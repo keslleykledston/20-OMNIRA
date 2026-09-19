@@ -158,12 +158,19 @@ func TestAtomicClaimHasExactlyOneWinner(t *testing.T) {
 		t.Fatalf("system assignment actor_source=%q changed_by=%v", actorSource, changedBy)
 	}
 	if err := platformdb.WithSystemTenantSession(ctx, app, tenantID, func(sc context.Context) error {
-		_, routeErr := svc.AssignRoundRobin(sc, protectedConversationID)
-		if !errors.Is(routeErr, application.ErrNoEligibleAgent) {
-			t.Fatalf("assigned conversation routed again: %v", routeErr)
+		redelivered, routeErr := svc.AssignRoundRobin(sc, protectedConversationID)
+		if routeErr != nil || redelivered != selected {
+			t.Fatalf("redelivery result=%s err=%v", redelivered, routeErr)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	var roundRobinEvents int
+	if err := seed.QueryRow(ctx, `SELECT count(*) FROM assignment_events WHERE tenant_id=$1 AND conversation_id=$2 AND reason='round_robin'`, tenantID, protectedConversationID).Scan(&roundRobinEvents); err != nil {
+		t.Fatal(err)
+	}
+	if roundRobinEvents != 1 {
+		t.Fatalf("round-robin redelivery created %d events", roundRobinEvents)
 	}
 }

@@ -71,7 +71,10 @@ func (r *PostgresAssignmentRepository) AssignRoundRobin(ctx context.Context, con
 		  INSERT INTO assignment_events(tenant_id,conversation_id,from_user_id,to_user_id,changed_by,reason,actor_source)
 		  SELECT tenant_id,id,NULL,user_id,NULL,$3,'system' FROM touched RETURNING to_user_id
 		)
-		SELECT (SELECT to_user_id FROM recorded)`, tc.TenantID, conversationID, reason).Scan(&assignedUser)
+		SELECT COALESCE(
+		  (SELECT to_user_id FROM recorded),
+		  (SELECT assigned_to_user_id FROM conversations WHERE tenant_id=$1 AND id=$2)
+		)`, tc.TenantID, conversationID, reason).Scan(&assignedUser)
 	if err != nil {
 		return uuid.Nil, false, err
 	}

@@ -81,6 +81,16 @@ channels:
       MembershipDeactivatedEvent:
         $ref: '#/components/messages/MembershipEvent'
 
+  job.routing.assign.v1:
+    address: job.routing.assign.v1
+    title: Assign conversation by routing policy
+    description: |
+      Requests idempotent round-robin assignment. Consumers must resolve tenant
+      ownership from the persisted conversation; tenant_id is not authority.
+    messages:
+      RoutingAssignJob:
+        $ref: '#/components/messages/RoutingAssignJob'
+
 operations:
   publishTenantEvents:
     title: Publish Tenant Events
@@ -98,6 +108,12 @@ operations:
     action: send
     description: |
       Worker publishes membership lifecycle events to NATS JetStream.
+
+  consumeRoutingAssignment:
+    title: Consume routing assignment jobs
+    channel:
+      $ref: '#/channels/job.routing.assign.v1'
+    action: receive
 
 components:
   messages:
@@ -117,6 +133,12 @@ components:
         Base event for membership lifecycle changes.
       payload:
         $ref: '#/components/schemas/MembershipEvent'
+
+    RoutingAssignJob:
+      title: Routing assignment job
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/EventEnvelope'
 
   schemas:
     EventEnvelope:
@@ -149,6 +171,7 @@ components:
             - tenant
             - membership
             - user
+            - conversation
         aggregate_id:
           type: string
           format: uuid
@@ -237,6 +260,7 @@ bindings:
     subjects:
       - "events.tenant.*"
       - "events.membership.*"
+      - "job.routing.assign.v1"
     queue: omnira-events
 
 x-omnira:

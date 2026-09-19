@@ -17,6 +17,8 @@
 - Round-robin derives Tenant from trusted system context; asynchronous Outbox/NATS dispatch remains a separate slice.
 - PostgreSQL Outbox now honors the transaction querier, preserving atomic domain-write/event-write rollback semantics.
 - Routing jobs use the canonical `job.routing.assign.v1` JetStream subject rather than the legacy event subject formatter.
+- Durable routing consumer resolves tenant ownership from the persisted conversation and ignores envelope `tenant_id` for authorization.
+- Round-robin redelivery is idempotent: an assigned conversation returns its existing owner without duplicating assignment history.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 

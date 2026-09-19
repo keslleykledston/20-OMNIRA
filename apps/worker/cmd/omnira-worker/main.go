@@ -17,7 +17,10 @@ import (
 	"github.com/omnira/omnira/internal/outbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
 	"github.com/omnira/omnira/internal/platform/health"
+	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
+	routingapp "github.com/omnira/omnira/internal/routing/application"
 	"github.com/omnira/omnira/internal/worker/publisher"
+	routingworker "github.com/omnira/omnira/internal/worker/routing"
 )
 
 func main() {
@@ -62,6 +65,13 @@ func main() {
 
 	// Publisher
 	pub := publisher.NewPublisher(outboxSvc, js, 10, 3)
+	routingHandler, err := routingworker.NewHandler(
+		routingworker.NewPostgresConversationRunner(dbPool),
+		routingapp.NewService(routingadapters.NewPostgresAssignmentRepository(dbPool)),
+	)
+	if err != nil {
+		log.Fatalf("failed to configure routing worker: %v", err)
+	}
 
 	// Health check
 	hc := health.NewHealthCheck(dbPool, nc)
@@ -84,10 +94,13 @@ func main() {
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()
+	routingConsumer, err := routingworker.StartConsumer(workerCtx, js, routingHandler)
+	if err != nil {
+		log.Fatalf("failed to start routing consumer: %v", err)
+	}
+	defer routingConsumer.Stop()
 
 	log.Printf("Worker starting (env: %s)\n", cfg.Env)
-	log.Printf("PostgreSQL: %s\n", cfg.DatabaseURL)
-	log.Printf("NATS: %s\n", cfg.NatsURL)
 	log.Printf("Publish interval: 1 second\n")
 	log.Printf("Metrics server: http://0.0.0.0:9090/metrics\n")
 
