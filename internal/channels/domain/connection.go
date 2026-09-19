@@ -10,14 +10,39 @@ import (
 	"github.com/google/uuid"
 )
 
-// ProviderKind — classificação obrigatória de todo provider. A UI nunca
-// deve esconder essa distinção do usuário (docs/WHATSAPP-PROVIDER-STRATEGY.md
-// do kit de reuso DeskcommCRM: "Não esconder essa diferença").
+// ProviderKind — classificação obrigatória de todo provider (equivalente a
+// "provider_type" na nomenclatura do PROMPT-CLAUDE-CODE.txt/
+// WHATSAPP-PROVIDER-STRATEGY.md). A UI nunca deve esconder essa distinção
+// do usuário ("Não esconder essa diferença").
 type ProviderKind string
 
 const (
 	ProviderKindOfficial   ProviderKind = "official"
 	ProviderKindUnofficial ProviderKind = "unofficial"
+)
+
+// Identificadores de provider conhecidos. NÃO é um enum fechado — o campo
+// ChannelConnection.Provider continua string livre de propósito, para que
+// adicionar um provider novo (WahaProvider, um BSP futuro, um provider de
+// outro canal) nunca exija alterar o domínio. Estas constantes existem só
+// para os poucos pontos do código (bootstrap/registry) que precisam se
+// referir a um provider concreto por nome, evitando strings mágicas
+// duplicadas.
+const (
+	ProviderMetaCloud          = "meta_cloud"
+	ProviderWAHA               = "waha"                      // não implementado nesta wave — reservado
+	ProviderFutureBSP          = "future_bsp"                // placeholder conceitual, sem adapter
+	ProviderFutureSessionBased = "future_session_provider"   // placeholder conceitual, sem adapter
+)
+
+// Channel — canal de comunicação. Hoje só "whatsapp" tem adapter; o campo
+// existe desde já para que Email/Instagram/Telegram (fora do MVP atual,
+// ver docs/product/MVP.md) não exijam uma nova versão de
+// ChannelConnection quando chegarem.
+type Channel string
+
+const (
+	ChannelWhatsApp Channel = "whatsapp"
 )
 
 // ConnectionStatus — estado operacional de uma ChannelConnection.
@@ -37,16 +62,17 @@ const (
 type Capability string
 
 const (
-	CapabilityText                Capability = "text"
-	CapabilityMedia               Capability = "media"
-	CapabilityTemplate            Capability = "template"
-	CapabilityDeliveryStatus      Capability = "delivery_status"
-	CapabilityReadStatus          Capability = "read_status"
-	CapabilityTyping              Capability = "typing"
-	CapabilitySessionPairing      Capability = "session_pairing"
-	CapabilityQRPairing           Capability = "qr_pairing"
-	CapabilityVoice               Capability = "voice"
-	CapabilityInteractiveMessages Capability = "interactive_messages"
+	CapabilityText           Capability = "text"
+	CapabilityMedia          Capability = "media"
+	CapabilityTemplate       Capability = "template"
+	CapabilityDeliveryStatus Capability = "delivery_status"
+	CapabilityReadStatus     Capability = "read_status"
+	CapabilityHealth         Capability = "health"
+	CapabilitySessionPairing Capability = "session_pairing"
+	CapabilityQRPairing      Capability = "qr_pairing"
+	CapabilityInteractive    Capability = "interactive"
+	CapabilityTyping         Capability = "typing" // extra além da lista mínima pedida; útil para providers session-based
+	CapabilityVoice          Capability = "voice"  // extra além da lista mínima pedida
 )
 
 // ChannelConnection — credencial/configuração de canal pertencente a
@@ -60,15 +86,17 @@ const (
 // é obrigatório por construção (NewChannelConnection valida) e nunca pode
 // ser deixado como zero-value silenciosamente.
 type ChannelConnection struct {
-	ID                 uuid.UUID
-	TenantID           uuid.UUID
-	Provider           string // identificador do provider concreto, ex.: "meta_cloud", "waha"
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	Channel  Channel // "whatsapp" hoje; outros canais reaproveitam esta struct sem migração de schema conceitual
+	Provider string  // identificador do provider concreto, ex.: "meta_cloud", "waha"
+
 	ProviderKind       ProviderKind
 	ExternalAccountID  string
 	ExternalNumberID   string
 	Status             ConnectionStatus
 	Capabilities       []Capability
-	SecretRef          string // referência a um secret (vault/KMS), NUNCA o secret em si
+	SecretRef          string // UUID de internal/channels/ports.CredentialStore — NUNCA o segredo em si (ver ADR-0009)
 	RiskAcknowledgedAt *time.Time
 	RiskAcknowledgedBy *uuid.UUID
 	CreatedAt          time.Time

@@ -4,6 +4,13 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
 ## [Unreleased]
 
+### Added (D3.1 — Channel credentials foundation)
+- `channel_connections` e `channel_credentials` com RLS + FORCE RLS e rollback.
+- AES-256-GCM com chave Base64 `OMNIRA_CREDENTIALS_KEY` de 32 bytes.
+- `CredentialStore` e repositórios PostgreSQL tenant-aware.
+- Testes de isolamento A/B, ciphertext, chave errada e resolução de credencial.
+- Contadores OTel de resolução de credenciais sem IDs ou segredos.
+
 ### Added (T01–T02 — Bootstrap + Local Infrastructure)
 
 #### T01 — Bootstrap Go repo

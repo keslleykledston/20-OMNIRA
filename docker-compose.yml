@@ -81,6 +81,7 @@ services:
       - DB_NAME=omnira_dev
       - NATS_URL=nats://nats:4222
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OMNIRA_CREDENTIALS_KEY=${OMNIRA_CREDENTIALS_KEY-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 5s
