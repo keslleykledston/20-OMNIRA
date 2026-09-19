@@ -10,10 +10,11 @@ import (
 type EventType string
 
 const (
-	EventTenantCreated      EventType = "tenant.created"
-	EventTenantDeactivated  EventType = "tenant.deactivated"
-	EventMembershipGranted  EventType = "membership.granted"
-	EventMembershipRevoked  EventType = "membership.revoked"
+	EventTenantCreated     EventType = "tenant.created"
+	EventTenantDeactivated EventType = "tenant.deactivated"
+	EventMembershipGranted EventType = "membership.granted"
+	EventMembershipRevoked EventType = "membership.revoked"
+	EventChannelSendText   EventType = "channel.message.send_text"
 )
 
 // AggregateType — tipo de agregado que gerou o evento.

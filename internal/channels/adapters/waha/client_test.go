@@ -94,3 +94,50 @@ func TestClientRejectsMissingConfiguration(t *testing.T) {
 		t.Fatal("empty API key accepted")
 	}
 }
+
+func TestClientSendTextUsesCanonicalWAHABody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/sendText" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["session"] != "omnira_conn" || body["chatId"] != "5511999999999@c.us" || body["text"] != "hello" {
+			t.Fatalf("unexpected body: %#v", body)
+		}
+		_, _ = w.Write([]byte(`{"id":"false_5511999999999@c.us_abc"}`))
+	}))
+	defer srv.Close()
+
+	c, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := c.SendText(context.Background(), "omnira_conn", "5511999999999@c.us", "hello")
+	if err != nil || id != "false_5511999999999@c.us_abc" {
+		t.Fatalf("unexpected result: %q, %v", id, err)
+	}
+}
+
+func TestClientClassifiesNonRetryableSessionAndProviderFailures(t *testing.T) {
+	for _, tc := range []struct {
+		code int
+		want error
+	}{
+		{http.StatusConflict, waha.ErrSessionDisconnected},
+		{http.StatusInternalServerError, waha.ErrProviderUnavailable},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.code) }))
+		c, err := waha.NewClient(srv.URL, "secret", srv.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.Health(context.Background())
+		if !errors.Is(err, tc.want) {
+			t.Errorf("status %d: got %v", tc.code, err)
+		}
+		srv.Close()
+	}
+}

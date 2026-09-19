@@ -4,6 +4,15 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
 ## [Unreleased]
 
+### Added (U4 — WAHA outbound text foundation)
+- WAHA `SendText` adapter using the canonical channel seam and `/api/sendText`.
+- E.164 recipient validation, deterministic connection session ownership, and canonical sent result.
+- Provider error classes for authentication, rate limiting, unavailable provider, disconnected session, configuration, permanent, transient, and unknown failures.
+- Low-cardinality OTel `channel_operation_total` and `channel_operation_error_total` metrics.
+- Idempotency remains owned by the Outbox/application layer; no secret or arbitrary provider payload crosses the domain seam.
+- Worker delivery boundary consumes only `connection_id` plus outbound message references; tenant scope is reconstructed by `TenantSessionRunner`.
+- Retry policy does not retry authentication, invalid configuration, permanent validation, or disconnected sessions.
+
 ### Added (U3 — WAHA webhook and inbound foundation)
 - Connection-scoped webhook route: `POST /webhooks/v1/whatsapp/waha/{connection_token}`.
 - Raw-body HMAC-SHA512 verification with constant-time comparison and per-connection CredentialStore secret.

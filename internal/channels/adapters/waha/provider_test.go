@@ -3,6 +3,7 @@ package waha_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,6 +134,56 @@ func TestCanonicalStatusMapping(t *testing.T) {
 			t.Errorf("%s: got %s, want %s", tc.waha, got, tc.want)
 		}
 	}
+}
+
+func TestProviderSendTextNormalizesRecipientAndReturnsCanonicalResult(t *testing.T) {
+	connection := wahaConnection()
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sendText" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"id":"provider-message-1"}`))
+	}))
+	defer srv.Close()
+	client, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := waha.NewProvider(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := provider.SendText(context.Background(), connection, domain.OutboundTextMessage{ToE164: "+5511999999999", Text: "hello", IdempotencyKey: "outbox-1"})
+	if err != nil || result == nil || result.ProviderMessageID != "provider-message-1" || result.State != domain.DeliveryStateSent {
+		t.Fatalf("unexpected result: %#v, %v", result, err)
+	}
+	if got["session"] != "omnira_"+connection.ID.String() || got["chatId"] != "5511999999999@c.us" || got["text"] != "hello" {
+		t.Fatalf("unexpected WAHA body: %#v", got)
+	}
+}
+
+func TestProviderSendTextRejectsInvalidCommand(t *testing.T) {
+	provider, err := waha.NewProvider(mustClient(t, "http://waha:3000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.SendText(context.Background(), wahaConnection(), domain.OutboundTextMessage{ToE164: "5511", Text: "secret", IdempotencyKey: "id"})
+	if !errors.Is(err, waha.ErrPermanent) {
+		t.Fatalf("expected permanent validation error, got %v", err)
+	}
+}
+
+func mustClient(t *testing.T, baseURL string) *waha.Client {
+	t.Helper()
+	client, err := waha.NewClient(baseURL, "secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }
 
 func wahaConnection() domain.ChannelConnection {

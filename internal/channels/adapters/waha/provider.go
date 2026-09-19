@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
+
+var e164Pattern = regexp.MustCompile(`^\+[1-9][0-9]{6,14}$`)
 
 var (
 	ErrInvalidConnection = errors.New("waha: invalid channel connection")
@@ -21,6 +27,8 @@ var (
 type WahaProvider struct {
 	client      *Client
 	credentials ports.CredentialStore
+	operations  metric.Int64Counter
+	errors      metric.Int64Counter
 }
 
 var _ ports.ChannelProvider = (*WahaProvider)(nil)
@@ -33,7 +41,10 @@ func NewProvider(client *Client, stores ...ports.CredentialStore) (*WahaProvider
 	if len(stores) > 0 {
 		credentials = stores[0]
 	}
-	return &WahaProvider{client: client, credentials: credentials}, nil
+	meter := otel.Meter("omnira/channels")
+	operations, _ := meter.Int64Counter("channel_operation_total")
+	errors, _ := meter.Int64Counter("channel_operation_error_total")
+	return &WahaProvider{client: client, credentials: credentials, operations: operations, errors: errors}, nil
 }
 
 // SessionRef deterministically binds one WAHA session to one connection.
@@ -121,6 +132,7 @@ func (p *WahaProvider) Metadata() ports.ProviderMetadata {
 		Name: domain.ProviderWAHA,
 		Kind: domain.ProviderKindUnofficial,
 		Capabilities: []domain.Capability{
+			domain.CapabilityText,
 			domain.CapabilityHealth,
 			domain.CapabilitySessionPairing,
 			domain.CapabilityQRPairing,
@@ -142,8 +154,48 @@ func (p *WahaProvider) CheckHealth(ctx context.Context, conn domain.ChannelConne
 	return ports.HealthStatus{Reachable: true}, nil
 }
 
-func (p *WahaProvider) SendText(context.Context, domain.ChannelConnection, domain.OutboundTextMessage) (*domain.SendResult, error) {
-	return nil, ports.ErrCapabilityNotSupported
+func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundTextMessage) (*domain.SendResult, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	if !e164Pattern.MatchString(msg.ToE164) || strings.TrimSpace(msg.Text) == "" || strings.TrimSpace(msg.IdempotencyKey) == "" {
+		return nil, fmt.Errorf("%w: recipient, text and idempotency key are required", ports.ErrPermanent)
+	}
+	name, err := p.SessionRef(conn)
+	if err != nil {
+		return nil, err
+	}
+	providerID, err := p.client.SendText(ctx, name, strings.TrimPrefix(msg.ToE164, "+")+"@c.us", msg.Text)
+	p.operations.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_text"), attribute.String("status", statusForError(err))))
+	if err != nil {
+		p.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_text"), attribute.String("status", statusForError(err))))
+		return nil, err
+	}
+	return &domain.SendResult{ProviderMessageID: providerID, State: domain.DeliveryStateSent}, nil
+}
+
+func statusForError(err error) string {
+	if err == nil {
+		return "success"
+	}
+	switch {
+	case errors.Is(err, ports.ErrAuthentication):
+		return "authentication"
+	case errors.Is(err, ports.ErrRateLimited):
+		return "rate_limited"
+	case errors.Is(err, ports.ErrSessionDisconnected):
+		return "session_disconnected"
+	case errors.Is(err, ports.ErrProviderUnavailable):
+		return "provider_unavailable"
+	case errors.Is(err, ports.ErrConfiguration):
+		return "configuration"
+	case errors.Is(err, ports.ErrPermanent):
+		return "permanent"
+	case errors.Is(err, ports.ErrTransient):
+		return "transient"
+	default:
+		return "unknown"
+	}
 }
 
 func (p *WahaProvider) SendMedia(context.Context, domain.ChannelConnection, domain.OutboundMediaMessage) (*domain.SendResult, error) {

@@ -3,20 +3,25 @@ package waha
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/omnira/omnira/internal/channels/ports"
 )
 
 var (
-	ErrAuthentication = errors.New("waha: authentication failed")
-	ErrConfiguration  = errors.New("waha: invalid configuration")
-	ErrTransient      = errors.New("waha: transient provider error")
-	ErrPermanent      = errors.New("waha: permanent provider error")
+	ErrAuthentication      = ports.ErrAuthentication
+	ErrConfiguration       = ports.ErrConfiguration
+	ErrTransient           = ports.ErrTransient
+	ErrPermanent           = ports.ErrPermanent
+	ErrRateLimited         = ports.ErrRateLimited
+	ErrProviderUnavailable = ports.ErrProviderUnavailable
+	ErrSessionDisconnected = ports.ErrSessionDisconnected
+	ErrUnknown             = ports.ErrUnknown
 )
 
 // Client is thin WAHA transport. It knows no Tenant, ChannelConnection or
@@ -45,6 +50,16 @@ type QRCode struct {
 type Account struct {
 	ID       string `json:"id"`
 	PushName string `json:"pushName"`
+}
+
+type sendTextRequest struct {
+	Session string `json:"session"`
+	ChatID  string `json:"chatId"`
+	Text    string `json:"text"`
+}
+
+type sendTextResponse struct {
+	ID string `json:"id"`
 }
 
 type WebhookConfig struct {
@@ -136,6 +151,23 @@ func (c *Client) GetMe(ctx context.Context, name string) (*Account, error) {
 	return account, err
 }
 
+// SendText calls WAHA's provider-neutral endpoint. The application/outbox
+// owns idempotency because WAHA has no stable idempotency-key contract.
+func (c *Client) SendText(ctx context.Context, name, chatID, text string) (string, error) {
+	body, err := json.Marshal(sendTextRequest{Session: name, ChatID: chatID, Text: text})
+	if err != nil {
+		return "", ErrConfiguration
+	}
+	var response sendTextResponse
+	if _, err = c.do(ctx, http.MethodPost, "/api/sendText", strings.NewReader(string(body)), &response); err != nil {
+		return "", err
+	}
+	if response.ID == "" {
+		return "", fmt.Errorf("%w: sendText response missing message id", ErrUnknown)
+	}
+	return response.ID, nil
+}
+
 func (c *Client) sessionAction(ctx context.Context, name, action string) (Session, error) {
 	var session Session
 	_, err := c.do(ctx, http.MethodPost, "/api/sessions/"+url.PathEscape(name)+"/"+action, nil, &session)
@@ -160,21 +192,27 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, body io
 	}
 	res, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrTransient, err)
+		return 0, fmt.Errorf("%w: %w: %v", ErrProviderUnavailable, ErrTransient, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 		return res.StatusCode, ErrAuthentication
 	}
-	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500 {
-		return res.StatusCode, ErrTransient
+	if res.StatusCode == http.StatusTooManyRequests {
+		return res.StatusCode, fmt.Errorf("%w: %w", ErrRateLimited, ErrTransient)
+	}
+	if res.StatusCode == http.StatusConflict {
+		return res.StatusCode, fmt.Errorf("%w: %w", ErrSessionDisconnected, ErrPermanent)
+	}
+	if res.StatusCode >= 500 {
+		return res.StatusCode, fmt.Errorf("%w: %w", ErrProviderUnavailable, ErrTransient)
 	}
 	if res.StatusCode >= 400 {
 		return res.StatusCode, ErrPermanent
 	}
 	if result != nil {
 		if err := json.NewDecoder(res.Body).Decode(result); err != nil {
-			return res.StatusCode, fmt.Errorf("waha: decode response: %w", err)
+			return res.StatusCode, fmt.Errorf("%w: decode response", ErrUnknown)
 		}
 	}
 	return res.StatusCode, nil

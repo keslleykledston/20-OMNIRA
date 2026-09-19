@@ -55,6 +55,12 @@ var (
 	// provider não está na allowlist. Proteção SSRF — nunca contornar
 	// isto para "tentar mesmo assim".
 	ErrMediaSourceNotAllowed = errors.New("channel: media source host not in allowlist")
+	ErrAuthentication        = errors.New("channel: provider authentication failed")
+	ErrConfiguration         = errors.New("channel: provider configuration invalid")
+	ErrRateLimited           = errors.New("channel: provider rate limited")
+	ErrProviderUnavailable   = errors.New("channel: provider unavailable")
+	ErrSessionDisconnected   = errors.New("channel: provider session disconnected")
+	ErrUnknown               = errors.New("channel: provider error with unknown classification")
 )
 
 // ProviderMetadata — descrição estática de um provider, usada para exibir
