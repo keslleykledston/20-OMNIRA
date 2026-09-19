@@ -31,14 +31,13 @@ func TestPostgresSessionStore(t *testing.T) {
 	// Insert test user (cleanup handled by defer)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO users(id, external_subject, email, status)
-		VALUES ($1, $2, $3, 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, userID, userID.String(), "test@test.local")
+		VALUES ($1, $2, $3, $4)
+	`, userID, userID.String(), "test@test.local", "active")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
 	})
 
 	// Test: Create session
@@ -130,14 +129,13 @@ func TestCallbackReplayPrevention(t *testing.T) {
 
 	_, err = pool.Exec(ctx, `
 		INSERT INTO users(id, external_subject, email, status)
-		VALUES ($1, $2, $3, 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, userID, userID.String(), "test@test.local")
+		VALUES ($1, $2, $3, $4)
+	`, userID, userID.String(), "test@test.local", "active")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
 	})
 
 	// Create two sessions from same user (simulating two separate callback flows)

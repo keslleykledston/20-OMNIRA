@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/routing/application"
-	"github.com/omnira/omnira/internal/testhelpers"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 

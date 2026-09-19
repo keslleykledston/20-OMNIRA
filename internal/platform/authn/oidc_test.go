@@ -26,8 +26,38 @@ func (r fakeOIDCResolver) ResolveUserID(_ context.Context, subject string) (uuid
 	}
 	return r.userID, nil
 }
+func (r fakeOIDCResolver) ResolveIdentity(context.Context, string, string) (uuid.UUID, error) {
+	return r.userID, nil
+}
+func (r fakeOIDCResolver) ProvisionIdentity(context.Context, string, string, string, string) (uuid.UUID, error) {
+	return r.userID, nil
+}
 func (r fakeOIDCResolver) SessionProfile(context.Context, uuid.UUID) (SessionProfile, error) {
 	return SessionProfile{User: SessionUser{ID: r.userID.String()}, Tenant: SessionTenant{ID: uuid.NewString(), Name: "Tenant"}}, nil
+}
+
+type fakeSessionStore struct {
+	sessions map[string]uuid.UUID
+}
+
+func (s *fakeSessionStore) CreateSession(_ context.Context, userID uuid.UUID, _ string, _ time.Duration) (string, error) {
+	sessionID := "session-" + userID.String()
+	s.sessions[sessionID] = userID
+	return sessionID, nil
+}
+func (s *fakeSessionStore) ResolveSession(_ context.Context, sessionID string) (uuid.UUID, error) {
+	userID, ok := s.sessions[sessionID]
+	if !ok {
+		return uuid.Nil, context.Canceled
+	}
+	return userID, nil
+}
+func (s *fakeSessionStore) RevokeSession(_ context.Context, sessionID string) error {
+	delete(s.sessions, sessionID)
+	return nil
+}
+func (s *fakeSessionStore) UpdateActivity(context.Context, string) error {
+	return nil
 }
 
 func jwkInt(v *big.Int) string { return base64.RawURLEncoding.EncodeToString(v.Bytes()) }
@@ -73,7 +103,8 @@ func TestOIDCAuthorizationCodePKCEAndCookie(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewOIDCHandler(auth, discovery, resolver, "client", "secret", "https://app.example/api/v1/auth/oidc/callback", "/login?oidc=complete", true)
+	sessionStore := &fakeSessionStore{sessions: map[string]uuid.UUID{}}
+	h := NewOIDCHandler(auth, discovery, resolver, sessionStore, issuer, "client", "secret", "https://app.example/api/v1/auth/oidc/callback", "/login?oidc=complete", true)
 
 	startReq := httptest.NewRequest(http.MethodGet, "https://app.example/api/v1/auth/oidc/start", nil)
 	startRec := httptest.NewRecorder()

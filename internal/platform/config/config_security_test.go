@@ -68,7 +68,7 @@ func TestConfigFailClosedProduction(t *testing.T) {
 			} else {
 				// Will fail due to missing OIDC config when authMode=oidc
 				// That's OK for this test
-				if err != nil && authMode := cfg.AuthMode; authMode == "oidc" {
+				if err != nil && cfg.AuthMode == "oidc" {
 					// Expected: missing OIDC config
 					return
 				}
@@ -127,6 +127,7 @@ func TestConfigProductionHTTPS(t *testing.T) {
 				CredentialsKey:   make([]byte, 32),
 				AuthIssuer:       tt.issuer,
 				AuthRedirectURL:  tt.redirectURL,
+				AuthPostLoginURL: "/login?oidc=complete",
 				AuthAudience:     "app",
 				AuthClientID:     "client",
 				AuthClientSecret: "secret",

@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
-	testhelper "github.com/omnira/omnira/internal/testhelpers"
 )
 
 func TestPostgresProvisionIdentity(t *testing.T) {

@@ -1,10 +1,8 @@
 package authn
 
 import (
-	"context"
 	"crypto/subtle"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -12,19 +10,7 @@ import (
 )
 
 func TestOIDCStateValidation(t *testing.T) {
-	auth := &OIDCHandler{
-		secureCookie: false,
-	}
-
 	// State mismatch: request state != cookie state
-	req := httptest.NewRequest("GET", "/?state=wrong&code=code123", nil)
-	req.AddCookie(&http.Cookie{Name: "omnira_oidc_state", Value: "correct"})
-	req.AddCookie(&http.Cookie{Name: "omnira_oidc_verifier", Value: "verifier"})
-	req.AddCookie(&http.Cookie{Name: "omnira_oidc_nonce", Value: "nonce"})
-
-	w := httptest.NewRecorder()
-
-	// Callback should fail with state mismatch
 	if subtle.ConstantTimeCompare([]byte("wrong"), []byte("correct")) == 1 {
 		t.Fatal("state validation failed: constant time comparison accepted mismatch")
 	}
@@ -57,9 +43,6 @@ func TestOIDCTokenExpiry(t *testing.T) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Hour)),
 		},
 	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, expiredClaims)
-	tokenString, _ := token.SignedString(nil) // mock signing
 
 	// Verify expiry is in the past
 	if expiredClaims.ExpiresAt.Before(time.Now()) {
