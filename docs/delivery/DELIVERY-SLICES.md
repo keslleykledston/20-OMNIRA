@@ -139,7 +139,8 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - DONE: M03.3 persistência de mídia inbound e aplicação de `message.ack` aos status canônicos.
 - DONE: M04 filas e seleção round-robin de domínio.
 - DONE: M04.1 claim manual atômico, repository/application e teste de corrida.
-- TODO: M04.2 round-robin assíncrono via Outbox/NATS e actor de sistema.
+- DONE: M04.2a atribuição round-robin atômica, capacidade/disponibilidade e actor de sistema.
+- TODO: M04.2b disparo assíncrono do round-robin via Outbox/NATS.
 - TODO: M05.1 API REST paginada da Inbox sob TenantContext.
 - TODO: M05.2 eventos realtime SSE/WebSocket com reautorização e isolamento A/B.
 - TODO: M05.3 frontend Next.js com Omnira iOS Design System; não reutilizar o Vite mock como runtime final.

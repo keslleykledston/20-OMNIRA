@@ -123,4 +123,47 @@ func TestAtomicClaimHasExactlyOneWinner(t *testing.T) {
 	if owner != nil {
 		t.Fatal("cross-tenant claim changed owner")
 	}
+
+	queueID := uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO queues(id,tenant_id,name,mode) VALUES($1,$2,'Round robin','round_robin')`, queueID, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, `UPDATE conversations SET queue_id=$1 WHERE id=$2`, queueID, protectedConversationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, `
+		INSERT INTO queue_members(tenant_id,queue_id,user_id,available,capacity,last_assigned_at)
+		VALUES ($1,$2,$3,true,2,NULL),($1,$2,$4,false,2,now())`, tenantID, queueID, userA, userB); err != nil {
+		t.Fatal(err)
+	}
+	var selected uuid.UUID
+	if err := platformdb.WithSystemTenantSession(ctx, app, tenantID, func(sc context.Context) error {
+		var routeErr error
+		selected, routeErr = svc.AssignRoundRobin(sc, protectedConversationID)
+		return routeErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if selected != userA {
+		t.Fatalf("round-robin selected %s, want %s", selected, userA)
+	}
+	var actorSource string
+	var changedBy *uuid.UUID
+	if err := seed.QueryRow(ctx, `
+		SELECT actor_source,changed_by FROM assignment_events
+		WHERE tenant_id=$1 AND conversation_id=$2`, tenantID, protectedConversationID).Scan(&actorSource, &changedBy); err != nil {
+		t.Fatal(err)
+	}
+	if actorSource != "system" || changedBy != nil {
+		t.Fatalf("system assignment actor_source=%q changed_by=%v", actorSource, changedBy)
+	}
+	if err := platformdb.WithSystemTenantSession(ctx, app, tenantID, func(sc context.Context) error {
+		_, routeErr := svc.AssignRoundRobin(sc, protectedConversationID)
+		if !errors.Is(routeErr, application.ErrNoEligibleAgent) {
+			t.Fatalf("assigned conversation routed again: %v", routeErr)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

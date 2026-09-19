@@ -13,6 +13,8 @@
 - `message.ack` updates outbound delivery status within the trusted connection scope and cannot regress delivered/read state.
 - Atomic manual conversation claim with exactly one concurrent winner and append-only assignment history.
 - Routing claim derives both Tenant and target operator from TenantContext; cross-tenant attempts remain indistinguishable from conflicts.
+- Atomic system round-robin selects only active, available queue members below capacity and records system-owned assignment history.
+- Round-robin derives Tenant from trusted system context; asynchronous Outbox/NATS dispatch remains a separate slice.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 

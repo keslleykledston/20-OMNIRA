@@ -13,10 +13,40 @@ import (
 )
 
 var ErrAlreadyAssigned = errors.New("routing: conversation already assigned")
+var ErrNoEligibleAgent = errors.New("routing: no eligible agent")
 
 type Service struct {
 	repo   ports.AssignmentRepository
 	claims metric.Int64Counter
+}
+
+// AssignRoundRobin runs only for trusted system work reconstructed from a
+// persisted conversation reference. Tenant ownership comes from context.
+func (s *Service) AssignRoundRobin(ctx context.Context, conversationID uuid.UUID) (uuid.UUID, error) {
+	if s == nil || s.repo == nil || conversationID == uuid.Nil {
+		return uuid.Nil, errors.New("routing: valid assignment is required")
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.Source != tenancydomain.AccessSourceSystem || tc.ActorID != uuid.Nil {
+		return uuid.Nil, errors.New("routing: system tenant context required")
+	}
+	userID, assigned, err := s.repo.AssignRoundRobin(ctx, conversationID, "round_robin")
+	status := "success"
+	if err != nil {
+		status = "error"
+	} else if !assigned {
+		status = "unavailable"
+	}
+	if s.claims != nil {
+		s.claims.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", "round_robin"), attribute.String("status", status)))
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if !assigned {
+		return uuid.Nil, ErrNoEligibleAgent
+	}
+	return userID, nil
 }
 
 func NewService(repo ports.AssignmentRepository) *Service {
