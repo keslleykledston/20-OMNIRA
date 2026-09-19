@@ -1,14 +1,14 @@
 # Handoff para o próximo agente
 
-> **Comece aqui.** Estado em `master` (branch atual, **AUTH.0-AUTH.7 + CRM.1-4 COMPLETO**, nada foi enviado com push nem tag). Atualize este arquivo ao terminar sua sessão.
-> Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência antes de dizer PASS; respostas em português, diretas.
+> **Comece aqui.** Estado em `master` (branch atual, **FIRST_INTERNAL_PRODUCT_DELIVERY_CONTROLLED = PASS**, iniciando REAL_PRODUCT_VALIDATION_MODE). Nada foi enviado com push nem tag. Atualize este arquivo ao terminar sua sessão.
+> Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência real antes de dizer PASS; respostas em português, diretas.
 
 ## 1. Situação em 5 linhas
 - **GOAL TÉCNICO COMPLETO** (Inbox WhatsApp não oficial/WAHA operável com CRM mock): login (OIDC) → QR (PASS 6/6) → receber → assumir → responder → status → **abrir/atualizar/fechar ticket CRM** — multi-tenant com RLS, via `docker compose`.
 - **STATE: FIRST_INTERNAL_PRODUCT_DELIVERY ✅** — **AUTH.0-AUTH.7 + CRM.1-5 COMPLETO**. QR gerado (6/6 PASS), backend CRM (6/6 unit tests), frontend TicketPanel (TypeScript ✓, 43/43 web tests ✓, 12/12 e2e ✓), E2E test case escrito. Commit: `9835f1f`.
 - **AUTH.0-AUTH.7 COMPLETO:** Opaque server-side sessions (64-hex), OIDC handoff (mock login), fail-closed production validation, RLS via GUC.
 - **CRM.1-5 COMPLETO:** MockCRMConnector (thread-safe, multi-tenant safe, 6/6 tests), HTTP handlers (create/get/update/close), TicketPanel.tsx (React, inline styles, error handling), E2E test (operador: create → in_progress → resolved → closed).
-- **Próximas fases:** P7 (humano com telefone valida SMS real) → Produção (gate de segurança + monitor).
+- **Próximas fases:** P7 (humano com telefone valida mensagem WhatsApp real via WAHA) → Produção (gate de segurança + monitor).
 
 ## 2. Ordem de leitura (30 min)
 1. `docs/delivery/ROADMAP-TO-GOAL.md` — fases P0–P6, o que foi achado/corrigido em cada uma, **pendências por fase** e **backlog em ordem**.
@@ -82,7 +82,7 @@ Toda mudança de migration: teste **up → down → up** e **down-all → up-all
 **Bloqueadores para PRODUÇÃO (ordenado):**
 1. **P7 — Validação humana com WhatsApp real** (BLOCKER_REQUIRES_HUMAN)
    - Dependência: telefone descartável + gerador WAHA
-   - Fluxo: QR → escanear com celular → enviar SMS real → receber na API → validar em inbox
+   - Fluxo: QR → escanear com celular → enviar mensagem WhatsApp real → receber na API → validar em inbox
    - Entrega: `scripts/w3-smoke.sh` já validou até QR; falta os passos 7-10 (inbound real + outbound + ack)
    - **Próximo:** Arranjar telefone; completar teste manual; documentar em `docs/pilots/phase-22/24H-PILOT-REPORT.md`
 
