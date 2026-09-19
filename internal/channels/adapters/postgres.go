@@ -130,13 +130,13 @@ func (s *PostgresWebhookEventStore) MarkReceived(ctx context.Context, connection
 			(tenant_id, connection_id, provider, provider_event_id, event_type, payload_digest)
 		SELECT tenant_id, id, provider, $2, $3, $4
 		FROM channel_connections
-		WHERE id = $1 AND provider = $5
+		WHERE id = $1
 		ON CONFLICT (connection_id, provider_event_id) DO NOTHING
-		RETURNING id`, connection.ID, providerEventID, eventType, payloadDigest, domain.ProviderWAHA).Scan(&id)
+		RETURNING id`, connection.ID, providerEventID, eventType, payloadDigest).Scan(&id)
 	if err == pgx.ErrNoRows {
 		var exists bool
 		if lookupErr := db.QuerierFromContext(ctx, s.pool).QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM channel_connections WHERE id = $1 AND provider = $2)`, connection.ID, domain.ProviderWAHA).Scan(&exists); lookupErr != nil {
+			`SELECT EXISTS(SELECT 1 FROM channel_connections WHERE id = $1)`, connection.ID).Scan(&exists); lookupErr != nil {
 			return false, fmt.Errorf("channel: verify webhook connection: %w", lookupErr)
 		}
 		if !exists {
@@ -170,6 +170,37 @@ func (r *WahaWebhookConnectionResolver) ResolveWahaConnection(ctx context.Contex
 	}
 	if connection == nil || connection.Provider != domain.ProviderWAHA || connection.ProviderKind != domain.ProviderKindUnofficial {
 		return nil, fmt.Errorf("channel: unknown WAHA connection")
+	}
+	return connection, nil
+}
+
+// MetaWebhookConnectionResolver resolves the connection for an unauthenticated
+// Meta callback from the trusted phone_number_id, in an explicit system session.
+// Tenant ownership comes from the persisted row, never from the payload.
+type MetaWebhookConnectionResolver struct {
+	pool *pgxpool.Pool
+	repo ports.ChannelConnectionRepository
+}
+
+func NewMetaWebhookConnectionResolver(pool *pgxpool.Pool, repo ports.ChannelConnectionRepository) *MetaWebhookConnectionResolver {
+	return &MetaWebhookConnectionResolver{pool: pool, repo: repo}
+}
+
+func (r *MetaWebhookConnectionResolver) ResolveInboundConnection(ctx context.Context, providerName, externalNumberID string) (*domain.ChannelConnection, error) {
+	if providerName != domain.ProviderMetaCloud {
+		return nil, fmt.Errorf("channel: unsupported provider for Meta resolver")
+	}
+	var connection *domain.ChannelConnection
+	err := db.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(systemCtx context.Context) error {
+		var lookupErr error
+		connection, lookupErr = r.repo.FindByExternalNumberID(systemCtx, providerName, externalNumberID)
+		return lookupErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if connection == nil || connection.Provider != domain.ProviderMetaCloud || connection.ProviderKind != domain.ProviderKindOfficial {
+		return nil, fmt.Errorf("channel: unknown Meta connection")
 	}
 	return connection, nil
 }

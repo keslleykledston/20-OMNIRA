@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	"log"
 	"os"
 	"os/signal"
@@ -75,6 +76,21 @@ func main() {
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).UseIntake(intake))
+	}
+	if cfg.MetaEnabled {
+		if cfg.MetaVerifyToken == "" || cfg.MetaAppSecret == "" {
+			log.Fatal("OMNIRA_META_VERIFY_TOKEN and OMNIRA_META_APP_SECRET are required when OMNIRA_META_ENABLED=true")
+		}
+		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
+		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)
+		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
+		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
+		srv.RegisterMetaWebhook(metachannel.Handler{
+			VerifyToken: cfg.MetaVerifyToken,
+			AppSecret:   cfg.MetaAppSecret,
+			Resolver:    channeladapters.NewMetaWebhookConnectionResolver(dbPool, connectionRepo),
+			Intake:      inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService),
+		})
 	}
 
 	errChan := make(chan error, 1)

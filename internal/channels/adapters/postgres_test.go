@@ -181,3 +181,51 @@ func TestPostgresWebhookEventStoreReservesOnce(t *testing.T) {
 		t.Fatalf("expected first delivery new and second duplicate: first=%v second=%v", first, second)
 	}
 }
+
+func TestPostgresMetaResolverAndWebhookDedupe(t *testing.T) {
+	f := newChannelIsolationFixture(t)
+	ctx := context.Background()
+	repo := NewPostgresChannelConnectionRepository(f.app)
+	store := NewPostgresWebhookEventStore(f.app)
+	resolver := NewMetaWebhookConnectionResolver(f.app, repo)
+	numA, numB := "meta-a-"+uuid.New().String(), "meta-b-"+uuid.New().String()
+	connA, connB := channelConn(f.tenantA, uuid.New(), numA), channelConn(f.tenantB, uuid.New(), numB)
+	for _, item := range []struct {
+		user uuid.UUID
+		conn *domain.ChannelConnection
+	}{{f.userA, connA}, {f.userB, connB}} {
+		if err := platformdb.WithTenantSession(ctx, f.app, item.user, false, func(sc context.Context) error { return repo.Store(sc, item.conn) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Each phone_number_id resolves to its own tenant, never the other's.
+	gotA, err := resolver.ResolveInboundConnection(ctx, domain.ProviderMetaCloud, numA)
+	if err != nil || gotA.TenantID != f.tenantA || gotA.ID != connA.ID {
+		t.Fatalf("A: %+v err=%v", gotA, err)
+	}
+	gotB, err := resolver.ResolveInboundConnection(ctx, domain.ProviderMetaCloud, numB)
+	if err != nil || gotB.TenantID != f.tenantB {
+		t.Fatalf("B: %+v err=%v", gotB, err)
+	}
+	if _, err := resolver.ResolveInboundConnection(ctx, domain.ProviderMetaCloud, "unknown-"+uuid.New().String()); err == nil {
+		t.Fatal("unknown phone_number_id must not resolve")
+	}
+	if _, err := resolver.ResolveInboundConnection(ctx, domain.ProviderWAHA, numA); err == nil {
+		t.Fatal("wrong provider must be rejected")
+	}
+	// Dedupe works for Meta connections (regression: was hardcoded to WAHA).
+	var first, second bool
+	if err := platformdb.WithTenantSession(ctx, f.app, uuid.Nil, true, func(sc context.Context) error {
+		var e error
+		if first, e = store.MarkReceived(sc, *gotA, "wamid.x", "message", "d"); e != nil {
+			return e
+		}
+		second, e = store.MarkReceived(sc, *gotA, "wamid.x", "message", "d")
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if first || !second {
+		t.Fatalf("first=%v second=%v", first, second)
+	}
+}

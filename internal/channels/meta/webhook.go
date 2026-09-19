@@ -55,10 +55,17 @@ type ConnectionResolver interface {
 	ResolveInboundConnection(ctx context.Context, providerName, externalNumberID string) (*domain.ChannelConnection, error)
 }
 
+// Intake atomically dedupes a provider event and applies its inbound effects
+// in the connection's tenant (implemented by inbox/adapters.WebhookIntake).
+type Intake interface {
+	ProcessWebhook(ctx context.Context, connection domain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *domain.InboundMessage, status *domain.DeliveryStatusUpdate) (duplicate bool, err error)
+}
+
 type Handler struct {
 	VerifyToken string
 	AppSecret   string
 	Resolver    ConnectionResolver
+	Intake      Intake // optional; nil keeps verify-only behavior
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +125,22 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if conn.ProviderKind != domain.ProviderKindOfficial {
 		http.Error(w, "provider mismatch", http.StatusConflict)
 		return
+	}
+	if h.Intake != nil {
+		events, err := ParseEvents(*conn, body)
+		if err != nil {
+			http.Error(w, "malformed payload", http.StatusBadRequest)
+			return
+		}
+		sum := sha256.Sum256(body)
+		digest := hex.EncodeToString(sum[:])
+		for _, ev := range events {
+			if _, err := h.Intake.ProcessWebhook(r.Context(), *conn, ev.Key, ev.Type, digest, ev.Message, ev.Status); err != nil {
+				// 5xx makes Meta retry; already-processed events dedupe on retry.
+				http.Error(w, "webhook intake unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }

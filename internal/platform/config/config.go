@@ -28,6 +28,9 @@ type Config struct {
 	WahaBaseURL       string
 	WahaAPIKey        string
 	WahaEngine        string
+	MetaEnabled       bool
+	MetaVerifyToken   string
+	MetaAppSecret     string
 	GracefulShutdown  int // segundos
 }
 
@@ -57,6 +60,9 @@ func Load() *Config {
 		WahaBaseURL:       getEnv("OMNIRA_WAHA_BASE_URL", "http://waha:3000"),
 		WahaAPIKey:        os.Getenv("OMNIRA_WAHA_API_KEY"),
 		WahaEngine:        getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
+		MetaEnabled:       getEnv("OMNIRA_META_ENABLED", "false") == "true",
+		MetaVerifyToken:   os.Getenv("OMNIRA_META_VERIFY_TOKEN"),
+		MetaAppSecret:     os.Getenv("OMNIRA_META_APP_SECRET"),
 		GracefulShutdown:  getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
 	}
 }
