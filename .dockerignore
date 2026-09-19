@@ -1,0 +1,9 @@
+.git
+web/node_modules
+web/dist
+bin
+logs
+omnira-api
+omnira-worker
+certs
+*.md

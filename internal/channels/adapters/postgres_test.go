@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,5 +228,97 @@ func TestPostgresMetaResolverAndWebhookDedupe(t *testing.T) {
 	}
 	if first || !second {
 		t.Fatalf("first=%v second=%v", first, second)
+	}
+}
+
+func TestPostgresCredentialRotateAndConnectionUpdate(t *testing.T) {
+	f := newChannelIsolationFixture(t)
+	ctx := context.Background()
+	cipher, err := channelcrypto.NewAESGCM([]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewPostgresChannelConnectionRepository(f.app)
+	store := NewPostgresCredentialStore(f.app, cipher)
+	connA, connB := channelConn(f.tenantA, uuid.New(), "rot-a-"+uuid.New().String()), channelConn(f.tenantB, uuid.New(), "rot-b-"+uuid.New().String())
+	for _, item := range []struct {
+		user uuid.UUID
+		conn *domain.ChannelConnection
+	}{{f.userA, connA}, {f.userB, connB}} {
+		if err := platformdb.WithTenantSession(ctx, f.app, item.user, false, func(sc context.Context) error { return repo.Store(sc, item.conn) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var refA, refB string
+	if err := platformdb.WithTenantSession(ctx, f.app, f.userA, false, func(sc context.Context) error {
+		var e error
+		refA, e = store.Store(sc, connA.ID, ports.Credential{Fields: map[string]string{"access_token": "old-a"}})
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformdb.WithTenantSession(ctx, f.app, f.userB, false, func(sc context.Context) error {
+		var e error
+		refB, e = store.Store(sc, connB.ID, ports.Credential{Fields: map[string]string{"access_token": "old-b"}})
+		return e
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Rotate keeps the opaque secret ref and replaces the value.
+	if err := platformdb.WithTenantSession(ctx, f.app, f.userA, false, func(sc context.Context) error {
+		if e := store.Rotate(sc, refA, ports.Credential{Fields: map[string]string{"access_token": "new-a"}}); e != nil {
+			return e
+		}
+		got, e := store.Resolve(sc, refA)
+		if e != nil || got.Fields["access_token"] != "new-a" {
+			t.Fatalf("rotated value not resolved: %v %v", got, e)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Tenant A cannot rotate or read tenant B's credential even knowing its ref (RLS).
+	if err := platformdb.WithTenantSession(ctx, f.app, f.userA, false, func(sc context.Context) error {
+		if e := store.Rotate(sc, refB, ports.Credential{Fields: map[string]string{"access_token": "evil"}}); e == nil {
+			t.Fatal("cross-tenant rotate succeeded")
+		}
+		if _, e := store.Resolve(sc, refB); e == nil {
+			t.Fatal("cross-tenant resolve succeeded")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformdb.WithTenantSession(ctx, f.app, f.userB, false, func(sc context.Context) error {
+		got, e := store.Resolve(sc, refB)
+		if e != nil || got.Fields["access_token"] != "old-b" {
+			t.Fatalf("B credential altered: %v %v", got, e)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Connection update persists status changes.
+	if err := platformdb.WithTenantSession(ctx, f.app, f.userA, false, func(sc context.Context) error {
+		connA.Status = domain.ConnectionStatusDisconnected
+		if e := repo.Update(sc, connA); e != nil {
+			return e
+		}
+		got, e := repo.FindByID(sc, connA.ID)
+		if e != nil || got == nil || got.Status != domain.ConnectionStatusDisconnected {
+			t.Fatalf("status not updated: %+v %v", got, e)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCredentialIsRedactedWhenFormatted(t *testing.T) {
+	c := ports.Credential{Fields: map[string]string{"access_token": "super_secret", "device_id": "device_123"}}
+	for _, s := range []string{c.String(), c.GoString()} {
+		if s == "" || strings.Contains(s, "super_secret") || strings.Contains(s, "device_123") {
+			t.Fatalf("credential leaked or empty: %q", s)
+		}
 	}
 }
