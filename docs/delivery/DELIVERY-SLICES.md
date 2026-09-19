@@ -134,7 +134,7 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - Prioridade vigente: **WhatsApp não oficial (WAHA)** nas primeiras entregas. Meta Cloud fica preservado como provider oficial (D3.1–D3.3 prontos), **sem prioridade operacional**; D3.4+ congelado.
 - Gate verde (Postgres real + `omnira_app`): `go build/vet/test ./...`, RLS completeness, isolation A/B, `validate-schema`, migrations up-all → down-all → up-all, `docker compose config`, imagens `Dockerfile.api`/`Dockerfile.worker` (Go 1.25), web vitest 24/24 + `tsc`.
 - Como rodar integração: DB descartável no `omnira-postgres` (porta 55434), migrations aplicadas como owner; `OMNIRA_DATABASE_URL` = owner (seed) e `OMNIRA_APP_DATABASE_URL` = `postgres://omnira_app:omnira_app@…` (a role de aplicação **tem LOGIN**, criada na migration 000006; não é superuser nem BYPASSRLS). As tools em `tools/` apontam `omnira_dev`; redirecione para um DB de teste.
-- Migrations: última = `000025_outbound_messages`. `000020.down` corrigido; `000022` remove policy GUC quebrada.
+- Migrations: última = `000026_realtime_events`. `000020.down` corrigido; `000022` remove policy GUC quebrada.
 - Restrições conhecidas: o worker fixa `:9090` para métricas (colide se ocupado, apenas loga); as migrations rodam como owner fora do compose (`tools/apply-migrations.sh`); `DELIVERY-SLICES`/contratos OpenAPI (`contracts/openapi` vazio) ainda não documentam as rotas de inbox/assign; erros HTTP são `http.Error` texto (sem Problem Details) em todo o projeto.
 
 ### Próximos passos ordenados (caminho WAHA)
@@ -142,7 +142,7 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 1. ~~**W1 — API de conexão/sessão WAHA**~~ ✅ DONE (ver abaixo). Falta a **UI** de conexões (criar, aceite de risco, QR com polling em `GET .../{id}` até `session_status=needs_qr`, status).
 2. ~~**W2 — M05.5 envio outbound de texto**~~ ✅ DONE (ver abaixo).
 3. **W3 — Smoke real com WAHA** (wizard pronto: `scripts/w3-smoke.sh`; falta rodar com um telefone — `--until-qr` passa 6/6 sem telefone; passos 3–6 humanos NÃO foram executados) (`devlikeapro/waha:gows`): parear sessão, inbound → Inbox via webhook, resposta outbound, ack. Nunca foi validado ponta a ponta com o container real.
-4. **M05.6 — Integrar as páginas M05 à sessão real** (achados no W2): o app inteiro ainda usa `lib/api.ts` mock (login não é o do backend); `tenantId` nunca é gravado; `ConversationPage` recebe o id via `?id=` embora a rota seja `/inbox/:conversationId`; o SSE (`EventSource`) não envia `Authorization`. Até lá as páginas só funcionam com token/tenant injetados manualmente.
+4. ~~**M05.6 — Integrar as páginas M05 à sessão real**~~ ✅ DONE (ver `docs/delivery/ROADMAP-TO-GOAL.md`, P1) (achados no W2): o app inteiro ainda usa `lib/api.ts` mock (login não é o do backend); `tenantId` nunca é gravado; `ConversationPage` recebe o id via `?id=` embora a rota seja `/inbox/:conversationId`; o SSE (`EventSource`) não envia `Authorization`. Até lá as páginas só funcionam com token/tenant injetados manualmente.
 5. **W4 — Mídia WAHA**: `SendMedia` (hoje `ErrCapabilityNotSupported`) + exibição de mídia inbound na UI.
 6. **M06** chatbot/automação. **D3.4–D3.8 Meta** somente após W1–W3 e nova ordem do produto.
 

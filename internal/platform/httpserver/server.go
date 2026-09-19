@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
@@ -17,12 +18,14 @@ import (
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
 // Issuer/audience do JWT mock — precisam bater com os valores gravados nas
@@ -231,12 +234,15 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	handler := inboxadapters.NewInboxAPIHandler(dbPool)
-	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn)
+	// SSE: authorize once + periodically in short transactions; never hold a tx while streaming.
+	streamAuth := sessionStreamAuthorizer{pool: dbPool, authz: authzSvc}
+	streamSession := inboxadapters.StreamMiddleware(streamAuth)
+	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn, streamAuth, inboxadapters.RealtimeOptions{})
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetConversation))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
 	assignHandler := routingadapters.NewAssignHandler(routingapplication.NewAssigner(
 		routingadapters.NewPostgresConversationAssigner(dbPool),
 		routingadapters.NewAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool)),
@@ -320,4 +326,21 @@ func (s *Server) Shutdown() error {
 
 func (s *Server) Done() <-chan struct{} {
 	return s.closed
+}
+
+// sessionStreamAuthorizer authorizes a user for a tenant in a short transaction (SET LOCAL
+// app.current_user_id), used by the long-lived SSE endpoints.
+type sessionStreamAuthorizer struct {
+	pool  *pgxpool.Pool
+	authz *tenancyapplication.AuthorizationService
+}
+
+func (a sessionStreamAuthorizer) Authorize(ctx context.Context, userID, tenantID uuid.UUID) (*tenancydomain.TenantContext, error) {
+	var tc *tenancydomain.TenantContext
+	err := platformdb.WithTenantSession(ctx, a.pool, userID, false, func(scoped context.Context) error {
+		var authErr error
+		tc, authErr = a.authz.AuthorizeAccessToTenant(scoped, tenantID, userID)
+		return authErr
+	})
+	return tc, err
 }

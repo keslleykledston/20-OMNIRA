@@ -28,6 +28,7 @@ import (
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	"github.com/omnira/omnira/internal/worker/publisher"
+	"github.com/omnira/omnira/internal/worker/realtime"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
 )
 
@@ -117,6 +118,9 @@ func main() {
 		log.Fatalf("failed to start routing consumer: %v", err)
 	}
 	defer routingConsumer.Stop()
+
+	// Realtime: Postgres NOTIFY (row triggers) -> NATS -> SSE. Best effort, ephemeral.
+	go realtime.NewBridge(dbPool, nc).Run(workerCtx)
 
 	// Outbound channel delivery (unofficial WhatsApp via WAHA).
 	if cfg.WahaEnabled {

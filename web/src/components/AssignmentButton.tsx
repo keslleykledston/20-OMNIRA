@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { getAuthToken } from '../lib/session';
+import { API_BASE } from '../lib/config';
+import { getAuthToken, getTenantId } from '../lib/session';
 
-const API_BASE = 'http://localhost:8080/api/v1';
 
 interface AssignmentButtonProps {
   conversationId: string;
@@ -16,7 +16,7 @@ interface AssignmentButtonProps {
  * Supports manual claim and unassignment
  */
 export function AssignmentButton({ conversationId, assignedToUserId, onAssignmentChange }: AssignmentButtonProps) {
-  const tenantId = getTenantIdFromAuth();
+  const tenantId = getTenantId();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -188,10 +188,6 @@ export function assignmentErrorMessage(err: any, fallback: string): string {
     default:
       return fallback;
   }
-}
-
-function getTenantIdFromAuth(): string {
-  return localStorage.getItem('tenantId') || '00000000-0000-0000-0000-000000000000';
 }
 
 function getJWTToken(): string {

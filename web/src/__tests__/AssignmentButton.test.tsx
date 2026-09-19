@@ -24,7 +24,7 @@ describe('AssignmentButton', () => {
     await userEvent.click(screen.getByText('Assign to Me'));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(ME));
     const [url, body, config] = vi.mocked(axios.post).mock.calls[0] as any[];
-    expect(url).toBe(`http://localhost:8080/api/v1/tenants/${TENANT}/inbox/conversations/${CONV}/assign`);
+    expect(url).toBe(`/api/v1/tenants/${TENANT}/inbox/conversations/${CONV}/assign`);
     expect(body).toEqual({});
     expect(config.headers.Authorization).toBe('Bearer tok');
   });
@@ -42,7 +42,7 @@ describe('AssignmentButton', () => {
     render(<AssignmentButton conversationId={CONV} assignedToUserId={ME} onAssignmentChange={onChange} />);
     await userEvent.click(screen.getByText('Release'));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(''));
-    expect(vi.mocked(axios.post).mock.calls[0][0]).toBe(`http://localhost:8080/api/v1/tenants/${TENANT}/inbox/conversations/${CONV}/unassign`);
+    expect(vi.mocked(axios.post).mock.calls[0][0]).toBe(`/api/v1/tenants/${TENANT}/inbox/conversations/${CONV}/unassign`);
   });
 
   it('shows a permission message on 403 when releasing', async () => {

@@ -63,7 +63,15 @@ const generateMockToken = (email: string) => {
 }
 
 export const authAPI = {
-  login: async (email: string, password: string) => {
+  // Real backend login (POST /api/v1/auth/login). Returns the same shape the mock did.
+  // NOTE: the backend endpoint is still a mock IdP (fixed known emails, per-process RS256 keys).
+  login: async (email: string, _password: string) => {
+    const res = await api.post('/v1/auth/login', { email })
+    const { token, user, tenant } = res.data
+    return { data: { token, user: { ...user, roles: user?.roles ?? [] }, tenant } }
+  },
+  // Offline dev/mock mode (VITE_MOCK_AUTH=true): fake unsigned token, NOT accepted by the backend.
+  mockLogin: async (email: string, password: string) => {
     // Mock login: qualquer email na lista + qualquer senha funciona
     if (!MOCK_USERS[email]) {
       return Promise.reject({

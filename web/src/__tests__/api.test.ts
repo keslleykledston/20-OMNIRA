@@ -4,7 +4,7 @@ import { authAPI, accountsAPI, ticketsAPI, reportsAPI } from '../lib/api'
 describe('API Mock', () => {
   describe('authAPI', () => {
     it('deve fazer login com email válido', async () => {
-      const res = await authAPI.login('test@omnira.local', 'password')
+      const res = await authAPI.mockLogin('test@omnira.local', 'password')
       expect(res.data).toHaveProperty('token')
       expect(res.data).toHaveProperty('user')
       expect(res.data.user.email).toBe('test@omnira.local')
@@ -12,7 +12,7 @@ describe('API Mock', () => {
 
     it('deve rejeitar email inválido', async () => {
       try {
-        await authAPI.login('invalid@email.com', 'password')
+        await authAPI.mockLogin('invalid@email.com', 'password')
         throw new Error('Should have rejected')
       } catch (error: any) {
         expect(error.response.status).toBe(401)
@@ -20,7 +20,7 @@ describe('API Mock', () => {
     })
 
     it('token deve ter formato JWT válido', async () => {
-      const res = await authAPI.login('test@omnira.local', 'pass')
+      const res = await authAPI.mockLogin('test@omnira.local', 'pass')
       const token = res.data.token
       const parts = token.split('.')
       expect(parts).toHaveLength(3)

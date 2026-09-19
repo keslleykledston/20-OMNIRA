@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { MessageItem, ConversationItem, RealtimeEvent } from '../types/api';
 import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import { AssignmentButton } from '../components/AssignmentButton';
-import { authHeaders } from '../lib/session';
-
-const API_BASE = 'http://localhost:8080/api/v1';
+import { useNavigate } from 'react-router-dom';
+import { API_BASE } from '../lib/config';
+import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../lib/session';
 
 interface ConversationPageProps {
   conversationId: string;
@@ -18,7 +18,9 @@ interface ConversationPageProps {
  * Consumes M05.2 SSE: GET /tenants/{tenant_id}/inbox/conversations/{conversation_id}/events
  */
 export function ConversationPage({ conversationId }: ConversationPageProps) {
-  const tenantId = getTenantIdFromAuth();
+  const tenantId = getTenantId();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [conversation, setConversation] = useState<ConversationItem | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -36,17 +38,45 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
     queryFn: async () => {
       const params: any = { limit: 50 };
       if (cursor) params.cursor = cursor;
-      const res = await axios.get(
-        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
-        { params, headers: authHeaders() }
-      );
-      return res.data;
+      try {
+        const res = await axios.get(
+          `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
+          { params, headers: authHeaders() }
+        );
+        return res.data;
+      } catch (err) {
+        if (isUnauthorized(err)) handleUnauthorized();
+        throw err;
+      }
     },
+    enabled: !!tenantId && !!conversationId,
+  });
+
+  // Conversation header data (contact, status, assignee) — GET .../inbox/conversations/{id}
+  const { data: conversationData } = useQuery({
+    queryKey: ['conversation', tenantId, conversationId],
+    queryFn: async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}`, {
+          headers: authHeaders(),
+        });
+        return res.data as ConversationItem;
+      } catch (err) {
+        if (isUnauthorized(err)) handleUnauthorized();
+        throw err;
+      }
+    },
+    enabled: !!tenantId && !!conversationId,
   });
 
   useEffect(() => {
+    if (conversationData) setConversation(conversationData);
+  }, [conversationData]);
+
+  useEffect(() => {
     if (messagesData) {
-      setMessages(messagesData.items || []);
+      // Merge by id: fresh copies win (status updates), older pages already shown are kept.
+      setMessages((prev) => mergeById(prev, messagesData.items || []));
       setHasMore(messagesData.has_more || false);
     }
   }, [messagesData]);
@@ -56,12 +86,16 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
     tenantId,
     conversationId,
     onEvent: (event: RealtimeEvent) => {
-      if (event.type === 'message_received') {
-        const newMessage = event.data as MessageItem;
-        setMessages((prev) => [newMessage, ...prev]);
-      } else if (event.type === 'status_changed') {
-        setConversation((prev) => prev ? { ...prev, status: event.data.status } : null);
+      // Events carry only references; refetch through the tenant-authorized REST API.
+      if (event.type === 'message_received' || event.type === 'message_status') {
+        void queryClient.invalidateQueries({ queryKey: ['messages', tenantId, conversationId] });
+      } else if (event.type === 'conversation_updated') {
+        void queryClient.invalidateQueries({ queryKey: ['conversation', tenantId, conversationId] });
       }
+    },
+    onReconnect: () => {
+      void queryClient.invalidateQueries({ queryKey: ['messages', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['conversation', tenantId, conversationId] });
     },
     onError: (error) => {
       console.error('Realtime error:', error);
@@ -84,7 +118,7 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
         { headers: { ...authHeaders(), 'Idempotency-Key': pendingSend.current.key } }
       );
       const sent = res.data as MessageItem;
-      setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [sent, ...prev]));
+      setMessages((prev) => mergeById(prev, [sent]));
       setMessageText('');
       pendingSend.current = null;
     } catch (err: any) {
@@ -98,7 +132,7 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
   return (
     <div className="conversation-page">
       <header className="conversation-header">
-        <button className="back-button">← Inbox</button>
+        <button className="back-button" onClick={() => navigate('/inbox')}>← Inbox</button>
         <div className="header-info">
           <h1>{conversation?.contact_name || 'Loading...'}</h1>
           <p className="phone">{conversation?.contact_phone}</p>
@@ -320,6 +354,12 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
   );
 }
 
+function mergeById(prev: MessageItem[], fresh: MessageItem[]): MessageItem[] {
+  const byId = new Map(prev.map((m) => [m.id, m] as const));
+  fresh.forEach((m) => byId.set(m.id, m));
+  return Array.from(byId.values()).sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+}
+
 function newIdempotencyKey(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -345,10 +385,6 @@ export function sendErrorMessage(err: any): string {
     default:
       return 'Failed to send message';
   }
-}
-
-function getTenantIdFromAuth(): string {
-  return localStorage.getItem('tenantId') || '00000000-0000-0000-0000-000000000000';
 }
 
 function formatTime(isoString: string): string {

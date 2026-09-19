@@ -1,17 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
-import { authHeaders } from '../lib/session';
+import { useNavigate } from 'react-router-dom';
+import { API_BASE } from '../lib/config';
+import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
+import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../lib/session';
 import { ConversationItem } from '../types/api';
 
-const API_BASE = 'http://localhost:8080/api/v1';
 
 /**
  * InboxPage — lista de conversas com paginação cursor-based
  * Consumes M05.1 API: GET /tenants/{tenant_id}/inbox/conversations
  */
 export function InboxPage() {
-  const tenantId = getTenantIdFromAuth();
+  const tenantId = getTenantId();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [cursor, setCursor] = useState<string | null>(null);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -21,14 +25,31 @@ export function InboxPage() {
     queryFn: async () => {
       const params: any = { limit: 20 };
       if (cursor) params.cursor = cursor;
-      const res = await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations`, { params, headers: authHeaders() });
-      return res.data;
+      try {
+        const res = await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations`, { params, headers: authHeaders() });
+        return res.data;
+      } catch (err) {
+        if (isUnauthorized(err)) handleUnauthorized();
+        throw err;
+      }
+    },
+    enabled: !!tenantId,
+  });
+
+  // New messages / assignment changes anywhere in the tenant: refetch the list.
+  useRealtimeEvents({
+    tenantId,
+    onEvent: () => {
+      void queryClient.invalidateQueries({ queryKey: ['conversations', tenantId] });
+    },
+    onReconnect: () => {
+      void queryClient.invalidateQueries({ queryKey: ['conversations', tenantId] });
     },
   });
 
   useEffect(() => {
     if (data) {
-      setConversations(data.items || []);
+      setConversations((prev) => mergeConversations(prev, data.items || []));
       setHasMore(data.has_more || false);
     }
   }, [data]);
@@ -45,7 +66,14 @@ export function InboxPage() {
 
       <div className="conversation-list">
         {conversations.map((conv) => (
-          <div key={conv.id} className="conversation-item">
+          <div
+            key={conv.id}
+            className="conversation-item"
+            role="link"
+            tabIndex={0}
+            onClick={() => navigate(`/inbox/${conv.id}`)}
+            onKeyDown={(e) => e.key === 'Enter' && navigate(`/inbox/${conv.id}`)}
+          >
             <div className="conversation-avatar">{conv.contact_name?.[0]?.toUpperCase()}</div>
             <div className="conversation-content">
               <h3 className="contact-name">{conv.contact_name}</h3>
@@ -192,9 +220,10 @@ export function InboxPage() {
   );
 }
 
-function getTenantIdFromAuth(): string {
-  // Mock — em produção, obter do JWT/auth context
-  return localStorage.getItem('tenantId') || '00000000-0000-0000-0000-000000000000';
+function mergeConversations(prev: ConversationItem[], fresh: ConversationItem[]): ConversationItem[] {
+  const byId = new Map(prev.map((c) => [c.id, c] as const));
+  fresh.forEach((c) => byId.set(c.id, c));
+  return Array.from(byId.values()).sort((a, b) => ((a.created_at ?? '') < (b.created_at ?? '') ? 1 : -1));
 }
 
 function formatTime(isoString: string): string {

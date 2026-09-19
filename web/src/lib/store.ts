@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { clearSession } from './session'
 
 export interface User {
   id: string
@@ -26,7 +27,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ token })
   },
   logout: () => {
-    localStorage.removeItem('token')
+    clearSession()
     set({ user: null, token: null })
   }
 }))

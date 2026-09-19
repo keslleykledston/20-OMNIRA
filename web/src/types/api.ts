@@ -5,6 +5,7 @@ export interface ConversationItem {
   contact_name: string;
   contact_phone: string;
   status: 'active' | 'closed' | 'pending';
+  created_at?: string;
   updated_at: string;
   assigned_to_user_id?: string;
   message_count: number;

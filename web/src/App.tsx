@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -11,6 +11,11 @@ import { ConversationPage } from './pages/ConversationPage'
 import Layout from './components/Layout'
 
 const queryClient = new QueryClient()
+
+function ConversationRoute() {
+  const { conversationId = '' } = useParams()
+  return <ConversationPage key={conversationId} conversationId={conversationId} />
+}
 
 export default function App() {
   return (
@@ -25,7 +30,7 @@ export default function App() {
             <Route path="/reports" element={<Reports />} />
             <Route path="/supervisor" element={<SupervisorDashboard />} />
             <Route path="/inbox" element={<InboxPage />} />
-            <Route path="/inbox/:conversationId" element={<ConversationPage conversationId={new URLSearchParams(window.location.search).get('id') || ''} />} />
+            <Route path="/inbox/:conversationId" element={<ConversationRoute />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Route>
         </Routes>

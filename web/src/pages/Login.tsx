@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../lib/store'
 import { authAPI } from '../lib/api'
+import { saveSession } from '../lib/session'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -17,8 +18,9 @@ export default function Login() {
     setLoading(true)
 
     try {
-      const response = await authAPI.login(email, password)
-      const { token, user } = response.data
+      const login = import.meta.env.VITE_MOCK_AUTH === 'true' ? authAPI.mockLogin : authAPI.login
+      const response = await login(email, password)
+      const { token, user, tenant } = response.data
 
       if (!token || !user) {
         setError('Login retornou dados inválidos')
@@ -27,7 +29,7 @@ export default function Login() {
 
       setToken(token)
       setUser(user)
-      localStorage.setItem('user', JSON.stringify(user))
+      saveSession(token, tenant?.id, user)
 
       // Aguarda um momento para garantir que o state foi atualizado
       setTimeout(() => navigate('/'), 100)
