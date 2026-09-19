@@ -18,6 +18,9 @@ const (
 	ActionMembershipDeactivated  AuditAction = "membership.deactivated"
 	ActionConversationAssigned   AuditAction = "conversation.assigned"
 	ActionConversationUnassigned AuditAction = "conversation.unassigned"
+	ActionChannelConnectionCreated AuditAction = "channel.connection_created"
+	ActionChannelSessionStarted    AuditAction = "channel.session_started"
+	ActionChannelSessionStopped    AuditAction = "channel.session_stopped"
 )
 
 // AuditOutcome — resultado da operação.
@@ -36,6 +39,7 @@ const (
 	ResourceMembership   ResourceType = "membership"
 	ResourceRole         ResourceType = "role"
 	ResourceConversation ResourceType = "conversation"
+	ResourceChannelConnection ResourceType = "channel_connection"
 )
 
 // AuditEvent — evento de auditoria.

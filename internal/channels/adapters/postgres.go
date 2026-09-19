@@ -258,10 +258,10 @@ func (r *PostgresChannelConnectionRepository) Update(ctx context.Context, c *dom
 	result, err := db.QuerierFromContext(ctx, r.pool).Exec(ctx, `
 		UPDATE channel_connections
 		SET status = $2, capabilities = $3, secret_ref = $4, provider_session_ref = $5,
-		    risk_acknowledged_at = $6, risk_acknowledged_by = $7, updated_at = now()
+		    risk_acknowledged_at = $6, risk_acknowledged_by = $7, external_account_id = $8, updated_at = now()
 		WHERE id = $1`,
 		c.ID, string(c.Status), caps, nullableUUID(c.SecretRef), c.ProviderSessionRef,
-		c.RiskAcknowledgedAt, c.RiskAcknowledgedBy)
+		c.RiskAcknowledgedAt, c.RiskAcknowledgedBy, c.ExternalAccountID)
 	if err != nil {
 		return fmt.Errorf("channel: update connection: %w", err)
 	}

@@ -12,9 +12,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
+	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
@@ -76,6 +78,12 @@ func main() {
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).UseIntake(intake))
+		srv.RegisterWahaConnectionHandlers(dbPool, channeladapters.NewConnectionHandler(channelapplication.NewWahaConnectionService(
+			connectionRepo, credentialStore, waha.NewSessionController(provider),
+			channeladapters.NewPostgresPermissionChecker(dbPool),
+			channeladapters.NewChannelAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool)),
+			cfg.PublicBaseURL,
+		)))
 	}
 	if cfg.MetaEnabled {
 		if cfg.MetaVerifyToken == "" || cfg.MetaAppSecret == "" {

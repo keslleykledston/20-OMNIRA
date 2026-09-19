@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
+	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/platform/health"
@@ -239,6 +240,29 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Assign))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Unassign))))
+}
+
+// RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session
+// management (admin-only via channel.manage), behind authn + tenant session.
+func (s *Server) RegisterWahaConnectionHandlers(dbPool *pgxpool.Pool, h *channeladapters.ConnectionHandler) {
+	if s.publicKey == nil || h == nil {
+		return
+	}
+	jwtAuth := authn.NewJWTAuthenticator(s.publicKey, mockJWTIssuer, mockJWTAudience)
+	authnMiddleware := authn.Middleware(jwtAuth)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	base := "/api/v1/tenants/{tenant_id}/channels/waha/connections"
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	s.mux.Handle("POST "+base, wrap(h.Create))
+	s.mux.Handle("GET "+base, wrap(h.List))
+	s.mux.Handle("GET "+base+"/{connection_id}", wrap(h.Get))
+	s.mux.Handle("POST "+base+"/{connection_id}/session/start", wrap(h.StartSession))
+	s.mux.Handle("POST "+base+"/{connection_id}/session/stop", wrap(h.StopSession))
+	s.mux.Handle("GET "+base+"/{connection_id}/qr", wrap(h.QR))
 }
 
 // RegisterWahaWebhook exposes only the connection-scoped WAHA callback.
