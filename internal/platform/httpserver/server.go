@@ -10,9 +10,20 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
+	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
+	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
+)
+
+// Issuer/audience do JWT mock — precisam bater com os valores gravados nas
+// claims em internal/platform/authn/mock_login.go.
+const (
+	mockJWTIssuer   = "omnira-mock"
+	mockJWTAudience = "omnira-api"
 )
 
 type Server struct {
@@ -25,6 +36,7 @@ type Server struct {
 	health      *health.HealthCheck
 	rateLimiter *ratelimit.Limiter
 	privateKey  *rsa.PrivateKey
+	publicKey   *rsa.PublicKey
 }
 
 func New(addr string) *Server {
@@ -109,13 +121,17 @@ func (s *Server) RegisterHealthHandlers() {
 
 // RegisterAuthHandlers — registra endpoints de autenticação (incluindo mock login para testes)
 func (s *Server) RegisterAuthHandlers() {
-	// Gerar chave RSA para JWT (use valores reais em produção)
-	privateKey, _, err := authn.GenerateTestRSAKeys()
+	// Gerar chave RSA para JWT (use valores reais em produção).
+	// A mesma keypair é reutilizada por RegisterTenancyHandlers para
+	// verificar os tokens emitidos aqui — por isso fica salva no Server em
+	// vez de local à função.
+	privateKey, publicKey, err := authn.GenerateTestRSAKeys()
 	if err != nil {
 		// Fallback: chave simplificada
 		privateKey = nil
 	}
 	s.privateKey = privateKey
+	s.publicKey = publicKey
 
 	if s.privateKey == nil {
 		// Health check apenas
@@ -130,6 +146,68 @@ func (s *Server) RegisterAuthHandlers() {
 	authHandler := authn.NewAuthHandler(s.privateKey)
 	s.mux.HandleFunc("POST /api/v1/auth/login", authHandler.MockLogin)
 	s.mux.HandleFunc("GET /api/v1/auth/health", authHandler.HealthCheck)
+}
+
+// RegisterTenancyHandlers — registra as rotas REST do M01/R0.1 Tenant
+// Management: GET /api/v1/me, GET /api/v1/tenants, GET/PATCH
+// /api/v1/tenants/{tenant_id}, membros e auditoria. Requer que
+// RegisterAuthHandlers já tenha rodado (usa a mesma keypair RSA).
+func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
+	if s.publicKey == nil {
+		// Sem chave pública não há como verificar tokens; não registrar
+		// rotas que dependeriam de autenticação funcional.
+		return
+	}
+
+	jwtAuth := authn.NewJWTAuthenticator(s.publicKey, mockJWTIssuer, mockJWTAudience)
+	authnMiddleware := authn.Middleware(jwtAuth)
+
+	tenantRepo := tenancyadapters.NewPostgresTenantRepository(dbPool)
+	memberRepo := tenancyadapters.NewPostgresMembershipRepository(dbPool)
+	roleRepo := tenancyadapters.NewPostgresRoleRepository(dbPool)
+
+	tenantSvc := tenancyapplication.NewTenantService(tenantRepo)
+	membershipSvc := tenancyapplication.NewMembershipService(memberRepo, roleRepo)
+	authzSvc := tenancyapplication.NewAuthorizationService(memberRepo, tenantRepo)
+
+	tenantHandler := tenancyadapters.NewTenantAPIHandler(tenantSvc, membershipSvc)
+
+	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
+	auditSvc := auditapplication.NewAuditService(auditRepo)
+	auditHandler := auditadapters.NewAuditAPIHandler(auditSvc)
+
+	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+
+	// GET /api/v1/me — identidade do Principal autenticado.
+	s.mux.Handle("GET /api/v1/me", authnMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, err := authn.FromContext(r.Context())
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"user_id": principal.UserID.String(),
+			"subject": principal.Subject,
+		})
+	})))
+
+	// GET /api/v1/tenants — tenants do usuário autenticado.
+	s.mux.Handle("GET /api/v1/tenants", authnMiddleware(userSession(http.HandlerFunc(tenantHandler.ListMyTenants))))
+
+	// GET /api/v1/tenants/{tenant_id} — detalhe de um tenant (autorização
+	// derivada de membership real, nunca do valor da URL isoladamente).
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.GetTenantMe))))
+
+	// Membros
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/members", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.ListMemberships))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/members", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.CreateMembership))))
+	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/members/{membership_id}", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.RevokeMembership))))
+
+	// Auditoria
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/audit", authnMiddleware(tenantSession(http.HandlerFunc(auditHandler.ListTenantAuditEvents))))
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {

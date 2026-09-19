@@ -8,11 +8,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/tenancy/application"
 	"github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// setupIsolationTestDB — setup PostgreSQL para testes de isolamento.
+// setupIsolationTestDB — pool de SEED, conectada com privilégios elevados
+// (OMNIRA_DATABASE_URL). Usada para preparar estado de teste diretamente,
+// contornando RLS de propósito — não é o caminho que a aplicação real usa.
 func setupIsolationTestDB(t *testing.T) *pgxpool.Pool {
 	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
 	if dbURL == "" {
@@ -36,6 +39,46 @@ func setupIsolationTestDB(t *testing.T) *pgxpool.Pool {
 	})
 
 	return pool
+}
+
+// setupIsolationAppPool — pool com a role de aplicação sem privilégios
+// (OMNIRA_APP_DATABASE_URL), a mesma usada em produção. Usada com
+// platformdb.WithTenantSession para exercitar RLS de verdade — sem isso,
+// current_user_id() nunca é setado e a policy nega tudo (fail-closed).
+func setupIsolationAppPool(t *testing.T) *pgxpool.Pool {
+	dbURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("OMNIRA_APP_DATABASE_URL not set; skipping RLS-enforced isolation tests")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("failed to connect to database as app role: %v", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("failed to ping database as app role: %v", err)
+	}
+	t.Cleanup(func() { pool.Close() })
+	return pool
+}
+
+// authorizeAsUser — roda AuthorizeAccessToTenant dentro de uma sessão RLS
+// real (app.current_user_id setado), como a aplicação faz de verdade.
+func authorizeAsUser(t *testing.T, appPool *pgxpool.Pool, authzSvc *application.AuthorizationService, tenantID, userID uuid.UUID) (*domain.TenantContext, error) {
+	t.Helper()
+	var tc *domain.TenantContext
+	var authzErr error
+	err := platformdb.WithTenantSession(context.Background(), appPool, userID, false, func(ctx context.Context) error {
+		tc, authzErr = authzSvc.AuthorizeAccessToTenant(ctx, tenantID, userID)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("failed to open tenant session: %v", err)
+	}
+	return tc, authzErr
 }
 
 // TestIsolation_TenantACannotReadTenantBData — adversarial: Tenant A tenta ler dados de Tenant B.
@@ -115,8 +158,10 @@ func TestIsolation_MembershipRevocation_DeniesAccess(t *testing.T) {
 	membership, _ := domain.NewMembership(tenant.ID, userID, systemRoleID)
 	memberRepo.Store(ctx, membership)
 
+	appPool := setupIsolationAppPool(t)
+
 	// Validar que acesso é permitido quando active
-	tc, err := authzSvc.AuthorizeAccessToTenant(ctx, tenant.ID, userID)
+	tc, err := authorizeAsUser(t, appPool, authzSvc, tenant.ID, userID)
 	if err != nil {
 		t.Fatalf("expected authorization before revocation, got error: %v", err)
 	}
@@ -129,7 +174,7 @@ func TestIsolation_MembershipRevocation_DeniesAccess(t *testing.T) {
 	memberRepo.Update(ctx, membership)
 
 	// Adversarial: User tenta acessar após revogação
-	tc, err = authzSvc.AuthorizeAccessToTenant(ctx, tenant.ID, userID)
+	tc, err = authorizeAsUser(t, appPool, authzSvc, tenant.ID, userID)
 	if err == nil {
 		t.Error("expected authorization to fail after revocation")
 	}
@@ -223,8 +268,10 @@ func TestIsolation_TenantInactive_DeniesAccess(t *testing.T) {
 	membership, _ := domain.NewMembership(tenant.ID, userID, systemRoleID)
 	memberRepo.Store(ctx, membership)
 
+	appPool := setupIsolationAppPool(t)
+
 	// Validar que acesso funciona quando tenant está ativo
-	tc, err := authzSvc.AuthorizeAccessToTenant(ctx, tenant.ID, userID)
+	tc, err := authorizeAsUser(t, appPool, authzSvc, tenant.ID, userID)
 	if err != nil {
 		t.Fatalf("expected authorization for active tenant, got error: %v", err)
 	}
@@ -237,7 +284,7 @@ func TestIsolation_TenantInactive_DeniesAccess(t *testing.T) {
 	tenantRepo.Update(ctx, tenant)
 
 	// Adversarial: User com membership ativa mas tenant inativo
-	tc, err = authzSvc.AuthorizeAccessToTenant(ctx, tenant.ID, userID)
+	tc, err = authorizeAsUser(t, appPool, authzSvc, tenant.ID, userID)
 	if err == nil {
 		t.Error("expected authorization to fail when tenant is inactive")
 	}

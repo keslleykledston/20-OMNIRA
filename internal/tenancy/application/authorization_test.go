@@ -32,6 +32,16 @@ func (m *MockMembershipRepo) FindByTenantAndUser(ctx context.Context, tenantID, 
 	return result, nil
 }
 
+func (m *MockMembershipRepo) FindByUser(ctx context.Context, userID uuid.UUID) ([]*domain.Membership, error) {
+	var result []*domain.Membership
+	for _, mem := range m.memberships {
+		if mem.UserID == userID && mem.IsActive() {
+			result = append(result, mem)
+		}
+	}
+	return result, nil
+}
+
 func (m *MockMembershipRepo) FindByTenant(ctx context.Context, tenantID uuid.UUID) ([]*domain.Membership, error) {
 	var result []*domain.Membership
 	for _, mem := range m.memberships {

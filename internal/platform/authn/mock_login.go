@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -8,7 +9,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 )
 
 // MockLoginRequest — request para mock login
@@ -110,27 +110,17 @@ func LoadPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {
 	return privateKey, nil
 }
 
-// GenerateTestRSAKeys — gera par RSA para testes (NÃO usar em produção)
+// GenerateTestRSAKeys — gera par RSA para testes (NÃO usar em produção).
+//
+// Gerado em runtime (2048 bits) em vez de PEM hardcoded: uma chave estática
+// no código-fonte é previsível/reversível e um PEM copiado à mão é frágil
+// a corrupção silenciosa (um PEM inválido aqui fazia RegisterAuthHandlers
+// cair no fallback silencioso e o login mock responder sempre 503).
 func GenerateTestRSAKeys() (*rsa.PrivateKey, *rsa.PublicKey, error) {
-	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(`-----BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEA0Z3VS5JJcds3u41ayW2LqAZnvl3zSLlBkJ5VJ7w/TYmQrj4H
-3R5CmSJuAd7KL1V+TJ5cI9gIRYZKXkJ4P7YvHT3v8khKKmGYnYqFP3WxJuHqNTJI
-pVKbVEO2aFW2RIzH7HkQZCgZjsVULECG6WJd9XqEzYKrFyUcKSqKU2sLyJ2sF5Z4
-V3vkLzYpJ3LdRKZqFOA3nHVnpLdF5cQf5QW9qZvHKfL8CKvL1fBqW3wZL9RQOJZK
-bqJUVvK3c8U8ZCKq8XvYXX2GKcKKU7JZ3nKVjZGUVzFkHH7X8jLGBZqKVmJ7KYvB
-K3mYHh8Xvu5v5UG5cKnJZcvDXZQvQJ7K5wIDAQABAoIBABsLkQp3Dd6+lKS3PJpq
-RwYKzKqVDvj5PJnJ2GrH9dXeG5VXF5aN1d9V3d2g8dH3gKl2dUHKLrJgLBQqK2cJ
-pSqL5rJeU5QzJ7h5tZKzKHpH7NczqQ8UJJqXKJzJKkVJ5nKX3qVKpVGqF7dZVJpC
-L7w5kCU5l5C5qV3zKJ5VRrJ8hJ5cLqVPzQqQ7zVP5Z9v3w7zQVCp5RZ5nJ3j3L3q
-5xUjKJVzJZGZ5jVZjZJQzZZl3ZZx5c5rD7vH9B5LJ7T5J5DZNzZ7TJ5L7N9Z7zPp
-Z9NzB5vGF5j9P5Y9R5hZVJ5hZx5jZ5rZzJ9j59IB79DJ99IJ19IRB1hRjz1fP1TB
-fVVYQAECgYEA7dE8uDfDKJNL5ELvfVQQHf4f4X3PVPdI+E1PrFJ5VLH8LqVvZYyz
-i7mPY4R5zZ7F5rn7D3zL7t3L9p7L7n3L/p3L7r3L/r3L7t3L/v3L/v/////
------END RSA PRIVATE KEY-----`))
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	publicKey := &privateKey.PublicKey
-	return privateKey, publicKey, nil
+	return privateKey, &privateKey.PublicKey, nil
 }

@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -19,12 +20,21 @@ const (
 	StatusUnknown   Status = "unknown"
 )
 
+// MillisDuration — time.Duration que serializa em JSON como milissegundos
+// (inteiro), em vez do padrão do encoding/json que grava o int64 bruto em
+// nanossegundos apesar do nome do campo dizer "_ms".
+type MillisDuration time.Duration
+
+func (d MillisDuration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).Milliseconds())
+}
+
 // ComponentHealth — saúde de um componente individual.
 type ComponentHealth struct {
-	Name    string        `json:"name"`
-	Status  Status        `json:"status"`
-	Message string        `json:"message,omitempty"`
-	Latency time.Duration `json:"latency_ms"`
+	Name    string         `json:"name"`
+	Status  Status         `json:"status"`
+	Message string         `json:"message,omitempty"`
+	Latency MillisDuration `json:"latency_ms"`
 }
 
 // HealthCheck — valida saúde dos componentes.
@@ -85,7 +95,7 @@ func (h *HealthCheck) checkDatabase(ctx context.Context) {
 			Name:    name,
 			Status:  StatusUnhealthy,
 			Message: fmt.Sprintf("ping failed: %v", err),
-			Latency: latency,
+			Latency: MillisDuration(latency),
 		}
 		return
 	}
@@ -93,7 +103,7 @@ func (h *HealthCheck) checkDatabase(ctx context.Context) {
 	h.components[name] = &ComponentHealth{
 		Name:    name,
 		Status:  StatusHealthy,
-		Latency: latency,
+		Latency: MillisDuration(latency),
 	}
 }
 
@@ -117,7 +127,7 @@ func (h *HealthCheck) checkNATS(ctx context.Context) {
 			Name:    name,
 			Status:  StatusUnhealthy,
 			Message: "not connected",
-			Latency: time.Since(start),
+			Latency: MillisDuration(time.Since(start)),
 		}
 		return
 	}
@@ -127,7 +137,7 @@ func (h *HealthCheck) checkNATS(ctx context.Context) {
 	h.components[name] = &ComponentHealth{
 		Name:    name,
 		Status:  StatusHealthy,
-		Latency: latency,
+		Latency: MillisDuration(latency),
 	}
 }
 

@@ -10,6 +10,17 @@ import (
 	"github.com/omnira/omnira/internal/tenancy/ports"
 )
 
+// Sentinel errors — permitem errors.Is() no chamador (ex.: middleware HTTP)
+// mapear cada falha para o status code correto. errors.New(...) solto não
+// funciona com errors.Is porque cada chamada cria uma instância distinta.
+var (
+	ErrInvalidTenantID  = errors.New("invalid tenant_id")
+	ErrInvalidActorID   = errors.New("invalid actor_id")
+	ErrTenantNotFound   = errors.New("tenant not found")
+	ErrTenantNotActive  = errors.New("tenant is not active")
+	ErrNoActiveMembership = errors.New("access denied: no active membership")
+)
+
 // AuthorizationService — valida acesso a recursos tenant-bound.
 type AuthorizationService struct {
 	memberRepo ports.MembershipRepository
@@ -39,10 +50,10 @@ func (s *AuthorizationService) AuthorizeAccessToTenant(
 ) (*domain.TenantContext, error) {
 	// Validar UUIDs
 	if tenantID == uuid.Nil {
-		return nil, errors.New("invalid tenant_id")
+		return nil, ErrInvalidTenantID
 	}
 	if actorID == uuid.Nil {
-		return nil, errors.New("invalid actor_id")
+		return nil, ErrInvalidActorID
 	}
 
 	// Verificar que o tenant existe
@@ -51,12 +62,12 @@ func (s *AuthorizationService) AuthorizeAccessToTenant(
 		return nil, fmt.Errorf("failed to fetch tenant: %w", err)
 	}
 	if tenant == nil {
-		return nil, errors.New("tenant not found")
+		return nil, ErrTenantNotFound
 	}
 
 	// Verificar se o tenant está ativo
 	if !tenant.IsActive() {
-		return nil, errors.New("tenant is not active")
+		return nil, ErrTenantNotActive
 	}
 
 	// Verificar membership: actor MUST ter membership ATIVO no tenant
@@ -75,7 +86,7 @@ func (s *AuthorizationService) AuthorizeAccessToTenant(
 	}
 
 	if activeMembership == nil {
-		return nil, errors.New("access denied: no active membership")
+		return nil, ErrNoActiveMembership
 	}
 
 	// Criar TenantContext

@@ -34,6 +34,7 @@ type JWTAuthenticator struct {
 // Claims — JWT payload mínimo.
 type Claims struct {
 	Subject string `json:"sub"`
+	UserID  string `json:"user_id,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -84,9 +85,14 @@ func (a *JWTAuthenticator) Verify(tokenString string) (*Principal, error) {
 		return nil, fmt.Errorf("invalid audience: expected %s", a.audience)
 	}
 
-	// Gerar UserID a partir do subject (hash SHA1 deterministicamente).
-	// Para dev, usamos o subject como seed pra um UUID consistente.
-	userID := uuid.NewSHA1([16]byte{}, []byte(claims.Subject))
+	// Preferir o claim "user_id" explícito (emitido pelo login real/mock e que
+	// bate com os UUIDs de membership persistidos). Só cair para um UUID
+	// derivado do subject se o claim não vier — não deve acontecer em tokens
+	// emitidos por este backend, mas evita panic em tokens externos/legados.
+	userID, err := uuid.Parse(claims.UserID)
+	if err != nil {
+		userID = uuid.NewSHA1([16]byte{}, []byte(claims.Subject))
+	}
 
 	return &Principal{
 		UserID:  userID,

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/audit/domain"
 	"github.com/omnira/omnira/internal/audit/ports"
+	"github.com/omnira/omnira/internal/platform/db"
 )
 
 // PostgresAuditEventRepository — implementação PostgreSQL.
@@ -29,7 +30,7 @@ func (r *PostgresAuditEventRepository) Store(ctx context.Context, event *domain.
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO NOTHING
 	`
-	_, err := r.pool.Exec(ctx, query,
+	_, err := db.QuerierFromContext(ctx, r.pool).Exec(ctx, query,
 		event.ID,
 		event.TenantID,
 		event.ActorID,
@@ -51,7 +52,7 @@ func (r *PostgresAuditEventRepository) FindByID(ctx context.Context, id uuid.UUI
 		FROM audit_events
 		WHERE id = $1
 	`
-	row := r.pool.QueryRow(ctx, query, id)
+	row := db.QuerierFromContext(ctx, r.pool).QueryRow(ctx, query, id)
 	event := &domain.AuditEvent{}
 	var metadataJSON []byte
 
@@ -91,7 +92,7 @@ func (r *PostgresAuditEventRepository) FindByTenantAndCorrelation(ctx context.Co
 		WHERE tenant_id = $1 AND correlation_id = $2
 		ORDER BY created_at DESC
 	`
-	rows, err := r.pool.Query(ctx, query, tenantID, correlationID)
+	rows, err := db.QuerierFromContext(ctx, r.pool).Query(ctx, query, tenantID, correlationID)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +109,7 @@ func (r *PostgresAuditEventRepository) FindByTenant(ctx context.Context, tenantI
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3
 	`
-	rows, err := r.pool.Query(ctx, query, tenantID, limit, offset)
+	rows, err := db.QuerierFromContext(ctx, r.pool).Query(ctx, query, tenantID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +126,7 @@ func (r *PostgresAuditEventRepository) FindByAction(ctx context.Context, tenantI
 		ORDER BY created_at DESC
 		LIMIT $3 OFFSET $4
 	`
-	rows, err := r.pool.Query(ctx, query, tenantID, string(action), limit, offset)
+	rows, err := db.QuerierFromContext(ctx, r.pool).Query(ctx, query, tenantID, string(action), limit, offset)
 	if err != nil {
 		return nil, err
 	}

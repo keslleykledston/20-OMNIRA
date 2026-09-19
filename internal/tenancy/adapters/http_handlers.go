@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/tenancy/application"
 	"github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -75,6 +76,43 @@ func (h *TenantAPIHandler) GetTenantMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(toTenantResponse(tenant))
+}
+
+// ListMyTenants — GET /api/v1/tenants (tenants em que o usuário autenticado
+// tem membership ativa). Diferente de GetTenantMe, não depende de
+// AuthorizationMiddleware/tenant_id na URL — usa só o Principal. A própria
+// query em memberships já é filtrada por RLS a partir de
+// app.current_user_id, então FindByUser nunca vaza membership de outro
+// usuário mesmo que o código aqui tivesse um bug de filtro.
+func (h *TenantAPIHandler) ListMyTenants(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	principal, err := authn.FromContext(ctx)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	memberships, err := h.membershipSvc.GetUserActiveMemberships(ctx, principal.UserID)
+	if err != nil {
+		http.Error(w, "failed to fetch memberships", http.StatusInternalServerError)
+		return
+	}
+
+	responses := make([]TenantResponse, 0, len(memberships))
+	for _, m := range memberships {
+		tenant, err := h.tenantSvc.GetTenant(ctx, m.TenantID)
+		if err != nil || tenant == nil {
+			// RLS pode legitimamente esconder um tenant que ficou inativo
+			// entre as duas queries; não é um erro fatal para a listagem.
+			continue
+		}
+		responses = append(responses, toTenantResponse(tenant))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(responses)
 }
 
 // ListMemberships — GET /api/v1/tenants/{tenant_id}/memberships (listar memberships do tenant).
@@ -186,7 +224,7 @@ func toTenantResponse(t *domain.Tenant) TenantResponse {
 		IsolationProfile: string(t.IsolationProfile),
 		Status:           string(t.Status),
 		CreatedAt:        t.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:        t.UpdateatedAt.Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:        t.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 	}
 }
 

@@ -47,6 +47,7 @@ func main() {
 	srv.SetupRateLimiting()
 	srv.RegisterHealthHandlers()
 	srv.RegisterAuthHandlers()
+	srv.RegisterTenancyHandlers(dbPool)
 
 	errChan := make(chan error, 1)
 	sigChan := make(chan os.Signal, 1)

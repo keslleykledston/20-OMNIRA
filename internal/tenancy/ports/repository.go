@@ -33,6 +33,11 @@ type MembershipRepository interface {
 	// FindByTenantAndUser — busca memberships de um usuário num tenant.
 	FindByTenantAndUser(ctx context.Context, tenantID, userID uuid.UUID) ([]*domain.Membership, error)
 
+	// FindByUser — busca todas as memberships ativas de um usuário, em
+	// qualquer tenant (usado para "meus tenants" em GET /api/v1/tenants).
+	// Sob RLS, só retorna tenants onde o próprio usuário tem membership.
+	FindByUser(ctx context.Context, userID uuid.UUID) ([]*domain.Membership, error)
+
 	// FindByTenant — lista todas as memberships de um tenant.
 	FindByTenant(ctx context.Context, tenantID uuid.UUID) ([]*domain.Membership, error)
 

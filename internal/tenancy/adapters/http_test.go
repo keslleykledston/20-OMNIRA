@@ -63,6 +63,16 @@ func (m *MockMembershipRepo) FindByTenantAndUser(ctx context.Context, tenantID, 
 	return result, nil
 }
 
+func (m *MockMembershipRepo) FindByUser(ctx context.Context, userID uuid.UUID) ([]*domain.Membership, error) {
+	var result []*domain.Membership
+	for _, mem := range m.memberships {
+		if mem.UserID == userID && mem.IsActive() {
+			result = append(result, mem)
+		}
+	}
+	return result, nil
+}
+
 func (m *MockMembershipRepo) FindByTenant(ctx context.Context, tenantID uuid.UUID) ([]*domain.Membership, error) {
 	var result []*domain.Membership
 	for _, mem := range m.memberships {
@@ -107,7 +117,7 @@ func TestAuthorizationMiddleware_MissingPrincipal(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/tenants/"+tenantID.String(), nil)
 
 	// Middleware + handler
-	handler := AuthorizationMiddleware(authzSvc)(okHandler())
+	handler := AuthorizationMiddleware(nil, authzSvc)(okHandler())
 
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -132,7 +142,7 @@ func TestAuthorizationMiddleware_MissingTenantID(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/tenants/", nil).WithContext(ctx)
 
 	// Middleware + handler
-	handler := AuthorizationMiddleware(authzSvc)(okHandler())
+	handler := AuthorizationMiddleware(nil, authzSvc)(okHandler())
 
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

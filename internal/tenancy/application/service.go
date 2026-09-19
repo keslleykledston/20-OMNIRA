@@ -143,3 +143,13 @@ func (s *MembershipService) GetTenantMemberships(ctx context.Context, tenantID u
 	}
 	return memberships, nil
 }
+
+// GetUserActiveMemberships — lista as memberships ativas de um usuário em
+// qualquer tenant (usado para "meus tenants").
+func (s *MembershipService) GetUserActiveMemberships(ctx context.Context, userID uuid.UUID) ([]*domain.Membership, error) {
+	memberships, err := s.memberRepo.FindByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user memberships: %w", err)
+	}
+	return memberships, nil
+}

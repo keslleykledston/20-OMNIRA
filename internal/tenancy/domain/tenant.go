@@ -33,7 +33,7 @@ type Tenant struct {
 	IsolationProfile  IsolationProfile
 	Status            TenantStatus
 	CreatedAt         time.Time
-	UpdateatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // NewTenant — factory com validação básica.
@@ -48,7 +48,7 @@ func NewTenant(legalName string, profile IsolationProfile) (*Tenant, error) {
 		IsolationProfile: profile,
 		Status:           TenantStatusActive,
 		CreatedAt:        time.Now().UTC(),
-		UpdateatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}, nil
 }
 
@@ -58,14 +58,14 @@ func (t *Tenant) Deactivate() error {
 		return errors.New("cannot deactivate a suspended tenant")
 	}
 	t.Status = TenantStatusInactive
-	t.UpdateatedAt = time.Now().UTC()
+	t.UpdatedAt = time.Now().UTC()
 	return nil
 }
 
 // Suspend — muda status pra suspended (operação administrativa).
 func (t *Tenant) Suspend() error {
 	t.Status = TenantStatusSuspended
-	t.UpdateatedAt = time.Now().UTC()
+	t.UpdatedAt = time.Now().UTC()
 	return nil
 }
 

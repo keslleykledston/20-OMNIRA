@@ -18,28 +18,35 @@ func NewAuthHandler(privateKey *rsa.PrivateKey) *AuthHandler {
 	}
 }
 
+// writeJSONError — resposta de erro em JSON consistente com o restante da API
+func writeJSONError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message, "message": message})
+}
+
 // MockLogin — endpoint POST /api/v1/auth/login (APENAS PARA TESTES)
 func (h *AuthHandler) MockLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var req MockLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		writeJSONError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
 	if req.Email == "" {
-		http.Error(w, "email é obrigatório", http.StatusBadRequest)
+		writeJSONError(w, "email é obrigatório", http.StatusBadRequest)
 		return
 	}
 
 	// Gerar token
 	resp, err := MockLoginHandler(req.Email, h.privateKey)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		writeJSONError(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 

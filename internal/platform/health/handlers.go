@@ -3,6 +3,7 @@ package health
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -77,7 +78,7 @@ func (h *HealthCheck) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("omnira_health_status{component=\"")
 		sb.WriteString(component.Name)
 		sb.WriteString("\"} ")
-		sb.WriteString(json.Number(string(rune(statusVal))).String())
+		sb.WriteString(strconv.Itoa(statusVal))
 		sb.WriteString("\n")
 	}
 
@@ -88,7 +89,7 @@ func (h *HealthCheck) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("omnira_health_latency_ms{component=\"")
 		sb.WriteString(component.Name)
 		sb.WriteString("\"} ")
-		sb.WriteString(json.Number(string(rune(component.Latency.Milliseconds()))).String())
+		sb.WriteString(strconv.FormatInt(time.Duration(component.Latency).Milliseconds(), 10))
 		sb.WriteString("\n")
 	}
 
