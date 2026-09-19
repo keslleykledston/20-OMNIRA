@@ -118,8 +118,10 @@ func (c *Config) Validate() error {
 	if authMode != "mock" && authMode != "oidc" {
 		return fmt.Errorf("OMNIRA_AUTH_MODE deve ser mock ou oidc")
 	}
-	if c.Env == "production" && authMode == "mock" {
-		return fmt.Errorf("OMNIRA_AUTH_MODE=mock é proibido em produção")
+	if c.Env == "staging" || c.Env == "production" {
+		if authMode == "mock" {
+			return fmt.Errorf("OMNIRA_AUTH_MODE=mock é proibido em staging/production; exigido: oidc")
+		}
 	}
 	if authMode == "oidc" {
 		if c.AuthIssuer == "" || c.AuthAudience == "" || c.AuthClientID == "" || c.AuthClientSecret == "" || c.AuthRedirectURL == "" {
