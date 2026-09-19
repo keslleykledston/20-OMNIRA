@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added (M03.1 — Inbound persistence foundation)
+- Provider-neutral inbound orchestration for Contact, Conversation, Message and Ticket.
+- PostgreSQL adapter scoped by TenantContext and transaction querier.
+- Provider-message idempotency: a redelivery cannot create a second message or ticket.
+
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
 ## [Unreleased]
