@@ -136,7 +136,7 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - DONE: M02 Contact foundation.
 - DONE: M03 Conversation/Message/Ticket foundation.
 - DONE: M03.1/M03.2 persistência inbound atômica e idempotente ligada ao webhook WAHA.
-- TODO: M03.3 persistência de mídia inbound e aplicação de `message.ack` aos status canônicos.
+- DONE: M03.3 persistência de mídia inbound e aplicação de `message.ack` aos status canônicos.
 - DONE: M04 filas e seleção round-robin de domínio.
 - TODO: M04.1 claim atômico, repository/application de routing e worker NATS/Outbox.
 - TODO: M05.1 API REST paginada da Inbox sob TenantContext.

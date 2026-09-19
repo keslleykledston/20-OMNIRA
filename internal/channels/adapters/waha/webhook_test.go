@@ -43,16 +43,31 @@ type webhookEventStore struct {
 type webhookIntake struct {
 	calls     int
 	message   *domain.InboundMessage
+	status    *domain.DeliveryStatusUpdate
 	duplicate bool
 	err       error
 }
 
-func (i *webhookIntake) ProcessWebhook(_ context.Context, _ domain.ChannelConnection, _, _ string, _ string, message *domain.InboundMessage) (bool, error) {
+func (i *webhookIntake) ProcessWebhook(_ context.Context, _ domain.ChannelConnection, _, _ string, _ string, message *domain.InboundMessage, status *domain.DeliveryStatusUpdate) (bool, error) {
 	i.calls++
 	i.message = message
+	i.status = status
 	duplicate := i.duplicate
 	i.duplicate = true
 	return duplicate, i.err
+}
+
+func TestWebhookHandlerNormalizesAckForIntake(t *testing.T) {
+	conn := webhookConnection()
+	conn.SecretRef = "credential-a"
+	intake := &webhookIntake{}
+	handler := waha.NewWebhookHandler(newProvider(t, "hmac-secret"), wahaResolver{conn: &conn}).UseIntake(intake)
+	body := []byte(`{"id":"evt-ack","event":"message.ack","session":"` + sessionName(conn) + `","payload":{"id":"msg-out","ackName":"DEVICE","timestamp":1710000000}}`)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, signedRequest("/webhooks/v1/whatsapp/waha/"+conn.ID.String(), body, "hmac-secret"))
+	if res.Code != http.StatusOK || intake.status == nil || intake.status.State != domain.DeliveryStateDelivered {
+		t.Fatalf("ack not normalized: code=%d status=%+v", res.Code, intake.status)
+	}
 }
 
 func (s *webhookEventStore) MarkReceived(_ context.Context, _ domain.ChannelConnection, eventID, eventType, digest string) (bool, error) {

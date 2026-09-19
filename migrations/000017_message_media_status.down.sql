@@ -1,0 +1,3 @@
+ALTER TABLE messages DROP COLUMN IF EXISTS size_bytes;
+ALTER TABLE messages DROP COLUMN IF EXISTS mime_type;
+ALTER TABLE messages DROP COLUMN IF EXISTS media_ref;

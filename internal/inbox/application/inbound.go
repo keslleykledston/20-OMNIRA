@@ -28,6 +28,7 @@ type ConversationStore interface {
 
 type MessageStore interface {
 	StoreInbound(context.Context, *messagedomain.Message) (*messagedomain.Message, bool, error)
+	ApplyDeliveryStatus(context.Context, uuid.UUID, string, messagedomain.Status) (bool, error)
 }
 
 type TicketStore interface {
@@ -92,7 +93,12 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 			return nil, fmt.Errorf("inbox: store conversation: %w", err)
 		}
 	}
-	message, err := messagedomain.NewTextMessage(tc.TenantID, conversation.ID, messagedomain.DirectionInbound, inbound.Text, inbound.ProviderMessageID)
+	messageType, mediaRef, mimeType, sizeBytes := "text", "", "", int64(0)
+	if inbound.Media != nil {
+		messageType = string(inbound.Media.Kind)
+		mediaRef, mimeType, sizeBytes = inbound.Media.MediaRef, inbound.Media.MimeType, inbound.Media.SizeBytes
+	}
+	message, err := messagedomain.NewMessage(tc.TenantID, conversation.ID, messagedomain.DirectionInbound, messageType, inbound.Text, mediaRef, mimeType, sizeBytes, inbound.ProviderMessageID)
 	if err != nil {
 		return nil, err
 	}
@@ -118,4 +124,21 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		}
 	}
 	return &InboundResult{Contact: contact, Conversation: conversation, Message: stored, Ticket: ticket}, nil
+}
+
+func (s *InboundService) ApplyDeliveryStatus(ctx context.Context, connection channeldomain.ChannelConnection, update channeldomain.DeliveryStatusUpdate) (bool, error) {
+	if s == nil || s.messages == nil {
+		return false, errors.New("inbox: inbound service is not configured")
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || connection.TenantID != tc.TenantID || connection.ID == uuid.Nil || update.ProviderMessageID == "" {
+		return false, errors.New("inbox: trusted delivery status context required")
+	}
+	status := messagedomain.Status(update.State)
+	switch status {
+	case messagedomain.StatusQueued, messagedomain.StatusSent, messagedomain.StatusDelivered, messagedomain.StatusRead, messagedomain.StatusFailed:
+	default:
+		return false, errors.New("inbox: unsupported delivery status")
+	}
+	return s.messages.ApplyDeliveryStatus(ctx, connection.ID, update.ProviderMessageID, status)
 }

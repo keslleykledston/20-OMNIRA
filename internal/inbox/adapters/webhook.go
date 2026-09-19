@@ -24,7 +24,7 @@ func NewWebhookIntake(pool *pgxpool.Pool, events channelports.WebhookEventStore,
 	return &WebhookIntake{pool: pool, events: events, inbound: inbound}
 }
 
-func (i *WebhookIntake) ProcessWebhook(ctx context.Context, connection channeldomain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *channeldomain.InboundMessage) (bool, error) {
+func (i *WebhookIntake) ProcessWebhook(ctx context.Context, connection channeldomain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *channeldomain.InboundMessage, status *channeldomain.DeliveryStatusUpdate) (bool, error) {
 	if i == nil || i.pool == nil || i.events == nil || i.inbound == nil {
 		return false, errors.New("inbox: webhook intake is not configured")
 	}
@@ -32,10 +32,14 @@ func (i *WebhookIntake) ProcessWebhook(ctx context.Context, connection channeldo
 	err := platformdb.WithSystemTenantSession(ctx, i.pool, connection.TenantID, func(scoped context.Context) error {
 		var err error
 		duplicate, err = i.events.MarkReceived(scoped, connection, deduplicationKey, eventType, payloadDigest)
-		if err != nil || duplicate || message == nil {
+		if err != nil || duplicate {
 			return err
 		}
-		_, err = i.inbound.Ingest(scoped, connection, *message)
+		if message != nil {
+			_, err = i.inbound.Ingest(scoped, connection, *message)
+		} else if status != nil {
+			_, err = i.inbound.ApplyDeliveryStatus(scoped, connection, *status)
+		}
 		return err
 	})
 	return duplicate, err

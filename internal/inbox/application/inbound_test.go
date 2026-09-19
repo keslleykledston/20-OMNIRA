@@ -40,6 +40,13 @@ func (m *memoryStores) StoreInbound(_ context.Context, msg *messagedomain.Messag
 	m.message = msg
 	return msg, false, nil
 }
+func (m *memoryStores) ApplyDeliveryStatus(_ context.Context, _ uuid.UUID, _ string, status messagedomain.Status) (bool, error) {
+	if m.message == nil {
+		return false, nil
+	}
+	m.message.Status = status
+	return true, nil
+}
 func (m *memoryStores) FindOpenByConversation(_ context.Context, _ uuid.UUID) (*ticketdomain.Ticket, error) {
 	return m.ticket, nil
 }
@@ -99,5 +106,18 @@ func TestIngestRedeliveryDoesNotCreateSecondTicket(t *testing.T) {
 	got, err := svc.Ingest(ctx, connection, inbound)
 	if err != nil || !got.Duplicate || got.Ticket != nil {
 		t.Fatalf("redelivery was not idempotent: %+v %v", got, err)
+	}
+}
+
+func TestIngestMediaOnlyMessage(t *testing.T) {
+	tenantID, connectionID := uuid.New(), uuid.New()
+	stores := &memoryStores{}
+	svc := NewInboundService(stores, stores, stores, ticketAdapter{stores})
+	result, err := svc.Ingest(inboundContext(t, tenantID), channeldomain.ChannelConnection{ID: connectionID, TenantID: tenantID}, channeldomain.InboundMessage{ConnectionID: connectionID.String(), ProviderMessageID: "media-1", FromE164: "+5511999999999", Media: &channeldomain.InboundMedia{Kind: channeldomain.MediaKindImage, MediaRef: "opaque-ref", MimeType: "image/jpeg"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Message.MessageType != "image" || result.Message.MediaRef != "opaque-ref" || result.Message.MimeType != "image/jpeg" {
+		t.Fatalf("media not canonicalized: %+v", result.Message)
 	}
 }

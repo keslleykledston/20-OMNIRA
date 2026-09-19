@@ -9,6 +9,8 @@
 - WAHA webhook intake now reserves dedupe and persists the canonical message in one transaction.
 - System TenantContext derives ownership from the persisted ChannelConnection without a fabricated user UUID.
 - Provider-message uniqueness is scoped by ChannelConnection, with concurrent open-conversation/active-ticket guards.
+- Inbound media metadata is persisted canonically without retaining the WAHA payload.
+- `message.ack` updates outbound delivery status within the trusted connection scope and cannot regress delivered/read state.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 

@@ -234,6 +234,10 @@ func (p *WahaProvider) HandleDeliveryStatus(ctx context.Context, conn domain.Cha
 		return nil, ctx.Err()
 	default:
 	}
+	return p.parseDeliveryStatus(conn, payload)
+}
+
+func (p *WahaProvider) parseDeliveryStatus(conn domain.ChannelConnection, payload []byte) (*domain.DeliveryStatusUpdate, error) {
 	var envelope webhookEnvelope
 	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.Event != "message.ack" || envelope.Session == "" {
 		return nil, ErrMalformedWebhook

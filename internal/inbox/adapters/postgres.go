@@ -74,12 +74,12 @@ func (s *PostgresInboundStore) StoreInbound(ctx context.Context, message *messag
 		return nil, false, err
 	}
 	stored, err := scanMessage(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		INSERT INTO messages (id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, provider_message_id, status, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		INSERT INTO messages (id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, media_ref, mime_type, size_bytes, provider_message_id, status, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (tenant_id, channel_connection_id, provider_message_id)
 		  WHERE provider_message_id <> '' AND channel_connection_id IS NOT NULL DO NOTHING
-		RETURNING id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, provider_message_id, status, created_at, updated_at`,
-		message.ID, message.TenantID, message.ConversationID, message.ChannelConnectionID, message.Direction, message.MessageType, message.Body, message.ProviderMessageID, message.Status, message.CreatedAt, message.UpdatedAt))
+		RETURNING id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, media_ref, mime_type, size_bytes, provider_message_id, status, created_at, updated_at`,
+		message.ID, message.TenantID, message.ConversationID, message.ChannelConnectionID, message.Direction, message.MessageType, message.Body, message.MediaRef, message.MimeType, message.SizeBytes, message.ProviderMessageID, message.Status, message.CreatedAt, message.UpdatedAt))
 	if err == nil {
 		return stored, false, nil
 	}
@@ -87,9 +87,28 @@ func (s *PostgresInboundStore) StoreInbound(ctx context.Context, message *messag
 		return nil, false, err
 	}
 	duplicate, lookupErr := scanMessage(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		SELECT id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, provider_message_id, status, created_at, updated_at
+		SELECT id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, media_ref, mime_type, size_bytes, provider_message_id, status, created_at, updated_at
 		FROM messages WHERE tenant_id=$1 AND channel_connection_id=$2 AND provider_message_id=$3`, message.TenantID, message.ChannelConnectionID, message.ProviderMessageID))
 	return duplicate, true, lookupErr
+}
+
+func (s *PostgresInboundStore) ApplyDeliveryStatus(ctx context.Context, connectionID uuid.UUID, providerMessageID string, status messagedomain.Status) (bool, error) {
+	tenantID, err := tenantID(ctx)
+	if err != nil {
+		return false, err
+	}
+	result, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
+		UPDATE messages SET status=$4, updated_at=now()
+		WHERE tenant_id=$1 AND channel_connection_id=$2 AND provider_message_id=$3
+		  AND direction='outbound'
+		  AND CASE status
+		    WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE 4 END
+		      <= CASE $4 WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE 4 END
+		  AND NOT (status IN ('delivered','read') AND $4='failed')`, tenantID, connectionID, providerMessageID, status)
+	if err != nil {
+		return false, err
+	}
+	return result.RowsAffected() == 1, nil
 }
 
 func (s *PostgresInboundStore) FindOpenByConversation(ctx context.Context, conversationID uuid.UUID) (*ticketdomain.Ticket, error) {
@@ -165,7 +184,7 @@ func scanConversation(row scanner) (*conversationdomain.Conversation, error) {
 func scanMessage(row scanner) (*messagedomain.Message, error) {
 	m := &messagedomain.Message{}
 	var direction, status string
-	err := row.Scan(&m.ID, &m.TenantID, &m.ConversationID, &m.ChannelConnectionID, &direction, &m.MessageType, &m.Body, &m.ProviderMessageID, &status, &m.CreatedAt, &m.UpdatedAt)
+	err := row.Scan(&m.ID, &m.TenantID, &m.ConversationID, &m.ChannelConnectionID, &direction, &m.MessageType, &m.Body, &m.MediaRef, &m.MimeType, &m.SizeBytes, &m.ProviderMessageID, &status, &m.CreatedAt, &m.UpdatedAt)
 	m.Direction = messagedomain.Direction(direction)
 	m.Status = messagedomain.Status(status)
 	return m, err

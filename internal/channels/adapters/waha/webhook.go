@@ -100,6 +100,7 @@ type ParsedWebhook struct {
 	DeduplicationKey string
 	Event            string
 	Message          *domain.InboundMessage
+	DeliveryStatus   *domain.DeliveryStatusUpdate
 }
 
 // ParseWebhook normalizes message/message.any and safely acknowledges
@@ -123,6 +124,13 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 	if envelope.Event != "message" && envelope.Event != "message.any" {
 		if envelope.Event != "message.ack" && envelope.Event != "session.status" {
 			return ParsedWebhook{}, ErrUnsupportedWebhookEvent
+		}
+		if envelope.Event == "message.ack" {
+			status, err := p.parseDeliveryStatus(conn, body)
+			if err != nil {
+				return ParsedWebhook{}, err
+			}
+			result.DeliveryStatus = status
 		}
 		return result, nil
 	}
@@ -185,7 +193,7 @@ type WahaConnectionResolver interface {
 // WebhookIntake atomically reserves one provider event and applies its
 // canonical inbound effects in the tenant derived from the connection.
 type WebhookIntake interface {
-	ProcessWebhook(ctx context.Context, connection domain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *domain.InboundMessage) (duplicate bool, err error)
+	ProcessWebhook(ctx context.Context, connection domain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *domain.InboundMessage, status *domain.DeliveryStatusUpdate) (duplicate bool, err error)
 }
 
 type WebhookHandler struct {
@@ -273,7 +281,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	digest := sha256.Sum256(body)
 	digestHex := hex.EncodeToString(digest[:])
 	if h.Intake != nil {
-		duplicate, err := h.Intake.ProcessWebhook(r.Context(), *conn, parsed.DeduplicationKey, parsed.Event, digestHex, parsed.Message)
+		duplicate, err := h.Intake.ProcessWebhook(r.Context(), *conn, parsed.DeduplicationKey, parsed.Event, digestHex, parsed.Message, parsed.DeliveryStatus)
 		if err != nil {
 			h.reject(r.Context(), w, http.StatusServiceUnavailable, "webhook intake unavailable")
 			return
