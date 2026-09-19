@@ -13,6 +13,7 @@ import (
 	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	testhelper "github.com/omnira/omnira/internal/testhelpers"
 )
 
 type channelIsolationFixture struct {
@@ -58,8 +59,7 @@ func newChannelIsolationFixture(t *testing.T) channelIsolationFixture {
 		id   uuid.UUID
 		name string
 	}{{f.tenantA, "D31 A"}, {f.tenantB, "D31 B"}} {
-		_, err = seed.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, item.id, item.name)
-		if err != nil {
+		if err := testhelper.CreateTenantWithRLS(ctx, seed, item.id, item.name); err != nil {
 			t.Fatal(err)
 		}
 	}
