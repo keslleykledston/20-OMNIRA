@@ -1,14 +1,14 @@
 # Handoff para o próximo agente
 
-> **Comece aqui.** Estado em `7f3a9e4` (branch `master`, **AUTH.0-AUTH.7 integrado + CRM mock implementado**, nada foi enviado com push nem tag). Atualize este arquivo ao terminar sua sessão.
+> **Comece aqui.** Estado em `master` (branch atual, **AUTH.0-AUTH.7 + CRM.1-4 COMPLETO**, nada foi enviado com push nem tag). Atualize este arquivo ao terminar sua sessão.
 > Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência antes de dizer PASS; respostas em português, diretas.
 
 ## 1. Situação em 5 linhas
 - **GOAL TÉCNICO COMPLETO** (Inbox WhatsApp não oficial/WAHA operável com CRM mock): login (OIDC) → QR (PASS 6/6) → receber → assumir → responder → status → **abrir/atualizar/fechar ticket CRM** — multi-tenant com RLS, via `docker compose`.
-- **STATE: FIRST_WHATSAPP_ATTENDANCE_PARTIAL** — QR gerado em w3-smoke, toda pipeline técnica PASS, falta apenas P7 (humano escanear QR + enviar SMS real).
+- **STATE: FIRST_WHATSAPP_ATTENDANCE_NEARLY_COMPLETE** — QR gerado em w3-smoke (6/6 PASS), CRM backend integrado (6/6 unit tests PASS), CRM frontend UI agora rodando (TicketPanel.tsx em ConversationPage), testes e2e revalidando.
 - **AUTH.0-AUTH.7 COMPLETO:** Opaque server-side sessions, OIDC, fail-closed production validation, 48/51 Go tests PASS.
-- **CRM.1-3 COMPLETO:** MockCRMConnector (6/6 unit tests), HTTP handlers (create/get/update/close ticket), wired into httpserver com RLS.
-- **Proxima fase:** CRM.4-5 (Frontend UI para tickets) → FIRST_INTERNAL_PRODUCT_DELIVERY (CRM.4/5 + E2E humano são ult imos passos).
+- **CRM.1-4 COMPLETO:** MockCRMConnector (6/6 unit tests), HTTP handlers (create/get/update/close ticket), wired into httpserver com RLS, TicketPanel.tsx integrada ao ConversationPage.
+- **Proxima fase:** CRM.5 (E2E com operador humano abrindo/fechando ticket real) → FIRST_INTERNAL_PRODUCT_DELIVERY.
 
 ## 2. Ordem de leitura (30 min)
 1. `docs/delivery/ROADMAP-TO-GOAL.md` — fases P0–P6, o que foi achado/corrigido em cada uma, **pendências por fase** e **backlog em ordem**.

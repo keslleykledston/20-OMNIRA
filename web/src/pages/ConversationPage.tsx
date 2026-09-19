@@ -4,6 +4,7 @@ import axios from 'axios';
 import { MessageItem, ConversationItem, RealtimeEvent } from '../types/api';
 import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import { AssignmentButton } from '../components/AssignmentButton';
+import { TicketPanel } from '../components/TicketPanel';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../lib/config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../lib/session';
@@ -201,6 +202,8 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
           {sendError}
         </div>
       )}
+
+      <TicketPanel conversationId={conversationId} />
 
       <style>{`
         .send-error {
