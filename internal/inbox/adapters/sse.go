@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
