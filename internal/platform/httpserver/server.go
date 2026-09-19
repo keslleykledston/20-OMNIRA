@@ -38,6 +38,7 @@ type Server struct {
 	rateLimiter *ratelimit.Limiter
 	privateKey  *rsa.PrivateKey
 	publicKey   *rsa.PublicKey
+	natsConn    *nats.Conn
 }
 
 func New(addr string) *Server {
@@ -66,6 +67,7 @@ func (s *Server) SetupRateLimiting() {
 
 // SetupHealth — configura health check com dependências.
 func (s *Server) SetupHealth(dbPool *pgxpool.Pool, natsConn *nats.Conn) {
+	s.natsConn = natsConn
 	s.health = health.NewHealthCheck(dbPool, natsConn)
 }
 
@@ -211,7 +213,7 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/audit", authnMiddleware(tenantSession(http.HandlerFunc(auditHandler.ListTenantAuditEvents))))
 }
 
-// RegisterInboxHandlers exposes tenant-scoped, read-only Inbox queries.
+// RegisterInboxHandlers exposes tenant-scoped, read-only Inbox queries and realtime SSE.
 func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	if s.publicKey == nil {
 		return
@@ -224,8 +226,11 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	handler := inboxadapters.NewInboxAPIHandler(dbPool)
+	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
 }
 
 // RegisterWahaWebhook exposes only the connection-scoped WAHA callback.
