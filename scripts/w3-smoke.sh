@@ -55,6 +55,7 @@ for f in migrations/*.up.sql; do "${PSQL_OWNER[@]}" -d $DB < "$f" >/dev/null 2>/
 INSERT INTO users(id,external_subject,email,status) VALUES
  ('22222222-2222-2222-2222-222222222222','test@omnira.local','test@omnira.local','active'),
  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','admin@omnira.local','admin@omnira.local','active');
+SELECT set_config('app.is_system_admin', 'true', true);
 INSERT INTO tenants(id,legal_name,status) VALUES ('$TENANT','W3 Smoke','active');
 INSERT INTO memberships(tenant_id,user_id,role_id,status)
  SELECT '$TENANT','22222222-2222-2222-2222-222222222222',id,'active' FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL;
