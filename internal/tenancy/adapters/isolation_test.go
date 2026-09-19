@@ -292,3 +292,85 @@ func TestIsolation_TenantInactive_DeniesAccess(t *testing.T) {
 		t.Error("expected no TenantContext for inactive tenant")
 	}
 }
+
+// TestRLS_KnownUUID_CrossTenantDenied — a prova mais forte de isolamento:
+// SQL cru executado com a role real de produção (omnira_app), contornando
+// completamente os repositórios/serviços Go. Se este teste passar, o
+// isolamento não depende de nenhuma linha de código de aplicação estar
+// correta — está garantido pelo próprio banco. Conhecer o UUID de outro
+// tenant/membership não deve bastar para lê-lo ou alterá-lo.
+func TestRLS_KnownUUID_CrossTenantDenied(t *testing.T) {
+	seedPool := setupIsolationTestDB(t)
+	appPool := setupIsolationAppPool(t)
+	ctx := context.Background()
+
+	tenantRepo := NewPostgresTenantRepository(seedPool)
+	memberRepo := NewPostgresMembershipRepository(seedPool)
+
+	tenantA, _ := domain.NewTenant("RLS Raw Tenant A", domain.IsolationSharedStrong)
+	tenantRepo.Store(ctx, tenantA)
+	tenantB, _ := domain.NewTenant("RLS Raw Tenant B", domain.IsolationSharedStrong)
+	tenantRepo.Store(ctx, tenantB)
+
+	userX := uuid.New()
+	seedPool.Exec(ctx, `
+		INSERT INTO users (id, external_subject, email, status)
+		VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING
+	`, userX, userX.String(), userX.String()+"@example.com", "active")
+
+	var adminRoleID uuid.UUID
+	seedPool.QueryRow(ctx, `SELECT id FROM roles WHERE key = 'tenant_admin' AND tenant_id IS NULL LIMIT 1`).Scan(&adminRoleID)
+
+	// userX só tem membership (admin) em A — nunca em B.
+	membershipXinA, _ := domain.NewMembership(tenantA.ID, userX, adminRoleID)
+	memberRepo.Store(ctx, membershipXinA)
+
+	err := platformdb.WithTenantSession(ctx, appPool, userX, false, func(ctx context.Context) error {
+		q := platformdb.QuerierFromContext(ctx, appPool)
+
+		// 1. SELECT direto em tenants por UUID conhecido de B: deve vir vazio.
+		var legalName string
+		err := q.QueryRow(ctx, `SELECT legal_name FROM tenants WHERE id = $1`, tenantB.ID).Scan(&legalName)
+		if err == nil {
+			t.Errorf("esperava 0 linhas para tenant B, mas leu legal_name=%q", legalName)
+		} else if err.Error() != "no rows in result set" {
+			t.Errorf("esperava 'no rows in result set', obteve: %v", err)
+		}
+
+		// 2. SELECT direto em memberships de B por UUID conhecido: deve vir vazio.
+		rows, err := q.Query(ctx, `SELECT id FROM memberships WHERE tenant_id = $1`, tenantB.ID)
+		if err != nil {
+			t.Errorf("query memberships de B não deveria falhar, apenas retornar vazio: %v", err)
+		} else {
+			count := 0
+			for rows.Next() {
+				count++
+			}
+			rows.Close()
+			if count != 0 {
+				t.Errorf("esperava 0 memberships visíveis em B, obteve %d", count)
+			}
+		}
+
+		// 3. INSERT direto criando membership em B (userX não é admin de B):
+		// RLS deve rejeitar mesmo sabendo o UUID exato de B.
+		_, err = q.Exec(ctx, `
+			INSERT INTO memberships (id, tenant_id, user_id, role_id, status, created_at, updated_at)
+			VALUES (gen_random_uuid(), $1, $2, $3, 'active', now(), now())
+		`, tenantB.ID, userX, adminRoleID)
+		if err == nil {
+			t.Error("esperava que o INSERT em memberships de B fosse rejeitado por RLS, mas foi aceito")
+		}
+
+		return nil
+	})
+	// O INSERT do passo 3 é rejeitado de propósito pela policy RLS; isso
+	// aborta a transação em andamento, então o Commit final também falha
+	// (comportamento padrão do Postgres para uma tx abortada) — é o
+	// resultado esperado deste teste, não uma falha de infraestrutura.
+	// As asserções reais (o que deveria ou não ser visível/aceito) já
+	// rodaram via t.Errorf acima.
+	if err != nil {
+		t.Logf("sessão terminou com erro esperado (INSERT rejeitado por RLS abortou a tx): %v", err)
+	}
+}
