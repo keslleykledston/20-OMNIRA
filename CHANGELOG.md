@@ -19,6 +19,8 @@
 - Routing jobs use the canonical `job.routing.assign.v1` JetStream subject rather than the legacy event subject formatter.
 - Durable routing consumer resolves tenant ownership from the persisted conversation and ignores envelope `tenant_id` for authorization.
 - Round-robin redelivery is idempotent: an assigned conversation returns its existing owner without duplicating assignment history.
+- Each tenant may mark one explicit default queue; new inbound conversations enter it without name-based or payload-based inference.
+- Initial round-robin routing job is written atomically with inbound persistence; manual default queues remain available for operator claim.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 

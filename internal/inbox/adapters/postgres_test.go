@@ -53,11 +53,15 @@ func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {
 		_, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userA)
 	})
 	connectionID := uuid.New()
+	queueID := uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO queues(id,tenant_id,name,mode,is_default) VALUES($1,$2,'Default','round_robin',true)`, queueID, tenantA); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := seed.Exec(ctx, `INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active')`, connectionID, tenantA, connectionID.String()); err != nil {
 		t.Fatal(err)
 	}
 	store := NewPostgresInboundStore(app)
-	svc := inboxapp.NewInboundService(store, store, store, TicketStore{store})
+	svc := inboxapp.NewInboundService(store, store, store, TicketStore{store}, store)
 	connection := channeldomain.ChannelConnection{ID: connectionID, TenantID: tenantA}
 	inbound := channeldomain.InboundMessage{ConnectionID: connectionID.String(), ProviderMessageID: "provider-message-1", FromE164: "+5511999999999", Text: "oi"}
 	if err := platformdb.WithTenantSession(ctx, app, userA, false, func(sc context.Context) error {
@@ -95,6 +99,20 @@ func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {
 	}
 	if messages != 1 || tickets != 1 {
 		t.Fatalf("got messages=%d tickets=%d", messages, tickets)
+	}
+	var routedQueue uuid.UUID
+	var routingJobs int
+	if err := seed.QueryRow(ctx, `SELECT queue_id FROM conversations WHERE tenant_id=$1 LIMIT 1`, tenantA).Scan(&routedQueue); err != nil {
+		t.Fatal(err)
+	}
+	if routedQueue != queueID {
+		t.Fatalf("initial queue=%s want=%s", routedQueue, queueID)
+	}
+	if err := seed.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE tenant_id=$1 AND event_type='job.routing.assign.v1'`, tenantA).Scan(&routingJobs); err != nil {
+		t.Fatal(err)
+	}
+	if routingJobs != 1 {
+		t.Fatalf("routing jobs=%d", routingJobs)
 	}
 	intake := NewWebhookIntake(app, channeladapters.NewPostgresWebhookEventStore(app), svc)
 	webhookMessage := inbound

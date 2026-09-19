@@ -36,11 +36,16 @@ type TicketStore interface {
 	Store(context.Context, *ticketdomain.Ticket) error
 }
 
+type InitialRouter interface {
+	RouteNew(context.Context, uuid.UUID) error
+}
+
 type InboundService struct {
 	contacts      ContactStore
 	conversations ConversationStore
 	messages      MessageStore
 	tickets       TicketStore
+	router        InitialRouter
 }
 
 type InboundResult struct {
@@ -51,8 +56,12 @@ type InboundResult struct {
 	Duplicate    bool
 }
 
-func NewInboundService(contacts ContactStore, conversations ConversationStore, messages MessageStore, tickets TicketStore) *InboundService {
-	return &InboundService{contacts: contacts, conversations: conversations, messages: messages, tickets: tickets}
+func NewInboundService(contacts ContactStore, conversations ConversationStore, messages MessageStore, tickets TicketStore, router ...InitialRouter) *InboundService {
+	service := &InboundService{contacts: contacts, conversations: conversations, messages: messages, tickets: tickets}
+	if len(router) > 0 {
+		service.router = router[0]
+	}
+	return service
 }
 
 // Ingest persists an inbound canonical message. Callers must execute this in
@@ -91,6 +100,11 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		}
 		if err := s.conversations.Store(ctx, conversation); err != nil {
 			return nil, fmt.Errorf("inbox: store conversation: %w", err)
+		}
+		if s.router != nil {
+			if err := s.router.RouteNew(ctx, conversation.ID); err != nil {
+				return nil, fmt.Errorf("inbox: route conversation: %w", err)
+			}
 		}
 	}
 	messageType, mediaRef, mimeType, sizeBytes := "text", "", "", int64(0)

@@ -18,6 +18,8 @@ type memoryStores struct {
 	conversation *conversationdomain.Conversation
 	message      *messagedomain.Message
 	ticket       *ticketdomain.Ticket
+	routed       uuid.UUID
+	routeCalls   int
 }
 
 func (m *memoryStores) UpsertByPhone(_ context.Context, c *contactdomain.Contact) (*contactdomain.Contact, error) {
@@ -54,6 +56,11 @@ func (m *memoryStores) StoreTicket(_ context.Context, ticket *ticketdomain.Ticke
 	m.ticket = ticket
 	return nil
 }
+func (m *memoryStores) RouteNew(_ context.Context, conversationID uuid.UUID) error {
+	m.routed = conversationID
+	m.routeCalls++
+	return nil
+}
 
 type ticketAdapter struct{ *memoryStores }
 
@@ -73,13 +80,16 @@ func inboundContext(t *testing.T, tenantID uuid.UUID) context.Context {
 func TestIngestCreatesCanonicalTenantOwnedChain(t *testing.T) {
 	tenantID, connectionID := uuid.New(), uuid.New()
 	stores := &memoryStores{}
-	svc := NewInboundService(stores, stores, stores, ticketAdapter{stores})
+	svc := NewInboundService(stores, stores, stores, ticketAdapter{stores}, stores)
 	result, err := svc.Ingest(inboundContext(t, tenantID), channeldomain.ChannelConnection{ID: connectionID, TenantID: tenantID}, channeldomain.InboundMessage{ConnectionID: connectionID.String(), ProviderMessageID: "wamid-1", FromE164: "+5511999999999", Text: "oi"})
 	if err != nil || result.Duplicate || result.Ticket == nil {
 		t.Fatalf("unexpected ingest: %+v %v", result, err)
 	}
 	if result.Contact.TenantID != tenantID || result.Conversation.TenantID != tenantID || result.Message.TenantID != tenantID || result.Ticket.TenantID != tenantID {
 		t.Fatal("tenant ownership not propagated")
+	}
+	if stores.routeCalls != 1 || stores.routed != result.Conversation.ID {
+		t.Fatalf("initial routing calls=%d conversation=%s", stores.routeCalls, stores.routed)
 	}
 }
 
@@ -96,7 +106,7 @@ func TestIngestRejectsConnectionTenantConfusion(t *testing.T) {
 func TestIngestRedeliveryDoesNotCreateSecondTicket(t *testing.T) {
 	tenantID, connectionID := uuid.New(), uuid.New()
 	stores := &memoryStores{}
-	svc := NewInboundService(stores, stores, stores, ticketAdapter{stores})
+	svc := NewInboundService(stores, stores, stores, ticketAdapter{stores}, stores)
 	ctx := inboundContext(t, tenantID)
 	connection := channeldomain.ChannelConnection{ID: connectionID, TenantID: tenantID}
 	inbound := channeldomain.InboundMessage{ConnectionID: connectionID.String(), ProviderMessageID: "wamid-1", FromE164: "+5511999999999", Text: "oi"}
@@ -106,6 +116,9 @@ func TestIngestRedeliveryDoesNotCreateSecondTicket(t *testing.T) {
 	got, err := svc.Ingest(ctx, connection, inbound)
 	if err != nil || !got.Duplicate || got.Ticket != nil {
 		t.Fatalf("redelivery was not idempotent: %+v %v", got, err)
+	}
+	if stores.routeCalls != 1 {
+		t.Fatalf("redelivery routed %d times", stores.routeCalls)
 	}
 }
 

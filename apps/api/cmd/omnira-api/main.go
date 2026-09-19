@@ -71,7 +71,7 @@ func main() {
 		}
 		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
-		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore})
+		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).UseIntake(intake))
 	}

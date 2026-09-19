@@ -66,6 +66,29 @@ func (s *PostgresInboundStore) Store(ctx context.Context, conversation *conversa
 	return err
 }
 
+// RouteNew selects only the tenant's explicit default queue. Round-robin
+// queues enqueue a durable reference in the same transaction as inbound
+// persistence; manual queues remain visible for operator claim.
+func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid.UUID) error {
+	tenantID, err := tenantID(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
+		WITH selected AS (
+		  SELECT id,mode FROM queues WHERE tenant_id=$1 AND is_default ORDER BY id LIMIT 1
+		), routed AS (
+		  UPDATE conversations c SET queue_id=selected.id,updated_at=now()
+		  FROM selected WHERE c.tenant_id=$1 AND c.id=$2 AND c.queue_id IS NULL
+		  RETURNING c.id,selected.mode
+		)
+		INSERT INTO outbox_events
+		  (id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload)
+		SELECT $3,$1,'job.routing.assign.v1','conversation',id::text,$4,'{}'::jsonb
+		FROM routed WHERE mode='round_robin'`, tenantID, conversationID, uuid.New(), uuid.New())
+	return err
+}
+
 func (s *PostgresInboundStore) StoreInbound(ctx context.Context, message *messagedomain.Message) (*messagedomain.Message, bool, error) {
 	if message == nil {
 		return nil, false, errors.New("inbox: message required")
