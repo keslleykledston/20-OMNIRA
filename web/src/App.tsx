@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import Login from './pages/Login'
+import NoAccess from './pages/NoAccess'
 import Dashboard from './pages/Dashboard'
 import Accounts from './pages/Accounts'
 import Tickets from './pages/Tickets'
@@ -24,6 +25,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/no-access" element={<NoAccess />} />
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/accounts" element={<Accounts />} />

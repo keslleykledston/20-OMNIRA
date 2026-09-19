@@ -26,9 +26,19 @@ export default function Login() {
 					const { user, tenant } = session.data
 					setUser({ ...user, roles: user.roles ?? [] })
 					saveSession('', tenant?.id, user)
-					navigate('/', { replace: true })
-				} catch {
-					setError('A sessão do provedor de identidade não pôde ser validada.')
+					// Se sem tenant, redirecionar para página de sem acesso
+					if (!tenant || !tenant.id) {
+						navigate('/no-access', { replace: true })
+					} else {
+						navigate('/', { replace: true })
+					}
+				} catch (err: any) {
+					// Se erro ao buscar sessão (ex: sem tenant/membership), mostrar sem acesso
+					if (err.response?.status === 403) {
+						navigate('/no-access', { replace: true })
+					} else {
+						setError('A sessão do provedor de identidade não pôde ser validada.')
+					}
 				} finally {
 					setLoading(false)
 				}
