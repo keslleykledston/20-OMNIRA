@@ -33,3 +33,31 @@ Referências normativas: [OpenID Connect Core 1.0](https://openid.net/specs/open
 - Fluxo implícito: rejeitado; não oferece as garantias do Authorization Code + PKCE.
 - Criar usuários/memberships automaticamente pelo token: rejeitado porque transforma claims externas em autoridade de Tenant.
 - Sessões opacas em memória local: rejeitadas porque quebram múltiplas réplicas e reinícios. Uma store de sessão revogável pode ser adotada futuramente se houver requisito de revogação imediata.
+
+## Implementação (Phase 21-22)
+
+**Backend (Go):**
+- `internal/platform/authn/oidc.go`: OIDCAuthenticator (discovery, JWKS, validation), OIDCHandler (Start/Callback/Session/Logout)
+- `internal/platform/authn/postgres.go`: ResolveIdentity, ProvisionIdentity (JIT), SessionProfile
+- `internal/platform/config/config.go`: OIDC env vars, fail-closed validation (staging/prod require OIDC)
+- `migrations/000028_user_identities.up.sql`: user_identities table (issuer+subject key)
+
+**Frontend (React):**
+- `web/src/pages/Login.tsx`: mode detection, OIDC button, callback handler
+- `web/src/pages/NoAccess.tsx`: authenticated user without tenant membership
+- `web/src/lib/session.ts`: HttpOnly-only session, no OIDC tokens in localStorage
+- `web/src/lib/api.ts`: authAPI.startOIDC(), authAPI.session(), authAPI.logout()
+
+**Keycloak (Reference IdP):**
+- `docker-compose.yml`: keycloak + keycloak-postgres services
+- `deploy/keycloak/omnira-realm.json`: realm bootstrap
+- `deploy/keycloak/bootstrap.sh`: client secret generation
+- `docs/ops/KEYCLOAK.md`: complete setup guide
+
+**Security (AUTH.5):**
+- Fail-closed: staging/production block mock
+- State/nonce/PKCE: constant-time comparison
+- Cookie: HttpOnly + Secure (prod) + SameSite=Lax
+- Config validation: HTTPS in production
+
+**Status:** Accepted & Implemented (AUTH.1 → AUTH.6, Phase 21-22)
