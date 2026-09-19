@@ -128,6 +128,22 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 
 ## Estado de execução — WhatsApp não oficial até Inbox
 
+### Estado atual da retomada
+
+- Branch: `master`.
+- HEAD: `f88fbd9` (`feat(routing): enqueue new conversations from default queue`).
+- Working tree: limpa.
+- Último gate verde: `go test ./...`, `go vet ./...`, RLS completeness, isolation A/B, OpenAPI/AsyncAPI e Compose.
+- Última migration validada: `000019_default_queue` em fluxo vazio → up → down → up.
+- Nenhuma implementação de M04.4 foi iniciada nesta retomada; o patch tentado falhou antes de alterar arquivos.
+
+### Próximos passos ordenados
+
+1. M04.4: fazer o dispatcher Outbox executar leitura, tentativa e marcação sob transações com `SET LOCAL app.is_system_admin=true`, usando exclusivamente `omnira_app`.
+2. Testar ponta a ponta: inbound → conversa/fila default → Outbox → NATS JetStream → worker routing → atribuição.
+3. Cobrir rollback, redelivery, RLS e ausência de vazamento de `tenant_id` do envelope.
+4. Só após M04.4 verde iniciar M05.1 (API REST paginada da Inbox).
+
 - DONE: U1 runtime Docker WAHA.
 - DONE: U2 lifecycle de sessão e QR no adapter.
 - DONE: U3 webhook HMAC e normalização canônica.
