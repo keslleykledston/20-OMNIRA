@@ -141,7 +141,7 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 
 1. ~~**W1 — API de conexão/sessão WAHA**~~ ✅ DONE (ver abaixo). Falta a **UI** de conexões (criar, aceite de risco, QR com polling em `GET .../{id}` até `session_status=needs_qr`, status).
 2. ~~**W2 — M05.5 envio outbound de texto**~~ ✅ DONE (ver abaixo).
-3. **W3 — Smoke real com WAHA** (`devlikeapro/waha:gows`): parear sessão, inbound → Inbox via webhook, resposta outbound, ack. Nunca foi validado ponta a ponta com o container real.
+3. **W3 — Smoke real com WAHA** (wizard pronto: `scripts/w3-smoke.sh`; falta rodar com um telefone — `--until-qr` passa 6/6 sem telefone; passos 3–6 humanos NÃO foram executados) (`devlikeapro/waha:gows`): parear sessão, inbound → Inbox via webhook, resposta outbound, ack. Nunca foi validado ponta a ponta com o container real.
 4. **M05.6 — Integrar as páginas M05 à sessão real** (achados no W2): o app inteiro ainda usa `lib/api.ts` mock (login não é o do backend); `tenantId` nunca é gravado; `ConversationPage` recebe o id via `?id=` embora a rota seja `/inbox/:conversationId`; o SSE (`EventSource`) não envia `Authorization`. Até lá as páginas só funcionam com token/tenant injetados manualmente.
 5. **W4 — Mídia WAHA**: `SendMedia` (hoje `ErrCapabilityNotSupported`) + exibição de mídia inbound na UI.
 6. **M06** chatbot/automação. **D3.4–D3.8 Meta** somente após W1–W3 e nova ordem do produto.
