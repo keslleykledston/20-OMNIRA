@@ -15,7 +15,7 @@ runbook e pendências documentadas. Meta oficial (Meta Cloud) permanece preserva
 |---|------|--------|-----------|
 | P0 | Fundação já entregue (H0/H1, M05.1–5.4, W1, W2, D3.1–3.3) | ✅ DONE | — |
 | P1 | M05.6 — UI usa sessão real (login backend, tenant, rotas, SSE autenticado, GET conversa) + realtime real + e2e em navegador | ✅ DONE | P0 |
-| P2 | W-UI — Tela de conexões WAHA (criar c/ aceite de risco, QR com polling, status, start/stop) | ⏳ | P1 |
+| P2 | W-UI — Tela de conexões WAHA (criar c/ aceite de risco, QR com polling, status, start/stop) | ✅ DONE | P1 |
 | P3 | Vertical E2E automatizado sem telefone (WAHA stub: webhook assinado → Inbox → reply → worker → ack) | ⏳ | P1 |
 | P4 | Compose completo (migrations, web, worker) + runbook de operação | ⏳ | P1–P2 |
 | P5 | Contrato OpenAPI das rotas M05/W + validação | ⏳ | P1–P2 |
@@ -52,3 +52,8 @@ runbook e pendências documentadas. Meta oficial (Meta Cloud) permanece preserva
 - A ponte ocupa 1 conexão do pool do worker permanentemente.
 - Telas legadas (Dashboard/Contas/Tickets/Relatórios/Supervisor) seguem com dados **mock** (`web/src/lib/api.ts`); specs e2e antigos (`web/e2e/{auth,dashboard,accounts}.spec.ts`) assumem esse mock e o domínio de produção.
 - Sem paginação infinita/scroll automático; sem indicador de digitação/leitura; `unread_count`/`message_count` do tipo `ConversationItem` não vêm da API.
+
+### P2 — Tela de conexões WAHA ✅
+`/channels` ("Canais" na Sidebar): lista conexões; **criar exige marcar o aceite de risco** (texto de banimento; registrado no backend com usuário e hora); iniciar sessão → polling de `GET .../{id}` a cada 2 s **somente após Start** → QR (`GET .../qr`, renovado a cada 8 s enquanto `needs_qr`) → "Connected as +número" quando ativa; parar sessão; 403 mostra "Only tenant administrators…" e esconde o formulário; 502/503/409/422 mapeados para mensagens acionáveis (`lib/channels.ts`).
+**Evidência:** vitest 44/44 (`ChannelsPage.test.tsx`: criar c/ aceite, 403, QR→conectado, erros, stop) e e2e no navegador **contra um WAHA real** (`web/e2e/channels.spec.ts`, via `scripts/e2e-inbox.sh`, 11/11 no total): não-admin vê permissão; admin cria → `pending` + auditoria + `risk_acknowledged_by`; Start → **QR real decodificável** na tela; a chave HMAC não aparece no HTML; Stop → `disconnected` + 2 audits.
+**Pendências P2:** pareamento com telefone real (P7); sem UI para remover/revogar conexão (só parar); sem exibir o número/nome do perfil além de `external_account_id`; lista não atualiza em tempo real (só ao criar/iniciar/parar).

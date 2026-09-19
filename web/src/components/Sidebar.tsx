@@ -4,6 +4,7 @@ import clsx from 'clsx'
 const navItems = [
   { label: 'Dashboard', path: '/', icon: 'dashboard' },
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
+  { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Contas', path: '/accounts', icon: 'accounts' },
   { label: 'Tickets', path: '/tickets', icon: 'tickets' },
   { label: 'Relatórios', path: '/reports', icon: 'reports' },
@@ -21,6 +22,8 @@ export default function Sidebar() {
         return <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10.5 1.5H3.75A2.25 2.25 0 001.5 3.75v12.5A2.25 2.25 0 003.75 18.5h12.5a2.25 2.25 0 002.25-2.25V9.5M10 6.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM7 10.5c-1 0-2 .5-2 1.5v1h5v-1c0-1-1-1.5-2-1.5h-1zm5-5h5M15 4.5v5"/></svg>
       case 'inbox':
         return <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v7h-4l-1 2H7l-1-2H2V5zm0 9h3l1 2h8l1-2h3v1a2 2 0 01-2 2H4a2 2 0 01-2-2v-1z"/></svg>
+      case 'channels':
+        return <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M2 5a3 3 0 013-3h10a3 3 0 013 3v6a3 3 0 01-3 3H9l-4 4v-4a3 3 0 01-3-3V5z"/></svg>
       case 'tickets':
         return <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.763l.296 1.485a1 1 0 00.963.807h3.204a1 1 0 00.963-.807l.296-1.485a1 1 0 01.986-.763h2.153a1 1 0 011 1v2a1 1 0 01-1 1H3a1 1 0 01-1-1V3zM2 9a1 1 0 011-1h14a1 1 0 011 1v8a2 2 0 01-2 2H4a2 2 0 01-2-2V9z"/></svg>
       case 'reports':
