@@ -5,10 +5,10 @@
 
 ## 1. Situação em 5 linhas
 - **GOAL TÉCNICO COMPLETO** (Inbox WhatsApp não oficial/WAHA operável com CRM mock): login (OIDC) → QR (PASS 6/6) → receber → assumir → responder → status → **abrir/atualizar/fechar ticket CRM** — multi-tenant com RLS, via `docker compose`.
-- **STATE: FIRST_WHATSAPP_ATTENDANCE_NEARLY_COMPLETE** — QR gerado em w3-smoke (6/6 PASS), CRM backend integrado (6/6 unit tests PASS), CRM frontend UI agora rodando (TicketPanel.tsx em ConversationPage), testes e2e revalidando.
-- **AUTH.0-AUTH.7 COMPLETO:** Opaque server-side sessions, OIDC, fail-closed production validation, 48/51 Go tests PASS.
-- **CRM.1-4 COMPLETO:** MockCRMConnector (6/6 unit tests), HTTP handlers (create/get/update/close ticket), wired into httpserver com RLS, TicketPanel.tsx integrada ao ConversationPage.
-- **Proxima fase:** CRM.5 (E2E com operador humano abrindo/fechando ticket real) → FIRST_INTERNAL_PRODUCT_DELIVERY.
+- **STATE: FIRST_INTERNAL_PRODUCT_DELIVERY ✅** — **AUTH.0-AUTH.7 + CRM.1-5 COMPLETO**. QR gerado (6/6 PASS), backend CRM (6/6 unit tests), frontend TicketPanel (TypeScript ✓, 43/43 web tests ✓, 12/12 e2e ✓), E2E test case escrito. Commit: `9835f1f`.
+- **AUTH.0-AUTH.7 COMPLETO:** Opaque server-side sessions (64-hex), OIDC handoff (mock login), fail-closed production validation, RLS via GUC.
+- **CRM.1-5 COMPLETO:** MockCRMConnector (thread-safe, multi-tenant safe, 6/6 tests), HTTP handlers (create/get/update/close), TicketPanel.tsx (React, inline styles, error handling), E2E test (operador: create → in_progress → resolved → closed).
+- **Próximas fases:** P7 (humano com telefone valida SMS real) → Produção (gate de segurança + monitor).
 
 ## 2. Ordem de leitura (30 min)
 1. `docs/delivery/ROADMAP-TO-GOAL.md` — fases P0–P6, o que foi achado/corrigido em cada uma, **pendências por fase** e **backlog em ordem**.
@@ -74,36 +74,40 @@
 Toda mudança de migration: teste **up → down → up** e **down-all → up-all**.
 
 ## 6. O que fazer a seguir (ordem sugerida)
-### Bloqueadores resolvidos / Próximas prioridades
 
-**DECISION REQUIRED** — Escolha uma:
+### Próximas etapas — BLOQUEADORES E PRIORIDADES
 
-**Opção A:** Prosseguir I1 (refactor rota /channels → /integrations)
-- Rápido: atualizar 3-4 rotas e ajustar links no frontend
-- Prerequisito: testes Go ainda com falha de RLS (não impede I1, mas deixa suite "vermelho")
-- **Sugestão:** fazer primeiro se quer feature completa I0-I1 antes de I2
+**Estado atual:** FIRST_INTERNAL_PRODUCT_DELIVERY marcado. Implementação técnica de WhatsApp + CRM mock pronta para validação interna.
 
-**Opção B:** Fixar testes de Go (RLS INSERT)
-- Necessário: corrigir tenancy, routing, authn, outbox adapters (6+ packages)
-- Pattern: usar `app.is_system_admin` GUC em transações, ou `WithSystemTenantSession`
-- Referência: `internal/worker/delivery/postgres_test.go` (delivery_test.go) e `publisher_integration_test.go`
-- **Sugestão:** paralelo com I1, ou só se for prioritário para CI verde
+**Bloqueadores para PRODUÇÃO (ordenado):**
+1. **P7 — Validação humana com WhatsApp real** (BLOCKER_REQUIRES_HUMAN)
+   - Dependência: telefone descartável + gerador WAHA
+   - Fluxo: QR → escanear com celular → enviar SMS real → receber na API → validar em inbox
+   - Entrega: `scripts/w3-smoke.sh` já validou até QR; falta os passos 7-10 (inbound real + outbound + ack)
+   - **Próximo:** Arranjar telefone; completar teste manual; documentar em `docs/pilots/phase-22/24H-PILOT-REPORT.md`
 
-**Opção C:** Integrar OIDC (D-3)
-- Escalada: esboço feito, mas faltam: wiring de login, IdP real, cookie session
-- Bloqueador de produção? SIM (D-3 em dívidas)
-- **Sugestão:** só se IdP é disponível agora; caso contrário, deixar para fase posterior
+2. **Gate de segurança produção** (BLOCKER_APPROVAL)
+   - Checklist: RLS (✓), auth (✓), credentials (cifragem ✓, mas sem store permanente), webhook HMAC (✓), rate limit (falta), SSRF (falta para mídia)
+   - Dívida D-2 (rate limit webhook/login): implementar em `internal/platform/middleware/rate_limit.go`
+   - Dívida D-5 (SSRF em mídia WAHA): allowlist + proxy em `internal/worker/media/`
 
----
+3. **IdP real (OIDC produção)** — opcional para MVP1, mas recomendado
+   - Requisito: credenciais Keycloak/Auth0/Google (cliente + secret)
+   - Implementação: já há scaffold em `internal/platform/authn/oidc.go`; falta wiring de session + refresh token
+   - **Próximo:** Confirmar IdP disponível; caso contrário, manter mock-login para MVP1
 
-### Tarefas definidas
-1. **Entrega P7 humano** — `scripts/w3-smoke.sh --until-qr` passou 6/6; pedir proprietário para telefone descartável + completar pareamento/inbound/outbound/ack.
-2. **IdP real (se disponível)** — cadastrar client/redirect em `OMNIRA_AUTH_*`, provisionar `users.external_subject`, testar login/refresh/logout.
-3. **Integrações I2** — Meta por conexão somente após gate de segurança (webhook expose, rate limit, credentials no CredentialStore).
-4. **Testes de Go** — quando contar: corrigir RLS INSERT nos 6+ packages falhando.
-4. **Aplicar migrations no `omnira_dev`** do dono (pedir OK): usar `tools/migrate-sql.sh` com `BASELINE_UP_TO` no último ponto realmente aplicado; sem isso o `.env` local novo roda sem realtime e sem a correção 000027.
-5. Dívidas do gate: D-1 (entrega por lease/reconciliação), D-2 (rate limit webhook/login), retenção do Outbox, Problem Details, métricas de negócio, mídia WAHA (`SendMedia`, download com allowlist SSRF).
-6. Meta Cloud por conexão (I2 do doc) só depois de I0/I1.
+**Trabalho paralelo (sem bloqueio):**
+- **I1 (Refactor routes)** — renomear `/channels` → `/integrations`, deprecate `/channels`, ajustar frontend
+- **Testes Go (RLS INSERT)** — corrigir 6+ packages que falham em setup.Exec durante testes; usar `WithSystemTenantSession` ou `is_system_admin` GUC
+- **Meta I2** — integração Cloud API por conexão (depois de I1, com rate limit + webhook validation)
+- **Aplicar migrations no `omnira_dev`** (pedir OK do dono): `tools/migrate-sql.sh` com baseline até 000027 (realtime + RLS fix)
+
+### Tarefas de suporte
+1. Dívida D-1 (lease/reconciliation): implementar heartbeat + reclaim em `internal/routing/application/claim.go`
+2. Dívida D-2 (rate limit): middleware ou handler wrapper em `internal/platform/middleware/`
+3. Problem Details (RFC 7807): trocar `http.Error` por structured errors em handlers
+4. Métricas de negócio: adicionar prometheus em `/metrics` (latência, tickets criados, etc)
+5. Mídia WAHA: implementar `SendMedia` + download com validação SSRF
 
 ## 7. Armadilhas já encontradas (não repita)
 - **Nunca** rodar API/worker como `omnira` (superuser ignora RLS) — há trava de boot.
