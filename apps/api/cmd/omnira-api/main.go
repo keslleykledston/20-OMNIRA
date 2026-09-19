@@ -14,6 +14,8 @@ import (
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
+	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
 	"github.com/omnira/omnira/internal/platform/httpserver"
 )
@@ -68,7 +70,10 @@ func main() {
 			log.Fatalf("WAHA provider config error: %v", providerErr)
 		}
 		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
-		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore))
+		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
+		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore})
+		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
+		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).UseIntake(intake))
 	}
 
 	errChan := make(chan error, 1)

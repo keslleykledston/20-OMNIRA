@@ -12,11 +12,13 @@ package db
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
 // Querier — subconjunto comum de *pgxpool.Pool e pgx.Tx usado pelos
@@ -82,4 +84,20 @@ func WithTenantSession(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID
 	}
 
 	return tx.Commit(ctx)
+}
+
+// WithSystemTenantSession is the only entry point for non-human tenant work.
+// tenantID must already have been derived from trusted persisted state; this
+// helper never accepts or resolves tenant ownership from a provider payload.
+func WithSystemTenantSession(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID, fn func(ctx context.Context) error) error {
+	if tenantID == uuid.Nil {
+		return errors.New("system tenant session requires tenant_id")
+	}
+	return WithTenantSession(ctx, pool, uuid.Nil, true, func(scoped context.Context) error {
+		tc, err := tenancydomain.NewTenantContext(tenantID, uuid.Nil, tenancydomain.AccessSourceSystem)
+		if err != nil {
+			return err
+		}
+		return fn(tenancydomain.WithTenantContext(scoped, tc))
+	})
 }

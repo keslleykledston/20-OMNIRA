@@ -143,3 +143,14 @@ func TestMembershipIsActive(t *testing.T) {
 		t.Error("expected membership to not be active after revoke")
 	}
 }
+
+func TestSystemTenantContextAllowsNoHumanActor(t *testing.T) {
+	tenantID := uuid.New()
+	tc, err := NewTenantContext(tenantID, uuid.Nil, AccessSourceSystem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tc.TenantID != tenantID || tc.ActorID != uuid.Nil || tc.Source != AccessSourceSystem {
+		t.Fatalf("unexpected system context: %+v", tc)
+	}
+}

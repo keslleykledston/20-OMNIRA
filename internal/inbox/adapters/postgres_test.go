@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channeldomain "github.com/omnira/omnira/internal/channels/domain"
 	inboxapp "github.com/omnira/omnira/internal/inbox/application"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
@@ -47,8 +48,14 @@ func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {
 	if _, err := seed.Exec(ctx, `INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, tenantA, userA, roleID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userA) })
+	t.Cleanup(func() {
+		_, _ = seed.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1,$2)`, tenantA, tenantB)
+		_, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userA)
+	})
 	connectionID := uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active')`, connectionID, tenantA, connectionID.String()); err != nil {
+		t.Fatal(err)
+	}
 	store := NewPostgresInboundStore(app)
 	svc := inboxapp.NewInboundService(store, store, store, TicketStore{store})
 	connection := channeldomain.ChannelConnection{ID: connectionID, TenantID: tenantA}
@@ -88,6 +95,28 @@ func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {
 	}
 	if messages != 1 || tickets != 1 {
 		t.Fatalf("got messages=%d tickets=%d", messages, tickets)
+	}
+	intake := NewWebhookIntake(app, channeladapters.NewPostgresWebhookEventStore(app), svc)
+	webhookMessage := inbound
+	webhookMessage.ProviderMessageID = "provider-message-2"
+	duplicate, err := intake.ProcessWebhook(ctx, connection, webhookMessage.ProviderMessageID, "message.any", "digest", &webhookMessage)
+	if err != nil || duplicate {
+		t.Fatalf("system webhook intake failed: duplicate=%v err=%v", duplicate, err)
+	}
+	duplicate, err = intake.ProcessWebhook(ctx, connection, webhookMessage.ProviderMessageID, "message.any", "digest", &webhookMessage)
+	if err != nil || !duplicate {
+		t.Fatalf("system webhook redelivery failed: duplicate=%v err=%v", duplicate, err)
+	}
+	rollbackMessage := inbound
+	rollbackMessage.ProviderMessageID = "provider-message-rollback"
+	rollbackMessage.Text = ""
+	if _, err := intake.ProcessWebhook(ctx, connection, rollbackMessage.ProviderMessageID, "message.any", "digest", &rollbackMessage); err == nil {
+		t.Fatal("invalid message did not abort webhook transaction")
+	}
+	rollbackMessage.Text = "retry válido"
+	duplicate, err = intake.ProcessWebhook(ctx, connection, rollbackMessage.ProviderMessageID, "message.any", "digest", &rollbackMessage)
+	if err != nil || duplicate {
+		t.Fatalf("rolled-back reservation blocked retry: duplicate=%v err=%v", duplicate, err)
 	}
 	if err := platformdb.WithTenantSession(ctx, app, userA, false, func(sc context.Context) error {
 		tc, e := tenancydomain.NewTenantContext(tenantB, userA, tenancydomain.AccessSourceDirect)

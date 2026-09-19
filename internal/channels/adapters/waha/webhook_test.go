@@ -40,6 +40,21 @@ type webhookEventStore struct {
 	keys      []string
 }
 
+type webhookIntake struct {
+	calls     int
+	message   *domain.InboundMessage
+	duplicate bool
+	err       error
+}
+
+func (i *webhookIntake) ProcessWebhook(_ context.Context, _ domain.ChannelConnection, _, _ string, _ string, message *domain.InboundMessage) (bool, error) {
+	i.calls++
+	i.message = message
+	duplicate := i.duplicate
+	i.duplicate = true
+	return duplicate, i.err
+}
+
 func (s *webhookEventStore) MarkReceived(_ context.Context, _ domain.ChannelConnection, eventID, eventType, digest string) (bool, error) {
 	s.keys = append(s.keys, eventID+":"+eventType+":"+digest)
 	duplicate := s.duplicate
@@ -203,6 +218,26 @@ func TestWebhookHandlerAcknowledgesRedeliveryAfterDurableReservation(t *testing.
 	}
 	if len(events.keys) != 2 || !strings.HasPrefix(events.keys[0], "msg-1:message.any:") {
 		t.Fatalf("dedupe key not prepared: %#v", events.keys)
+	}
+}
+
+func TestWebhookHandlerSendsCanonicalMessageToAtomicIntake(t *testing.T) {
+	conn := webhookConnection()
+	conn.SecretRef = "credential-a"
+	provider := newProvider(t, "hmac-secret")
+	intake := &webhookIntake{}
+	handler := waha.NewWebhookHandler(provider, wahaResolver{conn: &conn}).UseIntake(intake)
+	body := []byte(`{"id":"evt-1","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"msg-1","timestamp":1710000000,"from":"5511999999999@c.us","body":"oi"}}`)
+	path := "/webhooks/v1/whatsapp/waha/" + conn.ID.String()
+	for range 2 {
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, signedRequest(path, body, "hmac-secret"))
+		if res.Code != http.StatusOK {
+			t.Fatalf("webhook got %d: %s", res.Code, res.Body.String())
+		}
+	}
+	if intake.calls != 2 || intake.message == nil || intake.message.ProviderMessageID != "msg-1" {
+		t.Fatalf("canonical intake not called: %+v", intake)
 	}
 }
 

@@ -182,13 +182,25 @@ type WahaConnectionResolver interface {
 	ResolveWahaConnection(ctx context.Context, connectionToken string) (*domain.ChannelConnection, error)
 }
 
+// WebhookIntake atomically reserves one provider event and applies its
+// canonical inbound effects in the tenant derived from the connection.
+type WebhookIntake interface {
+	ProcessWebhook(ctx context.Context, connection domain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *domain.InboundMessage) (duplicate bool, err error)
+}
+
 type WebhookHandler struct {
 	Provider *WahaProvider
 	Resolver WahaConnectionResolver
 	Events   ports.WebhookEventStore
+	Intake   WebhookIntake
 	MaxBody  int64
 	webhook  metric.Int64Counter
 	invalid  metric.Int64Counter
+}
+
+func (h *WebhookHandler) UseIntake(intake WebhookIntake) *WebhookHandler {
+	h.Intake = intake
+	return h
 }
 
 func NewWebhookHandler(provider *WahaProvider, resolver WahaConnectionResolver, stores ...ports.WebhookEventStore) *WebhookHandler {
@@ -258,8 +270,20 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(r.Context(), w, http.StatusBadRequest, "malformed webhook")
 		return
 	}
-	if h.Events != nil {
-		digest := sha256.Sum256(body)
+	digest := sha256.Sum256(body)
+	digestHex := hex.EncodeToString(digest[:])
+	if h.Intake != nil {
+		duplicate, err := h.Intake.ProcessWebhook(r.Context(), *conn, parsed.DeduplicationKey, parsed.Event, digestHex, parsed.Message)
+		if err != nil {
+			h.reject(r.Context(), w, http.StatusServiceUnavailable, "webhook intake unavailable")
+			return
+		}
+		if duplicate {
+			h.addMetric(r.Context(), h.webhook, "duplicate")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	} else if h.Events != nil {
 		duplicate, err := h.Events.MarkReceived(r.Context(), *conn, parsed.DeduplicationKey, parsed.Event, hex.EncodeToString(digest[:]))
 		if err != nil {
 			h.reject(r.Context(), w, http.StatusServiceUnavailable, "webhook intake unavailable")

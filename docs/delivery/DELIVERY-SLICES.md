@@ -125,3 +125,21 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - runbook quando existe operação nova;
 - changelog;
 - nenhuma dívida cross-tenant conhecida.
+
+## Estado de execução — WhatsApp não oficial até Inbox
+
+- DONE: U1 runtime Docker WAHA.
+- DONE: U2 lifecycle de sessão e QR no adapter.
+- DONE: U3 webhook HMAC e normalização canônica.
+- DONE: U4 outbound text e boundary de worker.
+- DONE: U5 mídia/status no adapter.
+- DONE: M02 Contact foundation.
+- DONE: M03 Conversation/Message/Ticket foundation.
+- DONE: M03.1/M03.2 persistência inbound atômica e idempotente ligada ao webhook WAHA.
+- TODO: M03.3 persistência de mídia inbound e aplicação de `message.ack` aos status canônicos.
+- DONE: M04 filas e seleção round-robin de domínio.
+- TODO: M04.1 claim atômico, repository/application de routing e worker NATS/Outbox.
+- TODO: M05.1 API REST paginada da Inbox sob TenantContext.
+- TODO: M05.2 eventos realtime SSE/WebSocket com reautorização e isolamento A/B.
+- TODO: M05.3 frontend Next.js com Omnira iOS Design System; não reutilizar o Vite mock como runtime final.
+- TODO: M06 chatbot/automation depois do vertical Inbox funcional.

@@ -96,6 +96,7 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 	if err != nil {
 		return nil, err
 	}
+	message.ChannelConnectionID = &connection.ID
 	stored, duplicate, err := s.messages.StoreInbound(ctx, message)
 	if err != nil {
 		return nil, fmt.Errorf("inbox: store message: %w", err)

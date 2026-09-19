@@ -28,6 +28,10 @@ Relação entre Usuário e Tenant ou entre Usuário e Hub, contendo papel e perm
 
 Contexto explícito e imutável aplicado a cada operação de domínio que acessa dados de um Tenant.
 
+## Actor do Sistema
+
+Identidade não humana usada por webhooks e workers após o Tenant ser derivado de um registro persistido confiável. Não possui `UserID` e nunca pode ser construída a partir de `tenant_id` recebido em payload.
+
 ## Conversa
 
 Thread omnichannel com um contato em um canal. Pode originar ou estar associada a um Ticket.

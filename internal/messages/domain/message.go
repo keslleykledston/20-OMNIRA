@@ -22,16 +22,17 @@ const (
 )
 
 type Message struct {
-	ID                uuid.UUID
-	TenantID          uuid.UUID
-	ConversationID    uuid.UUID
-	Direction         Direction
-	MessageType       string
-	Body              string
-	ProviderMessageID string
-	Status            Status
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                  uuid.UUID
+	TenantID            uuid.UUID
+	ConversationID      uuid.UUID
+	ChannelConnectionID *uuid.UUID
+	Direction           Direction
+	MessageType         string
+	Body                string
+	ProviderMessageID   string
+	Status              Status
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 func NewTextMessage(tenantID, conversationID uuid.UUID, direction Direction, body, providerMessageID string) (*Message, error) {

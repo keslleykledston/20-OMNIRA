@@ -74,11 +74,12 @@ func (s *PostgresInboundStore) StoreInbound(ctx context.Context, message *messag
 		return nil, false, err
 	}
 	stored, err := scanMessage(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		INSERT INTO messages (id, tenant_id, conversation_id, direction, message_type, body, provider_message_id, status, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		ON CONFLICT (tenant_id, provider_message_id) WHERE provider_message_id <> '' DO NOTHING
-		RETURNING id, tenant_id, conversation_id, direction, message_type, body, provider_message_id, status, created_at, updated_at`,
-		message.ID, message.TenantID, message.ConversationID, message.Direction, message.MessageType, message.Body, message.ProviderMessageID, message.Status, message.CreatedAt, message.UpdatedAt))
+		INSERT INTO messages (id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, provider_message_id, status, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (tenant_id, channel_connection_id, provider_message_id)
+		  WHERE provider_message_id <> '' AND channel_connection_id IS NOT NULL DO NOTHING
+		RETURNING id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, provider_message_id, status, created_at, updated_at`,
+		message.ID, message.TenantID, message.ConversationID, message.ChannelConnectionID, message.Direction, message.MessageType, message.Body, message.ProviderMessageID, message.Status, message.CreatedAt, message.UpdatedAt))
 	if err == nil {
 		return stored, false, nil
 	}
@@ -86,8 +87,8 @@ func (s *PostgresInboundStore) StoreInbound(ctx context.Context, message *messag
 		return nil, false, err
 	}
 	duplicate, lookupErr := scanMessage(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		SELECT id, tenant_id, conversation_id, direction, message_type, body, provider_message_id, status, created_at, updated_at
-		FROM messages WHERE tenant_id=$1 AND provider_message_id=$2`, message.TenantID, message.ProviderMessageID))
+		SELECT id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, provider_message_id, status, created_at, updated_at
+		FROM messages WHERE tenant_id=$1 AND channel_connection_id=$2 AND provider_message_id=$3`, message.TenantID, message.ChannelConnectionID, message.ProviderMessageID))
 	return duplicate, true, lookupErr
 }
 
@@ -164,10 +165,7 @@ func scanConversation(row scanner) (*conversationdomain.Conversation, error) {
 func scanMessage(row scanner) (*messagedomain.Message, error) {
 	m := &messagedomain.Message{}
 	var direction, status string
-	err := row.Scan(&m.ID, &m.TenantID, &m.ConversationID, &direction, &m.MessageType, &m.Body, &m.ProviderMessageID, &status, &m.CreatedAt, &m.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
+	err := row.Scan(&m.ID, &m.TenantID, &m.ConversationID, &m.ChannelConnectionID, &direction, &m.MessageType, &m.Body, &m.ProviderMessageID, &status, &m.CreatedAt, &m.UpdatedAt)
 	m.Direction = messagedomain.Direction(direction)
 	m.Status = messagedomain.Status(status)
 	return m, err

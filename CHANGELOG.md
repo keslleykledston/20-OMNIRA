@@ -6,6 +6,9 @@
 - Provider-neutral inbound orchestration for Contact, Conversation, Message and Ticket.
 - PostgreSQL adapter scoped by TenantContext and transaction querier.
 - Provider-message idempotency: a redelivery cannot create a second message or ticket.
+- WAHA webhook intake now reserves dedupe and persists the canonical message in one transaction.
+- System TenantContext derives ownership from the persisted ChannelConnection without a fabricated user UUID.
+- Provider-message uniqueness is scoped by ChannelConnection, with concurrent open-conversation/active-ticket guards.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
