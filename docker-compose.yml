@@ -8,11 +8,11 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_OTEL_ENDPOINT: http://otel-collector:4317
   OMNIRA_ENV: ${OMNIRA_ENV-development}
   OMNIRA_AUTH_MODE: ${OMNIRA_AUTH_MODE-mock}
-  OMNIRA_AUTH_ISSUER: ${OMNIRA_AUTH_ISSUER-http://localhost:8080}
+  OMNIRA_AUTH_ISSUER: ${OMNIRA_AUTH_ISSUER-http://keycloak:8080/realms/omnira}
   OMNIRA_AUTH_AUDIENCE: ${OMNIRA_AUTH_AUDIENCE-omnira-web}
-  OMNIRA_AUTH_CLIENT_ID: ${OMNIRA_AUTH_CLIENT_ID-}
+  OMNIRA_AUTH_CLIENT_ID: ${OMNIRA_AUTH_CLIENT_ID-omnira-web}
   OMNIRA_AUTH_CLIENT_SECRET: ${OMNIRA_AUTH_CLIENT_SECRET-}
-  OMNIRA_AUTH_REDIRECT_URL: ${OMNIRA_AUTH_REDIRECT_URL-}
+  OMNIRA_AUTH_REDIRECT_URL: ${OMNIRA_AUTH_REDIRECT_URL-http://localhost:8080/api/v1/auth/oidc/callback}
   OMNIRA_AUTH_POST_LOGIN_URL: ${OMNIRA_AUTH_POST_LOGIN_URL-/login?oidc=complete}
   OMNIRA_AUTH_COOKIE_SECURE: ${OMNIRA_AUTH_COOKIE_SECURE-false}
   OMNIRA_CREDENTIALS_KEY: ${OMNIRA_CREDENTIALS_KEY-}
@@ -61,6 +61,59 @@ services:
       start_period: 10s
     networks:
       - omnira-network
+    restart: unless-stopped
+
+  keycloak-postgres:
+    image: postgres:16-alpine
+    container_name: omnira-keycloak-postgres
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      POSTGRES_DB: keycloak
+    ports:
+      - "127.0.0.1:55435:5432"
+    volumes:
+      - keycloak_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - omnira-network
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: omnira-keycloak
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-localhost:8888}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY: edge
+    volumes:
+      - ./deploy/keycloak/omnira-realm.json:/opt/keycloak/data/import/omnira-realm.json:ro
+    command: start --import-realm --optimized
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    networks:
+      - omnira-network
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   otel-collector:
@@ -260,6 +313,8 @@ volumes:
   postgres_data:
     driver: local
   nats_data:
+    driver: local
+  keycloak_postgres_data:
     driver: local
   waha_sessions:
     driver: local
