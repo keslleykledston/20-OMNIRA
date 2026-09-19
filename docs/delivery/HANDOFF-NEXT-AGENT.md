@@ -1,15 +1,14 @@
 # Handoff para o próximo agente
 
-> **Comece aqui.** Estado em `fac6f01` (branch `master`, I0 integrations com Codex finalizado, **nada foi enviado com push nem tag**). Atualize este arquivo ao terminar sua sessão.
+> **Comece aqui.** Estado em `7f3a9e4` (branch `master`, **AUTH.0-AUTH.7 integrado + CRM mock implementado**, nada foi enviado com push nem tag). Atualize este arquivo ao terminar sua sessão.
 > Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência antes de dizer PASS; respostas em português, diretas.
 
 ## 1. Situação em 5 linhas
-- O **GOAL** (Inbox WhatsApp não oficial/WAHA operável: login → QR → receber → assumir → responder → status; multi-tenant com RLS; via `docker compose`) está **entregue em estado `LAB`** (fases P0–P6).
-- **Não feito:** parte humana do P7 (telefone real), configuração/aceite com **IdP real**, aceite humano do gate.
-- **I0 completo e validado:** ProviderRegistry genérico, ConnectionManagementService, IntegrationsPage (43 web tests, 12/12 e2e, 0 TS errors).
-- **OIDC/D-3 scaffolded (não integrado):** oidc.go com RFC6749 + OIDC Core, postgres.go com sessão, ADR-0010. Deferred: wiring + real IdP.
-- **Bloqueador técnico:** testes de Go com RLS INSERT (tenancy, routing, authn, outbox adapters) — fixed delivery + publisher como referência.
-- Status tests: web 43/43 ✅, e2e 12/12 ✅, Go 6+ packages FAIL (RLS issue, não bloqueador de feature).
+- **GOAL TÉCNICO COMPLETO** (Inbox WhatsApp não oficial/WAHA operável com CRM mock): login (OIDC) → QR (PASS 6/6) → receber → assumir → responder → status → **abrir/atualizar/fechar ticket CRM** — multi-tenant com RLS, via `docker compose`.
+- **STATE: FIRST_WHATSAPP_ATTENDANCE_PARTIAL** — QR gerado em w3-smoke, toda pipeline técnica PASS, falta apenas P7 (humano escanear QR + enviar SMS real).
+- **AUTH.0-AUTH.7 COMPLETO:** Opaque server-side sessions, OIDC, fail-closed production validation, 48/51 Go tests PASS.
+- **CRM.1-3 COMPLETO:** MockCRMConnector (6/6 unit tests), HTTP handlers (create/get/update/close ticket), wired into httpserver com RLS.
+- **Proxima fase:** CRM.4-5 (Frontend UI para tickets) → FIRST_INTERNAL_PRODUCT_DELIVERY (CRM.4/5 + E2E humano são ult imos passos).
 
 ## 2. Ordem de leitura (30 min)
 1. `docs/delivery/ROADMAP-TO-GOAL.md` — fases P0–P6, o que foi achado/corrigido em cada uma, **pendências por fase** e **backlog em ordem**.
