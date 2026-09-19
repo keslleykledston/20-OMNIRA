@@ -230,17 +230,19 @@ type OIDCHandler struct {
 	auth         *OIDCAuthenticator
 	discovery    OIDCDiscovery
 	resolver     OIDCIdentityResolver
+	sessionStore SessionStore
 	issuer       string
 	clientID     string
 	clientSecret string
 	redirectURL  string
 	postLoginURL string
 	secureCookie bool
+	sessionTTL   time.Duration
 }
 
-func NewOIDCHandler(auth *OIDCAuthenticator, discovery OIDCDiscovery, resolver OIDCIdentityResolver, issuer, clientID, clientSecret, redirectURL, postLoginURL string, secureCookie bool) *OIDCHandler {
-	return &OIDCHandler{auth: auth, discovery: discovery, resolver: resolver, issuer: issuer, clientID: clientID, clientSecret: clientSecret,
-		redirectURL: redirectURL, postLoginURL: postLoginURL, secureCookie: secureCookie}
+func NewOIDCHandler(auth *OIDCAuthenticator, discovery OIDCDiscovery, resolver OIDCIdentityResolver, sessionStore SessionStore, issuer, clientID, clientSecret, redirectURL, postLoginURL string, secureCookie bool) *OIDCHandler {
+	return &OIDCHandler{auth: auth, discovery: discovery, resolver: resolver, sessionStore: sessionStore, issuer: issuer, clientID: clientID, clientSecret: clientSecret,
+		redirectURL: redirectURL, postLoginURL: postLoginURL, secureCookie: secureCookie, sessionTTL: 15 * time.Minute}
 }
 
 func randomURLSafe(size int) (string, error) {
@@ -336,7 +338,15 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("identity provisioning error: %v", err), http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, h.cookie(SessionCookieName, tokens.IDToken, maxAge))
+
+	// Create server-side session (opaque session ID, not ID Token)
+	sessionID, err := h.sessionStore.CreateSession(r.Context(), principal.UserID, "oidc", h.sessionTTL)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("session creation error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, h.cookie(SessionCookieName, sessionID, int(h.sessionTTL.Seconds())))
 	for _, name := range []string{oidcStateCookie, oidcVerifierCookie, oidcNonceCookie} {
 		http.SetCookie(w, h.cookie(name, "", -1))
 	}
@@ -358,7 +368,10 @@ func (h *OIDCHandler) Session(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(profile)
 }
 
-func (h *OIDCHandler) Logout(w http.ResponseWriter, _ *http.Request) {
+func (h *OIDCHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(SessionCookieName); err == nil {
+		_ = h.sessionStore.RevokeSession(r.Context(), cookie.Value)
+	}
 	http.SetCookie(w, h.cookie(SessionCookieName, "", -1))
 	w.WriteHeader(http.StatusNoContent)
 }

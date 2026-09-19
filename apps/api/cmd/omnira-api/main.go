@@ -66,11 +66,12 @@ func main() {
 	srv.RegisterHealthHandlers()
 	if cfg.AuthMode == "oidc" {
 		resolver := authn.NewPostgresIdentityResolver(dbPool)
+		sessionStore := authn.NewPostgresSessionStore(dbPool)
 		oidcAuth, discovery, oidcErr := authn.NewOIDCAuthenticator(context.Background(), cfg.AuthIssuer, cfg.AuthAudience, nil, resolver)
 		if oidcErr != nil {
 			log.Fatalf("OIDC configuration error: %v", oidcErr)
 		}
-		srv.RegisterOIDCAuthHandlers(oidcAuth, authn.NewOIDCHandler(oidcAuth, discovery, resolver, cfg.AuthIssuer,
+		srv.RegisterOIDCAuthHandlers(oidcAuth, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
 			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
 	} else {
 		srv.RegisterAuthHandlers(cfg.AuthCookieSecure)

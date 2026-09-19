@@ -121,12 +121,13 @@ func FromContext(ctx context.Context) (*Principal, error) {
 	return principal, nil
 }
 
-// Middleware — HTTP middleware que valida token Bearer e injeta Principal.
+// Middleware — HTTP middleware que valida token Bearer/session e injeta Principal.
+// Suporta dois modos:
+// - Bearer token (API clients, dev mock)
+// - Session cookie (OIDC browsers)
 func Middleware(auth Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Bearer remains supported for API clients and the development mock.
-			// Browsers use the HttpOnly session cookie so scripts cannot read it.
 			authHeader := r.Header.Get("Authorization")
 			var token string
 			if authHeader != "" {
@@ -150,6 +151,29 @@ func Middleware(auth Authenticator) func(http.Handler) http.Handler {
 			}
 
 			// Injetar Principal no context
+			ctx := WithPrincipal(r.Context(), principal)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// SessionMiddleware — validates session cookie and injects Principal (OIDC only).
+func SessionMiddleware(store SessionStore) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cookie, err := r.Cookie(SessionCookieName)
+			if err != nil {
+				http.Error(w, "missing session", http.StatusUnauthorized)
+				return
+			}
+
+			userID, err := store.ResolveSession(r.Context(), cookie.Value)
+			if err != nil {
+				http.Error(w, "invalid or expired session", http.StatusUnauthorized)
+				return
+			}
+
+			principal := &Principal{UserID: userID, Subject: userID.String()}
 			ctx := WithPrincipal(r.Context(), principal)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
