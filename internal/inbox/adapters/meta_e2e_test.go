@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	"github.com/omnira/omnira/internal/channels/meta"
+	"github.com/omnira/omnira/internal/testhelpers"
 	inboxapp "github.com/omnira/omnira/internal/inbox/application"
 )
 

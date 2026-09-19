@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	"github.com/omnira/omnira/internal/platform/authn"
+	"github.com/omnira/omnira/internal/testhelpers"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
