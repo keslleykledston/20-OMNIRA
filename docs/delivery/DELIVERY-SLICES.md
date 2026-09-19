@@ -131,18 +131,18 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 ### Estado atual da retomada
 
 - Branch: `master`.
-- HEAD: `f88fbd9` (`feat(routing): enqueue new conversations from default queue`).
+- HEAD: `98dd6b7` (`feat(M05.1): Inbox API — tenant-scoped REST endpoints with cursor pagination`).
 - Working tree: limpa.
 - Último gate verde: `go test ./...`, `go vet ./...`, RLS completeness, isolation A/B, OpenAPI/AsyncAPI e Compose.
 - Última migration validada: `000019_default_queue` em fluxo vazio → up → down → up.
-- Nenhuma implementação de M04.4 foi iniciada nesta retomada; o patch tentado falhou antes de alterar arquivos.
+- M04.4: ✅ DONE (86a1223) — Outbox dispatcher under RLS session; PostgreSQL + omnira_app + NATS smoke validated.
+- M05.1: ✅ DONE (98dd6b7) — Inbox API (ListConversations, ListMessages) with cursor pagination and full OpenAPI documentation.
 
 ### Próximos passos ordenados
 
-1. M04.4: fazer o dispatcher Outbox executar leitura, tentativa e marcação sob transações com `SET LOCAL app.is_system_admin=true`, usando exclusivamente `omnira_app`.
-2. Testar ponta a ponta: inbound → conversa/fila default → Outbox → NATS JetStream → worker routing → atribuição.
-3. Cobrir rollback, redelivery, RLS e ausência de vazamento de `tenant_id` do envelope.
-4. Só após M04.4 verde iniciar M05.1 (API REST paginada da Inbox).
+1. M05.2: Realtime SSE/WebSocket com reautorização e isolamento A/B.
+2. M05.3: Frontend Next.js com Omnira iOS Design System (não reutilizar Vite mock como runtime final).
+3. M06: Chatbot/automação após o vertical Inbox estar funcional.
 
 - DONE: U1 runtime Docker WAHA.
 - DONE: U2 lifecycle de sessão e QR no adapter.
