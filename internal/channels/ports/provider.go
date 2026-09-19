@@ -73,6 +73,55 @@ type ProviderMetadata struct {
 	Capabilities []domain.Capability
 }
 
+// ConnectMethod tells clients which onboarding flow a provider requires.
+// Values are deliberately provider-neutral so the web UI can render a
+// wizard from the descriptor without importing adapter-specific knowledge.
+type ConnectMethod string
+
+const (
+	ConnectMethodQRSession     ConnectMethod = "qr_session"
+	ConnectMethodCredentials   ConnectMethod = "credentials"
+	ConnectMethodOAuthRedirect ConnectMethod = "oauth_redirect"
+)
+
+type ProviderInputDescriptor struct {
+	Key      string   `json:"key"`
+	Label    string   `json:"label"`
+	Type     string   `json:"type"`
+	Required bool     `json:"required"`
+	Pattern  string   `json:"pattern,omitempty"`
+	Help     string   `json:"help,omitempty"`
+	Example  string   `json:"example,omitempty"`
+	Secret   bool     `json:"secret"`
+	Options  []string `json:"options,omitempty"`
+}
+
+type ProviderDisplayDescriptor struct {
+	Key           string `json:"key"`
+	Label         string `json:"label"`
+	ValueTemplate string `json:"value_template,omitempty"`
+	Copyable      bool   `json:"copyable"`
+	Sensitive     bool   `json:"sensitive"`
+	Help          string `json:"help,omitempty"`
+}
+
+// ProviderDescriptor is the declarative, secret-free catalog entry exposed
+// to tenant administrators. Availability describes server configuration;
+// it never contains credentials or their values.
+type ProviderDescriptor struct {
+	ID                string                      `json:"id"`
+	Name              string                      `json:"name"`
+	Channel           domain.Channel              `json:"channel"`
+	Kind              domain.ProviderKind         `json:"kind"`
+	ConnectMethod     ConnectMethod               `json:"connect_method"`
+	RiskNotice        string                      `json:"risk_notice,omitempty"`
+	Capabilities      []domain.Capability         `json:"capabilities"`
+	Enabled           bool                        `json:"enabled"`
+	UnavailableReason string                      `json:"unavailable_reason,omitempty"`
+	Inputs            []ProviderInputDescriptor   `json:"inputs"`
+	Displays          []ProviderDisplayDescriptor `json:"displays"`
+}
+
 // WebhookVerificationRequest — dados brutos necessários para verificar a
 // autenticidade de um webhook antes de processá-lo.
 type WebhookVerificationRequest struct {

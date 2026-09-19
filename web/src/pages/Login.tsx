@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../lib/store'
 import { authAPI } from '../lib/api'
@@ -11,6 +11,31 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+	const [mode, setMode] = useState<'mock' | 'oidc' | null>(null)
+
+	useEffect(() => {
+		let active = true
+		const completeOIDC = new URLSearchParams(window.location.search).get('oidc') === 'complete'
+		authAPI.mode().then(async ({ data }) => {
+			if (!active) return
+			setMode(data.mode)
+			if (data.mode === 'oidc' && completeOIDC) {
+				setLoading(true)
+				try {
+					const session = await authAPI.session()
+					const { user, tenant } = session.data
+					setUser({ ...user, roles: user.roles ?? [] })
+					saveSession('', tenant?.id, user)
+					navigate('/', { replace: true })
+				} catch {
+					setError('A sessão do provedor de identidade não pôde ser validada.')
+				} finally {
+					setLoading(false)
+				}
+			}
+		}).catch(() => active && setError('Não foi possível consultar o modo de autenticação.'))
+		return () => { active = false }
+	}, [navigate, setUser])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -22,14 +47,16 @@ export default function Login() {
       const response = await login(email, password)
       const { token, user, tenant } = response.data
 
-      if (!token || !user) {
+		const offlineMock = import.meta.env.VITE_MOCK_AUTH === 'true'
+
+		if (!user) {
         setError('Login retornou dados inválidos')
         return
       }
 
-      setToken(token)
+		if (offlineMock) setToken(token)
       setUser(user)
-      saveSession(token, tenant?.id, user)
+		saveSession(offlineMock ? token : '', tenant?.id, user)
 
       // Aguarda um momento para garantir que o state foi atualizado
       setTimeout(() => navigate('/'), 100)
@@ -62,7 +89,12 @@ export default function Login() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+		{mode === 'oidc' ? (
+			<button className="w-full btn-primary font-medium" disabled={loading} onClick={() => authAPI.startOIDC()}>
+				{loading ? 'Validando sessão...' : 'Entrar com o provedor de identidade'}
+			</button>
+		) : mode === 'mock' || import.meta.env.VITE_MOCK_AUTH === 'true' ? (
+		<form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
               Email
@@ -98,7 +130,8 @@ export default function Login() {
           >
             {loading ? 'Autenticando...' : 'Entrar'}
           </button>
-        </form>
+		</form>
+		) : <div className="text-center text-slate-500">Carregando autenticação...</div>}
 
         <div className="mt-6 pt-6 border-t border-slate-200 text-center text-sm text-slate-600">
           <p>Demo: use credenciais válidas do seu servidor</p>

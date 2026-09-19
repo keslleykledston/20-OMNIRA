@@ -24,6 +24,13 @@ var (
 
 type op struct{ method, path string }
 
+type contractOIDCHandler struct{}
+
+func (contractOIDCHandler) Start(http.ResponseWriter, *http.Request)    {}
+func (contractOIDCHandler) Callback(http.ResponseWriter, *http.Request) {}
+func (contractOIDCHandler) Session(http.ResponseWriter, *http.Request)  {}
+func (contractOIDCHandler) Logout(http.ResponseWriter, *http.Request)   {}
+
 // specOps returns "METHOD /full/path" for every operation of the spec (server /api/v1 unless the
 // path overrides `servers` with url "/").
 func specOps(t *testing.T) []op {
@@ -69,8 +76,10 @@ func newRoutedServer(t *testing.T) *Server {
 	s := New("127.0.0.1:0")
 	s.RegisterHealthHandlers()
 	s.RegisterAuthHandlers() // generates the RSA keys the other registrations need
+	s.RegisterOIDCAuthHandlers(s.authenticator, contractOIDCHandler{})
 	s.RegisterTenancyHandlers(nil)
 	s.RegisterInboxHandlers(nil)
+	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
 	s.RegisterWahaWebhook(http.NotFoundHandler())
 	return s
@@ -104,13 +113,16 @@ func TestEveryInboxAndChannelRouteIsDocumented(t *testing.T) {
 	}
 	// the channels family uses: base := "..."; s.mux.Handle("METHOD "+base+"/suffix", ...)
 	baseRE := regexp.MustCompile(`base := "([^"]+)"`)
-	base := baseRE.FindStringSubmatch(string(src))
-	if base == nil {
+	bases := baseRE.FindAllStringSubmatch(string(src), -1)
+	if len(bases) == 0 {
 		t.Fatal("channels base path not found in server.go")
 	}
 	cat := regexp.MustCompile(`s\.mux\.Handle\("(GET|POST) "\+base(?:\+"([^"]*)")?`)
-	for _, m := range cat.FindAllStringSubmatch(string(src), -1) {
-		found = append(found, m[1]+" "+paramRE.ReplaceAllString(base[1]+m[2], "{}"))
+	patterns := cat.FindAllStringSubmatch(string(src), -1)
+	for _, base := range bases {
+		for _, m := range patterns {
+			found = append(found, m[1]+" "+paramRE.ReplaceAllString(base[1]+m[2], "{}"))
+		}
 	}
 	if len(found) < 10 {
 		t.Fatalf("parsed only %d routes from server.go — the extraction is broken", len(found))

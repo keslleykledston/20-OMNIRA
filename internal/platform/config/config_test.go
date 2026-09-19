@@ -95,3 +95,37 @@ func TestValidateWAHAConfig(t *testing.T) {
 		t.Fatal("unsupported WAHA engine accepted")
 	}
 }
+
+func TestValidateOIDCConfig(t *testing.T) {
+	base := Config{
+		Env:              "production",
+		DatabaseURL:      "postgres://test",
+		CredentialsKey:   make([]byte, 32),
+		AuthMode:         "oidc",
+		AuthIssuer:       "https://idp.example.com",
+		AuthAudience:     "omnira",
+		AuthClientID:     "client-id",
+		AuthClientSecret: "runtime-secret",
+		AuthRedirectURL:  "https://app.example.com/api/v1/auth/oidc/callback",
+		AuthPostLoginURL: "/login?oidc=complete",
+		AuthCookieSecure: true,
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid OIDC config rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*Config){
+		"insecure issuer":       func(c *Config) { c.AuthIssuer = "http://idp.example.com" },
+		"insecure redirect":     func(c *Config) { c.AuthRedirectURL = "http://app.example.com/callback" },
+		"external post-login":   func(c *Config) { c.AuthPostLoginURL = "https://evil.example.com" },
+		"scheme-relative target": func(c *Config) { c.AuthPostLoginURL = "//evil.example.com" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := base
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("unsafe OIDC config accepted")
+			}
+		})
+	}
+}

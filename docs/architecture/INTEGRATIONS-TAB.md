@@ -1,6 +1,6 @@
 # Aba "Integrações" — projeto
 
-> Estado: **PROPOSTA (design)**. Nada aqui foi implementado além do que está marcado **[existe]**.
+> Estado: **I0 e I1 implementadas em 2026-09-19**. I2–I5 permanecem propostas; itens pontuais continuam marcados **[existe]**.
 > Complementa `INTEGRATIONS.md` (princípio anti-corrupção, porta canônica ERP, contrato de canais) e
 > `docs/ops/RUNBOOK-INBOX-WAHA.md`. Hoje existe a página `/channels` ("Canais") só para WAHA; esta aba a **substitui e generaliza**.
 
@@ -196,12 +196,18 @@ Métricas (baixa cardinalidade): `channel_connections{provider,status}` (gauge),
 ## 12. Fases sugeridas
 | Fase | Entrega | Depende de |
 |---|---|---|
-| I0 | Registro de provedores + `GET /providers`; serviço genérico de conexões; alias do WAHA | — |
-| I1 | Aba `/integrations` (lista + assistente QR/WAHA) substituindo `/channels` | I0 |
+| I0 ✅ | Registro de provedores + `GET /providers`; serviço genérico de conexões; alias do WAHA | — |
+| I1 ✅ | Aba `/integrations` (lista + assistente QR/WAHA) substituindo `/channels` | I0 |
 | I2 | Meta por conexão (credenciais, callback/verify token, exposição nginx com rate limit) + assistente de credenciais | I0 |
 | I3 | Estado em tempo real (SSE) + reconciliação + métricas/alertas | I1 |
 | I4 | ERPs (IXC/SGP/Hubsoft) na mesma aba (credenciais + teste + IPs de saída) | I0 |
 | I5 | "Parear por código", reconexão guiada, cotas e telemetria de funil | I1 |
+
+### Evidência I0/I1
+
+- OpenAPI e guard de drift incluem catálogo, conexões genéricas e aliases WAHA depreciados.
+- Testes PostgreSQL como `omnira_app`: RBAC, 404 sem oráculo cross-tenant, input write-only, provedor desabilitado sem persistência e compatibilidade do alias.
+- Web: 43 testes e TypeScript; E2E real 12/12 com catálogo, assistente, aceite de risco, QR WAHA real e parada da sessão.
 
 ## 13. Riscos e decisões em aberto
 1. **Meta em produção exige exposição pública do webhook** (hoje bloqueada): decidir domínio/rate limit/WAF antes de I2.

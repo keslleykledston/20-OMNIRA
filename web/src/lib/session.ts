@@ -3,6 +3,7 @@
 export const TOKEN_KEY = 'token';
 export const TENANT_KEY = 'tenantId';
 export const USER_KEY = 'user';
+export const SESSION_KEY = 'sessionActive';
 
 export function getAuthToken(): string {
   return localStorage.getItem(TOKEN_KEY) || localStorage.getItem('jwtToken') || '';
@@ -18,19 +19,26 @@ export function authHeaders(): Record<string, string> {
 }
 
 export function saveSession(token: string, tenantId: string | undefined, user: unknown): void {
-  localStorage.setItem(TOKEN_KEY, token);
-  if (tenantId) localStorage.setItem(TENANT_KEY, tenantId);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+	if (token) localStorage.setItem(TOKEN_KEY, token);
+	else localStorage.removeItem(TOKEN_KEY);
+	if (tenantId) localStorage.setItem(TENANT_KEY, tenantId);
+	localStorage.setItem(USER_KEY, JSON.stringify(user));
+	localStorage.setItem(SESSION_KEY, 'true');
+}
+
+export function hasSession(): boolean {
+	return !!getAuthToken() || localStorage.getItem(SESSION_KEY) === 'true';
 }
 
 export function clearSession(): void {
-  [TOKEN_KEY, TENANT_KEY, USER_KEY, 'jwtToken'].forEach((k) => localStorage.removeItem(k));
+	[TOKEN_KEY, TENANT_KEY, USER_KEY, SESSION_KEY, 'jwtToken'].forEach((k) => localStorage.removeItem(k));
 }
 
 // A 401 from the API means the token is missing/expired (the backend keys are per process):
 // drop the session and send the user to the login page.
 export function handleUnauthorized(): void {
   clearSession();
+	void fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
   if (!window.location.pathname.includes('/login')) {
     window.location.replace('/login');
   }

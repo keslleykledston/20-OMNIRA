@@ -2,6 +2,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '/api',
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -70,6 +71,9 @@ export const authAPI = {
     const { token, user, tenant } = res.data
     return { data: { token, user: { ...user, roles: user?.roles ?? [] }, tenant } }
   },
+  mode: () => api.get<{ mode: 'mock' | 'oidc' }>('/v1/auth/mode'),
+  startOIDC: () => window.location.assign('/api/v1/auth/oidc/start'),
+  session: () => api.get('/v1/auth/session'),
   // Offline dev/mock mode (VITE_MOCK_AUTH=true): fake unsigned token, NOT accepted by the backend.
   mockLogin: async (email: string, password: string) => {
     // Mock login: qualquer email na lista + qualquer senha funciona
@@ -96,10 +100,11 @@ export const authAPI = {
       }
     })
   },
-  logout: () => {
+  logout: async () => {
+	await api.post('/v1/auth/logout').catch(() => undefined)
     localStorage.removeItem('token')
     localStorage.removeItem('user')
-    return Promise.resolve({ data: { status: 'ok' } })
+    return { data: { status: 'ok' } }
   },
   refresh: () => api.post('/v1/auth/refresh')
 }

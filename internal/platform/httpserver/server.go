@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,17 +37,18 @@ const (
 )
 
 type Server struct {
-	srv         *http.Server
-	mux         *http.ServeMux
-	addr        string
-	ln          net.Listener
-	closed      chan struct{}
-	closedOnce  bool
-	health      *health.HealthCheck
-	rateLimiter *ratelimit.Limiter
-	privateKey  *rsa.PrivateKey
-	publicKey   *rsa.PublicKey
-	natsConn    *nats.Conn
+	srv           *http.Server
+	mux           *http.ServeMux
+	addr          string
+	ln            net.Listener
+	closed        chan struct{}
+	closedOnce    bool
+	health        *health.HealthCheck
+	rateLimiter   *ratelimit.Limiter
+	privateKey    *rsa.PrivateKey
+	publicKey     *rsa.PublicKey
+	authenticator authn.Authenticator
+	natsConn      *nats.Conn
 }
 
 func New(addr string) *Server {
@@ -136,7 +138,7 @@ func (s *Server) RegisterHealthHandlers() {
 }
 
 // RegisterAuthHandlers — registra endpoints de autenticação (incluindo mock login para testes)
-func (s *Server) RegisterAuthHandlers() {
+func (s *Server) RegisterAuthHandlers(secureCookie ...bool) {
 	// Gerar chave RSA para JWT (use valores reais em produção).
 	// A mesma keypair é reutilizada por RegisterTenancyHandlers para
 	// verificar os tokens emitidos aqui — por isso fica salva no Server em
@@ -148,6 +150,9 @@ func (s *Server) RegisterAuthHandlers() {
 	}
 	s.privateKey = privateKey
 	s.publicKey = publicKey
+	if publicKey != nil {
+		s.authenticator = authn.NewJWTAuthenticator(publicKey, mockJWTIssuer, mockJWTAudience)
+	}
 
 	if s.privateKey == nil {
 		// Health check apenas
@@ -159,9 +164,41 @@ func (s *Server) RegisterAuthHandlers() {
 		return
 	}
 
-	authHandler := authn.NewAuthHandler(s.privateKey)
+	authHandler := authn.NewAuthHandler(s.privateKey, secureCookie...)
 	s.mux.HandleFunc("POST /api/v1/auth/login", authHandler.MockLogin)
 	s.mux.HandleFunc("GET /api/v1/auth/health", authHandler.HealthCheck)
+	s.mux.HandleFunc("GET /api/v1/auth/mode", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"mode": "mock"})
+	})
+}
+
+// RegisterOIDCAuthHandlers installs the production authentication boundary.
+// The browser receives only an HttpOnly cookie; tenant authority is still
+// derived later from persisted memberships by the tenancy middleware.
+type oidcHTTPHandler interface {
+	Start(http.ResponseWriter, *http.Request)
+	Callback(http.ResponseWriter, *http.Request)
+	Session(http.ResponseWriter, *http.Request)
+	Logout(http.ResponseWriter, *http.Request)
+}
+
+func (s *Server) RegisterOIDCAuthHandlers(authenticator authn.Authenticator, handler oidcHTTPHandler) {
+	if authenticator == nil || handler == nil {
+		return
+	}
+	s.authenticator = authenticator
+	s.mux.HandleFunc("GET /api/v1/auth/oidc/start", handler.Start)
+	s.mux.HandleFunc("GET /api/v1/auth/oidc/callback", handler.Callback)
+	s.mux.Handle("GET /api/v1/auth/session", authn.Middleware(authenticator)(http.HandlerFunc(handler.Session)))
+	s.mux.HandleFunc("POST /api/v1/auth/logout", handler.Logout)
+	_, modePattern := s.mux.Handler(&http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/api/v1/auth/mode"}})
+	if modePattern == "" {
+		s.mux.HandleFunc("GET /api/v1/auth/mode", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"mode": "oidc"})
+		})
+	}
 }
 
 // RegisterTenancyHandlers — registra as rotas REST do M01/R0.1 Tenant
@@ -169,14 +206,13 @@ func (s *Server) RegisterAuthHandlers() {
 // /api/v1/tenants/{tenant_id}, membros e auditoria. Requer que
 // RegisterAuthHandlers já tenha rodado (usa a mesma keypair RSA).
 func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
-	if s.publicKey == nil {
+	if s.authenticator == nil {
 		// Sem chave pública não há como verificar tokens; não registrar
 		// rotas que dependeriam de autenticação funcional.
 		return
 	}
 
-	jwtAuth := authn.NewJWTAuthenticator(s.publicKey, mockJWTIssuer, mockJWTAudience)
-	authnMiddleware := authn.Middleware(jwtAuth)
+	authnMiddleware := authn.Middleware(s.authenticator)
 
 	tenantRepo := tenancyadapters.NewPostgresTenantRepository(dbPool)
 	memberRepo := tenancyadapters.NewPostgresMembershipRepository(dbPool)
@@ -228,11 +264,10 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 
 // RegisterInboxHandlers exposes tenant-scoped, read-only Inbox queries and realtime SSE.
 func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
-	if s.publicKey == nil {
+	if s.authenticator == nil {
 		return
 	}
-	jwtAuth := authn.NewJWTAuthenticator(s.publicKey, mockJWTIssuer, mockJWTAudience)
-	authnMiddleware := authn.Middleware(jwtAuth)
+	authnMiddleware := authn.Middleware(s.authenticator)
 	authzSvc := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(dbPool),
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
@@ -264,11 +299,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session
 // management (admin-only via channel.manage), behind authn + tenant session.
 func (s *Server) RegisterWahaConnectionHandlers(dbPool *pgxpool.Pool, h *channeladapters.ConnectionHandler) {
-	if s.publicKey == nil || h == nil {
+	if s.authenticator == nil || h == nil {
 		return
 	}
-	jwtAuth := authn.NewJWTAuthenticator(s.publicKey, mockJWTIssuer, mockJWTAudience)
-	authnMiddleware := authn.Middleware(jwtAuth)
+	authnMiddleware := authn.Middleware(s.authenticator)
 	authzSvc := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(dbPool),
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
@@ -276,6 +310,29 @@ func (s *Server) RegisterWahaConnectionHandlers(dbPool *pgxpool.Pool, h *channel
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	base := "/api/v1/tenants/{tenant_id}/channels/waha/connections"
 	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	s.mux.Handle("POST "+base, wrap(h.Create))
+	s.mux.Handle("GET "+base, wrap(h.List))
+	s.mux.Handle("GET "+base+"/{connection_id}", wrap(h.Get))
+	s.mux.Handle("POST "+base+"/{connection_id}/session/start", wrap(h.StartSession))
+	s.mux.Handle("POST "+base+"/{connection_id}/session/stop", wrap(h.StopSession))
+	s.mux.Handle("GET "+base+"/{connection_id}/qr", wrap(h.QR))
+}
+
+// RegisterChannelManagementHandlers exposes the provider-neutral catalog and
+// connection routes introduced in I0. Provider-specific paths remain aliases.
+func (s *Server) RegisterChannelManagementHandlers(dbPool *pgxpool.Pool, h *channeladapters.ManagementHandler) {
+	if s.authenticator == nil || h == nil {
+		return
+	}
+	authnMiddleware := authn.Middleware(s.authenticator)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	base := "/api/v1/tenants/{tenant_id}/channels/connections"
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/channels/providers", wrap(h.Providers))
 	s.mux.Handle("POST "+base, wrap(h.Create))
 	s.mux.Handle("GET "+base, wrap(h.List))
 	s.mux.Handle("GET "+base+"/{connection_id}", wrap(h.Get))

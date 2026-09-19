@@ -151,6 +151,24 @@ func newConnEnv(t *testing.T, publicURL string) *connEnv {
 	svc := application.NewWahaConnectionService(adapters.NewPostgresChannelConnectionRepository(app), e.store, e.fake,
 		adapters.NewPostgresPermissionChecker(app), adapters.NewChannelAuditRecorder(auditadapters.NewPostgresAuditEventRepository(app)), publicURL)
 	h := adapters.NewConnectionHandler(svc)
+	registry := application.NewMapProviderRegistry()
+	if err := registry.RegisterDescriptor(ports.ProviderDescriptor{
+		ID: domain.ProviderWAHA, Name: "WhatsApp (não oficial)", Channel: domain.ChannelWhatsApp,
+		Kind: domain.ProviderKindUnofficial, ConnectMethod: ports.ConnectMethodQRSession, Enabled: true,
+		Capabilities: []domain.Capability{domain.CapabilityText, domain.CapabilityDeliveryStatus, domain.CapabilityQRPairing},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterDescriptor(ports.ProviderDescriptor{
+		ID: domain.ProviderMetaCloud, Name: "WhatsApp · Meta Cloud", Channel: domain.ChannelWhatsApp,
+		Kind: domain.ProviderKindOfficial, ConnectMethod: ports.ConnectMethodCredentials, Enabled: false,
+		UnavailableReason: "I2",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	management := application.NewConnectionManagementService(registry, adapters.NewPostgresPermissionChecker(app))
+	management.Register(domain.ProviderWAHA, svc)
+	mh := adapters.NewManagementHandler(management)
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(app), tenancyadapters.NewPostgresTenantRepository(app))
 	mw := tenancyadapters.AuthorizationMiddleware(app, authz)
 	base := "/api/v1/tenants/{tenant_id}/channels/waha/connections"
@@ -161,6 +179,14 @@ func newConnEnv(t *testing.T, publicURL string) *connEnv {
 	e.mux.Handle("POST "+base+"/{connection_id}/session/start", mw(http.HandlerFunc(h.StartSession)))
 	e.mux.Handle("POST "+base+"/{connection_id}/session/stop", mw(http.HandlerFunc(h.StopSession)))
 	e.mux.Handle("GET "+base+"/{connection_id}/qr", mw(http.HandlerFunc(h.QR)))
+	generic := "/api/v1/tenants/{tenant_id}/channels/connections"
+	e.mux.Handle("GET /api/v1/tenants/{tenant_id}/channels/providers", mw(http.HandlerFunc(mh.Providers)))
+	e.mux.Handle("POST "+generic, mw(http.HandlerFunc(mh.Create)))
+	e.mux.Handle("GET "+generic, mw(http.HandlerFunc(mh.List)))
+	e.mux.Handle("GET "+generic+"/{connection_id}", mw(http.HandlerFunc(mh.Get)))
+	e.mux.Handle("POST "+generic+"/{connection_id}/session/start", mw(http.HandlerFunc(mh.StartSession)))
+	e.mux.Handle("POST "+generic+"/{connection_id}/session/stop", mw(http.HandlerFunc(mh.StopSession)))
+	e.mux.Handle("GET "+generic+"/{connection_id}/qr", mw(http.HandlerFunc(mh.QR)))
 	return e
 }
 
@@ -171,13 +197,60 @@ type cres struct {
 }
 
 func (e *connEnv) do(user, tenant uuid.UUID, method, path, body string) cres {
-	req := httptest.NewRequest(method, "/api/v1/tenants/"+tenant.String()+"/channels/waha/connections"+path, strings.NewReader(body))
+	return e.doAt(user, method, "/api/v1/tenants/"+tenant.String()+"/channels/waha/connections"+path, body)
+}
+
+func (e *connEnv) doAt(user uuid.UUID, method, path, body string) cres {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: user, Subject: user.String()}))
 	rec := httptest.NewRecorder()
 	e.mux.ServeHTTP(rec, req)
 	r := cres{code: rec.Code, body: rec.Body.String()}
 	_ = json.Unmarshal(rec.Body.Bytes(), &r.m)
 	return r
+}
+
+func TestProviderCatalogAndGenericWahaAlias(t *testing.T) {
+	e := newConnEnv(t, "https://omnira.example.com")
+	root := "/api/v1/tenants/" + e.tenantA.String() + "/channels"
+
+	catalog := e.doAt(e.adminA, "GET", root+"/providers", "")
+	code(t, catalog, 200, "provider catalog")
+	items, ok := catalog.m["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("catalog: %s", catalog.body)
+	}
+	if strings.Contains(catalog.body, "do-not-store") || strings.Contains(catalog.body, "webhook_hmac_key") {
+		t.Fatalf("catalog leaked credential material: %s", catalog.body)
+	}
+	code(t, e.doAt(e.supervisorA, "GET", root+"/providers", ""), 403, "catalog RBAC")
+	code(t, e.doAt(e.supervisorA, "POST", root+"/connections", `{"provider":"waha","risk_acknowledged":true}`), 403, "generic create RBAC")
+
+	created := e.doAt(e.adminA, "POST", root+"/connections", `{"provider":"waha","risk_acknowledged":true}`)
+	code(t, created, 201, "generic create")
+	id := created.m["id"].(string)
+	legacy := e.do(e.adminA, e.tenantA, "GET", "/"+id, "")
+	code(t, legacy, 200, "legacy alias sees generic connection")
+	if legacy.m["id"] != created.m["id"] {
+		t.Fatalf("alias mismatch: generic=%s legacy=%s", created.body, legacy.body)
+	}
+	disabled := e.doAt(e.adminA, "POST", root+"/connections", `{"provider":"meta_cloud","inputs":{"access_token":"do-not-store"}}`)
+	code(t, disabled, 503, "disabled provider")
+	if strings.Contains(disabled.body, "do-not-store") {
+		t.Fatalf("write-only input leaked in error response: %s", disabled.body)
+	}
+	if n := e.count(`SELECT count(*) FROM channel_connections WHERE tenant_id=$1`, e.tenantA); n != 1 {
+		t.Fatalf("disabled provider persisted a row: %d", n)
+	}
+	rootB := "/api/v1/tenants/" + e.tenantB.String() + "/channels"
+	createdB := e.doAt(e.adminB, "POST", rootB+"/connections", `{"provider":"waha","risk_acknowledged":true}`)
+	code(t, createdB, 201, "tenant B generic create")
+	foreignID := createdB.m["id"].(string)
+	notFound := e.doAt(e.adminA, "GET", root+"/connections/"+uuid.NewString(), "")
+	foreign := e.doAt(e.adminA, "GET", root+"/connections/"+foreignID, "")
+	if foreign.code != 404 || foreign.body != notFound.body {
+		t.Fatalf("generic cross-tenant oracle: foreign=%d %q missing=%d %q", foreign.code, foreign.body, notFound.code, notFound.body)
+	}
 }
 
 func (e *connEnv) count(sql string, args ...any) (n int) {

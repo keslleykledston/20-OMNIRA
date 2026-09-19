@@ -33,37 +33,90 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer app.Close()
-	exec := func(sql string, args ...any) {
+	tenantA, tenantB := uuid.New(), uuid.New()
+	seedCreateTenant := func(tn uuid.UUID) error {
 		t.Helper()
-		if _, err := seed.Exec(ctx, sql, args...); err != nil {
-			t.Fatalf("%s: %v", sql, err)
+		conn, err := seed.Acquire(ctx)
+		if err != nil {
+			return err
+		}
+		defer conn.Release()
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tn, tn.String()); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	for _, tn := range []uuid.UUID{tenantA, tenantB} {
+		if err := seedCreateTenant(tn); err != nil {
+			t.Fatalf("create tenant %s: %v", tn, err)
 		}
 	}
-	tenantA, tenantB := uuid.New(), uuid.New()
-	for _, tn := range []uuid.UUID{tenantA, tenantB} {
-		exec(`INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tn, tn.String())
-	}
 	t.Cleanup(func() {
-		_, _ = seed.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1,$2)`, tenantA, tenantB)
+		_, _ = app.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1,$2)`, tenantA, tenantB)
 	})
 	connA, connOff := uuid.New(), uuid.New()
+	execInTenant := func(tn uuid.UUID, sql string, args ...any) {
+		t.Helper()
+		conn, err := seed.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		defer conn.Release()
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+			t.Fatalf("set_config: %v", err)
+		}
+		if _, err := tx.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
 	for id, status := range map[uuid.UUID]string{connA: "active", connOff: "disconnected"} {
-		exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities) VALUES($1,$2,'whatsapp','waha','unofficial',$3,$4,'["text"]')`, id, tenantA, id.String(), status)
+		execInTenant(tenantA, `INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities) VALUES($1,$2,'whatsapp','waha','unofficial',$3,$4,'["text"]')`, id, tenantA, id.String(), status)
 	}
 	contact, conv, convOff := uuid.New(), uuid.New(), uuid.New()
-	exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'C','+5511999990042')`, contact, tenantA)
-	exec(`INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status) VALUES($1,$2,$3,$4,'open')`, conv, tenantA, contact, connA)
-	exec(`INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status) VALUES($1,$2,$3,$4,'open')`, convOff, tenantA, contact, connOff)
+	execInTenant(tenantA, `INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'C','+5511999990042')`, contact, tenantA)
+	execInTenant(tenantA, `INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status) VALUES($1,$2,$3,$4,'open')`, conv, tenantA, contact, connA)
+	execInTenant(tenantA, `INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status) VALUES($1,$2,$3,$4,'open')`, convOff, tenantA, contact, connOff)
 	queue := func(conversation uuid.UUID, body string) uuid.UUID {
 		id := uuid.New()
-		exec(`INSERT INTO messages(id,tenant_id,conversation_id,channel_connection_id,direction,message_type,body,status)
+		execInTenant(tenantA, `INSERT INTO messages(id,tenant_id,conversation_id,channel_connection_id,direction,message_type,body,status)
 		      SELECT $1,tenant_id,id,channel_connection_id,'outbound','text',$3,'queued' FROM conversations WHERE id=$2`, id, conversation, body)
 		return id
 	}
 	row := func(id uuid.UUID) (status, provider, reason string) {
-		if err := seed.QueryRow(ctx, `SELECT status, provider_message_id, failure_reason FROM messages WHERE id=$1`, id).Scan(&status, &provider, &reason); err != nil {
-			t.Fatal(err)
+		t.Helper()
+		conn, err := seed.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire for row: %v", err)
 		}
+		defer conn.Release()
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin for row: %v", err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+			t.Fatalf("set_config for row: %v", err)
+		}
+		if err := tx.QueryRow(ctx, `SELECT status, provider_message_id, failure_reason FROM messages WHERE id=$1`, id).Scan(&status, &provider, &reason); err != nil {
+			t.Fatalf("row scan: %v", err)
+		}
+		_ = tx.Commit(ctx)
 		return
 	}
 	job := func(id uuid.UUID) []byte {

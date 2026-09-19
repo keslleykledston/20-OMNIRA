@@ -128,6 +128,13 @@ func (s *WahaConnectionService) Create(ctx context.Context, riskAcknowledged boo
 	return view(conn, ports.SessionMissing), nil
 }
 
+func (s *WahaConnectionService) CreateConnection(ctx context.Context, req ConnectionCreateRequest) (ConnectionView, error) {
+	if req.Provider != "" && req.Provider != domain.ProviderWAHA {
+		return ConnectionView{}, ErrProviderNotFound
+	}
+	return s.Create(ctx, req.RiskAcknowledged)
+}
+
 func (s *WahaConnectionService) List(ctx context.Context) ([]ConnectionView, error) {
 	tc, err := s.authorize(ctx)
 	if err != nil {

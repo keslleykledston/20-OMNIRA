@@ -8,13 +8,18 @@ import (
 
 // AuthHandler — HTTP handlers para autenticação
 type AuthHandler struct {
-	privateKey *rsa.PrivateKey
+	privateKey   *rsa.PrivateKey
+	secureCookie bool
 }
 
 // NewAuthHandler — cria novo handler de auth
-func NewAuthHandler(privateKey *rsa.PrivateKey) *AuthHandler {
+func NewAuthHandler(privateKey *rsa.PrivateKey, secureCookie ...bool) *AuthHandler {
+	secure := false
+	if len(secureCookie) > 0 {
+		secure = secureCookie[0]
+	}
 	return &AuthHandler{
-		privateKey: privateKey,
+		privateKey: privateKey, secureCookie: secure,
 	}
 }
 
@@ -49,6 +54,8 @@ func (h *AuthHandler) MockLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: resp.Token, Path: "/", MaxAge: resp.ExpiresIn,
+		HttpOnly: true, Secure: h.secureCookie, SameSite: http.SameSiteLaxMode})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

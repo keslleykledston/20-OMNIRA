@@ -29,17 +29,17 @@
 | 4 | MED | Chamada ao provedor com lock de linha + transação abertos | **Mitigado:** `MaxAckPending=8` (entregas em voo limitadas) e pool do worker ≥ 24 conexões. Redesenho por lease (claim curto → chamada fora da tx → finalização) fica como dívida **D-1**. |
 | 5 | MED | Crash entre envio e commit reenvia (duplicata ao cliente) | **Aceito/documentado:** o WAHA não tem idempotency-key; mitigação futura = reconciliação por lookup de mensagem (**D-1**). Duplicata só em crash na janela do envio. |
 | 6 | MED | Webhook anônimo sem rate limit | **Mitigado:** API publicada só em `127.0.0.1` por padrão; nginx público não encaminha `/webhooks` nem `/internal` (404). Rate limit dedicado fica em **D-2**. |
-| 7 | MED | JWT em `localStorage` sem CSP | **Mitigado:** CSP estrita + headers de segurança em toda location (o `add_header` por location anulava os do server — corrigido com snippet), e2e sem violações. Migrar para cookie HttpOnly junto do IdP real (**D-3**). |
+| 7 | MED | JWT em `localStorage` sem CSP | **Corrigido no código (D-3):** OIDC Authorization Code + PKCE e cookie HttpOnly/SameSite; mock proibido em produção. Falta aceite contra o IdP real do ambiente. |
 | 8 | MED | nginx do web só HTTP, sem HSTS | **Por desenho:** o container `web` é HTTP atrás do TLS do host (`omnira-nginx.conf`, agora com HSTS). Sem terminador TLS o deploy é inseguro — documentado no runbook. |
 | 9 | MED | `realtime_emit` executável por PUBLIC → forjar NOTIFY de outro tenant | **Aceito:** o evento carrega só ids e a UI refaz o fetch pela API autorizada (nenhum dado vaza; no pior caso, refetch espúrio). Qualquer role pode chamar `pg_notify` diretamente, então revogar a função não fecharia o vetor; validação de proveniência fica em **D-4**. |
 | 10 | LOW | FK de credencial só por `connection_id` | **Diferido (D-5):** FK composta `(tenant_id, id)`. Inserção direta exige privilégio de escrita já restrito a admin por RLS. |
 
 ## 3. Registro de dívidas (para o próximo agente)
-D-1 entrega por lease + reconciliação (duplicata/lock) · D-2 rate limit no webhook e no login · D-3 cookie HttpOnly/SameSite + IdP OIDC · D-4 proveniência do NOTIFY · D-5 FK composta · retenção/limpeza do Outbox (`outbox_events` cresce) · otel-collector sem healthcheck/destino validado e métricas de negócio só via OTel (o `/metrics` expõe apenas gauges de saúde) · erros ainda `text/plain` (sem Problem Details) · mídia (inbound/outbound) e templates · telas legadas com dados mock · CI que rode `cleanroom-compose.sh`/`backup-restore-check.sh`. Detalhes por fase em `docs/delivery/ROADMAP-TO-GOAL.md`.
+D-1 entrega por lease + reconciliação (duplicata/lock) · D-2 rate limit no webhook e no login · D-3 implementada no código, pendente validação com IdP real · D-4 proveniência do NOTIFY · D-5 FK composta · retenção/limpeza do Outbox (`outbox_events` cresce) · otel-collector sem healthcheck/destino validado e métricas de negócio só via OTel (o `/metrics` expõe apenas gauges de saúde) · erros ainda `text/plain` (sem Problem Details) · mídia (inbound/outbound) e templates · telas legadas com dados mock · CI que rode `cleanroom-compose.sh`/`backup-restore-check.sh`. Detalhes por fase em `docs/delivery/ROADMAP-TO-GOAL.md`.
 
 ## 4. Bloqueios para o próximo estado
 1. **Smoke com telefone real** (`scripts/w3-smoke.sh`): pareamento, recebimento e ack reais **não** foram exercitados (o vertical usa WAHA fake; o QR é real).
-2. **Autenticação real (OIDC)**: só existe login *mock* (e-mails fixos; chaves RSA geradas a cada boot).
+2. **Configuração e aceite do IdP real**: o adapter OIDC existe e foi testado com IdP determinístico, mas o ambiente ainda precisa de issuer/client/redirect e Usuários provisionados por `external_subject`.
 3. **Aceite humano** deste gate e piloto supervisionado.
 4. TLS/edge de produção configurado e testado; políticas de retenção de dados; observabilidade validada.
 

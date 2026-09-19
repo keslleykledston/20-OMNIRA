@@ -3,19 +3,20 @@ import { useAuthStore, useUIStore } from '../lib/store'
 import Sidebar from './Sidebar'
 import Header from './Header'
 import { useEffect } from 'react'
+import { hasSession } from '../lib/session'
 
 export default function Layout() {
   const navigate = useNavigate()
-  const { token } = useAuthStore()
   const { sidebarOpen } = useUIStore()
+	const authenticated = hasSession()
 
   useEffect(() => {
-    if (!token) {
+	if (!authenticated) {
       navigate('/login', { replace: true })
     }
-  }, [token, navigate])
+	}, [authenticated, navigate])
 
-  if (!token) {
+	if (!authenticated) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-100">
         <div className="text-center">

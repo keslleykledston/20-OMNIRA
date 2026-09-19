@@ -1,12 +1,13 @@
 # Handoff para o próximo agente
 
-> **Comece aqui.** Estado em `dd9e191` (branch `master`, **nada foi enviado com push nem tag**). Atualize este arquivo ao terminar sua sessão.
+> **Comece aqui.** Trabalho I0/I1/OIDC ainda não commitado sobre `6ff111e` (branch `master`, **nada foi enviado com push nem tag**). Atualize este arquivo ao terminar sua sessão.
 > Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência antes de dizer PASS; respostas em português, diretas.
 
 ## 1. Situação em 5 linhas
 - O **GOAL** (Inbox WhatsApp não oficial/WAHA operável: login → QR → receber → assumir → responder → status; multi-tenant com RLS; via `docker compose`) está **entregue em estado `LAB`** (fases P0–P6).
-- **Não feito:** P7 smoke com telefone real (precisa de humano), **IdP real** (só existe login *mock*), aceite humano do gate.
-- **Próximo trabalho projetado:** aba **Integrações** (design pronto, implementação **não iniciada**) → `docs/architecture/INTEGRATIONS-TAB.md`, fases I0–I5.
+- **Não feito:** parte humana do P7 (telefone), configuração/aceite com **IdP real**, aceite humano do gate.
+- **Integrações I0/I1 entregues:** catálogo por descritor, API genérica + aliases WAHA e `/integrations`; I2–I5 permanecem em `docs/architecture/INTEGRATIONS-TAB.md`.
+- **OIDC/D-3 entregue no código:** Authorization Code + PKCE, discovery/JWKS e cookie HttpOnly; mock recusado em produção. Testado com IdP fake, ainda não com o IdP do ambiente.
 - Meta Cloud (oficial) está preservado, sem prioridade; mídia e templates não implementados.
 - Todos os gates automatizados passam (Go 340/0, web 44, e2e clean-room 12/12, backup/restore, contratos).
 
@@ -30,7 +31,7 @@
 | Seed de dev (usuários do login mock) | `tools/seed-dev.sql`; fixtures de e2e: `web/e2e/fixtures.sql` |
 | Compose | `docker-compose.yml` (serviços `postgres nats migrate api worker web waha seed`; profiles `dev`, `whatsapp-unofficial`, `edge`) |
 | Variáveis de ambiente | `.env.example` (comentado); config lida em `internal/platform/config/config.go` |
-| Login mock (e-mails/ids fixos) | `internal/platform/authn/mock_login.go` (`test@omnira.local`=agente, `admin@omnira.local`=admin do tenant `11111111-1111-1111-1111-111111111111`) |
+| Auth mock/OIDC | `internal/platform/authn/{mock_login,oidc,postgres}.go`; mock: `test@omnira.local` agente, `admin@omnira.local` admin |
 | RBAC (permissions) | tabelas `permissions`/`role_permissions`; `conversation.claim`, `conversation.manage` (000023), `channel.manage` (000024) |
 | Atribuição/claim atômico | `internal/routing/{application,adapters}/assign*.go` |
 | Envio outbound + idempotência | `internal/messages/**`, worker: `internal/worker/delivery/**` |
@@ -39,7 +40,7 @@
 | Meta Cloud (preservado) | `internal/channels/meta/**` (webhook + parsing; config **global** via `OMNIRA_META_*`) |
 | Realtime | triggers em `migrations/000026*`, ponte `internal/worker/realtime/bridge.go`, SSE `internal/inbox/adapters/sse.go`, hook `web/src/hooks/useRealtimeEvents.ts` |
 | Guarda de role do banco | `internal/platform/db/role_guard.go` (API/worker recusam superuser/BYPASSRLS) |
-| Frontend | `web/src/pages/{InboxPage,ConversationPage,ChannelsPage}.tsx`, `web/src/lib/{session,config,channels}.ts` |
+| Frontend | `web/src/pages/{InboxPage,ConversationPage,IntegrationsPage}.tsx`, `web/src/lib/{session,config,integrations}.ts` |
 | Testes vertical/E2E | `internal/e2e/vertical_test.go` (sem telefone), `web/e2e/*.spec.ts` (navegador) |
 | Scripts de verificação | `scripts/cleanroom-compose.sh`, `scripts/e2e-inbox.sh`, `scripts/backup-restore-check.sh`, `scripts/w3-smoke.sh` |
 | Memória do agente | `~/.claude/projects/-data-home-moved-Projects--legacy-lowercase-projects-20-OMNIRA/memory/` (`omnira-current-state.md`) |
@@ -68,15 +69,15 @@
 | E2E navegador (containers avulsos) | `scripts/e2e-inbox.sh` | 12/12 |
 | Backup/restore + RLS após restore | `scripts/backup-restore-check.sh` | `BACKUP/RESTORE VALIDATED` |
 | Contratos | `tools/validate-specs.sh` | tudo OK |
-| Web | `cd web && npx tsc --noEmit && npx vitest run` | 44 testes |
+| Web | `cd web && npx tsc --noEmit && npx vitest run` | 43 testes |
 | Go (comando acima) | — | 0 falhas |
 | WhatsApp real (humano) | `! scripts/w3-smoke.sh` (`--until-qr` = só a parte automática) | 6/6 automáticos + passos com telefone |
 Toda mudança de migration: teste **up → down → up** e **down-all → up-all**.
 
 ## 6. O que fazer a seguir (ordem sugerida)
-1. **Aba Integrações** — implementar `INTEGRATIONS-TAB.md`, começando por **I0** (registro de provedores com descritor + `GET /channels/providers` + serviço genérico de conexões, mantendo `/channels/waha/connections` como alias) e **I1** (página `/integrations` substituindo `/channels`, assistente QR/WAHA dirigido pelo descritor). Critérios de aceite na §11 do doc.
-2. **P7** — pedir ao dono para rodar `scripts/w3-smoke.sh` com telefone descartável; corrigir o que falhar (candidato: alcance do webhook pelo WAHA).
-3. **IdP real (OIDC)** + cookie HttpOnly (D-3) — bloqueia produção.
+1. **P7 humano** — `scripts/w3-smoke.sh --until-qr` passou 6/6; pedir ao dono para concluir pareamento/inbound/outbound/ack com telefone descartável.
+2. **IdP do ambiente** — cadastrar client/redirect, configurar `OMNIRA_AUTH_*`, provisionar `users.external_subject=sub` e executar login/refresh de página/logout; o adapter já está implementado.
+3. **Integrações I2** — Meta por conexão somente após fechar a política de exposição/rate limit do webhook; I3–I5 conforme dependências do projeto.
 4. **Aplicar migrations no `omnira_dev`** do dono (pedir OK): usar `tools/migrate-sql.sh` com `BASELINE_UP_TO` no último ponto realmente aplicado; sem isso o `.env` local novo roda sem realtime e sem a correção 000027.
 5. Dívidas do gate: D-1 (entrega por lease/reconciliação), D-2 (rate limit webhook/login), retenção do Outbox, Problem Details, métricas de negócio, mídia WAHA (`SendMedia`, download com allowlist SSRF).
 6. Meta Cloud por conexão (I2 do doc) só depois de I0/I1.

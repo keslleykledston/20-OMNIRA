@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../lib/config';
-import { getAuthToken, getTenantId } from '../lib/session';
+import { authHeaders, getTenantId } from '../lib/session';
 
 
 interface AssignmentButtonProps {
@@ -29,9 +29,7 @@ export function AssignmentButton({ conversationId, assignedToUserId, onAssignmen
         `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/assign`,
         {},
         {
-          headers: {
-            Authorization: `Bearer ${getJWTToken()}`,
-          },
+          headers: authHeaders(),
         }
       );
 
@@ -55,9 +53,7 @@ export function AssignmentButton({ conversationId, assignedToUserId, onAssignmen
         `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/unassign`,
         {},
         {
-          headers: {
-            Authorization: `Bearer ${getJWTToken()}`,
-          },
+          headers: authHeaders(),
         }
       );
 
@@ -188,8 +184,4 @@ export function assignmentErrorMessage(err: any, fallback: string): string {
     default:
       return fallback;
   }
-}
-
-function getJWTToken(): string {
-  return getAuthToken();
 }

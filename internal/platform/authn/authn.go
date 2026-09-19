@@ -21,8 +21,10 @@ type Principal struct {
 // Authenticator — interface para estratégias de autenticação.
 type Authenticator interface {
 	// Verify retorna um Principal válido ou erro.
-	Verify(tokenString string) (*Principal, error)
+	Verify(context.Context, string) (*Principal, error)
 }
+
+const SessionCookieName = "omnira_session"
 
 // JWTAuthenticator — suporta JWT assinado por RSA (OIDC-compatible).
 type JWTAuthenticator struct {
@@ -48,7 +50,7 @@ func NewJWTAuthenticator(publicKey *rsa.PublicKey, issuer, audience string) *JWT
 }
 
 // Verify — parse e valida o JWT.
-func (a *JWTAuthenticator) Verify(tokenString string) (*Principal, error) {
+func (a *JWTAuthenticator) Verify(_ context.Context, tokenString string) (*Principal, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		// Validar alg
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
@@ -123,21 +125,25 @@ func FromContext(ctx context.Context) (*Principal, error) {
 func Middleware(auth Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extrair token do header Authorization
+			// Bearer remains supported for API clients and the development mock.
+			// Browsers use the HttpOnly session cookie so scripts cannot read it.
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				http.Error(w, "missing authorization header", http.StatusUnauthorized)
+			var token string
+			if authHeader != "" {
+				parts := strings.SplitN(authHeader, " ", 2)
+				if len(parts) != 2 || parts[0] != "Bearer" {
+					http.Error(w, "invalid authorization header", http.StatusUnauthorized)
+					return
+				}
+				token = parts[1]
+			} else if cookie, err := r.Cookie(SessionCookieName); err == nil {
+				token = cookie.Value
+			}
+			if token == "" {
+				http.Error(w, "missing authentication", http.StatusUnauthorized)
 				return
 			}
-
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || parts[0] != "Bearer" {
-				http.Error(w, "invalid authorization header", http.StatusUnauthorized)
-				return
-			}
-
-			token := parts[1]
-			principal, err := auth.Verify(token)
+			principal, err := auth.Verify(r.Context(), token)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("authentication failed: %v", err), http.StatusUnauthorized)
 				return

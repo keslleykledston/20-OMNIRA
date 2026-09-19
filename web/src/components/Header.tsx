@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore, useUIStore } from '../lib/store'
+import { authAPI } from '../lib/api'
 
 export default function Header() {
   const navigate = useNavigate()
@@ -22,6 +23,7 @@ export default function Header() {
   }, [user, setUser])
 
   const handleLogout = async () => {
+	await authAPI.logout()
     logout()
     navigate('/login')
   }

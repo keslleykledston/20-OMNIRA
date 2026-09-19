@@ -14,13 +14,15 @@ OMNIRA SaaS Platform exposes a RESTful HTTP API for tenant and membership manage
 
 ### Authentication
 
-All tenant-scoped endpoints require **Bearer JWT token** in the Authorization header:
+All tenant-scoped endpoints accept an OIDC session cookie (`omnira_session`,
+HttpOnly) for browser clients or a **Bearer JWT token** in the Authorization
+header for API clients:
 
 ```bash
 Authorization: Bearer <JWT_TOKEN>
 ```
 
-The JWT token is RSA-signed and OIDC-compatible. Tokens are validated server-side before authorizing access.
+The JWT token is RSA-signed and OIDC-compatible. Tokens are validated server-side before authorizing access. The mock login is restricted to non-production environments.
 
 ### Example Request
 
@@ -33,10 +35,10 @@ curl -H "Authorization: Bearer $JWT_TOKEN" \
 
 The complete OpenAPI 3.0.0 specification is available at:
 
-**File:** `docs/api/openapi.yaml`
+**Canonical file:** `contracts/openapi/omnira-v1.yaml`
 
 To view interactively:
-1. Copy `openapi.yaml` content
+1. Copy `contracts/openapi/omnira-v1.yaml` content
 2. Paste into [Swagger Editor](https://editor.swagger.io)
 3. Explore endpoints, schemas, and examples
 

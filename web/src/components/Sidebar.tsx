@@ -4,7 +4,7 @@ import clsx from 'clsx'
 const navItems = [
   { label: 'Dashboard', path: '/', icon: 'dashboard' },
   { label: 'Inbox', path: '/inbox', icon: 'inbox' },
-  { label: 'Canais', path: '/channels', icon: 'channels' },
+  { label: 'Integrações', path: '/integrations', icon: 'channels' },
   { label: 'Contas', path: '/accounts', icon: 'accounts' },
   { label: 'Tickets', path: '/tickets', icon: 'tickets' },
   { label: 'Relatórios', path: '/reports', icon: 'reports' },

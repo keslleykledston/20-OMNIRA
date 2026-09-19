@@ -51,7 +51,23 @@ func TestPublisherRuntimeRoleEndToEnd(t *testing.T) {
 	defer func() { _ = js.DeleteStream(ctx, streamName) }()
 
 	tenantID := uuid.New()
-	if _, err := seed.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,'Publisher test','active')`, tenantID); err != nil {
+	conn, err := seed.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,'Publisher test','active')`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _, _ = seed.Exec(context.Background(), `DELETE FROM tenants WHERE id=$1`, tenantID) }()

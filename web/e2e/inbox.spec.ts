@@ -41,10 +41,10 @@ test('the app runs without Content-Security-Policy violations', async ({ page })
 
 test('login uses the real backend and stores the tenant', async ({ page }) => {
   await login(page, AGENT.email);
-  const session = await page.evaluate(() => ({ token: localStorage.getItem('token'), tenant: localStorage.getItem('tenantId') }));
+  const session = await page.evaluate(() => ({ token: localStorage.getItem('token'), tenant: localStorage.getItem('tenantId'), active: localStorage.getItem('sessionActive') }));
   expect(session.tenant).toBe(TENANT);
-  expect(session.token?.split('.')).toHaveLength(3);
-  expect(session.token).not.toContain('mock-signature'); // a real RS256 token from the backend
+  expect(session.token).toBeNull(); // the browser authenticates with an HttpOnly cookie
+  expect(session.active).toBe('true');
 });
 
 test('unknown email is rejected by the backend', async ({ page }) => {

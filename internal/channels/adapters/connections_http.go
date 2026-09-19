@@ -20,6 +20,16 @@ type ConnectionHandler struct {
 	svc *application.WahaConnectionService
 }
 
+// ManagementHandler serves the provider-neutral I0 API. Legacy WAHA routes
+// keep using ConnectionHandler as aliases until the web migrates in I1.
+type ManagementHandler struct {
+	svc *application.ConnectionManagementService
+}
+
+func NewManagementHandler(svc *application.ConnectionManagementService) *ManagementHandler {
+	return &ManagementHandler{svc: svc}
+}
+
 func NewConnectionHandler(svc *application.WahaConnectionService) *ConnectionHandler {
 	return &ConnectionHandler{svc: svc}
 }
@@ -117,6 +127,98 @@ func (h *ConnectionHandler) QR(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"mimetype": qr.MIMEType, "data": qr.Data})
 }
 
+func (h *ManagementHandler) Providers(w http.ResponseWriter, r *http.Request) {
+	items, err := h.svc.Providers(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *ManagementHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider         string            `json:"provider"`
+		Inputs           map[string]string `json:"inputs"`
+		RiskAcknowledged bool              `json:"risk_acknowledged"`
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil || json.Unmarshal(body, &req) != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	v, err := h.svc.Create(r.Context(), application.ConnectionCreateRequest{
+		Provider: req.Provider, Inputs: req.Inputs, RiskAcknowledged: req.RiskAcknowledged,
+	})
+	h.respond(w, http.StatusCreated, v, err)
+}
+
+func (h *ManagementHandler) List(w http.ResponseWriter, r *http.Request) {
+	items, err := h.svc.List(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	out := make([]connectionJSON, len(items))
+	for i, item := range items {
+		out[i] = toJSON(item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+func (h *ManagementHandler) Get(w http.ResponseWriter, r *http.Request) {
+	id, ok := connectionID(w, r)
+	if !ok {
+		return
+	}
+	v, err := h.svc.Get(r.Context(), id)
+	h.respond(w, http.StatusOK, v, err)
+}
+
+func (h *ManagementHandler) StartSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := connectionID(w, r)
+	if !ok {
+		return
+	}
+	v, err := h.svc.StartSession(r.Context(), id)
+	h.respond(w, http.StatusOK, v, err)
+}
+
+func (h *ManagementHandler) StopSession(w http.ResponseWriter, r *http.Request) {
+	id, ok := connectionID(w, r)
+	if !ok {
+		return
+	}
+	v, err := h.svc.StopSession(r.Context(), id)
+	h.respond(w, http.StatusOK, v, err)
+}
+
+func (h *ManagementHandler) QR(w http.ResponseWriter, r *http.Request) {
+	id, ok := connectionID(w, r)
+	if !ok {
+		return
+	}
+	qr, err := h.svc.QR(r.Context(), id)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]string{"mimetype": qr.MIMEType, "data": qr.Data})
+}
+
+func (h *ManagementHandler) respond(w http.ResponseWriter, status int, v application.ConnectionView, err error) {
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	writeJSON(w, status, toJSON(v))
+}
+
+func (h *ManagementHandler) fail(w http.ResponseWriter, err error) {
+	failConnection(w, err)
+}
+
 func connectionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("connection_id"))
 	if err != nil {
@@ -135,6 +237,10 @@ func (h *ConnectionHandler) respond(w http.ResponseWriter, status int, v applica
 }
 
 func (h *ConnectionHandler) fail(w http.ResponseWriter, err error) {
+	failConnection(w, err)
+}
+
+func failConnection(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, application.ErrConnForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -142,10 +248,16 @@ func (h *ConnectionHandler) fail(w http.ResponseWriter, err error) {
 		http.Error(w, "connection not found", http.StatusNotFound)
 	case errors.Is(err, application.ErrRiskNotAcknowledged):
 		http.Error(w, "risk_acknowledged must be true for unofficial providers", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrProviderNotFound), errors.Is(err, application.ErrInvalidProviderInputs):
+		http.Error(w, "invalid provider or inputs", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrProviderUnavailable), errors.Is(err, ports.ErrNotConfigured):
+		http.Error(w, "channel provider is not configured", http.StatusServiceUnavailable)
 	case errors.Is(err, application.ErrQRUnavailable):
 		http.Error(w, "no QR code available in the current session state", http.StatusConflict)
-	case errors.Is(err, application.ErrPublicURLMissing), errors.Is(err, ports.ErrNotConfigured):
+	case errors.Is(err, application.ErrPublicURLMissing):
 		http.Error(w, "channel provider is not configured", http.StatusServiceUnavailable)
+	case errors.Is(err, ports.ErrCapabilityNotSupported):
+		http.Error(w, "operation is not supported by this provider", http.StatusConflict)
 	case errors.Is(err, ports.ErrTransient), errors.Is(err, ports.ErrProviderUnavailable), errors.Is(err, ports.ErrRateLimited):
 		http.Error(w, "channel provider unavailable", http.StatusBadGateway)
 	case errors.Is(err, ports.ErrAuthentication), errors.Is(err, ports.ErrPermanent), errors.Is(err, ports.ErrSessionDisconnected):

@@ -24,23 +24,25 @@ async function login(page: Page, email: string) {
 
 test('a non-admin sees a permission message instead of the connections', async ({ page }) => {
   await login(page, AGENT.email);
-  await page.click('a:has-text("Canais")');
-  await expect(page.getByRole('alert')).toContainText('Only tenant administrators');
-  await expect(page.getByRole('button', { name: 'Create connection' })).toHaveCount(0);
+  await page.click('a:has-text("Integrações")');
+  await expect(page.getByRole('alert')).toContainText('Somente administradores');
+  await expect(page.getByRole('button', { name: '+ Adicionar integração' })).toHaveCount(0);
 });
 
 test('admin creates a connection with the risk acknowledgement, pairs via a real QR and stops it', async ({ page }) => {
   await login(page, ADMIN.email);
-  await page.click('a:has-text("Canais")');
+  await page.click('a:has-text("Integrações")');
 
-  const create = page.getByRole('button', { name: 'Create connection' });
+  await page.getByRole('button', { name: '+ Adicionar integração' }).click();
+  await page.getByRole('button', { name: /WhatsApp \(não oficial\)/ }).click();
+  const create = page.getByRole('button', { name: 'Criar conexão' });
   await expect(create).toBeDisabled(); // no acknowledgement, no connection
   await page.getByRole('checkbox').check();
   await create.click();
 
   const card = page.locator('[data-testid^="connection-"]').first();
   await expect(card).toBeVisible();
-  await expect(card.getByTestId('conn-status')).toHaveText('pending');
+  await expect(card.getByTestId('conn-status')).toHaveText('Pendente');
   const id = (await card.getAttribute('data-testid'))!.replace('connection-', '');
   expect(sql(`SELECT provider||'|'||provider_kind||'|'||status||'|'||risk_acknowledged_by FROM channel_connections WHERE id='${id}'`))
     .toBe(`waha|unofficial|pending|${ADMIN.id}`);
@@ -58,8 +60,8 @@ test('admin creates a connection with the risk acknowledgement, pairs via a real
   expect(bad.status()).toBe(401);
   sql(`UPDATE channel_connections SET status='pending' WHERE id='${id}'`);
 
-  await card.getByRole('button', { name: 'Start session' }).click();
-  const qr = card.getByAltText('WhatsApp pairing QR code');
+  await card.getByRole('button', { name: 'Iniciar sessão' }).click();
+  const qr = card.getByAltText('QR para parear WhatsApp');
   await expect(qr).toBeVisible({ timeout: 40_000 }); // real WAHA renders a real QR
   const rendered = await qr.evaluate((img: HTMLImageElement) => new Promise<{ w: number; h: number }>((resolve, reject) => {
     if (img.complete && img.naturalWidth > 0) return resolve({ w: img.naturalWidth, h: img.naturalHeight });
@@ -67,10 +69,10 @@ test('admin creates a connection with the risk acknowledgement, pairs via a real
     img.onerror = () => reject(new Error('QR image failed to decode'));
   }));
   expect(rendered.w).toBeGreaterThan(100); // a decodable PNG, not a broken placeholder
-  await expect(card.getByText('Session: needs qr')).toBeVisible();
+  await expect(card.getByText('Sessão: needs qr')).toBeVisible();
 
-  await card.getByRole('button', { name: 'Stop' }).click();
-  await expect(card.getByTestId('conn-status')).toHaveText('disconnected', { timeout: 15_000 });
+  await card.getByRole('button', { name: 'Parar' }).click();
+  await expect(card.getByTestId('conn-status')).toHaveText('Desconectado', { timeout: 15_000 });
   expect(sql(`SELECT status FROM channel_connections WHERE id='${id}'`)).toBe('disconnected');
   expect(sql(`SELECT count(*) FROM audit_events WHERE resource_id='${id}' AND action IN ('channel.session_started','channel.session_stopped')`)).toBe('2');
 

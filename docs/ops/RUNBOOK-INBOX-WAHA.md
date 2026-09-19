@@ -30,8 +30,11 @@ Portas: `web` 3000→80 (o nginx do host, `omnira-nginx.conf`, aponta o frontend
 
 Adotar um banco já migrado à mão: `OMNIRA_MIGRATE_BASELINE=<último prefixo aplicado>` na primeira execução do `migrate`.
 
-## Primeiro acesso (DEV)
-O login é o **mock** do backend (`POST /api/v1/auth/login {email}`): só conhece `test@omnira.local` (agente) e `admin@omnira.local` (admin do tenant `11111111-…`). O seed cria tenant, usuários, memberships e fila padrão. Qualquer senha serve. **Não há IdP real** (ver bloqueios).
+## Autenticação
+
+- DEV/teste: `OMNIRA_AUTH_MODE=mock`; `POST /api/v1/auth/login {email}` conhece `test@omnira.local` e `admin@omnira.local`. O seed cria Tenant, Usuários e memberships. O navegador recebe cookie HttpOnly; o JWT não fica no `localStorage`.
+- Ambiente real: `OMNIRA_AUTH_MODE=oidc`, issuer/audience/client/secret/redirect configurados e `OMNIRA_AUTH_COOKIE_SECURE=true`. O IdP deve emitir `sub` igual a `users.external_subject`; Usuário e membership são provisionados antes do login.
+- O callback não cria acesso a Tenant. Membership/grant persistido continua sendo a única autoridade.
 
 ## Operar o WhatsApp (admin)
 1. Entrar como `admin@omnira.local` → **Canais** → marcar o **aceite de risco** → *Create connection* (gera a chave HMAC do webhook, cifrada; nunca exibida).
@@ -61,4 +64,4 @@ O login é o **mock** do backend (`POST /api/v1/auth/login {email}`): só conhec
 - **Mensagem `queued` para sempre** → worker parado, `OMNIRA_WAHA_ENABLED` falso no worker, ou NATS fora.
 
 ## Bloqueios para produção (não declarar `PRODUCTION_READY`)
-Veja `docs/delivery/ROADMAP-TO-GOAL.md` (pendências) — principalmente: **IdP real (OIDC)**, gate formal + piloto supervisionado, TLS/edge configurado, retenção/limpeza do Outbox, observabilidade validada.
+Veja `docs/delivery/ROADMAP-TO-GOAL.md` (pendências) — principalmente: configuração/aceite do **IdP real**, gate formal + piloto supervisionado, TLS/edge configurado, retenção/limpeza do Outbox e observabilidade validada.

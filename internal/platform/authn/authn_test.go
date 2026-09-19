@@ -26,8 +26,8 @@ func TestJWTVerify(t *testing.T) {
 	claims := &Claims{
 		Subject: "test-user",
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: []string{"test-audience"},
+			Issuer:    "test-issuer",
+			Audience:  []string{"test-audience"},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
 		},
 	}
@@ -38,7 +38,7 @@ func TestJWTVerify(t *testing.T) {
 	}
 
 	// Test: token válido
-	principal, err := auth.Verify(tokenString)
+	principal, err := auth.Verify(context.Background(), tokenString)
 	if err != nil {
 		t.Errorf("expected valid token, got error: %v", err)
 	}
@@ -53,15 +53,15 @@ func TestJWTVerify(t *testing.T) {
 	expiredClaims := &Claims{
 		Subject: "test-user",
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: []string{"test-audience"},
+			Issuer:    "test-issuer",
+			Audience:  []string{"test-audience"},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Hour)),
 		},
 	}
 	expiredToken := jwt.NewWithClaims(jwt.SigningMethodRS256, expiredClaims)
 	expiredTokenString, _ := expiredToken.SignedString(privateKey)
 
-	_, err = auth.Verify(expiredTokenString)
+	_, err = auth.Verify(context.Background(), expiredTokenString)
 	if err == nil {
 		t.Error("expected error for expired token")
 	}
@@ -70,15 +70,15 @@ func TestJWTVerify(t *testing.T) {
 	wrongIssuerClaims := &Claims{
 		Subject: "test-user",
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   "wrong-issuer",
-			Audience: []string{"test-audience"},
+			Issuer:    "wrong-issuer",
+			Audience:  []string{"test-audience"},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
 		},
 	}
 	wrongIssuerToken := jwt.NewWithClaims(jwt.SigningMethodRS256, wrongIssuerClaims)
 	wrongIssuerTokenString, _ := wrongIssuerToken.SignedString(privateKey)
 
-	_, err = auth.Verify(wrongIssuerTokenString)
+	_, err = auth.Verify(context.Background(), wrongIssuerTokenString)
 	if err == nil {
 		t.Error("expected error for wrong issuer")
 	}
@@ -131,8 +131,8 @@ func TestMiddleware(t *testing.T) {
 	claims := &Claims{
 		Subject: "test-user",
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   "test-issuer",
-			Audience: []string{"test-audience"},
+			Issuer:    "test-issuer",
+			Audience:  []string{"test-audience"},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
 		},
 	}
@@ -159,5 +159,28 @@ func TestMiddleware(t *testing.T) {
 
 	if w2.Code != http.StatusUnauthorized {
 		t.Errorf("expected status 401, got %d", w2.Code)
+	}
+}
+
+func TestMiddlewareAcceptsHttpOnlySessionCookie(t *testing.T) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	auth := NewJWTAuthenticator(&privateKey.PublicKey, "test-issuer", "test-audience")
+	claims := &Claims{Subject: "cookie-user", UserID: uuid.NewString(), RegisteredClaims: jwt.RegisteredClaims{
+		Issuer: "test-issuer", Audience: []string{"test-audience"}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	raw, _ := token.SignedString(privateKey)
+	handler := Middleware(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := FromContext(r.Context()); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: raw, HttpOnly: true})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("cookie authentication status=%d body=%q", rec.Code, rec.Body.String())
 	}
 }

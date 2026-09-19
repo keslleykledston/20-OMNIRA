@@ -3,8 +3,10 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Build info injected via ldflags
@@ -22,6 +24,12 @@ type Config struct {
 	OtelEndpoint      string
 	AuthIssuer        string
 	AuthAudience      string
+	AuthMode          string
+	AuthClientID      string
+	AuthClientSecret  string
+	AuthRedirectURL   string
+	AuthPostLoginURL  string
+	AuthCookieSecure  bool
 	CredentialsKey    []byte
 	credentialsKeyErr error
 	WahaEnabled       bool
@@ -56,6 +64,12 @@ func Load() *Config {
 		OtelEndpoint:      getEnv("OMNIRA_OTEL_ENDPOINT", "http://localhost:4317"),
 		AuthIssuer:        getEnv("OMNIRA_AUTH_ISSUER", "http://localhost:8080"),
 		AuthAudience:      getEnv("OMNIRA_AUTH_AUDIENCE", "omnira"),
+		AuthMode:          getEnv("OMNIRA_AUTH_MODE", "mock"),
+		AuthClientID:      os.Getenv("OMNIRA_AUTH_CLIENT_ID"),
+		AuthClientSecret:  os.Getenv("OMNIRA_AUTH_CLIENT_SECRET"),
+		AuthRedirectURL:   os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
+		AuthPostLoginURL:  getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
+		AuthCookieSecure:  getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
 		CredentialsKey:    key,
 		credentialsKeyErr: keyErr,
 		WahaEnabled:       getEnv("OMNIRA_WAHA_ENABLED", "false") == "true",
@@ -96,6 +110,38 @@ func (c *Config) Validate() error {
 	}
 	if len(c.CredentialsKey) != 32 {
 		return fmt.Errorf("OMNIRA_CREDENTIALS_KEY deve decodificar para 32 bytes")
+	}
+	authMode := c.AuthMode
+	if authMode == "" {
+		authMode = "mock"
+	}
+	if authMode != "mock" && authMode != "oidc" {
+		return fmt.Errorf("OMNIRA_AUTH_MODE deve ser mock ou oidc")
+	}
+	if c.Env == "production" && authMode == "mock" {
+		return fmt.Errorf("OMNIRA_AUTH_MODE=mock é proibido em produção")
+	}
+	if authMode == "oidc" {
+		if c.AuthIssuer == "" || c.AuthAudience == "" || c.AuthClientID == "" || c.AuthClientSecret == "" || c.AuthRedirectURL == "" {
+			return fmt.Errorf("OIDC exige issuer, audience, client id, client secret e redirect URL")
+		}
+		if c.Env == "production" && !c.AuthCookieSecure {
+			return fmt.Errorf("OIDC em produção exige OMNIRA_AUTH_COOKIE_SECURE=true")
+		}
+		issuerURL, err := url.Parse(c.AuthIssuer)
+		if err != nil || issuerURL.Host == "" || (issuerURL.Scheme != "http" && issuerURL.Scheme != "https") {
+			return fmt.Errorf("OMNIRA_AUTH_ISSUER deve ser uma URL HTTP(S) absoluta")
+		}
+		redirectURL, err := url.Parse(c.AuthRedirectURL)
+		if err != nil || redirectURL.Host == "" || (redirectURL.Scheme != "http" && redirectURL.Scheme != "https") {
+			return fmt.Errorf("OMNIRA_AUTH_REDIRECT_URL deve ser uma URL HTTP(S) absoluta")
+		}
+		if c.AuthPostLoginURL == "" || !strings.HasPrefix(c.AuthPostLoginURL, "/") || strings.HasPrefix(c.AuthPostLoginURL, "//") {
+			return fmt.Errorf("OMNIRA_AUTH_POST_LOGIN_URL deve ser um caminho local iniciado por /, mas não //")
+		}
+		if c.Env == "production" && (issuerURL.Scheme != "https" || redirectURL.Scheme != "https") {
+			return fmt.Errorf("OIDC em produção exige issuer e redirect URL HTTPS")
+		}
 	}
 	if c.WahaEnabled {
 		if c.WahaBaseURL == "" || c.WahaAPIKey == "" {

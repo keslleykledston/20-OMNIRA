@@ -20,6 +20,7 @@ import (
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
+	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
@@ -63,9 +64,29 @@ func main() {
 	srv.SetupHealth(dbPool, nc)
 	srv.SetupRateLimiting()
 	srv.RegisterHealthHandlers()
-	srv.RegisterAuthHandlers()
+	if cfg.AuthMode == "oidc" {
+		resolver := authn.NewPostgresIdentityResolver(dbPool)
+		oidcAuth, discovery, oidcErr := authn.NewOIDCAuthenticator(context.Background(), cfg.AuthIssuer, cfg.AuthAudience, nil, resolver)
+		if oidcErr != nil {
+			log.Fatalf("OIDC configuration error: %v", oidcErr)
+		}
+		srv.RegisterOIDCAuthHandlers(oidcAuth, authn.NewOIDCHandler(oidcAuth, discovery, resolver,
+			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
+	} else {
+		srv.RegisterAuthHandlers(cfg.AuthCookieSecure)
+	}
 	srv.RegisterTenancyHandlers(dbPool)
 	srv.RegisterInboxHandlers(dbPool)
+	providerRegistry := channelapplication.NewMapProviderRegistry()
+	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
+	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions)
+	if err := providerRegistry.RegisterDescriptor(metachannel.Descriptor(), nil); err != nil {
+		log.Fatalf("Meta provider descriptor error: %v", err)
+	}
+	wahaReason := ""
+	if !cfg.WahaEnabled {
+		wahaReason = "WAHA está desabilitado na configuração do servidor."
+	}
 	if cfg.WahaEnabled {
 		cipher, cipherErr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
 		if cipherErr != nil {
@@ -82,6 +103,9 @@ func main() {
 		if providerErr != nil {
 			log.Fatalf("WAHA provider config error: %v", providerErr)
 		}
+		if err := providerRegistry.RegisterDescriptor(waha.Descriptor(true, ""), provider); err != nil {
+			log.Fatalf("WAHA provider descriptor error: %v", err)
+		}
 		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
@@ -91,13 +115,18 @@ func main() {
 				return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
 			}).
 			UseIntake(intake))
-		srv.RegisterWahaConnectionHandlers(dbPool, channeladapters.NewConnectionHandler(channelapplication.NewWahaConnectionService(
+		wahaConnections := channelapplication.NewWahaConnectionService(
 			connectionRepo, credentialStore, waha.NewSessionController(provider),
-			channeladapters.NewPostgresPermissionChecker(dbPool),
+			permissions,
 			channeladapters.NewChannelAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool)),
 			cfg.PublicBaseURL,
-		)))
+		)
+		management.Register("waha", wahaConnections)
+		srv.RegisterWahaConnectionHandlers(dbPool, channeladapters.NewConnectionHandler(wahaConnections))
+	} else if err := providerRegistry.RegisterDescriptor(waha.Descriptor(false, wahaReason), nil); err != nil {
+		log.Fatalf("WAHA provider descriptor error: %v", err)
 	}
+	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management))
 	if cfg.MetaEnabled {
 		if cfg.MetaVerifyToken == "" || cfg.MetaAppSecret == "" {
 			log.Fatal("OMNIRA_META_VERIFY_TOKEN and OMNIRA_META_APP_SECRET are required when OMNIRA_META_ENABLED=true")

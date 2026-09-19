@@ -17,8 +17,8 @@ info:
     **Errors.** Errors are currently `text/plain` bodies with the HTTP status (no RFC 7807 Problem Details yet —
     tracked in docs/delivery/ROADMAP-TO-GOAL.md). The login endpoint answers JSON `{error, message}`.
 
-    **Authentication.** Only a *mock* login exists (`POST /auth/login`, fixed known e-mails, RSA keys regenerated at
-    every boot). A real IdP (OIDC) is a production blocker.
+    **Authentication.** Production uses OIDC Authorization Code + PKCE and an HttpOnly session cookie. The fixed-user
+    mock login remains available only when `OMNIRA_AUTH_MODE=mock` outside production.
 servers:
   - url: /api/v1
     description: Same-origin (web nginx / vite proxy forward /api to the API)
@@ -32,12 +32,14 @@ tags:
   - { name: Webhooks, description: Provider callbacks (server-to-server) }
 security:
   - bearerAuth: []
+  - cookieAuth: []
 paths:
   /auth/login:
     post:
       operationId: login
       tags: [Auth]
       summary: Mock login (development only)
+      description: Disabled when `OMNIRA_AUTH_MODE=oidc`; successful development logins also set the HttpOnly session cookie.
       security: []
       requestBody:
         required: true
@@ -52,6 +54,68 @@ paths:
               schema: { $ref: '#/components/schemas/LoginResponse' }
         '400': { $ref: '#/components/responses/JsonError' }
         '401': { $ref: '#/components/responses/JsonError' }
+  /auth/mode:
+    get:
+      operationId: getAuthenticationMode
+      tags: [Auth]
+      summary: Return the configured browser authentication mode
+      security: []
+      responses:
+        '200':
+          description: Authentication mode
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode: { type: string, enum: [mock, oidc] }
+  /auth/oidc/start:
+    get:
+      operationId: startOIDCLogin
+      tags: [Auth]
+      summary: Start Authorization Code + PKCE login
+      security: []
+      responses:
+        '302': { description: Redirect to the configured identity provider }
+        '503': { description: Authentication unavailable, content: { text/plain: { schema: { type: string } } } }
+  /auth/oidc/callback:
+    get:
+      operationId: finishOIDCLogin
+      tags: [Auth]
+      summary: Validate state, exchange the code and set the HttpOnly session cookie
+      security: []
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+      responses:
+        '302': { description: Session established; redirect to the web app }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /auth/session:
+    get:
+      operationId: getAuthenticationSession
+      tags: [Auth]
+      summary: Return the provisioned user and initial active Tenant for the browser session
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Current session profile; no identity-provider token is returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionProfile' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [Auth]
+      summary: Clear the browser session cookie
+      security: []
+      responses:
+        '204': { description: Session cookie cleared }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -247,11 +311,137 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '503': { description: "Realtime unavailable (no NATS)", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/channels/providers:
+    get:
+      operationId: listChannelProviders
+      tags: [Channels]
+      summary: List declarative provider descriptors (`channel.manage`)
+      description: Disabled providers remain visible with an actionable `unavailable_reason`; descriptors never contain secrets.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: Provider catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ProviderDescriptor' } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/channels/connections:
+    post:
+      operationId: createChannelConnection
+      tags: [Channels]
+      summary: Create a connection using its provider descriptor
+      description: Requires `channel.manage`. Inputs are write-only. In I0 only WAHA is enabled; the WAHA-specific path remains a compatibility alias.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGenericConnectionRequest' }
+      responses:
+        '201': { description: Connection created, content: { application/json: { schema: { $ref: '#/components/schemas/ChannelConnection' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Invalid provider, inputs, or risk acknowledgement', content: { text/plain: { schema: { type: string } } } }
+        '503': { description: Provider disabled or not configured, content: { text/plain: { schema: { type: string } } } }
+    get:
+      operationId: listChannelConnections
+      tags: [Channels]
+      summary: List connections from registered provider managers (`channel.manage`)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: Connections without secrets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ChannelConnection' } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/channels/connections/{connection_id}:
+    get:
+      operationId: getChannelConnection
+      tags: [Channels]
+      summary: Get a connection and its live provider state
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/channels/connections/{connection_id}/session/start:
+    post:
+      operationId: startChannelSession
+      tags: [Channels]
+      summary: Start a session-capable provider connection
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Provider does not support sessions, content: { text/plain: { schema: { type: string } } } }
+        '502': { $ref: '#/components/responses/Text502' }
+        '503': { description: Provider not configured, content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/channels/connections/{connection_id}/session/stop:
+    post:
+      operationId: stopChannelSession
+      tags: [Channels]
+      summary: Stop a session-capable provider connection
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Provider does not support sessions, content: { text/plain: { schema: { type: string } } } }
+        '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/channels/connections/{connection_id}/qr:
+    get:
+      operationId: getChannelConnectionQR
+      tags: [Channels]
+      summary: Get a QR from a QR-session provider
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { description: Pairing QR, content: { application/json: { schema: { $ref: '#/components/schemas/QRImage' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: QR unavailable in the current state or unsupported, content: { text/plain: { schema: { type: string } } } }
+        '502': { $ref: '#/components/responses/Text502' }
   /tenants/{tenant_id}/channels/waha/connections:
     post:
       operationId: createWahaConnection
       tags: [Channels]
       summary: Create a WhatsApp (WAHA, unofficial) connection
+      deprecated: true
       description: |
         Requires permission `channel.manage` (tenant admin). `risk_acknowledged` must be `true` (unofficial
         WhatsApp automation can get numbers banned); it is recorded with the acting user and the time. The webhook
@@ -278,6 +468,7 @@ paths:
       operationId: listWahaConnections
       tags: [Channels]
       summary: List the tenant's WAHA connections (`channel.manage`)
+      deprecated: true
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
       responses:
@@ -300,6 +491,7 @@ paths:
       operationId: getWahaConnection
       tags: [Channels]
       summary: Get a connection with its live session status (persists the derived status)
+      deprecated: true
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/ConnectionId' }
@@ -315,6 +507,7 @@ paths:
       operationId: startWahaSession
       tags: [Channels]
       summary: Start (and if needed create) the WAHA session; idempotent
+      deprecated: true
       description: Registers this connection's webhook (`OMNIRA_PUBLIC_BASE_URL`) when the session does not exist yet.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
@@ -333,6 +526,7 @@ paths:
       operationId: stopWahaSession
       tags: [Channels]
       summary: Stop the WAHA session
+      deprecated: true
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/ConnectionId' }
@@ -348,6 +542,7 @@ paths:
       operationId: getWahaQR
       tags: [Channels]
       summary: Pairing QR code (only while the session waits for a scan)
+      deprecated: true
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/ConnectionId' }
@@ -407,6 +602,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: omnira_session
   parameters:
     TenantId:
       name: tenant_id
@@ -482,6 +681,23 @@ components:
             name: { type: string }
         tenant:
           type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+    SessionProfile:
+      type: object
+      required: [user, tenant]
+      properties:
+        user:
+          type: object
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string }
+            name: { type: string }
+        tenant:
+          type: object
+          required: [id, name]
           properties:
             id: { type: string, format: uuid }
             name: { type: string }
@@ -584,6 +800,59 @@ components:
       required: [risk_acknowledged]
       properties:
         risk_acknowledged: { type: boolean, description: 'Must be true' }
+    CreateGenericConnectionRequest:
+      type: object
+      required: [provider]
+      additionalProperties: false
+      properties:
+        provider: { type: string, example: waha }
+        inputs:
+          type: object
+          additionalProperties: { type: string }
+          description: Write-only values accepted by the selected provider descriptor; never returned.
+        risk_acknowledged: { type: boolean, description: 'Required and true for unofficial providers' }
+    ProviderDescriptor:
+      type: object
+      required: [id, name, channel, kind, connect_method, capabilities, enabled, inputs, displays]
+      properties:
+        id: { type: string, example: waha }
+        name: { type: string, example: 'WhatsApp (não oficial)' }
+        channel: { type: string, example: whatsapp }
+        kind: { type: string, enum: [official, unofficial] }
+        connect_method: { type: string, enum: [qr_session, credentials, oauth_redirect] }
+        risk_notice: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+        unavailable_reason: { type: string }
+        inputs:
+          type: array
+          items: { $ref: '#/components/schemas/ProviderInputDescriptor' }
+        displays:
+          type: array
+          items: { $ref: '#/components/schemas/ProviderDisplayDescriptor' }
+    ProviderInputDescriptor:
+      type: object
+      required: [key, label, type, required, secret]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        type: { type: string, enum: [text, secret, select, phone] }
+        required: { type: boolean }
+        pattern: { type: string }
+        help: { type: string }
+        example: { type: string }
+        secret: { type: boolean }
+        options: { type: array, items: { type: string } }
+    ProviderDisplayDescriptor:
+      type: object
+      required: [key, label, copyable, sensitive]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        value_template: { type: string }
+        copyable: { type: boolean }
+        sensitive: { type: boolean }
+        help: { type: string }
     ChannelConnection:
       type: object
       required: [id, provider, provider_kind, status, capabilities, created_at]

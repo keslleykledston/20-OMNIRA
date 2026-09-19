@@ -145,6 +145,28 @@ func (p *WahaProvider) Metadata() ports.ProviderMetadata {
 	}
 }
 
+// Descriptor declares the WAHA onboarding flow without exposing runtime
+// configuration or credentials. Disabled deployments still publish it so
+// administrators understand why the integration cannot be selected.
+func Descriptor(enabled bool, unavailableReason string) ports.ProviderDescriptor {
+	return ports.ProviderDescriptor{
+		ID:            domain.ProviderWAHA,
+		Name:          "WhatsApp (não oficial)",
+		Channel:       domain.ChannelWhatsApp,
+		Kind:          domain.ProviderKindUnofficial,
+		ConnectMethod: ports.ConnectMethodQRSession,
+		RiskNotice:    "A automação não oficial pode causar o banimento do número. Use um número dedicado e aceite o risco antes de continuar.",
+		Capabilities: []domain.Capability{
+			domain.CapabilityText,
+			domain.CapabilityDeliveryStatus,
+			domain.CapabilitySessionPairing,
+			domain.CapabilityQRPairing,
+		},
+		Enabled: enabled, UnavailableReason: unavailableReason,
+		Inputs: []ports.ProviderInputDescriptor{}, Displays: []ports.ProviderDisplayDescriptor{},
+	}
+}
+
 func (p *WahaProvider) IsConfigured(_ context.Context, conn domain.ChannelConnection) bool {
 	return p != nil && p.client != nil && validateConnection(conn) == nil
 }

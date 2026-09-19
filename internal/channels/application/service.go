@@ -9,6 +9,8 @@ package application
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
@@ -20,29 +22,86 @@ import (
 // Trocar/adicionar um provider nunca deve exigir mudar ChannelService.
 type ProviderRegistry interface {
 	Resolve(providerName string) (ports.ChannelProvider, error)
+	Descriptor(providerName string) (ports.ProviderDescriptor, error)
+	Descriptors() []ports.ProviderDescriptor
 }
 
 // MapProviderRegistry — implementação simples de ProviderRegistry baseada
 // em mapa; suficiente para o MVP (poucos providers, registro estático no
 // bootstrap da aplicação).
 type MapProviderRegistry struct {
-	providers map[string]ports.ChannelProvider
+	providers   map[string]ports.ChannelProvider
+	descriptors map[string]ports.ProviderDescriptor
 }
 
 func NewMapProviderRegistry() *MapProviderRegistry {
-	return &MapProviderRegistry{providers: make(map[string]ports.ChannelProvider)}
+	return &MapProviderRegistry{providers: make(map[string]ports.ChannelProvider), descriptors: make(map[string]ports.ProviderDescriptor)}
 }
 
 func (r *MapProviderRegistry) Register(name string, provider ports.ChannelProvider) {
 	r.providers[name] = provider
+	if provider != nil {
+		metadata := provider.Metadata()
+		r.descriptors[name] = ports.ProviderDescriptor{
+			ID: name, Name: name, Kind: metadata.Kind, Capabilities: append([]domain.Capability(nil), metadata.Capabilities...),
+			Enabled: true, Inputs: []ports.ProviderInputDescriptor{}, Displays: []ports.ProviderDisplayDescriptor{},
+		}
+	}
+}
+
+// RegisterDescriptor records a UI descriptor independently from the runtime
+// adapter. This keeps disabled providers visible in the catalog while Resolve
+// still refuses to execute them.
+func (r *MapProviderRegistry) RegisterDescriptor(descriptor ports.ProviderDescriptor, provider ports.ChannelProvider) error {
+	descriptor.ID = strings.TrimSpace(descriptor.ID)
+	if descriptor.ID == "" || descriptor.Name == "" || descriptor.Channel == "" || descriptor.ConnectMethod == "" {
+		return fmt.Errorf("channel: invalid provider descriptor")
+	}
+	if descriptor.Inputs == nil {
+		descriptor.Inputs = []ports.ProviderInputDescriptor{}
+	}
+	if descriptor.Displays == nil {
+		descriptor.Displays = []ports.ProviderDisplayDescriptor{}
+	}
+	if descriptor.Capabilities == nil {
+		descriptor.Capabilities = []domain.Capability{}
+	}
+	r.descriptors[descriptor.ID] = descriptor
+	if provider != nil {
+		r.providers[descriptor.ID] = provider
+	} else {
+		delete(r.providers, descriptor.ID)
+	}
+	return nil
 }
 
 func (r *MapProviderRegistry) Resolve(providerName string) (ports.ChannelProvider, error) {
+	descriptor, described := r.descriptors[providerName]
+	if described && !descriptor.Enabled {
+		return nil, fmt.Errorf("%w: %s", ports.ErrNotConfigured, descriptor.UnavailableReason)
+	}
 	p, ok := r.providers[providerName]
 	if !ok {
 		return nil, fmt.Errorf("channel: provider %q não registrado", providerName)
 	}
 	return p, nil
+}
+
+func (r *MapProviderRegistry) Descriptor(providerName string) (ports.ProviderDescriptor, error) {
+	d, ok := r.descriptors[providerName]
+	if !ok {
+		return ports.ProviderDescriptor{}, fmt.Errorf("channel: provider %q not registered", providerName)
+	}
+	return d, nil
+}
+
+func (r *MapProviderRegistry) Descriptors() []ports.ProviderDescriptor {
+	out := make([]ports.ProviderDescriptor, 0, len(r.descriptors))
+	for _, descriptor := range r.descriptors {
+		out = append(out, descriptor)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
 
 // ChannelService — orquestra resolução de conexão + delegação ao provider.

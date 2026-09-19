@@ -83,8 +83,8 @@ Documento formal: **`docs/audit/GATE-INBOX-WAHA-LAB.md`** (evidência, triagem C
 **Pendências P6:** ver "Registro de dívidas" do gate (D-1…D-5 etc.).
 
 ## Backlog pós-GOAL / próximo agente (em ordem sugerida)
-0. **Aba Integrações** — projeto em `docs/architecture/INTEGRATIONS-TAB.md` (catálogo por descritor, QR/parâmetros por plataforma, API e fases I0–I5); implementação ainda não iniciada.
-1. **P7 — smoke com telefone real** (`scripts/w3-smoke.sh`) — desbloqueia `INTERNAL_PILOT` junto do aceite humano.
-2. **IdP real (OIDC)** + cookie HttpOnly (D-3) — bloqueio de produção.
+0. ~~**Aba Integrações I0/I1**~~ ✅ catálogo, rotas genéricas/aliases e assistente WAHA entregues; I2–I5 permanecem no projeto `docs/architecture/INTEGRATIONS-TAB.md`.
+1. **P7 — smoke com telefone real** (`scripts/w3-smoke.sh`) — parte automática `--until-qr` PASS 6/6 em 2026-09-19; pareamento/mensagens/ack e aceite humano continuam bloqueados por telefone.
+2. **IdP OIDC + cookie HttpOnly (D-3)** — implementação e testes com IdP fake concluídos; falta configurar um IdP real, provisionar `users.external_subject` e executar o aceite no ambiente.
 3. D-1 (entrega por lease/reconciliação), D-2 (rate limits), retenção do Outbox, Problem Details, métricas de negócio.
 4. Mídia WAHA (`SendMedia`, download inbound com allowlist SSRF), templates; só depois D3.4+ Meta.
