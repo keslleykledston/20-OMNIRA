@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 
 // Real stack incl. a throwaway WAHA (real QR). Seeded by scripts/e2e-inbox.sh.
 const DB = process.env.E2E_DB || 'omnira_e2e';
+const PG = process.env.E2E_PG_CONTAINER || 'omnira-postgres';
 const WAHA_URL = process.env.E2E_WAHA_URL || 'http://127.0.0.1:23200';
 const WAHA_KEY = process.env.E2E_WAHA_KEY || 'e2ekey';
 const API_URL = process.env.E2E_API_URL || 'http://127.0.0.1:28961';
@@ -10,7 +11,7 @@ const ADMIN = { email: 'admin@omnira.local', id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaa
 const AGENT = { email: 'test@omnira.local' };
 
 function sql(query: string): string {
-  return execFileSync('docker', ['exec', 'omnira-postgres', 'psql', '-U', 'omnira', '-d', DB, '-tA', '-c', query], { encoding: 'utf8' }).trim();
+  return execFileSync('docker', ['exec', PG, 'psql', '-U', 'omnira', '-d', DB, '-tA', '-c', query], { encoding: 'utf8' }).trim();
 }
 
 async function login(page: Page, email: string) {

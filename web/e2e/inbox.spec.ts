@@ -3,13 +3,14 @@ import { execFileSync } from 'node:child_process';
 
 // Real stack: backend API + worker + NATS + Postgres. Data is seeded by scripts/e2e-inbox.sh.
 const DB = process.env.E2E_DB || 'omnira_e2e';
+const PG = process.env.E2E_PG_CONTAINER || 'omnira-postgres';
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const CONV = 'd0d0d0d0-0000-0000-0000-000000000001';
 const FOREIGN_CONV = 'd0d0d0d0-0000-0000-0000-0000000000ff';
 const AGENT = { email: 'test@omnira.local', id: '22222222-2222-2222-2222-222222222222' };
 
 function sql(query: string): string {
-  return execFileSync('docker', ['exec', 'omnira-postgres', 'psql', '-U', 'omnira', '-d', DB, '-tA', '-c', query], { encoding: 'utf8' }).trim();
+  return execFileSync('docker', ['exec', PG, 'psql', '-U', 'omnira', '-d', DB, '-tA', '-c', query], { encoding: 'utf8' }).trim();
 }
 
 async function login(page: Page, email: string) {

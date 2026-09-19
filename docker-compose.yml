@@ -1,9 +1,7 @@
-version: '3.8'
-
 # Runtime environment shared by api and worker. The application connects as
 # omnira_app (NOT the owner): the owner is a superuser and would bypass RLS; the
-# services refuse to start with a privileged role. Migrations run as the owner
-# out of band (tools/apply-migrations.sh).
+# services refuse to start with a privileged role. Migrations run as the owner in the
+# one-shot `migrate` service (tools/migrate-sql.sh), which api and worker wait for.
 x-omnira-runtime: &omnira-runtime
   OMNIRA_DATABASE_URL: postgres://omnira_app:${OMNIRA_APP_DB_PASSWORD:-omnira_app}@postgres:5432/${OMNIRA_DB_NAME:-omnira_dev}?sslmode=disable
   OMNIRA_NATS_URL: nats://nats:4222
@@ -21,14 +19,14 @@ services:
     container_name: omnira-postgres
     environment:
       POSTGRES_USER: omnira
-      POSTGRES_PASSWORD: omnira
-      POSTGRES_DB: omnira_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnira}
+      POSTGRES_DB: ${OMNIRA_DB_NAME:-omnira_dev}
     ports:
       - "55434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U omnira -d omnira_dev"]
+      test: ["CMD-SHELL", "pg_isready -U omnira -d ${OMNIRA_DB_NAME:-omnira_dev}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -96,7 +94,8 @@ services:
     expose:
       - "3000"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/health >/dev/null || exit 1"]
+      # The WAHA image ships curl (no wget) and /health requires the API key; /ping is public.
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/ping >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -104,6 +103,52 @@ services:
     networks:
       - omnira-network
     restart: unless-stopped
+
+  # One-shot, idempotent schema migration as the OWNER role (records versions in schema_migrations).
+  # First adoption of a database whose schema was applied by hand: OMNIRA_MIGRATE_BASELINE=<last applied prefix>.
+  migrate:
+    image: postgres:16-alpine
+    container_name: omnira-migrate
+    entrypoint: ["/bin/sh", "/tools/migrate-sql.sh", "up"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: omnira
+      PGPASSWORD: ${POSTGRES_PASSWORD:-omnira}
+      PGDATABASE: ${OMNIRA_DB_NAME:-omnira_dev}
+      APP_DB_PASSWORD: ${OMNIRA_APP_DB_PASSWORD-}
+      BASELINE_UP_TO: ${OMNIRA_MIGRATE_BASELINE-}
+    volumes:
+      - ./migrations:/migrations:ro
+      - ./tools/migrate-sql.sh:/tools/migrate-sql.sh:ro
+    networks:
+      - omnira-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # DEVELOPMENT ONLY (profile "dev"): seeds the users known to the mock login (test@omnira.local as
+  # agent, admin@omnira.local as tenant admin) and one tenant. There is no real IdP yet.
+  seed:
+    image: postgres:16-alpine
+    container_name: omnira-seed
+    profiles: ["dev"]
+    entrypoint: ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "/tools/seed-dev.sql"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: omnira
+      PGPASSWORD: ${POSTGRES_PASSWORD:-omnira}
+      PGDATABASE: ${OMNIRA_DB_NAME:-omnira_dev}
+    volumes:
+      - ./tools/seed-dev.sql:/tools/seed-dev.sql:ro
+    networks:
+      - omnira-network
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
 
   api:
     build:
@@ -125,6 +170,8 @@ services:
     networks:
       - omnira-network
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       nats:
@@ -149,6 +196,8 @@ services:
     networks:
       - omnira-network
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       nats:
@@ -160,6 +209,15 @@ services:
       context: ./web
       dockerfile: Dockerfile
     container_name: omnira-web
+    ports:
+      - "3000:80"
+    healthcheck:
+      # 127.0.0.1, not localhost: the nginx image listens on IPv4 only and localhost may resolve to ::1
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
     networks:
       - omnira-network
     depends_on:
@@ -167,7 +225,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Edge TLS proxy — NOT part of the default stack. The `web` service already serves the SPA and
+  # proxies /api; production TLS terminates on the host nginx (omnira-nginx.conf, see
+  # docs/architecture/DEPLOYMENT-NGINX.md). Enable with `--profile edge` only with a matching conf.
   nginx:
+    profiles: ["edge"]
     image: nginx:alpine
     container_name: omnira-nginx
     ports:

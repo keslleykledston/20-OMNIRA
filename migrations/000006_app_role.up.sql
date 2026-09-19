@@ -13,7 +13,8 @@ BEGIN
 END
 $$;
 
-GRANT CONNECT ON DATABASE omnira_dev TO omnira_app;
+-- Portable: the database name is not fixed (it was hard-coded to omnira_dev, which broke any other name).
+DO $$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO omnira_app', current_database()); END $$;
 GRANT USAGE ON SCHEMA public TO omnira_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO omnira_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO omnira_app;
