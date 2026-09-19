@@ -4,6 +4,12 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
 ## [Unreleased]
 
+### Added (M02 — Contact foundation)
+- Tenant-owned provider-neutral `Contact` domain with canonical E.164 phone identity.
+- PostgreSQL `contacts` migration with RLS, FORCE RLS, tenant-scoped policies, unique tenant/phone identity, and rollback.
+- TenantContext-guarded repository and idempotent `UpsertByPhone` identity-resolution service.
+- Contact state transitions for active, blocked, and archived records.
+
 ### Added (U4 — WAHA outbound text foundation)
 - WAHA `SendText` adapter using the canonical channel seam and `/api/sendText`.
 - E.164 recipient validation, deterministic connection session ownership, and canonical sent result.
