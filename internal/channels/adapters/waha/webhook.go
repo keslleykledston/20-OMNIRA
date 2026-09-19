@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
 	"go.opentelemetry.io/otel"
@@ -196,7 +197,14 @@ type WebhookIntake interface {
 	ProcessWebhook(ctx context.Context, connection domain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *domain.InboundMessage, status *domain.DeliveryStatusUpdate) (duplicate bool, err error)
 }
 
+// SessionRunner runs fn inside a tenant-scoped system session. The unauthenticated webhook has
+// no user, but signature verification must read the connection's encrypted HMAC key, which RLS
+// only exposes inside a session for that tenant. The tenant always comes from the resolved
+// connection row, never from the payload.
+type SessionRunner func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error
+
 type WebhookHandler struct {
+	Session  SessionRunner
 	Provider *WahaProvider
 	Resolver WahaConnectionResolver
 	Events   ports.WebhookEventStore
@@ -204,6 +212,12 @@ type WebhookHandler struct {
 	MaxBody  int64
 	webhook  metric.Int64Counter
 	invalid  metric.Int64Counter
+}
+
+// UseSession makes signature verification run in a tenant-scoped system session.
+func (h *WebhookHandler) UseSession(runner SessionRunner) *WebhookHandler {
+	h.Session = runner
+	return h
 }
 
 func (h *WebhookHandler) UseIntake(intake WebhookIntake) *WebhookHandler {
@@ -259,14 +273,27 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(r.Context(), w, http.StatusRequestEntityTooLarge, "payload too large or unreadable")
 		return
 	}
-	if err := h.Provider.VerifyWebhook(r.Context(), *conn, ports.WebhookVerificationRequest{
+	verifyReq := ports.WebhookVerificationRequest{
 		Headers: map[string]string{
 			"X-Webhook-Hmac":           r.Header.Get("X-Webhook-Hmac"),
 			"X-Webhook-Hmac-Algorithm": r.Header.Get("X-Webhook-Hmac-Algorithm"),
 		},
 		Body: body,
-	}); err != nil {
-		h.reject(r.Context(), w, http.StatusUnauthorized, "invalid webhook signature")
+	}
+	verify := func(ctx context.Context) error { return h.Provider.VerifyWebhook(ctx, *conn, verifyReq) }
+	var verifyErr error
+	if h.Session != nil {
+		verifyErr = h.Session(r.Context(), conn.TenantID, verify)
+	} else {
+		verifyErr = verify(r.Context())
+	}
+	if verifyErr != nil {
+		if errors.Is(verifyErr, ErrInvalidWebhookSignature) {
+			h.reject(r.Context(), w, http.StatusUnauthorized, "invalid webhook signature")
+		} else {
+			// Not-configured / credential lookup failure is ours, not the sender's: 503 makes WAHA retry.
+			h.reject(r.Context(), w, http.StatusServiceUnavailable, "webhook verification unavailable")
+		}
 		return
 	}
 	parsed, parseErr := h.Provider.ParseWebhook(*conn, body)

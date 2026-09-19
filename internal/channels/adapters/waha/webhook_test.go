@@ -287,3 +287,45 @@ func signedRequest(path string, body []byte, secret string) *http.Request {
 	req.Header.Set("X-Webhook-Hmac-Algorithm", "sha512")
 	return req
 }
+
+// A failure to read the connection's credential is ours, not the sender's: 503 (WAHA retries), not 401.
+// The session runner wraps verification (needed for RLS) and receives the connection's tenant.
+func TestWebhookHandlerDistinguishesUnreadableKeyFromBadSignatureAndScopesSession(t *testing.T) {
+	conn := webhookConnection()
+	conn.SecretRef = "credential-a"
+	body := []byte(`{"id":"evt-1","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"msg-1","timestamp":1710000000,"from":"5511999999999@c.us","body":"oi"}}`)
+	path := "/webhooks/v1/whatsapp/waha/" + conn.ID.String()
+	post := func(h *waha.WebhookHandler) int {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+		req.Header.Set("X-Webhook-Hmac", hmacSignature(body, "hmac-secret"))
+		req.Header.Set("X-Webhook-Hmac-Algorithm", "sha512")
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, req)
+		return res.Code
+	}
+
+	// Provider without a credential store: not configured -> 503.
+	client, err := waha.NewClient("http://waha:3000", "api-key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := waha.NewProvider(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := post(waha.NewWebhookHandler(bare, wahaResolver{conn: &conn})); code != http.StatusServiceUnavailable {
+		t.Fatalf("unreadable key got %d, want 503", code)
+	}
+
+	// The session runner receives the resolved connection's tenant and wraps verification.
+	var gotTenant uuid.UUID
+	ran := false
+	handler := waha.NewWebhookHandler(newProvider(t, "hmac-secret"), wahaResolver{conn: &conn}).
+		UseSession(func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+			gotTenant, ran = tenantID, true
+			return fn(ctx)
+		})
+	if code := post(handler); code != http.StatusOK || !ran || gotTenant != conn.TenantID {
+		t.Fatalf("session runner: code=%d ran=%v tenant=%s want %s", code, ran, gotTenant, conn.TenantID)
+	}
+}

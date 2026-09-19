@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 const DB = process.env.E2E_DB || 'omnira_e2e';
 const WAHA_URL = process.env.E2E_WAHA_URL || 'http://127.0.0.1:23200';
 const WAHA_KEY = process.env.E2E_WAHA_KEY || 'e2ekey';
+const API_URL = process.env.E2E_API_URL || 'http://127.0.0.1:28961';
 const ADMIN = { email: 'admin@omnira.local', id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' };
 const AGENT = { email: 'test@omnira.local' };
 
@@ -45,6 +46,16 @@ test('admin creates a connection with the risk acknowledgement, pairs via a real
   expect(sql(`SELECT count(*) FROM audit_events WHERE resource_id='${id}' AND action='channel.connection_created' AND actor_id='${ADMIN.id}'`)).toBe('1');
   // The webhook HMAC key is never sent to the browser.
   expect(await page.content()).not.toContain('webhook_hmac_key');
+
+  // Real API wiring of the WAHA webhook: verification must read the connection's encrypted HMAC key
+  // (needs a tenant-scoped session). A bad signature is 401; 503 would mean the key was unreadable.
+  sql(`UPDATE channel_connections SET status='active' WHERE id='${id}'`);
+  const bad = await page.request.post(`${API_URL}/webhooks/v1/whatsapp/waha/${id}`, {
+    headers: { 'X-Webhook-Hmac': 'ab'.repeat(64), 'X-Webhook-Hmac-Algorithm': 'sha512', 'Content-Type': 'application/json' },
+    data: '{}',
+  });
+  expect(bad.status()).toBe(401);
+  sql(`UPDATE channel_connections SET status='pending' WHERE id='${id}'`);
 
   await card.getByRole('button', { name: 'Start session' }).click();
   const qr = card.getByAltText('WhatsApp pairing QR code');

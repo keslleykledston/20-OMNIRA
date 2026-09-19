@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
@@ -85,7 +86,11 @@ func main() {
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
-		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).UseIntake(intake))
+		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).
+			UseSession(func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+				return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
+			}).
+			UseIntake(intake))
 		srv.RegisterWahaConnectionHandlers(dbPool, channeladapters.NewConnectionHandler(channelapplication.NewWahaConnectionService(
 			connectionRepo, credentialStore, waha.NewSessionController(provider),
 			channeladapters.NewPostgresPermissionChecker(dbPool),

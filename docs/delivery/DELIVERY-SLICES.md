@@ -134,7 +134,7 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - Prioridade vigente: **WhatsApp não oficial (WAHA)** nas primeiras entregas. Meta Cloud fica preservado como provider oficial (D3.1–D3.3 prontos), **sem prioridade operacional**; D3.4+ congelado.
 - Gate verde (Postgres real + `omnira_app`): `go build/vet/test ./...`, RLS completeness, isolation A/B, `validate-schema`, migrations up-all → down-all → up-all, `docker compose config`, imagens `Dockerfile.api`/`Dockerfile.worker` (Go 1.25), web vitest 24/24 + `tsc`.
 - Como rodar integração: DB descartável no `omnira-postgres` (porta 55434), migrations aplicadas como owner; `OMNIRA_DATABASE_URL` = owner (seed) e `OMNIRA_APP_DATABASE_URL` = `postgres://omnira_app:omnira_app@…` (a role de aplicação **tem LOGIN**, criada na migration 000006; não é superuser nem BYPASSRLS). As tools em `tools/` apontam `omnira_dev`; redirecione para um DB de teste.
-- Migrations: última = `000026_realtime_events`. `000020.down` corrigido; `000022` remove policy GUC quebrada.
+- Migrations: última = `000027_rls_guc_empty_safe`. `000020.down` corrigido; `000022` remove policy GUC quebrada.
 - Restrições conhecidas: o worker fixa `:9090` para métricas (colide se ocupado, apenas loga); as migrations rodam como owner fora do compose (`tools/apply-migrations.sh`); `DELIVERY-SLICES`/contratos OpenAPI (`contracts/openapi` vazio) ainda não documentam as rotas de inbox/assign; erros HTTP são `http.Error` texto (sem Problem Details) em todo o projeto.
 
 ### Próximos passos ordenados (caminho WAHA)
