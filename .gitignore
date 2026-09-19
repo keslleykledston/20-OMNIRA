@@ -1,0 +1,16 @@
+# Secrets — nunca commitar
+.env
+*.pem
+*.key
+
+# Build
+bin/
+*.exe
+
+# Local AI — métricas locais, não versionar
+.local-ai-metrics.jsonl
+
+# Go
+*.test
+*.out
+vendor/

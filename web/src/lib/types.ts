@@ -1,0 +1,92 @@
+export interface Account {
+  id: string
+  tenant_id: string
+  name: string
+  account_type: 'operator' | 'contact_center' | 'reseller'
+  status: 'active' | 'inactive' | 'suspended'
+  sla_configuration?: SLAConfig
+  created_at: string
+  updated_at: string
+}
+
+export interface SLAConfig {
+  first_response_target_hours: number
+  resolution_target_hours: number
+}
+
+export interface Ticket {
+  id: string
+  account_id: string
+  title?: string
+  priority: 'low' | 'medium' | 'high' | 'critical'
+  status: 'open' | 'in_progress' | 'resolved' | 'closed'
+  assigned_to?: string
+  sla_metrics?: SLAMetrics
+  created_at: string
+  updated_at: string
+}
+
+export interface SLAMetrics {
+  first_response_target: string
+  resolution_target: string
+  first_response_met: boolean
+  resolution_met: boolean
+  breached_at?: string
+}
+
+export interface Report {
+  id: string
+  template_id: string
+  status: 'pending' | 'completed' | 'failed'
+  data?: any
+  duration_ms?: number
+  created_at: string
+  completed_at?: string
+}
+
+export interface ReportTemplate {
+  id: string
+  name: string
+  columns: ReportColumn[]
+  filters?: ReportFilter[]
+  sorting?: SortConfig[]
+  created_at: string
+}
+
+export interface ReportColumn {
+  field: string
+  label: string
+  type: 'string' | 'number' | 'date' | 'boolean'
+  sortable: boolean
+  filterable: boolean
+}
+
+export interface ReportFilter {
+  field: string
+  operator: 'eq' | 'ne' | 'gt' | 'lt' | 'contains' | 'in' | 'between'
+  value: any
+}
+
+export interface SortConfig {
+  field: string
+  direction: 'asc' | 'desc'
+}
+
+export interface Pagination {
+  cursor?: string
+  limit: number
+}
+
+export interface PaginatedResponse<T> {
+  data: T[]
+  pagination: {
+    next_cursor?: string
+    has_more: boolean
+  }
+}
+
+export interface APIError {
+  code: string
+  message: string
+  details?: Record<string, any>
+}

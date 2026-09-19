@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "omnira.fullname" . }}-config
+  labels:
+    {{- include "omnira.labels" . | nindent 4 }}
+data:
+  nats-url: {{ .Values.nats.urls | first | quote }}
+  otel-endpoint: "http://otel-collector:4317"
+  environment: {{ .Values.global.environment }}
+  domain: {{ .Values.global.domain }}

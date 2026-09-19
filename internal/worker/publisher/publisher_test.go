@@ -1,0 +1,162 @@
+package publisher
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/outbox/application"
+	"github.com/omnira/omnira/internal/outbox/domain"
+)
+
+// MockOutboxRepository — mock para testes.
+type MockOutboxRepository struct {
+	events map[uuid.UUID]*domain.OutboxEvent
+}
+
+// Implementar interface ports.OutboxEventRepository
+
+func (m *MockOutboxRepository) Store(ctx context.Context, event *domain.OutboxEvent) error {
+	m.events[event.ID] = event
+	return nil
+}
+
+func (m *MockOutboxRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.OutboxEvent, error) {
+	return m.events[id], nil
+}
+
+func (m *MockOutboxRepository) FindUnpublished(ctx context.Context, limit int) ([]*domain.OutboxEvent, error) {
+	var result []*domain.OutboxEvent
+	for _, e := range m.events {
+		if !e.IsPublished() {
+			result = append(result, e)
+			if len(result) >= limit {
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func (m *MockOutboxRepository) Update(ctx context.Context, event *domain.OutboxEvent) error {
+	m.events[event.ID] = event
+	return nil
+}
+
+func (m *MockOutboxRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	delete(m.events, id)
+	return nil
+}
+
+func (m *MockOutboxRepository) FindByTenant(ctx context.Context, tenantID uuid.UUID, limit, offset int) ([]*domain.OutboxEvent, error) {
+	var result []*domain.OutboxEvent
+	for _, e := range m.events {
+		if e.TenantID == tenantID {
+			result = append(result, e)
+		}
+	}
+	return result[offset:], nil
+}
+
+func TestPublisherInitialization(t *testing.T) {
+	repo := &MockOutboxRepository{events: make(map[uuid.UUID]*domain.OutboxEvent)}
+	svc := application.NewOutboxService(repo)
+
+	pub := NewPublisher(svc, nil, 0, 0)
+	if pub == nil {
+		t.Fatalf("expected publisher to be created, got nil")
+	}
+
+	if pub.batchSize != 10 {
+		t.Errorf("expected default batchSize=10, got %d", pub.batchSize)
+	}
+
+	if pub.maxRetries != 3 {
+		t.Errorf("expected default maxRetries=3, got %d", pub.maxRetries)
+	}
+}
+
+func TestPublisherBatchSize(t *testing.T) {
+	repo := &MockOutboxRepository{events: make(map[uuid.UUID]*domain.OutboxEvent)}
+	svc := application.NewOutboxService(repo)
+
+	pub := NewPublisher(svc, nil, 5, 2)
+	if pub.batchSize != 5 {
+		t.Errorf("expected batchSize=5, got %d", pub.batchSize)
+	}
+
+	if pub.maxRetries != 2 {
+		t.Errorf("expected maxRetries=2, got %d", pub.maxRetries)
+	}
+}
+
+func TestPublisherStartWithNilJS(t *testing.T) {
+	repo := &MockOutboxRepository{events: make(map[uuid.UUID]*domain.OutboxEvent)}
+	svc := application.NewOutboxService(repo)
+	pub := NewPublisher(svc, nil, 1, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Deve rodar até timeout sem panic
+	_ = pub.Start(ctx, 50*time.Millisecond)
+}
+
+func TestOutboxServiceIntegration(t *testing.T) {
+	repo := &MockOutboxRepository{events: make(map[uuid.UUID]*domain.OutboxEvent)}
+	svc := application.NewOutboxService(repo)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	aggregateID := uuid.New()
+	correlationID := uuid.New()
+
+	// Record event
+	event, err := svc.RecordEvent(
+		ctx,
+		tenantID,
+		domain.EventTenantCreated,
+		domain.AggregateTenant,
+		aggregateID,
+		correlationID,
+		map[string]interface{}{"name": "Test Tenant"},
+	)
+	if err != nil {
+		t.Fatalf("failed to record event: %v", err)
+	}
+
+	if event.ID == uuid.Nil {
+		t.Errorf("expected event to have an ID")
+	}
+
+	if !event.CreatedAt.Before(time.Now().Add(time.Second)) {
+		t.Errorf("expected event to have reasonable timestamp")
+	}
+
+	// Verify unpublished
+	unpublished, err := svc.GetUnpublishedEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("failed to get unpublished events: %v", err)
+	}
+
+	if len(unpublished) != 1 {
+		t.Errorf("expected 1 unpublished event, got %d", len(unpublished))
+	}
+
+	// Mark as published
+	err = svc.MarkPublished(ctx, event.ID)
+	if err != nil {
+		t.Fatalf("failed to mark as published: %v", err)
+	}
+
+	// Verify no more unpublished
+	unpublished, err = svc.GetUnpublishedEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("failed to get unpublished events after mark: %v", err)
+	}
+
+	if len(unpublished) != 0 {
+		t.Errorf("expected 0 unpublished events after mark, got %d", len(unpublished))
+	}
+}

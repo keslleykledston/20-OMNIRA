@@ -1,0 +1,54 @@
+# Multi-stage build para omnira-worker
+# Stage 1: Builder
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+# Instalar dependências de build
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Copiar módulos
+COPY go.mod ./
+RUN touch go.sum && go mod download 2>&1 || true
+
+# Copiar código
+COPY . .
+
+# Build com metadata
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+  -ldflags "-s -w \
+    -X github.com/omnira/omnira/internal/platform/config.Version=${VERSION} \
+    -X github.com/omnira/omnira/internal/platform/config.Commit=${COMMIT} \
+    -X github.com/omnira/omnira/internal/platform/config.BuildTime=${BUILD_TIME}" \
+  -o /build/omnira-worker \
+  ./apps/worker/cmd/omnira-worker
+
+# Stage 2: Runtime
+FROM alpine:latest
+
+# Instalar certificados CA (necessário para TLS com serviços externos)
+RUN apk add --no-cache ca-certificates tzdata
+
+# Criar usuário não-root
+RUN addgroup -g 1000 omnira && adduser -D -u 1000 -G omnira omnira
+
+WORKDIR /app
+
+# Copiar binário do builder
+COPY --from=builder /build/omnira-worker /app/omnira-worker
+
+# Permissões
+RUN chown -R omnira:omnira /app
+
+# Switch para usuário não-root
+USER omnira
+
+# Graceful shutdown
+STOPSIGNAL SIGTERM
+
+# Entrypoint
+ENTRYPOINT ["/app/omnira-worker"]

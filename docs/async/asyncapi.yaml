@@ -1,0 +1,262 @@
+asyncapi: 3.0.0
+info:
+  title: OMNIRA Event API
+  version: 0.1.0
+  description: |
+    OMNIRA SaaS Platform Event Streams — Tenant Foundation (R0.1)
+
+    Event-driven architecture using NATS JetStream for asynchronous
+    processing and event sourcing. All events include correlation IDs
+    for distributed tracing.
+  contact:
+    name: OMNIRA
+  license:
+    name: Proprietary
+
+defaultContentType: application/json
+
+servers:
+  - host: nats://localhost:4222
+    protocol: nats
+    description: Development NATS broker
+  - host: nats://nats.omnira.local:4222
+    protocol: nats
+    description: Production NATS broker
+
+channels:
+  events.tenant.created:
+    address: events.tenant.created
+    title: Tenant Created
+    description: |
+      Published when a new tenant is created in the system.
+      All tenant creation events flow through this channel.
+    messages:
+      TenantCreatedEvent:
+        $ref: '#/components/messages/TenantEvent'
+
+  events.tenant.deactivated:
+    address: events.tenant.deactivated
+    title: Tenant Deactivated
+    description: |
+      Published when a tenant is deactivated.
+      Signals end of service for a tenant.
+    messages:
+      TenantDeactivatedEvent:
+        $ref: '#/components/messages/TenantEvent'
+
+  events.tenant.suspended:
+    address: events.tenant.suspended
+    title: Tenant Suspended
+    description: |
+      Published when a tenant is suspended (e.g., due to billing or violations).
+    messages:
+      TenantSuspendedEvent:
+        $ref: '#/components/messages/TenantEvent'
+
+  events.membership.created:
+    address: events.membership.created
+    title: Membership Granted
+    description: |
+      Published when a user is granted membership in a tenant.
+    messages:
+      MembershipCreatedEvent:
+        $ref: '#/components/messages/MembershipEvent'
+
+  events.membership.revoked:
+    address: events.membership.revoked
+    title: Membership Revoked
+    description: |
+      Published when a user's membership is revoked.
+      Signals access removal for that user in a tenant.
+    messages:
+      MembershipRevokedEvent:
+        $ref: '#/components/messages/MembershipEvent'
+
+  events.membership.deactivated:
+    address: events.membership.deactivated
+    title: Membership Deactivated
+    description: |
+      Published when a membership is deactivated.
+    messages:
+      MembershipDeactivatedEvent:
+        $ref: '#/components/messages/MembershipEvent'
+
+operations:
+  publishTenantEvents:
+    title: Publish Tenant Events
+    channel:
+      $ref: '#/channels/events.tenant.created'
+    action: send
+    description: |
+      Worker publishes tenant lifecycle events to NATS JetStream.
+      Subject pattern: `events.{event_type}.{aggregate_type}`
+
+  publishMembershipEvents:
+    title: Publish Membership Events
+    channel:
+      $ref: '#/channels/events.membership.created'
+    action: send
+    description: |
+      Worker publishes membership lifecycle events to NATS JetStream.
+
+components:
+  messages:
+    TenantEvent:
+      title: Tenant Domain Event
+      contentType: application/json
+      description: |
+        Base event for tenant lifecycle changes.
+        Published via NATS JetStream from outbox pattern.
+      payload:
+        $ref: '#/components/schemas/TenantEvent'
+
+    MembershipEvent:
+      title: Membership Domain Event
+      contentType: application/json
+      description: |
+        Base event for membership lifecycle changes.
+      payload:
+        $ref: '#/components/schemas/MembershipEvent'
+
+  schemas:
+    EventEnvelope:
+      type: object
+      required:
+        - id
+        - tenant_id
+        - event_type
+        - aggregate_type
+        - aggregate_id
+        - correlation_id
+        - timestamp
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique event ID
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant this event belongs to
+        event_type:
+          type: string
+          description: Type of event (e.g., tenant.created)
+          example: tenant.created
+        aggregate_type:
+          type: string
+          description: Domain aggregate type
+          enum:
+            - tenant
+            - membership
+            - user
+        aggregate_id:
+          type: string
+          format: uuid
+          description: ID of the aggregate that changed
+        correlation_id:
+          type: string
+          format: uuid
+          description: |
+            Request correlation ID for distributed tracing.
+            Links events from same request across services.
+        causation_id:
+          type: string
+          format: uuid
+          description: |
+            Causation ID from parent command/event (if applicable).
+            Links causal chain of events.
+        timestamp:
+          type: string
+          format: date-time
+          description: When the event occurred in UTC
+
+    TenantEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          required:
+            - payload
+          properties:
+            payload:
+              type: object
+              description: Tenant-specific event data
+              properties:
+                legal_name:
+                  type: string
+                  description: Tenant legal name
+                  example: Acme Corporation
+                isolation_profile:
+                  type: string
+                  enum:
+                    - standard
+                    - premium
+                    - dedicated
+                status:
+                  type: string
+                  enum:
+                    - active
+                    - inactive
+                    - suspended
+                reason:
+                  type: string
+                  description: Reason for status change (if applicable)
+                  example: billing_overdue
+
+    MembershipEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          required:
+            - payload
+          properties:
+            payload:
+              type: object
+              description: Membership-specific event data
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                  description: User ID in this membership
+                role_id:
+                  type: string
+                  description: Role assigned
+                  example: admin
+                status:
+                  type: string
+                  enum:
+                    - active
+                    - inactive
+                    - revoked
+                reason:
+                  type: string
+                  description: Reason for status change (if applicable)
+
+bindings:
+  nats:
+    bindingVersion: 0.1.0
+    subjects:
+      - "events.tenant.*"
+      - "events.membership.*"
+    queue: omnira-events
+
+x-omnira:
+  guarantees:
+    - at_least_once: "NATS JetStream provides at-least-once delivery"
+    - ordering: "Events ordered per tenant (partition by tenant_id)"
+    - isolation: "RLS ensures cross-tenant data separation"
+    - idempotency: |
+        Event ID is idempotent key. Consumers should deduplicate
+        by event ID when processing.
+
+  retry_strategy: |
+    Worker publishes with exponential backoff:
+    - attempt 1: immediate
+    - attempt 2: 1s delay
+    - attempt 3: 2s delay
+    - attempt 4: 4s delay
+    After 4 attempts, event remains in outbox for manual intervention.
+
+  correlation:
+    strategy: "Request correlation ID propagated through HTTP headers"
+    header: "X-Correlation-ID"
+    tracing: "OpenTelemetry integration for distributed traces"

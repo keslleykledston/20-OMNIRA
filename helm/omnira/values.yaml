@@ -1,0 +1,147 @@
+global:
+  environment: development
+  domain: omnira.local
+
+# Chart name overrides (optional)
+nameOverride: ""
+fullnameOverride: ""
+
+# API Configuration
+api:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: omnira/api
+    tag: 0.1.0
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+
+# Worker Configuration
+worker:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: omnira/worker
+    tag: 0.1.0
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    metricsPort: 9090
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+
+# PostgreSQL Configuration
+# For production, use managed service (RDS, Cloud SQL, etc.)
+postgresql:
+  enabled: false  # Use external database in production
+  host: postgres
+  port: 5432
+  database: omnira
+  username: omnira
+  # password: set via secret
+
+# NATS Configuration
+nats:
+  enabled: false  # Use external NATS in production
+  urls:
+    - nats://nats:4222
+
+# Ingress Configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+  hosts:
+    - host: api.omnira.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+  tls:
+    - secretName: omnira-tls
+      hosts:
+        - api.omnira.local
+
+# RBAC
+rbac:
+  enabled: true
+  serviceAccountName: omnira
+
+# NetworkPolicy
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Monitoring (Prometheus)
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: false  # Enable if Prometheus Operator is installed
+    interval: 30s
+
+# Logging
+logging:
+  level: info
+  format: json
+
+# Security
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Health checks
+healthChecks:
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 5

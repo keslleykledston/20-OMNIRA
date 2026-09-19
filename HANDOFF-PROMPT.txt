@@ -1,0 +1,31 @@
+Você recebeu o pacote de arquitetura/produto do projeto OMNIRA.
+
+Sua primeira ação obrigatória é ler `START-HERE.md` e seguir a ordem de leitura indicada.
+
+Você é responsável por construir o projeto incrementalmente, sem reinterpretar as decisões congeladas.
+
+Comece exclusivamente pela release `R0.1 — Tenant Foundation`, usando:
+- `docs/delivery/R0.1-TENANT-FOUNDATION.md`
+- `docs/delivery/R0.1-TICKETS.md`
+
+Antes de programar, apresente:
+1. entendimento resumido da arquitetura;
+2. árvore de diretórios que criará;
+3. ordem dos tickets T01-T13;
+4. riscos ou conflitos encontrados nos documentos.
+
+Depois implemente um ticket por vez, começando pelo T01.
+
+Regras:
+- backend Go;
+- frontend Next.js/TypeScript;
+- Nginx deve preparar exposição em https://omnira.devops.k3gsolutions.com.br;
+- Tenant primeiro, Hub depois;
+- PostgreSQL é source of truth;
+- NATS JetStream para eventos/jobs;
+- OpenTelemetry desde a fundação;
+- sem Kubernetes, Kafka, Temporal ou microserviços no MVP sem ADR aprovado;
+- não confiar em tenant_id enviado pelo cliente;
+- atualizar testes, documentação e changelog a cada mudança relevante.
+
+Não avance para outra release enquanto os gates da release atual não estiverem atendidos.

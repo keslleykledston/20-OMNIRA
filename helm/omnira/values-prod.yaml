@@ -1,0 +1,327 @@
+# OMNIRA Helm Chart — Production Values
+# This file overrides values.yaml for production environments
+#
+# Usage: helm install omnira ./helm/omnira -f helm/omnira/values.yaml -f helm/omnira/values-prod.yaml
+
+global:
+  environment: production
+  domain: omnira.devops.k3gsolutions.com.br
+
+# API Configuration (Production)
+api:
+  enabled: true
+  replicaCount: 3  # Increased from 2 for HA
+
+  image:
+    repository: omnira/api
+    tag: 0.1.0
+    pullPolicy: Always  # Always pull latest in production
+
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+
+  # Production resource requirements
+  resources:
+    requests:
+      memory: 512Mi    # Increased from 256Mi
+      cpu: 250m        # Increased from 100m
+    limits:
+      memory: 1Gi      # Increased from 512Mi
+      cpu: 1000m       # Increased from 500m
+
+  # Aggressive autoscaling for production
+  autoscaling:
+    enabled: true
+    minReplicas: 3       # Increased from 2
+    maxReplicas: 10      # Increased from 5
+    targetCPUUtilizationPercentage: 70  # More aggressive (from 80)
+    targetMemoryUtilizationPercentage: 75
+
+  # Production-grade probes
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # Pod anti-affinity for high availability
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                    - omnira-api
+            topologyKey: kubernetes.io/hostname
+
+# Worker Configuration (Production)
+worker:
+  enabled: true
+  replicaCount: 2  # Increased from 1 for reliability
+
+  image:
+    repository: omnira/worker
+    tag: 0.1.0
+    pullPolicy: Always
+
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
+  # Enable autoscaling for workers
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                    - omnira-worker
+            topologyKey: kubernetes.io/hostname
+
+# PostgreSQL (Production: Use managed service)
+postgresql:
+  enabled: false  # Always use external managed database in production
+
+# NATS (Production: Use managed service)
+nats:
+  enabled: false  # Always use external managed NATS in production
+
+# Ingress Configuration (Production)
+ingress:
+  enabled: true
+  className: nginx
+
+  annotations:
+    # SSL/TLS configuration
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+    # Rate limiting at ingress level
+    nginx.ingress.kubernetes.io/limit-rps: "1000"
+    nginx.ingress.kubernetes.io/limit-connections: "100"
+
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+
+    # CORS (if applicable)
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://omnira.devops.k3gsolutions.com.br"
+
+  hosts:
+    - host: omnira.devops.k3gsolutions.com.br
+      paths:
+        - path: /
+          pathType: Prefix
+
+  tls:
+    - secretName: omnira-tls-prod
+      hosts:
+        - omnira.devops.k3gsolutions.com.br
+
+# RBAC (Production: enabled)
+rbac:
+  enabled: true
+  serviceAccountName: omnira
+
+# Network Policy (Production: strict)
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # Ingress rules
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+
+  # Egress rules (allow specific destinations)
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow database (external)
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8  # Adjust to your database CIDR
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    # Allow NATS (external)
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8  # Adjust to your NATS CIDR
+      ports:
+        - protocol: TCP
+          port: 4222
+
+# Pod Disruption Budget (Production: strict)
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2  # Increased from 1 for API pods
+
+# Monitoring (Production: enabled)
+monitoring:
+  enabled: true
+
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: prometheus  # Adjust to your Prometheus operator label
+
+  # Prometheus recording rules (for dashboards)
+  recordingRules:
+    enabled: true
+
+  # Alerts
+  alerts:
+    enabled: true
+    rules:
+      - alert: HighErrorRate
+        expr: rate(omnira_http_errors_total[5m]) > 0.05
+        for: 5m
+        annotations:
+          summary: High error rate detected
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, omnira_http_duration_seconds) > 1
+        for: 5m
+        annotations:
+          summary: High latency detected
+
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[1h]) > 0
+        for: 5m
+        annotations:
+          summary: Pod crash loop detected
+
+# Logging (Production: detailed)
+logging:
+  level: info          # info or debug for detailed logs
+  format: json         # JSON format for log aggregation
+  destination: stdout  # Send to stdout (collected by container runtime)
+
+# Security Context (Production: strict)
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+
+  capabilities:
+    drop:
+      - ALL
+    add: []  # Empty unless specific capabilities needed
+
+# Health Checks (Production: strict)
+healthChecks:
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Environment Variables (Production)
+env:
+  - name: OMNIRA_ENV
+    value: "production"
+  - name: OMNIRA_LOG_LEVEL
+    value: "info"
+  - name: OMNIRA_GRACEFUL_SHUTDOWN_SECONDS
+    value: "30"
+
+# Backup & Disaster Recovery
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  retention:
+    days: 30
+
+# Database Configuration (Production: External)
+# Set via Kubernetes secrets or sealed secrets
+database:
+  host: postgres.prod.internal
+  port: 5432
+  database: omnira_prod
+  # username and password via secret
+
+# NATS Configuration (Production: External)
+nats:
+  servers:
+    - nats://nats1.prod.internal:4222
+    - nats://nats2.prod.internal:4222
+    - nats://nats3.prod.internal:4222
+
+# OpenTelemetry Collector (Production)
+otel:
+  enabled: true
+  collectors:
+    - endpoint: otel-collector.monitoring.svc.cluster.local:4317
+  samplingRate: 0.1  # 10% sampling in production
+
+# Maintenance Window
+maintenance:
+  enabled: false
+  startTime: "02:00:00"
+  duration: 1h
+
+# Cost Optimization
+resources:
+  requests:
+    # Ensure nodes have enough capacity
+    cpu: 1500m    # 3 API + 2 Worker
+    memory: 3Gi
+  limits:
+    cpu: 3000m
+    memory: 6Gi

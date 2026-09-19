@@ -1,0 +1,317 @@
+[
+  {
+    "path": ".agents/skills/grill-with-docs/SKILL.md",
+    "sha256": "ca3def24d06b64a1eacaec1362ed5419fc8ec230fe4b95fd042675cb32d6a512",
+    "bytes": 856
+  },
+  {
+    "path": ".agents/skills/implement-ticket/SKILL.md",
+    "sha256": "f411c2ea862cd9a123215ae6a828e82b49feb4e37e8282e89973d053a44cbfbf",
+    "bytes": 382
+  },
+  {
+    "path": ".agents/skills/release/SKILL.md",
+    "sha256": "4d2d4d822478797509f3d54fdeee26d1ea0dce28abd2e50d89c4c55facd7fe4a",
+    "bytes": 276
+  },
+  {
+    "path": ".agents/skills/review-change/SKILL.md",
+    "sha256": "bcd09d0ba3525b1ce354512b077a1e4e136b8cefecc293a41cc89d999ae753cb",
+    "bytes": 381
+  },
+  {
+    "path": ".agents/skills/slice-tickets/SKILL.md",
+    "sha256": "9c94ff254733fd8561338a4376caff43b841e4cbb531a7f4369aa4f86a3c705b",
+    "bytes": 355
+  },
+  {
+    "path": ".agents/skills/write-spec/SKILL.md",
+    "sha256": "1d421d4977c735d08a955d6cb95ca4734cf7034ba3a069d9af259ad8d3a3b15a",
+    "bytes": 363
+  },
+  {
+    "path": ".agents/subagents/architect.md",
+    "sha256": "a1f408a3eb6f38066c6150fd0c37de6a458737b5febe06b7231d5b216d599f66",
+    "bytes": 405
+  },
+  {
+    "path": ".agents/subagents/backend.md",
+    "sha256": "71641e1d6ce06bbcc832573a2714311712657bc9e18a630a8e2f5056c6d0cda8",
+    "bytes": 262
+  },
+  {
+    "path": ".agents/subagents/devops.md",
+    "sha256": "97c1a7c7ac33a7a7fa5ae4625a041e77cee13a53a9f99a9489e5e8b902f25092",
+    "bytes": 239
+  },
+  {
+    "path": ".agents/subagents/docs.md",
+    "sha256": "e3230b5d6fdf4241de03f6bf986899999884ec3e56f0878018480be5e4a544b0",
+    "bytes": 303
+  },
+  {
+    "path": ".agents/subagents/frontend.md",
+    "sha256": "f76edcef74e3f10c1c53938b3592cf3c8c54957bc820b378b41d8b73d3afba4e",
+    "bytes": 322
+  },
+  {
+    "path": ".agents/subagents/integrations.md",
+    "sha256": "e5c73e2f1e1ac372a9fe7da813c08d43949811d8554e34e58d4395d36e0bc035",
+    "bytes": 223
+  },
+  {
+    "path": ".agents/subagents/product.md",
+    "sha256": "5600fa25dce62361040730bce0ff2176315a7326d1358684bd5d94059b805d3f",
+    "bytes": 324
+  },
+  {
+    "path": ".agents/subagents/qa.md",
+    "sha256": "3fcd4e3c453f86afc7c7b413833e44f14f5eeb35f0d14d1130f3466741bced3e",
+    "bytes": 230
+  },
+  {
+    "path": ".agents/subagents/security.md",
+    "sha256": "92889f35c678a83eb83d5c2c571686f1648d5a0321cb507948bad916f4661425",
+    "bytes": 406
+  },
+  {
+    "path": "AGENTS.md",
+    "sha256": "57099aa767e1e82c497f0588a65760e213b80b0c8b09e300cbc40fe995bc4bc3",
+    "bytes": 1611
+  },
+  {
+    "path": "CHANGELOG.md",
+    "sha256": "87ddbcc37fc1f613b77786f3c42ea4c3bc0d4d4b77a95626f4f1518a2db9cb98",
+    "bytes": 486
+  },
+  {
+    "path": "CLAUDE.md",
+    "sha256": "f4a33a9e67ec01e0da5e43d203981bd07531be1c1e34044b542a8359a12d0166",
+    "bytes": 1637
+  },
+  {
+    "path": "CODEX.md",
+    "sha256": "08f9bb1f6dfde745ab4f064e60e2bc5a62a2d4d3d6314cf3d8688b6567563400",
+    "bytes": 1403
+  },
+  {
+    "path": "CONTEXT.md",
+    "sha256": "06a761f8e9d82f4a6f71996ec06376fad8fb766df9783266bacc756b212d02bd",
+    "bytes": 2996
+  },
+  {
+    "path": "HANDOFF-PROMPT.txt",
+    "sha256": "fabafc3f0669cfeed8c2d1209868e9eaf1ad1c1e09efcc2ca6a954f21f79752e",
+    "bytes": 1236
+  },
+  {
+    "path": "PACKAGE-INDEX.md",
+    "sha256": "1bd5dbebb92fea03fda30fdf59282a0c50a1469b41ce13499081ccc6a0f6473b",
+    "bytes": 1228
+  },
+  {
+    "path": "START-HERE.md",
+    "sha256": "994804ec49f3167f9489967871a887314507a7bcbf5325bf7332a2f3ae7121fd",
+    "bytes": 2645
+  },
+  {
+    "path": "docs/adr/0001-tenant-context-and-rls.md",
+    "sha256": "5d705a0c8de84f1d9b2116e4be662c3d321ce42666e8c3a4ca6b5dd17dae31fc",
+    "bytes": 1027
+  },
+  {
+    "path": "docs/adr/0002-modular-monolith-first.md",
+    "sha256": "66566140c5b1692e91eda54b8189a037b3921ed948e5d0973009bf3c61d1930c",
+    "bytes": 563
+  },
+  {
+    "path": "docs/adr/0003-event-driven-integrations.md",
+    "sha256": "9cc88b92911e83c5081a27d3c53115c93e0fd9b765f556fbf08b5fa85983f034",
+    "bytes": 496
+  },
+  {
+    "path": "docs/adr/0004-official-whatsapp-first.md",
+    "sha256": "f0d103458955e2c52eecc1faea3091b28dbad44dee9c85801fa50801a0996e4e",
+    "bytes": 539
+  },
+  {
+    "path": "docs/adr/0005-isolation-tiers-and-tenant-placement.md",
+    "sha256": "3983afa0b894ebbeadb44d0876c4b3e287d8d1631e7edfab093eb404b052ffd9",
+    "bytes": 2059
+  },
+  {
+    "path": "docs/adr/0006-nats-jetstream-and-postgres-source-of-truth.md",
+    "sha256": "32a3d2b6227704beab7b92cefb127a006a898e1a000272de3709c892eefbe899",
+    "bytes": 915
+  },
+  {
+    "path": "docs/adr/0007-opentelemetry-observability-baseline.md",
+    "sha256": "86c4d1979eb8e54eec954be82abdf5770748040d03bcb24f7dc064d847673b96",
+    "bytes": 648
+  },
+  {
+    "path": "docs/adr/0008-go-backend-core.md",
+    "sha256": "d6d3247fd29f83b272f0d71105c913b2d81ea04066a26c88b12327bfea7dde71",
+    "bytes": 1580
+  },
+  {
+    "path": "docs/adr/README.md",
+    "sha256": "094b89ab1f48006b6c5f9c62629399c9690e32490f0d585d4c8ff733de8b1a2c",
+    "bytes": 266
+  },
+  {
+    "path": "docs/architecture/API-GOVERNANCE.md",
+    "sha256": "b7e7a22086250dda0b1957c8d538383112fc6886cc423cd99742a741eb848f78",
+    "bytes": 1875
+  },
+  {
+    "path": "docs/architecture/ARCHITECTURE-BRIEF.md",
+    "sha256": "8c4100fc0748e22b6abc409ffa3e327153abd4275cfc058251aaaadfbc15a196",
+    "bytes": 1253
+  },
+  {
+    "path": "docs/architecture/ARCHITECTURE.md",
+    "sha256": "ee024bc4b051e5277956e39a48c07bd3a27b8a31b4a99150220042b2384b8f9f",
+    "bytes": 2313
+  },
+  {
+    "path": "docs/architecture/DATA-MODEL.md",
+    "sha256": "dd282b1e5947f1e7c1b34f5b7ee0530b0a49ece3dbad6bdbd99f8e238b6435eb",
+    "bytes": 942
+  },
+  {
+    "path": "docs/architecture/DEPLOYMENT-NGINX.md",
+    "sha256": "30e6176b9c1a213d9f6580a72a84d7e034b95999ece321724d186bcd698efab7",
+    "bytes": 2902
+  },
+  {
+    "path": "docs/architecture/FRONTEND-UX.md",
+    "sha256": "0da54b1a6856584dfb64b82739de0fa91a343efc1f695a1e1657bc60b3b711c9",
+    "bytes": 3557
+  },
+  {
+    "path": "docs/architecture/GO-PROJECT-STRUCTURE.md",
+    "sha256": "91d803ab46ec495b33ac5957ff1110e514167b38ca919f1b3d950c7e89266777",
+    "bytes": 1660
+  },
+  {
+    "path": "docs/architecture/INTEGRATIONS.md",
+    "sha256": "08712bcbf44d1856bde27b4e5e6023c57633d5a5b47343189b3e266fed55122d",
+    "bytes": 954
+  },
+  {
+    "path": "docs/architecture/MESSAGING-JOBS-TOOLS.md",
+    "sha256": "2131b7995db95a8637085a17ed8239f46ccb555b7df9bd5061c908cc6408d671",
+    "bytes": 4424
+  },
+  {
+    "path": "docs/architecture/MODULE-MANAGEMENT.md",
+    "sha256": "0e4a78c867419c81f708758aaa3eec33342af3162d48e37a59bbb099f30f8da4",
+    "bytes": 1798
+  },
+  {
+    "path": "docs/architecture/OBSERVABILITY.md",
+    "sha256": "3f64bfea74d159a566c1d8cd7cbe5f80376094339c6c64fed270cc7fe6830b0f",
+    "bytes": 2418
+  },
+  {
+    "path": "docs/architecture/PLATFORM-BASELINE.md",
+    "sha256": "fc63ab63f581d96fc7ff1384d200c9554c12c43ef465cb552f1ad0fbe6b7e36b",
+    "bytes": 2224
+  },
+  {
+    "path": "docs/architecture/TENANCY-SECURITY.md",
+    "sha256": "dc14c0df7bf9b489b014fbddf8d51a1975dcc253440f9aed4447f3d75e8996af",
+    "bytes": 2012
+  },
+  {
+    "path": "docs/decisions/DECISION-LOG.md",
+    "sha256": "338c1bbf5f9dba4cf5de3dab42c2c3c6999d9f0b35911ab5d0703c094ff333c6",
+    "bytes": 625
+  },
+  {
+    "path": "docs/decisions/OPEN-QUESTIONS.md",
+    "sha256": "abb3ad114535f216ef1270056441a8f0392651296de0d9622d1effef47797975",
+    "bytes": 1489
+  },
+  {
+    "path": "docs/delivery/AGENT-IMPLEMENTATION-PROTOCOL.md",
+    "sha256": "f2b66763704051a8edfe148db10d4ccd05141b32dbeee3ffa425e0aef6ffb8f5",
+    "bytes": 1425
+  },
+  {
+    "path": "docs/delivery/DEFINITION-OF-DONE.md",
+    "sha256": "d90a1188084c030dbab3dc292428718fd2c3037b23376077eb306ac5725943ae",
+    "bytes": 770
+  },
+  {
+    "path": "docs/delivery/DELIVERY-SLICES.md",
+    "sha256": "07527283c086d3684e53275cffc0abe72c2c9c37ed2652cf0f06e21addb55312",
+    "bytes": 2196
+  },
+  {
+    "path": "docs/delivery/MVP-FREEZE.md",
+    "sha256": "9a78e4205f138cee25a4a80294a8b9fcae53821ead16af8607dff277183b6aab",
+    "bytes": 956
+  },
+  {
+    "path": "docs/delivery/R0.1-TENANT-FOUNDATION.md",
+    "sha256": "97f172862c5230735e77cd823c9027e861527ebb7978d26d73b1f4a279dc8080",
+    "bytes": 5875
+  },
+  {
+    "path": "docs/delivery/R0.1-TICKETS.md",
+    "sha256": "897872687c933db2176ca08d5c44768af19a5535d12cf6229478823ce2140c44",
+    "bytes": 2688
+  },
+  {
+    "path": "docs/delivery/TEST-STRATEGY.md",
+    "sha256": "bbd83dcf4a5b25d7fabc1f78613bb643d5a1244f024c6000ba6ac52235e6ac77",
+    "bytes": 675
+  },
+  {
+    "path": "docs/operations/CHANGELOG-POLICY.md",
+    "sha256": "e9697bdc391633976e38f46c18a96e0a0cd05592f4cdfbabb14779cb2a4b0ea6",
+    "bytes": 623
+  },
+  {
+    "path": "docs/operations/DISASTER-RECOVERY.md",
+    "sha256": "5a5a855ee16180a17343d1ad9a085d63062f075c964a9bc99c3e9324578d0cd0",
+    "bytes": 2892
+  },
+  {
+    "path": "docs/operations/RELEASE-PROCESS.md",
+    "sha256": "8e9480ddadd1076aefa96ae34062b94d7f548d36a6020aec91146a19ebd5cb81",
+    "bytes": 371
+  },
+  {
+    "path": "docs/operations/RUNBOOK.md",
+    "sha256": "572d63467485161cb7929379d960525100224ee9a8bc446f2b410b0242b5ac46",
+    "bytes": 1161
+  },
+  {
+    "path": "docs/operations/SERVICE-CATALOG.md",
+    "sha256": "417751d86c2b0b1d348d2e96af0e3ad2be7b8b0e1cee9c519be3270c8ad43db2",
+    "bytes": 847
+  },
+  {
+    "path": "docs/product/METRICS.md",
+    "sha256": "eac0a0f59391b5a7df128b5f7b27f8c4886bb7c1c7e3a4e4c115317c20faf87d",
+    "bytes": 610
+  },
+  {
+    "path": "docs/product/MVP.md",
+    "sha256": "3295613d601e6072cff31e81e6b8d7886d17d36881d42796e42d2c1a688b60b9",
+    "bytes": 4604
+  },
+  {
+    "path": "docs/product/PRD.md",
+    "sha256": "0d8e79ca9ee23eed7c70f40aad735ce9d4748773ca7f413cef6911ea2dcb4fd4",
+    "bytes": 7185
+  },
+  {
+    "path": "docs/product/ROADMAP.md",
+    "sha256": "7ba20f762538bcacc045e978ffe8378241a9a41db1bd9cdf62a71f3b6b79195b",
+    "bytes": 879
+  }
+]

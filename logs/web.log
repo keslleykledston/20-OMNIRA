@@ -1,0 +1,43 @@
+
+> omnira-web@1.0.0 dev
+> vite
+
+
+  VITE v5.4.21  ready in 140 ms
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: use --host to expose
+WebSocket server error:
+Error: listen EACCES: permission denied 131.108.136.133:443
+    at Server.setupListenHandle [as _listen2] (node:net:1918:21)
+    at listenInCluster (node:net:1997:12)
+    at GetAddrInfoReqWrap.callback (node:net:2206:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+1:01:27 AM [vite] hmr update /src/components/Header.tsx, /src/index.css
+1:05:59 AM [vite] hmr update /src/index.css, /src/pages/Login.tsx, /src/pages/Reports.tsx, /src/pages/Tickets.tsx, /src/pages/Dashboard.tsx, /src/pages/Accounts.tsx
+1:07:12 AM [vite] hmr update /src/pages/Tickets.tsx, /src/index.css
+1:07:23 AM [vite] hmr update /src/index.css, /src/pages/Login.tsx, /src/pages/Reports.tsx, /src/pages/Tickets.tsx, /src/pages/Dashboard.tsx, /src/pages/Accounts.tsx
+1:07:37 AM [vite] hmr update /src/pages/Reports.tsx, /src/index.css
+1:08:04 AM [vite] hmr update /src/App.tsx, /src/index.css
+1:08:08 AM [vite] hmr update /src/App.tsx, /src/index.css
+1:08:18 AM [vite] hmr update /src/components/Sidebar.tsx, /src/index.css
+1:08:24 AM [vite] hmr update /src/components/Sidebar.tsx, /src/index.css
+1:13:37 AM [vite] vite.config.ts changed, restarting server...
+Re-optimizing dependencies because lockfile has changed
+1:13:37 AM [vite] server restarted.
+WebSocket server error:
+Error: listen EACCES: permission denied 131.108.136.133:443
+    at Server.setupListenHandle [as _listen2] (node:net:1918:21)
+    at listenInCluster (node:net:1997:12)
+    at GetAddrInfoReqWrap.callback (node:net:2206:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+1:13:44 AM [vite] .env.local changed, restarting server...
+1:13:44 AM [vite] .env.local changed, restarting server...
+1:13:44 AM [vite] server restarted.
+WebSocket server error:
+Error: listen EACCES: permission denied 131.108.136.133:443
+    at Server.setupListenHandle [as _listen2] (node:net:1918:21)
+    at listenInCluster (node:net:1997:12)
+    at GetAddrInfoReqWrap.callback (node:net:2206:7)
+    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:134:8)
+Killed

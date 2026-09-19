@@ -1,0 +1,13 @@
+apiVersion: v2
+name: omnira
+description: OMNIRA SaaS Platform - Tenant Foundation (R0.1)
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+keywords:
+  - saas
+  - multi-tenant
+  - kubernetes
+maintainers:
+  - name: OMNIRA
+dependencies: []

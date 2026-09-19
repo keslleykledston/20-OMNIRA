@@ -1,0 +1,15 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "omnira.fullname" . }}-api
+  labels:
+    {{- include "omnira.labels" . | nindent 4 }}
+    component: api
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "omnira.api.selectorLabels" . | nindent 6 }}
+
+{{- end }}
