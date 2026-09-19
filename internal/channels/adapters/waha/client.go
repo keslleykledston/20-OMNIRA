@@ -27,6 +27,26 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// Session is the provider response reduced to fields needed by U2. Raw WAHA
+// payloads must not cross adapter boundary.
+type Session struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Engine struct {
+		Name string `json:"engine"`
+	} `json:"engine"`
+}
+
+type QRCode struct {
+	MIMEType string `json:"mimetype"`
+	Data     string `json:"data"`
+}
+
+type Account struct {
+	ID       string `json:"id"`
+	PushName string `json:"pushName"`
+}
+
 func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error) {
 	u, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
@@ -46,12 +66,63 @@ func (c *Client) Health(ctx context.Context) error {
 	return err
 }
 
+func (c *Client) CreateSession(ctx context.Context, name string) (Session, error) {
+	body := strings.NewReader(fmt.Sprintf(`{"name":%q,"start":false}`, name))
+	var session Session
+	_, err := c.do(ctx, http.MethodPost, "/api/sessions", body, &session)
+	return session, err
+}
+
+func (c *Client) GetSession(ctx context.Context, name string) (Session, error) {
+	var session Session
+	_, err := c.do(ctx, http.MethodGet, "/api/sessions/"+url.PathEscape(name), nil, &session)
+	return session, err
+}
+
+func (c *Client) StartSession(ctx context.Context, name string) (Session, error) {
+	return c.sessionAction(ctx, name, "start")
+}
+
+func (c *Client) StopSession(ctx context.Context, name string) (Session, error) {
+	return c.sessionAction(ctx, name, "stop")
+}
+
+func (c *Client) RestartSession(ctx context.Context, name string) (Session, error) {
+	return c.sessionAction(ctx, name, "restart")
+}
+
+func (c *Client) GetQRCode(ctx context.Context, name string) (QRCode, error) {
+	var qr QRCode
+	_, err := c.doWithHeaders(ctx, http.MethodGet, "/api/"+url.PathEscape(name)+"/auth/qr", nil,
+		map[string]string{"Accept": "application/json"}, &qr)
+	return qr, err
+}
+
+func (c *Client) GetMe(ctx context.Context, name string) (*Account, error) {
+	var account *Account
+	_, err := c.do(ctx, http.MethodGet, "/api/sessions/"+url.PathEscape(name)+"/me", nil, &account)
+	return account, err
+}
+
+func (c *Client) sessionAction(ctx context.Context, name, action string) (Session, error) {
+	var session Session
+	_, err := c.do(ctx, http.MethodPost, "/api/sessions/"+url.PathEscape(name)+"/"+action, nil, &session)
+	return session, err
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, result any) (int, error) {
+	return c.doWithHeaders(ctx, method, path, body, nil, result)
+}
+
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, body io.Reader, headers map[string]string, result any) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return 0, ErrConfiguration
 	}
 	req.Header.Set("X-Api-Key", c.apiKey)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -117,13 +117,13 @@ func (r *PostgresChannelConnectionRepository) Store(ctx context.Context, c *doma
 	_, err = db.QuerierFromContext(ctx, r.pool).Exec(ctx, `
 		INSERT INTO channel_connections
 		(id, tenant_id, channel, provider, provider_kind, external_account_id,
-		 external_number_id, status, capabilities, secret_ref, risk_acknowledged_at,
-		 risk_acknowledged_by, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		 external_number_id, provider_session_ref, status, capabilities, secret_ref,
+		 risk_acknowledged_at, risk_acknowledged_by, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT (id) DO UPDATE SET updated_at = EXCLUDED.updated_at`,
 		c.ID, c.TenantID, string(c.Channel), c.Provider, string(c.ProviderKind),
-		c.ExternalAccountID, c.ExternalNumberID, string(c.Status), caps, nullableUUID(c.SecretRef),
-		c.RiskAcknowledgedAt, c.RiskAcknowledgedBy, c.CreatedAt, c.UpdatedAt)
+		c.ExternalAccountID, c.ExternalNumberID, c.ProviderSessionRef, string(c.Status), caps,
+		nullableUUID(c.SecretRef), c.RiskAcknowledgedAt, c.RiskAcknowledgedBy, c.CreatedAt, c.UpdatedAt)
 	return err
 }
 
@@ -157,8 +157,8 @@ func (r *PostgresChannelConnectionRepository) Update(ctx context.Context, c *dom
 }
 
 const connectionSelect = `SELECT id, tenant_id, channel, provider, provider_kind,
- external_account_id, external_number_id, status, capabilities, secret_ref,
- risk_acknowledged_at, risk_acknowledged_by, created_at, updated_at FROM channel_connections`
+ external_account_id, external_number_id, provider_session_ref, status, capabilities,
+ secret_ref, risk_acknowledged_at, risk_acknowledged_by, created_at, updated_at FROM channel_connections`
 
 func (r *PostgresChannelConnectionRepository) find(ctx context.Context, suffix string, args ...any) (*domain.ChannelConnection, error) {
 	row := db.QuerierFromContext(ctx, r.pool).QueryRow(ctx, connectionSelect+" "+suffix, args...)
@@ -177,7 +177,7 @@ func scanConnection(row rowScanner) (*domain.ChannelConnection, error) {
 	var caps []byte
 	var secretRef *uuid.UUID
 	if err := row.Scan(&c.ID, &c.TenantID, &channel, &c.Provider, &kind, &c.ExternalAccountID,
-		&c.ExternalNumberID, &status, &caps, &secretRef, &c.RiskAcknowledgedAt,
+		&c.ExternalNumberID, &c.ProviderSessionRef, &status, &caps, &secretRef, &c.RiskAcknowledgedAt,
 		&c.RiskAcknowledgedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}

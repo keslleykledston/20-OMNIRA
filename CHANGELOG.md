@@ -4,6 +4,13 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
 ## [Unreleased]
 
+### Added (U2 — WAHA session management)
+- Deterministic `omnira_<connection-id>` session reference; arbitrary names rejected.
+- Create/start/stop/restart/get session, QR, account identity, and provider health operations.
+- WAHA statuses normalized to OMNIRA states; unknown states degrade safely.
+- Persisted `provider_session_ref` with migration rollback.
+- Tenant/connection identity checks in adapter; no tenant ID accepted from WAHA.
+
 ### Added (U1 — WAHA unofficial runtime foundation)
 - Optional internal-only WAHA Docker service pinned to `devlikeapro/waha:gows-2026.8.2`.
 - Persistent session/media volumes, healthcheck, restart policy, disabled dashboard/Swagger.

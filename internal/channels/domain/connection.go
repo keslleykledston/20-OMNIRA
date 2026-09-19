@@ -30,9 +30,9 @@ const (
 // duplicadas.
 const (
 	ProviderMetaCloud          = "meta_cloud"
-	ProviderWAHA               = "waha"                      // não implementado nesta wave — reservado
-	ProviderFutureBSP          = "future_bsp"                // placeholder conceitual, sem adapter
-	ProviderFutureSessionBased = "future_session_provider"   // placeholder conceitual, sem adapter
+	ProviderWAHA               = "waha"
+	ProviderFutureBSP          = "future_bsp"              // placeholder conceitual, sem adapter
+	ProviderFutureSessionBased = "future_session_provider" // placeholder conceitual, sem adapter
 )
 
 // Channel — canal de comunicação. Hoje só "whatsapp" tem adapter; o campo
@@ -53,7 +53,15 @@ const (
 	ConnectionStatusActive       ConnectionStatus = "active"
 	ConnectionStatusDegraded     ConnectionStatus = "degraded"
 	ConnectionStatusDisconnected ConnectionStatus = "disconnected"
+	ConnectionStatusFailed       ConnectionStatus = "failed"
 	ConnectionStatusRevoked      ConnectionStatus = "revoked"
+)
+
+// Canonical names used by session-based providers. Aliases preserve D3.1
+// persisted vocabulary: pending == connecting, active == connected.
+const (
+	ConnectionStatusConnecting = ConnectionStatusPending
+	ConnectionStatusConnected  = ConnectionStatusActive
 )
 
 // Capability — operação que um provider pode declarar suporte. Nem todo
@@ -94,6 +102,7 @@ type ChannelConnection struct {
 	ProviderKind       ProviderKind
 	ExternalAccountID  string
 	ExternalNumberID   string
+	ProviderSessionRef string // referência opaca persistida; nunca prova autorização
 	Status             ConnectionStatus
 	Capabilities       []Capability
 	SecretRef          string // UUID de internal/channels/ports.CredentialStore — NUNCA o segredo em si (ver ADR-0009)
