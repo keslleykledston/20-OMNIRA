@@ -10,6 +10,11 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 - TenantContext-guarded repository and idempotent `UpsertByPhone` identity-resolution service.
 - Contact state transitions for active, blocked, and archived records.
 
+### Added (M03 — Conversation, Message and Ticket foundation)
+- Tenant-owned conversation/message/ticket schema with composite tenant FKs and RLS/FORCE RLS.
+- Canonical lifecycle models for open/closed conversations, inbound/outbound messages, and ticket resolution.
+- Queue, routing, realtime inbox, and automation remain outside this slice.
+
 ### Added (U4 — WAHA outbound text foundation)
 - WAHA `SendText` adapter using the canonical channel seam and `/api/sendText`.
 - E.164 recipient validation, deterministic connection session ownership, and canonical sent result.

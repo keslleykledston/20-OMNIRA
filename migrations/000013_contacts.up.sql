@@ -13,6 +13,7 @@ CREATE TABLE contacts (
 );
 
 CREATE UNIQUE INDEX contacts_tenant_phone_uq ON contacts(tenant_id, phone_e164);
+CREATE UNIQUE INDEX contacts_tenant_id_uq ON contacts(tenant_id, id);
 CREATE INDEX idx_contacts_tenant_updated ON contacts(tenant_id, updated_at DESC, id DESC);
 
 ALTER TABLE contacts ENABLE ROW LEVEL SECURITY;

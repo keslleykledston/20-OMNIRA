@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS tickets CASCADE;
+DROP TABLE IF EXISTS messages CASCADE;
+DROP TABLE IF EXISTS conversations CASCADE;
+DROP INDEX IF EXISTS channel_connections_tenant_id_uq;
