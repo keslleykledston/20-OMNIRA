@@ -130,19 +130,20 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 
 ### Estado atual da retomada
 
-- Branch: `master`.
-- HEAD: `98dd6b7` (`feat(M05.1): Inbox API — tenant-scoped REST endpoints with cursor pagination`).
-- Working tree: limpa.
-- Último gate verde: `go test ./...`, `go vet ./...`, RLS completeness, isolation A/B, OpenAPI/AsyncAPI e Compose.
-- Última migration validada: `000019_default_queue` em fluxo vazio → up → down → up.
-- M04.4: ✅ DONE (86a1223) — Outbox dispatcher under RLS session; PostgreSQL + omnira_app + NATS smoke validated.
-- M05.1: ✅ DONE (98dd6b7) — Inbox API (ListConversations, ListMessages) with cursor pagination and full OpenAPI documentation.
+- Branch: `master`. HEAD: M05.4 (`1bab8b0`), sobre H0 (`022e74f`). Sem push/tag.
+- Prioridade vigente: **WhatsApp não oficial (WAHA)** nas primeiras entregas. Meta Cloud fica preservado como provider oficial (D3.1–D3.3 prontos), **sem prioridade operacional**; D3.4+ congelado.
+- Gate verde (Postgres real + `omnira_app`): `go build/vet/test ./...`, RLS completeness, isolation A/B, `validate-schema`, migrations up-all → down-all → up-all, `docker compose config`, imagens `Dockerfile.api`/`Dockerfile.worker` (Go 1.25), web vitest 24/24 + `tsc`.
+- Como rodar integração: DB descartável no `omnira-postgres` (porta 55434) com `OMNIRA_DATABASE_URL` (owner) e `OMNIRA_APP_DATABASE_URL` = mesma URL + `options=-c role=omnira_app` (a role não tem LOGIN). As tools em `tools/` apontam `omnira_dev`; redirecione para um DB de teste.
+- Migrations: última = `000023_conversation_permissions`. `000020.down` corrigido; `000022` remove policy GUC quebrada.
+- Restrições conhecidas: `DELIVERY-SLICES`/contratos OpenAPI (`contracts/openapi` vazio) ainda não documentam as rotas de inbox/assign; erros HTTP são `http.Error` texto (sem Problem Details) em todo o projeto.
 
-### Próximos passos ordenados
+### Próximos passos ordenados (caminho WAHA)
 
-1. M05.2: Realtime SSE/WebSocket com reautorização e isolamento A/B.
-2. M05.3: Frontend Next.js com Omnira iOS Design System (não reutilizar Vite mock como runtime final).
-3. M06: Chatbot/automação após o vertical Inbox estar funcional.
+1. **W1 — API de conexão/sessão WAHA**: criar conexão (tenant-scoped, permission nova p.ex. `channel.manage`), start/stop session, QR, status, registro do webhook com HMAC (`CreateSessionWithWebhook`). Hoje só existe no adapter (`waha.Client/Provider`), sem rota HTTP.
+2. **W2 — M05.5 envio outbound de texto**: `POST .../messages` com idempotency key → `messages` queued + Outbox job → **ligar `internal/worker/delivery` no `omnira-worker`** (existe como biblioteca, não está no `main`) → `WahaProvider.SendText` → status/ack canônico. Retry ErrTransient/ErrPermanent.
+3. **W3 — Smoke real com WAHA** (`devlikeapro/waha:gows`): parear sessão, inbound → Inbox via webhook, resposta outbound, ack. Nunca foi validado ponta a ponta com o container real.
+4. **W4 — Mídia WAHA**: `SendMedia` (hoje `ErrCapabilityNotSupported`) + exibição de mídia inbound na UI.
+5. **M06** chatbot/automação. **D3.4–D3.8 Meta** somente após W1–W3 e nova ordem do produto.
 
 - DONE: U1 runtime Docker WAHA.
 - DONE: U2 lifecycle de sessão e QR no adapter.
@@ -163,10 +164,11 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - Gate M04.4: PostgreSQL + `omnira_app` + NATS smoke confirmou publicação e `published_at`; migrations fresh up/down/up passaram.
 - DONE: M05.1 API REST paginada da Inbox sob TenantContext (98dd6b7).
 - DONE: M05.2 eventos realtime SSE com reautorização (387785f, fix de build 86b43f0).
-- DONE (leitura): M05.3 UI React/Vite Inbox + Conversa, rotas e SSE (cebcfc1, 691b6f4). Gate: vitest 20/20, `tsc --noEmit` limpo. Limitação: `AssignmentButton` chama `POST .../assign|unassign`, que **não existem** no backend — inoperante até M05.4.
+- DONE: M05.3 UI React/Vite Inbox + Conversa, rotas e SSE (cebcfc1, 691b6f4).
+- DONE: H0 saneamento (022e74f): `000020.down` seguro, adapter PG paralelo morto removido (Rotate/Update/redação portados ao canônico), `Update` de conexão agora persiste, Dockerfiles Go 1.25 + `.dockerignore`.
+- DONE: M05.4 (1bab8b0) `POST /api/v1/tenants/{tid}/inbox/conversations/{cid}/assign|unassign`. Claim atômico (`FOR UPDATE`, perdedor recebe 409), RBAC `conversation.claim` (agent/supervisor/admin) e `conversation.manage` (supervisor/admin: atribuir a outro/soltar de outro; alvo precisa de `conversation.claim`), histórico `assignment_events`, audit `conversation.assigned|unassigned`, repetição idempotente = 200 `changed:false`, cross-tenant = 404 sem oráculo. Body só aceita `assignee_user_id` opcional; tenant/ator vêm do JWT+membership. Gate: 4 testes HTTP com Postgres real (-race x3) + smoke na imagem da API + vitest.
 - DONE: D3.2 verificação de webhook Meta (challenge + HMAC-SHA256 + resolução por `phone_number_id`), `internal/channels/meta`.
 - DONE: D3.3 parsing inbound Meta (texto/mídia/botões/status), dedupe por `wamid`, intake tenant-safe (f39829d). Gate: E2E com Postgres real + `omnira_app` (dedupe, `tenant_id` forjado ignorado, isolamento A/B). Opt-in `OMNIRA_META_ENABLED`.
 - TODO: D3.4 outbound Meta, D3.5 mídia (download c/ allowlist SSRF), D3.6 status outbound, D3.7 health, D3.8 templates.
-- TODO: M05.4 endpoints assign/unassign + testes A/B.
-- TODO: M05.5 envio outbound com idempotency key.
+- TODO: M05.5 envio outbound com idempotency key (= W2 acima).
 - TODO: M06 chatbot/automation depois do vertical Inbox funcional.
