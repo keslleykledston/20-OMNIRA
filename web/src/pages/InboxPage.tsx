@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
+import { authHeaders } from '../lib/session';
 import { ConversationItem } from '../types/api';
 
 const API_BASE = 'http://localhost:8080/api/v1';
@@ -20,7 +21,7 @@ export function InboxPage() {
     queryFn: async () => {
       const params: any = { limit: 20 };
       if (cursor) params.cursor = cursor;
-      const res = await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations`, { params });
+      const res = await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations`, { params, headers: authHeaders() });
       return res.data;
     },
   });

@@ -10,14 +10,14 @@ import (
 type AuditAction string
 
 const (
-	ActionTenantCreated          AuditAction = "tenant.created"
-	ActionTenantDeactivated      AuditAction = "tenant.deactivated"
-	ActionTenantSuspended        AuditAction = "tenant.suspended"
-	ActionMembershipGranted      AuditAction = "membership.granted"
-	ActionMembershipRevoked      AuditAction = "membership.revoked"
-	ActionMembershipDeactivated  AuditAction = "membership.deactivated"
-	ActionConversationAssigned   AuditAction = "conversation.assigned"
-	ActionConversationUnassigned AuditAction = "conversation.unassigned"
+	ActionTenantCreated            AuditAction = "tenant.created"
+	ActionTenantDeactivated        AuditAction = "tenant.deactivated"
+	ActionTenantSuspended          AuditAction = "tenant.suspended"
+	ActionMembershipGranted        AuditAction = "membership.granted"
+	ActionMembershipRevoked        AuditAction = "membership.revoked"
+	ActionMembershipDeactivated    AuditAction = "membership.deactivated"
+	ActionConversationAssigned     AuditAction = "conversation.assigned"
+	ActionConversationUnassigned   AuditAction = "conversation.unassigned"
 	ActionChannelConnectionCreated AuditAction = "channel.connection_created"
 	ActionChannelSessionStarted    AuditAction = "channel.session_started"
 	ActionChannelSessionStopped    AuditAction = "channel.session_stopped"
@@ -35,10 +35,10 @@ const (
 type ResourceType string
 
 const (
-	ResourceTenant       ResourceType = "tenant"
-	ResourceMembership   ResourceType = "membership"
-	ResourceRole         ResourceType = "role"
-	ResourceConversation ResourceType = "conversation"
+	ResourceTenant            ResourceType = "tenant"
+	ResourceMembership        ResourceType = "membership"
+	ResourceRole              ResourceType = "role"
+	ResourceConversation      ResourceType = "conversation"
 	ResourceChannelConnection ResourceType = "channel_connection"
 )
 

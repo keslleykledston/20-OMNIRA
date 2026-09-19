@@ -14,6 +14,8 @@ import (
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
@@ -240,6 +242,11 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Assign))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Unassign))))
+	sendHandler := messagesadapters.NewSendHandler(messagesapplication.NewSender(
+		messagesadapters.NewPostgresOutboundStore(dbPool),
+		channeladapters.NewPostgresPermissionChecker(dbPool),
+	))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.Send))))
 }
 
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session

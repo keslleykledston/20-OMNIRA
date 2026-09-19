@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import { getAuthToken } from '../lib/session';
 
 const API_BASE = 'http://localhost:8080/api/v1';
 
@@ -194,5 +195,5 @@ function getTenantIdFromAuth(): string {
 }
 
 function getJWTToken(): string {
-  return localStorage.getItem('jwtToken') || '';
+  return getAuthToken();
 }

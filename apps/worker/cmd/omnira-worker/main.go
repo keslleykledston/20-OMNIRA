@@ -14,6 +14,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
+	"github.com/omnira/omnira/internal/channels/adapters/waha"
+	channelapp "github.com/omnira/omnira/internal/channels/application"
+	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/outbox/adapters"
 	"github.com/omnira/omnira/internal/outbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
@@ -21,6 +26,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/health"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapp "github.com/omnira/omnira/internal/routing/application"
+	"github.com/omnira/omnira/internal/worker/delivery"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
 )
@@ -104,6 +110,37 @@ func main() {
 		log.Fatalf("failed to start routing consumer: %v", err)
 	}
 	defer routingConsumer.Stop()
+
+	// Outbound channel delivery (unofficial WhatsApp via WAHA).
+	if cfg.WahaEnabled {
+		cipher, err := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+		if err != nil {
+			log.Fatalf("WAHA credential cipher error: %v", err)
+		}
+		client, err := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
+		if err != nil {
+			log.Fatalf("WAHA client config error: %v", err)
+		}
+		provider, err := waha.NewProvider(client, channeladapters.NewPostgresCredentialStore(dbPool, cipher))
+		if err != nil {
+			log.Fatalf("WAHA provider config error: %v", err)
+		}
+		registry := channelapp.NewMapProviderRegistry()
+		registry.Register(domain.ProviderWAHA, provider)
+		channelSvc := channelapp.NewChannelService(channeladapters.NewPostgresChannelConnectionRepository(dbPool), registry)
+		deliveryHandler, err := delivery.NewHandler(delivery.NewPostgresOutboundStore(dbPool), channelSvc, delivery.MaxAttempts)
+		if err != nil {
+			log.Fatalf("failed to configure delivery worker: %v", err)
+		}
+		deliveryConsumer, err := delivery.StartConsumer(workerCtx, js, deliveryHandler)
+		if err != nil {
+			log.Fatalf("failed to start delivery consumer: %v", err)
+		}
+		defer deliveryConsumer.Stop()
+		log.Printf("Outbound delivery consumer started (WAHA)\n")
+	} else {
+		log.Printf("Outbound delivery disabled (OMNIRA_WAHA_ENABLED != true)\n")
+	}
 
 	log.Printf("Worker starting (env: %s)\n", cfg.Env)
 	log.Printf("Publish interval: 1 second\n")

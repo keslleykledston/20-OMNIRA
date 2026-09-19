@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 import { MessageItem, ConversationItem, RealtimeEvent } from '../types/api';
 import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import { AssignmentButton } from '../components/AssignmentButton';
+import { authHeaders } from '../lib/session';
 
 const API_BASE = 'http://localhost:8080/api/v1';
 
@@ -23,6 +24,11 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [messageText, setMessageText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  // One Idempotency-Key per distinct text: a retry after a network failure or a
+  // timeout re-sends the same key, so the backend never queues a duplicate.
+  const pendingSend = useRef<{ text: string; key: string } | null>(null);
 
   // Load messages via REST API (M05.1)
   const { data: messagesData, isLoading: messagesLoading } = useQuery({
@@ -32,7 +38,7 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
       if (cursor) params.cursor = cursor;
       const res = await axios.get(
         `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
-        { params }
+        { params, headers: authHeaders() }
       );
       return res.data;
     },
@@ -64,21 +70,29 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!messageText.trim()) return;
-
-    // Mock send — em produção, chamar API de envio
-    const newMessage: MessageItem = {
-      id: Math.random().toString(),
-      conversation_id: conversationId,
-      body: messageText,
-      direction: 'outbound',
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      created_by: tenantId,
-    };
-
-    setMessages((prev) => [newMessage, ...prev]);
-    setMessageText('');
+    const text = messageText.trim();
+    if (!text || sending) return;
+    if (!pendingSend.current || pendingSend.current.text !== text) {
+      pendingSend.current = { text, key: newIdempotencyKey() };
+    }
+    setSending(true);
+    setSendError(null);
+    try {
+      const res = await axios.post(
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
+        { text },
+        { headers: { ...authHeaders(), 'Idempotency-Key': pendingSend.current.key } }
+      );
+      const sent = res.data as MessageItem;
+      setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [sent, ...prev]));
+      setMessageText('');
+      pendingSend.current = null;
+    } catch (err: any) {
+      // Keep the text and the key: retrying is safe (idempotent).
+      setSendError(sendErrorMessage(err));
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -144,12 +158,22 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
           placeholder="Type a message..."
           className="message-input"
         />
-        <button type="submit" className="send-button">
-          Send
+        <button type="submit" className="send-button" disabled={sending}>
+          {sending ? 'Sending...' : 'Send'}
         </button>
       </form>
+      {sendError && (
+        <div className="send-error" role="alert">
+          {sendError}
+        </div>
+      )}
 
       <style>{`
+        .send-error {
+          color: #ff3b30;
+          font-size: 12px;
+          padding: 4px 16px 8px;
+        }
         .conversation-page {
           display: flex;
           flex-direction: column;
@@ -294,6 +318,33 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
       `}</style>
     </div>
   );
+}
+
+function newIdempotencyKey(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `k-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+// Backend answers plain-text errors: 409 not assigned to you yet / no active
+// channel, 403 assigned to another agent, 404 not visible in this tenant, 422 bad text.
+export function sendErrorMessage(err: any): string {
+  const status = err?.response?.status;
+  const detail = typeof err?.response?.data === 'string' ? err.response.data : '';
+  switch (status) {
+    case 409:
+      return detail.includes('assigned')
+        ? 'Assign this conversation to yourself before replying'
+        : 'This conversation has no active WhatsApp channel';
+    case 403:
+      return 'This conversation is assigned to another agent';
+    case 404:
+      return 'Conversation not found';
+    case 422:
+      return 'Message is empty or too long';
+    default:
+      return 'Failed to send message';
+  }
 }
 
 function getTenantIdFromAuth(): string {

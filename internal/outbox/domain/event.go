@@ -16,6 +16,7 @@ const (
 	EventMembershipRevoked EventType = "membership.revoked"
 	EventChannelSendText   EventType = "channel.message.send_text"
 	JobRoutingAssign       EventType = "job.routing.assign.v1"
+	JobChannelSendText     EventType = "job.channel.send_text.v1"
 )
 
 // AggregateType — tipo de agregado que gerou o evento.
@@ -25,6 +26,7 @@ const (
 	AggregateTenant       AggregateType = "tenant"
 	AggregateMembership   AggregateType = "membership"
 	AggregateConversation AggregateType = "conversation"
+	AggregateMessage      AggregateType = "message"
 )
 
 // OutboxEvent — evento pendente de publicação (padrão Outbox).
