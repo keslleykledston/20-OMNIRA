@@ -14,7 +14,11 @@ const (
 	sendSubject  = "job.channel.send_text.v1"
 	// MaxDeliver bounds JetStream redelivery; the handler gives up (marks the
 	// message failed) at MaxAttempts, always before this limit.
-	MaxDeliver  = 10
+	MaxDeliver = 10
+	// MaxInFlight bounds concurrent deliveries: each holds a DB connection (row lock + tenant
+	// transaction) for the duration of the provider call, so unbounded concurrency could starve the
+	// worker's pool (publisher, routing, realtime bridge).
+	MaxInFlight = 8
 	MaxAttempts = 8
 )
 
@@ -33,6 +37,7 @@ func StartConsumer(ctx context.Context, js jetstream.JetStream, handler *Handler
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: sendSubject,
 		MaxDeliver:    MaxDeliver,
+		MaxAckPending: MaxInFlight,
 		AckWait:       60 * time.Second,
 	})
 	if err != nil {

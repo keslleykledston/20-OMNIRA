@@ -22,7 +22,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnira}
       POSTGRES_DB: ${OMNIRA_DB_NAME:-omnira_dev}
     ports:
-      - "55434:5432"
+      - "127.0.0.1:55434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -39,8 +39,8 @@ services:
     image: nats:2.10-alpine
     container_name: omnira-nats
     ports:
-      - "4222:4222"
-      - "8222:8222"
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
     command: -js -sd /data
     volumes:
       - nats_data:/data
@@ -58,9 +58,9 @@ services:
     image: otel/opentelemetry-collector:latest
     container_name: omnira-otel
     ports:
-      - "4317:4317"
-      - "4318:4318"
-      - "13133:13133"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:13133:13133"
     volumes:
       - ./config/otel-collector-config.yml:/etc/otel-collector-config.yml:ro
     command: ["--config=/etc/otel-collector-config.yml"]
@@ -156,7 +156,9 @@ services:
       dockerfile: Dockerfile.api
     container_name: omnira-api
     ports:
-      - "8080:8080"
+      # loopback only: the API also serves the unauthenticated provider webhook; expose publicly only via a
+      # reverse proxy that does NOT forward /webhooks or /internal (see web/nginx.conf, omnira-nginx.conf)
+      - "127.0.0.1:8080:8080"
     environment:
       <<: *omnira-runtime
       OMNIRA_HTTP_ADDR: ":8080"
@@ -210,7 +212,7 @@ services:
       dockerfile: Dockerfile
     container_name: omnira-web
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     healthcheck:
       # 127.0.0.1, not localhost: the nginx image listens on IPv4 only and localhost may resolve to ::1
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]

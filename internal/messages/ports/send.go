@@ -2,10 +2,14 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrConversationChanged: the conversation's assignee or channel changed between the checks and the insert.
+var ErrConversationChanged = errors.New("messages: conversation changed, retry")
 
 // SendContext is what the send use case needs to know about a conversation,
 // read inside the caller's tenant session (RLS + explicit tenant filter).
@@ -34,7 +38,12 @@ type OutboundStore interface {
 	// InsertQueued inserts the message (status queued) and enqueues the delivery
 	// job in the Outbox. When (tenant, sender, key) already exists it returns the
 	// existing message with replayed=true and inserts nothing.
-	InsertQueued(ctx context.Context, sender uuid.UUID, in SendContext, body, idempotencyKey, requestHash string) (msg *QueuedMessage, replayed bool, err error)
+	//
+	// The insertion re-checks, in the SAME statement and under a row lock on the conversation, that the
+	// conversation still uses the same active text channel and (when requireAssignee) is still assigned to
+	// the sender — closing the window between LoadSendContext and the insert (reassign/unassign/channel
+	// change). When the state changed it returns ErrConversationChanged and inserts nothing.
+	InsertQueued(ctx context.Context, sender uuid.UUID, in SendContext, body, idempotencyKey, requestHash string, requireAssignee bool) (msg *QueuedMessage, replayed bool, err error)
 }
 
 // PermissionChecker resolves role permissions of a user in the TenantContext tenant.

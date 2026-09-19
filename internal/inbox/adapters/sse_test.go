@@ -21,6 +21,7 @@ import (
 )
 
 type fakeAuth struct {
+	hidden  map[uuid.UUID]bool // conversation -> not visible
 	allowed map[uuid.UUID]bool // tenant -> allowed
 	calls   atomic.Int32
 	revoke  atomic.Bool
@@ -32,6 +33,10 @@ func (f *fakeAuth) Authorize(_ context.Context, userID, tenantID uuid.UUID) (*te
 		return nil, errors.New("denied")
 	}
 	return tenancydomain.NewTenantContext(tenantID, userID, tenancydomain.AccessSourceDirect)
+}
+
+func (f *fakeAuth) ConversationVisible(_ context.Context, _, _, conversationID uuid.UUID) (bool, error) {
+	return !f.hidden[conversationID], nil
 }
 
 func natsConn(t *testing.T) *nats.Conn {
@@ -58,9 +63,13 @@ type sseFixture struct {
 }
 
 func newSSE(t *testing.T, recheck time.Duration) *sseFixture {
+	return newSSEWith(t, inboxadapters.RealtimeOptions{Recheck: recheck, Keepalive: 80 * time.Millisecond})
+}
+
+func newSSEWith(t *testing.T, opts inboxadapters.RealtimeOptions) *sseFixture {
 	f := &sseFixture{nc: natsConn(t), tenant: uuid.New(), user: uuid.New(), conv: uuid.New(), principalOK: true}
-	f.auth = &fakeAuth{allowed: map[uuid.UUID]bool{f.tenant: true}}
-	h := inboxadapters.NewRealtimeHandler(f.nc, f.auth, inboxadapters.RealtimeOptions{Recheck: recheck, Keepalive: 80 * time.Millisecond})
+	f.auth = &fakeAuth{allowed: map[uuid.UUID]bool{f.tenant: true}, hidden: map[uuid.UUID]bool{}}
+	h := inboxadapters.NewRealtimeHandler(f.nc, f.auth, opts)
 	withPrincipal := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if f.principalOK {
@@ -188,5 +197,70 @@ func TestSSEClosesWhenAuthorizationIsRevoked(t *testing.T) {
 	case <-done: // stream closed by the server
 	case <-time.After(3 * time.Second):
 		t.Fatal("stream stayed open after the membership was revoked")
+	}
+}
+
+func TestSSELimitsConcurrentStreamsPerUserAndFreesSlotsOnClose(t *testing.T) {
+	f := newSSEWith(t, inboxadapters.RealtimeOptions{Recheck: time.Hour, Keepalive: time.Hour, MaxPerUser: 2})
+	path := "/t/" + f.tenant.String() + "/events"
+	_, _, cancel1 := f.open(t, path)
+	_, _, _ = f.open(t, path)
+	res, _, _ := f.open(t, path) // third stream of the same user
+	if res.StatusCode != http.StatusTooManyRequests || res.Header.Get("Retry-After") == "" {
+		t.Fatalf("third stream: %d (want 429 with Retry-After)", res.StatusCode)
+	}
+	cancel1() // client closes one stream: the slot must be released
+	waitOK := func() bool {
+		for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			r, _, _ := f.open(t, path)
+			if r.StatusCode == 200 {
+				return true
+			}
+		}
+		return false
+	}
+	if !waitOK() {
+		t.Fatal("slot was not released after a stream closed")
+	}
+	// Another user has their own budget.
+	f.user = uuid.New()
+	if r, _, _ := f.open(t, path); r.StatusCode != 200 {
+		t.Fatalf("a different user must not be affected: %d", r.StatusCode)
+	}
+}
+
+func TestSSEEnforcesGlobalCeilingAndMaxLifetime(t *testing.T) {
+	f := newSSEWith(t, inboxadapters.RealtimeOptions{Recheck: time.Hour, Keepalive: time.Hour, MaxTotal: 1, MaxLifetime: 250 * time.Millisecond})
+	path := "/t/" + f.tenant.String() + "/events"
+	_, r, _ := f.open(t, path)
+	f.user = uuid.New()
+	if res, _, _ := f.open(t, path); res.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("global ceiling: %d", res.StatusCode)
+	}
+	done := make(chan struct{})
+	go func() {
+		for {
+			if _, err := r.ReadString('\n'); err != nil {
+				close(done)
+				return
+			}
+		}
+	}()
+	select {
+	case <-done: // closed by the server at MaxLifetime
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream outlived MaxLifetime")
+	}
+}
+
+func TestSSEConversationStreamRefusesUnknownOrForeignConversation(t *testing.T) {
+	f := newSSE(t, time.Hour)
+	unknown := uuid.New()
+	f.auth.hidden[unknown] = true
+	if res, _, _ := f.open(t, "/t/"+f.tenant.String()+"/c/"+unknown.String()+"/events"); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("hidden conversation: %d", res.StatusCode)
+	}
+	if res, _, _ := f.open(t, "/t/"+f.tenant.String()+"/c/"+f.conv.String()+"/events"); res.StatusCode != http.StatusOK {
+		t.Fatalf("visible conversation: %d", res.StatusCode)
 	}
 }

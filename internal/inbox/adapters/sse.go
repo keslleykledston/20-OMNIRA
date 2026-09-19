@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,12 +29,18 @@ type RealtimeEvent struct {
 // transaction. It must never hold a database transaction for the stream lifetime.
 type StreamAuthorizer interface {
 	Authorize(ctx context.Context, userID, tenantID uuid.UUID) (*tenancydomain.TenantContext, error)
+	// ConversationVisible reports whether the conversation exists in the tenant and is visible to the user
+	// (short transaction, RLS applies). Used to refuse streams for unknown/foreign conversation ids.
+	ConversationVisible(ctx context.Context, userID, tenantID, conversationID uuid.UUID) (bool, error)
 }
 
 // RealtimeOptions tunes the stream timing; zero values use production defaults.
 type RealtimeOptions struct {
-	Recheck   time.Duration // membership re-authorization interval (default 30s)
-	Keepalive time.Duration // heartbeat comment interval (default 20s)
+	Recheck     time.Duration // membership re-authorization interval (default 30s)
+	Keepalive   time.Duration // heartbeat comment interval (default 20s)
+	MaxLifetime time.Duration // a stream is closed after this long; clients reconnect (default 30m)
+	MaxPerUser  int           // concurrent streams per user (default 10)
+	MaxTotal    int           // concurrent streams per process (default 2000)
 }
 
 // RealtimeHandler serves SSE from NATS. Authorization happens once (StreamMiddleware) and is
@@ -43,6 +50,10 @@ type RealtimeHandler struct {
 	nc   *nats.Conn
 	auth StreamAuthorizer
 	opts RealtimeOptions
+
+	mu      sync.Mutex
+	perUser map[uuid.UUID]int
+	total   int
 }
 
 func NewRealtimeHandler(nc *nats.Conn, auth StreamAuthorizer, opts RealtimeOptions) *RealtimeHandler {
@@ -52,7 +63,38 @@ func NewRealtimeHandler(nc *nats.Conn, auth StreamAuthorizer, opts RealtimeOptio
 	if opts.Keepalive <= 0 {
 		opts.Keepalive = 20 * time.Second
 	}
-	return &RealtimeHandler{nc: nc, auth: auth, opts: opts}
+	if opts.MaxLifetime <= 0 {
+		opts.MaxLifetime = 30 * time.Minute
+	}
+	if opts.MaxPerUser <= 0 {
+		opts.MaxPerUser = 10
+	}
+	if opts.MaxTotal <= 0 {
+		opts.MaxTotal = 2000
+	}
+	return &RealtimeHandler{nc: nc, auth: auth, opts: opts, perUser: map[uuid.UUID]int{}}
+}
+
+// acquire reserves a stream slot for the user; false when a per-user or global ceiling is reached.
+// Every stream costs a goroutine, a NATS subscription, a channel and timers, and has no write deadline.
+func (h *RealtimeHandler) acquire(user uuid.UUID) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.total >= h.opts.MaxTotal || h.perUser[user] >= h.opts.MaxPerUser {
+		return false
+	}
+	h.perUser[user]++
+	h.total++
+	return true
+}
+
+func (h *RealtimeHandler) release(user uuid.UUID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.perUser[user]--; h.perUser[user] <= 0 {
+		delete(h.perUser, user)
+	}
+	h.total--
 }
 
 // StreamMiddleware authenticates (Principal from authn) and authorizes the {tenant_id} path
@@ -93,6 +135,17 @@ func (h *RealtimeHandler) StreamConversationEvents(w http.ResponseWriter, r *htt
 		http.Error(w, "invalid conversation_id", http.StatusBadRequest)
 		return
 	}
+	if principal, perr := authn.FromContext(r.Context()); perr == nil {
+		visible, verr := h.auth.ConversationVisible(r.Context(), principal.UserID, tc.TenantID, conversationID)
+		if verr != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !visible { // unknown and foreign ids are indistinguishable
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
+	}
 	h.stream(w, r, tc, fmt.Sprintf("inbox.events.%s.%s", tc.TenantID, conversationID))
 }
 
@@ -121,6 +174,12 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
+	if !h.acquire(principal.UserID) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "too many realtime connections", http.StatusTooManyRequests)
+		return
+	}
+	defer h.release(principal.UserID)
 	// The server-wide WriteTimeout would cut a long-lived stream.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 
@@ -139,6 +198,8 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 	fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
 
+	lifetime := time.NewTimer(h.opts.MaxLifetime)
+	defer lifetime.Stop()
 	recheck := time.NewTicker(h.opts.Recheck)
 	defer recheck.Stop()
 	keepalive := time.NewTicker(h.opts.Keepalive)
@@ -148,6 +209,8 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 		select {
 		case <-r.Context().Done():
 			return
+		case <-lifetime.C:
+			return // bounded lifetime: the client reconnects (and refetches) with backoff
 		case msg := <-msgs:
 			var event RealtimeEvent
 			if err := json.Unmarshal(msg.Data, &event); err != nil {

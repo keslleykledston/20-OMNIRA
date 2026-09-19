@@ -19,7 +19,7 @@ runbook e pendências documentadas. Meta oficial (Meta Cloud) permanece preserva
 | P3 | Vertical E2E automatizado sem telefone (WAHA stub: webhook assinado → Inbox → reply → worker → ack) | ✅ DONE | P1 |
 | P4 | Compose completo (migrations, web, worker) + runbook de operação | ✅ DONE | P1–P2 |
 | P5 | Contrato OpenAPI das rotas M05/W + validação | ✅ DONE | P1–P2 |
-| P6 | Gates de release (backup/restore, health/metrics, checklist LIMITED_INTERNAL_PRODUCTION_CANDIDATE) | ⏳ | P3–P5 |
+| P6 | Gates de release (backup/restore, health/metrics, revisão Codex, gate formal) | ✅ DONE (gate `LAB`) | P3–P5 |
 | P7 | W3 — Smoke com telefone real (`scripts/w3-smoke.sh`) | ⛔ BLOQUEADO: requer telefone humano | P4 |
 
 ## Como verificar (comandos)
@@ -75,3 +75,15 @@ runbook e pendências documentadas. Meta oficial (Meta Cloud) permanece preserva
 `contracts/openapi/omnira-v1.yaml` (OpenAPI 3.0.3, **14 paths / 16 operações**: login mock, inbox list/get, messages list/send (`Idempotency-Key`), assign/unassign, SSE tenant e conversa, channels WAHA create/list/get/start/stop/qr, webhook WAHA) e `contracts/asyncapi/omnira-v1.yaml` (AsyncAPI 2.6: `job.routing.assign.v1`, `job.channel.send_text.v1`, `inbox.events.{tenant}.{conversation}`; regras: só referências, `tenant_id` do envelope nunca autoriza). Documentam permissões, idempotência, 404 sem oráculo, reautorização do SSE e o que **não** é público (webhook e `/internal`).
 **Validação:** Redocly lint = válido (0 erros/warnings); `tools/validate-specs.sh` agora aponta para esses arquivos e roda o lint semântico; **teste de drift** `internal/platform/httpserver/contract_test.go` usa o `ServeMux` real: toda operação documentada tem de casar com uma rota registrada, e toda rota inbox/channels do `server.go` tem de estar documentada (mutação provada nas duas direções).
 **Pendências P5:** erros ainda `text/plain` (sem Problem Details/`correlation_id` como pede `docs/architecture/API-GOVERNANCE.md`); rotas de tenancy/membros/auditoria/relatórios/BPO/tools **não** estão no contrato (só o vertical Inbox/WAHA); esquemas de resposta não são validados contra o JSON real automaticamente (só rotas); Meta webhook (`/webhooks/v1/whatsapp/meta`) não documentado; sem geração de cliente TS a partir do contrato (o frontend usa tipos escritos à mão em `web/src/types/api.ts`).
+
+### P6 — Gates de release ✅ (estado declarado: `LAB`)
+Documento formal: **`docs/audit/GATE-INBOX-WAHA-LAB.md`** (evidência, triagem Codex, dívidas, bloqueios, aceite).
+**Entregue:** `scripts/backup-restore-check.sh` (restore em novo DB e em **cluster novo**, RTO ~1 s, checksums de 16 tabelas, RLS provado como `omnira_app` depois do restore, mutação detectada); readiness que sonda dependências a cada chamada (antes ficava "ready" com o DB fora); **revisão Codex real** (0 CRITICAL / 2 HIGH / 7 MEDIUM / 1 LOW — o 1º HIGH foi refutado com evidência, o 2º corrigido) e correções: SSE com tetos por usuário/global, vida máxima e conversa visível; TOCTOU do envio fechado no SQL; worker com concorrência limitada e pool dimensionado; portas do compose só em loopback; CSP + headers em todas as locations do nginx e HSTS no host.
+**Números finais:** Go 340 ✓/0 ✗ (49 pacotes), web 44 ✓, e2e clean-room 12/12, specs válidas, migrations up/down/up.
+**Pendências P6:** ver "Registro de dívidas" do gate (D-1…D-5 etc.).
+
+## Backlog pós-GOAL / próximo agente (em ordem sugerida)
+1. **P7 — smoke com telefone real** (`scripts/w3-smoke.sh`) — desbloqueia `INTERNAL_PILOT` junto do aceite humano.
+2. **IdP real (OIDC)** + cookie HttpOnly (D-3) — bloqueio de produção.
+3. D-1 (entrega por lease/reconciliação), D-2 (rate limits), retenção do Outbox, Problem Details, métricas de negócio.
+4. Mídia WAHA (`SendMedia`, download inbound com allowlist SSRF), templates; só depois D3.4+ Meta.

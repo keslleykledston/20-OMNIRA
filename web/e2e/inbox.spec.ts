@@ -27,6 +27,18 @@ test.beforeEach(() => {
        DELETE FROM messages WHERE conversation_id='${CONV}' AND body <> 'Olá, preciso de ajuda com meu pedido';`);
 });
 
+test('the app runs without Content-Security-Policy violations', async ({ page }) => {
+  const violations: string[] = [];
+  page.on('console', (m) => { if (/content security policy/i.test(m.text())) violations.push(m.text()); });
+  page.on('pageerror', (e) => { if (/content security policy/i.test(e.message)) violations.push(e.message); });
+  await login(page, AGENT.email);
+  await page.goto('/inbox');
+  await expect(page.getByText('Maria Souza')).toBeVisible();
+  await page.getByText('Maria Souza').click();
+  await expect(page.getByRole('heading', { name: 'Maria Souza' })).toBeVisible();
+  expect(violations).toEqual([]);
+});
+
 test('login uses the real backend and stores the tenant', async ({ page }) => {
   await login(page, AGENT.email);
   const session = await page.evaluate(() => ({ token: localStorage.getItem('token'), tenant: localStorage.getItem('tenantId') }));

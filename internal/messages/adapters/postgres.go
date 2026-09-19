@@ -62,7 +62,7 @@ func (s *PostgresOutboundStore) LoadSendContext(ctx context.Context, conversatio
 	return &out, nil
 }
 
-func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UUID, in ports.SendContext, body, key, hash string) (*ports.QueuedMessage, bool, error) {
+func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UUID, in ports.SendContext, body, key, hash string, requireAssignee bool) (*ports.QueuedMessage, bool, error) {
 	tenantID, err := tenantOf(ctx)
 	if err != nil {
 		return nil, false, err
@@ -72,11 +72,21 @@ func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UU
 	// One statement: the message, its delivery job (reference only — no text,
 	// phone or secret enters the queue) and the conversation touch commit together.
 	err = q.QueryRow(ctx, `
-		WITH ins AS (
+		WITH target AS (
+		  SELECT c.id, c.tenant_id, c.channel_connection_id
+		  FROM conversations c
+		  JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.channel_connection_id
+		       AND cc.status = 'active' AND cc.capabilities ? 'text'
+		  WHERE c.tenant_id = $2 AND c.id = $3
+		    AND c.channel_connection_id IS NOT DISTINCT FROM $4::uuid
+		    AND (NOT $11::bool OR c.assigned_to_user_id = $8)
+		  FOR SHARE OF c            -- blocks a concurrent assign/unassign (FOR UPDATE) until we commit
+		), ins AS (
 		  INSERT INTO messages
 		    (id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, status,
 		     idempotency_key, request_hash, sent_by_user_id)
-		  VALUES ($1,$2,$3,$4,'outbound','text',$5,'queued',$6,$7,$8)
+		  SELECT $1, t.tenant_id, t.id, t.channel_connection_id, 'outbound', 'text', $5, 'queued', $6, $7, $8
+		  FROM target t
 		  ON CONFLICT (tenant_id, sent_by_user_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 		  RETURNING id, created_at
 		), job AS (
@@ -89,7 +99,7 @@ func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UU
 		  RETURNING id
 		)
 		SELECT id, created_at FROM ins`,
-		msg.ID, tenantID, in.ConversationID, in.ConnectionID, body, key, hash, sender, uuid.New(), uuid.New()).
+		msg.ID, tenantID, in.ConversationID, in.ConnectionID, body, key, hash, sender, uuid.New(), uuid.New(), requireAssignee).
 		Scan(&msg.ID, &msg.CreatedAt)
 	if err == nil {
 		return msg, false, nil
@@ -103,6 +113,10 @@ func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UU
 		FROM messages WHERE tenant_id = $1 AND sent_by_user_id = $2 AND idempotency_key = $3`,
 		tenantID, sender, key).
 		Scan(&existing.ID, &existing.ConversationID, &existing.Body, &existing.Status, &existing.CreatedAt, &existing.RequestHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Neither inserted nor a replay: the conversation's assignee/channel changed after the checks.
+		return nil, false, ports.ErrConversationChanged
+	}
 	if err != nil {
 		return nil, false, fmt.Errorf("messages: load idempotent message: %w", err)
 	}

@@ -41,7 +41,16 @@ func main() {
 	}
 
 	// PostgreSQL connection
-	dbPool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("invalid OMNIRA_DATABASE_URL: %v", err)
+	}
+	// Publisher + routing + realtime bridge (1 permanent) + up to delivery.MaxInFlight deliveries that
+	// each hold a connection during the provider call: never rely on the tiny library default.
+	if poolCfg.MaxConns < 24 {
+		poolCfg.MaxConns = 24
+	}
+	dbPool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}

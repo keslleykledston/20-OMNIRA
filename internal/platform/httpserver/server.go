@@ -112,6 +112,11 @@ func (s *Server) RegisterHealthHandlers() {
 	})
 
 	s.mux.HandleFunc("GET /internal/health/ready", func(w http.ResponseWriter, r *http.Request) {
+		if s.health != nil {
+			// Fresh probe on every call: IsHealthy() alone only reflects the last /healthz run, so a
+			// database outage would keep answering "ready" until somebody hit /healthz.
+			s.health.Check(r.Context())
+		}
 		if s.health == nil || s.health.IsHealthy() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -343,4 +348,14 @@ func (a sessionStreamAuthorizer) Authorize(ctx context.Context, userID, tenantID
 		return authErr
 	})
 	return tc, err
+}
+
+// ConversationVisible reports whether the conversation exists in the tenant for the user (RLS applies).
+func (a sessionStreamAuthorizer) ConversationVisible(ctx context.Context, userID, tenantID, conversationID uuid.UUID) (bool, error) {
+	var visible bool
+	err := platformdb.WithTenantSession(ctx, a.pool, userID, false, func(scoped context.Context) error {
+		return platformdb.QuerierFromContext(scoped, a.pool).QueryRow(scoped,
+			`SELECT EXISTS(SELECT 1 FROM conversations WHERE tenant_id=$1 AND id=$2)`, tenantID, conversationID).Scan(&visible)
+	})
+	return visible, err
 }

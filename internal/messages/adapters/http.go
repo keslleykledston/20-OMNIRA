@@ -69,6 +69,8 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 	case errors.Is(err, application.ErrUnassigned):
 		http.Error(w, "conversation must be assigned before replying", http.StatusConflict)
+	case errors.Is(err, application.ErrConversationChanged):
+		http.Error(w, "conversation changed, retry", http.StatusConflict)
 	case errors.Is(err, application.ErrChannelUnavailable):
 		http.Error(w, "conversation has no active text channel", http.StatusConflict)
 	case errors.Is(err, application.ErrInvalidKey):

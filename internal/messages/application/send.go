@@ -28,6 +28,7 @@ var (
 	ErrChannelUnavailable  = errors.New("messages: conversation has no active text channel")
 	ErrInvalidText         = errors.New("messages: text is required (max 4096 characters)")
 	ErrInvalidKey          = errors.New("messages: Idempotency-Key must be 8-128 chars of [A-Za-z0-9._:-]")
+	ErrConversationChanged = ports.ErrConversationChanged
 	ErrIdempotencyMismatch = errors.New("messages: Idempotency-Key was already used with a different request")
 )
 
@@ -82,24 +83,23 @@ func (s *Sender) Send(ctx context.Context, conversationID uuid.UUID, text, idemp
 	if sc == nil {
 		return SendResult{}, ErrNotFound
 	}
+	manage, err := s.has(ctx, tc.ActorID, PermissionManage)
+	if err != nil {
+		return SendResult{}, err
+	}
 	switch {
 	case sc.AssignedTo == nil:
 		return SendResult{}, ErrUnassigned
-	case *sc.AssignedTo != tc.ActorID:
-		manage, err := s.has(ctx, tc.ActorID, PermissionManage)
-		if err != nil {
-			return SendResult{}, err
-		}
-		if !manage {
-			return SendResult{}, ErrNotAssignedToYou
-		}
+	case *sc.AssignedTo != tc.ActorID && !manage:
+		return SendResult{}, ErrNotAssignedToYou
 	}
 	if sc.ConnectionID == nil || !sc.ConnectionReady || sc.ToE164 == "" {
 		return SendResult{}, ErrChannelUnavailable
 	}
 	sum := sha256.Sum256([]byte(conversationID.String() + "\n" + text))
 	hash := hex.EncodeToString(sum[:])
-	msg, replayed, err := s.store.InsertQueued(ctx, tc.ActorID, *sc, text, idempotencyKey, hash)
+	// A non-manager must still be the assignee at insert time (re-checked atomically by the store).
+	msg, replayed, err := s.store.InsertQueued(ctx, tc.ActorID, *sc, text, idempotencyKey, hash, !manage)
 	if err != nil {
 		return SendResult{}, err
 	}

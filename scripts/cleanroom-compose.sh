@@ -60,6 +60,13 @@ curl -sf "http://127.0.0.1:$WEB_PORT/api/v1/auth/health" >/dev/null && echo "   
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$WEB_PORT/internal/health/live"); body=$(curl -s "http://127.0.0.1:$WEB_PORT/internal/health/live" | head -c 60)
 echo "   /internal/health/live via web -> $code ($(echo "$body" | grep -qi '<!doctype html' && echo 'SPA index, backend NOT reachable' || echo "$body"))"
 
+echo "== security headers on the web container (CSP must be on HTML and on assets)"
+for path in / "$(curl -s "http://127.0.0.1:$WEB_PORT/" | grep -o '/assets/[^"]*\.js' | head -1)"; do
+  h=$(curl -sI "http://127.0.0.1:$WEB_PORT$path")
+  for want in "content-security-policy" "x-content-type-options" "x-frame-options"; do
+    echo "$h" | grep -qi "^$want:" && echo "   $path has $want" || { echo "   MISSING $want on $path"; die "security header $want missing on $path"; }
+  done
+done
 echo "== playwright against the compose stack"
 (cd web && E2E_DB=$OMNIRA_DB_NAME E2E_PG_CONTAINER="$PGC" E2E_BASE_URL="http://127.0.0.1:$WEB_PORT" E2E_API_URL="http://127.0.0.1:$API_PORT" \
   E2E_WAHA_URL=http://127.0.0.1:1 E2E_WAHA_KEY=x npx playwright test -c playwright.inbox.config.ts)

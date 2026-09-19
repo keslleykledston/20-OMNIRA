@@ -17,6 +17,7 @@ import (
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
+	"github.com/omnira/omnira/internal/messages/ports"
 	"github.com/omnira/omnira/internal/platform/authn"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
@@ -274,5 +275,58 @@ func TestSendTenantIsolation(t *testing.T) {
 	}
 	if n := e.count(`SELECT count(*) FROM outbox_events WHERE tenant_id=$1`, e.tenantB); n != 0 {
 		t.Fatalf("cross-tenant job created: %d", n)
+	}
+}
+
+// A stale LoadSendContext (assignee changed between the checks and the insert) must not let the
+// former assignee queue a reply, and must not leave a message or job behind.
+type staleStore struct {
+	ports.OutboundStore
+	assignee uuid.UUID
+}
+
+func (s staleStore) LoadSendContext(ctx context.Context, id uuid.UUID) (*ports.SendContext, error) {
+	sc, err := s.OutboundStore.LoadSendContext(ctx, id)
+	if sc != nil {
+		sc.AssignedTo = &s.assignee // what the sender saw before the reassignment
+	}
+	return sc, err
+}
+
+func TestSendRechecksAssigneeAtInsertTime(t *testing.T) {
+	e := newEnv(t)
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(e.app), tenancyadapters.NewPostgresTenantRepository(e.app))
+	mw := tenancyadapters.AuthorizationMiddleware(e.app, authz)
+	perms := channeladapters.NewPostgresPermissionChecker(e.app)
+	stale := messagesadapters.NewSendHandler(messagesapplication.NewSender(staleStore{messagesadapters.NewPostgresOutboundStore(e.app), e.agent1}, perms))
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", mw(http.HandlerFunc(stale.Send)))
+	post := func(user uuid.UUID, conv uuid.UUID) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/"+e.tenantA.String()+"/inbox/conversations/"+conv.String()+"/messages", strings.NewReader(`{"text":"oi"}`))
+		req.Header.Set("Idempotency-Key", key())
+		req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: user, Subject: user.String()}))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	// convA is assigned to agent1 in the fixture; move it to agent2 behind the sender's back.
+	e.exec(`UPDATE conversations SET assigned_to_user_id=$2 WHERE id=$1`, e.convA, e.agent2)
+	if code := post(e.agent1, e.convA); code != http.StatusConflict {
+		t.Fatalf("former assignee (stale view) got %d, want 409", code)
+	}
+	if n := e.count(`SELECT count(*) FROM messages WHERE conversation_id=$1 AND direction='outbound'`, e.convA); n != 0 {
+		t.Fatalf("stale send created %d messages", n)
+	}
+	if n := e.count(`SELECT count(*) FROM outbox_events WHERE tenant_id=$1 AND event_type='job.channel.send_text.v1'`, e.tenantA); n != 0 {
+		t.Fatalf("stale send enqueued %d jobs", n)
+	}
+	// A manager may still reply on a conversation assigned to someone else (no assignee predicate for them).
+	if code := post(e.supervisor, e.convA); code != http.StatusAccepted {
+		t.Fatalf("manager send got %d", code)
+	}
+	// Channel disabled after the checks: refused too.
+	e.exec(`UPDATE channel_connections SET status='disconnected' WHERE id=(SELECT channel_connection_id FROM conversations WHERE id=$1)`, e.convA)
+	if code := post(e.supervisor, e.convA); code != http.StatusConflict {
+		t.Fatalf("channel went inactive after the checks: got %d, want 409", code)
 	}
 }
