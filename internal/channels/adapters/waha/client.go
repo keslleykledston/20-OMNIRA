@@ -14,15 +14,18 @@ import (
 )
 
 var (
-	ErrAuthentication      = ports.ErrAuthentication
-	ErrConfiguration       = ports.ErrConfiguration
-	ErrTransient           = ports.ErrTransient
-	ErrPermanent           = ports.ErrPermanent
-	ErrRateLimited         = ports.ErrRateLimited
-	ErrProviderUnavailable = ports.ErrProviderUnavailable
-	ErrSessionDisconnected = ports.ErrSessionDisconnected
-	ErrUnknown             = ports.ErrUnknown
+	ErrAuthentication        = ports.ErrAuthentication
+	ErrConfiguration         = ports.ErrConfiguration
+	ErrTransient             = ports.ErrTransient
+	ErrPermanent             = ports.ErrPermanent
+	ErrRateLimited           = ports.ErrRateLimited
+	ErrProviderUnavailable   = ports.ErrProviderUnavailable
+	ErrSessionDisconnected   = ports.ErrSessionDisconnected
+	ErrUnknown               = ports.ErrUnknown
+	ErrMediaSourceNotAllowed = ports.ErrMediaSourceNotAllowed
 )
+
+const maxDownloadedMedia = 25 << 20
 
 // Client is thin WAHA transport. It knows no Tenant, ChannelConnection or
 // WAHA payload domain; adapter/application layers own those boundaries.
@@ -166,6 +169,44 @@ func (c *Client) SendText(ctx context.Context, name, chatID, text string) (strin
 		return "", fmt.Errorf("%w: sendText response missing message id", ErrUnknown)
 	}
 	return response.ID, nil
+}
+
+func (c *Client) DownloadMedia(ctx context.Context, mediaURL string) ([]byte, string, error) {
+	target, err := url.Parse(mediaURL)
+	base, baseErr := url.Parse(c.baseURL)
+	if err != nil || baseErr != nil || target.Scheme != base.Scheme || !strings.EqualFold(target.Host, base.Host) {
+		return nil, "", ports.ErrMediaSourceNotAllowed
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: media request", ErrConfiguration)
+	}
+	req.Header.Set("X-Api-Key", c.apiKey)
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %w: %v", ErrProviderUnavailable, ErrTransient, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		return nil, "", ErrAuthentication
+	}
+	if res.StatusCode == http.StatusTooManyRequests {
+		return nil, "", fmt.Errorf("%w: %w", ErrRateLimited, ErrTransient)
+	}
+	if res.StatusCode >= 500 {
+		return nil, "", fmt.Errorf("%w: %w", ErrProviderUnavailable, ErrTransient)
+	}
+	if res.StatusCode >= 400 {
+		return nil, "", ErrPermanent
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxDownloadedMedia+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: media read", ErrUnknown)
+	}
+	if len(data) > maxDownloadedMedia {
+		return nil, "", fmt.Errorf("%w: media exceeds size limit", ErrPermanent)
+	}
+	return data, res.Header.Get("Content-Type"), nil
 }
 
 func (c *Client) sessionAction(ctx context.Context, name, action string) (Session, error) {

@@ -141,3 +141,25 @@ func TestClientClassifiesNonRetryableSessionAndProviderFailures(t *testing.T) {
 		srv.Close()
 	}
 }
+
+func TestClientDownloadMediaRestrictsOriginAndSize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "secret" {
+			t.Fatal("media request missing API key")
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte("image-bytes"))
+	}))
+	defer srv.Close()
+	c, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, contentType, err := c.DownloadMedia(context.Background(), srv.URL+"/api/files/media.jpg")
+	if err != nil || string(data) != "image-bytes" || contentType != "image/jpeg" {
+		t.Fatalf("unexpected media result: %q %q %v", data, contentType, err)
+	}
+	if _, _, err := c.DownloadMedia(context.Background(), "https://attacker.example/secret"); !errors.Is(err, waha.ErrMediaSourceNotAllowed) {
+		t.Fatalf("external media origin accepted: %v", err)
+	}
+}

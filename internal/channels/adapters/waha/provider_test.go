@@ -177,6 +177,35 @@ func TestProviderSendTextRejectsInvalidCommand(t *testing.T) {
 	}
 }
 
+func TestProviderNormalizesAckStatuses(t *testing.T) {
+	connection := wahaConnection()
+	client, err := waha.NewClient("http://waha:3000", "secret", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := waha.NewProvider(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		ack  string
+		want domain.DeliveryState
+	}{
+		{"ERROR", domain.DeliveryStateFailed},
+		{"PENDING", domain.DeliveryStateQueued},
+		{"SERVER", domain.DeliveryStateSent},
+		{"DEVICE", domain.DeliveryStateDelivered},
+		{"READ", domain.DeliveryStateRead},
+		{"PLAYED", domain.DeliveryStateRead},
+	} {
+		payload := []byte(`{"event":"message.ack","session":"` + "omnira_" + connection.ID.String() + `","payload":{"id":"message-1","ackName":"` + tc.ack + `","timestamp":1710000000}}`)
+		status, err := provider.HandleDeliveryStatus(context.Background(), connection, payload)
+		if err != nil || status == nil || status.State != tc.want || status.ProviderMessageID != "message-1" {
+			t.Fatalf("ack %s: status=%+v err=%v", tc.ack, status, err)
+		}
+	}
+}
+
 func mustClient(t *testing.T, baseURL string) *waha.Client {
 	t.Helper()
 	client, err := waha.NewClient(baseURL, "secret", nil)

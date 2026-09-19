@@ -12,6 +12,7 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 - Idempotency remains owned by the Outbox/application layer; no secret or arbitrary provider payload crosses the domain seam.
 - Worker delivery boundary consumes only `connection_id` plus outbound message references; tenant scope is reconstructed by `TenantSessionRunner`.
 - Retry policy does not retry authentication, invalid configuration, permanent validation, or disconnected sessions.
+- WAHA `message.ack` is normalized to canonical delivery states, and inbound media download is restricted to the configured WAHA origin with a 25 MiB limit.
 
 ### Added (U3 — WAHA webhook and inbound foundation)
 - Connection-scoped webhook route: `POST /webhooks/v1/whatsapp/waha/{connection_token}`.

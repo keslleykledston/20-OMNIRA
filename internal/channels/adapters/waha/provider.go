@@ -2,10 +2,12 @@ package waha
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
@@ -133,6 +135,9 @@ func (p *WahaProvider) Metadata() ports.ProviderMetadata {
 		Kind: domain.ProviderKindUnofficial,
 		Capabilities: []domain.Capability{
 			domain.CapabilityText,
+			domain.CapabilityMedia,
+			domain.CapabilityDeliveryStatus,
+			domain.CapabilityReadStatus,
 			domain.CapabilityHealth,
 			domain.CapabilitySessionPairing,
 			domain.CapabilityQRPairing,
@@ -206,12 +211,74 @@ func (p *WahaProvider) SendTemplate(context.Context, domain.ChannelConnection, d
 	return nil, ports.ErrCapabilityNotSupported
 }
 
-func (p *WahaProvider) DownloadMedia(context.Context, domain.ChannelConnection, domain.InboundMedia) (*domain.MediaContent, error) {
-	return nil, ports.ErrCapabilityNotSupported
+func (p *WahaProvider) DownloadMedia(ctx context.Context, conn domain.ChannelConnection, media domain.InboundMedia) (*domain.MediaContent, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	if media.MediaRef == "" || media.Kind == "" {
+		return nil, fmt.Errorf("%w: media reference and kind required", ports.ErrPermanent)
+	}
+	data, contentType, err := p.client.DownloadMedia(ctx, media.MediaRef)
+	if err != nil {
+		return nil, err
+	}
+	if media.MimeType != "" {
+		contentType = media.MimeType
+	}
+	return &domain.MediaContent{Kind: media.Kind, MimeType: contentType, Data: data, SizeBytes: int64(len(data))}, nil
 }
 
-func (p *WahaProvider) HandleDeliveryStatus(context.Context, domain.ChannelConnection, []byte) (*domain.DeliveryStatusUpdate, error) {
-	return nil, ports.ErrCapabilityNotSupported
+func (p *WahaProvider) HandleDeliveryStatus(ctx context.Context, conn domain.ChannelConnection, payload []byte) (*domain.DeliveryStatusUpdate, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	var envelope webhookEnvelope
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.Event != "message.ack" || envelope.Session == "" {
+		return nil, ErrMalformedWebhook
+	}
+	expected, err := p.SessionRef(conn)
+	if err != nil {
+		return nil, err
+	}
+	if envelope.Session != expected {
+		return nil, ErrSessionOwnership
+	}
+	var ack struct {
+		ID        string  `json:"id"`
+		AckName   string  `json:"ackName"`
+		Timestamp float64 `json:"timestamp"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &ack); err != nil || ack.ID == "" {
+		return nil, ErrMalformedWebhook
+	}
+	state, ok := deliveryState(ack.AckName)
+	if !ok {
+		return nil, ErrUnsupportedWebhookEvent
+	}
+	occurred := time.Now().UTC()
+	if ack.Timestamp > 0 {
+		occurred = time.Unix(int64(ack.Timestamp), int64((ack.Timestamp-float64(int64(ack.Timestamp)))*1e9)).UTC()
+	}
+	return &domain.DeliveryStatusUpdate{ProviderMessageID: ack.ID, State: state, OccurredAt: occurred, Reason: ack.AckName}, nil
+}
+
+func deliveryState(ack string) (domain.DeliveryState, bool) {
+	switch ack {
+	case "ERROR":
+		return domain.DeliveryStateFailed, true
+	case "PENDING":
+		return domain.DeliveryStateQueued, true
+	case "SERVER":
+		return domain.DeliveryStateSent, true
+	case "DEVICE":
+		return domain.DeliveryStateDelivered, true
+	case "READ", "PLAYED":
+		return domain.DeliveryStateRead, true
+	default:
+		return "", false
+	}
 }
 
 // CanonicalStatus maps WAHA vocabulary to existing OMNIRA connection states.
