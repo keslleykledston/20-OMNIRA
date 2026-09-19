@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -13,9 +14,9 @@ import (
 
 // Publisher — publica eventos do outbox para NATS JetStream.
 type Publisher struct {
-	outboxSvc *application.OutboxService
-	js        jetstream.JetStream
-	batchSize int
+	outboxSvc  *application.OutboxService
+	js         jetstream.JetStream
+	batchSize  int
 	maxRetries int
 }
 
@@ -95,7 +96,7 @@ func (p *Publisher) publishEvent(ctx context.Context, event *domain.OutboxEvent)
 	}
 
 	// Subject pattern: events.{event_type}.{aggregate_type}
-	subject := fmt.Sprintf("events.%s.%s", event.EventType, event.AggregateType)
+	subject := subjectForEvent(event)
 
 	// Publicar com retries
 	for attempt := 0; attempt <= p.maxRetries; attempt++ {
@@ -118,6 +119,13 @@ func (p *Publisher) publishEvent(ctx context.Context, event *domain.OutboxEvent)
 	}
 
 	return fmt.Errorf("max retries exceeded publishing to %s", subject)
+}
+
+func subjectForEvent(event *domain.OutboxEvent) string {
+	if strings.HasPrefix(string(event.EventType), "job.") {
+		return string(event.EventType)
+	}
+	return fmt.Sprintf("events.%s.%s", event.EventType, event.AggregateType)
 }
 
 // Start — inicia loop de publicação (worker loop).

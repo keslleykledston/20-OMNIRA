@@ -91,6 +91,16 @@ func TestPublisherBatchSize(t *testing.T) {
 	}
 }
 
+func TestRoutingJobUsesCanonicalSubject(t *testing.T) {
+	event, err := domain.NewOutboxEvent(uuid.New(), domain.JobRoutingAssign, domain.AggregateConversation, uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := subjectForEvent(event); got != "job.routing.assign.v1" {
+		t.Fatalf("subject=%q", got)
+	}
+}
+
 func TestPublisherStartWithNilJS(t *testing.T) {
 	repo := &MockOutboxRepository{events: make(map[uuid.UUID]*domain.OutboxEvent)}
 	svc := application.NewOutboxService(repo)

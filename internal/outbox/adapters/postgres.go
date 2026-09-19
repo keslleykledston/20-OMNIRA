@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/outbox/domain"
 	"github.com/omnira/omnira/internal/outbox/ports"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
 // PostgresOutboxRepository — implementação PostgreSQL do OutboxEventRepository.
@@ -36,7 +37,7 @@ func (r *PostgresOutboxRepository) Store(ctx context.Context, event *domain.Outb
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	_, err = r.pool.Exec(ctx, query,
+	_, err = platformdb.QuerierFromContext(ctx, r.pool).Exec(ctx, query,
 		event.ID,
 		event.TenantID,
 		string(event.EventType),
@@ -63,7 +64,7 @@ func (r *PostgresOutboxRepository) FindByID(ctx context.Context, id uuid.UUID) (
 		WHERE id = $1
 	`
 
-	row := r.pool.QueryRow(ctx, query, id)
+	row := platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx, query, id)
 	event, err := scanOutboxEvent(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -86,7 +87,7 @@ func (r *PostgresOutboxRepository) FindUnpublished(ctx context.Context, limit in
 		LIMIT $1
 	`
 
-	rows, err := r.pool.Query(ctx, query, limit)
+	rows, err := platformdb.QuerierFromContext(ctx, r.pool).Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query unpublished events: %w", err)
 	}
@@ -121,7 +122,7 @@ func (r *PostgresOutboxRepository) Update(ctx context.Context, event *domain.Out
 		WHERE id = $4
 	`
 
-	result, err := r.pool.Exec(ctx, query, payloadJSON, event.PublishedAt, event.Attempts, event.ID)
+	result, err := platformdb.QuerierFromContext(ctx, r.pool).Exec(ctx, query, payloadJSON, event.PublishedAt, event.Attempts, event.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update outbox event: %w", err)
 	}
@@ -137,7 +138,7 @@ func (r *PostgresOutboxRepository) Update(ctx context.Context, event *domain.Out
 func (r *PostgresOutboxRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	query := `DELETE FROM outbox_events WHERE id = $1`
 
-	result, err := r.pool.Exec(ctx, query, id)
+	result, err := platformdb.QuerierFromContext(ctx, r.pool).Exec(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete outbox event: %w", err)
 	}
@@ -160,7 +161,7 @@ func (r *PostgresOutboxRepository) FindByTenant(ctx context.Context, tenantID uu
 		LIMIT $2 OFFSET $3
 	`
 
-	rows, err := r.pool.Query(ctx, query, tenantID, limit, offset)
+	rows, err := platformdb.QuerierFromContext(ctx, r.pool).Query(ctx, query, tenantID, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query events by tenant: %w", err)
 	}

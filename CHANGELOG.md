@@ -15,6 +15,8 @@
 - Routing claim derives both Tenant and target operator from TenantContext; cross-tenant attempts remain indistinguishable from conflicts.
 - Atomic system round-robin selects only active, available queue members below capacity and records system-owned assignment history.
 - Round-robin derives Tenant from trusted system context; asynchronous Outbox/NATS dispatch remains a separate slice.
+- PostgreSQL Outbox now honors the transaction querier, preserving atomic domain-write/event-write rollback semantics.
+- Routing jobs use the canonical `job.routing.assign.v1` JetStream subject rather than the legacy event subject formatter.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
