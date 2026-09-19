@@ -138,7 +138,8 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - DONE: M03.1/M03.2 persistência inbound atômica e idempotente ligada ao webhook WAHA.
 - DONE: M03.3 persistência de mídia inbound e aplicação de `message.ack` aos status canônicos.
 - DONE: M04 filas e seleção round-robin de domínio.
-- TODO: M04.1 claim atômico, repository/application de routing e worker NATS/Outbox.
+- DONE: M04.1 claim manual atômico, repository/application e teste de corrida.
+- TODO: M04.2 round-robin assíncrono via Outbox/NATS e actor de sistema.
 - TODO: M05.1 API REST paginada da Inbox sob TenantContext.
 - TODO: M05.2 eventos realtime SSE/WebSocket com reautorização e isolamento A/B.
 - TODO: M05.3 frontend Next.js com Omnira iOS Design System; não reutilizar o Vite mock como runtime final.

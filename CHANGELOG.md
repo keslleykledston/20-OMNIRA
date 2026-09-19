@@ -11,6 +11,8 @@
 - Provider-message uniqueness is scoped by ChannelConnection, with concurrent open-conversation/active-ticket guards.
 - Inbound media metadata is persisted canonically without retaining the WAHA payload.
 - `message.ack` updates outbound delivery status within the trusted connection scope and cannot regress delivered/read state.
+- Atomic manual conversation claim with exactly one concurrent winner and append-only assignment history.
+- Routing claim derives both Tenant and target operator from TenantContext; cross-tenant attempts remain indistinguishable from conflicts.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
