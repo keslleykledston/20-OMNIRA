@@ -70,7 +70,7 @@ func main() {
 		if oidcErr != nil {
 			log.Fatalf("OIDC configuration error: %v", oidcErr)
 		}
-		srv.RegisterOIDCAuthHandlers(oidcAuth, authn.NewOIDCHandler(oidcAuth, discovery, resolver,
+		srv.RegisterOIDCAuthHandlers(oidcAuth, authn.NewOIDCHandler(oidcAuth, discovery, resolver, cfg.AuthIssuer,
 			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
 	} else {
 		srv.RegisterAuthHandlers(cfg.AuthCookieSecure)

@@ -37,6 +37,8 @@ type OIDCDiscovery struct {
 
 type OIDCIdentityResolver interface {
 	ResolveUserID(context.Context, string) (uuid.UUID, error)
+	ResolveIdentity(context.Context, string, string) (uuid.UUID, error)
+	ProvisionIdentity(context.Context, string, string, string, string) (uuid.UUID, error)
 	SessionProfile(context.Context, uuid.UUID) (SessionProfile, error)
 }
 
@@ -57,7 +59,11 @@ type SessionTenant struct {
 }
 
 type oidcClaims struct {
-	Nonce string `json:"nonce,omitempty"`
+	Nonce       string `json:"nonce,omitempty"`
+	Email       string `json:"email,omitempty"`
+	Name        string `json:"name,omitempty"`
+	GivenName   string `json:"given_name,omitempty"`
+	FamilyName  string `json:"family_name,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -166,6 +172,18 @@ func (a *OIDCAuthenticator) VerifyIDToken(ctx context.Context, tokenString, expe
 	return principal, expiry, nil
 }
 
+// VerifyIDTokenWithClaims verifies token and returns principal + claims (for JIT provisioning).
+func (a *OIDCAuthenticator) VerifyIDTokenWithClaims(ctx context.Context, tokenString, expectedNonce string) (*Principal, *oidcClaims, time.Time, error) {
+	principal, claims, expiry, err := a.verify(ctx, tokenString)
+	if err != nil {
+		return nil, nil, time.Time{}, err
+	}
+	if expectedNonce == "" || subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(expectedNonce)) != 1 {
+		return nil, nil, time.Time{}, errors.New("oidc nonce mismatch")
+	}
+	return principal, claims, expiry, nil
+}
+
 func (a *OIDCAuthenticator) verify(ctx context.Context, tokenString string) (*Principal, *oidcClaims, time.Time, error) {
 	claims := &oidcClaims{}
 	keyFunc := func(token *jwt.Token) (any, error) {
@@ -212,6 +230,7 @@ type OIDCHandler struct {
 	auth         *OIDCAuthenticator
 	discovery    OIDCDiscovery
 	resolver     OIDCIdentityResolver
+	issuer       string
 	clientID     string
 	clientSecret string
 	redirectURL  string
@@ -219,8 +238,8 @@ type OIDCHandler struct {
 	secureCookie bool
 }
 
-func NewOIDCHandler(auth *OIDCAuthenticator, discovery OIDCDiscovery, resolver OIDCIdentityResolver, clientID, clientSecret, redirectURL, postLoginURL string, secureCookie bool) *OIDCHandler {
-	return &OIDCHandler{auth: auth, discovery: discovery, resolver: resolver, clientID: clientID, clientSecret: clientSecret,
+func NewOIDCHandler(auth *OIDCAuthenticator, discovery OIDCDiscovery, resolver OIDCIdentityResolver, issuer, clientID, clientSecret, redirectURL, postLoginURL string, secureCookie bool) *OIDCHandler {
+	return &OIDCHandler{auth: auth, discovery: discovery, resolver: resolver, issuer: issuer, clientID: clientID, clientSecret: clientSecret,
 		redirectURL: redirectURL, postLoginURL: postLoginURL, secureCookie: secureCookie}
 }
 
@@ -295,7 +314,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "identity provider rejected the callback", http.StatusBadGateway)
 		return
 	}
-	_, expiry, err := h.auth.VerifyIDToken(r.Context(), tokens.IDToken, nonceCookie.Value)
+	principal, claims, expiry, err := h.auth.VerifyIDTokenWithClaims(r.Context(), tokens.IDToken, nonceCookie.Value)
 	if err != nil {
 		http.Error(w, "invalid identity token", http.StatusUnauthorized)
 		return
@@ -303,6 +322,18 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	maxAge := int(time.Until(expiry).Seconds())
 	if maxAge <= 0 {
 		http.Error(w, "expired identity token", http.StatusUnauthorized)
+		return
+	}
+	displayName := claims.Name
+	if displayName == "" && claims.GivenName != "" {
+		displayName = claims.GivenName
+		if claims.FamilyName != "" {
+			displayName += " " + claims.FamilyName
+		}
+	}
+	_, err = h.resolver.ProvisionIdentity(r.Context(), h.issuer, principal.Subject, claims.Email, displayName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("identity provisioning error: %v", err), http.StatusInternalServerError)
 		return
 	}
 	http.SetCookie(w, h.cookie(SessionCookieName, tokens.IDToken, maxAge))
