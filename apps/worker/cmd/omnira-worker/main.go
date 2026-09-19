@@ -54,6 +54,13 @@ func main() {
 	}
 	cancel()
 
+	if err := platformdb.RequireUnprivilegedRole(context.Background(), dbPool); err != nil {
+		if !cfg.AllowPrivilegedDB {
+			log.Fatalf("refusing to start: %v (set OMNIRA_ALLOW_PRIVILEGED_DB=true only for a deliberate, non-production exception)", err)
+		}
+		log.Printf("WARNING: %v -- RLS is NOT enforced for this process", err)
+	}
+
 	// NATS connection
 	nc, err := nats.Connect(cfg.NatsURL)
 	if err != nil {

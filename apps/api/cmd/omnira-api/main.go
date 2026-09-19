@@ -20,6 +20,7 @@ import (
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
 )
 
@@ -37,6 +38,13 @@ func main() {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 	defer dbPool.Close()
+
+	if err := platformdb.RequireUnprivilegedRole(context.Background(), dbPool); err != nil {
+		if !cfg.AllowPrivilegedDB {
+			log.Fatalf("refusing to start: %v (set OMNIRA_ALLOW_PRIVILEGED_DB=true only for a deliberate, non-production exception)", err)
+		}
+		log.Printf("WARNING: %v -- RLS is NOT enforced for this process", err)
+	}
 
 	// NATS (optional for API)
 	var nc *nats.Conn

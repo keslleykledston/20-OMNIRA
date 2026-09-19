@@ -70,7 +70,7 @@ docker run -d --name omnira-w3-waha --add-host=host.docker.internal:host-gateway
   devlikeapro/waha:gows-2026.8.2 >/dev/null || die "cannot start WAHA"
 KEY=$(head -c 32 /dev/urandom | base64)
 ENVS=(-e OMNIRA_CREDENTIALS_KEY="$KEY" -e OMNIRA_WAHA_ENABLED=true -e OMNIRA_WAHA_BASE_URL=http://127.0.0.1:$WAHA_PORT -e OMNIRA_WAHA_API_KEY=$WAHA_KEY
-      -e OMNIRA_DATABASE_URL="postgres://omnira:omnira@127.0.0.1:55434/$DB?sslmode=disable&options=-c%20role%3Domnira_app" -e OMNIRA_NATS_URL=nats://127.0.0.1:4222)
+      -e OMNIRA_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:55434/$DB?sslmode=disable" -e OMNIRA_NATS_URL=nats://127.0.0.1:4222)
 # WAHA runs in a bridge network and must reach the API on the host to deliver webhooks.
 docker run -d --name omnira-w3-api --network host -e OMNIRA_HTTP_ADDR=0.0.0.0:$API_PORT -e OMNIRA_PUBLIC_BASE_URL=http://host.docker.internal:$API_PORT "${ENVS[@]}" omnira-api:w3 >/dev/null || die "cannot start API"
 docker run -d --name omnira-w3-worker --network host "${ENVS[@]}" omnira-worker:w3 >/dev/null || die "cannot start worker"

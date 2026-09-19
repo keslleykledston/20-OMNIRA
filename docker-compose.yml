@@ -1,5 +1,20 @@
 version: '3.8'
 
+# Runtime environment shared by api and worker. The application connects as
+# omnira_app (NOT the owner): the owner is a superuser and would bypass RLS; the
+# services refuse to start with a privileged role. Migrations run as the owner
+# out of band (tools/apply-migrations.sh).
+x-omnira-runtime: &omnira-runtime
+  OMNIRA_DATABASE_URL: postgres://omnira_app:${OMNIRA_APP_DB_PASSWORD:-omnira_app}@postgres:5432/${OMNIRA_DB_NAME:-omnira_dev}?sslmode=disable
+  OMNIRA_NATS_URL: nats://nats:4222
+  OMNIRA_OTEL_ENDPOINT: http://otel-collector:4317
+  OMNIRA_CREDENTIALS_KEY: ${OMNIRA_CREDENTIALS_KEY-}
+  OMNIRA_PUBLIC_BASE_URL: ${OMNIRA_PUBLIC_BASE_URL-}
+  OMNIRA_WAHA_ENABLED: ${OMNIRA_WAHA_ENABLED-false}
+  OMNIRA_WAHA_BASE_URL: ${OMNIRA_WAHA_BASE_URL-http://waha:3000}
+  OMNIRA_WAHA_API_KEY: ${OMNIRA_WAHA_API_KEY-}
+  OMNIRA_WAHA_ENGINE: ${OMNIRA_WAHA_ENGINE-GOWS}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -98,24 +113,38 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=omnira
-      - DB_PASSWORD=omnira
-      - DB_NAME=omnira_dev
-      - NATS_URL=nats://nats:4222
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-      - OMNIRA_CREDENTIALS_KEY=${OMNIRA_CREDENTIALS_KEY-}
-      - OMNIRA_PUBLIC_BASE_URL=${OMNIRA_PUBLIC_BASE_URL-}
-      - OMNIRA_WAHA_ENABLED=${OMNIRA_WAHA_ENABLED-false}
-      - OMNIRA_WAHA_BASE_URL=${OMNIRA_WAHA_BASE_URL-http://waha:3000}
-      - OMNIRA_WAHA_API_KEY=${OMNIRA_WAHA_API_KEY-}
-      - OMNIRA_WAHA_ENGINE=${OMNIRA_WAHA_ENGINE-GOWS}
+      <<: *omnira-runtime
+      OMNIRA_HTTP_ADDR: ":8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      # Runtime image is alpine: wget (busybox) exists, curl does not.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 10s
+    networks:
+      - omnira-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Publishes the Outbox to NATS and runs the routing and outbound-delivery
+  # consumers. Without it no job (routing, WhatsApp send) is ever processed.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: omnira-worker
+    environment:
+      <<: *omnira-runtime
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
       start_period: 10s
     networks:
       - omnira-network

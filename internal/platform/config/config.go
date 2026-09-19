@@ -30,6 +30,7 @@ type Config struct {
 	WahaEngine        string
 	MetaEnabled       bool
 	PublicBaseURL     string
+	AllowPrivilegedDB bool
 	MetaVerifyToken   string
 	MetaAppSecret     string
 	GracefulShutdown  int // segundos
@@ -63,6 +64,7 @@ func Load() *Config {
 		WahaEngine:        getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
 		MetaEnabled:       getEnv("OMNIRA_META_ENABLED", "false") == "true",
 		PublicBaseURL:     os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
+		AllowPrivilegedDB: getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
 		MetaVerifyToken:   os.Getenv("OMNIRA_META_VERIFY_TOKEN"),
 		MetaAppSecret:     os.Getenv("OMNIRA_META_APP_SECRET"),
 		GracefulShutdown:  getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
