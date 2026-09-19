@@ -6,6 +6,8 @@ import Accounts from './pages/Accounts'
 import Tickets from './pages/Tickets'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
+import { InboxPage } from './pages/InboxPage'
+import { ConversationPage } from './pages/ConversationPage'
 import Layout from './components/Layout'
 
 const queryClient = new QueryClient()
@@ -22,6 +24,8 @@ export default function App() {
             <Route path="/tickets" element={<Tickets />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/supervisor" element={<SupervisorDashboard />} />
+            <Route path="/inbox" element={<InboxPage />} />
+            <Route path="/inbox/:conversationId" element={<ConversationPage conversationId={new URLSearchParams(window.location.search).get('id') || ''} />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Route>
         </Routes>
