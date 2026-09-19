@@ -18,9 +18,9 @@ export default defineConfig({
       }
     },
     hmr: {
-      protocol: 'ws',
-      host: 'localhost',
-      port: 3000,
+      protocol: 'wss',
+      host: 'omnira.devops.k3gsolutions.com.br',
+      clientPort: 443,
     }
   }
 })
