@@ -161,7 +161,12 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - DONE: M04.3 fila inicial explícita e job de routing atômico no inbound.
 - DONE: M04.4 dispatcher Outbox com sessão system transaction-local e validação usando `omnira_app`.
 - Gate M04.4: PostgreSQL + `omnira_app` + NATS smoke confirmou publicação e `published_at`; migrations fresh up/down/up passaram.
-- TODO: M05.1 API REST paginada da Inbox sob TenantContext.
-- TODO: M05.2 eventos realtime SSE/WebSocket com reautorização e isolamento A/B.
-- TODO: M05.3 frontend Next.js com Omnira iOS Design System; não reutilizar o Vite mock como runtime final.
+- DONE: M05.1 API REST paginada da Inbox sob TenantContext (98dd6b7).
+- DONE: M05.2 eventos realtime SSE com reautorização (387785f, fix de build 86b43f0).
+- DONE (leitura): M05.3 UI React/Vite Inbox + Conversa, rotas e SSE (cebcfc1, 691b6f4). Gate: vitest 20/20, `tsc --noEmit` limpo. Limitação: `AssignmentButton` chama `POST .../assign|unassign`, que **não existem** no backend — inoperante até M05.4.
+- DONE: D3.2 verificação de webhook Meta (challenge + HMAC-SHA256 + resolução por `phone_number_id`), `internal/channels/meta`.
+- DONE: D3.3 parsing inbound Meta (texto/mídia/botões/status), dedupe por `wamid`, intake tenant-safe (f39829d). Gate: E2E com Postgres real + `omnira_app` (dedupe, `tenant_id` forjado ignorado, isolamento A/B). Opt-in `OMNIRA_META_ENABLED`.
+- TODO: D3.4 outbound Meta, D3.5 mídia (download c/ allowlist SSRF), D3.6 status outbound, D3.7 health, D3.8 templates.
+- TODO: M05.4 endpoints assign/unassign + testes A/B.
+- TODO: M05.5 envio outbound com idempotency key.
 - TODO: M06 chatbot/automation depois do vertical Inbox funcional.
