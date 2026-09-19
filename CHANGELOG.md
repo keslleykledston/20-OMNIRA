@@ -21,6 +21,10 @@
 - Round-robin redelivery is idempotent: an assigned conversation returns its existing owner without duplicating assignment history.
 - Each tenant may mark one explicit default queue; new inbound conversations enter it without name-based or payload-based inference.
 - Initial round-robin routing job is written atomically with inbound persistence; manual default queues remain available for operator claim.
+- Outbox dispatcher now executes read, attempt and publish-mark operations inside transaction-local system sessions, compatible with `omnira_app` and RLS.
+- Worker no longer emits database or NATS connection URLs to logs.
+- Outbox UPDATE policy is restricted to the system worker session (`000021`); fresh migration bootstrap is now valid.
+- D3.1 PostgreSQL adapter tests use the canonical TenantContext and compile with the existing `lib/pq` implementation.
 
 Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 

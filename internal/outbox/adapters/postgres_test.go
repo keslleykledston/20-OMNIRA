@@ -59,4 +59,27 @@ func TestStoreUsesInjectedTransaction(t *testing.T) {
 	if count != 0 {
 		t.Fatal("outbox event escaped rolled-back transaction")
 	}
+	committed, err := domain.NewOutboxEvent(tenantID, domain.JobRoutingAssign, domain.AggregateConversation, uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := platformdb.WithSystemTenantSession(ctx, app, tenantID, func(scoped context.Context) error {
+		return repo.Store(scoped, committed)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformdb.WithTenantSession(ctx, app, uuid.Nil, true, func(scoped context.Context) error {
+		events, err := repo.FindUnpublished(scoped, 10)
+		if err != nil {
+			return err
+		}
+		for _, got := range events {
+			if got.ID == committed.ID {
+				return nil
+			}
+		}
+		return errors.New("runtime system session could not read committed outbox event")
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

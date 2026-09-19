@@ -4,20 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
-	"github.com/omnira/omnira/internal/platform/db"
 )
 
 // PostgresChannelConnectionRepository implementa ports.ChannelConnectionRepository.
 // Persiste ChannelConnection em channel_connections table (tenant-owned, RLS+FORCE).
 type PostgresChannelConnectionRepository struct {
-	db          *sql.DB
-	credStore   ports.CredentialStore
+	db        *sql.DB
+	credStore ports.CredentialStore
 }
 
 func NewPostgresChannelConnectionRepository(db *sql.DB, credStore ports.CredentialStore) *PostgresChannelConnectionRepository {
@@ -38,10 +36,9 @@ func (r *PostgresChannelConnectionRepository) Store(ctx context.Context, conn *d
 		return fmt.Errorf("ChannelConnection.TenantID must not be nil")
 	}
 
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID != conn.TenantID {
-		return fmt.Errorf("TenantContext mismatch: context tenant %v, conn tenant %v",
-			tenantCtx.ID, conn.TenantID)
+	tenantID, err := tenantIDFromContext(ctx)
+	if err != nil || tenantID != conn.TenantID {
+		return fmt.Errorf("TenantContext mismatch: context tenant %v, conn tenant %v", tenantID, conn.TenantID)
 	}
 
 	// Converter Capabilities slice → PostgreSQL array
@@ -51,7 +48,7 @@ func (r *PostgresChannelConnectionRepository) Store(ctx context.Context, conn *d
 	}
 
 	// INSERT channel_connections
-	_, err := r.db.ExecContext(ctx,
+	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO channel_connections (
 			id, tenant_id, channel, provider, provider_kind,
 			external_account_id, external_number_id, status, capabilities, secret_ref,
@@ -71,8 +68,8 @@ func (r *PostgresChannelConnectionRepository) Store(ctx context.Context, conn *d
 // FindByID retorna ChannelConnection por ID (sem descriptografar credential).
 // RLS policy garante que só conexões do tenant atual são retornadas.
 func (r *PostgresChannelConnectionRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.ChannelConnection, error) {
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID == uuid.Nil {
+	tenantID, err := tenantIDFromContext(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("TenantContext not available")
 	}
 
@@ -82,7 +79,7 @@ func (r *PostgresChannelConnectionRepository) FindByID(ctx context.Context, id u
 		        risk_acknowledged_at, risk_acknowledged_by, created_at, updated_at
 		 FROM channel_connections
 		 WHERE id = $1 AND tenant_id = $2`,
-		id, tenantCtx.ID,
+		id, tenantID,
 	)
 
 	return scanChannelConnection(row)
@@ -96,8 +93,8 @@ func (r *PostgresChannelConnectionRepository) FindByExternalNumberID(
 	provider string,
 	externalNumberID string,
 ) (*domain.ChannelConnection, error) {
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID == uuid.Nil {
+	tenantID, err := tenantIDFromContext(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("TenantContext not available")
 	}
 
@@ -107,7 +104,7 @@ func (r *PostgresChannelConnectionRepository) FindByExternalNumberID(
 		        risk_acknowledged_at, risk_acknowledged_by, created_at, updated_at
 		 FROM channel_connections
 		 WHERE provider = $1 AND external_number_id = $2 AND tenant_id = $3`,
-		provider, externalNumberID, tenantCtx.ID,
+		provider, externalNumberID, tenantID,
 	)
 
 	return scanChannelConnection(row)
@@ -116,8 +113,8 @@ func (r *PostgresChannelConnectionRepository) FindByExternalNumberID(
 // FindByTenant retorna todas ChannelConnections do tenant.
 // RLS policy garante resultado apenas para tenant atual.
 func (r *PostgresChannelConnectionRepository) FindByTenant(ctx context.Context, tenantID uuid.UUID) ([]*domain.ChannelConnection, error) {
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID != tenantID {
+	currentTenant, err := tenantIDFromContext(ctx)
+	if err != nil || currentTenant != tenantID {
 		return nil, fmt.Errorf("TenantContext mismatch")
 	}
 
@@ -154,8 +151,8 @@ func (r *PostgresChannelConnectionRepository) FindByTenant(ctx context.Context, 
 // Update atualiza ChannelConnection existente.
 // Tipicamente used para mudar status, capabilities, ou risk acknowledgement.
 func (r *PostgresChannelConnectionRepository) Update(ctx context.Context, conn *domain.ChannelConnection) error {
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID != conn.TenantID {
+	currentTenant, err := tenantIDFromContext(ctx)
+	if err != nil || currentTenant != conn.TenantID {
 		return fmt.Errorf("TenantContext mismatch")
 	}
 

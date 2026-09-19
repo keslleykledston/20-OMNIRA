@@ -3,7 +3,6 @@ package crypto_test
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"os"
 	"testing"
 
 	"github.com/omnira/omnira/internal/channels/adapters/crypto"

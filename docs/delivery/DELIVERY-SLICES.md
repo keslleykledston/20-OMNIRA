@@ -159,7 +159,8 @@ mesmo operador atende A e B sem relogin e sem vazamento.
 - DONE: M04.2b1 Outbox transacional e subject canônico `job.routing.assign.v1`.
 - DONE: M04.2b2 consumidor JetStream, resolução confiável por conversa e redelivery idempotente.
 - DONE: M04.3 fila inicial explícita e job de routing atômico no inbound.
-- TODO: M04.4 validar dispatcher Outbox ponta a ponta usando exclusivamente a role runtime `omnira_app`.
+- DONE: M04.4 dispatcher Outbox com sessão system transaction-local e validação usando `omnira_app`.
+- Gate M04.4: PostgreSQL + `omnira_app` + NATS smoke confirmou publicação e `published_at`; migrations fresh up/down/up passaram.
 - TODO: M05.1 API REST paginada da Inbox sob TenantContext.
 - TODO: M05.2 eventos realtime SSE/WebSocket com reautorização e isolamento A/B.
 - TODO: M05.3 frontend Next.js com Omnira iOS Design System; não reutilizar o Vite mock como runtime final.

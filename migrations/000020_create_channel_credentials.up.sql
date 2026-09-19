@@ -42,6 +42,14 @@ CREATE POLICY channel_credentials_tenant_policy ON channel_credentials
 ALTER TABLE channel_credentials FORCE ROW LEVEL SECURITY;
 
 -- Ensure updated_at is refreshed automatically
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE TRIGGER channel_credentials_updated_at
   BEFORE UPDATE ON channel_credentials
   FOR EACH ROW

@@ -113,6 +113,22 @@ func TestPublisherStartWithNilJS(t *testing.T) {
 	_ = pub.Start(ctx, 50*time.Millisecond)
 }
 
+func TestPublisherReadsOutboxInsideSessionRunner(t *testing.T) {
+	repo := &MockOutboxRepository{events: make(map[uuid.UUID]*domain.OutboxEvent)}
+	pub := NewPublisher(application.NewOutboxService(repo), nil, 1, 1)
+	calls := 0
+	pub.SetSessionRunner(func(ctx context.Context, fn func(context.Context) error) error {
+		calls++
+		return fn(ctx)
+	})
+	if published, err := pub.PublishUnpublished(context.Background()); err != nil || published != 0 {
+		t.Fatalf("published=%d err=%v", published, err)
+	}
+	if calls != 1 {
+		t.Fatalf("session runner calls=%d", calls)
+	}
+}
+
 func TestOutboxServiceIntegration(t *testing.T) {
 	repo := &MockOutboxRepository{events: make(map[uuid.UUID]*domain.OutboxEvent)}
 	svc := application.NewOutboxService(repo)

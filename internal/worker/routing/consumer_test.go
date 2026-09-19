@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,14 +42,17 @@ func TestJetStreamConsumerDispatchesRoutingJob(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	consumer, err := StartConsumer(ctx, js, handler)
+	testStream := "OMNIRA_ROUTING_TEST_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	testSubject := "contract.routing.test." + strings.ReplaceAll(uuid.NewString(), "-", "")
+	consumer, err := startConsumer(ctx, js, handler, testStream, "routing-test-"+uuid.NewString(), testSubject, testSubject)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer consumer.Stop()
+	defer func() { _ = js.DeleteStream(ctx, testStream) }()
 
 	raw := []byte(`{"tenant_id":"` + uuid.NewString() + `","aggregate_id":"` + conversationID.String() + `"}`)
-	if _, err := js.Publish(ctx, routingJob, raw, jetstream.WithMsgID(uuid.NewString())); err != nil {
+	if _, err := js.Publish(ctx, testSubject, raw, jetstream.WithMsgID(uuid.NewString())); err != nil {
 		t.Fatal(err)
 	}
 	select {

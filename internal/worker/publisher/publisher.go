@@ -18,7 +18,12 @@ type Publisher struct {
 	js         jetstream.JetStream
 	batchSize  int
 	maxRetries int
+	session    SessionRunner
 }
+
+// SessionRunner wraps every database operation in a transaction-local RLS
+// context. A worker must never rely on state retained by a pool connection.
+type SessionRunner func(context.Context, func(context.Context) error) error
 
 // NewPublisher — cria um novo Publisher.
 func NewPublisher(
@@ -42,10 +47,26 @@ func NewPublisher(
 	}
 }
 
+func (p *Publisher) SetSessionRunner(runner SessionRunner) {
+	p.session = runner
+}
+
+func (p *Publisher) runSession(ctx context.Context, fn func(context.Context) error) error {
+	if p.session != nil {
+		return p.session(ctx, fn)
+	}
+	return fn(ctx)
+}
+
 // PublishUnpublished — publica eventos não publicados do outbox.
 // Retorna número de eventos publicados.
 func (p *Publisher) PublishUnpublished(ctx context.Context) (int, error) {
-	events, err := p.outboxSvc.GetUnpublishedEvents(ctx, p.batchSize)
+	var events []*domain.OutboxEvent
+	err := p.runSession(ctx, func(scoped context.Context) error {
+		var err error
+		events, err = p.outboxSvc.GetUnpublishedEvents(scoped, p.batchSize)
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("failed to get unpublished events: %w", err)
 	}
@@ -57,14 +78,18 @@ func (p *Publisher) PublishUnpublished(ctx context.Context) (int, error) {
 			fmt.Printf("failed to publish event %s: %v\n", event.ID, err)
 
 			// Record attempt for retry logic
-			if err := p.outboxSvc.RecordAttempt(ctx, event.ID); err != nil {
+			if err := p.runSession(ctx, func(scoped context.Context) error {
+				return p.outboxSvc.RecordAttempt(scoped, event.ID)
+			}); err != nil {
 				fmt.Printf("failed to record attempt for event %s: %v\n", event.ID, err)
 			}
 			continue
 		}
 
 		// Mark as published
-		if err := p.outboxSvc.MarkPublished(ctx, event.ID); err != nil {
+		if err := p.runSession(ctx, func(scoped context.Context) error {
+			return p.outboxSvc.MarkPublished(scoped, event.ID)
+		}); err != nil {
 			fmt.Printf("failed to mark event published %s: %v\n", event.ID, err)
 			continue
 		}

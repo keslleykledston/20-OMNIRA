@@ -10,12 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/omnira/omnira/internal/outbox/adapters"
 	"github.com/omnira/omnira/internal/outbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapp "github.com/omnira/omnira/internal/routing/application"
@@ -65,6 +67,9 @@ func main() {
 
 	// Publisher
 	pub := publisher.NewPublisher(outboxSvc, js, 10, 3)
+	pub.SetSessionRunner(func(ctx context.Context, fn func(context.Context) error) error {
+		return platformdb.WithTenantSession(ctx, dbPool, uuid.Nil, true, fn)
+	})
 	routingHandler, err := routingworker.NewHandler(
 		routingworker.NewPostgresConversationRunner(dbPool),
 		routingapp.NewService(routingadapters.NewPostgresAssignmentRepository(dbPool)),

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/postgres"
 	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
-	"github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -476,5 +476,5 @@ func createContextWithTenant(ctx context.Context, tenantID uuid.UUID) context.Co
 }
 
 func contains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && s != "" && substr != ""
+	return strings.Contains(s, substr)
 }

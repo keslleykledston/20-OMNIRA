@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/ports"
-	"github.com/omnira/omnira/internal/platform/db"
 )
 
 // PostgresCredentialStore implementa ports.CredentialStore.
@@ -27,8 +26,8 @@ func NewPostgresCredentialStore(db *sql.DB, cipher ports.CredentialCipher) *Post
 // TenantID é resolvido do context (via TenantContext); falha se não disponível.
 func (s *PostgresCredentialStore) Store(ctx context.Context, connectionID uuid.UUID, cred ports.Credential) (secretRef string, err error) {
 	// 1. Resolver TenantID do context
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID == uuid.Nil {
+	tenantID, err := tenantIDFromContext(ctx)
+	if err != nil {
 		return "", fmt.Errorf("TenantContext not available or empty")
 	}
 
@@ -54,7 +53,7 @@ func (s *PostgresCredentialStore) Store(ctx context.Context, connectionID uuid.U
 		`INSERT INTO channel_credentials (connection_id, tenant_id, nonce, ciphertext)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
-		connectionID, tenantCtx.ID, nonce, ciphertext,
+		connectionID, tenantID, nonce, ciphertext,
 	).Scan(&secretUUID)
 	if err != nil {
 		return "", fmt.Errorf("failed to store credential: %w", err)
@@ -73,8 +72,8 @@ func (s *PostgresCredentialStore) Resolve(ctx context.Context, secretRef string)
 		return ports.Credential{}, fmt.Errorf("invalid secretRef: %w", err)
 	}
 
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID == uuid.Nil {
+	tenantID, err := tenantIDFromContext(ctx)
+	if err != nil {
 		return ports.Credential{}, fmt.Errorf("TenantContext not available or empty")
 	}
 
@@ -83,7 +82,7 @@ func (s *PostgresCredentialStore) Resolve(ctx context.Context, secretRef string)
 	err = s.db.QueryRowContext(ctx,
 		`SELECT nonce, ciphertext FROM channel_credentials
 		 WHERE id = $1 AND tenant_id = $2`,
-		secretUUID, tenantCtx.ID,
+		secretUUID, tenantID,
 	).Scan(&nonce, &ciphertext)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -119,8 +118,8 @@ func (s *PostgresCredentialStore) Rotate(ctx context.Context, secretRef string, 
 		return fmt.Errorf("invalid secretRef: %w", err)
 	}
 
-	tenantCtx := db.TenantContextFrom(ctx)
-	if tenantCtx == nil || tenantCtx.ID == uuid.Nil {
+	tenantID, err := tenantIDFromContext(ctx)
+	if err != nil {
 		return fmt.Errorf("TenantContext not available or empty")
 	}
 
@@ -143,7 +142,7 @@ func (s *PostgresCredentialStore) Rotate(ctx context.Context, secretRef string, 
 		`UPDATE channel_credentials
 		 SET nonce = $1, ciphertext = $2, updated_at = NOW()
 		 WHERE id = $3 AND tenant_id = $4`,
-		nonce, ciphertext, secretUUID, tenantCtx.ID,
+		nonce, ciphertext, secretUUID, tenantID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to rotate credential: %w", err)

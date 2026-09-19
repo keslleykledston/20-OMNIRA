@@ -11,7 +11,6 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/crypto"
 	"github.com/omnira/omnira/internal/channels/adapters/postgres"
 	"github.com/omnira/omnira/internal/channels/ports"
-	"github.com/omnira/omnira/internal/platform/db"
 )
 
 // setupTestCipherAndStore: cria cipher e CredentialStore para testes.
@@ -181,24 +180,6 @@ func TestPostgresCredentialStore_Rotate_WrongTenant_Fails(t *testing.T) {
 	if err == nil {
 		t.Error("Rotate should fail when tenant_id doesn't match (RLS)")
 	}
-}
-
-// Helpers
-
-// getTestDB: retorna conexão DB para testes, ou nil se não disponível.
-// Em MVP local sem DB real, retorna nil.
-func getTestDB(t *testing.T) *sql.DB {
-	// TODO: implementar conexão de teste (docker-compose up postgres, conectar)
-	// Por enquanto, retornar nil (tests serão skip'd)
-	return nil
-}
-
-// createContextWithTenant: cria context com TenantContext injetado.
-// Mock para testes; produção usa middleware para setar via context.
-func createContextWithTenant(ctx context.Context, tenantID uuid.UUID) context.Context {
-	// TODO: usar db.NewTenantContext ou equivalente
-	// Por enquanto, usar context.WithValue como exemplo
-	return ctx // Placeholder; implementação real requer helper do pacote db
 }
 
 // Testes unitários (sem DB) serão adicionados quando cipher for mockado.
