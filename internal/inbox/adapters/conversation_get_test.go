@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"github.com/omnira/omnira/internal/platform/authn"
-	"github.com/omnira/omnira/internal/testhelpers"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 )
