@@ -1,0 +1,141 @@
+// Package ports define o contrato canônico que todo provider de canal
+// (WhatsApp oficial via Meta Cloud, WhatsApp não oficial via WAHA/outros,
+// e futuramente outros canais) deve implementar.
+//
+// Este é o "channel seam" do Wave D2 do kit de reuso DeskcommCRM: a
+// interface é testada e estabilizada ANTES de qualquer implementação real
+// (Meta Cloud entra no Wave D3). O domínio (Contact/Conversation/Ticket/
+// Routing) nunca importa este pacote de adapters concretos — só esta
+// interface.
+//
+// Regra de fronteira (docs/reference-kits/deskcomm-reuse/.../
+// ARCHITECTURE-COMPATIBILITY.md): adapters traduzem formato e chamam o
+// provider externo; nunca decidem regra de negócio (window policy,
+// routing, retries, permissions, TenantContext, handoff ficam fora do
+// adapter).
+package ports
+
+import (
+	"context"
+	"errors"
+
+	"github.com/omnira/omnira/internal/channels/domain"
+)
+
+// Sentinel errors — o worker/application layer decide retry/backoff a
+// partir destes, nunca inspecionando string de erro ou o tipo concreto do
+// provider.
+var (
+	// ErrCapabilityNotSupported — o provider não implementa esta operação
+	// (ex.: um provider unofficial sem suporte a template). O chamador
+	// deveria ter checado ChannelConnection.HasCapability antes; retornar
+	// este erro é a rede de segurança, não o caminho esperado.
+	ErrCapabilityNotSupported = errors.New("channel: capability not supported by this provider")
+
+	// ErrNotConfigured — credencial ausente/incompleta para esta conexão.
+	// Deve ser um erro explícito, nunca um "sucesso" fantasma — o audit do
+	// donor project documenta um bug de produção real causado exatamente
+	// por isConfigured() checar env de forma síncrona e ficar
+	// silenciosamente desatualizado (mensagens "queued" para sempre).
+	ErrNotConfigured = errors.New("channel: connection not configured")
+
+	// ErrInvalidWebhookSignature — a assinatura do webhook não bateu.
+	// Nunca processar o payload quando este erro ocorre.
+	ErrInvalidWebhookSignature = errors.New("channel: invalid webhook signature")
+
+	// ErrTransient — falha classificada como retentável (timeout, 429,
+	// 5xx, connection reset). O worker deve aplicar backoff exponencial.
+	ErrTransient = errors.New("channel: transient error, retry with backoff")
+
+	// ErrPermanent — falha classificada como definitiva (auth inválida,
+	// payload inválido, forbidden, not found). Não retentar.
+	ErrPermanent = errors.New("channel: permanent error, do not retry")
+
+	// ErrMediaSourceNotAllowed — a URL/host de mídia retornada pelo
+	// provider não está na allowlist. Proteção SSRF — nunca contornar
+	// isto para "tentar mesmo assim".
+	ErrMediaSourceNotAllowed = errors.New("channel: media source host not in allowlist")
+)
+
+// ProviderMetadata — descrição estática de um provider, usada para exibir
+// a distinção official/unofficial na UI (nunca escondida) e para telemetria
+// de baixa cardinalidade (provider + provider_kind, nunca tenant_id como
+// label).
+type ProviderMetadata struct {
+	Name         string // ex.: "meta_cloud", "waha"
+	Kind         domain.ProviderKind
+	Capabilities []domain.Capability
+}
+
+// WebhookVerificationRequest — dados brutos necessários para verificar a
+// autenticidade de um webhook antes de processá-lo.
+type WebhookVerificationRequest struct {
+	Headers map[string]string
+	Body    []byte
+	// Query carrega parâmetros de verificação de handshake inicial (ex.:
+	// hub.challenge da Meta), quando aplicável.
+	Query map[string]string
+}
+
+// HealthStatus — resultado normalizado de um health check. Reachable=false
+// significa erro de rede/timeout (não é o canal que caiu); Degraded=true
+// com Reachable=true significa que o provider respondeu mas reportou um
+// problema real (token inválido, número desconectado).
+type HealthStatus struct {
+	Reachable bool
+	Degraded  bool
+	Detail    string
+}
+
+// ChannelProvider — contrato canônico. Todo método aceita a
+// ChannelConnection explicitamente (nunca um estado implícito/global) e
+// deve tratar TenantID como não-opcional.
+//
+// Capacidades opcionais (SendTemplate, DownloadMedia, HandleDeliveryStatus
+// quando o provider não suporta delivery receipts, etc.) retornam
+// ErrCapabilityNotSupported em vez de o chamador precisar fazer uma type
+// assertion para "descobrir" o que o provider suporta — o jeito correto de
+// descobrir é ChannelConnection.HasCapability, consultado ANTES da
+// chamada; o erro é a rede de segurança.
+type ChannelProvider interface {
+	// Metadata — descrição estática, nunca requer I/O.
+	Metadata() ProviderMetadata
+
+	// IsConfigured — a conexão tem credencial suficiente para operar.
+	// Nunca deve ser a única defesa contra credencial ausente: Send* deve
+	// retornar ErrNotConfigured mesmo que IsConfigured tenha sido pulado.
+	IsConfigured(ctx context.Context, conn domain.ChannelConnection) bool
+
+	// CheckHealth — reaproveita, quando possível, a mesma chamada usada
+	// para validar a credencial (evita duas fontes de verdade divergentes
+	// sobre "o canal está bem").
+	CheckHealth(ctx context.Context, conn domain.ChannelConnection) (HealthStatus, error)
+
+	// VerifyWebhook — valida autenticidade antes de qualquer parsing.
+	// Deve retornar ErrInvalidWebhookSignature em caso de falha.
+	VerifyWebhook(ctx context.Context, conn domain.ChannelConnection, req WebhookVerificationRequest) error
+
+	// ParseInbound — traduz o payload já verificado para o formato
+	// canônico. Nunca deve resolver tenant a partir do payload — a
+	// resolução de ChannelConnection acontece antes, por uma fonte
+	// confiável (ex.: phone_number_id do path/query do webhook).
+	ParseInbound(ctx context.Context, conn domain.ChannelConnection, payload []byte) (*domain.InboundMessage, error)
+
+	// SendText, SendMedia, SendTemplate — outbound. IdempotencyKey em cada
+	// mensagem deve ser respeitada pelo adapter quando o provider suportar
+	// deduplicação nativa; caso contrário, a idempotência é garantida pela
+	// camada de aplicação antes de chamar o adapter.
+	SendText(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundTextMessage) (*domain.SendResult, error)
+	SendMedia(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundMediaMessage) (*domain.SendResult, error)
+	SendTemplate(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundTemplateMessage) (*domain.SendResult, error)
+
+	// DownloadMedia — o adapter é responsável por validar a URL/host
+	// devolvida pelo provider contra uma allowlist antes de baixar
+	// (proteção SSRF); deve retornar ErrMediaSourceNotAllowed quando a
+	// origem não é confiável.
+	DownloadMedia(ctx context.Context, conn domain.ChannelConnection, media domain.InboundMedia) (*domain.MediaContent, error)
+
+	// HandleDeliveryStatus — traduz um payload de delivery/read receipt
+	// para o formato canônico.
+	HandleDeliveryStatus(ctx context.Context, conn domain.ChannelConnection, payload []byte) (*domain.DeliveryStatusUpdate, error)
+}
