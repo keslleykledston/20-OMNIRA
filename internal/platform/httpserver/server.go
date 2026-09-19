@@ -294,6 +294,13 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 		channeladapters.NewPostgresPermissionChecker(dbPool),
 	))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.Send))))
+
+	// CRM ticket handlers
+	crmHandler := inboxadapters.NewCRMHandlers(dbPool)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateTicket))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetTicket))))
+	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicket))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}/close", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CloseTicket))))
 }
 
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session

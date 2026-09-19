@@ -46,8 +46,7 @@ func NewCRMHandlers(dbPool *pgxpool.Pool) *CRMHandlers {
 // POST /api/v1/tenants/{tenantId}/conversations/{conversationId}/ticket
 func (h *CRMHandlers) CreateTicket(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	principal, err := authn.FromContext(ctx)
-	if err != nil {
+	if _, err := authn.FromContext(ctx); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
