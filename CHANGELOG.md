@@ -11,6 +11,11 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 - Testes de isolamento A/B, ciphertext, chave errada e resolução de credencial.
 - Contadores OTel de resolução de credenciais sem IDs ou segredos.
 
+### Added (D3.2 — Meta webhook verification foundation)
+- Verificação de challenge Meta e assinatura HMAC-SHA256 sobre raw body.
+- Handler limitado a 1 MiB, resolução por `phone_number_id` confiável e bloqueio de conexão inativa/não oficial.
+- Testes sem dependência de chamada externa à Meta.
+
 ### Added (T01–T02 — Bootstrap + Local Infrastructure)
 
 #### T01 — Bootstrap Go repo
