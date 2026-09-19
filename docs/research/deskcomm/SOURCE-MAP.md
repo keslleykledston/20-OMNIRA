@@ -21,6 +21,7 @@
 | `internal/channels/meta/` (a criar) | `lib/channels/adapters/meta-cloud.ts` | 04ef7981 | PORT |
 | `internal/channels/meta/` (a criar) | `lib/channels/meta/` (credentials.ts, webhook.ts, ingest.ts, session.ts, template-*.ts) | 04ef7981 | PORT (parcial — ver REUSE-AUDIT) |
 | N/A — não portar | `lib/channels/adapters/waha*.ts` (via `lib/waha/`) | 04ef7981 | REJECT como default; ADAPT futuro opcional (Wave pós-D3) |
+| `internal/channels/adapters/waha/` + Compose U1 | `lib/waha/`, `docs/prd/03-prd-whatsapp-waha.md`, `docs/specs/03-spec-whatsapp-waha.md`, `docker-compose.prod.yml` | 04ef7981 | INSPIRE — lifecycle/segurança Docker consultados; nenhum TypeScript copiado |
 | `apps/web/features/inbox/` (Next.js, a criar) | `app/app/inbox/` (rotas) | 04ef7981 | ADAPT |
 | `apps/web/features/inbox/components/` (a criar) | `components/inbox/*.tsx` (ConversationList, ChatThread, Composer, CRMSidePanel, media/*) | 04ef7981 | ADAPT |
 | `internal/bpo` (rotas de ticket, já parcialmente existe) | `docs/specs/04-spec-pipeline-attendance.md` §9 (claim atômico "Eu cuido" — UPDATE condicional + 409) | 04ef7981 | PORT |

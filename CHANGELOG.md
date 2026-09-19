@@ -4,6 +4,13 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
 ## [Unreleased]
 
+### Added (U1 — WAHA unofficial runtime foundation)
+- Optional internal-only WAHA Docker service pinned to `devlikeapro/waha:gows-2026.8.2`.
+- Persistent session/media volumes, healthcheck, restart policy, disabled dashboard/Swagger.
+- Centralized WAHA config and engine validation (`GOWS`, `NOWEB`, `WEBJS`).
+- Provider-agnostic WAHA HTTP client foundation with API-key transport and error classification.
+- No WAHA port published to host; API key remains runtime secret.
+
 ### Added (D3.1 — Channel credentials foundation)
 - `channel_connections` e `channel_credentials` com RLS + FORCE RLS e rollback.
 - AES-256-GCM com chave Base64 `OMNIRA_CREDENTIALS_KEY` de 32 bytes.

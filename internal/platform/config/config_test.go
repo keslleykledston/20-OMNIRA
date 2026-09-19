@@ -67,3 +67,31 @@ func TestLoadRejectsMalformedCredentialKey(t *testing.T) {
 		t.Fatalf("valid credential key rejected: %v", err)
 	}
 }
+
+func TestValidateWAHAConfig(t *testing.T) {
+	base := Config{
+		Env:            "test",
+		HTTPAddr:       ":8080",
+		DatabaseURL:    "postgres://test",
+		CredentialsKey: make([]byte, 32),
+		WahaEnabled:    true,
+		WahaBaseURL:    "http://waha:3000",
+		WahaAPIKey:     "runtime-secret",
+		WahaEngine:     "GOWS",
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid WAHA config rejected: %v", err)
+	}
+
+	missingKey := base
+	missingKey.WahaAPIKey = ""
+	if err := missingKey.Validate(); err == nil {
+		t.Fatal("missing WAHA API key accepted")
+	}
+
+	badEngine := base
+	badEngine.WahaEngine = "UNKNOWN"
+	if err := badEngine.Validate(); err == nil {
+		t.Fatal("unsupported WAHA engine accepted")
+	}
+}

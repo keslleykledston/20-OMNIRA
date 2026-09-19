@@ -24,6 +24,10 @@ type Config struct {
 	AuthAudience      string
 	CredentialsKey    []byte
 	credentialsKeyErr error
+	WahaEnabled       bool
+	WahaBaseURL       string
+	WahaAPIKey        string
+	WahaEngine        string
 	GracefulShutdown  int // segundos
 }
 
@@ -49,6 +53,10 @@ func Load() *Config {
 		AuthAudience:      getEnv("OMNIRA_AUTH_AUDIENCE", "omnira"),
 		CredentialsKey:    key,
 		credentialsKeyErr: keyErr,
+		WahaEnabled:       getEnv("OMNIRA_WAHA_ENABLED", "false") == "true",
+		WahaBaseURL:       getEnv("OMNIRA_WAHA_BASE_URL", "http://waha:3000"),
+		WahaAPIKey:        os.Getenv("OMNIRA_WAHA_API_KEY"),
+		WahaEngine:        getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
 		GracefulShutdown:  getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
 	}
 }
@@ -78,6 +86,14 @@ func (c *Config) Validate() error {
 	}
 	if len(c.CredentialsKey) != 32 {
 		return fmt.Errorf("OMNIRA_CREDENTIALS_KEY deve decodificar para 32 bytes")
+	}
+	if c.WahaEnabled {
+		if c.WahaBaseURL == "" || c.WahaAPIKey == "" {
+			return fmt.Errorf("WAHA habilitado exige OMNIRA_WAHA_BASE_URL e OMNIRA_WAHA_API_KEY")
+		}
+		if c.WahaEngine != "GOWS" && c.WahaEngine != "NOWEB" && c.WahaEngine != "WEBJS" {
+			return fmt.Errorf("OMNIRA_WAHA_ENGINE inválido")
+		}
 	}
 	return nil
 }

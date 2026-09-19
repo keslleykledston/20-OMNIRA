@@ -66,6 +66,30 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  waha:
+    image: devlikeapro/waha:gows-2026.8.2
+    profiles:
+      - whatsapp-unofficial
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: ${OMNIRA_WAHA_ENGINE-GOWS}
+      WAHA_API_KEY: ${WAHA_API_KEY-}
+      WAHA_DASHBOARD_ENABLED: "false"
+      WHATSAPP_SWAGGER_ENABLED: "false"
+    volumes:
+      - waha_sessions:/app/.sessions
+      - waha_media:/app/.media
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - omnira-network
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -82,6 +106,10 @@ services:
       - NATS_URL=nats://nats:4222
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OMNIRA_CREDENTIALS_KEY=${OMNIRA_CREDENTIALS_KEY-}
+      - OMNIRA_WAHA_ENABLED=${OMNIRA_WAHA_ENABLED-false}
+      - OMNIRA_WAHA_BASE_URL=${OMNIRA_WAHA_BASE_URL-http://waha:3000}
+      - OMNIRA_WAHA_API_KEY=${OMNIRA_WAHA_API_KEY-}
+      - OMNIRA_WAHA_ENGINE=${OMNIRA_WAHA_ENGINE-GOWS}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 5s
@@ -129,6 +157,10 @@ volumes:
   postgres_data:
     driver: local
   nats_data:
+    driver: local
+  waha_sessions:
+    driver: local
+  waha_media:
     driver: local
 
 networks:
