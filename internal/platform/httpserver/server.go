@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
+	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
@@ -208,6 +209,23 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 
 	// Auditoria
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/audit", authnMiddleware(tenantSession(http.HandlerFunc(auditHandler.ListTenantAuditEvents))))
+}
+
+// RegisterInboxHandlers exposes tenant-scoped, read-only Inbox queries.
+func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
+	if s.publicKey == nil {
+		return
+	}
+	jwtAuth := authn.NewJWTAuthenticator(s.publicKey, mockJWTIssuer, mockJWTAudience)
+	authnMiddleware := authn.Middleware(jwtAuth)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	handler := inboxadapters.NewInboxAPIHandler(dbPool)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
 }
 
 // RegisterWahaWebhook exposes only the connection-scoped WAHA callback.

@@ -19,7 +19,7 @@ func (c *Cursor) Encode() string {
 	if c == nil {
 		return ""
 	}
-	encoded := fmt.Sprintf("%s:%d", c.ID, c.Timestamp.Unix())
+	encoded := fmt.Sprintf("%s:%d", c.ID, c.Timestamp.UnixNano())
 	return base64.StdEncoding.EncodeToString([]byte(encoded))
 }
 
@@ -45,10 +45,10 @@ func DecodeCursor(s string) (*Cursor, error) {
 		return nil, fmt.Errorf("invalid cursor timestamp: %w", err)
 	}
 
-	return &Cursor{
-		ID:        id,
-		Timestamp: time.Unix(timestamp, 0),
-	}, nil
+	if timestamp < 1_000_000_000_000 {
+		return &Cursor{ID: id, Timestamp: time.Unix(timestamp, 0)}, nil
+	}
+	return &Cursor{ID: id, Timestamp: time.Unix(0, timestamp)}, nil
 }
 
 // PageOptions — opções para paginação

@@ -23,6 +23,8 @@ tags:
     description: System health checks and metrics
   - name: Tenancy
     description: Tenant management and membership
+  - name: Inbox
+    description: Tenant-scoped conversations and messages
   - name: Internal
     description: Internal endpoints (not exposed publicly)
 
@@ -313,6 +315,134 @@ paths:
         '404':
           description: Membership not found
 
+  /api/v1/tenants/{tenant_id}/inbox/conversations:
+    get:
+      operationId: listConversations
+      summary: List tenant conversations
+      tags:
+        - Inbox
+      description: |
+        Lists all conversations for the authenticated tenant.
+        Supports cursor-based pagination.
+        Results ordered by created_at DESC.
+      security:
+        - Bearer: []
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Base64-encoded cursor for pagination
+        - name: sort
+          in: query
+          schema:
+            type: string
+            default: created_at:desc
+          description: 'Only supported value: created_at:desc'
+      responses:
+        '200':
+          description: List of conversations with pagination
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationPageResult'
+          headers:
+            Link:
+              schema:
+                type: string
+              description: RFC 5988 Link header for next page
+            X-Has-More:
+              schema:
+                type: boolean
+              description: Whether more results are available
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+
+  /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages:
+    get:
+      operationId: listMessages
+      summary: List conversation messages
+      tags:
+        - Inbox
+      description: |
+        Lists all messages in a conversation.
+        Supports cursor-based pagination.
+        Results ordered by created_at DESC.
+      security:
+        - Bearer: []
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Base64-encoded cursor for pagination
+        - name: sort
+          in: query
+          schema:
+            type: string
+            default: created_at:desc
+          description: 'Only supported value: created_at:desc'
+      responses:
+        '200':
+          description: List of messages with pagination
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagePageResult'
+          headers:
+            Link:
+              schema:
+                type: string
+              description: RFC 5988 Link header for next page
+            X-Has-More:
+              schema:
+                type: boolean
+              description: Whether more results are available
+        '400':
+          description: Invalid conversation_id
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '500':
+          description: Internal server error
+
   /internal/health/live:
     get:
       operationId: getLivenessProbe
@@ -572,3 +702,168 @@ components:
           type: string
           description: Cursor for next page (null if has_more is false)
           example: "dXNlci0xOjE2OTUzMTIzNDU="
+
+    ConversationItem:
+      type: object
+      required:
+        - id
+        - contact_id
+        - status
+        - title
+        - contact_name
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        contact_id:
+          type: string
+          format: uuid
+        channel_connection_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+          enum:
+            - pending
+            - active
+            - paused
+            - archived
+        title:
+          type: string
+        assigned_to_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        queue_id:
+          type: string
+          format: uuid
+          nullable: true
+        contact_name:
+          type: string
+        contact_phone:
+          type: string
+        ticket_status:
+          type: string
+          nullable: true
+          enum:
+            - open
+            - in_progress
+            - waiting
+            - resolved
+            - closed
+        ticket_priority:
+          type: string
+          nullable: true
+          enum:
+            - low
+            - medium
+            - high
+            - urgent
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ConversationPageResult:
+      type: object
+      required:
+        - items
+        - count
+        - limit
+        - has_more
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConversationItem'
+        count:
+          type: integer
+        limit:
+          type: integer
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+          nullable: true
+
+    MessageItem:
+      type: object
+      required:
+        - id
+        - conversation_id
+        - direction
+        - message_type
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversation_id:
+          type: string
+          format: uuid
+        channel_connection_id:
+          type: string
+          format: uuid
+          nullable: true
+        direction:
+          type: string
+          enum:
+            - inbound
+            - outbound
+        message_type:
+          type: string
+          enum:
+            - text
+            - media
+            - interactive
+            - template
+        body:
+          type: string
+          nullable: true
+        media_ref:
+          type: string
+          nullable: true
+        mime_type:
+          type: string
+          nullable: true
+        size_bytes:
+          type: integer
+          nullable: true
+        status:
+          type: string
+          enum:
+            - received
+            - delivered
+            - read
+            - failed
+        created_at:
+          type: string
+          format: date-time
+
+    MessagePageResult:
+      type: object
+      required:
+        - items
+        - count
+        - limit
+        - has_more
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageItem'
+        count:
+          type: integer
+        limit:
+          type: integer
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+          nullable: true

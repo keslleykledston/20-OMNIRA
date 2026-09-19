@@ -53,6 +53,7 @@ func main() {
 	srv.RegisterHealthHandlers()
 	srv.RegisterAuthHandlers()
 	srv.RegisterTenancyHandlers(dbPool)
+	srv.RegisterInboxHandlers(dbPool)
 	if cfg.WahaEnabled {
 		cipher, cipherErr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
 		if cipherErr != nil {
