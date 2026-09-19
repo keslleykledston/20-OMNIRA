@@ -11,7 +11,7 @@ interface AssignmentButtonProps {
 
 /**
  * M05.4 — AssignmentButton
- * Integrates with M04.1 claim endpoint: POST /tenants/{tid}/conversations/{cid}/assign
+ * Consumes POST /tenants/{tid}/inbox/conversations/{cid}/assign|unassign (tenant and actor come from the JWT, never the body)
  * Supports manual claim and unassignment
  */
 export function AssignmentButton({ conversationId, assignedToUserId, onAssignmentChange }: AssignmentButtonProps) {
@@ -25,7 +25,7 @@ export function AssignmentButton({ conversationId, assignedToUserId, onAssignmen
 
     try {
       const response = await axios.post(
-        `${API_BASE}/tenants/${tenantId}/conversations/${conversationId}/assign`,
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/assign`,
         {},
         {
           headers: {
@@ -36,10 +36,10 @@ export function AssignmentButton({ conversationId, assignedToUserId, onAssignmen
 
       if (response.status === 200) {
         const data = response.data;
-        onAssignmentChange?.(data.assigned_to_user_id);
+        onAssignmentChange?.(data.assigned_to_user_id ?? '');
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to assign conversation');
+      setError(assignmentErrorMessage(err, 'Failed to assign conversation'));
     } finally {
       setIsLoading(false);
     }
@@ -51,7 +51,7 @@ export function AssignmentButton({ conversationId, assignedToUserId, onAssignmen
 
     try {
       await axios.post(
-        `${API_BASE}/tenants/${tenantId}/conversations/${conversationId}/unassign`,
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/unassign`,
         {},
         {
           headers: {
@@ -62,7 +62,7 @@ export function AssignmentButton({ conversationId, assignedToUserId, onAssignmen
 
       onAssignmentChange?.('');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to unassign conversation');
+      setError(assignmentErrorMessage(err, 'Failed to unassign conversation'));
     } finally {
       setIsLoading(false);
     }
@@ -172,6 +172,21 @@ export function AssignmentButton({ conversationId, assignedToUserId, onAssignmen
       `}</style>
     </div>
   );
+}
+
+// Backend answers plain-text errors: 409 lost the claim race, 403 lacks the
+// permission, 404 conversation not visible in this tenant.
+export function assignmentErrorMessage(err: any, fallback: string): string {
+  switch (err?.response?.status) {
+    case 409:
+      return 'Already assigned to another agent';
+    case 403:
+      return 'You do not have permission to do this';
+    case 404:
+      return 'Conversation not found';
+    default:
+      return fallback;
+  }
 }
 
 function getTenantIdFromAuth(): string {

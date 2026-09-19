@@ -16,6 +16,8 @@ import (
 	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
+	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
+	routingapplication "github.com/omnira/omnira/internal/routing/application"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 )
@@ -231,6 +233,12 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
+	assignHandler := routingadapters.NewAssignHandler(routingapplication.NewAssigner(
+		routingadapters.NewPostgresConversationAssigner(dbPool),
+		routingadapters.NewAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool)),
+	))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Assign))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Unassign))))
 }
 
 // RegisterWahaWebhook exposes only the connection-scoped WAHA callback.

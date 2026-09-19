@@ -10,12 +10,14 @@ import (
 type AuditAction string
 
 const (
-	ActionTenantCreated       AuditAction = "tenant.created"
-	ActionTenantDeactivated   AuditAction = "tenant.deactivated"
-	ActionTenantSuspended     AuditAction = "tenant.suspended"
-	ActionMembershipGranted   AuditAction = "membership.granted"
-	ActionMembershipRevoked   AuditAction = "membership.revoked"
-	ActionMembershipDeactivated AuditAction = "membership.deactivated"
+	ActionTenantCreated          AuditAction = "tenant.created"
+	ActionTenantDeactivated      AuditAction = "tenant.deactivated"
+	ActionTenantSuspended        AuditAction = "tenant.suspended"
+	ActionMembershipGranted      AuditAction = "membership.granted"
+	ActionMembershipRevoked      AuditAction = "membership.revoked"
+	ActionMembershipDeactivated  AuditAction = "membership.deactivated"
+	ActionConversationAssigned   AuditAction = "conversation.assigned"
+	ActionConversationUnassigned AuditAction = "conversation.unassigned"
 )
 
 // AuditOutcome — resultado da operação.
@@ -30,9 +32,10 @@ const (
 type ResourceType string
 
 const (
-	ResourceTenant     ResourceType = "tenant"
-	ResourceMembership ResourceType = "membership"
-	ResourceRole       ResourceType = "role"
+	ResourceTenant       ResourceType = "tenant"
+	ResourceMembership   ResourceType = "membership"
+	ResourceRole         ResourceType = "role"
+	ResourceConversation ResourceType = "conversation"
 )
 
 // AuditEvent — evento de auditoria.
