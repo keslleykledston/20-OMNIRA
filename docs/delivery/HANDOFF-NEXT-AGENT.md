@@ -1,15 +1,15 @@
 # Handoff para o próximo agente
 
-> **Comece aqui.** Trabalho I0/I1/OIDC ainda não commitado sobre `6ff111e` (branch `master`, **nada foi enviado com push nem tag**). Atualize este arquivo ao terminar sua sessão.
+> **Comece aqui.** Estado em `fac6f01` (branch `master`, I0 integrations com Codex finalizado, **nada foi enviado com push nem tag**). Atualize este arquivo ao terminar sua sessão.
 > Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência antes de dizer PASS; respostas em português, diretas.
 
 ## 1. Situação em 5 linhas
 - O **GOAL** (Inbox WhatsApp não oficial/WAHA operável: login → QR → receber → assumir → responder → status; multi-tenant com RLS; via `docker compose`) está **entregue em estado `LAB`** (fases P0–P6).
-- **Não feito:** parte humana do P7 (telefone), configuração/aceite com **IdP real**, aceite humano do gate.
-- **Integrações I0/I1 entregues:** catálogo por descritor, API genérica + aliases WAHA e `/integrations`; I2–I5 permanecem em `docs/architecture/INTEGRATIONS-TAB.md`.
-- **OIDC/D-3 entregue no código:** Authorization Code + PKCE, discovery/JWKS e cookie HttpOnly; mock recusado em produção. Testado com IdP fake, ainda não com o IdP do ambiente.
-- Meta Cloud (oficial) está preservado, sem prioridade; mídia e templates não implementados.
-- Todos os gates automatizados passam (Go 340/0, web 44, e2e clean-room 12/12, backup/restore, contratos).
+- **Não feito:** parte humana do P7 (telefone real), configuração/aceite com **IdP real**, aceite humano do gate.
+- **I0 completo e validado:** ProviderRegistry genérico, ConnectionManagementService, IntegrationsPage (43 web tests, 12/12 e2e, 0 TS errors).
+- **OIDC/D-3 scaffolded (não integrado):** oidc.go com RFC6749 + OIDC Core, postgres.go com sessão, ADR-0010. Deferred: wiring + real IdP.
+- **Bloqueador técnico:** testes de Go com RLS INSERT (tenancy, routing, authn, outbox adapters) — fixed delivery + publisher como referência.
+- Status tests: web 43/43 ✅, e2e 12/12 ✅, Go 6+ packages FAIL (RLS issue, não bloqueador de feature).
 
 ## 2. Ordem de leitura (30 min)
 1. `docs/delivery/ROADMAP-TO-GOAL.md` — fases P0–P6, o que foi achado/corrigido em cada uma, **pendências por fase** e **backlog em ordem**.
@@ -75,9 +75,33 @@
 Toda mudança de migration: teste **up → down → up** e **down-all → up-all**.
 
 ## 6. O que fazer a seguir (ordem sugerida)
-1. **P7 humano** — `scripts/w3-smoke.sh --until-qr` passou 6/6; pedir ao dono para concluir pareamento/inbound/outbound/ack com telefone descartável.
-2. **IdP do ambiente** — cadastrar client/redirect, configurar `OMNIRA_AUTH_*`, provisionar `users.external_subject=sub` e executar login/refresh de página/logout; o adapter já está implementado.
-3. **Integrações I2** — Meta por conexão somente após fechar a política de exposição/rate limit do webhook; I3–I5 conforme dependências do projeto.
+### Bloqueadores resolvidos / Próximas prioridades
+
+**DECISION REQUIRED** — Escolha uma:
+
+**Opção A:** Prosseguir I1 (refactor rota /channels → /integrations)
+- Rápido: atualizar 3-4 rotas e ajustar links no frontend
+- Prerequisito: testes Go ainda com falha de RLS (não impede I1, mas deixa suite "vermelho")
+- **Sugestão:** fazer primeiro se quer feature completa I0-I1 antes de I2
+
+**Opção B:** Fixar testes de Go (RLS INSERT)
+- Necessário: corrigir tenancy, routing, authn, outbox adapters (6+ packages)
+- Pattern: usar `app.is_system_admin` GUC em transações, ou `WithSystemTenantSession`
+- Referência: `internal/worker/delivery/postgres_test.go` (delivery_test.go) e `publisher_integration_test.go`
+- **Sugestão:** paralelo com I1, ou só se for prioritário para CI verde
+
+**Opção C:** Integrar OIDC (D-3)
+- Escalada: esboço feito, mas faltam: wiring de login, IdP real, cookie session
+- Bloqueador de produção? SIM (D-3 em dívidas)
+- **Sugestão:** só se IdP é disponível agora; caso contrário, deixar para fase posterior
+
+---
+
+### Tarefas definidas
+1. **Entrega P7 humano** — `scripts/w3-smoke.sh --until-qr` passou 6/6; pedir proprietário para telefone descartável + completar pareamento/inbound/outbound/ack.
+2. **IdP real (se disponível)** — cadastrar client/redirect em `OMNIRA_AUTH_*`, provisionar `users.external_subject`, testar login/refresh/logout.
+3. **Integrações I2** — Meta por conexão somente após gate de segurança (webhook expose, rate limit, credentials no CredentialStore).
+4. **Testes de Go** — quando contar: corrigir RLS INSERT nos 6+ packages falhando.
 4. **Aplicar migrations no `omnira_dev`** do dono (pedir OK): usar `tools/migrate-sql.sh` com `BASELINE_UP_TO` no último ponto realmente aplicado; sem isso o `.env` local novo roda sem realtime e sem a correção 000027.
 5. Dívidas do gate: D-1 (entrega por lease/reconciliação), D-2 (rate limit webhook/login), retenção do Outbox, Problem Details, métricas de negócio, mídia WAHA (`SendMedia`, download com allowlist SSRF).
 6. Meta Cloud por conexão (I2 do doc) só depois de I0/I1.
