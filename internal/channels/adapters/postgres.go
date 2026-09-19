@@ -109,6 +109,71 @@ func NewPostgresChannelConnectionRepository(pool *pgxpool.Pool) ports.ChannelCon
 	return &PostgresChannelConnectionRepository{pool: pool}
 }
 
+// WahaWebhookConnectionResolver performs the unauthenticated callback lookup
+// in an explicit system transaction. It derives tenant ownership from the
+// persisted connection row; no tenant_id from webhook payload is accepted.
+type WahaWebhookConnectionResolver struct {
+	pool *pgxpool.Pool
+	repo ports.ChannelConnectionRepository
+}
+
+type PostgresWebhookEventStore struct{ pool *pgxpool.Pool }
+
+func NewPostgresWebhookEventStore(pool *pgxpool.Pool) ports.WebhookEventStore {
+	return &PostgresWebhookEventStore{pool: pool}
+}
+
+func (s *PostgresWebhookEventStore) MarkReceived(ctx context.Context, connection domain.ChannelConnection, providerEventID, eventType, payloadDigest string) (bool, error) {
+	var id uuid.UUID
+	err := db.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
+		INSERT INTO channel_webhook_events
+			(tenant_id, connection_id, provider, provider_event_id, event_type, payload_digest)
+		SELECT tenant_id, id, provider, $2, $3, $4
+		FROM channel_connections
+		WHERE id = $1 AND provider = $5
+		ON CONFLICT (connection_id, provider_event_id) DO NOTHING
+		RETURNING id`, connection.ID, providerEventID, eventType, payloadDigest, domain.ProviderWAHA).Scan(&id)
+	if err == pgx.ErrNoRows {
+		var exists bool
+		if lookupErr := db.QuerierFromContext(ctx, s.pool).QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM channel_connections WHERE id = $1 AND provider = $2)`, connection.ID, domain.ProviderWAHA).Scan(&exists); lookupErr != nil {
+			return false, fmt.Errorf("channel: verify webhook connection: %w", lookupErr)
+		}
+		if !exists {
+			return false, fmt.Errorf("channel: webhook connection not eligible")
+		}
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("channel: reserve webhook event: %w", err)
+	}
+	return false, nil
+}
+
+func NewWahaWebhookConnectionResolver(pool *pgxpool.Pool, repo ports.ChannelConnectionRepository) *WahaWebhookConnectionResolver {
+	return &WahaWebhookConnectionResolver{pool: pool, repo: repo}
+}
+
+func (r *WahaWebhookConnectionResolver) ResolveWahaConnection(ctx context.Context, connectionToken string) (*domain.ChannelConnection, error) {
+	id, err := uuid.Parse(connectionToken)
+	if err != nil {
+		return nil, fmt.Errorf("channel: invalid WAHA connection token")
+	}
+	var connection *domain.ChannelConnection
+	err = db.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(systemCtx context.Context) error {
+		var lookupErr error
+		connection, lookupErr = r.repo.FindByID(systemCtx, id)
+		return lookupErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if connection == nil || connection.Provider != domain.ProviderWAHA || connection.ProviderKind != domain.ProviderKindUnofficial {
+		return nil, fmt.Errorf("channel: unknown WAHA connection")
+	}
+	return connection, nil
+}
+
 func (r *PostgresChannelConnectionRepository) Store(ctx context.Context, c *domain.ChannelConnection) error {
 	caps, err := json.Marshal(c.Capabilities)
 	if err != nil {

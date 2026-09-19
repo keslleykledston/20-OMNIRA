@@ -47,6 +47,22 @@ type Account struct {
 	PushName string `json:"pushName"`
 }
 
+type WebhookConfig struct {
+	URL    string   `json:"url"`
+	Events []string `json:"events"`
+	HMAC   struct {
+		Key string `json:"key"`
+	} `json:"hmac"`
+}
+
+type sessionCreateRequest struct {
+	Name   string `json:"name"`
+	Start  bool   `json:"start"`
+	Config struct {
+		Webhooks []WebhookConfig `json:"webhooks,omitempty"`
+	} `json:"config,omitempty"`
+}
+
 func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error) {
 	u, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
@@ -67,9 +83,25 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) CreateSession(ctx context.Context, name string) (Session, error) {
-	body := strings.NewReader(fmt.Sprintf(`{"name":%q,"start":false}`, name))
+	return c.createSession(ctx, sessionCreateRequest{Name: name, Start: false})
+}
+
+func (c *Client) CreateSessionWithWebhook(ctx context.Context, name, webhookURL, hmacKey string) (Session, error) {
+	request := sessionCreateRequest{Name: name, Start: false}
+	webhook := WebhookConfig{URL: webhookURL, Events: []string{"message.any", "message.ack", "session.status"}}
+	webhook.HMAC.Key = hmacKey
+	request.Config.Webhooks = []WebhookConfig{webhook}
+	return c.createSession(ctx, request)
+}
+
+func (c *Client) createSession(ctx context.Context, request sessionCreateRequest) (Session, error) {
+	bodyBytes, err := json.Marshal(request)
+	if err != nil {
+		return Session{}, ErrConfiguration
+	}
+	body := strings.NewReader(string(bodyBytes))
 	var session Session
-	_, err := c.do(ctx, http.MethodPost, "/api/sessions", body, &session)
+	_, err = c.do(ctx, http.MethodPost, "/api/sessions", body, &session)
 	return session, err
 }
 

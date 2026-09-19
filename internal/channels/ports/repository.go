@@ -23,3 +23,10 @@ type ChannelConnectionRepository interface {
 	FindByTenant(ctx context.Context, tenantID uuid.UUID) ([]*domain.ChannelConnection, error)
 	Update(ctx context.Context, conn *domain.ChannelConnection) error
 }
+
+// WebhookEventStore reserves one provider event/message key per connection.
+// MarkReceived returns true only for the first delivery; payloads are never
+// persisted here, only a short digest for audit/debug correlation.
+type WebhookEventStore interface {
+	MarkReceived(ctx context.Context, connection domain.ChannelConnection, providerEventID, eventType, payloadDigest string) (duplicate bool, err error)
+}

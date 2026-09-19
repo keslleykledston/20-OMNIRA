@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
+	"github.com/omnira/omnira/internal/channels/ports"
 )
 
 var (
@@ -17,14 +19,21 @@ var (
 // WahaProvider owns WAHA-specific session lifecycle. Authorization remains
 // outside this adapter: callers must resolve and authorize conn first.
 type WahaProvider struct {
-	client *Client
+	client      *Client
+	credentials ports.CredentialStore
 }
 
-func NewProvider(client *Client) (*WahaProvider, error) {
+var _ ports.ChannelProvider = (*WahaProvider)(nil)
+
+func NewProvider(client *Client, stores ...ports.CredentialStore) (*WahaProvider, error) {
 	if client == nil {
 		return nil, ErrConfiguration
 	}
-	return &WahaProvider{client: client}, nil
+	var credentials ports.CredentialStore
+	if len(stores) > 0 {
+		credentials = stores[0]
+	}
+	return &WahaProvider{client: client, credentials: credentials}, nil
 }
 
 // SessionRef deterministically binds one WAHA session to one connection.
@@ -46,6 +55,29 @@ func (p *WahaProvider) CreateSession(ctx context.Context, conn domain.ChannelCon
 		return Session{}, err
 	}
 	return p.client.CreateSession(ctx, name)
+}
+
+// CreateSessionWithWebhook configures only this connection's webhook. The
+// HMAC key is resolved server-side and sent only to WAHA over the adapter
+// request; it is never returned to the caller.
+func (p *WahaProvider) CreateSessionWithWebhook(ctx context.Context, conn domain.ChannelConnection, publicWebhookBaseURL string) (Session, error) {
+	name, err := p.SessionRef(conn)
+	if err != nil {
+		return Session{}, err
+	}
+	if p.credentials == nil || conn.SecretRef == "" {
+		return Session{}, ports.ErrNotConfigured
+	}
+	credential, err := p.credentials.Resolve(ctx, conn.SecretRef)
+	if err != nil {
+		return Session{}, errors.New("waha: resolve webhook credential failed")
+	}
+	hmacKey := credential.Fields["webhook_hmac_key"]
+	if hmacKey == "" || strings.TrimSpace(publicWebhookBaseURL) == "" {
+		return Session{}, ports.ErrNotConfigured
+	}
+	callback := strings.TrimRight(publicWebhookBaseURL, "/") + "/webhooks/v1/whatsapp/waha/" + conn.ID.String()
+	return p.client.CreateSessionWithWebhook(ctx, name, callback, hmacKey)
 }
 
 func (p *WahaProvider) StartSession(ctx context.Context, conn domain.ChannelConnection) (Session, error) {
@@ -84,8 +116,50 @@ func (p *WahaProvider) GetMe(ctx context.Context, conn domain.ChannelConnection)
 	return p.client.GetMe(ctx, name)
 }
 
-func (p *WahaProvider) CheckHealth(ctx context.Context) error {
-	return p.client.Health(ctx)
+func (p *WahaProvider) Metadata() ports.ProviderMetadata {
+	return ports.ProviderMetadata{
+		Name: domain.ProviderWAHA,
+		Kind: domain.ProviderKindUnofficial,
+		Capabilities: []domain.Capability{
+			domain.CapabilityHealth,
+			domain.CapabilitySessionPairing,
+			domain.CapabilityQRPairing,
+		},
+	}
+}
+
+func (p *WahaProvider) IsConfigured(_ context.Context, conn domain.ChannelConnection) bool {
+	return p != nil && p.client != nil && validateConnection(conn) == nil
+}
+
+func (p *WahaProvider) CheckHealth(ctx context.Context, conn domain.ChannelConnection) (ports.HealthStatus, error) {
+	if err := validateConnection(conn); err != nil {
+		return ports.HealthStatus{Reachable: false, Degraded: true}, err
+	}
+	if err := p.client.Health(ctx); err != nil {
+		return ports.HealthStatus{Reachable: false, Degraded: true}, err
+	}
+	return ports.HealthStatus{Reachable: true}, nil
+}
+
+func (p *WahaProvider) SendText(context.Context, domain.ChannelConnection, domain.OutboundTextMessage) (*domain.SendResult, error) {
+	return nil, ports.ErrCapabilityNotSupported
+}
+
+func (p *WahaProvider) SendMedia(context.Context, domain.ChannelConnection, domain.OutboundMediaMessage) (*domain.SendResult, error) {
+	return nil, ports.ErrCapabilityNotSupported
+}
+
+func (p *WahaProvider) SendTemplate(context.Context, domain.ChannelConnection, domain.OutboundTemplateMessage) (*domain.SendResult, error) {
+	return nil, ports.ErrCapabilityNotSupported
+}
+
+func (p *WahaProvider) DownloadMedia(context.Context, domain.ChannelConnection, domain.InboundMedia) (*domain.MediaContent, error) {
+	return nil, ports.ErrCapabilityNotSupported
+}
+
+func (p *WahaProvider) HandleDeliveryStatus(context.Context, domain.ChannelConnection, []byte) (*domain.DeliveryStatusUpdate, error) {
+	return nil, ports.ErrCapabilityNotSupported
 }
 
 // CanonicalStatus maps WAHA vocabulary to existing OMNIRA connection states.

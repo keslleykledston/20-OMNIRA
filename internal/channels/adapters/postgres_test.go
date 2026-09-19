@@ -151,3 +151,33 @@ func TestPostgresChannelIsolationAndCredentials(t *testing.T) {
 	}
 	_ = connA
 }
+
+func TestPostgresWebhookEventStoreReservesOnce(t *testing.T) {
+	f := newChannelIsolationFixture(t)
+	ctx := context.Background()
+	repo := NewPostgresChannelConnectionRepository(f.app)
+	store := NewPostgresWebhookEventStore(f.app)
+	conn := channelConn(f.tenantA, uuid.New(), "waha-a-"+uuid.New().String())
+	conn.Provider = domain.ProviderWAHA
+	conn.ProviderKind = domain.ProviderKindUnofficial
+	if err := platformdb.WithTenantSession(ctx, f.app, f.userA, false, func(sc context.Context) error {
+		return repo.Store(sc, conn)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var first, second bool
+	if err := platformdb.WithTenantSession(ctx, f.app, uuid.Nil, true, func(sc context.Context) error {
+		var err error
+		first, err = store.MarkReceived(sc, *conn, "msg-a", "message.any", "digest-a")
+		if err != nil {
+			return err
+		}
+		second, err = store.MarkReceived(sc, *conn, "msg-a", "message.any", "digest-a")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if first || !second {
+		t.Fatalf("expected first delivery new and second duplicate: first=%v second=%v", first, second)
+	}
+}

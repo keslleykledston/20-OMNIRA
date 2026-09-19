@@ -4,6 +4,14 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 
 ## [Unreleased]
 
+### Added (U3 — WAHA webhook and inbound foundation)
+- Connection-scoped webhook route: `POST /webhooks/v1/whatsapp/waha/{connection_token}`.
+- Raw-body HMAC-SHA512 verification with constant-time comparison and per-connection CredentialStore secret.
+- Session webhook configuration limited to `message.any`, `message.ack`, and `session.status`.
+- WAHA message normalization to canonical `InboundMessage`; provider echoes ignored.
+- System transaction resolves connection ownership; webhook payload never supplies tenant authority.
+- Body limit and OTel webhook counters with low-cardinality labels.
+
 ### Added (U2 — WAHA session management)
 - Deterministic `omnira_<connection-id>` session reference; arbitrary names rejected.
 - Create/start/stop/restart/get session, QR, account identity, and provider health operations.

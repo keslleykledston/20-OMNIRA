@@ -11,6 +11,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
+	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	"github.com/omnira/omnira/internal/platform/config"
 	"github.com/omnira/omnira/internal/platform/httpserver"
 )
@@ -48,6 +51,25 @@ func main() {
 	srv.RegisterHealthHandlers()
 	srv.RegisterAuthHandlers()
 	srv.RegisterTenancyHandlers(dbPool)
+	if cfg.WahaEnabled {
+		cipher, cipherErr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+		if cipherErr != nil {
+			log.Fatalf("WAHA credential cipher error: %v", cipherErr)
+		}
+		credentialStore := channeladapters.NewPostgresCredentialStore(dbPool, cipher)
+		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
+		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)
+		client, clientErr := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
+		if clientErr != nil {
+			log.Fatalf("WAHA client config error: %v", clientErr)
+		}
+		provider, providerErr := waha.NewProvider(client, credentialStore)
+		if providerErr != nil {
+			log.Fatalf("WAHA provider config error: %v", providerErr)
+		}
+		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
+		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore))
+	}
 
 	errChan := make(chan error, 1)
 	sigChan := make(chan os.Signal, 1)

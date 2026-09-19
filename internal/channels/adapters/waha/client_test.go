@@ -2,6 +2,7 @@ package waha_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,43 @@ import (
 
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 )
+
+func TestClientCreateSessionWithWebhookConfiguresOnlyAllowedEvents(t *testing.T) {
+	const secret = "webhook-secret"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name   string `json:"name"`
+			Start  bool   `json:"start"`
+			Config struct {
+				Webhooks []struct {
+					URL    string   `json:"url"`
+					Events []string `json:"events"`
+					HMAC   struct {
+						Key string `json:"key"`
+					} `json:"hmac"`
+				} `json:"webhooks"`
+			} `json:"config"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Start || len(body.Config.Webhooks) != 1 || body.Config.Webhooks[0].HMAC.Key != secret {
+			t.Fatalf("unexpected session config: %+v", body)
+		}
+		if got := body.Config.Webhooks[0].Events; len(got) != 3 || got[0] != "message.any" || got[1] != "message.ack" || got[2] != "session.status" {
+			t.Fatalf("unexpected webhook events: %#v", got)
+		}
+		_, _ = w.Write([]byte(`{"name":"session","status":"STOPPED"}`))
+	}))
+	defer srv.Close()
+	client, err := waha.NewClient(srv.URL, "api-key", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateSessionWithWebhook(context.Background(), "omnira_conn", "https://omnira.example/webhook", secret); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestClientHealthUsesAPIKeyWithoutExposingIt(t *testing.T) {
 	const secret = "waha-secret-not-for-logs"

@@ -210,6 +210,16 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/audit", authnMiddleware(tenantSession(http.HandlerFunc(auditHandler.ListTenantAuditEvents))))
 }
 
+// RegisterWahaWebhook exposes only the connection-scoped WAHA callback.
+// Authentication happens inside the handler using the per-connection HMAC
+// credential; this route never accepts a tenant_id claim.
+func (s *Server) RegisterWahaWebhook(handler http.Handler) {
+	if handler == nil {
+		return
+	}
+	s.mux.Handle("POST /webhooks/v1/whatsapp/waha/{connection_token}", handler)
+}
+
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {

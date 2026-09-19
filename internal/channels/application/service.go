@@ -70,6 +70,25 @@ func (s *ChannelService) ResolveInboundConnection(ctx context.Context, providerN
 	return conn, nil
 }
 
+// ResolveWahaConnection resolves the opaque path token used by a WAHA
+// webhook. The token is a connection UUID, not a tenant claim or session
+// name. Caller must use an authorized system context for this unauthenticated
+// provider callback, then derive TenantContext from the returned connection.
+func (s *ChannelService) ResolveWahaConnection(ctx context.Context, connectionToken string) (*domain.ChannelConnection, error) {
+	connectionID, err := uuid.Parse(connectionToken)
+	if err != nil {
+		return nil, fmt.Errorf("channel: invalid WAHA connection token")
+	}
+	conn, err := s.connRepo.FindByID(ctx, connectionID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: failed to resolve WAHA connection: %w", err)
+	}
+	if conn == nil || conn.Provider != domain.ProviderWAHA || conn.ProviderKind != domain.ProviderKindUnofficial {
+		return nil, fmt.Errorf("channel: unknown WAHA connection")
+	}
+	return conn, nil
+}
+
 // SendText — resolve o provider da conexão e delega o envio. O
 // TenantContext do chamador já deve ter autorizado o acesso a esta
 // connection antes de chegar aqui (a autorização não é responsabilidade
