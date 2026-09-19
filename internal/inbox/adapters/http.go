@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
@@ -95,6 +96,37 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	}
 	pagination.WritePaginationHeaders(w, result)
 	writeJSON(w, result)
+}
+
+// GetConversation returns one conversation of the TenantContext tenant. A
+// conversation of another tenant and an unknown id are indistinguishable (404).
+func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := requestTenant(r)
+	if err != nil {
+		http.Error(w, "tenant context not found", http.StatusInternalServerError)
+		return
+	}
+	conversationID, err := uuid.Parse(r.PathValue("conversation_id"))
+	if err != nil {
+		http.Error(w, "invalid conversation_id", http.StatusBadRequest)
+		return
+	}
+	item, err := scanConversationItem(platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
+		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
+		       co.display_name,co.phone_e164,t.status,t.priority,c.created_at,c.updated_at
+		FROM conversations c JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
+		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
+		WHERE c.tenant_id=$1 AND c.id=$2
+		ORDER BY t.created_at DESC NULLS LAST LIMIT 1`, tenantID, conversationID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to read conversation", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, item)
 }
 
 func (h *InboxAPIHandler) ListMessages(w http.ResponseWriter, r *http.Request) {

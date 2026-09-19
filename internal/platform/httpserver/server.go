@@ -233,6 +233,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	handler := inboxadapters.NewInboxAPIHandler(dbPool)
 	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetConversation))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(tenantSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
