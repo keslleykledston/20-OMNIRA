@@ -1,5 +1,7 @@
 # OMNIRA — START HERE
 
+> **Retomando o trabalho?** Leia primeiro `docs/delivery/HANDOFF-NEXT-AGENT.md` (estado atual, onde achar cada dado, próximos passos).
+
 Este pacote é o contrato de direção para o agente responsável por construir o OMNIRA.
 
 ## Objetivo

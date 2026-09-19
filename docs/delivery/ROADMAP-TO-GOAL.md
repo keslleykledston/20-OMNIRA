@@ -1,6 +1,6 @@
 # Roadmap até o GOAL — Inbox WhatsApp não oficial (WAHA) operável
 
-> Documento vivo para qualquer agente que assuma o trabalho. Atualize a tabela e as seções
+> Documento vivo para qualquer agente que assuma o trabalho. **Ponto de entrada: `docs/delivery/HANDOFF-NEXT-AGENT.md`.** Atualize a tabela e as seções
 > "Evidência" e "Pendências" a cada fase. Regras do projeto: `CLAUDE.md`, `docs/architecture/*`.
 > Nunca declarar produção pronta; estados permitidos em `~/.claude/CLAUDE.md` (K3G).
 
