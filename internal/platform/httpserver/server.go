@@ -243,6 +243,16 @@ func (s *Server) RegisterWahaWebhook(handler http.Handler) {
 	s.mux.Handle("POST /webhooks/v1/whatsapp/waha/{connection_token}", handler)
 }
 
+// RegisterMetaWebhook exposes Meta Cloud WhatsApp webhook (verification + inbound).
+// D3.2: Webhook is tenant-safe — resolution via phone_number_id, never payload tenant_id.
+func (s *Server) RegisterMetaWebhook(handler http.Handler) {
+	if handler == nil {
+		return
+	}
+	s.mux.Handle("GET /webhooks/v1/whatsapp/meta", handler)
+	s.mux.Handle("POST /webhooks/v1/whatsapp/meta", handler)
+}
+
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
