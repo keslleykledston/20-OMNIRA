@@ -1,0 +1,613 @@
+openapi: 3.0.3
+info:
+  title: OMNIRA API
+  version: 1.0.0-lab
+  license: { name: Proprietary, url: 'https://omnira.devops.k3gsolutions.com.br' }
+  description: |
+    Inbox WhatsApp (unofficial provider WAHA) — REST, SSE and webhook contract.
+
+    **Status: LAB.** Hand-authored from the implementation; `internal/platform/httpserver/contract_test.go`
+    fails when a documented route and the server routes diverge. Field-level shapes are exercised by the
+    Go integration tests and the browser e2e (`scripts/e2e-inbox.sh`).
+
+    **Tenancy.** Every `/tenants/{tenant_id}/...` route requires a Bearer JWT and an *active membership* in
+    that tenant. The tenant and the actor are derived from the token + membership, never trusted from a body.
+    A tenant the caller cannot see and a nonexistent tenant/resource are indistinguishable: **404** (no enumeration).
+
+    **Errors.** Errors are currently `text/plain` bodies with the HTTP status (no RFC 7807 Problem Details yet —
+    tracked in docs/delivery/ROADMAP-TO-GOAL.md). The login endpoint answers JSON `{error, message}`.
+
+    **Authentication.** Only a *mock* login exists (`POST /auth/login`, fixed known e-mails, RSA keys regenerated at
+    every boot). A real IdP (OIDC) is a production blocker.
+servers:
+  - url: /api/v1
+    description: Same-origin (web nginx / vite proxy forward /api to the API)
+tags:
+  - { name: Auth, description: Mock login (development only) }
+  - { name: Inbox, description: Conversations of the tenant }
+  - { name: Assignment, description: "Claim, assign, release with atomic claim and audit" }
+  - { name: Messages, description: Message history and idempotent outbound text }
+  - { name: Realtime, description: SSE stream of reference-only events }
+  - { name: Channels, description: "WhatsApp (WAHA) connections, sessions and pairing (admin)" }
+  - { name: Webhooks, description: Provider callbacks (server-to-server) }
+security:
+  - bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Mock login (development only)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Signed JWT (RS256, 24h) and the user's tenant
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '400': { $ref: '#/components/responses/JsonError' }
+        '401': { $ref: '#/components/responses/JsonError' }
+  /tenants/{tenant_id}/inbox/conversations:
+    get:
+      operationId: listConversations
+      tags: [Inbox]
+      summary: List conversations (cursor pagination, newest first)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - name: sort
+          in: query
+          schema: { type: string, enum: ['created_at:desc'] }
+      responses:
+        '200':
+          description: A page of conversations
+          headers:
+            X-Pagination-Count: { $ref: '#/components/headers/XPaginationCount' }
+            X-Pagination-Limit: { $ref: '#/components/headers/XPaginationLimit' }
+            X-Pagination-HasMore: { $ref: '#/components/headers/XPaginationHasMore' }
+            X-Pagination-NextCursor: { $ref: '#/components/headers/XPaginationNextCursor' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationPage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}:
+    get:
+      operationId: getConversation
+      tags: [Inbox]
+      summary: Get one conversation
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200':
+          description: The conversation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationItem' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages:
+    get:
+      operationId: listMessages
+      tags: [Messages]
+      summary: List a conversation's messages
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: A page of messages
+          headers:
+            X-Pagination-Count: { $ref: '#/components/headers/XPaginationCount' }
+            X-Pagination-Limit: { $ref: '#/components/headers/XPaginationLimit' }
+            X-Pagination-HasMore: { $ref: '#/components/headers/XPaginationHasMore' }
+            X-Pagination-NextCursor: { $ref: '#/components/headers/XPaginationNextCursor' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessagePage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: sendMessage
+      tags: [Messages]
+      summary: Queue an outbound text message
+      description: |
+        Persists the message (`queued`) and its delivery job atomically; the worker delivers it through the
+        conversation's channel. Requires permission `conversation.claim` **and** being the conversation's assignee
+        (or `conversation.manage`). Idempotent per (tenant, sender, `Idempotency-Key`): a retry with the same key
+        and body returns the original message (`200` + `Idempotent-Replayed: true`); the same key with a different
+        body is `422`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: 8-128 characters of `[A-Za-z0-9._:-]`
+          schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9._:-]{8,128}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendMessageRequest' }
+      responses:
+        '202':
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueuedMessage' }
+        '200':
+          description: Idempotent replay of an earlier request
+          headers:
+            Idempotent-Replayed: { schema: { type: string, enum: ['true'] } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueuedMessage' }
+        '400': { description: "Malformed body or invalid Idempotency-Key", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { description: "Missing permission or conversation assigned to another agent", content: { text/plain: { schema: { type: string } } } }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Conversation is unassigned, or has no active text channel", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Blank/too long text (max 4096 characters) or key reused with a different request", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign:
+    post:
+      operationId: assignConversation
+      tags: [Assignment]
+      summary: Assign the conversation (claim for yourself, or assign to another agent)
+      description: |
+        Without a body: atomically claim an unassigned conversation for the caller (`conversation.claim`); if it is
+        already yours the call is an idempotent no-op (`changed:false`); owned by someone else → `409` (of two
+        simultaneous claimers exactly one wins). With `assignee_user_id`: assign to another agent
+        (`conversation.manage`); the target must hold `conversation.claim` in this tenant (else `422`).
+        History (`assignment_events`) and audit (`conversation.assigned`) are written in the same transaction.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/AssignResult' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Already assigned to another agent", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Assignee is not an eligible agent of this tenant", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign:
+    post:
+      operationId: unassignConversation
+      tags: [Assignment]
+      summary: Release the conversation
+      description: |
+        Releasing your own needs `conversation.claim`; releasing someone else's needs `conversation.manage`.
+        Unassigning an already-unassigned conversation is an idempotent no-op (`changed:false`).
+        Audit `conversation.unassigned`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200': { $ref: '#/components/responses/AssignResult' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/events:
+    get:
+      operationId: streamInboxEvents
+      tags: [Realtime]
+      summary: Server-Sent Events for the whole tenant
+      description: &sse |
+        `text/event-stream`. Authorized once and **re-authorized every 30 s** (revoked membership closes the stream);
+        heartbeat comment every 20 s. Send the JWT in the `Authorization` header (use fetch streaming; `EventSource`
+        cannot). Events carry **references only** (no message body/phone): refetch through the REST API.
+        Delivery is best-effort: after a reconnect, refetch.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: "Stream of `data: <RealtimeEvent JSON>` frames"
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/RealtimeEvent' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '503': { description: "Realtime unavailable (no NATS)", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/events:
+    get:
+      operationId: streamConversationEvents
+      tags: [Realtime]
+      summary: Server-Sent Events for one conversation
+      description: *sse
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200':
+          description: "Stream of `data: <RealtimeEvent JSON>` frames"
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/RealtimeEvent' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '503': { description: "Realtime unavailable (no NATS)", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/channels/waha/connections:
+    post:
+      operationId: createWahaConnection
+      tags: [Channels]
+      summary: Create a WhatsApp (WAHA, unofficial) connection
+      description: |
+        Requires permission `channel.manage` (tenant admin). `risk_acknowledged` must be `true` (unofficial
+        WhatsApp automation can get numbers banned); it is recorded with the acting user and the time. The webhook
+        HMAC key is generated server-side, stored encrypted and **never returned**.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateConnectionRequest' }
+      responses:
+        '201':
+          description: Connection created (status `pending`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChannelConnection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: "Risk not acknowledged", content: { text/plain: { schema: { type: string } } } }
+    get:
+      operationId: listWahaConnections
+      tags: [Channels]
+      summary: List the tenant's WAHA connections (`channel.manage`)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: Connections (no live session status)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChannelConnection' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/channels/waha/connections/{connection_id}:
+    get:
+      operationId: getWahaConnection
+      tags: [Channels]
+      summary: Get a connection with its live session status (persists the derived status)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/channels/waha/connections/{connection_id}/session/start:
+    post:
+      operationId: startWahaSession
+      tags: [Channels]
+      summary: Start (and if needed create) the WAHA session; idempotent
+      description: Registers this connection's webhook (`OMNIRA_PUBLIC_BASE_URL`) when the session does not exist yet.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: "Risk not acknowledged", content: { text/plain: { schema: { type: string } } } }
+        '502': { $ref: '#/components/responses/Text502' }
+        '503': { description: "Public webhook URL or gateway not configured", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/channels/waha/connections/{connection_id}/session/stop:
+    post:
+      operationId: stopWahaSession
+      tags: [Channels]
+      summary: Stop the WAHA session
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/channels/waha/connections/{connection_id}/qr:
+    get:
+      operationId: getWahaQR
+      tags: [Channels]
+      summary: Pairing QR code (only while the session waits for a scan)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200':
+          description: "QR image (base64). `Cache-Control: no-store`."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QRImage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "No QR code in the current session state (poll GET connection until `session_status` is `needs_qr`)", content: { text/plain: { schema: { type: string } } } }
+        '502': { $ref: '#/components/responses/Text502' }
+  /webhooks/v1/whatsapp/waha/{connection_id}:
+    servers:
+      - url: /
+        description: Not under /api/v1
+    post:
+      operationId: receiveWahaWebhook
+      tags: [Webhooks]
+      summary: WAHA → OMNIRA webhook (server-to-server; NOT exposed by the public nginx)
+      description: |
+        Authenticated by `X-Webhook-Hmac` = hex(HMAC-SHA512(raw body, connection webhook key)). The connection (and
+        therefore the tenant) is resolved from the path id in a system session; nothing in the payload selects the
+        tenant. Idempotent by event id (redeliveries are acknowledged, not reapplied). Events: `message` /
+        `message.any` (inbound), `message.ack` (delivery status), `session.status`.
+      security: []
+      parameters:
+        - { $ref: '#/components/parameters/ConnectionId' }
+        - name: X-Webhook-Hmac
+          in: header
+          required: true
+          schema: { type: string, description: 'hex, 128 chars' }
+        - name: X-Webhook-Hmac-Algorithm
+          in: header
+          required: true
+          schema: { type: string, enum: [sha512] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WahaWebhook' }
+      responses:
+        '200': { description: "Accepted (or duplicate)", content: { text/plain: { schema: { type: string } } } }
+        '202': { description: "Event ignored (unsupported)", content: { text/plain: { schema: { type: string } } } }
+        '400': { description: "Malformed webhook", content: { text/plain: { schema: { type: string } } } }
+        '401': { description: "Invalid signature", content: { text/plain: { schema: { type: string } } } }
+        '404': { description: "Unknown connection", content: { text/plain: { schema: { type: string } } } }
+        '409': { description: "Connection inactive or provider mismatch", content: { text/plain: { schema: { type: string } } } }
+        '413': { description: "Body too large (1 MiB)", content: { text/plain: { schema: { type: string } } } }
+        '503': { description: "Verification key unreadable / intake unavailable — WAHA retries", content: { text/plain: { schema: { type: string } } } }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    TenantId:
+      name: tenant_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConnectionId:
+      name: connection_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from `next_cursor`
+      schema: { type: string }
+  headers:
+    XPaginationCount: { description: Items in this page, schema: { type: integer } }
+    XPaginationLimit: { description: Effective page size, schema: { type: integer } }
+    XPaginationHasMore: { description: Whether another page exists, schema: { type: boolean } }
+    XPaginationNextCursor: { description: Cursor for the next page (only when has_more), schema: { type: string } }
+  responses:
+    JsonError:
+      description: Error (JSON)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              message: { type: string }
+    Text400: { description: "Malformed identifier, pagination or body", content: { text/plain: { schema: { type: string } } } }
+    Text401: { description: "Missing/invalid/expired JWT", content: { text/plain: { schema: { type: string } } } }
+    Text403: { description: "Missing permission (e.g. `channel.manage` / `conversation.*`)", content: { text/plain: { schema: { type: string } } } }
+    Text404: { description: "Tenant, membership or resource not visible to the caller (no enumeration oracle)", content: { text/plain: { schema: { type: string } } } }
+    Text502: { description: "WhatsApp gateway (WAHA) unavailable or rejected the request", content: { text/plain: { schema: { type: string } } } }
+    AssignResult:
+      description: Resulting assignee; `changed:false` for an idempotent no-op
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AssignResult' }
+    Connection:
+      description: The connection
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ChannelConnection' }
+  schemas:
+    LoginRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, example: admin@omnira.local }
+    LoginResponse:
+      type: object
+      required: [token, expires_in, user, tenant]
+      properties:
+        token: { type: string }
+        expires_in: { type: integer, example: 86400 }
+        user:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string }
+            name: { type: string }
+        tenant:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+    ConversationItem:
+      type: object
+      required: [id, contact_id, status, title, contact_name, contact_phone, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        contact_id: { type: string, format: uuid }
+        channel_connection_id: { type: string, format: uuid }
+        status: { type: string, example: open }
+        title: { type: string }
+        assigned_to_user_id: { type: string, format: uuid, description: 'absent when unassigned' }
+        queue_id: { type: string, format: uuid }
+        contact_name: { type: string }
+        contact_phone: { type: string, description: E.164 }
+        ticket_status: { type: string }
+        ticket_priority: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ConversationPage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConversationItem' }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
+    MessageItem:
+      type: object
+      required: [id, conversation_id, direction, message_type, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        channel_connection_id: { type: string, format: uuid }
+        direction: { type: string, enum: [inbound, outbound] }
+        message_type: { type: string, enum: [text, image, video, audio, document, sticker] }
+        body: { type: string }
+        media_ref: { type: string }
+        mime_type: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        status: { type: string, enum: [received, queued, sent, delivered, read, failed] }
+        created_at: { type: string, format: date-time }
+    MessagePage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MessageItem' }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
+    SendMessageRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1, maxLength: 4096 }
+    QueuedMessage:
+      type: object
+      required: [id, conversation_id, direction, body, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        direction: { type: string, enum: [outbound] }
+        body: { type: string }
+        status: { type: string, enum: [queued, sent, delivered, read, failed] }
+        created_at: { type: string, format: date-time }
+    AssignRequest:
+      type: object
+      properties:
+        assignee_user_id:
+          type: string
+          format: uuid
+          description: Optional. Absent = claim for yourself. Requires `conversation.manage` for another agent.
+    AssignResult:
+      type: object
+      required: [conversation_id, assigned_to_user_id, changed]
+      properties:
+        conversation_id: { type: string, format: uuid }
+        assigned_to_user_id: { type: string, format: uuid, nullable: true }
+        changed: { type: boolean }
+    RealtimeEvent:
+      type: object
+      required: [type, id, timestamp]
+      properties:
+        type: { type: string, enum: [message_received, message_status, conversation_updated] }
+        id: { type: string, format: uuid, description: conversation id }
+        timestamp: { type: string, format: date-time }
+        data:
+          type: object
+          description: 'References only. message_received {message_id, direction, status}; message_status {message_id, status}; conversation_updated {reason, assigned_to_user_id, status}.'
+          additionalProperties: true
+    CreateConnectionRequest:
+      type: object
+      required: [risk_acknowledged]
+      properties:
+        risk_acknowledged: { type: boolean, description: 'Must be true' }
+    ChannelConnection:
+      type: object
+      required: [id, provider, provider_kind, status, capabilities, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, example: waha }
+        provider_kind: { type: string, enum: [official, unofficial] }
+        status: { type: string, enum: [pending, active, degraded, disconnected, failed, revoked] }
+        session_status: { type: string, enum: [missing, starting, needs_qr, working, stopped, failed], description: 'Only on GET / start / stop' }
+        external_account_id: { type: string, description: Paired account (digits) }
+        capabilities: { type: array, items: { type: string } }
+        risk_acknowledged_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    QRImage:
+      type: object
+      required: [mimetype, data]
+      properties:
+        mimetype: { type: string, example: image/png }
+        data: { type: string, description: base64 }
+    WahaWebhook:
+      type: object
+      required: [id, event, session, payload]
+      properties:
+        id: { type: string, description: 'Event id — deduplication key' }
+        event: { type: string, enum: [message, message.any, message.ack, session.status] }
+        session: { type: string, description: 'Must equal omnira_<connection_id>' }
+        payload: { type: object, additionalProperties: true }

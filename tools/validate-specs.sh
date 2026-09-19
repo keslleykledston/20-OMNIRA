@@ -32,18 +32,28 @@ echo -e "${YELLOW}=== API Specification Validation ===${NC}"
 echo ""
 
 # Validate OpenAPI
-if [ -f "docs/api/openapi.yaml" ]; then
-    validate_yaml "docs/api/openapi.yaml" "OpenAPI 3.0.0"
+if [ -f "contracts/openapi/omnira-v1.yaml" ]; then
+    validate_yaml "contracts/openapi/omnira-v1.yaml" "OpenAPI 3.0.0"
 else
-    echo -e "${RED}✗ docs/api/openapi.yaml not found${NC}"
+    echo -e "${RED}✗ contracts/openapi/omnira-v1.yaml not found${NC}"
     ((ERRORS++))
 fi
 
+# Semantic OpenAPI lint (needs npx + network the first time)
+if command -v npx >/dev/null 2>&1; then
+    echo -n "Linting OpenAPI (redocly)... "
+    if npx --yes @redocly/cli@latest lint contracts/openapi/omnira-v1.yaml >/tmp/redocly.out 2>&1; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"; tail -20 /tmp/redocly.out; ((ERRORS++))
+    fi
+fi
+
 # Validate AsyncAPI
-if [ -f "docs/async/asyncapi.yaml" ]; then
-    validate_yaml "docs/async/asyncapi.yaml" "AsyncAPI 3.0.0"
+if [ -f "contracts/asyncapi/omnira-v1.yaml" ]; then
+    validate_yaml "contracts/asyncapi/omnira-v1.yaml" "AsyncAPI 2.6"
 else
-    echo -e "${RED}✗ docs/async/asyncapi.yaml not found${NC}"
+    echo -e "${RED}✗ contracts/asyncapi/omnira-v1.yaml not found${NC}"
     ((ERRORS++))
 fi
 

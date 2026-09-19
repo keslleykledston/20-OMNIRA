@@ -1,0 +1,70 @@
+asyncapi: 2.6.0
+info:
+  title: OMNIRA messaging
+  version: 1.0.0-lab
+  description: |
+    NATS JetStream jobs and the ephemeral realtime path. **Status: LAB**, hand-authored from the implementation.
+
+    Rules that hold for every subject:
+    - A message never carries secrets, message bodies or phone numbers: only **references** (ids).
+    - `tenant_id` inside an envelope is informational and is **never** used for authorization; consumers derive the
+      tenant from the persisted row (`RunForMessage` / `RunForConversation`) and open a tenant session.
+    - Delivery is at-least-once for jobs (consumers are idempotent) and best-effort for realtime.
+servers:
+  local:
+    url: nats://nats:4222
+    protocol: nats
+channels:
+  job.routing.assign.v1:
+    description: Round-robin assignment of a new conversation (stream OMNIRA_JOBS, durable consumer `worker-routing`).
+    subscribe:
+      operationId: consumeRoutingAssign
+      message: { $ref: '#/components/messages/OutboxEnvelope' }
+  job.channel.send_text.v1:
+    description: |
+      Deliver one queued outbound text through the conversation's channel (stream OMNIRA_JOBS, durable consumer
+      `worker-channel-send`, MaxDeliver 10; the handler marks the message `failed` after 8 attempts of a retryable
+      error). `aggregate_id` is the **message id**; the payload is empty.
+    subscribe:
+      operationId: consumeChannelSendText
+      message: { $ref: '#/components/messages/OutboxEnvelope' }
+  'inbox.events.{tenant_id}.{conversation_id}':
+    description: |
+      Realtime events for the SSE endpoints (core NATS, no persistence). Produced by the worker's bridge from the
+      Postgres `NOTIFY omnira_inbox_events` emitted by row triggers (migration 000026). `>` on the conversation
+      token is used for the tenant-wide stream. References only.
+    parameters:
+      tenant_id: { schema: { type: string, format: uuid } }
+      conversation_id: { schema: { type: string, format: uuid } }
+    subscribe:
+      operationId: consumeInboxEvent
+      message: { $ref: '#/components/messages/InboxEvent' }
+components:
+  messages:
+    OutboxEnvelope:
+      name: OutboxEnvelope
+      contentType: application/json
+      payload:
+        type: object
+        required: [id, tenant_id, event_type, aggregate_type, aggregate_id, timestamp]
+        properties:
+          id: { type: string, format: uuid, description: Outbox event id (JetStream Msg-Id, dedupe) }
+          tenant_id: { type: string, format: uuid, description: Informational only — never an authorization source }
+          event_type: { type: string, example: job.channel.send_text.v1 }
+          aggregate_type: { type: string, enum: [conversation, message] }
+          aggregate_id: { type: string, description: conversation id or message id }
+          correlation_id: { type: string }
+          causation_id: { type: string }
+          payload: { type: object }
+          timestamp: { type: string, format: date-time }
+    InboxEvent:
+      name: InboxEvent
+      contentType: application/json
+      payload:
+        type: object
+        required: [type, id, timestamp]
+        properties:
+          type: { type: string, enum: [message_received, message_status, conversation_updated] }
+          id: { type: string, format: uuid, description: conversation id }
+          timestamp: { type: string, format: date-time }
+          data: { type: object, description: 'References only: message_id, direction, status, reason, assigned_to_user_id' }

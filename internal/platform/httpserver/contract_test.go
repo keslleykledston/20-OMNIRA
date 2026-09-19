@@ -1,0 +1,124 @@
+package httpserver
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+
+	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+)
+
+// Drift guard between contracts/openapi/omnira-v1.yaml and the routes the server really registers.
+// Forward: every documented operation must match a registered route (real ServeMux matching).
+// Reverse: every inbox/channels/assign/messages route declared in server.go must be documented.
+
+var (
+	specPathRE   = regexp.MustCompile(`^  (/\S+):\s*$`)
+	specMethodRE = regexp.MustCompile(`^    (get|post|put|patch|delete):\s*$`)
+	paramRE      = regexp.MustCompile(`\{[^}]+\}`)
+)
+
+type op struct{ method, path string }
+
+// specOps returns "METHOD /full/path" for every operation of the spec (server /api/v1 unless the
+// path overrides `servers` with url "/").
+func specOps(t *testing.T) []op {
+	raw, err := os.ReadFile("../../../contracts/openapi/omnira-v1.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ops []op
+	inPaths, cur, rootServer := false, "", false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "paths:" {
+			inPaths = true
+			continue
+		}
+		if inPaths && line == "components:" {
+			break
+		}
+		if !inPaths {
+			continue
+		}
+		if m := specPathRE.FindStringSubmatch(line); m != nil {
+			cur, rootServer = m[1], false
+			continue
+		}
+		if cur != "" && strings.HasPrefix(line, "      - url: /") && strings.TrimSpace(line) == "- url: /" {
+			rootServer = true
+		}
+		if m := specMethodRE.FindStringSubmatch(line); m != nil && cur != "" {
+			full := "/api/v1" + cur
+			if rootServer {
+				full = cur
+			}
+			ops = append(ops, op{strings.ToUpper(m[1]), full})
+		}
+	}
+	if len(ops) == 0 {
+		t.Fatal("no operations parsed from the contract")
+	}
+	return ops
+}
+
+func newRoutedServer(t *testing.T) *Server {
+	s := New("127.0.0.1:0")
+	s.RegisterHealthHandlers()
+	s.RegisterAuthHandlers() // generates the RSA keys the other registrations need
+	s.RegisterTenancyHandlers(nil)
+	s.RegisterInboxHandlers(nil)
+	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
+	s.RegisterWahaWebhook(http.NotFoundHandler())
+	return s
+}
+
+func TestEveryDocumentedOperationIsARegisteredRoute(t *testing.T) {
+	s := newRoutedServer(t)
+	for _, o := range specOps(t) {
+		concrete := paramRE.ReplaceAllString(o.path, "3f9c1b2e-0000-4000-8000-000000000001")
+		_, pattern := s.mux.Handler(httptest.NewRequest(o.method, concrete, nil))
+		if pattern == "" {
+			t.Errorf("documented but not routed: %s %s", o.method, o.path)
+		}
+	}
+}
+
+func TestEveryInboxAndChannelRouteIsDocumented(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := map[string]bool{}
+	for _, o := range specOps(t) {
+		documented[o.method+" "+paramRE.ReplaceAllString(o.path, "{}")] = true
+	}
+	var found []string
+	// literal patterns: s.mux.Handle("METHOD /api/v1/tenants/{tenant_id}/inbox/...", ...)
+	lit := regexp.MustCompile(`s\.mux\.Handle\("(GET|POST|PUT|PATCH|DELETE) (/api/v1/tenants/\{tenant_id\}/(?:inbox|channels)[^"]*)"`)
+	for _, m := range lit.FindAllStringSubmatch(string(src), -1) {
+		found = append(found, m[1]+" "+paramRE.ReplaceAllString(m[2], "{}"))
+	}
+	// the channels family uses: base := "..."; s.mux.Handle("METHOD "+base+"/suffix", ...)
+	baseRE := regexp.MustCompile(`base := "([^"]+)"`)
+	base := baseRE.FindStringSubmatch(string(src))
+	if base == nil {
+		t.Fatal("channels base path not found in server.go")
+	}
+	cat := regexp.MustCompile(`s\.mux\.Handle\("(GET|POST) "\+base(?:\+"([^"]*)")?`)
+	for _, m := range cat.FindAllStringSubmatch(string(src), -1) {
+		found = append(found, m[1]+" "+paramRE.ReplaceAllString(base[1]+m[2], "{}"))
+	}
+	if len(found) < 10 {
+		t.Fatalf("parsed only %d routes from server.go — the extraction is broken", len(found))
+	}
+	sort.Strings(found)
+	for _, f := range found {
+		if !documented[f] {
+			t.Errorf("routed but not documented in contracts/openapi/omnira-v1.yaml: %s", f)
+		}
+	}
+}
