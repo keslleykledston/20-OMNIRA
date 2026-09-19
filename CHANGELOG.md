@@ -15,6 +15,12 @@ Todas as mudanças relevantes do OMNIRA serão registradas aqui.
 - Canonical lifecycle models for open/closed conversations, inbound/outbound messages, and ticket resolution.
 - Queue, routing, realtime inbox, and automation remain outside this slice.
 
+### Added (M04 — Queue and routing foundation)
+- Tenant-owned queues, queue members, availability/capacity and append-only assignment events.
+- Manual and round-robin modes with deterministic oldest-assignment selection.
+- Composite tenant FKs and RLS/FORCE RLS for routing data.
+- Atomic claim remains a SQL application operation; no read-then-write claim path introduced.
+
 ### Added (U4 — WAHA outbound text foundation)
 - WAHA `SendText` adapter using the canonical channel seam and `/api/sendText`.
 - E.164 recipient validation, deterministic connection session ownership, and canonical sent result.
