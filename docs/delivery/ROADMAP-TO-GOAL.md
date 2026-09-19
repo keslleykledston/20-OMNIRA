@@ -83,6 +83,7 @@ Documento formal: **`docs/audit/GATE-INBOX-WAHA-LAB.md`** (evidência, triagem C
 **Pendências P6:** ver "Registro de dívidas" do gate (D-1…D-5 etc.).
 
 ## Backlog pós-GOAL / próximo agente (em ordem sugerida)
+0. **Aba Integrações** — projeto em `docs/architecture/INTEGRATIONS-TAB.md` (catálogo por descritor, QR/parâmetros por plataforma, API e fases I0–I5); implementação ainda não iniciada.
 1. **P7 — smoke com telefone real** (`scripts/w3-smoke.sh`) — desbloqueia `INTERNAL_PILOT` junto do aceite humano.
 2. **IdP real (OIDC)** + cookie HttpOnly (D-3) — bloqueio de produção.
 3. D-1 (entrega por lease/reconciliação), D-2 (rate limits), retenção do Outbox, Problem Details, métricas de negócio.
