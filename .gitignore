@@ -17,3 +17,6 @@ vendor/
 
 # Runtime logs
 logs/*.log
+
+# Clone de referencia externa (donor projects) - nunca versionar
+.reference-external/

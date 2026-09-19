@@ -1,0 +1,170 @@
+Você recebeu o pacote `OMNIRA-DESKCOMM-REUSE-KIT-v1.0`.
+
+Objetivo:
+usar o DeskcommCRM como donor/reference project para acelerar o OMNIRA.
+
+Leia primeiro:
+1. START-HERE.md
+2. README-AGENT.md
+3. docs/REUSE-MAP.md
+4. docs/ARCHITECTURE-COMPATIBILITY.md
+5. docs/MIGRATION-WAVES.md
+6. docs/LEGAL-ATTRIBUTION.md
+7. docs/ACCEPTANCE-GATES.md
+
+Depois:
+
+## FASE 1 — AUDIT
+
+1. Clone ou disponibilize o DeskcommCRM em uma pasta de referência, fora do runtime do OMNIRA.
+2. Registre o commit SHA exato.
+3. Não copie código ainda.
+4. Analise primeiro:
+   - docs/specs/01-spec-platform-base.md
+   - tests/invariants/rls-isolation.test.ts
+   - tests/invariants/rls-completude-varredura.test.ts
+   - lib/channels/types.ts
+   - lib/channels/adapters/meta-cloud.ts
+   - lib/channels/meta/
+   - app/app/inbox/
+   - components/inbox/
+   - docs/specs/04-spec-pipeline-attendance.md
+   - docs/specs/13-spec-governanca-atendimento.md
+   - lib/automation/
+   - lib/followup/
+   - .agents/skills/
+   - AGENTS.md
+   - CLAUDE.md
+
+5. Gere:
+   `docs/research/deskcomm/REUSE-AUDIT.md`
+   e
+   `docs/research/deskcomm/SOURCE-MAP.md`
+
+Para cada item classifique:
+COPY / ADAPT / PORT / INSPIRE / REJECT.
+
+## FASE 2 — TENANCY HARNESS
+
+Antes de qualquer feature Deskcomm:
+- adapte os padrões de teste RLS;
+- crie coverage check para tabelas tenant-owned;
+- adicione suite adversarial Tenant A/B;
+- não mude a arquitetura TenantContext do OMNIRA.
+
+## FASE 3 — CHANNEL SEAM
+
+Crie/valide o contrato canônico de channel no Go.
+Use o Deskcomm apenas como referência.
+Não implemente Meta antes de o seam estar testado.
+
+## FASE 4 — META CLOUD
+
+Porte para Go os comportamentos relevantes do adapter oficial Meta.
+Não copie TypeScript para o backend.
+
+Priorize:
+- inbound;
+- outbound;
+- delivery status;
+- idempotência;
+- credentials por tenant;
+- health;
+- media;
+- SSRF;
+- E.164/phone variants;
+- templates.
+
+Use:
+PostgreSQL + Outbox + NATS JetStream.
+
+## FASE 5 — FRONTEND
+
+Audite Inbox/Contacts.
+Reaproveite componentes React apenas onde isso reduzir trabalho.
+
+Obrigatório:
+- remover Supabase data layer;
+- usar OMNIRA API Go;
+- Omnira iOS Design System;
+- preservar accessibility e responsive.
+
+## FASE 6 — ROUTING/SUPERVISOR
+
+Porte state machine, atomic claim, assignment history e availability.
+Não copie schema cegamente; alinhe ao modelo OMNIRA.
+
+## FASE 7 — AUTOMATION
+
+Porte conceitos de graph validation/runtime.
+Execução continua via Outbox/NATS/worker Go.
+
+## LICENÇA
+
+Antes da primeira cópia/adaptação substancial:
+crie `THIRD_PARTY_NOTICES.md`.
+
+Registre:
+source path + commit + OMNIRA target.
+
+## REGRAS IMUTÁVEIS
+
+Não substituir:
+- Go;
+- PostgreSQL;
+- NATS JetStream;
+- Docker-first;
+- Nginx;
+- OpenTelemetry;
+- TenantContext;
+- RLS;
+- Meta Cloud oficial como provider prioritário, com arquitetura aberta a providers não oficiais opcionais;
+- Omnira iOS Design System.
+
+Não introduzir:
+- Supabase runtime como backend;
+- Caddy;
+- event_log como fila principal;
+- WAHA ou outro provider não oficial como canal principal/default;
+- Sentry como base obrigatória.
+
+
+## WHATSAPP MULTI-PROVIDER
+
+Mantenha o `ChannelProvider` preparado para:
+
+- official providers;
+- unofficial/session-based providers.
+
+Meta Cloud continua sendo a primeira implementação oficial.
+
+WAHA pode ser implementado futuramente como adapter opcional, tenant-scoped e containerizado, sem alterar o domínio.
+
+Não faça fallback automático entre official e unofficial.
+
+Leia `docs/WHATSAPP-PROVIDER-STRATEGY.md`.
+
+## EXECUÇÃO
+
+Trabalhe wave por wave.
+Não tente portar tudo de uma vez.
+
+Ao final de cada wave reporte:
+
+Wave:
+Status:
+Deskcomm commit:
+Itens analisados:
+COPY:
+ADAPT:
+PORT:
+INSPIRE:
+REJECT:
+Arquivos OMNIRA alterados:
+Tests:
+Security:
+Docker:
+Telemetry:
+Attribution:
+Pendências:
+Próxima wave:

@@ -1,0 +1,102 @@
+[
+  {
+    "path": "EXTRACTION-AND-USE.md",
+    "bytes": 1135,
+    "sha256": "0bb2fd8fc72e76582adafa48ebe419e1632ea2ac4957a169e18494a31949f439"
+  },
+  {
+    "path": "PACKAGE-INDEX.md",
+    "bytes": 530,
+    "sha256": "32d747af43bfcae45714333696bfb02fee34edcc36a72be4618e72ccba358d50"
+  },
+  {
+    "path": "PROMPT-CLAUDE-CODE.txt",
+    "bytes": 3796,
+    "sha256": "bfbd055bcc861f68e02c5cc56ef225fc1c3b8e90d741d4a1b3149d68b256b66e"
+  },
+  {
+    "path": "README-AGENT.md",
+    "bytes": 2450,
+    "sha256": "613432ee26022160921381d905b97a7ecb43fd91dd96df1c6891e9633adb274f"
+  },
+  {
+    "path": "START-HERE.md",
+    "bytes": 2198,
+    "sha256": "54ce23865072cb4704005b96dcdd3d33c6af8c734cadd343d35b349b101c69d8"
+  },
+  {
+    "path": "THIRD_PARTY_NOTICES-TEMPLATE.md",
+    "bytes": 446,
+    "sha256": "cd70eb5c9b3950c0c9af2a9bba0ee32621f78421bc805031e1aefa3190fefc91"
+  },
+  {
+    "path": "docs/ACCEPTANCE-GATES.md",
+    "bytes": 1192,
+    "sha256": "56e219650aa711a4ad866f477ca632bf72dc182f84d50616e8db96355148d420"
+  },
+  {
+    "path": "docs/ARCHITECTURE-COMPATIBILITY.md",
+    "bytes": 1203,
+    "sha256": "4dc8321f7916f648417b6f109540e87f4456e5fd9fef3d032baab361e24ca01b"
+  },
+  {
+    "path": "docs/AUTOMATION-PORT.md",
+    "bytes": 1031,
+    "sha256": "94eab1ca7bc86637b85629406b5637715eccca7622413a4199465a7296e80bc6"
+  },
+  {
+    "path": "docs/DO-NOT-PORT.md",
+    "bytes": 1046,
+    "sha256": "3a58a29e0ebfd95e582f356ec3d96e5c6c06bdcf4d308908a70718331840ed1f"
+  },
+  {
+    "path": "docs/FRONTEND-ADAPTATION.md",
+    "bytes": 1367,
+    "sha256": "e068d068f4f3db5f255fed5cb5205d200899a9ec0a46a985411a3c510021dfa9"
+  },
+  {
+    "path": "docs/HARNESS-SKILLS-PORT.md",
+    "bytes": 932,
+    "sha256": "7b7b6455d5a16db6fceacfe1ffdc0e150ffbb7280efc540f399c67d47ecb4ba3"
+  },
+  {
+    "path": "docs/LEGAL-ATTRIBUTION.md",
+    "bytes": 870,
+    "sha256": "c6282c00e1115113c01dddb66d5b416439586b9d819ab9a98f5a4095ecca0999"
+  },
+  {
+    "path": "docs/MIGRATION-WAVES.md",
+    "bytes": 2343,
+    "sha256": "affea6a4317a44038f9d70ae0528ea67ddbc488bef0db4663b79c0065ec6df38"
+  },
+  {
+    "path": "docs/REUSE-MAP.md",
+    "bytes": 1738,
+    "sha256": "d5e112ef3ca5a4da29b12a09539981defaee9fede2a83403fb4dd23dcc99d8c6"
+  },
+  {
+    "path": "docs/ROUTING-SUPERVISOR-PORT.md",
+    "bytes": 897,
+    "sha256": "af6e6a8c8349d4288a3e5c6393a57ed9b8842a31dc35aaf21b7eb17b2e6eacbe"
+  },
+  {
+    "path": "docs/SOURCE-TRACKING.md",
+    "bytes": 663,
+    "sha256": "45ddf751c7dca4b463d5ac1d460e41f6ec776553d221ff7e194904432c60cea7"
+  },
+  {
+    "path": "docs/TENANCY-PORT.md",
+    "bytes": 1158,
+    "sha256": "eb20c534c83998bdc65db92188710abee155274ebee30b0126f6fb47a884958b"
+  },
+  {
+    "path": "docs/WHATSAPP-META-PORT.md",
+    "bytes": 2148,
+    "sha256": "888ce51fe7483a39e036086a6b7c81a96515dcc6cf627360170720179e26bfa4"
+  },
+  {
+    "path": "docs/WHATSAPP-PROVIDER-STRATEGY.md",
+    "bytes": 3968,
+    "sha256": "dd626a091d868fa3a6acfa62f77a8da8d8f69062997ffdb085431d36f0fb7274"
+  }
+]
