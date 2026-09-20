@@ -258,6 +258,10 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/members", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.CreateMembership))))
 	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/members/{membership_id}", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.RevokeMembership))))
 
+	// Agentes (para co-atendimento)
+	agentsHandler := tenancyadapters.NewAgentsHandler(dbPool)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/users/agents", authnMiddleware(tenantSession(http.HandlerFunc(agentsHandler.ListAgents))))
+
 	// Auditoria
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/audit", authnMiddleware(tenantSession(http.HandlerFunc(auditHandler.ListTenantAuditEvents))))
 }

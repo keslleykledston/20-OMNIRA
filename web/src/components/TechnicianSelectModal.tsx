@@ -37,15 +37,18 @@ export function TechnicianSelectModal({
       setLoading(true);
       setError(null);
       try {
-        // TODO: Implementar endpoint GET /tenants/{id}/users/agents
-        // Por enquanto, usar dados mockados
+        const res = await axios.get(
+          `${API_BASE}/tenants/${tenantId}/users/agents`,
+          { headers: authHeaders() }
+        );
+        setTechnicians((res.data.items || []).filter((t: Technician) => !excludeUserIds.includes(t.id)));
+      } catch (err: any) {
+        setError(err.response?.data?.message || 'Erro ao carregar técnicos');
+        // Fallback para dados mockados se endpoint falhar
         setTechnicians([
           { id: '22222222-2222-2222-2222-222222222222', email: 'alice@omnira.local', name: 'Alice' },
           { id: '33333333-3333-3333-3333-333333333333', email: 'bob@omnira.local', name: 'Bob' },
-          { id: '44444444-4444-4444-4444-444444444444', email: 'carol@omnira.local', name: 'Carol' },
         ].filter((t) => !excludeUserIds.includes(t.id)));
-      } catch (err: any) {
-        setError(err.response?.data?.message || 'Erro ao carregar técnicos');
       } finally {
         setLoading(false);
       }
