@@ -8,7 +8,8 @@
 - **Gates R1, R2, R3, R4, R6 = PASS. R5 (CRM real/IXC) = BLOCKED_REQUIRES_HUMAN** — adapter implementado e testado contra fake server, falta credencial de ambiente real.
 - **Dois defeitos críticos só apareceram com tráfego real** e cada um sozinho inviabilizava o produto, ambos falhando em silêncio: **D-7** (remetente `@lid` recusado — nenhuma mensagem de cliente entrava) e **D-8** (resposta endereçada ao telefone não era entregue — nenhuma resposta saía). Corrigidos em `644ee1f` e `da0c156`.
 - **A instância do host roda por `docker-compose.prod.yml`**, não pelo compose principal: API em 8081 (8080 é do `evolution-api`, outro projeto), frontend pelo Vite em :3000 fora do compose, `OMNIRA_ENV=lab` enquanto o auth for mock. Ver `docs/deployment/FIX-PRODUCTION-AUTH.md`.
-- **Abertos e não bloqueantes:** D-6 (webhook recusa `session.status` no pareamento), D-9 (telefone gravado sem o nono dígito), e a dívida antiga de RLS INSERT nos testes de `authn`.
+- **Abertos e não bloqueantes:** D-6 (webhook recusa `session.status` no pareamento), D-9 (telefone gravado sem o nono dígito).
+- **Baseline de banco restaurado em 2026-09-20.** O dev estava em 30/33 porque a `000032` nunca aplicou (erro de sintaxe, além de faltar RLS/FORCE/grants). Corrigida in-place, por nunca ter sido aplicada em ambiente nenhum. A dívida de RLS INSERT em `authn` deixou de existir: `000033` deu a `users` a policy de INSERT que faltava e a resolução de identidade passou a ser por `(issuer, subject)` via `user_identities`. Hoje dev e banco limpo estão ambos em 33/33 com `go test ./...` verde.
 
 ## 2. Ordem de leitura (30 min)
 1. `docs/delivery/ROADMAP-TO-GOAL.md` — fases P0–P6, o que foi achado/corrigido em cada uma, **pendências por fase** e **backlog em ordem**.
@@ -73,6 +74,27 @@
 | WhatsApp real (humano) | `! scripts/w3-smoke.sh` (`--until-qr` = só a parte automática) | 6/6 automáticos + passos com telefone |
 Toda mudança de migration: teste **up → down → up** e **down-all → up-all**.
 
+### Gate obrigatório de migration (regra nova, 2026-09-20)
+
+Nenhuma migration é aceita por inspeção. Antes do merge, toda migration passa por:
+
+```
+POSTGRES VAZIO → todas as migrations do zero → check de RLS → go test ./...
+```
+
+Motivo: a `000032` entrou com erro de sintaxe, sem RLS, sem FORCE e sem grants — e ninguém percebeu porque nunca foi aplicada em lugar nenhum; o banco de dev tinha parado em 30/32. Dias depois, a `users` revelou a mesma classe de falha pelo outro lado: tinha policies de SELECT e UPDATE, mas nenhuma de INSERT, e o JIT provisioning do primeiro login falhava sob FORCE RLS.
+
+Banco descartável para isso:
+```bash
+docker run -d --name omnira-tmpdb -e POSTGRES_USER=omnira -e POSTGRES_PASSWORD=omnira \
+  -e POSTGRES_DB=omnira_test -p 127.0.0.1:55499:5432 postgres:16-alpine
+docker run --rm --network host -v "$PWD/migrations":/migrations:ro -v "$PWD/tools":/tools:ro \
+  -e PGHOST=127.0.0.1 -e PGPORT=55499 -e PGUSER=omnira -e PGPASSWORD=omnira \
+  -e PGDATABASE=omnira_test postgres:16-alpine sh /tools/migrate-sql.sh up
+```
+
+`tools/check-rls.sh` cobre as duas metades: `TestRLSCompleteness` exige RLS + FORCE + alguma policy em toda tabela com `tenant_id`; `TestRLSPolicyCoverage` exige policy para cada operação que o runtime executa, declarada em `expectedPolicyCoverage`. **Ao adicionar tabela tenant-owned nova, declare-a nessa matriz.**
+
 ## 6. O que fazer a seguir (ordem sugerida)
 
 ### Próximas etapas — BLOQUEADORES E PRIORIDADES
@@ -94,6 +116,24 @@ Toda mudança de migration: teste **up → down → up** e **down-all → up-all
 3. **IdP real (OIDC produção)** — opcional para MVP1, mas recomendado
    - Requisito: credenciais Keycloak/Auth0/Google (cliente + secret)
    - Implementação: já há scaffold em `internal/platform/authn/oidc.go`; falta wiring de session + refresh token
+
+### IAM — aprovado, começa depois de FR3
+
+Registro de escopo; **nenhuma destas waves deve ser iniciada agora.**
+
+| Wave | Escopo |
+|---|---|
+| IAM0 | Auth & Access Audit |
+| IAM1 | Secure Login & Session |
+| IAM2 | Users / Invitations / Memberships |
+| IAM3 | Roles & Permissions |
+| IAM4 | Agent Management |
+| IAM5 | Access Control UI |
+| IAM6 | Security Hardening |
+
+A ordem é essa porque o modelo de identidade precisa estar correto antes de expandir gestão de usuários e permissões — a base ficou pronta em `0f812b0`, que tornou `(issuer, subject)` a identidade canônica. Account linking (mesma pessoa em dois IdPs) é feature de IAM2+, não existe hoje e não deve ser inferida por e-mail, telefone ou nome.
+
+Ordem corrente: **FR3A (feito) → FR3B Contacts UI → IAM**.
    - **Próximo:** Confirmar IdP disponível; caso contrário, manter mock-login para MVP1
 
 **Trabalho paralelo (sem bloqueio):**
