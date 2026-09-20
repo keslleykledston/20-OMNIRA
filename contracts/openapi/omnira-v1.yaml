@@ -116,6 +116,56 @@ paths:
       security: []
       responses:
         '204': { description: Session cookie cleared }
+  /tenants/{tenant_id}/contacts:
+    get:
+      operationId: listContacts
+      tags: [Contacts]
+      summary: List contacts (cursor pagination, most recently updated first)
+      description: |
+        Scoped to the session's tenant — the `tenant_id` path segment is routing sugar, the tenant comes from the
+        established TenantContext. Ordering is `(updated_at DESC, id DESC)`, which the cursor walks, so paging is
+        stable even when timestamps collide. The payload never echoes `tenant_id`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - name: sort
+          in: query
+          schema: { type: string, enum: ['updated_at:desc'] }
+      responses:
+        '200':
+          description: A page of contacts
+          headers:
+            X-Pagination-Count: { $ref: '#/components/headers/XPaginationCount' }
+            X-Pagination-Limit: { $ref: '#/components/headers/XPaginationLimit' }
+            X-Pagination-HasMore: { $ref: '#/components/headers/XPaginationHasMore' }
+            X-Pagination-NextCursor: { $ref: '#/components/headers/XPaginationNextCursor' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactPage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/contacts/{contact_id}:
+    get:
+      operationId: getContact
+      tags: [Contacts]
+      summary: Get one contact
+      description: |
+        A contact belonging to another tenant and an unknown id are indistinguishable (`404`), so the endpoint
+        cannot be used to probe for ids that exist elsewhere.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ContactId' }
+      responses:
+        '200':
+          description: The contact
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactItem' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -749,6 +799,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    ContactId:
+      name: contact_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     ConnectionId:
       name: connection_id
       in: path
@@ -833,6 +888,28 @@ components:
           properties:
             id: { type: string, format: uuid }
             name: { type: string }
+    ContactItem:
+      type: object
+      required: [id, display_name, phone_e164, email, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        phone_e164: { type: string, description: E.164 }
+        email: { type: string }
+        status: { type: string, enum: [active, blocked, archived] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ContactPage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ContactItem' }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
     ConversationItem:
       type: object
       required: [id, contact_id, status, title, contact_name, contact_phone, created_at, updated_at]

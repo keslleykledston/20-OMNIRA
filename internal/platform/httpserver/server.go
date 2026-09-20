@@ -15,6 +15,7 @@ import (
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
@@ -288,6 +289,11 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) *inboxadapters.CRMH
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
+
+	contactsHandler := contactsadapters.NewContactsAPIHandler(dbPool)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContacts))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.GetContact))))
+
 	auditRec := routingadapters.NewAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool))
 	assignHandler := routingadapters.NewAssignHandler(routingapplication.NewAssigner(
 		routingadapters.NewPostgresConversationAssigner(dbPool),
