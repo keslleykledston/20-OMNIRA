@@ -10,6 +10,8 @@ import SupervisorDashboard from './pages/SupervisorDashboard'
 import { InboxPage } from './pages/InboxPage'
 import { ConversationPage } from './pages/ConversationPage'
 import IntegrationsPage from './pages/IntegrationsPage'
+import ContactsPage from './pages/ContactsPage'
+import ContactDetailPage from './pages/ContactDetailPage'
 import ChannelsPage from './pages/ChannelsPage'
 import WahaWizardPage from './pages/WahaWizardPage'
 import Layout from './components/Layout'
@@ -35,6 +37,8 @@ export default function App() {
             <Route path="/reports" element={<Reports />} />
             <Route path="/supervisor" element={<SupervisorDashboard />} />
             <Route path="/inbox" element={<InboxPage />} />
+            <Route path="/contacts" element={<ContactsPage />} />
+            <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/channels/whatsapp/new" element={<WahaWizardPage />} />

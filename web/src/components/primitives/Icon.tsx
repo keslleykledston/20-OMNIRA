@@ -20,6 +20,7 @@ export type IconName =
   | 'arrow-down'
   | 'arrow-left'
   | 'check'
+  | 'copy'
   | 'info'
   | 'plus'
   | 'whatsapp'
@@ -42,6 +43,7 @@ const paths: Record<IconName, string> = {
   'arrow-down': 'M12 5v14m0 0 6-6m-6 6-6-6',
   'arrow-left': 'M19 12H5m0 0 6-6m-6 6 6 6',
   check: 'm5 13 4 4L19 7',
+  copy: 'M8 8V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-3M5 8h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z',
   info: 'M12 16v-4m0-4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
   plus: 'M12 5v14M5 12h14',
   whatsapp: 'M21 11.5a8.5 8.5 0 0 1-12.3 7.6L4 20.5l1.5-4.6A8.5 8.5 0 1 1 21 11.5Zm-12 -2.2c0 3.2 2.6 5.8 5.8 5.8.6 0 1-.4 1-.9v-.9c0-.4-.3-.7-.7-.7-.3 0-.6.1-.9.2l-1.3-1.3c.1-.3.2-.6.2-.9 0-.4-.3-.7-.7-.7h-.9c-.5 0-.9.4-.9 1Z',

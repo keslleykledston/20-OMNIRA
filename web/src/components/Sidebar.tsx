@@ -10,7 +10,7 @@ const navItems: { label: string; path: string; icon: IconName }[] = [
   { label: 'Dashboard', path: '/', icon: 'dashboard' },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
   { label: 'Tickets', path: '/tickets', icon: 'tickets' },
-  { label: 'Contatos', path: '/accounts', icon: 'contacts' },
+  { label: 'Contatos', path: '/contacts', icon: 'contacts' },
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports' },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
