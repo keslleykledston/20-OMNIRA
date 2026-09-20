@@ -284,12 +284,25 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) *inboxadapters.CRMH
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
+	auditRec := routingadapters.NewAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool))
 	assignHandler := routingadapters.NewAssignHandler(routingapplication.NewAssigner(
 		routingadapters.NewPostgresConversationAssigner(dbPool),
-		routingadapters.NewAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool)),
+		auditRec,
 	))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Assign))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Unassign))))
+
+	// Co-attendance: invite, transfer, accept, reject, leave
+	participantHandler := routingadapters.NewParticipantHandler(routingapplication.NewParticipantService(
+		routingadapters.NewPostgresParticipantRepository(dbPool),
+		routingadapters.NewPostgresConversationAssigner(dbPool),
+		auditRec,
+	))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/invite", authnMiddleware(tenantSession(http.HandlerFunc(participantHandler.Invite))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/transfer", authnMiddleware(tenantSession(http.HandlerFunc(participantHandler.Transfer))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/accept-invite", authnMiddleware(tenantSession(http.HandlerFunc(participantHandler.AcceptInvite))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/reject-invite", authnMiddleware(tenantSession(http.HandlerFunc(participantHandler.RejectInvite))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/leave", authnMiddleware(tenantSession(http.HandlerFunc(participantHandler.Leave))))
 	sendHandler := messagesadapters.NewSendHandler(messagesapplication.NewSender(
 		messagesadapters.NewPostgresOutboundStore(dbPool),
 		channeladapters.NewPostgresPermissionChecker(dbPool),
