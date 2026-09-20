@@ -131,3 +131,102 @@ func TestK3GCRMNeverLeaksTokenInErrors(t *testing.T) {
 		t.Fatalf("credencial vazou no erro: %v", err)
 	}
 }
+
+func TestK3GCRMFindCustomerByPhoneReturnsNilIfNotFound(t *testing.T) {
+	c := crmServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/crm/contacts" {
+			t.Fatalf("esperava /api/crm/contacts, got %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"contacts": []any{}})
+	})
+	contact, err := c.FindCustomerByPhone(context.Background(), "+5592991740090", "company-id-123")
+	if err != nil {
+		t.Fatalf("FindCustomerByPhone falhou: %v", err)
+	}
+	if contact != nil {
+		t.Fatal("esperava nil quando contato não encontrado")
+	}
+}
+
+func TestK3GCRMFindCustomerByPhoneReturnsContactIfFound(t *testing.T) {
+	c := crmServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"contacts": []map[string]string{
+				{
+					"id":        "contact-uuid-123",
+					"name":      "Alice Silva",
+					"phone":     "+5592991740090",
+					"email":     "alice@example.com",
+					"companyId": "company-id-123",
+				},
+			},
+		})
+	})
+	contact, err := c.FindCustomerByPhone(context.Background(), "+5592991740090", "company-id-123")
+	if err != nil {
+		t.Fatalf("FindCustomerByPhone falhou: %v", err)
+	}
+	if contact == nil {
+		t.Fatal("esperava contato")
+	}
+	if contact.ID != "contact-uuid-123" || contact.Name != "Alice Silva" || contact.Phone != "+5592991740090" {
+		t.Fatalf("contato com valores incorretos: %+v", contact)
+	}
+}
+
+func TestK3GCRMCreateContactReturnsContactWithID(t *testing.T) {
+	var gotPayload map[string]string
+	c := crmServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("esperava POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/crm/contacts" {
+			t.Fatalf("esperava /api/crm/contacts, got %s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"id":        "new-contact-uuid",
+			"name":      "Bob Costa",
+			"phone":     "+5592991740091",
+			"email":     "bob@example.com",
+			"companyId": "company-id-456",
+		})
+	})
+	contact, err := c.CreateContact(context.Background(), "Bob Costa", "+5592991740091", "company-id-456")
+	if err != nil {
+		t.Fatalf("CreateContact falhou: %v", err)
+	}
+	if contact == nil {
+		t.Fatal("esperava contato")
+	}
+	if contact.ID != "new-contact-uuid" || contact.Name != "Bob Costa" {
+		t.Fatalf("contato com valores incorretos: %+v", contact)
+	}
+	if gotPayload["companyId"] != "company-id-456" {
+		t.Fatalf("companyId não foi enviado corretamente: %+v", gotPayload)
+	}
+}
+
+func TestK3GCRMCreateContactRejectsEmptyFields(t *testing.T) {
+	c := crmServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	tests := []struct {
+		name      string
+		phone     string
+		companyID string
+	}{
+		{"empty phone", "", "cid"},
+		{"empty company", "+559299", ""},
+		{"all empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := c.CreateContact(context.Background(), "Alice", tt.phone, tt.companyID)
+			if !errors.Is(err, ErrCRMRejected) {
+				t.Fatalf("esperava ErrCRMRejected, got %v", err)
+			}
+		})
+	}
+}

@@ -120,6 +120,48 @@ func (c *K3GCRMClient) get(ctx context.Context, path string) ([]byte, error) {
 	return body, nil
 }
 
+func (c *K3GCRMClient) post(ctx context.Context, path string, payload any) ([]byte, error) {
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot marshal payload", ErrCRMRejected)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, strings.NewReader(string(reqBody)))
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot build request", ErrCRMRejected)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	res, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCRMUnavailable, err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot read response", ErrCRMUnavailable)
+	}
+	switch {
+	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
+		return nil, ErrCRMUnauthorized
+	case res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500:
+		return nil, fmt.Errorf("%w: status %d", ErrCRMUnavailable, res.StatusCode)
+	case res.StatusCode >= 400:
+		return nil, fmt.Errorf("%w: status %d", ErrCRMRejected, res.StatusCode)
+	}
+	return body, nil
+}
+
+// CRMContact é o contato como gravado no CRM: identidade única, endereço de
+// comunicação, e vínculo com empresa.
+type CRMContact struct {
+	ID        string
+	Name      string
+	Phone     string
+	Email     string
+	CompanyID string
+}
+
 // CRMCompany é a empresa como o OMNIRA precisa dela: identidade, rótulo para o
 // operador escolher, e o documento para conferência. O resto do cadastro fica
 // no CRM — o core não deve conhecer campos de módulo do CRM.
@@ -177,4 +219,84 @@ func (c *K3GCRMClient) ListCompanies(ctx context.Context) ([]CRMCompany, error) 
 		})
 	}
 	return out, nil
+}
+
+// FindCustomerByPhone procura contato no CRM por telefone e empresa.
+// Retorna nil se não encontrar.
+func (c *K3GCRMClient) FindCustomerByPhone(ctx context.Context, phone, companyID string) (*CRMContact, error) {
+	if c == nil || c.client == nil {
+		return nil, ErrCRMNotConfigured
+	}
+	phone = strings.TrimSpace(phone)
+	companyID = strings.TrimSpace(companyID)
+	if phone == "" || companyID == "" {
+		return nil, fmt.Errorf("%w: phone and companyId are required", ErrCRMRejected)
+	}
+	body, err := c.get(ctx, fmt.Sprintf("/api/crm/contacts?phone=%s&companyId=%s", 
+		strings.ReplaceAll(phone, "+", "%2B"), companyID))
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Contacts []struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			Phone     string `json:"phone"`
+			Email     string `json:"email"`
+			CompanyID string `json:"companyId"`
+		} `json:"contacts"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, fmt.Errorf("%w: unexpected contacts response", ErrCRMRejected)
+	}
+	if len(page.Contacts) == 0 {
+		return nil, nil
+	}
+	raw := page.Contacts[0]
+	return &CRMContact{
+		ID:        strings.TrimSpace(raw.ID),
+		Name:      strings.TrimSpace(raw.Name),
+		Phone:     strings.TrimSpace(raw.Phone),
+		Email:     strings.TrimSpace(raw.Email),
+		CompanyID: strings.TrimSpace(raw.CompanyID),
+	}, nil
+}
+
+// CreateContact cria um novo contato no CRM. Retorna o contato com ID atribuído
+// ou erro (422 validation, 401 auth, 5xx unavail).
+func (c *K3GCRMClient) CreateContact(ctx context.Context, name, phone, companyID string) (*CRMContact, error) {
+	if c == nil || c.client == nil {
+		return nil, ErrCRMNotConfigured
+	}
+	name = strings.TrimSpace(name)
+	phone = strings.TrimSpace(phone)
+	companyID = strings.TrimSpace(companyID)
+	if name == "" || phone == "" || companyID == "" {
+		return nil, fmt.Errorf("%w: name, phone and companyId are required", ErrCRMRejected)
+	}
+	payload := map[string]string{"name": name, "phone": phone, "companyId": companyID}
+	body, err := c.post(ctx, "/api/crm/contacts", payload)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		Phone     string `json:"phone"`
+		Email     string `json:"email"`
+		CompanyID string `json:"companyId"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("%w: unexpected create response", ErrCRMRejected)
+	}
+	if strings.TrimSpace(resp.ID) == "" {
+		return nil, fmt.Errorf("%w: contact created but no ID returned", ErrCRMRejected)
+	}
+	return &CRMContact{
+		ID:        resp.ID,
+		Name:      strings.TrimSpace(resp.Name),
+		Phone:     strings.TrimSpace(resp.Phone),
+		Email:     strings.TrimSpace(resp.Email),
+		CompanyID: strings.TrimSpace(resp.CompanyID),
+	}, nil
 }
