@@ -46,6 +46,17 @@
   /* Interaction surfaces */
   --color-surface-hover: #F2F4F7;
 
+  /* Categorical chart hue — for a series that needs to stay distinguishable
+     from the status colours (e.g. a 4th donut slice next to two blues) */
+  --color-chart-violet: #7A5AF8;
+
+  /* Channel identity — brand hues, used for series/legends/badges only */
+  --color-channel-whatsapp: #25D366;
+  --color-channel-instagram: #E1306C;
+  --color-channel-facebook: #1877F2;
+  --color-channel-webchat: #2E90FA;
+  --color-channel-email: #F79009;
+
   /* Spacing — 4px base */
   --space-1: 4px;
   --space-2: 8px;

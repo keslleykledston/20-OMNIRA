@@ -58,7 +58,7 @@ export default function Header() {
               <p className="text-sm font-medium text-text-primary">
                 {user.name}
               </p>
-              <p className="text-xs text-text-tertiary">
+              <p className="hidden text-xs text-text-tertiary sm:block">
                 {user.email}
               </p>
             </div>

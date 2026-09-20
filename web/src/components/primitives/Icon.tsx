@@ -13,6 +13,11 @@ export type IconName =
   | 'search'
   | 'close'
   | 'more'
+  | 'clock'
+  | 'calendar'
+  | 'chevron-down'
+  | 'arrow-up'
+  | 'arrow-down'
 
 const paths: Record<IconName, string> = {
   dashboard: 'M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z',
@@ -25,6 +30,11 @@ const paths: Record<IconName, string> = {
   search: 'M21 21l-4.3-4.3M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z',
   close: 'M6 6l12 12M18 6 6 18',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  clock: 'M12 7v5l3 2m6-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  calendar: 'M8 3v4m8-4v4M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
+  'chevron-down': 'm6 9 6 6 6-6',
+  'arrow-up': 'M12 19V5m0 0-6 6m6-6 6 6',
+  'arrow-down': 'M12 5v14m0 0 6-6m-6 6-6-6',
 }
 
 interface IconProps {

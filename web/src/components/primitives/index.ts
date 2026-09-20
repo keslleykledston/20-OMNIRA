@@ -2,6 +2,7 @@
 
 export { Button, IconButton } from './Button';
 export { Icon } from './Icon';
+export { PageHeader } from './PageHeader';
 export type { IconName } from './Icon';
 export { Card, CardHeader, CardBody, CardFooter } from './Card';
 export { Badge, StatusBadge } from './Badge';
