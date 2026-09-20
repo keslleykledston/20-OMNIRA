@@ -1,3 +1,7 @@
+/* Omnira Design System — Imports */
+@import './design/tokens.css';
+@import './design/typography.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -13,50 +17,38 @@ html {
 }
 
 body {
-  @apply bg-slate-50 text-slate-900;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--color-canvas);
+  color: var(--color-text-primary);
 }
 
 a {
-  @apply text-blue-600 hover:text-blue-800 transition-colors;
+  color: var(--color-accent-primary);
+  transition: color var(--transition-base);
+}
+
+a:hover {
+  color: var(--color-accent-primary-hover);
 }
 
 button {
-  @apply transition-all duration-200;
+  transition: all var(--transition-fast);
 }
 
 input, textarea, select {
-  @apply transition-colors;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
+/* Legacy utils (for gradual migration) */
 .container {
-  @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  max-width: 1280px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--space-4);
+  padding-right: var(--space-4);
 }
 
-.btn-primary {
-  @apply px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-slate-400;
-}
-
-.btn-secondary {
-  @apply px-4 py-2 bg-slate-200 text-slate-900 rounded-lg hover:bg-slate-300 disabled:bg-slate-100;
-}
-
-.badge {
-  @apply px-3 py-1 rounded-full text-sm font-medium;
-}
-
-.badge-success {
-  @apply bg-green-100 text-green-800;
-}
-
-.badge-warning {
-  @apply bg-yellow-100 text-yellow-800;
-}
-
-.badge-error {
-  @apply bg-red-100 text-red-800;
-}
-
-.badge-info {
-  @apply bg-blue-100 text-blue-800;
+/* Focus ring — global */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }

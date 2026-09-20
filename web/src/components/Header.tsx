@@ -1,12 +1,13 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuthStore, useUIStore } from '../lib/store'
+import { useAuthStore } from '../lib/store'
 import { authAPI } from '../lib/api'
+import { Button, Avatar } from './primitives'
+import clsx from 'clsx'
 
 export default function Header() {
   const navigate = useNavigate()
   const { user, logout, setUser } = useAuthStore()
-  const { toggleSidebar } = useUIStore()
 
   useEffect(() => {
     // Carregar user do localStorage se não estiver no store
@@ -23,35 +24,54 @@ export default function Header() {
   }, [user, setUser])
 
   const handleLogout = async () => {
-	await authAPI.logout()
+    await authAPI.logout()
     logout()
     navigate('/login')
   }
 
   return (
-    <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center">
-      <div className="flex items-center gap-4">
-        <button
-          onClick={toggleSidebar}
-          className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-        <h1 className="text-2xl font-bold text-slate-900">OMNIRA</h1>
+    <header
+      style={{ height: 'var(--header-height)' }}
+      className={clsx(
+        // On desktop the reference shows no shell header band: blend into the canvas.
+        // On mobile this bar is the only chrome (sidebar hidden), so keep it a surface.
+        'bg-surface lg:bg-transparent',
+        'border-b border-border-subtle lg:border-b-0',
+        'px-6',
+        'flex',
+        'items-center',
+        'justify-between',
+        'sticky',
+        'top-0',
+        'z-10'
+      )}
+    >
+      {/* Brand only where the sidebar is hidden; on desktop it lives in the sidebar. */}
+      <div className="flex items-center gap-4 lg:invisible">
+        <span className="text-lg font-bold text-text-primary">OMNIRA</span>
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="text-sm text-slate-600">
-          {user?.name}
-        </div>
-        <button
+        {user && (
+          <div className="flex items-center gap-3">
+            <div>
+              <p className="text-sm font-medium text-text-primary">
+                {user.name}
+              </p>
+              <p className="text-xs text-text-tertiary">
+                {user.email}
+              </p>
+            </div>
+            <Avatar alt={user.name} initials={user.name?.substring(0, 2).toUpperCase()} size="md" />
+          </div>
+        )}
+        <Button
           onClick={handleLogout}
-          className="btn-secondary text-sm"
+          variant="secondary"
+          size="sm"
         >
           Sair
-        </button>
+        </Button>
       </div>
     </header>
   )

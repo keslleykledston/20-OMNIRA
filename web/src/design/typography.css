@@ -1,0 +1,127 @@
+/* Typography — Font family, hierarchy & baseline */
+
+:root {
+  /* Font family stack */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+
+  /* Font sizes & line heights */
+  /* Display / Page Title */
+  --text-display-lg-size: 32px;
+  --text-display-lg-height: 40px;
+  --text-display-lg-weight: 700;
+
+  --text-display-md-size: 28px;
+  --text-display-md-height: 36px;
+  --text-display-md-weight: 700;
+
+  /* Section Title */
+  --text-section-lg-size: 20px;
+  --text-section-lg-height: 28px;
+  --text-section-lg-weight: 600;
+
+  --text-section-md-size: 18px;
+  --text-section-md-height: 26px;
+  --text-section-md-weight: 600;
+
+  --text-section-sm-size: 16px;
+  --text-section-sm-height: 24px;
+  --text-section-sm-weight: 600;
+
+  /* Body */
+  --text-body-lg-size: 16px;
+  --text-body-lg-height: 24px;
+  --text-body-lg-weight: 400;
+
+  --text-body-md-size: 15px;
+  --text-body-md-height: 24px;
+  --text-body-md-weight: 400;
+
+  --text-body-sm-size: 14px;
+  --text-body-sm-height: 20px;
+  --text-body-sm-weight: 400;
+
+  /* Caption & Metadata */
+  --text-caption-size: 13px;
+  --text-caption-height: 18px;
+  --text-caption-weight: 500;
+
+  --text-metadata-size: 12px;
+  --text-metadata-height: 16px;
+  --text-metadata-weight: 400;
+
+  /* Button/Control text */
+  --text-control-size: 14px;
+  --text-control-height: 20px;
+  --text-control-weight: 600;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--text-body-md-size);
+  line-height: var(--text-body-md-height);
+  font-weight: var(--text-body-md-weight);
+  color: var(--color-text-primary);
+  background-color: var(--color-canvas);
+}
+
+/* Heading hierarchy */
+h1 {
+  font-size: var(--text-display-lg-size);
+  line-height: var(--text-display-lg-height);
+  font-weight: var(--text-display-lg-weight);
+}
+
+h2 {
+  font-size: var(--text-section-lg-size);
+  line-height: var(--text-section-lg-height);
+  font-weight: var(--text-section-lg-weight);
+}
+
+h3 {
+  font-size: var(--text-section-md-size);
+  line-height: var(--text-section-md-height);
+  font-weight: var(--text-section-md-weight);
+}
+
+h4 {
+  font-size: var(--text-section-sm-size);
+  line-height: var(--text-section-sm-height);
+  font-weight: var(--text-section-sm-weight);
+}
+
+h5, h6 {
+  font-size: var(--text-body-lg-size);
+  line-height: var(--text-body-lg-height);
+  font-weight: var(--text-section-md-weight);
+}
+
+p, span {
+  line-height: 1.6;
+}
+
+small, .text-caption {
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-height);
+  font-weight: var(--text-caption-weight);
+}
+
+.text-metadata {
+  font-size: var(--text-metadata-size);
+  line-height: var(--text-metadata-height);
+  font-weight: var(--text-metadata-weight);
+  color: var(--color-text-tertiary);
+}
+
+/* Strong emphasis */
+strong {
+  font-weight: 600;
+}
+
+/* Secondary text helper */
+.text-secondary {
+  color: var(--color-text-secondary);
+}
+
+.text-tertiary {
+  color: var(--color-text-tertiary);
+}

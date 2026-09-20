@@ -1,0 +1,54 @@
+import clsx from 'clsx'
+
+// Single outline icon family for the Omnira shell.
+// Inline SVG (the pattern already used in this repo) so no icon dependency is added.
+export type IconName =
+  | 'dashboard'
+  | 'conversations'
+  | 'tickets'
+  | 'contacts'
+  | 'channels'
+  | 'reports'
+  | 'supervisor'
+  | 'search'
+  | 'close'
+  | 'more'
+
+const paths: Record<IconName, string> = {
+  dashboard: 'M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z',
+  conversations: 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12Z',
+  tickets: 'M4 8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4Z',
+  contacts: 'M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M12 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm9 12v-1a4 4 0 0 0-3-3.9M16 4.1a4 4 0 0 1 0 7.8',
+  channels: 'M7 8h10M7 12h6M21 12a9 9 0 0 1-13.1 8L3 21l1-4.9A9 9 0 1 1 21 12Z',
+  reports: 'M4 20V10m5 10V4m5 16v-7m5 7V7',
+  supervisor: 'M12 3 4 7v5c0 4.4 3.4 8.4 8 9 4.6-.6 8-4.6 8-9V7l-8-4Zm0 6v4m0 3h.01',
+  search: 'M21 21l-4.3-4.3M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z',
+  close: 'M6 6l12 12M18 6 6 18',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+}
+
+interface IconProps {
+  name: IconName
+  size?: number
+  className?: string
+}
+
+export function Icon({ name, size = 20, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+      className={clsx('flex-shrink-0', className)}
+    >
+      <path d={paths[name]} />
+    </svg>
+  )
+}
