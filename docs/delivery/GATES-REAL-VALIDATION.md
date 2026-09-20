@@ -86,6 +86,30 @@ Expected signal:
 Do NOT proceed to R2 until this is confirmed.
 ```
 
+### Achado D-6 — webhook rejeita `session.status` de conexão não-ativa
+
+`internal/channels/adapters/waha/webhook.go:263` rejeita **qualquer** evento
+quando `conn.Status != active`:
+
+```go
+if conn.Status != domain.ConnectionStatusActive {
+    h.reject(r.Context(), w, http.StatusConflict, "connection inactive")
+```
+
+Mas `session.status` é justamente o evento que acompanha a conexão saindo de
+`pending`. Observado em produção 2026-09-20: o WAHA tentou entregar
+`session.status` 15 vezes, levou 409 `connection inactive` em todas e desistiu.
+
+Não bloqueia o pareamento — a API também faz *pull* do estado da sessão, e foi
+assim que a conexão chegou a `needs_qr` em 4s. O custo é que todo evento de
+sessão durante o pareamento se perde, e o log fica poluído com erro que parece
+fatal e não é.
+
+Correção sugerida (não aplicada aqui, mexe em boundary de segurança): aceitar
+`session.status` para conexões em pareamento (`pending`), mantendo a rejeição
+para eventos de mensagem. Merece revisão dedicada — afrouxar o filtro do
+webhook amplia superfície de ataque.
+
 ---
 
 ## GATE R2 — Inbound Real
