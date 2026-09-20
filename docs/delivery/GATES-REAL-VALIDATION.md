@@ -476,24 +476,75 @@ normalização ingênua e merece slice próprio.
 
 **Objetivo**: Validar que operador consegue abrir ticket em CRM real (IXC).
 
-**Status**: BLOQUEADO_REQUER_CREDENCIAL
+**Status**: BLOCKED_REQUIRES_HUMAN — adapter pronto, falta ambiente real
 
-Razão: Credencial IXC real (URL, usuário, token) necessária.
+### Feito sem credencial (2026-09-20)
 
-**Ação requerida**:
-1. Fornecer URL da API IXC
-2. Fornecer credencial de teste (usuário + token)
-3. Informar assinante/customer de teste permitido
-4. Confirmar permissões: CreateTicket, UpdateTicket, CloseTicket
+- [x] Adapter em `internal/tool/connectors/ixc.go`, satisfazendo a porta
+      `CRMConnector` existente — sem segunda arquitetura de CRM
+- [x] Contract tests com fake HTTP server (`ixc_test.go`)
+- [x] Error mapping por intenção (permanente × transitório × não encontrado)
+- [x] Política de retry: leitura repete, abertura de chamado não
+- [x] Tradução de status e datas isolada no adapter
+- [x] Teste de que a credencial não vaza em mensagem de erro
+- [ ] Credential storage por tenant (`CredentialStore`) — depende do formato real
+- [ ] Wiring em `ToolExecution`
+- [ ] UI: `TicketPanel` apontando para o IXC em vez do mock
+- [ ] **Validação contra ambiente real**
 
-**Implementação pendente**:
-- [ ] IXC Adapter em `internal/tool/connectors/ixc.go`
-- [ ] Contract tests com mock HTTP server
-- [ ] Credential storage (CredentialStore per tenant)
-- [ ] ToolExecution wiring
-- [ ] Error mapping (IXC API → OMNIRA errors)
-- [ ] Idempotency (ticket_id deduplicação)
-- [ ] UI integration (TicketPanel com IXC real)
+O que ficou de fora foi deliberado: fixar o formato da credencial e a
+tradução de erro na UI antes de ver uma resposta real do IXC produz retrabalho.
+O adapter é a parte que se pode escrever com proveito no escuro; o resto ganha
+mais sendo escrito depois de uma chamada de verdade.
+
+### Limite desta implementação
+
+O contrato veio da documentação pública do IXC e **não foi exercido contra
+ambiente real**. Cada suposição está marcada com `SUPOSIÇÃO:` no código
+(autenticação Basic, header `ixcsoft: listar`, tabelas `cliente` e
+`su_oss_chamado`, códigos de status `N`/`EN`/`F`, formato de data).
+
+O fake server dos testes implementa exatamente essas suposições. Logo **os
+testes passam mesmo se as suposições estiverem erradas** — eles provam o
+comportamento do adapter (tradução, erros, retry, não-duplicação), não a
+compatibilidade com o IXC. Essa só a credencial real prova, e é por isso que o
+gate continua bloqueado em vez de ser dado como parcialmente concluído.
+
+### Decisão que vale conferir primeiro no ambiente real
+
+`CreateTicket` **não é repetida** em falha de rede. O IXC não oferece chave de
+idempotência, então um retry cego abriria um segundo chamado para o mesmo
+cliente — ruído no ERP e confusão no atendimento. O custo é que uma falha
+transitória na abertura volta como erro para o operador, que decide reenviar.
+Se o ambiente real oferecer alguma forma de deduplicação, esta decisão deve ser
+revista.
+
+### BLOCKED_REQUIRES_HUMAN
+
+```
+Gate: R5 (CRM real / IXC)
+
+Reason:
+Adapter implementado e coberto por contract tests, mas nenhuma chamada foi
+feita a um IXC real. Sem isso não é possível confirmar autenticação, nomes de
+tabela e campo, códigos de status nem formato de data.
+
+Required action:
+1. URL base da API IXC (ex.: https://<host>/webservice/v1)
+2. Usuário e token de API de um ambiente de TESTE
+3. Um assinante de teste (id ou CPF/telefone) autorizado para abrir chamado
+4. Confirmar que o token tem permissão de criar, editar e fechar chamado
+5. Informar a faixa/tipo de chamado que pode ser usada em teste
+
+Do NOT send credentials in chat or paste them in logs. Use o CredentialStore
+(cifrado por tenant, AES-256-GCM) ou o secret manager já em uso no host.
+
+Expected evidence to close the gate:
+- FindCustomer devolve o assinante de teste
+- CreateTicket cria chamado visível na interface do IXC
+- UpdateTicket e CloseTicket refletem na interface do IXC
+- Nenhum chamado duplicado após uma falha transitória
+```
 
 ---
 
@@ -548,8 +599,27 @@ Marcado quando:
 - [x] GATE R2: Inbound real recebido
 - [x] GATE R3: Multiagent assignment
 - [x] GATE R4: Outbound real entregue
-- [ ] GATE R5: CRM real (IXC) — bloqueado por credencial
+- [ ] GATE R5: CRM real (IXC) — adapter pronto, bloqueado por credencial
 - [x] GATE R6: RLS/Tenant isolation validado
+
+### Estado em 2026-09-20
+
+| Gate | Estado | Bug encontrado no caminho |
+|---|---|---|
+| R1 pareamento | PASS | UI não exibia QR sem clique prévio |
+| R2 inbound | PASS | **D-7** — remetente `@lid` recusado: toda mensagem perdida |
+| R3 multiagent | PASS | — |
+| R4 outbound | PASS | **D-8** — resposta endereçada ao telefone não era entregue |
+| R5 CRM/IXC | BLOCKED | — |
+| R6 RLS | PASS | — |
+
+Os dois achados marcados eram, cada um por si, suficientes para inviabilizar o
+produto: com D-7 nenhuma mensagem de cliente entrava; com D-8 nenhuma resposta
+saía — e ambos falhavam em silêncio, sem erro visível ao operador. Nenhum dos
+dois apareceria sem tráfego real de WhatsApp.
+
+Aberto e não bloqueante: **D-6** (webhook recusa `session.status` durante
+pareamento) e **D-9** (telefone gravado sem o nono dígito).
 
 **Milestone**: Quando todos gates completarem, marcar e arquivar este doc.
 
