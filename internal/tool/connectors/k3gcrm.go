@@ -300,3 +300,63 @@ func (c *K3GCRMClient) CreateContact(ctx context.Context, name, phone, companyID
 		CompanyID: strings.TrimSpace(resp.CompanyID),
 	}, nil
 }
+
+// CRMActivity é a atividade (atendimento) no CRM K3G.
+type CRMActivity struct {
+	ID        string
+	Type      string
+	Subject   string
+	ContactID string
+	CompanyID string
+	CreatedAt string
+}
+
+// CreateActivity cria nova atividade (atendimento) no CRM.
+// Type deve ser um dos: CALL, EMAIL, MEETING, TASK, WHATSAPP, NOTE.
+// Subject é obrigatório (ex.: "Solicita orçamento", "Dúvida sobre produto").
+// ContactID e CompanyID devem ser UUIDs válidos.
+// Retorna activity com ID gerado ou erro (422 validation, 401 auth, 5xx unavail).
+func (c *K3GCRMClient) CreateActivity(ctx context.Context, actType, subject, contactID, companyID string) (*CRMActivity, error) {
+	if c == nil || c.client == nil {
+		return nil, ErrCRMNotConfigured
+	}
+	actType = strings.TrimSpace(actType)
+	subject = strings.TrimSpace(subject)
+	contactID = strings.TrimSpace(contactID)
+	companyID = strings.TrimSpace(companyID)
+	if actType == "" || subject == "" || contactID == "" || companyID == "" {
+		return nil, fmt.Errorf("%w: type, subject, contactId and companyId are required", ErrCRMRejected)
+	}
+	payload := map[string]string{
+		"type":       actType,
+		"subject":    subject,
+		"contactId":  contactID,
+		"companyId":  companyID,
+	}
+	body, err := c.post(ctx, "/api/crm/activities", payload)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		ID        string `json:"id"`
+		Type      string `json:"type"`
+		Subject   string `json:"subject"`
+		ContactID string `json:"contactId"`
+		CompanyID string `json:"companyId"`
+		CreatedAt string `json:"createdAt"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("%w: unexpected create activity response", ErrCRMRejected)
+	}
+	if strings.TrimSpace(resp.ID) == "" {
+		return nil, fmt.Errorf("%w: activity created but no ID returned", ErrCRMRejected)
+	}
+	return &CRMActivity{
+		ID:        resp.ID,
+		Type:      strings.TrimSpace(resp.Type),
+		Subject:   strings.TrimSpace(resp.Subject),
+		ContactID: strings.TrimSpace(resp.ContactID),
+		CompanyID: strings.TrimSpace(resp.CompanyID),
+		CreatedAt: strings.TrimSpace(resp.CreatedAt),
+	}, nil
+}

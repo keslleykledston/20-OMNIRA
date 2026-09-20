@@ -40,3 +40,16 @@ func (c *K3GCRMConnector) CreateContact(ctx context.Context, name, phone, compan
 	}
 	return strings.TrimSpace(contact.ID), nil
 }
+
+// CreateActivity cria nova atividade (atendimento) no CRM.
+// Retorna a string do UUID gerado ou erro.
+func (c *K3GCRMConnector) CreateActivity(ctx context.Context, actType, subject, contactID, companyID string) (string, error) {
+	if c.client == nil {
+		return "", ErrCRMNotConfigured
+	}
+	activity, err := c.client.CreateActivity(ctx, actType, subject, contactID, companyID)
+	if err != nil || activity == nil {
+		return "", err
+	}
+	return strings.TrimSpace(activity.ID), nil
+}
