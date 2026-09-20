@@ -1,37 +1,46 @@
 # Gates de Validação Real — FIRST_REAL_INTERNAL_PRODUCT_DELIVERY
 
-Estado: Em execução (GATE R1 iniciado 2026-09-19 23:40 UTC)
+Estado: Em execução (GATE R1 iniciado 2026-09-19 23:40 UTC, mudança para Android 2026-09-20)
 
-## GATE R1 — WAHA Real + QR Pairing
+## GATE R1 — WAHA Android Real + QR Pairing
 
-**Objetivo**: Validar que WAHA real consegue gerar QR e humano consegue escanear.
+**Objetivo**: Validar que WAHA Android consegue gerar QR e humano consegue escanear no telefone.
+
+**Engine**: ANDROID (ao invés de GOWS/Web, que sofre rate-limiting)
 
 **Pré-requisitos**:
 - Stack Docker rodando (postgres, nats, migrate, api, worker, web, waha)
-- WAHA_ENABLED=true no environment
-- Humano com telefone real + WhatsApp instalado
+- WAHA_ENABLED=true + WHATSAPP_DEFAULT_ENGINE=ANDROID
+- Telefone Android real com WhatsApp + Debug USB ativado
+- ADB tools no servidor
+- Conexão USB ou rede entre servidor e Android
 
 **Procedimento automático**:
-1. Subir stack com `--profile whatsapp-unofficial`
-2. Executar migração de schema
-3. Fazer login na web (mock: test@omnira.local)
-4. Ir para /channels → Adicionar WAHA
-5. Aceitar risco (checkbox + timestamp)
-6. Gerar QR real
-7. Salvar QR em arquivo de teste
+1. Conectar Android ao servidor via USB/ADB: `adb devices`
+2. Ativar Modo Debug no Android (Configurações → Opções de desenvolvedor → Depuração USB)
+3. Atualizar docker-compose: `WHATSAPP_DEFAULT_ENGINE=ANDROID`
+4. Subir stack: `docker compose --profile whatsapp-unofficial --profile dev up -d`
+5. Executar migração de schema (automático)
+6. Verificar WAHA logs: `docker logs waha`
 
 **Procedimento manual (BLOQUEADOR_REQUER_HUMANO)**:
-1. Abrir WhatsApp no telefone real
-2. Ir em Configurações → Aparelhos conectados → Conectar aparelho
-3. Apontar câmera para QR exibido
-4. Confirmar pareamento
+1. Abrir OMNIRA web: login (mock: admin@omnira.local)
+2. Ir para Canais → Adicionar WAHA → Aceitar risco
+3. Start session → **QR gerado** (no servidor)
+4. **No telefone Android**:
+   - Abrir WhatsApp
+   - Aparelhos conectados → Conectar aparelho
+   - Apontar câmera para QR
+   - Confirmar pareamento
 5. Voltar à tela de OMNIRA
 6. Verificar status: "Conectado" e "sessão: working"
 
 **Evidência esperada**:
 ```
-WAHA session state = connected
+WAHA session state = connected (Android)
 Provider message: "Conectado · sessão: working · última atividade: agora"
+Android device status: "Device paired" (no Android: Settings → Linked devices)
+WAHA logs: No errors, Android engine active
 ```
 
 **Critério de sucesso**:
@@ -45,19 +54,29 @@ Parar aqui com mensagem:
 ```
 BLOCKED_REQUIRES_HUMAN
 
+Gate: R1 (WAHA Android Pairing)
+
 Reason:
-WhatsApp pairing requires human scanning of QR code on real phone.
+WhatsApp pairing requires human scanning of QR code on real Android phone.
 
 Required action:
-1. Open WhatsApp on your phone
-2. Settings → Connected devices → Link a device
-3. Point camera at QR code shown on screen
-4. Confirm pairing in WhatsApp
+1. Enable Debug USB on Android (Settings → Developer options → USB Debugging)
+2. Connect Android to server: adb devices
+3. Open OMNIRA web → Canals → Add WAHA → Accept risk
+4. Start session → QR generated on server screen
+5. On Android phone:
+   - Open WhatsApp
+   - Settings → Linked devices → Link a device
+   - Point camera at QR shown on server
+   - Confirm pairing in WhatsApp
 
 Expected signal:
-Device status changes to "Conectado · sessão: working"
+- Android shows "Device linked"
+- WAHA session state = connected
+- OMNIRA shows "Conectado · sessão: working"
+- WAHA logs show no errors
 
-Do NOT proceed with next gates until this is confirmed.
+Do NOT proceed to R2 until this is confirmed.
 ```
 
 ---
