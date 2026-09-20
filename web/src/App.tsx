@@ -10,6 +10,8 @@ import SupervisorDashboard from './pages/SupervisorDashboard'
 import { InboxPage } from './pages/InboxPage'
 import { ConversationPage } from './pages/ConversationPage'
 import IntegrationsPage from './pages/IntegrationsPage'
+import ChannelsPage from './pages/ChannelsPage'
+import WahaWizardPage from './pages/WahaWizardPage'
 import Layout from './components/Layout'
 
 const queryClient = new QueryClient()
@@ -34,7 +36,8 @@ export default function App() {
             <Route path="/supervisor" element={<SupervisorDashboard />} />
             <Route path="/inbox" element={<InboxPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
-            <Route path="/channels" element={<Navigate to="/integrations" replace />} />
+            <Route path="/channels" element={<ChannelsPage />} />
+            <Route path="/channels/whatsapp/new" element={<WahaWizardPage />} />
             <Route path="/inbox/:conversationId" element={<ConversationRoute />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Route>

@@ -24,14 +24,18 @@ async function login(page: Page, email: string) {
 
 test('a non-admin sees a permission message instead of the connections', async ({ page }) => {
   await login(page, AGENT.email);
-  await page.click('a:has-text("Integrações")');
+  // The sidebar now links to the rebuilt /channels page; this spec still covers
+  // the legacy IntegrationsPage shell, so navigate to it directly.
+  await page.goto('/integrations');
   await expect(page.getByRole('alert')).toContainText('Somente administradores');
   await expect(page.getByRole('button', { name: '+ Adicionar integração' })).toHaveCount(0);
 });
 
 test('admin creates a connection with the risk acknowledgement, pairs via a real QR and stops it', async ({ page }) => {
   await login(page, ADMIN.email);
-  await page.click('a:has-text("Integrações")');
+  // The sidebar now links to the rebuilt /channels page; this spec still covers
+  // the legacy IntegrationsPage shell, so navigate to it directly.
+  await page.goto('/integrations');
 
   await page.getByRole('button', { name: '+ Adicionar integração' }).click();
   await page.getByRole('button', { name: /WhatsApp \(não oficial\)/ }).click();

@@ -38,7 +38,7 @@ test.describe('Dashboard', () => {
 
   test('navegar para outras páginas', async ({ page }) => {
     // Clique em Contas no sidebar
-    await page.click('a:has-text("Contas")');
+    await page.click('a:has-text("Contatos")');
     await page.waitForURL('/accounts');
 
     // Verificar que está em Contas

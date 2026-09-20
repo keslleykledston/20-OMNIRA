@@ -58,7 +58,7 @@ test('unknown email is rejected by the backend', async ({ page }) => {
 
 test('inbox lists the conversation, opens it and shows header + messages', async ({ page }) => {
   await login(page, AGENT.email);
-  await page.click('a:has-text("Inbox")');
+  await page.click('a:has-text("Conversas")');
   await expect(page.getByText('Maria Souza')).toBeVisible();
   await page.getByText('Maria Souza').click();
   await expect(page).toHaveURL(new RegExp(`/inbox/${CONV}$`));
