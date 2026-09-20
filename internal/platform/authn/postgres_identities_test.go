@@ -105,3 +105,67 @@ func TestPostgresProvisionIdentity(t *testing.T) {
 	// Cleanup
 	_, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1,$2)`, userID, userID3)
 }
+
+// Identity is (issuer, subject). Two IdPs may legitimately issue the same
+// subject for different people, so resolution must never key on subject alone.
+func TestIdentityIsScopedToIssuer(t *testing.T) {
+	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if seedURL == "" || appURL == "" {
+		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+
+	resolver := NewPostgresIdentityResolver(app)
+	subject := "shared-subject-" + uuid.NewString()
+	issuerA := "https://idp-a.test/realms/" + uuid.NewString()
+	issuerB := "https://idp-b.test/realms/" + uuid.NewString()
+
+	userA, err := resolver.ProvisionIdentity(ctx, issuerA, subject, "a@test.local", "User A")
+	if err != nil {
+		t.Fatalf("provision A: %v", err)
+	}
+	// Same identity again is idempotent.
+	again, err := resolver.ProvisionIdentity(ctx, issuerA, subject, "a@test.local", "User A")
+	if err != nil || again != userA {
+		t.Fatalf("reprovision A: user=%s err=%v", again, err)
+	}
+
+	userB, err := resolver.ProvisionIdentity(ctx, issuerB, subject, "b@test.local", "User B")
+	if err != nil {
+		t.Fatalf("provision B: %v", err)
+	}
+	if userB == userA {
+		t.Fatal("the same subject from a different issuer collapsed into one user")
+	}
+	t.Cleanup(func() {
+		_, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1,$2)`, userA, userB)
+	})
+
+	resolvedA, err := resolver.ResolveUserID(ctx, issuerA, subject)
+	if err != nil || resolvedA != userA {
+		t.Fatalf("resolve A: user=%s err=%v", resolvedA, err)
+	}
+	resolvedB, err := resolver.ResolveUserID(ctx, issuerB, subject)
+	if err != nil || resolvedB != userB {
+		t.Fatalf("resolve B: user=%s err=%v", resolvedB, err)
+	}
+
+	if _, err := resolver.ResolveUserID(ctx, "https://unknown-idp.test/realms/x", subject); err == nil {
+		t.Fatal("an unknown issuer resolved to a user")
+	}
+	if _, err := resolver.ResolveUserID(ctx, issuerA, "no-such-subject-"+uuid.NewString()); err == nil {
+		t.Fatal("an unknown subject resolved to a user")
+	}
+}

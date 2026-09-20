@@ -124,3 +124,85 @@ func TestRLSCompleteness(t *testing.T) {
 		}
 	}
 }
+
+// expectedPolicyCoverage — para cada tabela crítica, os comandos que a
+// aplicação realmente executa e que portanto precisam de policy.
+//
+// A varredura acima prova que existe *alguma* policy; não prova que existe
+// policy para a operação que o código usa. Foi por aí que dois defeitos
+// passaram: users tinha SELECT e UPDATE mas não INSERT, e o JIT provisioning
+// do primeiro login falhava sob FORCE RLS; conversation_participants entrou
+// sem policy nenhuma. Ambos só apareceram em teste contra Postgres real.
+//
+// Listar a operação aqui é declarar "o runtime faz isto" — e o inverso também
+// vale: o que não está listado não deve ganhar policy sem motivo.
+var expectedPolicyCoverage = map[string][]string{
+	// users não tem tenant_id, então a varredura por tenant_id não a alcança.
+	"users":                     {"SELECT", "UPDATE", "INSERT"},
+	"conversation_participants": {"SELECT", "INSERT", "UPDATE"},
+	"contacts":                  {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"conversations":             {"SELECT", "INSERT", "UPDATE", "DELETE"},
+	"messages":                  {"SELECT", "INSERT", "UPDATE", "DELETE"},
+}
+
+func TestRLSPolicyCoverage(t *testing.T) {
+	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("OMNIRA_DATABASE_URL not set; skipping RLS policy coverage scan")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	defer pool.Close()
+
+	// polcmd: r=SELECT, a=INSERT, w=UPDATE, d=DELETE, *=ALL
+	commandOf := map[string]string{"r": "SELECT", "a": "INSERT", "w": "UPDATE", "d": "DELETE"}
+
+	for table, expected := range expectedPolicyCoverage {
+		rows, err := pool.Query(ctx, `
+			SELECT p.polcmd::text
+			FROM pg_policy p
+			JOIN pg_class c ON c.oid = p.polrelid
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = 'public' AND c.relname = $1`, table)
+		if err != nil {
+			t.Fatalf("query policies for %s: %v", table, err)
+		}
+		covered := map[string]bool{}
+		for rows.Next() {
+			var cmd string
+			if err := rows.Scan(&cmd); err != nil {
+				rows.Close()
+				t.Fatalf("scan policy for %s: %v", table, err)
+			}
+			if cmd == "*" {
+				for _, c := range commandOf {
+					covered[c] = true
+				}
+				continue
+			}
+			if c, ok := commandOf[cmd]; ok {
+				covered[c] = true
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatalf("rows error for %s: %v", table, err)
+		}
+
+		if len(covered) == 0 {
+			t.Errorf("tabela %q não tem policy alguma, mas o runtime executa %v", table, expected)
+			continue
+		}
+		for _, cmd := range expected {
+			if !covered[cmd] {
+				t.Errorf("tabela %q não tem policy de %s, mas o runtime executa essa operação — sob FORCE RLS ela falha em produção", table, cmd)
+			}
+		}
+	}
+}

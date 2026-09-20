@@ -36,7 +36,9 @@ type OIDCDiscovery struct {
 }
 
 type OIDCIdentityResolver interface {
-	ResolveUserID(context.Context, string) (uuid.UUID, error)
+	// ResolveUserID takes the validated issuer and the subject: an identity is
+	// the pair, never the subject alone.
+	ResolveUserID(ctx context.Context, issuer, subject string) (uuid.UUID, error)
 	ResolveIdentity(context.Context, string, string) (uuid.UUID, error)
 	ProvisionIdentity(context.Context, string, string, string, string) (uuid.UUID, error)
 	SessionProfile(context.Context, uuid.UUID) (SessionProfile, error)
@@ -215,7 +217,9 @@ func (a *OIDCAuthenticator) verify(ctx context.Context, tokenString string) (*Pr
 	if !token.Valid || claims.Subject == "" {
 		return nil, nil, time.Time{}, errors.New("invalid oidc token")
 	}
-	userID, err := a.resolver.ResolveUserID(ctx, claims.Subject)
+	// a.issuer, not a claim: the token was just validated against it, so the
+	// client cannot steer which identity is resolved.
+	userID, err := a.resolver.ResolveUserID(ctx, a.issuer, claims.Subject)
 	if err != nil || userID == uuid.Nil {
 		return nil, nil, time.Time{}, errors.New("oidc identity is not provisioned")
 	}

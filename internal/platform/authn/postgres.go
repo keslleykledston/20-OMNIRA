@@ -16,11 +16,25 @@ func NewPostgresIdentityResolver(pool *pgxpool.Pool) *PostgresIdentityResolver {
 	return &PostgresIdentityResolver{pool: pool}
 }
 
-func (r *PostgresIdentityResolver) ResolveUserID(ctx context.Context, subject string) (uuid.UUID, error) {
+// users.external_subject predates the multi-IdP model of migration 000028 and
+// is UNIQUE, so storing a bare subject collides when two issuers emit the same
+// one. It is legacy compatibility only — user_identities is the canonical
+// identity for authentication.
+func legacyExternalSubject(issuer, subject string) string { return issuer + "|" + subject }
+
+// ResolveUserID maps a validated OIDC identity to its user. The identity is
+// (issuer, subject) — two IdPs may issue the same subject for different people,
+// so the subject alone is not an identity.
+//
+// It runs on every authenticated request, so unlike ResolveIdentity it writes
+// nothing: touching last_login_at here would mean a write per request.
+func (r *PostgresIdentityResolver) ResolveUserID(ctx context.Context, issuer, subject string) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := platformdb.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(scoped context.Context) error {
-		return platformdb.QuerierFromContext(scoped, r.pool).QueryRow(scoped,
-			`SELECT id FROM users WHERE external_subject=$1 AND status='active'`, subject).Scan(&id)
+		return platformdb.QuerierFromContext(scoped, r.pool).QueryRow(scoped, `
+			SELECT u.id FROM user_identities i
+			JOIN users u ON u.id = i.user_id
+			WHERE i.issuer=$1 AND i.subject=$2 AND u.status='active'`, issuer, subject).Scan(&id)
 	})
 	if err == pgx.ErrNoRows {
 		return uuid.Nil, errors.New("identity not provisioned")
@@ -92,6 +106,14 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 			`, issuer, subject, email, displayName); err != nil {
 				return err
 			}
+			// Os atributos vêm do IdP a cada login e users é o que o resto da
+			// aplicação lê (SessionProfile, lista de agentes), então a linha de
+			// users acompanha a identidade em vez de congelar no primeiro login.
+			if _, err := q.Exec(scoped, `
+				UPDATE users SET email=$2, display_name=$3, updated_at=NOW() WHERE id=$1
+			`, userID, email, displayName); err != nil {
+				return err
+			}
 			return nil
 		} else if err != pgx.ErrNoRows {
 			return err
@@ -100,7 +122,7 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 		if _, err := q.Exec(scoped, `
 			INSERT INTO users(id, external_subject, email, display_name, status)
 			VALUES ($1, $2, $3, $4, 'active')
-		`, userID, subject, email, displayName); err != nil {
+		`, userID, legacyExternalSubject(issuer, subject), email, displayName); err != nil {
 			return err
 		}
 		if _, err := q.Exec(scoped, `

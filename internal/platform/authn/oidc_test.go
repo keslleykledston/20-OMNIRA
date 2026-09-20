@@ -20,8 +20,8 @@ import (
 
 type fakeOIDCResolver struct{ userID uuid.UUID }
 
-func (r fakeOIDCResolver) ResolveUserID(_ context.Context, subject string) (uuid.UUID, error) {
-	if subject != "idp-user-1" {
+func (r fakeOIDCResolver) ResolveUserID(_ context.Context, issuer, subject string) (uuid.UUID, error) {
+	if issuer == "" || subject != "idp-user-1" {
 		return uuid.Nil, context.Canceled
 	}
 	return r.userID, nil
