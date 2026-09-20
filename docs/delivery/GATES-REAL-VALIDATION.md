@@ -399,12 +399,12 @@ Phone 2:
 ```
 
 **Critério de sucesso**:
-- [x] Message status = sent
-- [ ] **Message recebida no telefone do cliente** ← aguardando confirmação humana
+- [x] Message status = delivered
+- [x] Message recebida no aparelho do cliente — `ack=2 DEVICE`, e `ack=3 READ` num envio irmão
 - [x] Conteúdo íntegro
 - [x] Sem duplicação de envio
 
-### Resultado — PARCIAL (2026-09-20): cadeia interna PASS, entrega não confirmada
+### Resultado — PASS (2026-09-20), após corrigir D-8
 
 Agent A enviou pela conversa que assumiu no R3. Cada elo foi verificado:
 
@@ -421,18 +421,54 @@ Sem duplicação: o WAHA devolve a própria mensagem como `message.any` com
 `fromMe=true` e a API a ignora, então a conversa tem exatamente duas linhas —
 uma inbound (`received`) e uma outbound (`sent`).
 
-**Por que não é PASS**: `ack=1 (SERVER)` significa que o servidor do WhatsApp
-aceitou a mensagem, não que o aparelho a recebeu. O nível que atende ao critério
-deste gate é `ack=2 (DEVICE)`. Uma mensagem anterior no mesmo chat chegou a
-`ack=3 (READ)`, então a cadeia de ack funciona — o aparelho destinatário é que
-não confirmou nesta janela, provavelmente por estar offline.
+A primeira tentativa **não foi entregue**, e a causa está em D-8.
 
-Como o gate proíbe explicitamente aceitar o 200 do WAHA como evidência final,
-o resultado fica **PARCIAL** até confirmação visual no aparelho.
+### Reenvio após corrigir D-8 — entregue
 
-Pendência derivada, a verificar quando o ack evoluir: o OMNIRA precisa refletir
-`delivered` ao receber `message.ack` — a transição `sent → delivered` ainda não
-foi exercida ponta a ponta.
+Com o endereçamento corrigido, o mesmo caminho completo (Composer → API →
+Outbox → NATS → worker → WAHA → WhatsApp):
+
+```
+OMNIRA  messages.status      = delivered        (antes: preso em sent)
+        provider_message_id  = true_175222334484588@lid_3EB0074DBA850AE
+WAHA    ack                  = 2 (DEVICE)
+```
+
+Também derruba a suspeita inicial de "indicador de entrega cego": a transição
+`sent → delivered` funciona e foi exercida ponta a ponta pela primeira vez. O
+que faltava não era o ack — era a mensagem chegar.
+
+### Achado D-8 — resposta endereçada ao telefone não é entregue
+
+O envio montava o destino como `<telefone>@c.us` a partir do contato
+(`waha/provider.go:195`). O WhatsApp passou a endereçar contatos por **LID**, e
+nesse caso o endereço derivado do telefone é **aceito e nunca entregue**.
+
+Medido na instância real, mesmo texto e mesmo destinatário:
+
+| Destino | ack | Entregue |
+|---|---|---|
+| `559291740090@c.us` (derivado do telefone) | 1 SERVER | **não** |
+| `175222334484588@lid` (endereço da conversa) | 2 DEVICE → 3 READ | sim |
+
+O que torna isso grave é o silêncio: sem erro, sem retry, sem sinal na UI. A
+mensagem fica `sent` para sempre e o operador acredita ter respondido o cliente.
+
+Corrigido guardando `conversations.provider_chat_id` — o endereço tal como o
+provedor o informou no inbound — e usando-o no envio (migration 000030). Sem
+valor conhecido, o comportamento antigo permanece.
+
+### Achado D-9 — telefone gravado sem o nono dígito (aberto)
+
+O contato foi gravado como **+559291740090**, mas o número real é
+**+55 92 99174-0090** — falta o `9`. O `SenderAlt` do WhatsApp vem em formato
+legado, e o `phone_e164` do contato herdou essa forma.
+
+Não afeta a entrega agora, porque o envio passou a usar `provider_chat_id`. Mas
+o dado está incorreto para todo o resto: ligar, exportar, casar com cadastro de
+CRM, ou o fallback de envio quando não há `provider_chat_id`. Corrigir exige a
+regra do nono dígito brasileiro (celular, DDD, faixa de numeração) — não é uma
+normalização ingênua e merece slice próprio.
 
 ---
 
