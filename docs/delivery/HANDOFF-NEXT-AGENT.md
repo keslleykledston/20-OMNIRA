@@ -4,11 +4,11 @@
 > Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência real antes de dizer PASS; respostas em português, diretas.
 
 ## 1. Situação em 5 linhas
-- **GOAL TÉCNICO COMPLETO** (Inbox WhatsApp não oficial/WAHA operável com CRM mock): login (OIDC) → QR (PASS 6/6) → receber → assumir → responder → status → **abrir/atualizar/fechar ticket CRM** — multi-tenant com RLS, via `docker compose`.
-- **STATE: FIRST_INTERNAL_PRODUCT_DELIVERY ✅** — **AUTH.0-AUTH.7 + CRM.1-5 COMPLETO**. QR gerado (6/6 PASS), backend CRM (6/6 unit tests), frontend TicketPanel (TypeScript ✓, 43/43 web tests ✓, 12/12 e2e ✓), E2E test case escrito. Commit: `9835f1f`.
-- **AUTH.0-AUTH.7 COMPLETO:** Opaque server-side sessions (64-hex), OIDC handoff (mock login), fail-closed production validation, RLS via GUC.
-- **CRM.1-5 COMPLETO:** MockCRMConnector (thread-safe, multi-tenant safe, 6/6 tests), HTTP handlers (create/get/update/close), TicketPanel.tsx (React, inline styles, error handling), E2E test (operador: create → in_progress → resolved → closed).
-- **Próximas fases:** P7 (humano com telefone valida mensagem WhatsApp real via WAHA) → Produção (gate de segurança + monitor).
+- **Fluxo WhatsApp validado com tráfego real em 2026-09-20**: pareamento por QR → mensagem de cliente real entrando → dois operadores → resposta chegando no aparelho do cliente (`ack=2 DEVICE`), tudo multi-tenant com RLS. Detalhe e evidência em `docs/delivery/GATES-REAL-VALIDATION.md`.
+- **Gates R1, R2, R3, R4, R6 = PASS. R5 (CRM real/IXC) = BLOCKED_REQUIRES_HUMAN** — adapter implementado e testado contra fake server, falta credencial de ambiente real.
+- **Dois defeitos críticos só apareceram com tráfego real** e cada um sozinho inviabilizava o produto, ambos falhando em silêncio: **D-7** (remetente `@lid` recusado — nenhuma mensagem de cliente entrava) e **D-8** (resposta endereçada ao telefone não era entregue — nenhuma resposta saía). Corrigidos em `644ee1f` e `da0c156`.
+- **A instância do host roda por `docker-compose.prod.yml`**, não pelo compose principal: API em 8081 (8080 é do `evolution-api`, outro projeto), frontend pelo Vite em :3000 fora do compose, `OMNIRA_ENV=lab` enquanto o auth for mock. Ver `docs/deployment/FIX-PRODUCTION-AUTH.md`.
+- **Abertos e não bloqueantes:** D-6 (webhook recusa `session.status` no pareamento), D-9 (telefone gravado sem o nono dígito), e a dívida antiga de RLS INSERT nos testes de `authn`.
 
 ## 2. Ordem de leitura (30 min)
 1. `docs/delivery/ROADMAP-TO-GOAL.md` — fases P0–P6, o que foi achado/corrigido em cada uma, **pendências por fase** e **backlog em ordem**.
