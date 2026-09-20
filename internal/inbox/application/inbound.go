@@ -81,7 +81,7 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 	if inbound.ProviderMessageID == "" || inbound.FromE164 == "" {
 		return nil, errors.New("inbox: inbound message identity is required")
 	}
-	contact, err := contactdomain.NewContact(tc.TenantID, inbound.FromE164, "")
+	contact, err := contactdomain.NewContact(tc.TenantID, inbound.FromE164, inbound.SenderName)
 	if err != nil {
 		return nil, err
 	}

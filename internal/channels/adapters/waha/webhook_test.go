@@ -160,6 +160,52 @@ func TestParseInboundResolvesLinkedIDSenderFromSenderAlt(t *testing.T) {
 	}
 }
 
+// O nome de perfil (pushName) é escolhido por quem envia, então serve como
+// rótulo de exibição e nunca como identidade — e precisa ser higienizado antes
+// de chegar à UI e aos logs.
+func TestParseInboundCarriesSanitizedSenderName(t *testing.T) {
+	conn := webhookConnection()
+	provider := newProvider(t, "secret")
+	msg := func(push string) []byte {
+		return []byte(`{"id":"evt-n","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"m1","timestamp":1710000000,"from":"5511999999999@c.us","fromMe":false,"body":"oi","_data":{"Info":{"PushName":` + push + `}}}}`)
+	}
+	parsed, err := provider.ParseWebhook(conn, msg(`"K3G Solutions"`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Message.SenderName != "K3G Solutions" {
+		t.Fatalf("sender name not carried: %q", parsed.Message.SenderName)
+	}
+	// A identidade continua sendo o telefone, não o nome.
+	if parsed.Message.FromE164 != "+5511999999999" {
+		t.Fatalf("identity changed by sender name: %q", parsed.Message.FromE164)
+	}
+
+	dirty, err := provider.ParseWebhook(conn, msg(`"  Evil\u0000Corp\nSupport  "`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirty.Message.SenderName != "EvilCorp Support" {
+		t.Fatalf("control characters survived: %q", dirty.Message.SenderName)
+	}
+
+	long, err := provider.ParseWebhook(conn, msg(`"`+strings.Repeat("a", 200)+`"`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len([]rune(long.Message.SenderName)); n != 80 {
+		t.Fatalf("sender name not truncated: %d runes", n)
+	}
+
+	none, err := provider.ParseWebhook(conn, []byte(`{"id":"evt-n2","event":"message.any","session":"`+sessionName(conn)+`","payload":{"id":"m2","timestamp":1710000000,"from":"5511999999999@c.us","fromMe":false,"body":"oi"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.Message.SenderName != "" {
+		t.Fatalf("expected empty sender name, got %q", none.Message.SenderName)
+	}
+}
+
 func TestParseInboundRejectsSessionConfusionAndMalformedSender(t *testing.T) {
 	conn := webhookConnection()
 	provider := newProvider(t, "secret")

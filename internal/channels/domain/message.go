@@ -33,7 +33,11 @@ type InboundMessage struct {
 	ProviderMessageID string // ID atribuído pelo provider — usado para dedupe
 	ConnectionID      string
 	FromE164          string // sempre em E.164, normalizado pelo adapter
-	Text              string
+	// SenderName é o nome de perfil informado pelo remetente (ex.: pushName do
+	// WhatsApp). Serve como rótulo de exibição e NUNCA como identidade: quem
+	// envia escolhe esse valor livremente. A identidade é FromE164.
+	SenderName string
+	Text       string
 	Media             *InboundMedia
 	Timestamp         time.Time
 	RawProviderEvent  string // referência opcional ao payload bruto (auditoria), nunca segredo

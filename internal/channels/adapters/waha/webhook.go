@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
@@ -97,9 +98,32 @@ type webhookMessage struct {
 	Data *struct {
 		Info *struct {
 			SenderAlt string `json:"SenderAlt"`
+			PushName  string `json:"PushName"`
 		} `json:"Info"`
 	} `json:"_data"`
 }
+
+// sanitizeSenderName limpa o nome de perfil vindo do remetente. O valor é
+// escolhido livremente por quem envia, então entra só como rótulo: remove
+// controles (que quebrariam log e UI) e limita o tamanho.
+func sanitizeSenderName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.Join(strings.Fields(name), " ")
+	if len([]rune(name)) > maxSenderNameRunes {
+		name = string([]rune(name)[:maxSenderNameRunes])
+	}
+	return name
+}
+
+const maxSenderNameRunes = 80
 
 // senderJID devolve o endereço de onde extrair o telefone.
 //
@@ -168,10 +192,15 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 	if payload.Body == "" && !payload.HasMedia {
 		return ParsedWebhook{}, ErrMalformedWebhook
 	}
+	senderName := ""
+	if payload.Data != nil && payload.Data.Info != nil {
+		senderName = sanitizeSenderName(payload.Data.Info.PushName)
+	}
 	message := &domain.InboundMessage{
 		ProviderMessageID: payload.ID,
 		ConnectionID:      conn.ID.String(),
 		FromE164:          from,
+		SenderName:        senderName,
 		Text:              payload.Body,
 		Timestamp:         time.Unix(int64(payload.Timestamp), int64((payload.Timestamp-float64(int64(payload.Timestamp)))*1e9)).UTC(),
 	}

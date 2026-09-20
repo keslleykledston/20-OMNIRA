@@ -171,3 +171,101 @@ func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// O nome de perfil do remetente batiza um contato que ainda não tem nome, mas
+// não pode sobrescrever um nome curado pelo operador — caso contrário quem
+// envia escolheria como aparece na inbox alheia (ex.: "Banco Oficial").
+func TestInboundContactNameFillsPlaceholderButNeverOverwritesCuratedName(t *testing.T) {
+	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if seedURL == "" || appURL == "" {
+		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	var roleID uuid.UUID
+	if err := seed.QueryRow(ctx, `SELECT id FROM roles WHERE key='tenant_admin' AND tenant_id IS NULL LIMIT 1`).Scan(&roleID); err != nil {
+		t.Fatal(err)
+	}
+	tenant, user := uuid.New(), uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO users(id,external_subject,email,status) VALUES($1,$2,$3,'active')`, user, user, user.String()+"@invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tenant, tenant.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, `INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, tenant, user, roleID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = seed.Exec(context.Background(), `DELETE FROM tenants WHERE id=$1`, tenant)
+		_, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, user)
+	})
+	connectionID, queueID := uuid.New(), uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO queues(id,tenant_id,name,mode,is_default) VALUES($1,$2,'Default','manual',true)`, queueID, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, `INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active')`, connectionID, tenant, connectionID.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPostgresInboundStore(app)
+	svc := inboxapp.NewInboundService(store, store, store, TicketStore{store}, store)
+	connection := channeldomain.ChannelConnection{ID: connectionID, TenantID: tenant}
+	const phone = "+5511988887777"
+	ingest := func(providerID, senderName string) {
+		t.Helper()
+		if err := platformdb.WithTenantSession(ctx, app, user, false, func(sc context.Context) error {
+			tc, e := tenancydomain.NewTenantContext(tenant, user, tenancydomain.AccessSourceDirect)
+			if e != nil {
+				return e
+			}
+			_, e = svc.Ingest(tenancydomain.WithTenantContext(sc, tc), connection, channeldomain.InboundMessage{
+				ConnectionID: connectionID.String(), ProviderMessageID: providerID,
+				FromE164: phone, SenderName: senderName, Text: "oi",
+			})
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	name := func() string {
+		t.Helper()
+		var got string
+		if err := seed.QueryRow(ctx, `SELECT display_name FROM contacts WHERE tenant_id=$1 AND phone_e164=$2`, tenant, phone).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	// Sem nome de perfil, o contato nasce com o telefone como placeholder.
+	ingest("m-1", "")
+	if got := name(); got != phone {
+		t.Fatalf("placeholder esperado %q, veio %q", phone, got)
+	}
+
+	// Chegando um nome de perfil, o placeholder é substituído.
+	ingest("m-2", "K3G Solutions")
+	if got := name(); got != "K3G Solutions" {
+		t.Fatalf("nome de perfil não aplicado ao placeholder: %q", got)
+	}
+
+	// Operador renomeia; a partir daí o remetente não manda mais no rótulo.
+	if _, err := seed.Exec(ctx, `UPDATE contacts SET display_name=$3 WHERE tenant_id=$1 AND phone_e164=$2`, tenant, phone, "Cliente VIP"); err != nil {
+		t.Fatal(err)
+	}
+	ingest("m-3", "Banco Oficial Suporte")
+	if got := name(); got != "Cliente VIP" {
+		t.Fatalf("nome curado foi sobrescrito pelo remetente: %q", got)
+	}
+}
