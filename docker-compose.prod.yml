@@ -1,4 +1,28 @@
-version: '3.8'
+# Stack de validação do host devops (vhost omnira.devops.k3gsolutions.com.br).
+#
+# Diferenças em relação ao docker-compose.yml principal, ditadas pelo host:
+#   - a API publica em 127.0.0.1:8081 porque 8080 pertence ao container
+#     evolution-api, de outro projeto. O upstream do nginx do host aponta para 8081.
+#   - o frontend NÃO vem daqui: é o Vite dev server em :3000, processo do host.
+#   - OMNIRA_ENV=lab é obrigatório enquanto OMNIRA_AUTH_MODE=mock; o config recusa
+#     mock sob staging/production.
+#   - OMNIRA_DATABASE_URL usa omnira_app: a API recusa iniciar como owner (BYPASSRLS).
+#
+# Migrations e seed não estão aqui: rodam sob demanda (ver
+# docs/deployment/FIX-PRODUCTION-AUTH.md). NUNCA use `down -v` neste host — apaga volumes.
+
+x-runtime: &runtime
+  OMNIRA_DATABASE_URL: postgres://omnira_app:omnira_app@postgres:5432/omnira_dev?sslmode=disable
+  OMNIRA_NATS_URL: nats://nats:4222
+  OMNIRA_AUTH_MODE: mock
+  OMNIRA_ENV: lab
+  OMNIRA_CREDENTIALS_KEY: TUlSds2/+c+9Kx7mPNm5E5sZPf9nc0u6zW50k/c5YgE=
+  OMNIRA_WAHA_ENABLED: "true"
+  OMNIRA_WAHA_BASE_URL: http://waha:3000
+  OMNIRA_WAHA_API_KEY: omnira-waha-local
+  OMNIRA_WAHA_ENGINE: GOWS
+  OMNIRA_PUBLIC_BASE_URL: http://api:8080
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -6,6 +30,8 @@ services:
       POSTGRES_USER: omnira
       POSTGRES_PASSWORD: omnira
       POSTGRES_DB: omnira_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:55434:5432"
     healthcheck:
@@ -16,6 +42,9 @@ services:
 
   nats:
     image: nats:2.10-alpine
+    command: -js -sd /data
+    volumes:
+      - nats_data:/data
     ports:
       - "127.0.0.1:4222:4222"
     healthcheck:
@@ -23,6 +52,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  waha:
+    image: devlikeapro/waha:gows-2026.8.2
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WAHA_API_KEY: omnira-waha-local
+      WAHA_DASHBOARD_ENABLED: "false"
+      WHATSAPP_SWAGGER_ENABLED: "false"
+    volumes:
+      - waha_sessions:/app/.sessions
+      - waha_media:/app/.media
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/ping >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   api:
     image: 20-omnira-api
@@ -32,16 +80,23 @@ services:
       nats:
         condition: service_healthy
     environment:
-      OMNIRA_DATABASE_URL: postgres://omnira_app:omnira_app@postgres:5432/omnira_dev?sslmode=disable
-      OMNIRA_NATS_URL: nats://nats:4222
-      OMNIRA_AUTH_MODE: mock
-      OMNIRA_ENV: lab
-      OMNIRA_CREDENTIALS_KEY: TUlSds2/+c+9Kx7mPNm5E5sZPf9nc0u6zW50k/c5YgE=
+      <<: *runtime
       OMNIRA_HTTP_ADDR: 0.0.0.0:8080
     ports:
       - "127.0.0.1:8081:8080"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/internal/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+
+  worker:
+    image: 20-omnira-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    environment:
+      <<: *runtime
+
+volumes:
+  postgres_data:
+  nats_data:
+  waha_sessions:
+  waha_media:
