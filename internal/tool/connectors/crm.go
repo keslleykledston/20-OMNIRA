@@ -19,11 +19,17 @@ type CRMTicket struct {
 	UpdatedAt time.Time
 }
 
-// CRMConnector — interface de CRM
+// CRMConnector — porta canônica de CRM/ERP. O core não conhece campos de
+// IXC/SGP/Hubsoft: cada adapter traduz para o seu sistema e guarda a
+// referência externa por conta própria.
 type CRMConnector interface {
 	Name() string
 	Authenticate(ctx context.Context, credentials map[string]interface{}) error
-	FindCustomer(ctx context.Context, email string) (customerID string, err error)
+	// FindCustomer localiza o cliente por um identificador de busca. O que
+	// serve como identificador é decisão do adapter: e-mail no mock, e em um
+	// ERP de provedor normalmente telefone, CPF/CNPJ ou contrato — que é o
+	// dado que o atendimento por WhatsApp tem em mãos.
+	FindCustomer(ctx context.Context, query string) (customerID string, err error)
 	CreateTicket(ctx context.Context, customerID, subject string) (ticketID string, err error)
 	GetTicket(ctx context.Context, ticketID string) (*CRMTicket, error)
 	UpdateTicket(ctx context.Context, ticketID, status string) error
