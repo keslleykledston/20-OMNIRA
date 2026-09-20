@@ -43,6 +43,10 @@ type Channel string
 
 const (
 	ChannelWhatsApp Channel = "whatsapp"
+	// ChannelERP agrupa sistemas de retaguarda (CRM/ERP) na mesma aba de
+	// Integrações. Não transporta mensagem: a conexão existe para guardar
+	// credencial e estado de teste, não para receber ou enviar conversa.
+	ChannelERP Channel = "erp"
 )
 
 // ConnectionStatus — estado operacional de uma ChannelConnection.

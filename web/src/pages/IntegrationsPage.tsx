@@ -83,10 +83,14 @@ function AddIntegrationWizard({ providers, onClose }: { providers: ProviderDescr
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<ProviderDescriptor | null>(null);
   const [riskAccepted, setRiskAccepted] = useState(false);
+  const [inputs, setInputs] = useState<Record<string, string>>({});
   const [created, setCreated] = useState<ChannelConnection | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const missingRequired = (selected?.inputs ?? []).some(
+    (field) => field.required && !(inputs[field.key] ?? '').trim(),
+  );
   const create = useMutation({
-    mutationFn: () => integrationsAPI.create(selected!.id, {}, riskAccepted),
+    mutationFn: () => integrationsAPI.create(selected!.id, inputs, riskAccepted),
     onSuccess: (connection) => {
       setCreated(connection);
       setError(null);
@@ -124,9 +128,35 @@ function AddIntegrationWizard({ providers, onClose }: { providers: ProviderDescr
 
       {selected && !created && (
         <div className="space-y-4">
-          <button className="text-sm text-blue-700" onClick={() => { setSelected(null); setRiskAccepted(false); }}>← Voltar</button>
+          <button className="text-sm text-blue-700" onClick={() => { setSelected(null); setRiskAccepted(false); setInputs({}); }}>← Voltar</button>
           <h3 className="font-medium">{selected.name}</h3>
           {selected.risk_notice && <Alert tone="warning"><strong>Risco:</strong> {selected.risk_notice}</Alert>}
+
+          {/* Campos ditados pelo descritor: a tela não conhece IXC nem CRM K3G. */}
+          {selected.inputs?.map((field) => (
+            <label key={field.key} className="block">
+              <span className="block text-sm font-medium text-slate-700 mb-1">
+                {field.label}
+                {field.required && <span className="text-red-600" aria-hidden="true"> *</span>}
+              </span>
+              <input
+                type={field.secret ? 'password' : 'text'}
+                autoComplete={field.secret ? 'new-password' : 'off'}
+                required={field.required}
+                placeholder={field.example}
+                value={inputs[field.key] ?? ''}
+                onChange={(e) => setInputs((prev) => ({ ...prev, [field.key]: e.target.value }))}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {field.help && <span className="block text-xs text-slate-500 mt-1">{field.help}</span>}
+              {field.secret && (
+                <span className="block text-xs text-slate-500 mt-1">
+                  Guardado cifrado; não é exibido de volta depois de salvo.
+                </span>
+              )}
+            </label>
+          ))}
+
           {selected.kind === 'unofficial' && (
             <label className="flex items-start gap-2 text-sm text-slate-800">
               <input type="checkbox" checked={riskAccepted} onChange={(event) => setRiskAccepted(event.target.checked)} className="mt-1" />
@@ -135,7 +165,7 @@ function AddIntegrationWizard({ providers, onClose }: { providers: ProviderDescr
           )}
           <button
             className="btn-primary"
-            disabled={(selected.kind === 'unofficial' && !riskAccepted) || create.isPending}
+            disabled={(selected.kind === 'unofficial' && !riskAccepted) || missingRequired || create.isPending}
             onClick={() => create.mutate()}
           >
             {create.isPending ? 'Criando...' : 'Criar conexão'}

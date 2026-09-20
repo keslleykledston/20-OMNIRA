@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	metachannel "github.com/omnira/omnira/internal/channels/meta"
+	ports "github.com/omnira/omnira/internal/channels/ports"
+	toolconnectors "github.com/omnira/omnira/internal/tool/connectors"
 	"log"
 	"os"
 	"os/signal"
@@ -83,6 +85,17 @@ func main() {
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions)
 	if err := providerRegistry.RegisterDescriptor(metachannel.Descriptor(), nil); err != nil {
 		log.Fatalf("Meta provider descriptor error: %v", err)
+	}
+	// Sistemas de retaguarda (CRM/ERP) aparecem na mesma aba de Integrações.
+	// O descritor só descreve o formulário; o adapter correspondente entra em
+	// uso quando a conexão é configurada e testada.
+	for _, descriptor := range []ports.ProviderDescriptor{
+		toolconnectors.K3GCRMDescriptor(true, ""),
+		toolconnectors.IXCDescriptor(true, ""),
+	} {
+		if err := providerRegistry.RegisterDescriptor(descriptor, nil); err != nil {
+			log.Fatalf("ERP descriptor error (%s): %v", descriptor.ID, err)
+		}
 	}
 	wahaReason := ""
 	if !cfg.WahaEnabled {
