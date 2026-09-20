@@ -270,6 +270,122 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/invite:
+    post:
+      operationId: inviteParticipant
+      tags: [Co-attendance]
+      summary: Invite another agent to co-attend the conversation
+      description: |
+        Creates a pending invitation (`INVITED`) for `target_user_id`. The target must be an eligible agent of this
+        tenant (else `422`). Re-inviting an already invited or active participant is an idempotent no-op
+        (`changed:false`). Audit `participant.invited`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ParticipantTargetRequest' }
+      responses:
+        '201':
+          description: "Invitation registered"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InviteResult' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Conflicting participant state", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Target is not an eligible agent of this tenant", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/transfer:
+    post:
+      operationId: transferConversation
+      tags: [Co-attendance]
+      summary: Transfer the conversation to another agent
+      description: |
+        Moves ownership to `target_user_id`. The target must be an eligible agent of this tenant (else `422`).
+        Transferring to the current assignee is an idempotent no-op (`changed:false`).
+        Audit `conversation.transferred`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ParticipantTargetRequest' }
+      responses:
+        '200':
+          description: "Transfer applied"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransferResult' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Conflicting participant state", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Target is not an eligible agent of this tenant", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/accept-invite:
+    post:
+      operationId: acceptParticipantInvite
+      tags: [Co-attendance]
+      summary: Accept a pending co-attendance invitation
+      description: |
+        The caller accepts their own pending invitation and becomes an active co-attendee.
+        Only invitations in `INVITED` state can be accepted (else `409`). Audit `participant.accepted`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '201':
+          description: "Invitation accepted"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AcceptInviteResult' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Only pending invitations can be accepted", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/reject-invite:
+    post:
+      operationId: rejectParticipantInvite
+      tags: [Co-attendance]
+      summary: Reject a pending co-attendance invitation
+      description: |
+        The caller declines their own pending invitation. Only invitations in `INVITED` state can be rejected
+        (else `409`). Audit `participant.rejected`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '204': { description: "Invitation rejected" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Only pending invitations can be rejected", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/leave:
+    post:
+      operationId: leaveConversation
+      tags: [Co-attendance]
+      summary: Leave the conversation as co-attendee
+      description: |
+        Removes the caller from the active co-attendees. Only co-attendees can leave — the owner releases the
+        conversation through `/unassign` instead (else `409`). Audit `participant.left`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '204': { description: "Left the conversation" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Only co-attendees can leave", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/events:
     get:
       operationId: streamInboxEvents
@@ -387,6 +503,22 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/channels/connections/{connection_id}/test:
+    post:
+      operationId: testChannelConnection
+      tags: [Channels]
+      summary: Probe the provider and refresh the connection status
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+        '503': { description: Provider not configured, content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/channels/connections/{connection_id}/session/start:
     post:
       operationId: startChannelSession
@@ -784,6 +916,35 @@ components:
         conversation_id: { type: string, format: uuid }
         assigned_to_user_id: { type: string, format: uuid, nullable: true }
         changed: { type: boolean }
+    ParticipantTargetRequest:
+      type: object
+      required: [target_user_id]
+      properties:
+        target_user_id:
+          type: string
+          format: uuid
+          description: The agent being invited or transferred to. Must be an eligible agent of this tenant.
+    InviteResult:
+      type: object
+      required: [participant_id, target_user_id, role, changed]
+      properties:
+        participant_id: { type: string, format: uuid }
+        target_user_id: { type: string, format: uuid }
+        role: { type: string, description: "Participant role, e.g. `INVITED`" }
+        changed: { type: boolean, description: "false when the invitation already existed (idempotent no-op)" }
+    TransferResult:
+      type: object
+      required: [changed]
+      properties:
+        previous_assignee: { type: string, format: uuid, nullable: true }
+        new_assignee: { type: string, format: uuid, nullable: true }
+        changed: { type: boolean, description: "false when the target already owned the conversation" }
+    AcceptInviteResult:
+      type: object
+      required: [participant_id]
+      properties:
+        participant_id: { type: string, format: uuid }
+        joined_at: { type: string, format: date-time, nullable: true }
     RealtimeEvent:
       type: object
       required: [type, id, timestamp]

@@ -285,11 +285,11 @@ func (h *CRMHandlers) CreateActivity(w http.ResponseWriter, r *http.Request) {
 	activityID := ""
 	err = db.WithTenantSession(ctx, h.dbPool, tid, false, func(sessionCtx context.Context) error {
 		// Create activity in CRM (type is always WHATSAPP in this context)
-		id, crErr := h.crm.CreateActivity(sessionCtx, "WHATSAPP", req.Subject, req.ContactID, req.CompanyID)
+		activity, crErr := h.k3gClient.CreateActivity(sessionCtx, "WHATSAPP", req.Subject, req.ContactID, req.CompanyID)
 		if crErr != nil {
 			return crErr
 		}
-		activityID = id
+		activityID = activity.ID
 		return nil
 	})
 	if err != nil {

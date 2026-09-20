@@ -131,7 +131,7 @@ func TestInviteSuccessful(t *testing.T) {
 	svc := NewParticipantService(repo, assigner, nil)
 
 	ctx := context.Background()
-	ctx = tenancydomain.WithContext(ctx, &tenancydomain.TenantContext{
+	ctx = tenancydomain.WithTenantContext(ctx, &tenancydomain.TenantContext{
 		TenantID: tenantID,
 		ActorID:  actorID,
 		Source:   tenancydomain.AccessSourceDirect,
@@ -164,7 +164,7 @@ func TestInviteForbiddenWithoutPermission(t *testing.T) {
 	svc := NewParticipantService(repo, assigner, nil)
 
 	ctx := context.Background()
-	ctx = tenancydomain.WithContext(ctx, &tenancydomain.TenantContext{
+	ctx = tenancydomain.WithTenantContext(ctx, &tenancydomain.TenantContext{
 		TenantID: tenantID,
 		ActorID:  actorID,
 		Source:   tenancydomain.AccessSourceDirect,
@@ -189,7 +189,7 @@ func TestAcceptInviteSuccessful(t *testing.T) {
 	svc := NewParticipantService(repo, assigner, nil)
 
 	ctx := context.Background()
-	ctx = tenancydomain.WithContext(ctx, &tenancydomain.TenantContext{
+	ctx = tenancydomain.WithTenantContext(ctx, &tenancydomain.TenantContext{
 		TenantID: tenantID,
 		ActorID:  actorID,
 		Source:   tenancydomain.AccessSourceDirect,

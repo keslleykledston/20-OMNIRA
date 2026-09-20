@@ -146,9 +146,11 @@ func TestOIDCAuthorizationCodePKCEAndCookie(t *testing.T) {
 	if session == nil || !session.HttpOnly || !session.Secure || session.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unsafe session cookie: %#v", session)
 	}
-	principal, err := auth.Verify(context.Background(), session.Value)
-	if err != nil || principal.UserID != resolver.userID || principal.Subject != "idp-user-1" {
-		t.Fatalf("verified principal=%#v err=%v", principal, err)
+	// The session cookie carries an opaque server-side session id, not the ID
+	// Token: it only identifies the user through the session store.
+	userID, err := sessionStore.ResolveSession(context.Background(), session.Value)
+	if err != nil || userID != resolver.userID {
+		t.Fatalf("resolved session user=%v err=%v", userID, err)
 	}
 }
 

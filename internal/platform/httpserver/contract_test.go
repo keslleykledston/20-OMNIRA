@@ -112,16 +112,22 @@ func TestEveryInboxAndChannelRouteIsDocumented(t *testing.T) {
 		found = append(found, m[1]+" "+paramRE.ReplaceAllString(m[2], "{}"))
 	}
 	// the channels family uses: base := "..."; s.mux.Handle("METHOD "+base+"/suffix", ...)
+	// Each base only owns the Handle calls that follow it, up to the next base
+	// declaration — a cartesian product would invent routes that are not registered.
 	baseRE := regexp.MustCompile(`base := "([^"]+)"`)
-	bases := baseRE.FindAllStringSubmatch(string(src), -1)
+	bases := baseRE.FindAllStringSubmatchIndex(string(src), -1)
 	if len(bases) == 0 {
 		t.Fatal("channels base path not found in server.go")
 	}
 	cat := regexp.MustCompile(`s\.mux\.Handle\("(GET|POST) "\+base(?:\+"([^"]*)")?`)
-	patterns := cat.FindAllStringSubmatch(string(src), -1)
-	for _, base := range bases {
-		for _, m := range patterns {
-			found = append(found, m[1]+" "+paramRE.ReplaceAllString(base[1]+m[2], "{}"))
+	for i, base := range bases {
+		end := len(src)
+		if i+1 < len(bases) {
+			end = bases[i+1][0]
+		}
+		basePath := string(src[base[2]:base[3]])
+		for _, m := range cat.FindAllStringSubmatch(string(src[base[1]:end]), -1) {
+			found = append(found, m[1]+" "+paramRE.ReplaceAllString(basePath+m[2], "{}"))
 		}
 	}
 	if len(found) < 10 {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/routing/application"
@@ -169,19 +170,6 @@ func (h *ParticipantHandler) Leave(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListParticipants retorna todos os participants ativos.
-// GET /conversations/{id}/participants
-func (h *ParticipantHandler) ListParticipants(w http.ResponseWriter, r *http.Request) {
-	id, ok := conversationIDFromPath(w, r)
-	if !ok {
-		return
-	}
-
-	// TODO: implementar endpoint de listagem
-	// Por enquanto, retornar 501 Not Implemented
-	http.Error(w, "not implemented", http.StatusNotImplemented)
-}
-
 func conversationIDFromPath(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("conversation_id"))
 	if err != nil {
@@ -199,15 +187,15 @@ func respondParticipantError(w http.ResponseWriter, err error) {
 
 	msg := err.Error()
 	switch {
-	case errors.Contains(msg, "forbidden"):
+	case strings.Contains(msg, "forbidden"):
 		http.Error(w, "forbidden", http.StatusForbidden)
-	case errors.Contains(msg, "not found"):
+	case strings.Contains(msg, "not found"):
 		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Contains(msg, "not an eligible agent"):
+	case strings.Contains(msg, "not an eligible agent"):
 		http.Error(w, "target is not an eligible agent", http.StatusUnprocessableEntity)
-	case errors.Contains(msg, "pending invitations"):
+	case strings.Contains(msg, "pending invitations"):
 		http.Error(w, "only pending invitations can be accepted", http.StatusConflict)
-	case errors.Contains(msg, "co-attendees can"):
+	case strings.Contains(msg, "co-attendees can"):
 		http.Error(w, msg, http.StatusConflict)
 	default:
 		http.Error(w, "internal server error", http.StatusInternalServerError)

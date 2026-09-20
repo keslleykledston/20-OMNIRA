@@ -115,6 +115,10 @@ func main() {
 	if !cfg.WahaEnabled {
 		wahaReason = "WAHA está desabilitado na configuração do servidor."
 	}
+	// Compartilhado entre os wirings WAHA e Meta: o cliente CRM é resolvido no
+	// primeiro bloco que executa e reaproveitado pelo outro.
+	var k3gClientForAPI *toolconnectors.K3GCRMClient
+
 	if cfg.WahaEnabled {
 		cipher, cipherErr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
 		if cipherErr != nil {
@@ -140,12 +144,11 @@ func main() {
 
 		// R5: Wiring de CRM (K3G) no webhook inbound. Quando mensagem chega,
 		// procura contato no CRM; se não existe, cria automaticamente.
-		var k3gClientForAPI *toolconnectors.K3GCRMClient
 		if k3gConnection, k3gErr := erpConnections.FindByTenant(context.Background(), uuid.Nil); k3gErr == nil && k3gConnection != nil {
 			for _, conn := range k3gConnection {
 				if conn.Provider == "k3g_crm" && conn.Status == "active" {
 					k3gCred, credErr := erpCredentials.Resolve(context.Background(), conn.SecretRef)
-					if credErr == nil && k3gCred != nil {
+					if credErr == nil && k3gCred.Fields != nil {
 						k3gClient, clientErr := toolconnectors.NewK3GCRMClient(toolconnectors.K3GCRMConfig{
 							BaseURL: k3gCred.Fields["base_url"],
 							Token:   k3gCred.Fields["token"],

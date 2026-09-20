@@ -37,8 +37,8 @@ type TicketStore interface {
 }
 
 type CRMConnector interface {
-	FindCustomerByPhone(context.Context, phone, companyID string) (contactID string, err error)
-	CreateContact(context.Context, name, phone, companyID string) (contactID string, err error)
+	FindCustomerByPhone(ctx context.Context, phone, companyID string) (contactID string, err error)
+	CreateContact(ctx context.Context, name, phone, companyID string) (contactID string, err error)
 }
 
 type InitialRouter interface {
@@ -124,7 +124,7 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 				return nil, fmt.Errorf("inbox: find customer in crm: %w", err)
 			}
 			if crmContactID == "" {
-				crmContactID, err = s.crm.CreateContact(ctx, contact.Name, inbound.FromE164, s.crmCompanyID)
+				crmContactID, err = s.crm.CreateContact(ctx, contact.DisplayName, inbound.FromE164, s.crmCompanyID)
 				if err != nil {
 					return nil, fmt.Errorf("inbox: create contact in crm: %w", err)
 				}

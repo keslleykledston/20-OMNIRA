@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -32,7 +31,7 @@ func (m *mockCRMConnector) CreateContact(ctx context.Context, name, phone, compa
 }
 
 func TestInboundServiceWithCRMCreatesContactOnFirstMessage(t *testing.T) {
-	tenantID, contactID := uuid.New(), uuid.New()
+	tenantID := uuid.New()
 	connectionID := uuid.New()
 	companyID := uuid.New().String()
 	expectedCRMContactID := uuid.New().String()
@@ -52,7 +51,7 @@ func TestInboundServiceWithCRMCreatesContactOnFirstMessage(t *testing.T) {
 	svc := NewInboundService(contacts, conversations, messages, tickets)
 	svc.WithCRM(crmMock, companyID)
 
-	ctx := tenancydomain.NewContext(context.Background(), &tenancydomain.TenantContext{
+	ctx := tenancydomain.WithTenantContext(context.Background(), &tenancydomain.TenantContext{
 		TenantID: tenantID,
 		ActorID:  uuid.New(),
 		Source:   tenancydomain.AccessSourceDirect,
@@ -111,7 +110,7 @@ func TestInboundServiceWithCRMCreatesContactOnFirstMessage(t *testing.T) {
 }
 
 func TestInboundServiceWithCRMReusesExistingContact(t *testing.T) {
-	tenantID, contactID := uuid.New(), uuid.New()
+	tenantID := uuid.New()
 	connectionID := uuid.New()
 	companyID := uuid.New().String()
 	existingCRMContactID := uuid.New().String()
@@ -130,7 +129,7 @@ func TestInboundServiceWithCRMReusesExistingContact(t *testing.T) {
 	svc := NewInboundService(contacts, conversations, messages, tickets)
 	svc.WithCRM(crmMock, companyID)
 
-	ctx := tenancydomain.NewContext(context.Background(), &tenancydomain.TenantContext{
+	ctx := tenancydomain.WithTenantContext(context.Background(), &tenancydomain.TenantContext{
 		TenantID: tenantID,
 		ActorID:  uuid.New(),
 		Source:   tenancydomain.AccessSourceDirect,
@@ -191,7 +190,7 @@ func TestInboundServiceWithoutCRMWorksAsNormal(t *testing.T) {
 	svc := NewInboundService(contacts, conversations, messages, tickets)
 	// Sem WithCRM: crm = nil
 
-	ctx := tenancydomain.NewContext(context.Background(), &tenancydomain.TenantContext{
+	ctx := tenancydomain.WithTenantContext(context.Background(), &tenancydomain.TenantContext{
 		TenantID: tenantID,
 		ActorID:  uuid.New(),
 		Source:   tenancydomain.AccessSourceDirect,

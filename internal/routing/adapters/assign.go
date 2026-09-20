@@ -131,3 +131,75 @@ func (a *AuditRecorder) ConversationAssignmentChanged(ctx context.Context, c por
 		Metadata: meta, CreatedAt: time.Now().UTC(),
 	})
 }
+
+func (a *AuditRecorder) ParticipantInvited(ctx context.Context, conversationID, actor, targetUser uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	return a.repo.Store(ctx, &auditdomain.AuditEvent{
+		ID: uuid.New(), TenantID: tenantID, ActorID: actor, Action: auditdomain.ActionParticipantInvited,
+		ResourceType: auditdomain.ResourceConversation, ResourceID: conversationID,
+		Outcome: auditdomain.OutcomeSuccess, CorrelationID: uuid.New(), CausationID: uuid.New(),
+		Metadata: map[string]interface{}{"target_user": targetUser.String()}, CreatedAt: time.Now().UTC(),
+	})
+}
+
+func (a *AuditRecorder) ParticipantAccepted(ctx context.Context, conversationID, actor uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	return a.repo.Store(ctx, &auditdomain.AuditEvent{
+		ID: uuid.New(), TenantID: tenantID, ActorID: actor, Action: auditdomain.ActionParticipantAccepted,
+		ResourceType: auditdomain.ResourceConversation, ResourceID: conversationID,
+		Outcome: auditdomain.OutcomeSuccess, CorrelationID: uuid.New(), CausationID: uuid.New(),
+		Metadata: map[string]interface{}{}, CreatedAt: time.Now().UTC(),
+	})
+}
+
+func (a *AuditRecorder) ParticipantRejected(ctx context.Context, conversationID, actor uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	return a.repo.Store(ctx, &auditdomain.AuditEvent{
+		ID: uuid.New(), TenantID: tenantID, ActorID: actor, Action: auditdomain.ActionParticipantRejected,
+		ResourceType: auditdomain.ResourceConversation, ResourceID: conversationID,
+		Outcome: auditdomain.OutcomeSuccess, CorrelationID: uuid.New(), CausationID: uuid.New(),
+		Metadata: map[string]interface{}{}, CreatedAt: time.Now().UTC(),
+	})
+}
+
+func (a *AuditRecorder) ParticipantLeft(ctx context.Context, conversationID, actor uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	return a.repo.Store(ctx, &auditdomain.AuditEvent{
+		ID: uuid.New(), TenantID: tenantID, ActorID: actor, Action: auditdomain.ActionParticipantLeft,
+		ResourceType: auditdomain.ResourceConversation, ResourceID: conversationID,
+		Outcome: auditdomain.OutcomeSuccess, CorrelationID: uuid.New(), CausationID: uuid.New(),
+		Metadata: map[string]interface{}{}, CreatedAt: time.Now().UTC(),
+	})
+}
+
+func (a *AuditRecorder) ConversationTransferred(ctx context.Context, conversationID, actor uuid.UUID, from, to *uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	meta := map[string]interface{}{}
+	if from != nil {
+		meta["from_participant"] = from.String()
+	}
+	if to != nil {
+		meta["to_participant"] = to.String()
+	}
+	return a.repo.Store(ctx, &auditdomain.AuditEvent{
+		ID: uuid.New(), TenantID: tenantID, ActorID: actor, Action: auditdomain.ActionConversationTransferred,
+		ResourceType: auditdomain.ResourceConversation, ResourceID: conversationID,
+		Outcome: auditdomain.OutcomeSuccess, CorrelationID: uuid.New(), CausationID: uuid.New(),
+		Metadata: meta, CreatedAt: time.Now().UTC(),
+	})
+}
