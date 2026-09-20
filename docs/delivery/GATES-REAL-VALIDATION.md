@@ -399,10 +399,40 @@ Phone 2:
 ```
 
 **Critério de sucesso**:
-- [ ] Message status = sent (mínimo)
-- [ ] Message recebida no telefone cliente
-- [ ] Conteúdo íntegro
-- [ ] Sem duplicação de envio
+- [x] Message status = sent
+- [ ] **Message recebida no telefone do cliente** ← aguardando confirmação humana
+- [x] Conteúdo íntegro
+- [x] Sem duplicação de envio
+
+### Resultado — PARCIAL (2026-09-20): cadeia interna PASS, entrega não confirmada
+
+Agent A enviou pela conversa que assumiu no R3. Cada elo foi verificado:
+
+| Elo | Evidência |
+|---|---|
+| Composer → API | `POST …/conversations/{id}/messages` → **202** `{status: "queued"}` |
+| API → DB | `messages` id=`d123a9ad…`, direction=outbound, tenant correto |
+| DB → Outbox → NATS | `outbox_events`: 1 total, 1 publicado; worker logou `published 1 events` |
+| worker → WAHA | `provider_message_id = true_559291740090@c.us_3EB00527B22A92E041CD4B` |
+| WAHA → WhatsApp | mensagem presente no chat, `fromMe=true`, **ack=1 (SERVER)** |
+| WhatsApp → dispositivo | **não confirmado** — ack permaneceu em 1 por 2min+ |
+
+Sem duplicação: o WAHA devolve a própria mensagem como `message.any` com
+`fromMe=true` e a API a ignora, então a conversa tem exatamente duas linhas —
+uma inbound (`received`) e uma outbound (`sent`).
+
+**Por que não é PASS**: `ack=1 (SERVER)` significa que o servidor do WhatsApp
+aceitou a mensagem, não que o aparelho a recebeu. O nível que atende ao critério
+deste gate é `ack=2 (DEVICE)`. Uma mensagem anterior no mesmo chat chegou a
+`ack=3 (READ)`, então a cadeia de ack funciona — o aparelho destinatário é que
+não confirmou nesta janela, provavelmente por estar offline.
+
+Como o gate proíbe explicitamente aceitar o 200 do WAHA como evidência final,
+o resultado fica **PARCIAL** até confirmação visual no aparelho.
+
+Pendência derivada, a verificar quando o ack evoluir: o OMNIRA precisa refletir
+`delivered` ao receber `message.ack` — a transição `sent → delivered` ainda não
+foi exercida ponta a ponta.
 
 ---
 
