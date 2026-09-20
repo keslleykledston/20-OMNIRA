@@ -13,9 +13,10 @@ import (
 
 // ParticipantService orquestra convites, transferências e co-atendimentos.
 type ParticipantService struct {
-	repo  ports.ParticipantRepository
-	conv  ports.ConversationAssigner
-	audit ports.AuditRecorder
+	repo      ports.ParticipantRepository
+	conv      ports.ConversationAssigner
+	audit     ports.AuditRecorder
+	publisher EventPublisher
 }
 
 func NewParticipantService(
@@ -24,6 +25,12 @@ func NewParticipantService(
 	audit ports.AuditRecorder,
 ) *ParticipantService {
 	return &ParticipantService{repo: repo, conv: conv, audit: audit}
+}
+
+// WithEventPublisher configura o publisher para notificações realtime
+func (s *ParticipantService) WithEventPublisher(pub EventPublisher) *ParticipantService {
+	s.publisher = pub
+	return s
 }
 
 // InviteResult = resultado de um convite.
@@ -87,6 +94,11 @@ func (s *ParticipantService) Invite(
 	// Auditar
 	if s.audit != nil {
 		s.audit.ParticipantInvited(ctx, conversationID, tc.ActorID, targetUserID)
+	}
+
+	// Publicar evento realtime para notificar target user
+	if s.publisher != nil {
+		_ = s.publisher.PublishParticipantInvited(ctx, tc.TenantID, targetUserID, conversationID)
 	}
 
 	return InviteResult{
@@ -173,6 +185,11 @@ func (s *ParticipantService) Transfer(
 	// Auditar
 	if s.audit != nil {
 		s.audit.ConversationTransferred(ctx, conversationID, tc.ActorID, current, &targetUserID)
+	}
+
+	// Publicar evento realtime para novo assignee
+	if s.publisher != nil {
+		_ = s.publisher.PublishParticipantTransferred(ctx, tc.TenantID, targetUserID, current)
 	}
 
 	return TransferResult{
