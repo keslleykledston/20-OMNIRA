@@ -87,8 +87,14 @@ func main() {
 		log.Fatalf("Meta provider descriptor error: %v", err)
 	}
 	// Sistemas de retaguarda (CRM/ERP) aparecem na mesma aba de Integrações.
-	// O descritor só descreve o formulário; o adapter correspondente entra em
-	// uso quando a conexão é configurada e testada.
+	// Guardam credencial cifrada por tenant e não têm sessão nem pareamento.
+	erpCipher, erpCipherErr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+	if erpCipherErr != nil {
+		log.Fatalf("ERP credential cipher error: %v", erpCipherErr)
+	}
+	erpCredentials := channeladapters.NewPostgresCredentialStore(dbPool, erpCipher)
+	erpConnections := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
+	erpAudit := channeladapters.NewChannelAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool))
 	for _, descriptor := range []ports.ProviderDescriptor{
 		toolconnectors.K3GCRMDescriptor(true, ""),
 		toolconnectors.IXCDescriptor(true, ""),
@@ -96,6 +102,9 @@ func main() {
 		if err := providerRegistry.RegisterDescriptor(descriptor, nil); err != nil {
 			log.Fatalf("ERP descriptor error (%s): %v", descriptor.ID, err)
 		}
+		management.Register(descriptor.ID, channelapplication.NewERPConnectionService(
+			descriptor, erpConnections, erpCredentials, permissions, erpAudit,
+		))
 	}
 	wahaReason := ""
 	if !cfg.WahaEnabled {
