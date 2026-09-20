@@ -175,6 +175,15 @@ func (h *ManagementHandler) Get(w http.ResponseWriter, r *http.Request) {
 	h.respond(w, http.StatusOK, v, err)
 }
 
+func (h *ManagementHandler) TestConnection(w http.ResponseWriter, r *http.Request) {
+	id, ok := connectionID(w, r)
+	if !ok {
+		return
+	}
+	v, err := h.svc.TestConnection(r.Context(), id)
+	h.respond(w, http.StatusOK, v, err)
+}
+
 func (h *ManagementHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 	id, ok := connectionID(w, r)
 	if !ok {
@@ -248,6 +257,10 @@ func failConnection(w http.ResponseWriter, err error) {
 		http.Error(w, "connection not found", http.StatusNotFound)
 	case errors.Is(err, application.ErrRiskNotAcknowledged):
 		http.Error(w, "risk_acknowledged must be true for unofficial providers", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrCredentialRejected):
+		http.Error(w, "credential rejected by the provider: check the token and try again", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrInvalidCredentials):
+		http.Error(w, "invalid credentials: check the required fields", http.StatusUnprocessableEntity)
 	case errors.Is(err, application.ErrProviderNotFound), errors.Is(err, application.ErrInvalidProviderInputs):
 		http.Error(w, "invalid provider or inputs", http.StatusUnprocessableEntity)
 	case errors.Is(err, application.ErrProviderUnavailable), errors.Is(err, ports.ErrNotConfigured):

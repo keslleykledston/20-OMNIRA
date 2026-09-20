@@ -343,6 +343,7 @@ func (s *Server) RegisterChannelManagementHandlers(dbPool *pgxpool.Pool, h *chan
 	s.mux.Handle("POST "+base, wrap(h.Create))
 	s.mux.Handle("GET "+base, wrap(h.List))
 	s.mux.Handle("GET "+base+"/{connection_id}", wrap(h.Get))
+	s.mux.Handle("POST "+base+"/{connection_id}/test", wrap(h.TestConnection))
 	s.mux.Handle("POST "+base+"/{connection_id}/session/start", wrap(h.StartSession))
 	s.mux.Handle("POST "+base+"/{connection_id}/session/stop", wrap(h.StopSession))
 	s.mux.Handle("GET "+base+"/{connection_id}/qr", wrap(h.QR))

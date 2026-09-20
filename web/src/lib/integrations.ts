@@ -80,6 +80,7 @@ export const integrationsAPI = {
       risk_acknowledged: riskAcknowledged,
     }, { headers: authHeaders() })),
   start: (id: string) => call<ChannelConnection>(() => axios.post(`${connectionsBase()}/${id}/session/start`, undefined, { headers: authHeaders() })),
+  test: (id: string) => call<ChannelConnection>(() => axios.post(`${connectionsBase()}/${id}/test`, undefined, { headers: authHeaders() })),
   stop: (id: string) => call<ChannelConnection>(() => axios.post(`${connectionsBase()}/${id}/session/stop`, undefined, { headers: authHeaders() })),
   qr: (id: string) => call<QRImage>(() => axios.get(`${connectionsBase()}/${id}/qr`, { headers: authHeaders() })),
 };

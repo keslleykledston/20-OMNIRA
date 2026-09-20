@@ -99,10 +99,29 @@ func erpCtx(t *testing.T) (context.Context, uuid.UUID) {
 	return tenancydomain.WithTenantContext(context.Background(), tc), tenant
 }
 
+// erpProbe simula a verificação da credencial no sistema externo.
+type erpProbe struct {
+	err    error
+	calls  int
+	fields map[string]string
+}
+
+func (p *erpProbe) Probe(_ context.Context, fields map[string]string) error {
+	p.calls++
+	p.fields = fields
+	return p.err
+}
+
 func newERP(t *testing.T, allow bool) (*application.ERPConnectionService, *erpConnRepo, *erpCredStore, *erpAudit) {
 	t.Helper()
+	svc, repo, creds, audit, _ := newERPWithProbe(t, allow, &erpProbe{})
+	return svc, repo, creds, audit
+}
+
+func newERPWithProbe(t *testing.T, allow bool, probe *erpProbe) (*application.ERPConnectionService, *erpConnRepo, *erpCredStore, *erpAudit, *erpProbe) {
+	t.Helper()
 	repo, creds, audit := &erpConnRepo{}, &erpCredStore{}, &erpAudit{}
-	return application.NewERPConnectionService(erpDescriptor(), repo, creds, erpPerms{allow: allow}, audit), repo, creds, audit
+	return application.NewERPConnectionService(erpDescriptor(), repo, creds, erpPerms{allow: allow}, audit, probe), repo, creds, audit, probe
 }
 
 func TestERPCreateStoresCredentialEncryptedAndNeverInTheRow(t *testing.T) {
@@ -211,5 +230,64 @@ func TestERPDoesNotServeAnotherProvider(t *testing.T) {
 	})
 	if !errors.Is(err, application.ErrProviderNotFound) {
 		t.Fatalf("serviço do CRM aceitou conexão de outro provedor: %v", err)
+	}
+}
+
+// O estado precisa refletir a última verificação real. Marcar "conectado" sem
+// ter falado com o sistema é o "sucesso fantasma" que o projeto proíbe.
+func TestERPTestConnectionReflectsProbeOutcome(t *testing.T) {
+	ctx, _ := erpCtx(t)
+	inputs := map[string]string{"base_url": "https://api.k3gsolutions.com.br", "token": "tok"}
+
+	t.Run("credencial aceita vira conectado", func(t *testing.T) {
+		svc, _, _, audit, probe := newERPWithProbe(t, true, &erpProbe{})
+		created, err := svc.CreateConnection(ctx, application.ConnectionCreateRequest{Provider: "k3g_crm", Inputs: inputs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := svc.TestConnection(ctx, created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Status != domain.ConnectionStatusActive {
+			t.Fatalf("status após sonda ok: %q", v.Status)
+		}
+		if probe.calls != 1 {
+			t.Fatalf("sonda chamada %d vezes", probe.calls)
+		}
+		// A sonda recebe a credencial decifrada, senão não teria o que testar.
+		if probe.fields["token"] != "tok" {
+			t.Fatalf("sonda não recebeu a credencial: %v", probe.fields)
+		}
+		if len(audit.payloads) != 2 || audit.payloads[1]["outcome"] != "ok" {
+			t.Fatalf("auditoria não registrou o teste: %+v", audit.payloads)
+		}
+	})
+
+	t.Run("credencial recusada vira falha e propaga o erro", func(t *testing.T) {
+		boom := errors.New("token rejected")
+		svc, _, _, audit, _ := newERPWithProbe(t, true, &erpProbe{err: boom})
+		created, err := svc.CreateConnection(ctx, application.ConnectionCreateRequest{Provider: "k3g_crm", Inputs: inputs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := svc.TestConnection(ctx, created.ID)
+		if !errors.Is(err, boom) {
+			t.Fatalf("erro da sonda não propagado: %v", err)
+		}
+		if v.Status != domain.ConnectionStatusFailed {
+			t.Fatalf("status após sonda com falha: %q", v.Status)
+		}
+		if audit.payloads[1]["outcome"] != "failed" {
+			t.Fatalf("auditoria registrou desfecho errado: %+v", audit.payloads[1])
+		}
+	})
+}
+
+func TestERPTestConnectionRejectsForeignConnection(t *testing.T) {
+	ctx, _ := erpCtx(t)
+	svc, _, _, _ := newERP(t, true)
+	if _, err := svc.TestConnection(ctx, uuid.New()); !errors.Is(err, application.ErrConnNotFound) {
+		t.Fatalf("testou conexão inexistente: %v", err)
 	}
 }

@@ -223,6 +223,11 @@ function ConnectionCard({ connection, descriptor, pairing = false, onConnected }
     onSuccess: (data) => { setError(null); afterAction(data); setModalOpen(true); },
     onError: (err) => setError(integrationErrorMessage(err, 'Não foi possível iniciar a sessão.')),
   });
+  const test = useMutation({
+    mutationFn: () => integrationsAPI.test(connection.id),
+    onSuccess: (data) => { setError(null); afterAction(data); },
+    onError: (err) => setError(integrationErrorMessage(err, 'A credencial não foi aceita pelo sistema.')),
+  });
   const stop = useMutation({
     mutationFn: () => integrationsAPI.stop(connection.id),
     onSuccess: (data) => { setError(null); setModalOpen(false); afterAction(data); },
@@ -252,8 +257,12 @@ function ConnectionCard({ connection, descriptor, pairing = false, onConnected }
             {start.isPending ? 'Iniciando...' : sessionLive ? 'Ver QR' : 'Iniciar sessão'}
           </button>
         )}
-        {pairable && (
+        {pairable ? (
           <button className="btn-secondary" disabled={stop.isPending} onClick={() => stop.mutate()}>Parar</button>
+        ) : (
+          <button className="btn-primary" disabled={test.isPending} onClick={() => test.mutate()}>
+            {test.isPending ? 'Testando...' : 'Testar conexão'}
+          </button>
         )}
       </div>
       {error && <div role="alert" className="text-sm text-red-700">{error}</div>}

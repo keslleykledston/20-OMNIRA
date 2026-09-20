@@ -19,6 +19,20 @@ import (
 // sem jamais ecoar o valor, que pode ser o segredo.
 var ErrInvalidCredentials = errors.New("channel: invalid credentials")
 
+// ErrCredentialRejected é a credencial guardada sendo recusada pelo sistema
+// externo. É diferente de ErrInvalidCredentials, que é formulário malformado:
+// aqui o formato está certo e quem recusou foi o outro lado.
+var ErrCredentialRejected = errors.New("channel: credential rejected by the provider")
+
+// CredentialProbe confirma que uma credencial é aceita pelo sistema externo.
+//
+// A sonda deve ser de leitura: "Testar" é um botão, e o operador vai clicar
+// mais de uma vez. Uma sonda que escrevesse deixaria rastro no sistema do
+// cliente a cada tentativa.
+type CredentialProbe interface {
+	Probe(ctx context.Context, fields map[string]string) error
+}
+
 // ERPConnectionService guarda as credenciais de um sistema de retaguarda
 // (CRM/ERP) por tenant.
 //
@@ -31,6 +45,7 @@ type ERPConnectionService struct {
 	credentials ports.CredentialStore
 	perms       ports.PermissionChecker
 	audit       ports.ChannelAudit
+	probe       CredentialProbe
 }
 
 func NewERPConnectionService(
@@ -39,8 +54,62 @@ func NewERPConnectionService(
 	credentials ports.CredentialStore,
 	perms ports.PermissionChecker,
 	audit ports.ChannelAudit,
+	probe CredentialProbe,
 ) *ERPConnectionService {
-	return &ERPConnectionService{descriptor: descriptor, conns: conns, credentials: credentials, perms: perms, audit: audit}
+	return &ERPConnectionService{descriptor: descriptor, conns: conns, credentials: credentials, perms: perms, audit: audit, probe: probe}
+}
+
+// TestConnection verifica a credencial guardada e persiste o resultado.
+//
+// O estado reflete a última verificação real, nunca a intenção: sem sonda
+// configurada a conexão permanece pendente, porque afirmar "conectado" sem ter
+// falado com o sistema seria exatamente o "sucesso fantasma" que o projeto
+// proíbe.
+func (s *ERPConnectionService) TestConnection(ctx context.Context, id uuid.UUID) (ConnectionView, error) {
+	tc, err := s.authorize(ctx)
+	if err != nil {
+		return ConnectionView{}, err
+	}
+	conn, err := s.conns.FindByID(ctx, id)
+	if err != nil {
+		return ConnectionView{}, err
+	}
+	if conn == nil || conn.TenantID != tc.TenantID || conn.Provider != s.descriptor.ID {
+		return ConnectionView{}, ErrConnNotFound
+	}
+	if s.probe == nil {
+		return ConnectionView{}, fmt.Errorf("%w: no probe for %s", ports.ErrNotConfigured, s.descriptor.ID)
+	}
+	credential, err := s.credentials.Resolve(ctx, conn.SecretRef)
+	if err != nil {
+		return ConnectionView{}, err
+	}
+
+	probeErr := s.probe.Probe(ctx, credential.Fields)
+	conn.Status = domain.ConnectionStatusActive
+	outcome := "ok"
+	if probeErr != nil {
+		conn.Status = domain.ConnectionStatusFailed
+		outcome = "failed"
+	}
+	conn.UpdatedAt = time.Now().UTC()
+	if err := s.conns.Update(ctx, conn); err != nil {
+		return ConnectionView{}, err
+	}
+	// Registra o desfecho, não a causa detalhada: mensagens de erro de
+	// provedor às vezes ecoam o que foi enviado.
+	if err := s.audit.Record(ctx, "channel.connection_tested", "channel_connection", conn.ID, map[string]any{
+		"provider": conn.Provider, "host": conn.ExternalAccountID, "outcome": outcome,
+	}); err != nil {
+		return ConnectionView{}, err
+	}
+	if probeErr != nil {
+		if errors.Is(probeErr, ports.ErrAuthentication) {
+			return view(conn, ""), fmt.Errorf("%w: %v", ErrCredentialRejected, probeErr)
+		}
+		return view(conn, ""), probeErr
+	}
+	return view(conn, ""), nil
 }
 
 func (s *ERPConnectionService) authorize(ctx context.Context) (*tenancydomain.TenantContext, error) {

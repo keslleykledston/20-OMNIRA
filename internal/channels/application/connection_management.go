@@ -172,6 +172,33 @@ func (s *ConnectionManagementService) session(ctx context.Context, id uuid.UUID)
 	return nil, ErrConnNotFound
 }
 
+// TestableConnectionManager é implementado por provedores cuja conexão pode ser
+// verificada sem sessão — o caso de credencial de CRM/ERP.
+type TestableConnectionManager interface {
+	ConnectionManager
+	TestConnection(context.Context, uuid.UUID) (ConnectionView, error)
+}
+
+// TestConnection encontra o manager dono da conexão e pede a verificação.
+// Provedor que não sabe se testar responde ErrUnsupported em vez de fingir
+// sucesso.
+func (s *ConnectionManagementService) TestConnection(ctx context.Context, id uuid.UUID) (ConnectionView, error) {
+	if err := s.authorize(ctx); err != nil {
+		return ConnectionView{}, err
+	}
+	for _, manager := range s.managers {
+		testable, ok := manager.(TestableConnectionManager)
+		if !ok {
+			continue
+		}
+		if _, err := testable.Get(ctx, id); err != nil {
+			continue
+		}
+		return testable.TestConnection(ctx, id)
+	}
+	return ConnectionView{}, ErrConnNotFound
+}
+
 func (s *ConnectionManagementService) StartSession(ctx context.Context, id uuid.UUID) (ConnectionView, error) {
 	manager, err := s.session(ctx, id)
 	if err != nil {

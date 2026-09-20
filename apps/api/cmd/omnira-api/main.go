@@ -95,15 +95,19 @@ func main() {
 	erpCredentials := channeladapters.NewPostgresCredentialStore(dbPool, erpCipher)
 	erpConnections := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 	erpAudit := channeladapters.NewChannelAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool))
-	for _, descriptor := range []ports.ProviderDescriptor{
-		toolconnectors.K3GCRMDescriptor(true, ""),
-		toolconnectors.IXCDescriptor(true, ""),
-	} {
-		if err := providerRegistry.RegisterDescriptor(descriptor, nil); err != nil {
-			log.Fatalf("ERP descriptor error (%s): %v", descriptor.ID, err)
+	erpProviders := []struct {
+		descriptor ports.ProviderDescriptor
+		probe      channelapplication.CredentialProbe
+	}{
+		{toolconnectors.K3GCRMDescriptor(true, ""), toolconnectors.K3GCRMProbe{}},
+		{toolconnectors.IXCDescriptor(true, ""), toolconnectors.IXCProbe{}},
+	}
+	for _, erp := range erpProviders {
+		if err := providerRegistry.RegisterDescriptor(erp.descriptor, nil); err != nil {
+			log.Fatalf("ERP descriptor error (%s): %v", erp.descriptor.ID, err)
 		}
-		management.Register(descriptor.ID, channelapplication.NewERPConnectionService(
-			descriptor, erpConnections, erpCredentials, permissions, erpAudit,
+		management.Register(erp.descriptor.ID, channelapplication.NewERPConnectionService(
+			erp.descriptor, erpConnections, erpCredentials, permissions, erpAudit, erp.probe,
 		))
 	}
 	wahaReason := ""
