@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import IntegrationsPage from '../pages/IntegrationsPage';
@@ -82,22 +82,47 @@ describe('IntegrationsPage', () => {
     expect(screen.queryByRole('button', { name: '+ Adicionar integração' })).toBeNull();
   });
 
-  it('starts pairing, renders the QR and observes the connected account', async () => {
+  it('starts pairing, renders the QR in a modal and observes the connected account', async () => {
     const id = conn().id;
-    let live: any = conn({ session_status: 'needs_qr' });
+    // Começa sem sessão para o botão inicial ser estável: o polling do card só
+    // passa a oferecer "Ver QR" depois que o servidor reportar needs_qr.
+    let live: any = conn();
     gets({
       [PROVIDERS]: () => ({ items: [waha] }), [CONNECTIONS]: () => ({ items: [conn()] }),
       [`${CONNECTIONS}/${id}`]: () => live,
       [`${CONNECTIONS}/${id}/qr`]: () => ({ mimetype: 'image/png', data: 'QRBASE64' }),
     });
-    vi.mocked(axios.post).mockResolvedValue({ data: live });
+    vi.mocked(axios.post).mockImplementation(async () => {
+      live = conn({ session_status: 'needs_qr' });
+      return { data: live } as any;
+    });
     page();
     await userEvent.click(await screen.findByRole('button', { name: 'Iniciar sessão' }));
-    expect(await screen.findByAltText('QR para parear WhatsApp')).toHaveAttribute('src', 'data:image/png;base64,QRBASE64');
+    const modal = await screen.findByRole('dialog', { name: /Conectar/ });
+    expect(await screen.findByTestId('qr-image')).toHaveAttribute('src', 'data:image/png;base64,QRBASE64');
+    expect(within(modal).getByTestId('qr-modal-status')).toHaveTextContent('Aguardando leitura do QR');
     expect(vi.mocked(axios.post).mock.calls[0][0]).toBe(`${CONNECTIONS}/${id}/session/start`);
     live = conn({ status: 'active', session_status: 'working', external_account_id: '5511988887777' });
-    await waitFor(() => expect(screen.getByText(/Conectado como \+5511988887777/)).toBeInTheDocument(), { timeout: 4000 });
-    expect(screen.queryByAltText('QR para parear WhatsApp')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('qr-connected')).toBeInTheDocument(), { timeout: 4000 });
+    expect(screen.queryByTestId('qr-image')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Concluir' }));
+    expect(screen.queryByRole('dialog', { name: /Conectar/ })).toBeNull();
+    expect(screen.getByText(/Conectado como \+5511988887777/)).toBeInTheDocument();
+  });
+
+  it('reflects the live status without opening the modal', async () => {
+    const id = conn().id;
+    let live: any = conn({ status: 'pending', session_status: 'starting' });
+    gets({
+      [PROVIDERS]: () => ({ items: [waha] }), [CONNECTIONS]: () => ({ items: [conn({ status: 'pending' })] }),
+      [`${CONNECTIONS}/${id}`]: () => live,
+    });
+    page();
+    // Sem nenhum clique: o card sozinho passa a refletir o estado do servidor.
+    await waitFor(() => expect(screen.getByTestId('conn-status')).toHaveTextContent('Pendente'));
+    live = conn({ status: 'active', session_status: 'working', external_account_id: '5511988887777' });
+    await waitFor(() => expect(screen.getByTestId('conn-status')).toHaveTextContent('Conectado'), { timeout: 6000 });
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('maps provider errors and stops a session', async () => {

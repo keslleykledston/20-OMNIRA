@@ -7,6 +7,7 @@ import {
   ProviderDescriptor,
 } from '../lib/integrations';
 import { getTenantId } from '../lib/session';
+import { QRPairingModal } from '../components/QRPairingModal';
 
 const STATUS_STYLE: Record<string, string> = {
   active: 'bg-green-100 text-green-800',
@@ -149,6 +150,7 @@ function AddIntegrationWizard({ providers, onClose }: { providers: ProviderDescr
           <ConnectionCard connection={created} descriptor={selected} pairing onConnected={onClose} />
         </div>
       )}
+
     </section>
   );
 }
@@ -161,32 +163,26 @@ function ConnectionCard({ connection, descriptor, pairing = false, onConnected }
 }) {
   const queryClient = useQueryClient();
   const tenantId = getTenantId();
-  const [watching, setWatching] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const key = ['channel-connection', tenantId, connection.id];
+  // O status é consultado enquanto a conexão não estiver ativa, mesmo sem o modal
+  // aberto: antes ele só era buscado após clicar em "Iniciar sessão", então um
+  // card recarregado ficava preso no status do fetch da lista.
   const live = useQuery({
     queryKey: key,
     queryFn: () => integrationsAPI.get(connection.id),
-    enabled: watching,
-    refetchInterval: watching ? 2000 : false,
+    initialData: connection,
+    refetchInterval: (query) => (query.state.data?.status === 'active' ? false : 4000),
     retry: false,
   });
   const current = live.data ?? connection;
-  const session = live.data?.session_status;
-  const qr = useQuery({
-    queryKey: ['channel-qr', tenantId, connection.id],
-    queryFn: () => integrationsAPI.qr(connection.id),
-    enabled: session === 'needs_qr',
-    refetchInterval: session === 'needs_qr' ? 8000 : false,
-    retry: false,
-  });
+  const session = current.session_status;
+  const connected = current.status === 'active';
 
   useEffect(() => {
-    if (watching && current.status === 'active') {
-      setWatching(false);
-      onConnected?.();
-    }
-  }, [current.status, onConnected, watching]);
+    if (connected) onConnected?.();
+  }, [connected, onConnected]);
 
   const afterAction = (data: ChannelConnection) => {
     queryClient.setQueryData(key, data);
@@ -194,15 +190,17 @@ function ConnectionCard({ connection, descriptor, pairing = false, onConnected }
   };
   const start = useMutation({
     mutationFn: () => integrationsAPI.start(connection.id),
-    onSuccess: (data) => { setError(null); setWatching(true); afterAction(data); },
+    onSuccess: (data) => { setError(null); afterAction(data); setModalOpen(true); },
     onError: (err) => setError(integrationErrorMessage(err, 'Não foi possível iniciar a sessão.')),
   });
   const stop = useMutation({
     mutationFn: () => integrationsAPI.stop(connection.id),
-    onSuccess: (data) => { setError(null); setWatching(false); afterAction(data); },
+    onSuccess: (data) => { setError(null); setModalOpen(false); afterAction(data); },
     onError: (err) => setError(integrationErrorMessage(err, 'Não foi possível parar a sessão.')),
   });
-  const connected = current.status === 'active';
+
+  const pairable = descriptor?.connect_method !== 'credentials';
+  const sessionLive = session === 'needs_qr' || session === 'starting';
 
   return (
     <article className={`${pairing ? 'border' : 'bg-white shadow'} rounded-xl p-5 space-y-3`} data-testid={`connection-${connection.id}`}>
@@ -217,26 +215,26 @@ function ConnectionCard({ connection, descriptor, pairing = false, onConnected }
       </div>
       {connected && <div className="text-sm text-green-700">Conectado{current.external_account_id ? ` como +${current.external_account_id}` : ''}</div>}
       {session && !connected && <div aria-live="polite" className="text-sm text-slate-600">Sessão: {session.replace('_', ' ')}</div>}
-      {session === 'needs_qr' && qr.data && (
-        <div className="space-y-2">
-          <img alt="QR para parear WhatsApp" className="w-56 h-56 border-8 border-white rounded" src={`data:${qr.data.mimetype};base64,${qr.data.data}`} />
-          <ol className="text-xs text-slate-600 list-decimal pl-4">
-            <li>No celular, abra o WhatsApp.</li><li>Acesse Configurações → Aparelhos conectados.</li><li>Escolha Conectar aparelho e leia este código.</li>
-          </ol>
-        </div>
-      )}
-      {session === 'needs_qr' && !qr.data && <div className="text-sm text-slate-500">Carregando QR...</div>}
+
       <div className="flex gap-2 flex-wrap">
-        {!connected && descriptor?.connect_method !== 'credentials' && (
-          <button className="btn-primary" disabled={start.isPending} onClick={() => start.mutate()}>
-            {start.isPending ? 'Iniciando...' : watching || session ? 'Gerar novo QR' : 'Iniciar sessão'}
+        {!connected && pairable && (
+          <button className="btn-primary" disabled={start.isPending} onClick={() => (sessionLive ? setModalOpen(true) : start.mutate())}>
+            {start.isPending ? 'Iniciando...' : sessionLive ? 'Ver QR' : 'Iniciar sessão'}
           </button>
         )}
-        {descriptor?.connect_method !== 'credentials' && (
+        {pairable && (
           <button className="btn-secondary" disabled={stop.isPending} onClick={() => stop.mutate()}>Parar</button>
         )}
       </div>
       {error && <div role="alert" className="text-sm text-red-700">{error}</div>}
+
+      {modalOpen && pairable && (
+        <QRPairingModal
+          connection={current}
+          providerName={descriptor?.name ?? connection.provider}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
     </article>
   );
 }
