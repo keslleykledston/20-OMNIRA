@@ -39,7 +39,7 @@ func K3GCRMDescriptor(enabled bool, unavailableReason string) ports.ProviderDesc
 				Help:    "Endereço base da API do CRM, sem barra no fim.",
 				Example: "https://api.k3gsolutions.com.br"},
 			{Key: "token", Label: "Token de API", Type: "secret", Required: true, Secret: true,
-				Help: "Gerado no próprio CRM. Guardado cifrado e nunca exibido de volta."},
+				Help: "Gerado no próprio CRM, em Configurações → Tokens de API."},
 		}.toPorts(),
 		Displays: []ports.ProviderDisplayDescriptor{},
 	}
@@ -66,7 +66,7 @@ func IXCDescriptor(enabled bool, unavailableReason string) ports.ProviderDescrip
 			{Key: "user", Label: "Usuário da API", Type: "text", Required: true,
 				Help: "Usuário com permissão de consultar cliente e abrir chamado."},
 			{Key: "token", Label: "Token da API", Type: "secret", Required: true, Secret: true,
-				Help: "Gerado no IXC em Configurações → API. Guardado cifrado."},
+				Help: "Gerado no IXC em Configurações → API."},
 		}.toPorts(),
 		Displays: []ports.ProviderDisplayDescriptor{},
 	}
