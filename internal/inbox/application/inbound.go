@@ -36,6 +36,11 @@ type TicketStore interface {
 	Store(context.Context, *ticketdomain.Ticket) error
 }
 
+type CRMConnector interface {
+	FindCustomerByPhone(context.Context, phone, companyID string) (contactID string, err error)
+	CreateContact(context.Context, name, phone, companyID string) (contactID string, err error)
+}
+
 type InitialRouter interface {
 	RouteNew(context.Context, uuid.UUID) error
 }
@@ -46,6 +51,8 @@ type InboundService struct {
 	messages      MessageStore
 	tickets       TicketStore
 	router        InitialRouter
+	crm           CRMConnector
+	crmCompanyID  string
 }
 
 type InboundResult struct {
@@ -62,6 +69,12 @@ func NewInboundService(contacts ContactStore, conversations ConversationStore, m
 		service.router = router[0]
 	}
 	return service
+}
+
+func (s *InboundService) WithCRM(crm CRMConnector, companyID string) *InboundService {
+	s.crm = crm
+	s.crmCompanyID = companyID
+	return s
 }
 
 // Ingest persists an inbound canonical message. Callers must execute this in
@@ -102,6 +115,28 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		// provedor pode endereçar o contato por um identificador que não se
 		// deriva do telefone (ex.: LID do WhatsApp).
 		conversation.ProviderChatID = inbound.ProviderChatID
+
+		// Sincroniza contato com CRM (R5): procura por número e empresa; se não
+		// existe, cria automaticamente no primeiro atendimento.
+		if s.crm != nil && s.crmCompanyID != "" {
+			crmContactID, err := s.crm.FindCustomerByPhone(ctx, inbound.FromE164, s.crmCompanyID)
+			if err != nil {
+				return nil, fmt.Errorf("inbox: find customer in crm: %w", err)
+			}
+			if crmContactID == "" {
+				crmContactID, err = s.crm.CreateContact(ctx, contact.Name, inbound.FromE164, s.crmCompanyID)
+				if err != nil {
+					return nil, fmt.Errorf("inbox: create contact in crm: %w", err)
+				}
+			}
+			if crmContactID != "" {
+				id, parseErr := uuid.Parse(crmContactID)
+				if parseErr == nil {
+					conversation.CRMContactID = &id
+				}
+			}
+		}
+
 		if err := s.conversations.Store(ctx, conversation); err != nil {
 			return nil, fmt.Errorf("inbox: store conversation: %w", err)
 		}

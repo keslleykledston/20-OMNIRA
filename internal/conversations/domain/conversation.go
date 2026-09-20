@@ -24,11 +24,14 @@ type Conversation struct {
 	// o provedor endereça o contato por outro identificador (ex.: LID do
 	// WhatsApp). Vazio significa "desconhecido" — aí o envio deriva do telefone.
 	ProviderChatID string
-	Status         Status
-	Title          string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	ClosedAt       *time.Time
+	// CRMContactID é o UUID do contato no CRM K3G, gravado quando inbound chega.
+	// Permite reusar contato no CRM sem duplicata em próximos atendimentos.
+	CRMContactID *uuid.UUID
+	Status       Status
+	Title        string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	ClosedAt     *time.Time
 }
 
 func NewConversation(tenantID, contactID uuid.UUID, connectionID *uuid.UUID) (*Conversation, error) {

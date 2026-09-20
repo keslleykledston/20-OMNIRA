@@ -58,7 +58,7 @@ func (s *PostgresInboundStore) FindOpen(ctx context.Context, contactID, connecti
 		return nil, err
 	}
 	return scanConversation(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		SELECT id, tenant_id, contact_id, channel_connection_id, provider_chat_id, status, title, created_at, updated_at, closed_at
+		SELECT id, tenant_id, contact_id, channel_connection_id, provider_chat_id, crm_contact_id, status, title, created_at, updated_at, closed_at
 		FROM conversations WHERE tenant_id=$1 AND contact_id=$2 AND channel_connection_id=$3 AND status='open'
 		ORDER BY updated_at DESC, id DESC LIMIT 1`, tenantID, contactID, connectionID))
 }
@@ -71,8 +71,8 @@ func (s *PostgresInboundStore) Store(ctx context.Context, conversation *conversa
 		return err
 	}
 	_, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
-		INSERT INTO conversations (id, tenant_id, contact_id, channel_connection_id, provider_chat_id, status, title, created_at, updated_at, closed_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, conversation.ID, conversation.TenantID, conversation.ContactID, conversation.ChannelConnectionID, conversation.ProviderChatID, conversation.Status, conversation.Title, conversation.CreatedAt, conversation.UpdatedAt, conversation.ClosedAt)
+		INSERT INTO conversations (id, tenant_id, contact_id, channel_connection_id, provider_chat_id, crm_contact_id, status, title, created_at, updated_at, closed_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, conversation.ID, conversation.TenantID, conversation.ContactID, conversation.ChannelConnectionID, conversation.ProviderChatID, conversation.CRMContactID, conversation.Status, conversation.Title, conversation.CreatedAt, conversation.UpdatedAt, conversation.ClosedAt)
 	return err
 }
 
@@ -207,7 +207,7 @@ func scanContact(row scanner) (*contactdomain.Contact, error) {
 func scanConversation(row scanner) (*conversationdomain.Conversation, error) {
 	c := &conversationdomain.Conversation{}
 	var status string
-	err := row.Scan(&c.ID, &c.TenantID, &c.ContactID, &c.ChannelConnectionID, &c.ProviderChatID, &status, &c.Title, &c.CreatedAt, &c.UpdatedAt, &c.ClosedAt)
+	err := row.Scan(&c.ID, &c.TenantID, &c.ContactID, &c.ChannelConnectionID, &c.ProviderChatID, &c.CRMContactID, &status, &c.Title, &c.CreatedAt, &c.UpdatedAt, &c.ClosedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
