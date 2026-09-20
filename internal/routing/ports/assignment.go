@@ -32,4 +32,10 @@ type ConversationAssigner interface {
 // AuditRecorder appends an audit event in the caller's transaction.
 type AuditRecorder interface {
 	ConversationAssignmentChanged(ctx context.Context, change AssignmentChange) error
+	// Participant events (co-attendance + transfer)
+	ParticipantInvited(ctx context.Context, conversationID, actor, targetUser uuid.UUID) error
+	ParticipantAccepted(ctx context.Context, conversationID, actor uuid.UUID) error
+	ParticipantRejected(ctx context.Context, conversationID, actor uuid.UUID) error
+	ParticipantLeft(ctx context.Context, conversationID, actor uuid.UUID) error
+	ConversationTransferred(ctx context.Context, conversationID, actor uuid.UUID, from, to *uuid.UUID) error
 }
