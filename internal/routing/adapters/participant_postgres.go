@@ -30,14 +30,20 @@ func (r *PostgresParticipantRepository) Create(ctx context.Context, p *domain.Co
 	return err
 }
 
+// The tenant filter is a second layer behind RLS: knowing a conversation id of
+// another tenant must be useless even if a policy is ever relaxed by mistake.
 func (r *PostgresParticipantRepository) FindByConversation(ctx context.Context, conversationID uuid.UUID) ([]*domain.ConversationParticipant, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	rows, err := q.Query(ctx, `
 		SELECT id, tenant_id, conversation_id, user_id, role, joined_at, left_at, created_at, updated_at
 		FROM conversation_participants
-		WHERE conversation_id = $1
+		WHERE tenant_id = $1 AND conversation_id = $2
 		ORDER BY created_at ASC
-	`, conversationID)
+	`, tenantID, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -55,13 +61,17 @@ func (r *PostgresParticipantRepository) FindByConversation(ctx context.Context, 
 }
 
 func (r *PostgresParticipantRepository) FindAssignee(ctx context.Context, conversationID uuid.UUID) (*domain.ConversationParticipant, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	row := q.QueryRow(ctx, `
 		SELECT id, tenant_id, conversation_id, user_id, role, joined_at, left_at, created_at, updated_at
 		FROM conversation_participants
-		WHERE conversation_id = $1 AND role = 'ASSIGNEE'
+		WHERE tenant_id = $1 AND conversation_id = $2 AND role = 'ASSIGNEE'
 		LIMIT 1
-	`, conversationID)
+	`, tenantID, conversationID)
 	p, err := scanParticipant(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -70,13 +80,17 @@ func (r *PostgresParticipantRepository) FindAssignee(ctx context.Context, conver
 }
 
 func (r *PostgresParticipantRepository) FindByUserAndConversation(ctx context.Context, conversationID, userID uuid.UUID) (*domain.ConversationParticipant, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	row := q.QueryRow(ctx, `
 		SELECT id, tenant_id, conversation_id, user_id, role, joined_at, left_at, created_at, updated_at
 		FROM conversation_participants
-		WHERE conversation_id = $1 AND user_id = $2
+		WHERE tenant_id = $1 AND conversation_id = $2 AND user_id = $3
 		LIMIT 1
-	`, conversationID, userID)
+	`, tenantID, conversationID, userID)
 	p, err := scanParticipant(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -85,43 +99,59 @@ func (r *PostgresParticipantRepository) FindByUserAndConversation(ctx context.Co
 }
 
 func (r *PostgresParticipantRepository) UpdateRole(ctx context.Context, participantID uuid.UUID, role domain.ParticipantRole) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
 	q := platformdb.QuerierFromContext(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		UPDATE conversation_participants
-		SET role = $2, updated_at = now()
-		WHERE id = $1
-	`, participantID, role)
+		SET role = $3, updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantID, participantID, role)
 	return err
 }
 
 func (r *PostgresParticipantRepository) MarkAsJoined(ctx context.Context, participantID uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
 	q := platformdb.QuerierFromContext(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		UPDATE conversation_participants
 		SET joined_at = now(), updated_at = now()
-		WHERE id = $1 AND joined_at IS NULL
-	`, participantID)
+		WHERE tenant_id = $1 AND id = $2 AND joined_at IS NULL
+	`, tenantID, participantID)
 	return err
 }
 
 func (r *PostgresParticipantRepository) MarkAsLeft(ctx context.Context, participantID uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
 	q := platformdb.QuerierFromContext(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		UPDATE conversation_participants
 		SET left_at = now(), updated_at = now()
-		WHERE id = $1 AND left_at IS NULL
-	`, participantID)
+		WHERE tenant_id = $1 AND id = $2 AND left_at IS NULL
+	`, tenantID, participantID)
 	return err
 }
 
 func (r *PostgresParticipantRepository) ListActiveParticipants(ctx context.Context, conversationID uuid.UUID) ([]*domain.ConversationParticipant, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	rows, err := q.Query(ctx, `
 		SELECT id, tenant_id, conversation_id, user_id, role, joined_at, left_at, created_at, updated_at
 		FROM conversation_participants
-		WHERE conversation_id = $1 AND left_at IS NULL
+		WHERE tenant_id = $1 AND conversation_id = $2 AND left_at IS NULL
 		ORDER BY created_at ASC
-	`, conversationID)
+	`, tenantID, conversationID)
 	if err != nil {
 		return nil, err
 	}

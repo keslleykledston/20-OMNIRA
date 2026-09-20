@@ -1,6 +1,5 @@
--- Reverter suporte a co-atendimento
-DROP INDEX idx_conversation_participants_role;
-DROP INDEX idx_conversation_participants_user;
-DROP INDEX idx_conversation_participants_conversation;
-DROP TABLE conversation_participants;
-DROP TYPE conversation_participant_role;
+-- Reverter suporte a co-atendimento.
+-- DROP TABLE leva junto índices, constraints, policies e grants da tabela;
+-- o ENUM é um objeto separado e precisa cair explicitamente.
+DROP TABLE IF EXISTS conversation_participants CASCADE;
+DROP TYPE IF EXISTS conversation_participant_role;
