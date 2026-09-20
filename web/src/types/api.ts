@@ -10,6 +10,7 @@ export interface ConversationItem {
   assigned_to_user_id?: string;
   message_count: number;
   unread_count: number;
+  crm_contact_id?: string;
 }
 
 export interface MessageItem {

@@ -80,7 +80,7 @@ func main() {
 		srv.RegisterAuthHandlers(cfg.AuthCookieSecure)
 	}
 	srv.RegisterTenancyHandlers(dbPool)
-	srv.RegisterInboxHandlers(dbPool)
+	crmHandler := srv.RegisterInboxHandlers(dbPool)
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions)
@@ -140,6 +140,7 @@ func main() {
 
 		// R5: Wiring de CRM (K3G) no webhook inbound. Quando mensagem chega,
 		// procura contato no CRM; se não existe, cria automaticamente.
+		var k3gClientForAPI *toolconnectors.K3GCRMClient
 		if k3gConnection, k3gErr := erpConnections.FindByTenant(context.Background(), uuid.Nil); k3gErr == nil && k3gConnection != nil {
 			for _, conn := range k3gConnection {
 				if conn.Provider == "k3g_crm" && conn.Status == "active" {
@@ -162,6 +163,7 @@ func main() {
 								if acmeCompanyID != "" {
 									crmConnector := toolconnectors.NewK3GCRMConnector(k3gClient)
 									inboundService.WithCRM(crmConnector, acmeCompanyID)
+									k3gClientForAPI = k3gClient
 								}
 							}
 						}
@@ -198,34 +200,28 @@ func main() {
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
 
-		// R5: mesmo wiring de CRM para Meta webhook
-		if k3gConnection, k3gErr := erpConnections.FindByTenant(context.Background(), uuid.Nil); k3gErr == nil && k3gConnection != nil {
-			for _, conn := range k3gConnection {
-				if conn.Provider == "k3g_crm" && conn.Status == "active" {
-					k3gCred, credErr := erpCredentials.Resolve(context.Background(), conn.SecretRef)
-					if credErr == nil && k3gCred != nil {
-						k3gClient, clientErr := toolconnectors.NewK3GCRMClient(toolconnectors.K3GCRMConfig{
-							BaseURL: k3gCred.Fields["base_url"],
-							Token:   k3gCred.Fields["token"],
-						})
-						if clientErr == nil && k3gClient != nil {
-							companies, listErr := k3gClient.ListCompanies(context.Background())
-							if listErr == nil && len(companies) > 0 {
-								var acmeCompanyID string
-								for _, co := range companies {
-									if strings.Contains(strings.ToUpper(co.Name), "ACME") {
-										acmeCompanyID = co.ID
-										break
-									}
-								}
-								if acmeCompanyID != "" {
-									crmConnector := toolconnectors.NewK3GCRMConnector(k3gClient)
-									inboundService.WithCRM(crmConnector, acmeCompanyID)
+		// R5: mesmo wiring de CRM para Meta webhook (reutiliza k3gClientForAPI se já foi configurado)
+		if k3gClientForAPI != nil {
+			// Use o cliente já configurado
+			if k3gConnection, k3gErr := erpConnections.FindByTenant(context.Background(), uuid.Nil); k3gErr == nil && k3gConnection != nil {
+				for _, conn := range k3gConnection {
+					if conn.Provider == "k3g_crm" && conn.Status == "active" {
+						companies, listErr := k3gClientForAPI.ListCompanies(context.Background())
+						if listErr == nil && len(companies) > 0 {
+							var acmeCompanyID string
+							for _, co := range companies {
+								if strings.Contains(strings.ToUpper(co.Name), "ACME") {
+									acmeCompanyID = co.ID
+									break
 								}
 							}
+							if acmeCompanyID != "" {
+								crmConnector := toolconnectors.NewK3GCRMConnector(k3gClientForAPI)
+								inboundService.WithCRM(crmConnector, acmeCompanyID)
+							}
 						}
+						break
 					}
-					break
 				}
 			}
 		}
@@ -236,6 +232,11 @@ func main() {
 			Resolver:    channeladapters.NewMetaWebhookConnectionResolver(dbPool, connectionRepo),
 			Intake:      inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService),
 		})
+	}
+
+	// R5.2: Configura K3G CRM client no handler para ListCompanies
+	if crmHandler != nil && k3gClientForAPI != nil {
+		crmHandler.SetK3GCRMClient(k3gClientForAPI)
 	}
 
 	errChan := make(chan error, 1)

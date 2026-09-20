@@ -29,8 +29,9 @@ type CRMTicketResponse struct {
 
 // CRMHandlers — handlers para CRM
 type CRMHandlers struct {
-	dbPool *pgxpool.Pool
-	crm    connectors.CRMConnector
+	dbPool    *pgxpool.Pool
+	crm       connectors.CRMConnector
+	k3gClient *connectors.K3GCRMClient
 }
 
 // NewCRMHandlers — cria novo CRM handler
@@ -40,6 +41,11 @@ func NewCRMHandlers(dbPool *pgxpool.Pool) *CRMHandlers {
 		dbPool: dbPool,
 		crm:    connectors.NewMockCRMConnector(),
 	}
+}
+
+// SetK3GCRMClient — configura o cliente K3G CRM
+func (h *CRMHandlers) SetK3GCRMClient(client *connectors.K3GCRMClient) {
+	h.k3gClient = client
 }
 
 // CreateTicket — cria ticket para uma conversa
@@ -302,4 +308,54 @@ func (h *CRMHandlers) CreateActivity(w http.ResponseWriter, r *http.Request) {
 		CompanyID: req.CompanyID,
 		CreatedAt: "", // CRM retorna, mas não temos aqui
 	})
+}
+
+// CompanyItem — representação de uma empresa
+type CompanyItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	CNPJ string `json:"cnpj,omitempty"`
+}
+
+// CompanyListResponse — resposta com lista de empresas
+type CompanyListResponse struct {
+	Items []CompanyItem `json:"items"`
+}
+
+// ListCompanies — lista empresas do CRM K3G
+// GET /api/v1/integrations/companies
+func (h *CRMHandlers) ListCompanies(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, err := authn.FromContext(ctx); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Check if K3G CRM client is configured
+	if h.k3gClient == nil {
+		// Return empty list if CRM not configured
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CompanyListResponse{Items: []CompanyItem{}})
+		return
+	}
+
+	// List companies from K3G CRM
+	companies, err := h.k3gClient.ListCompanies(ctx)
+	if err != nil {
+		http.Error(w, "failed to list companies: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	items := make([]CompanyItem, len(companies))
+	for i, co := range companies {
+		items[i] = CompanyItem{
+			ID:   co.ID,
+			Name: co.Name,
+			CNPJ: co.CNPJ,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(CompanyListResponse{Items: items})
 }

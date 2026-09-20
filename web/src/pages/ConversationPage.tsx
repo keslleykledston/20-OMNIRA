@@ -203,7 +203,7 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
         </div>
       )}
 
-      <TicketPanel conversationId={conversationId} />
+      <TicketPanel conversationId={conversationId} crmContactId={conversation?.crm_contact_id} />
 
       <style>{`
         .send-error {

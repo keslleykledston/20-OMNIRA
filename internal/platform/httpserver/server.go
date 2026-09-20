@@ -263,9 +263,10 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 }
 
 // RegisterInboxHandlers exposes tenant-scoped, read-only Inbox queries and realtime SSE.
-func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
+// Retorna o crmHandler para que possa ser configurado com o K3G CRM client.
+func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) *inboxadapters.CRMHandlers {
 	if s.authenticator == nil {
-		return
+		return nil
 	}
 	authnMiddleware := authn.Middleware(s.authenticator)
 	authzSvc := tenancyapplication.NewAuthorizationService(
@@ -303,6 +304,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}/close", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CloseTicket))))
 	// R5.2: Create activity (atendimento WHATSAPP) in CRM
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/crm/activity", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateActivity))))
+	// R5.2: List companies from K3G CRM (without tenant_id in path, just authn)
+	s.mux.Handle("GET /api/v1/integrations/companies", authnMiddleware(http.HandlerFunc(crmHandler.ListCompanies)))
+
+	return crmHandler
 }
 
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session

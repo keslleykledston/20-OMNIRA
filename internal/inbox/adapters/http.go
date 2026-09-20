@@ -31,6 +31,7 @@ type ConversationItem struct {
 	ContactPhone        string     `json:"contact_phone"`
 	TicketStatus        *string    `json:"ticket_status,omitempty"`
 	TicketPriority      *string    `json:"ticket_priority,omitempty"`
+	CRMContactID        *uuid.UUID `json:"crm_contact_id,omitempty"`
 	CreatedAt           string     `json:"created_at"`
 	UpdatedAt           string     `json:"updated_at"`
 }
@@ -70,7 +71,7 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	}
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
-		       co.display_name,co.phone_e164,t.status,t.priority,c.created_at,c.updated_at
+		       co.display_name,co.phone_e164,t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at
 		FROM conversations c JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
 		WHERE `+where+` ORDER BY c.created_at DESC,c.id DESC LIMIT $`+strconv.Itoa(limitPos), args...)
@@ -113,7 +114,7 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 	}
 	item, err := scanConversationItem(platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
-		       co.display_name,co.phone_e164,t.status,t.priority,c.created_at,c.updated_at
+		       co.display_name,co.phone_e164,t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at
 		FROM conversations c JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
 		WHERE c.tenant_id=$1 AND c.id=$2
@@ -187,7 +188,7 @@ func scanConversationItem(row rowScanner) (ConversationItem, error) {
 	var status string
 	var ticketStatus, ticketPriority *string
 	var created, updated time.Time
-	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &created, &updated)
+	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated)
 	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
 	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
 	return item, err
