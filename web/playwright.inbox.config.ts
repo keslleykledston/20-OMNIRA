@@ -4,7 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 // Postgres DB + API + worker + the built SPA (vite preview, /api proxied to the API).
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /(inbox|channels)\.spec\.ts/,
+  testMatch: /(inbox|channels|ticket-panel)\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   retries: 0,
