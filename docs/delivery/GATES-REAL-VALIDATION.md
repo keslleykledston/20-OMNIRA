@@ -52,9 +52,35 @@ WAHA logs: No errors, Android engine active
 
 **Critério de sucesso**:
 - [x] QR gerado sem erro
-- [ ] QR escaneado com sucesso
-- [ ] Status WAHA = connected no OMNIRA
-- [ ] Sessions persistem após docker restart
+- [x] QR escaneado com sucesso — **2026-09-20 03:5x UTC**
+- [x] Status WAHA = connected no OMNIRA
+- [ ] Sessão persiste após restart do container (não verificado ainda)
+
+### Resultado — PASS (2026-09-20)
+
+Pareado pela UI (`/integrations` → Ver QR → leitura no celular), com o engine
+**GOWS/WhatsApp Web**, não Android: o bloqueio de 2026-09-19 era o rate-limit
+temporário do WhatsApp ("Não é possível conectar novos dispositivos no
+momento"), que expirou. O plano de Android em `GATE-R1-ANDROID-SETUP.md` fica
+como alternativa se o rate-limit voltar a atrapalhar, não como requisito.
+
+Evidência nos dois lados:
+
+```
+OMNIRA  GET /channels/connections/85af82d7…
+        status=active  session_status=working  external_account_id=559291882864
+
+WAHA    GET /api/sessions
+        omnira_85af82d7…  status=WORKING  me=559291882864@c.us
+```
+
+Duas condições foram necessárias antes de o pareamento ser possível:
+
+1. **UI** — o card não consultava estado sem um clique prévio em "Iniciar
+   sessão", então nunca exibia QR ao recarregar a página (corrigido em `873b0ac`).
+2. **Sessão travada** — a sessão anterior ficou `FAILED` no WAHA e não se
+   recuperava com restart; foi preciso `stop` + `DELETE` da sessão e recriar a
+   conexão. A nova chegou a `needs_qr` em 4s.
 
 **Se bloqueado**:
 Parar aqui com mensagem:
