@@ -119,3 +119,62 @@ func (c *K3GCRMClient) get(ctx context.Context, path string) ([]byte, error) {
 	}
 	return body, nil
 }
+
+// CRMCompany é a empresa como o OMNIRA precisa dela: identidade, rótulo para o
+// operador escolher, e o documento para conferência. O resto do cadastro fica
+// no CRM — o core não deve conhecer campos de módulo do CRM.
+type CRMCompany struct {
+	ID       string
+	Name     string
+	CNPJ     string
+	City     string
+	State    string
+	IsActive bool
+}
+
+// ListCompanies traz as empresas do CRM para o operador escolher a qual
+// empresa o atendimento pertence.
+//
+// Só lê. A lista é o "cadastro prévio": o OMNIRA não cria empresa, porque
+// quem é cliente de quem é decisão que já foi tomada no CRM.
+func (c *K3GCRMClient) ListCompanies(ctx context.Context) ([]CRMCompany, error) {
+	if c == nil || c.client == nil {
+		return nil, ErrCRMNotConfigured
+	}
+	body, err := c.get(ctx, "/api/companies")
+	if err != nil {
+		return nil, err
+	}
+	var page struct {
+		Companies []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			RazaoSocial string `json:"razaoSocial"`
+			CNPJ        string `json:"cnpj"`
+			City        string `json:"city"`
+			State       string `json:"state"`
+			IsActive    bool   `json:"isActive"`
+		} `json:"companies"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, fmt.Errorf("%w: unexpected companies response", ErrCRMRejected)
+	}
+	out := make([]CRMCompany, 0, len(page.Companies))
+	for _, raw := range page.Companies {
+		// O CRM tem nome fantasia e razão social; o operador reconhece pelo
+		// primeiro, mas nem toda empresa preenche os dois.
+		name := strings.TrimSpace(raw.Name)
+		if name == "" {
+			name = strings.TrimSpace(raw.RazaoSocial)
+		}
+		if strings.TrimSpace(raw.ID) == "" || name == "" {
+			continue
+		}
+		out = append(out, CRMCompany{
+			ID: raw.ID, Name: name, CNPJ: strings.TrimSpace(raw.CNPJ),
+			City: strings.TrimSpace(raw.City), State: strings.TrimSpace(raw.State),
+			IsActive: raw.IsActive,
+		})
+	}
+	return out, nil
+}
