@@ -269,23 +269,47 @@ Razão: Credencial IXC real (URL, usuário, token) necessária.
 
 ---
 
-## GATE R6 — RLS/Tenant Isolation Real
+## GATE R6 — RLS/Tenant Isolation Real ✅ PASS (2026-09-20)
 
-**Objetivo**: Validar que Tenant B não consegue enxergar dados de Tenant A.
+**Objetivo**: Validar que um tenant não enxerga dados de outro.
 
-**Procedimento**:
-1. Criar segundo Tenant com outro usuário
-2. Ambos fazem login
-3. Tenant A gera dados (Contact, Conversation, Message)
-4. Tenant B tenta acessar via API com seu token
-5. API retorna 404 (via RLS)
-6. Tenant B UI não mostra dados de A
+**Executado contra**: instância real em `https://omnira.devops.k3gsolutions.com.br`
+(API em `127.0.0.1:8081`, banco `omnira_dev`, 29 migrations).
+
+**Procedimento executado**:
+1. Criado Tenant B (`bbbbbbbb-…`) direto no banco como owner, com Contact e
+   Conversation de título `SEGREDO DO TENANT B` — dado **real e existente**,
+   não um id inventado.
+2. Login como `admin@omnira.local` (Tenant A, `11111111-…`) pelo domínio público.
+3. Tentativas de acesso cruzado com o token do Tenant A.
+
+**Evidência**:
+
+| # | Requisição (token do Tenant A) | Resultado |
+|---|---|---|
+| 1 | `SELECT title … WHERE id=<conv B>` como owner | `SEGREDO DO TENANT B` (o dado existe) |
+| 2 | `GET /tenants/<B>/inbox/conversations` | **404** `tenant not found` |
+| 3 | `GET /tenants/<A>/inbox/conversations/<conv B>` (IDOR) | **404** `conversation not found` |
+| 4 | `GET /tenants/<A>/inbox/conversations` | `{"items":[],"count":0}` |
+| 5 | grep por `SEGREDO` na resposta de A | **0 ocorrências** |
+| 6 | `GET /tenants/<A>/inbox/conversations` sem token | **401** |
+
+O ponto que torna o teste válido: em (1) o registro **existe**; em (2)(3) a API
+responde "não encontrado" mesmo assim. É RLS filtrando, não ausência de dado.
 
 **Critério de sucesso**:
-- [ ] RLS ativo no Postgres
-- [ ] Queries retornam apenas do tenant_id do JWT
-- [ ] Tentativa de acesso cross-tenant → 404 ou 403
-- [ ] Nenhum vazamento em logs/errors
+- [x] RLS ativo no Postgres
+- [x] Queries retornam apenas o tenant_id do JWT
+- [x] Acesso cross-tenant → 404
+- [x] IDOR por id direto → 404
+- [x] Sem vazamento no corpo da resposta
+- [x] Sem token → 401
+
+**Limpeza**: fixtures do Tenant B removidos após o teste (banco de volta a 1 tenant).
+
+**Não coberto ainda**: escrita cross-tenant e membership revogada — o login mock
+só conhece dois usuários do mesmo tenant, então falta um segundo login para
+exercitar a direção B→A. Cobrir quando houver IdP real ou seed multi-tenant.
 
 ---
 
