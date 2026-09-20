@@ -94,6 +94,24 @@ type webhookMessage struct {
 		MIMEType string `json:"mimetype"`
 		Filename string `json:"filename"`
 	} `json:"media"`
+	Data *struct {
+		Info *struct {
+			SenderAlt string `json:"SenderAlt"`
+		} `json:"Info"`
+	} `json:"_data"`
+}
+
+// senderJID devolve o endereço de onde extrair o telefone.
+//
+// O WhatsApp passou a entregar o remetente como "@lid" (Linked ID), um
+// identificador opaco que NÃO é número de telefone — tratá-lo como tal
+// produziria um contato com identidade falsa. Nesses eventos o número real vem
+// em _data.Info.SenderAlt, já no formato @s.whatsapp.net.
+func senderJID(m webhookMessage) string {
+	if strings.HasSuffix(m.From, "@lid") && m.Data != nil && m.Data.Info != nil && m.Data.Info.SenderAlt != "" {
+		return m.Data.Info.SenderAlt
+	}
+	return m.From
 }
 
 type ParsedWebhook struct {
@@ -143,7 +161,7 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 	if payload.FromMe {
 		return result, ErrIgnoredWebhookMessage
 	}
-	from, err := normalizeSender(payload.From)
+	from, err := normalizeSender(senderJID(payload))
 	if err != nil {
 		return ParsedWebhook{}, err
 	}

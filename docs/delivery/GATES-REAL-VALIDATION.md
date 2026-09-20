@@ -194,15 +194,87 @@ Queue {
 ```
 
 **Critério de sucesso**:
-- [ ] Contact criado com phone_e164 correto
-- [ ] Conversation com status=active
-- [ ] Message com direction=inbound
-- [ ] Message aparece na Inbox UI
-- [ ] Queue entry para Conversation
-- [ ] Nenhuma duplicação em redelivery
+- [x] Contact criado com phone_e164 correto
+- [x] Conversation com status=open
+- [x] Message com direction=inbound
+- [x] Message aparece na Inbox (API autenticada)
+- [x] Queue vinculada à Conversation
+- [x] Nenhuma duplicação em redelivery
 
-**Se bloqueado**:
-Parar com diagnóstico exato (webhook error, validation failure, etc).
+### Resultado — PASS (2026-09-20), após corrigir D-7
+
+A mensagem real foi enviada e **falhou na primeira tentativa**: o WAHA entregou
+`message.any` e a API respondeu **400 `malformed webhook`**, 15 vezes, até
+desistir. Causa em D-7 (abaixo). Depois da correção, o mesmo evento — mesma
+mensagem, mesmo remetente, mesmo `provider_message_id` — foi reentregue e
+percorreu a cadeia inteira.
+
+Evidência no PostgreSQL (`omnira_dev`):
+
+```
+contacts       id=c328df30…  tenant=11111111…  phone_e164=+559291740090
+               display_name=+559291740090  status=active
+
+conversations  id=9cac94f4…  tenant=11111111…  contact=c328df30…
+               channel_connection=85af82d7…  status=open
+               queue_id=6c9cd0e9…  assigned_to_user_id=NULL
+
+messages       id=0c1c7da0…  tenant=11111111…  conversation=9cac94f4…
+               direction=inbound  message_type=text  status=received
+               provider_message_id=false_175222334484588@lid_2A6E11EFC97C9069B924
+               body: 16 chars (conteúdo não registrado aqui)
+
+queues         6c9cd0e9…  name=Default  mode=manual  is_default=t  tenant=11111111…
+```
+
+Inbox pela API autenticada, como `test@omnira.local`:
+
+```
+GET /tenants/11111111…/inbox/conversations
+  → count=1, contact_phone=+559291740090, status=open, queue_id=6c9cd0e9…
+GET /tenants/11111111…/inbox/conversations/9cac94f4…/messages
+  → direction=inbound, status=received
+```
+
+Demais verificações:
+
+| Item | Resultado |
+|---|---|
+| Tenant correto | `11111111-…` em contact, conversation, message e queue |
+| HMAC | validado — assinatura errada daria 401, não 200 |
+| Redelivery idempotente | 3 reenvios do mesmo evento → HTTP 200 nos três, contadores imóveis em `contacts=1 conv=1 msgs=1` |
+| Duplicação | nenhuma |
+| Timestamps | contact 03:59:41.509 → conversation .516 → message .520, ordem causal coerente |
+| Logs sem segredo | chave HMAC, `OMNIRA_CREDENTIALS_KEY` e corpo da mensagem: 0 ocorrências nos logs de api e worker |
+
+**Nota de método**: a reentrega foi um *replay* do evento real capturado no
+WAHA (mesmo id, remetente e corpo), não um payload sintético — o WAHA já havia
+esgotado seus 15 retries antes de a correção existir. Um payload sintético
+chegou a ser usado só para isolar o parser, e os registros que ele gerou foram
+apagados antes da validação real.
+
+### Achado D-7 — remetente `@lid` recusado (corrigido)
+
+O WhatsApp passou a entregar o remetente como **`@lid`** (Linked ID), um
+identificador opaco de preservação de privacidade:
+
+```
+from       : 175222334484588@lid
+_data.Info.SenderAlt : 559291740090@s.whatsapp.net
+```
+
+`normalizeSender` (webhook.go:365) aceitava apenas `c.us` e `s.whatsapp.net`,
+então `@lid` virava `unsupported sender address` → 400 `malformed webhook` →
+**toda mensagem inbound era perdida**.
+
+O ponto que importa além do 400: `175222334484588` **não é um telefone**.
+Aceitá-lo por relaxamento do validador criaria um contato com identidade falsa
+e `phone_e164` inválido. A correção lê o número verdadeiro de
+`_data.Info.SenderAlt`, que já vem em formato aceito, e mantém a recusa quando
+o `@lid` chega sem `SenderAlt` — sem número confiável, não há contato.
+
+Coberto por `TestParseInboundResolvesLinkedIDSenderFromSenderAlt`, que verifica
+tanto a resolução quanto o não-vazamento do LID para o campo E.164.
 
 ---
 

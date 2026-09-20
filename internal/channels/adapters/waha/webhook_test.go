@@ -129,6 +129,37 @@ func TestParseInboundCanonicalizesMessageAndRejectsProviderEcho(t *testing.T) {
 	}
 }
 
+// O WhatsApp entrega remetentes como "@lid" (Linked ID), um identificador
+// opaco que não é telefone. O número real vem em _data.Info.SenderAlt e é ele
+// que deve virar o E.164 do contato — caso contrário a mensagem é recusada
+// (observado em produção 2026-09-20: 400 "malformed webhook") ou, pior, o
+// contato nasceria com uma identidade falsa derivada do LID.
+func TestParseInboundResolvesLinkedIDSenderFromSenderAlt(t *testing.T) {
+	conn := webhookConnection()
+	provider := newProvider(t, "secret")
+	body := []byte(`{"id":"evt-lid","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"false_175222334484588@lid_2A6E","timestamp":1710000000,"from":"175222334484588@lid","fromMe":false,"body":"oi","hasMedia":false,"_data":{"Info":{"SenderAlt":"559291740090@s.whatsapp.net"}}}}`)
+	parsed, err := provider.ParseWebhook(conn, body)
+	if err != nil {
+		t.Fatalf("lid sender rejected: %v", err)
+	}
+	if parsed.Message == nil {
+		t.Fatal("no message parsed")
+	}
+	if parsed.Message.FromE164 != "+559291740090" {
+		t.Fatalf("sender not resolved from SenderAlt: %q", parsed.Message.FromE164)
+	}
+	// O LID nunca pode virar telefone: seria um contato com identidade falsa.
+	if strings.Contains(parsed.Message.FromE164, "175222334484588") {
+		t.Fatalf("opaque LID leaked into E.164: %q", parsed.Message.FromE164)
+	}
+
+	// Sem SenderAlt não há número confiável; recusar continua sendo o correto.
+	noAlt := `{"id":"evt-lid2","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"m2","timestamp":1710000000,"from":"175222334484588@lid","fromMe":false,"body":"oi"}}`
+	if _, err := provider.ParseWebhook(conn, []byte(noAlt)); err == nil {
+		t.Fatal("lid without SenderAlt accepted as E.164")
+	}
+}
+
 func TestParseInboundRejectsSessionConfusionAndMalformedSender(t *testing.T) {
 	conn := webhookConnection()
 	provider := newProvider(t, "secret")
