@@ -406,3 +406,21 @@ func TestWebhookHandlerDistinguishesUnreadableKeyFromBadSignatureAndScopesSessio
 		t.Fatalf("session runner: code=%d ran=%v tenant=%s want %s", code, ran, gotTenant, conn.TenantID)
 	}
 }
+
+// Responder no endereço em que a mensagem chegou não é detalhe: com contatos
+// endereçados por LID, derivar "<telefone>@c.us" produz um destino que o
+// WhatsApp aceita e não entrega — falha silenciosa observada em produção.
+func TestOutboundUsesProviderChatIDWhenKnown(t *testing.T) {
+	conn := webhookConnection()
+	provider := newProvider(t, "secret")
+
+	// O parser precisa carregar o endereço original para o envio poder usá-lo.
+	body := []byte(`{"id":"evt-chat","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"m1","timestamp":1710000000,"from":"175222334484588@lid","fromMe":false,"body":"oi","_data":{"Info":{"SenderAlt":"559291740090@s.whatsapp.net"}}}}`)
+	parsed, err := provider.ParseWebhook(conn, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Message.ProviderChatID != "175222334484588@lid" {
+		t.Fatalf("endereço da conversa não preservado: %q", parsed.Message.ProviderChatID)
+	}
+}

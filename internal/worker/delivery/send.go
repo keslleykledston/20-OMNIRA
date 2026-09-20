@@ -23,9 +23,13 @@ var ErrPermanent = errors.New("channel delivery: permanent job error")
 
 // OutboundJob is the persisted state needed to deliver one queued message.
 type OutboundJob struct {
-	MessageID         uuid.UUID
-	ConnectionID      uuid.UUID
-	ToE164            string
+	MessageID    uuid.UUID
+	ConnectionID uuid.UUID
+	ToE164       string
+	// ProviderChatID é o endereço da conversa no provedor. Quando presente, é
+	// ele que endereça o envio; derivar do telefone falha silenciosamente com
+	// contatos endereçados por LID no WhatsApp.
+	ProviderChatID    string
 	Text              string
 	Status            string
 	ProviderMessageID string
@@ -102,7 +106,7 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 			return h.store.MarkFailed(scoped, messageID, "channel_not_active")
 		}
 		result, sendErr := h.sender.SendText(scoped, out.ConnectionID, domain.OutboundTextMessage{
-			ToE164: out.ToE164, Text: out.Text, IdempotencyKey: messageID.String(),
+			ToE164: out.ToE164, ProviderChatID: out.ProviderChatID, Text: out.Text, IdempotencyKey: messageID.String(),
 		})
 		switch {
 		case sendErr == nil:

@@ -201,6 +201,7 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 		ConnectionID:      conn.ID.String(),
 		FromE164:          from,
 		SenderName:        senderName,
+		ProviderChatID:    payload.From,
 		Text:              payload.Body,
 		Timestamp:         time.Unix(int64(payload.Timestamp), int64((payload.Timestamp-float64(int64(payload.Timestamp)))*1e9)).UTC(),
 	}

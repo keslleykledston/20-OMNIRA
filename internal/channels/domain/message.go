@@ -37,7 +37,12 @@ type InboundMessage struct {
 	// WhatsApp). Serve como rótulo de exibição e NUNCA como identidade: quem
 	// envia escolhe esse valor livremente. A identidade é FromE164.
 	SenderName string
-	Text       string
+	// ProviderChatID é o endereço da conversa como o provedor o informou
+	// (ex.: "1752…@lid"). É por ele que a resposta deve ser endereçada:
+	// reconstruir o destino a partir do telefone produz um endereço que o
+	// WhatsApp aceita mas não entrega quando o contato é endereçado por LID.
+	ProviderChatID string
+	Text           string
 	Media             *InboundMedia
 	Timestamp         time.Time
 	RawProviderEvent  string // referência opcional ao payload bruto (auditoria), nunca segredo
@@ -64,7 +69,12 @@ type MediaContent struct {
 // OutboundTextMessage — comando de envio de texto.
 type OutboundTextMessage struct {
 	ToE164 string
-	Text   string
+	// ProviderChatID é o endereço da conversa no provedor, quando conhecido.
+	// Tem precedência sobre ToE164: o provedor pode endereçar o contato por um
+	// identificador que não se deriva do telefone, e nesse caso o endereço
+	// derivado é aceito mas a mensagem não é entregue.
+	ProviderChatID string
+	Text           string
 	// IdempotencyKey identifica este envio de forma única para o
 	// provider/worker — reenviar a mesma chave nunca deve duplicar a
 	// mensagem no destinatário.

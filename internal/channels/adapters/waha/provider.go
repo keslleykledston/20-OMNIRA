@@ -192,7 +192,11 @@ func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnecti
 	if err != nil {
 		return nil, err
 	}
-	providerID, err := p.client.SendText(ctx, name, strings.TrimPrefix(msg.ToE164, "+")+"@c.us", msg.Text)
+	chatID, err := outboundChatID(msg.ProviderChatID, msg.ToE164)
+	if err != nil {
+		return nil, err
+	}
+	providerID, err := p.client.SendText(ctx, name, chatID, msg.Text)
 	p.operations.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_text"), attribute.String("status", statusForError(err))))
 	if err != nil {
 		p.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_text"), attribute.String("status", statusForError(err))))
@@ -341,4 +345,29 @@ func validateConnection(conn domain.ChannelConnection) error {
 		return fmt.Errorf("%w: connection revoked", ErrInvalidConnection)
 	}
 	return nil
+}
+
+// chatIDPattern aceita os endereços que o WhatsApp usa: telefone (c.us /
+// s.whatsapp.net), Linked ID (lid) e grupo (g.us).
+var chatIDPattern = regexp.MustCompile(`^[0-9]{5,20}(-[0-9]{1,20})?@(c\.us|s\.whatsapp\.net|lid|g\.us)$`)
+
+// outboundChatID escolhe o endereço de envio.
+//
+// Prefere o endereço que o provedor informou na conversa. Derivar o destino do
+// telefone ("<e164>@c.us") parece equivalente e não é: quando o contato é
+// endereçado por LID, o WhatsApp ACEITA a mensagem no endereço derivado
+// (ack=1 SERVER) e nunca a entrega — falha silenciosa, sem erro para o
+// operador. Observado em produção 2026-09-20; o mesmo texto chegou a ack=2
+// DEVICE quando endereçado ao LID.
+//
+// O valor persistido veio do provedor, então é validado antes de virar chamada
+// de API: um endereço malformado é erro permanente, não algo a retransmitir.
+func outboundChatID(providerChatID, toE164 string) (string, error) {
+	if chatID := strings.TrimSpace(providerChatID); chatID != "" {
+		if !chatIDPattern.MatchString(chatID) {
+			return "", fmt.Errorf("%w: malformed provider chat id", ports.ErrPermanent)
+		}
+		return chatID, nil
+	}
+	return strings.TrimPrefix(toE164, "+") + "@c.us", nil
 }

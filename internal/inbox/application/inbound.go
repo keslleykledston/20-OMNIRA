@@ -98,6 +98,10 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		if err != nil {
 			return nil, err
 		}
+		// Guarda o endereço em que a mensagem chegou para responder nele: o
+		// provedor pode endereçar o contato por um identificador que não se
+		// deriva do telefone (ex.: LID do WhatsApp).
+		conversation.ProviderChatID = inbound.ProviderChatID
 		if err := s.conversations.Store(ctx, conversation); err != nil {
 			return nil, fmt.Errorf("inbox: store conversation: %w", err)
 		}
