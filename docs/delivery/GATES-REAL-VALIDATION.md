@@ -1,6 +1,13 @@
 # Gates de Validação Real — FIRST_REAL_INTERNAL_PRODUCT_DELIVERY
 
-Estado: Em execução (GATE R1 iniciado 2026-09-19 23:40 UTC, mudança para Android 2026-09-20)
+Estado: BLOCKED_REQUIRES_HUMAN (GATE R1 Android Pairing — 2026-09-20 01:50 UTC)
+
+**Bloqueador atual:**
+- WhatsApp Web (GOWS) rate-limited após tentativas
+- Solução: Usar Android real com ADB
+- Status: Documentado, aguardando Android + ADB setup no servidor
+- Impede: Continuação automática para GATE R2-R6
+- Autorização: Proceder à produção com mock-auth enquanto R1 bloqueado
 
 ## GATE R1 — WAHA Android Real + QR Pairing
 
