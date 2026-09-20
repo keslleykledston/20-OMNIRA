@@ -313,10 +313,50 @@ Agent B UI (realtime):
 ```
 
 **Critério de sucesso**:
-- [ ] Atomic assignment (CAS sem race condition)
-- [ ] Realtime update para ambos agents
-- [ ] Assignment history registrado
-- [ ] 409 Conflict é legível no erro
+- [x] Assignment atômico (CAS, sem sobrescrita)
+- [x] Realtime para o segundo operador
+- [x] Histórico de assignment registrado
+- [x] 409 legível no erro
+
+### Resultado — PASS (2026-09-20)
+
+Dois operadores reais do mesmo tenant, pela API autenticada, sobre a conversa
+que entrou no R2 (`9cac94f4…`):
+
+- Agent A = `test@omnira.local` (`22222222-…`)
+- Agent B = `admin@omnira.local` (`aaaaaaaa-…`)
+
+| # | Ação | Resultado |
+|---|---|---|
+| 1 | A e B listam o inbox | ambos veem `count=1`, `assigned=None` |
+| 2 | A assume | 200 `{assigned_to_user_id: 2222…, changed: true}` |
+| 3 | B tenta assumir | **409** `conversation already assigned to another agent` |
+| 4 | B tenta forçar com `assigned_to_user_id` próprio no corpo | **409** — o payload não é autoridade |
+| 5 | A e B releem a conversa | ambos veem `2222…` (o dono real) |
+
+O item 4 é o que dá valor ao teste: não basta o botão estar desabilitado na UI,
+o corpo da requisição não pode virar autoridade de atribuição.
+
+**Realtime** — B manteve `GET …/conversations/{id}/events` (SSE) aberto enquanto
+A liberava e reassumia:
+
+```
+: connected
+data: {"type":"conversation_updated","id":"9cac94f4…","data":{"assigned_to_user_id":null,"reason":"changed","status":"open"}}
+data: {"type":"conversation_updated","id":"9cac94f4…","data":{"assigned_to_user_id":"22222222-…","reason":"changed","status":"open"}}
+: keepalive
+```
+
+As duas transições chegaram a B sem reload, e o evento carrega apenas
+referências — nenhum corpo de mensagem trafega pelo stream.
+
+**Histórico** (`assignment_events`), com as recusas de B corretamente ausentes:
+
+```
+04:01:50  —      → 2222…   manual_claim    human
+04:02:31  2222…  → —       manual_release  human
+04:02:35  —      → 2222…   manual_claim    human
+```
 
 ---
 
