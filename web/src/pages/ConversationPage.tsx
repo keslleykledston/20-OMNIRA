@@ -5,6 +5,7 @@ import { MessageItem, ConversationItem, RealtimeEvent } from '../types/api';
 import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import { AssignmentButton } from '../components/AssignmentButton';
 import { TicketPanel } from '../components/TicketPanel';
+import { TechnicianSelectModal } from '../components/TechnicianSelectModal';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE } from '../lib/config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../lib/session';
@@ -32,6 +33,10 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
   // One Idempotency-Key per distinct text: a retry after a network failure or a
   // timeout re-sends the same key, so the backend never queues a duplicate.
   const pendingSend = useRef<{ text: string; key: string } | null>(null);
+
+  // Co-attendance modal
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
 
   // Load messages via REST API (M05.1)
   const { data: messagesData, isLoading: messagesLoading } = useQuery({
@@ -130,6 +135,42 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
     }
   };
 
+  const handleInviteTechnician = async (technicianId: string) => {
+    try {
+      await axios.post(
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/invite`,
+        { target_user_id: technicianId },
+        { headers: authHeaders() }
+      );
+      // Refetch conversation to update participants
+      void queryClient.invalidateQueries({ queryKey: ['conversation', tenantId, conversationId] });
+    } catch (err: any) {
+      setSendError(err.response?.data?.message || 'Erro ao convidar técnico');
+      throw err;
+    }
+  };
+
+  const handleTransferTechnician = async (technicianId: string) => {
+    try {
+      await axios.post(
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/transfer`,
+        { target_user_id: technicianId },
+        { headers: authHeaders() }
+      );
+      // Refetch conversation to update assignee
+      void queryClient.invalidateQueries({ queryKey: ['conversation', tenantId, conversationId] });
+    } catch (err: any) {
+      setSendError(err.response?.data?.message || 'Erro ao transferir atendimento');
+      throw err;
+    }
+  };
+
+  // Get list of active participants (excluding current user for invite/transfer)
+  const coAttendees = conversation?.participants?.filter(p => p.role === 'CO_ATTENDEE' && p.left_at === undefined) || [];
+  const excludeUserIds = conversation?.participants
+    ?.filter(p => p.left_at === undefined)
+    .map(p => p.user_id) || [];
+
   return (
     <div className="conversation-page">
       <header className="conversation-header">
@@ -139,6 +180,51 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
           <p className="phone">{conversation?.contact_phone}</p>
         </div>
         <div className="header-controls">
+          {coAttendees.length > 0 && (
+            <div style={{
+              padding: '4px 8px',
+              backgroundColor: '#e3f2fd',
+              color: '#1976d2',
+              borderRadius: '4px',
+              fontSize: '11px',
+              fontWeight: 500,
+            }}>
+              👥 {coAttendees.length + 1} técnico{coAttendees.length + 1 !== 1 ? 's' : ''}
+            </div>
+          )}
+
+          <button
+            onClick={() => setShowInviteModal(true)}
+            title="Convidar técnico para co-atender"
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              backgroundColor: '#4CAF50',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            + Convidar
+          </button>
+
+          <button
+            onClick={() => setShowTransferModal(true)}
+            title="Transferir atendimento para outro técnico"
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              backgroundColor: '#FF9800',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            ↗ Transferir
+          </button>
+
           <div className="header-status" data-status={conversation?.status || 'active'}>
             {conversation?.status}
           </div>
@@ -204,6 +290,22 @@ export function ConversationPage({ conversationId }: ConversationPageProps) {
       )}
 
       <TicketPanel conversationId={conversationId} crmContactId={conversation?.crm_contact_id} />
+
+      <TechnicianSelectModal
+        isOpen={showInviteModal}
+        title="Convidar Técnico para Co-atender"
+        onSelect={handleInviteTechnician}
+        onClose={() => setShowInviteModal(false)}
+        excludeUserIds={excludeUserIds}
+      />
+
+      <TechnicianSelectModal
+        isOpen={showTransferModal}
+        title="Transferir Atendimento"
+        onSelect={handleTransferTechnician}
+        onClose={() => setShowTransferModal(false)}
+        excludeUserIds={excludeUserIds}
+      />
 
       <style>{`
         .send-error {

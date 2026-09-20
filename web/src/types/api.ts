@@ -1,5 +1,13 @@
 // M05.1 - M05.2: Inbox API types (REST + SSE)
 
+export interface ConversationParticipant {
+  id: string;
+  user_id: string;
+  role: 'ASSIGNEE' | 'INVITED' | 'CO_ATTENDEE';
+  joined_at?: string;
+  left_at?: string;
+}
+
 export interface ConversationItem {
   id: string;
   contact_name: string;
@@ -11,6 +19,7 @@ export interface ConversationItem {
   message_count: number;
   unread_count: number;
   crm_contact_id?: string;
+  participants?: ConversationParticipant[];
 }
 
 export interface MessageItem {
