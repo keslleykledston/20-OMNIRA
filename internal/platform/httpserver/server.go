@@ -301,6 +301,8 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetTicket))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicket))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}/close", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CloseTicket))))
+	// R5.2: Create activity (atendimento WHATSAPP) in CRM
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/crm/activity", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateActivity))))
 }
 
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session

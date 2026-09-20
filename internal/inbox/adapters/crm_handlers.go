@@ -223,3 +223,83 @@ func (h *CRMHandlers) CloseTicket(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// CRMActivityRequest — payload para criar activity (atendimento)
+type CRMActivityRequest struct {
+	Subject   string `json:"subject"`
+	CompanyID string `json:"company_id"`
+	ContactID string `json:"contact_id"`
+}
+
+// CRMActivityResponse — resposta de activity
+type CRMActivityResponse struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Subject   string `json:"subject"`
+	ContactID string `json:"contact_id"`
+	CompanyID string `json:"company_id"`
+	CreatedAt string `json:"created_at"`
+}
+
+// CreateActivity — cria activity (atendimento WHATSAPP) para uma conversa
+// POST /api/v1/tenants/{tenantId}/conversations/{conversationId}/crm/activity
+func (h *CRMHandlers) CreateActivity(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, err := authn.FromContext(ctx); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	tenantID, convID := r.PathValue("tenantId"), r.PathValue("conversationId")
+	if tenantID == "" || convID == "" {
+		http.Error(w, "missing tenant or conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	// Parse request
+	var req CRMActivityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.Subject == "" || req.ContactID == "" || req.CompanyID == "" {
+		http.Error(w, "subject, contact_id and company_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Get tenant ID
+	tid, err := uuid.Parse(tenantID)
+	if err != nil {
+		http.Error(w, "invalid tenant ID", http.StatusBadRequest)
+		return
+	}
+
+	// Check tenant access via RLS
+	activityID := ""
+	err = db.WithTenantSession(ctx, h.dbPool, tid, false, func(sessionCtx context.Context) error {
+		// Create activity in CRM (type is always WHATSAPP in this context)
+		id, crErr := h.crm.CreateActivity(sessionCtx, "WHATSAPP", req.Subject, req.ContactID, req.CompanyID)
+		if crErr != nil {
+			return crErr
+		}
+		activityID = id
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "activity creation failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(CRMActivityResponse{
+		ID:        activityID,
+		Type:      "WHATSAPP",
+		Subject:   req.Subject,
+		ContactID: req.ContactID,
+		CompanyID: req.CompanyID,
+		CreatedAt: "", // CRM retorna, mas não temos aqui
+	})
+}
