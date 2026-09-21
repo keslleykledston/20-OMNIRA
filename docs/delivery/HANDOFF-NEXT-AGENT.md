@@ -95,6 +95,48 @@ docker run --rm --network host -v "$PWD/migrations":/migrations:ro -v "$PWD/tool
 
 `tools/check-rls.sh` cobre as duas metades: `TestRLSCompleteness` exige RLS + FORCE + alguma policy em toda tabela com `tenant_id`; `TestRLSPolicyCoverage` exige policy para cada operação que o runtime executa, declarada em `expectedPolicyCoverage`. **Ao adicionar tabela tenant-owned nova, declare-a nessa matriz.**
 
+## 6. Latest Session Progress (2026-09-21, Session cceb1a5)
+
+**Workspace 3-painel implemented:**
+- ✅ InboxWorkspace (desktop: 3-panel, tablet/mobile: responsive)
+- ✅ ConversationListPanel (segmentation: all/unread/mine, search, rows)
+- ✅ ChatPane (header + timeline + composer, realtime SSE)
+- ✅ MessageBubble (inbound/outbound, delivery status)
+- ✅ MessageComposer (auto-grow, Enter sends, Shift+Enter newline)
+- ✅ ContextPane (contact card, conversation stats, actions)
+- ✅ Design tokens extended (surface-tertiary for hover)
+- ✅ Build PASS (npm run build)
+- ✅ Tests PASS (94/94 vitest)
+
+**What's next:**
+1. Verify routing from App.tsx (InboxWorkspace replaces InboxPage)
+2. API integration testing: fetch conversations, messages, send (if not already wired)
+3. E2E in browser: login → inbox list → select conversation → send message
+4. Backend gaps audit: any missing endpoints, RLS checks, assignment flow
+5. Continue to Contact slice (contact card refinements, CRM linking)
+
+**Known gaps:**
+- ContextPane actions (Transfer, Resolve, Tags) are UI-only — backend handlers missing
+- Composer send: integrated but needs E2E in browser (dev server localhost:5173 or compose web container)
+- Responsivity: desktop ✓, tablet layout (side-by-side), mobile (sheet) — test on real viewport
+- No realtime status indicator on conversation row yet (star/dot for new)
+- ESLint v9 migration (config file missing; not blocking build/test)
+
+**Validation checklist:**
+- [x] npm run build: ✅ (production bundle 417KB gzip)
+- [x] npm run test: ✅ (94/94 vitest, no breaking changes)
+- [x] npx tsc --noEmit: ✅ (0 type errors)
+- [x] API /api/v1/tenants/{id}/inbox/conversations: ✅ (real data, no mock)
+- [ ] Browser E2E: localhost:5173 → login → inbox list → select conversation → send message (next)
+- [ ] Cleanroom compose: needs OMNIRA_ENV=development flag (existing script issue, not code)
+
+**Debt:**
+- IAM3 still paused (phases 2-5: HTTP endpoints, enforcement, tests)
+- IAM3 trigger: use if any new endpoint requires authorization during Contact slice
+- Router shadow mode: still in passive observation, no real decisions yet
+
+---
+
 ## 6. O que fazer a seguir (ordem sugerida)
 
 ### Próximas etapas — BLOQUEADORES E PRIORIDADES
