@@ -6,6 +6,7 @@ import { ConversationItem } from '../../types/api';
 import { API_BASE } from '../../lib/config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { Icon } from '../primitives';
+import { TicketPanel } from '../TicketPanel';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -129,6 +130,9 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
           )}
         </div>
       </div>
+
+      {/* Chamado + atividade CRM */}
+      <TicketPanel conversationId={conversationId} crmContactId={conversation?.crm_contact_id} />
 
       {/* Error */}
       {assignError && (

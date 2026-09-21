@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import clsx from 'clsx';
 import { API_BASE } from '../lib/config';
 import { authHeaders, getTenantId } from '../lib/session';
+import { Button } from './primitives';
 
 interface Ticket {
   id: string;
@@ -22,6 +24,20 @@ interface TicketPanelProps {
   crmContactId?: string;
 }
 
+const STATUS_CLASS: Record<string, string> = {
+  open: 'border-status-info-border bg-status-info-soft text-status-info',
+  in_progress: 'border-status-warning-border bg-status-warning-soft text-status-warning',
+  resolved: 'border-status-success-border bg-status-success-soft text-status-success',
+  closed: 'border-border-subtle bg-status-muted text-text-secondary',
+};
+
+const FIELD =
+  'w-full min-w-0 rounded-control border border-border-subtle bg-surface px-3 py-2 text-xs text-text-primary ' +
+  'placeholder:text-text-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary ' +
+  'disabled:opacity-50 disabled:cursor-not-allowed';
+
+const SECTION_TITLE = 'mb-2 text-[10px] font-bold uppercase text-text-tertiary';
+
 export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) {
   const tenantId = getTenantId();
   const [ticket, setTicket] = useState<Ticket | null>(null);
@@ -40,17 +56,14 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
     const loadCompanies = async () => {
       setLoadingCompanies(true);
       try {
-        const res = await axios.get(
-          `${API_BASE}/integrations/companies`,
-          { headers: authHeaders() }
-        );
+        const res = await axios.get(`${API_BASE}/integrations/companies`, { headers: authHeaders() });
         setCompanies(res.data.items || []);
         if (res.data.items && res.data.items.length > 0) {
           setSelectedCompanyId(res.data.items[0].id);
         }
       } catch (err: any) {
         console.error('Erro ao carregar empresas:', err);
-        // Silently fail — not critical if companies don't load
+        // Not critical: the panel shows "Nenhuma empresa disponível".
       } finally {
         setLoadingCompanies(false);
       }
@@ -132,10 +145,7 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
         },
         { headers: authHeaders() }
       );
-      // Clear form on success
       setActivitySubject('');
-      // Show success message
-      setError(null); // Clear any previous error
     } catch (err: any) {
       setError(err.response?.data?.message || 'Erro ao criar atividade no CRM');
     } finally {
@@ -143,192 +153,129 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
     }
   };
 
+  const noCompanies = !loadingCompanies && companies.length === 0;
+
   return (
-    <div style={{ padding: '12px', borderTop: '1px solid #e0e0e0', backgroundColor: '#fafafa' }}>
+    <div className="border-b border-border-subtle px-4">
       {error && (
-        <div style={{ padding: '8px', backgroundColor: '#ffebee', color: '#c62828', borderRadius: '4px', marginBottom: '8px', fontSize: '12px' }}>
+        <div
+          role="alert"
+          className="mt-3 rounded-control border border-status-danger-border bg-status-danger-soft px-3 py-2 text-xs text-status-danger"
+        >
           {error}
         </div>
       )}
 
-      <div style={{ marginBottom: '16px' }}>
-        <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600 }}>Chamado</h3>
+      <section className="py-3" aria-labelledby="ticket-panel-heading">
+        <h3 id="ticket-panel-heading" className={SECTION_TITLE}>Chamado</h3>
 
-      {ticket ? (
-        <div style={{ backgroundColor: 'white', padding: '8px', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
-          <div style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '12px', color: '#666' }}>ID: </span>
-            <span style={{ fontSize: '12px', fontFamily: 'monospace' }}>{ticket.id.slice(0, 8)}</span>
-          </div>
-          <div style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '12px', color: '#666' }}>Assunto: </span>
-            <span style={{ fontSize: '12px' }}>{ticket.subject}</span>
-          </div>
-          <div style={{ marginBottom: '8px' }}>
-            <span style={{ fontSize: '12px', color: '#666' }}>Status: </span>
-            <span style={{ fontSize: '12px', fontWeight: 500 }}>{ticket.status}</span>
-          </div>
+        {ticket ? (
+          <div className="rounded-control border border-border-subtle bg-surface p-3">
+            <div className="flex min-w-0 items-start justify-between gap-2">
+              <div className="min-w-0">
+                <code className="block font-mono text-[10px] text-text-tertiary">{ticket.id.slice(0, 8)}</code>
+                <p className="mt-1 text-[9px] font-semibold uppercase text-text-tertiary">Assunto</p>
+                <p className="mt-0.5 truncate text-xs font-semibold text-text-primary" title={ticket.subject}>
+                  {ticket.subject}
+                </p>
+              </div>
+              <span
+                className={clsx(
+                  'shrink-0 rounded-control border px-1.5 py-0.5 text-[9px] font-bold',
+                  STATUS_CLASS[ticket.status] ?? STATUS_CLASS.closed
+                )}
+              >
+                {ticket.status}
+              </span>
+            </div>
 
-          <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
-            {ticket.status !== 'in_progress' && (
-              <button
-                onClick={() => updateTicketStatus('in_progress')}
-                disabled={loading}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  backgroundColor: '#2196F3',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: loading ? 'default' : 'pointer',
-                  opacity: loading ? 0.6 : 1,
-                }}
-              >
-                Trabalhando
-              </button>
-            )}
-            {ticket.status !== 'resolved' && (
-              <button
-                onClick={() => updateTicketStatus('resolved')}
-                disabled={loading}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  backgroundColor: '#4CAF50',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: loading ? 'default' : 'pointer',
-                  opacity: loading ? 0.6 : 1,
-                }}
-              >
-                Resolvido
-              </button>
-            )}
             {ticket.status !== 'closed' && (
-              <button
-                onClick={closeTicket}
-                disabled={loading}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  backgroundColor: '#f44336',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: loading ? 'default' : 'pointer',
-                  opacity: loading ? 0.6 : 1,
-                }}
-              >
-                Fechar
-              </button>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {ticket.status !== 'in_progress' && (
+                  <Button type="button" variant="secondary" size="sm" disabled={loading} onClick={() => updateTicketStatus('in_progress')}>
+                    Trabalhando
+                  </Button>
+                )}
+                {ticket.status !== 'resolved' && (
+                  <Button type="button" variant="secondary" size="sm" disabled={loading} onClick={() => updateTicketStatus('resolved')}>
+                    Resolvido
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="!border-status-danger-border !bg-status-danger-soft !text-status-danger"
+                  disabled={loading}
+                  onClick={closeTicket}
+                >
+                  Fechar
+                </Button>
+              </div>
             )}
           </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <input
-            type="text"
-            placeholder="Novo chamado..."
-            value={newSubject}
-            onChange={(e) => setNewSubject(e.target.value)}
-            style={{
-              flex: 1,
-              padding: '6px 8px',
-              fontSize: '12px',
-              border: '1px solid #ddd',
-              borderRadius: '4px',
-            }}
-          />
-          <button
-            onClick={createTicket}
-            disabled={loading || !newSubject.trim()}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              backgroundColor: '#2196F3',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: loading || !newSubject.trim() ? 'default' : 'pointer',
-              opacity: loading || !newSubject.trim() ? 0.6 : 1,
+        ) : (
+          <form
+            className="flex min-w-0 gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void createTicket();
             }}
           >
-            Abrir
-          </button>
-        </div>
-      )}
-      </div>
+            <input
+              className={FIELD}
+              value={newSubject}
+              onChange={(e) => setNewSubject(e.target.value)}
+              placeholder="Novo chamado..."
+              aria-label="Novo chamado"
+              disabled={loading}
+            />
+            <Button type="submit" size="sm" disabled={loading || !newSubject.trim()}>
+              Abrir
+            </Button>
+          </form>
+        )}
+      </section>
 
       {crmContactId && (
-        <div>
-          <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600 }}>Atividade CRM</h3>
-
-          <div style={{ backgroundColor: 'white', padding: '8px', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
-            <div style={{ marginBottom: '8px' }}>
-              <label style={{ fontSize: '12px', color: '#666', display: 'block', marginBottom: '4px' }}>
-                Empresa
-              </label>
-              <select
-                value={selectedCompanyId}
-                onChange={(e) => setSelectedCompanyId(e.target.value)}
-                disabled={loadingCompanies || companies.length === 0}
-                style={{
-                  width: '100%',
-                  padding: '6px 8px',
-                  fontSize: '12px',
-                  border: '1px solid #ddd',
-                  borderRadius: '4px',
-                }}
-              >
-                {companies.map((company) => (
-                  <option key={company.id} value={company.id}>
-                    {company.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ marginBottom: '8px' }}>
-              <label style={{ fontSize: '12px', color: '#666', display: 'block', marginBottom: '4px' }}>
-                Assunto
-              </label>
-              <input
-                type="text"
-                placeholder="Descrição da atividade..."
-                value={activitySubject}
-                onChange={(e) => setActivitySubject(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '6px 8px',
-                  fontSize: '12px',
-                  border: '1px solid #ddd',
-                  borderRadius: '4px',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-
-            <button
-              onClick={createActivity}
-              disabled={loading || !activitySubject.trim() || !selectedCompanyId}
-              style={{
-                width: '100%',
-                padding: '6px 12px',
-                fontSize: '12px',
-                backgroundColor: '#FF9800',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: loading || !activitySubject.trim() || !selectedCompanyId ? 'default' : 'pointer',
-                opacity: loading || !activitySubject.trim() || !selectedCompanyId ? 0.6 : 1,
-              }}
+        <section className="border-t border-border-subtle py-3" aria-labelledby="crm-activity-heading">
+          <h3 id="crm-activity-heading" className={SECTION_TITLE}>Atividade CRM</h3>
+          <form
+            className="grid gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void createActivity();
+            }}
+          >
+            <select
+              className={FIELD}
+              aria-label="Empresa"
+              value={selectedCompanyId}
+              onChange={(e) => setSelectedCompanyId(e.target.value)}
+              disabled={loading || loadingCompanies || companies.length === 0}
             >
+              {companies.length === 0 && <option value="">Selecionar empresa</option>}
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.cnpj ? ` (${c.cnpj})` : ''}
+                </option>
+              ))}
+            </select>
+            {noCompanies && <p className="m-0 text-[10px] text-text-tertiary">Nenhuma empresa disponível</p>}
+            <input
+              className={FIELD}
+              value={activitySubject}
+              onChange={(e) => setActivitySubject(e.target.value)}
+              placeholder="Descrição da atividade..."
+              aria-label="Descrição da atividade"
+              disabled={loading}
+            />
+            <Button type="submit" size="sm" disabled={loading || !activitySubject.trim() || !selectedCompanyId}>
               {loading ? 'Criando...' : 'Criar Atividade'}
-            </button>
-          </div>
-        </div>
+            </Button>
+          </form>
+        </section>
       )}
     </div>
   );
