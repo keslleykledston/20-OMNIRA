@@ -124,7 +124,7 @@ docker run --rm --network host -v "$PWD/migrations":/migrations:ro -v "$PWD/tool
 | IAM0 | Auth & Access Audit | **DONE** |
 | IAM1 | Secure Login & Session | **DONE** (`bd41007`) |
 | IAM2A | Users & Memberships | **DONE** |
-| IAM2B | Invitations | próximo |
+| IAM2B | Invitations | **DONE** (`0c8cbee`, `38b432b`, `65bc73d`) |
 | IAM3 | Roles & Permissions | — |
 | IAM4 | Agent Management | — |
 | IAM5 | Access Control / Sessions UI | — |
@@ -149,6 +149,23 @@ A ordem é essa porque o modelo de identidade precisa estar correto antes de exp
 A mesma migration deu a `users` uma policy de leitura entre pares de tenant — sem ela, a listagem de equipe devolvia só a própria linha do ator sob RLS.
 
 `GET/POST/DELETE /api/v1/tenants/{tenant_id}/members` é API legada, candidata a depreciação: sem uso pelo frontend, sem contrato, e sem checagem de permissão em nível de aplicação (RLS ainda protege). Toda UI nova de equipe usa `/team`, `/roles` e `/me/access`. Não adicionar feature nova em `/members`.
+
+**PROCESS DEVIATION (IAM2B):** IAM2B foi commitado antes do human gate por retomada de contexto. Código e commits foram posteriormente revisados. Não repetir nas próximas waves.
+
+**IAM2B — Invitations, resumo:** `membership_invitations` (migration `000035`, RLS + FORCE RLS, token de uso único via `crypto/rand`/SHA-256, nunca re-retornado), fluxo de aceite com allowlist anti-open-redirect no OIDC (`^/invite/[A-Za-z0-9_-]{16,}$`), e **entrega fail-closed** (`65bc73d`): produção sem sender real configurado (`NoopInvitationSender`) recusa `POST .../invitations` com 503 e não persiste a linha; dev/lab com `OMNIRA_DEV_AUTH_ENABLED=true` continua expondo `invite_url` relativo para uso manual. Capacidade exposta em `GET .../me/access` como `invitation_delivery_available`, consumida pelo frontend para desabilitar o botão "Convidar usuário" com tooltip — mas o backend é a única autoridade real.
+
+**Invitation production behavior: FAIL-CLOSED when no delivery mechanism exists.**
+
+**Modelo de segurança de e-mail no aceite de convite:** a comparação de e-mail não é prova de identidade criptográfica enquanto `email_verified` do IdP não é auditado — é uma restrição adicional sobre a fronteira real (sessão OIDC autenticada + token de uso único de alta entropia + invariantes de tenant/role). Não remover; não implementar account linking; validação de `email_verified` fica para IAM6, após auditoria do IdP.
+
+**Dívida conhecida (IAM2B):**
+- provedor de e-mail real (hoje `NoopInvitationSender`)
+- validação de `email_verified`
+- editor de permissões de role → IAM3
+- AgentProfile → IAM4
+- sessões/dispositivos → IAM5
+- classificação generalizada de RLS → IAM6
+- `/members` legado
 
 Ordem corrente: **FR3A (feito) → FR3B Contacts UI (feito) → IAM**.
    - **Próximo:** Confirmar IdP disponível; caso contrário, manter mock-login para MVP1
