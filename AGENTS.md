@@ -12,6 +12,78 @@ Todo agente deve ler, nesta ordem:
 
 Não invente novos termos de domínio quando existir termo canônico.
 
+## Multi-Agent Development
+
+Este repositório pode ser alterado por Codex, Claude Code e Lovable. Git é a
+fonte canônica do código e do estado de trabalho versionado.
+
+Antes de trabalhar:
+
+- inspecione status, branch e commits recentes;
+- leia `docs/AI_HANDOFF.md` e `docs/AI_WORKFLOW.md`;
+- leia os documentos de arquitetura relevantes;
+- inspecione a implementação existente antes de propor substituições.
+
+Não presuma acesso ao contexto de conversa de outro agente.
+
+## Handoff
+
+Ao concluir trabalho substancial, atualize `docs/AI_HANDOFF.md` com trabalho
+concluído, estado atual, próximas tarefas, decisões e validações. Não inclua
+segredos ou credenciais.
+
+## Lovable
+
+Lovable é principalmente agente de UI/UX/frontend. Prefira Codex ou Claude Code
+para backend, APIs, banco, migrations, regras de negócio, testes,
+infraestrutura, segurança, debugging e pequenas mudanças frontend. Revise código
+gerado pela Lovable antes de aceitá-lo.
+
+## Database Safety
+
+Nunca altere schema de produção sem migration e revisão explícita. Nunca
+execute SQL destrutivo sem solicitação explícita.
+
+## Repository Safety
+
+Preserve trabalho local desconhecido. Não force reset, limpe arquivos ou
+reescreva histórico compartilhado sem autorização explícita.
+
+## Router Shadow (Opcional — ROUTER_MODE=shadow)
+
+Um roteador de custo/tier está em avaliação em `.agents/router/`. Em shadow
+mode (default), ele recomenda um tier (TOOL < LOCAL_LLM < CHEAP_LLM <
+FRONTIER_LLM < HUMAN) para tarefas elegíveis, sem forçar execução.
+
+**Quando usar:**
+
+Tarefas de engenharia (refactor, review, debug, docs) onde a escolha de
+modelo/tier afeta custo/latência podem consultar:
+
+```bash
+.agents/router/route.sh --id <TASK-ID> --domains <csv> --desc "<descrição curta>"
+```
+
+Isso grava a recomendação em `logs/decisions.jsonl` para análise posterior.
+
+**Quando NÃO usar:**
+
+Nunca chamar router para: grep, git, lint, compiler output, tests diretos,
+Docker checks, scripts determinísticos. Esses continuam TOOL direto.
+
+**Ao executar a tarefa:**
+
+Registre o resultado para fechar o loop de avaliação:
+
+```bash
+python3 .agents/router/log_outcome.py --task-id <TASK-ID> \
+  --actual-tier <TIER> --actual-model <MODEL> --tokens N \
+  --cost-usd C --latency-ms MS --test-result <pass|fail|n/a>
+```
+
+Ver `.agents/router/README.md` (arquitetura) e
+`.agents/router/ROUTER.3-SHADOW-EVALUATION.md` (plano de avaliação).
+
 ## Princípios
 
 - **Docker-first:** Todo componente executável deve possuir build Docker reproduzível. Veja `docs/deployment/DOCKER-FIRST.md`.
