@@ -10,6 +10,7 @@ export default {
         canvas: 'var(--color-canvas)',
         surface: 'var(--color-surface)',
         'surface-muted': 'var(--color-surface-muted)',
+        'surface-tertiary': 'var(--color-surface-tertiary)',
         'surface-hover': 'var(--color-surface-hover)',
         'border-subtle': 'var(--color-border-subtle)',
         'border-light': 'var(--color-border-light)',

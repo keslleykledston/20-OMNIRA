@@ -7,8 +7,7 @@ import Accounts from './pages/Accounts'
 import Tickets from './pages/Tickets'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
-import { InboxPage } from './pages/InboxPage'
-import { ConversationPage } from './pages/ConversationPage'
+import InboxWorkspace from './pages/InboxWorkspace'
 import IntegrationsPage from './pages/IntegrationsPage'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
@@ -20,10 +19,6 @@ import Layout from './components/Layout'
 
 const queryClient = new QueryClient()
 
-function ConversationRoute() {
-  const { conversationId = '' } = useParams()
-  return <ConversationPage key={conversationId} conversationId={conversationId} />
-}
 
 export default function App() {
   return (
@@ -39,14 +34,13 @@ export default function App() {
             <Route path="/tickets" element={<Tickets />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/supervisor" element={<SupervisorDashboard />} />
-            <Route path="/inbox" element={<InboxPage />} />
+            <Route path="/inbox" element={<InboxWorkspace />} />
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
             <Route path="/settings/team" element={<TeamPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/channels/whatsapp/new" element={<WahaWizardPage />} />
-            <Route path="/inbox/:conversationId" element={<ConversationRoute />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Route>
         </Routes>
