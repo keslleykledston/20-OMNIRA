@@ -57,6 +57,8 @@ func appPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// The tenant cascades to contacts, conversations and memberships, so dropping
+// it is enough to leave the database as the test found it.
 func seedTenant(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
@@ -66,6 +68,9 @@ func seedTenant(t *testing.T, pool *pgxpool.Pool, name string) uuid.UUID {
 		id, name+"-"+id.String()[:8]); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id=$1`, id)
+	})
 	return id
 }
 
@@ -90,6 +95,10 @@ func seedMember(t *testing.T, pool *pgxpool.Pool, tenantID uuid.UUID, status str
 		uuid.New(), tenantID, userID, roleID, status); err != nil {
 		t.Fatalf("seed membership: %v", err)
 	}
+	// users has no tenant_id, so it does not cascade with the tenant.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
 	return userID
 }
 

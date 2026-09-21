@@ -107,6 +107,13 @@ func seedParticipantFixture(t *testing.T, pool *pgxpool.Pool, membershipStatus s
 		f.conversationID, f.tenantID, contactID); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
+	// The tenant cascades to contact, conversation and participants; the user
+	// has no tenant_id and goes separately.
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = pool.Exec(bg, `DELETE FROM tenants WHERE id=$1`, f.tenantID)
+		_, _ = pool.Exec(bg, `DELETE FROM users WHERE id=$1`, f.userID)
+	})
 	return f
 }
 

@@ -57,6 +57,9 @@ func seedUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 		id, id.String(), id.String()+"@example.com"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, id)
+	})
 	return id
 }
 
@@ -82,12 +85,20 @@ func seedTenantAdmin(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) {
 		uuid.New(), tenantID, userID, roleID); err != nil {
 		t.Fatalf("seed membership: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id=$1`, tenantID)
+	})
 }
 
-func insertUserAs(t *testing.T, pool *pgxpool.Pool, actor uuid.UUID, systemAdmin bool) error {
+// cleaner is the owner pool: users has no DELETE policy, so the runtime role
+// cannot remove even a row it just inserted.
+func insertUserAs(t *testing.T, pool, cleaner *pgxpool.Pool, actor uuid.UUID, systemAdmin bool) error {
 	t.Helper()
+	newID := uuid.New()
+	t.Cleanup(func() {
+		_, _ = cleaner.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, newID)
+	})
 	return platformdb.WithTenantSession(context.Background(), pool, actor, systemAdmin, func(ctx context.Context) error {
-		newID := uuid.New()
 		_, err := platformdb.QuerierFromContext(ctx, pool).Exec(ctx,
 			`INSERT INTO users (id, external_subject, email, status) VALUES ($1,$2,$3,'active')`,
 			newID, newID.String(), newID.String()+"@example.com")
@@ -97,8 +108,8 @@ func insertUserAs(t *testing.T, pool *pgxpool.Pool, actor uuid.UUID, systemAdmin
 
 // A: the trusted provisioning context may create the row.
 func TestUsersInsertAllowedInSystemContext(t *testing.T) {
-	app := usersAppPool(t)
-	if err := insertUserAs(t, app, uuid.Nil, true); err != nil {
+	seed, app := usersSeedPool(t), usersAppPool(t)
+	if err := insertUserAs(t, app, seed, uuid.Nil, true); err != nil {
 		t.Fatalf("system context must be able to provision a user: %v", err)
 	}
 }
@@ -108,7 +119,7 @@ func TestUsersInsertDeniedInNormalContext(t *testing.T) {
 	seed, app := usersSeedPool(t), usersAppPool(t)
 	actor := seedUser(t, seed)
 
-	if err := insertUserAs(t, app, actor, false); err == nil {
+	if err := insertUserAs(t, app, seed, actor, false); err == nil {
 		t.Fatal("an ordinary session was allowed to insert a user")
 	}
 }
@@ -120,7 +131,7 @@ func TestUsersInsertDeniedForTenantAdmin(t *testing.T) {
 	actor := seedUser(t, seed)
 	seedTenantAdmin(t, seed, actor)
 
-	if err := insertUserAs(t, app, actor, false); err == nil {
+	if err := insertUserAs(t, app, seed, actor, false); err == nil {
 		t.Fatal("tenant_admin was allowed to insert a user")
 	}
 }
