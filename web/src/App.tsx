@@ -12,6 +12,7 @@ import IntegrationsPage from './pages/IntegrationsPage'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TeamPage from './pages/TeamPage'
+import RolesPermissionsPage from './pages/RolesPermissionsPage'
 import AcceptInvitePage from './pages/AcceptInvitePage'
 import ChannelsPage from './pages/ChannelsPage'
 import WahaWizardPage from './pages/WahaWizardPage'
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
             <Route path="/settings/team" element={<TeamPage />} />
+            <Route path="/settings/roles" element={<RolesPermissionsPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/channels/whatsapp/new" element={<WahaWizardPage />} />
