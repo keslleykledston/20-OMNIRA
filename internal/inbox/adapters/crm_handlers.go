@@ -82,34 +82,23 @@ func (h *CRMHandlers) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check tenant access via RLS
-	err = db.WithTenantSession(ctx, h.dbPool, tid, false, func(sessionCtx context.Context) error {
-		// Verify conversation exists and belongs to tenant
-		var count int
-		row := h.dbPool.QueryRow(sessionCtx, `
-			SELECT 1 FROM conversations WHERE id = $1 AND tenant_id = $2
-		`, convID, tid)
-		if err := row.Scan(&count); err != nil {
-			return http.ErrMissingFile
-		}
-		return nil
-	})
-	if err != nil {
+	// The tenantSession middleware already put a tenant-scoped transaction in ctx;
+	// query through it so RLS applies (the raw pool would run without tenant context).
+	q := db.QuerierFromContext(ctx, h.dbPool)
+	var exists int
+	if err := q.QueryRow(ctx, `SELECT 1 FROM conversations WHERE id = $1 AND tenant_id = $2`, convID, tid).Scan(&exists); err != nil {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
 
 	// Get contact email for CRM lookup
 	var contactEmail string
-	err = db.WithTenantSession(ctx, h.dbPool, tid, false, func(sessionCtx context.Context) error {
-		row := h.dbPool.QueryRow(sessionCtx, `
-			SELECT c.external_identity
-			FROM conversations conv
-			JOIN contacts c ON conv.contact_id = c.id
-			WHERE conv.id = $1 AND conv.tenant_id = $2
-		`, convID, tid)
-		return row.Scan(&contactEmail)
-	})
+	err = q.QueryRow(ctx, `
+		SELECT COALESCE(c.email, '')
+		FROM conversations conv
+		JOIN contacts c ON conv.contact_id = c.id
+		WHERE conv.id = $1 AND conv.tenant_id = $2
+	`, convID, tid).Scan(&contactEmail)
 	if err != nil || contactEmail == "" {
 		contactEmail = "customer@example.com"
 	}
