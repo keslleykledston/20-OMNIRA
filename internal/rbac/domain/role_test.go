@@ -7,7 +7,7 @@ import (
 )
 
 func TestHasPermission_Admin(t *testing.T) {
-	adminRole := SystemRoles["admin"]
+	adminRole := SystemRoles["tenant_admin"]
 
 	if !adminRole.HasPermission(ResourceMembership, ActionAdmin) {
 		t.Errorf("admin should have admin permission on membership")
@@ -23,7 +23,7 @@ func TestHasPermission_Admin(t *testing.T) {
 }
 
 func TestHasPermission_Viewer(t *testing.T) {
-	viewerRole := SystemRoles["viewer"]
+	viewerRole := SystemRoles["tenant_agent"]
 
 	if viewerRole.HasPermission(ResourceMembership, ActionWrite) {
 		t.Errorf("viewer should not have write permission on membership")
@@ -39,41 +39,41 @@ func TestHasPermission_Viewer(t *testing.T) {
 }
 
 func TestCanRead(t *testing.T) {
-	editorRole := SystemRoles["editor"]
+	supervisorRole := SystemRoles["tenant_supervisor"]
 
-	if !editorRole.CanRead(ResourceTenant) {
-		t.Errorf("editor should be able to read tenant")
+	if !supervisorRole.CanRead(ResourceTenant) {
+		t.Errorf("supervisor should be able to read tenant")
 	}
 
-	guestRole := SystemRoles["guest"]
-	if guestRole.CanRead(ResourceTenant) {
-		t.Errorf("guest should not be able to read tenant")
+	emptyRole := &Role{}
+	if emptyRole.CanRead(ResourceTenant) {
+		t.Errorf("role without permissions should not be able to read tenant")
 	}
 }
 
 func TestCanWrite(t *testing.T) {
-	adminRole := SystemRoles["admin"]
+	adminRole := SystemRoles["tenant_admin"]
 
 	if !adminRole.CanWrite(ResourceMembership) {
 		t.Errorf("admin should be able to write membership")
 	}
 
-	viewerRole := SystemRoles["viewer"]
-	if viewerRole.CanWrite(ResourceMembership) {
-		t.Errorf("viewer should not be able to write membership")
+	agentRole := SystemRoles["tenant_agent"]
+	if agentRole.CanWrite(ResourceMembership) {
+		t.Errorf("agent should not be able to write membership")
 	}
 }
 
 func TestCanAdmin(t *testing.T) {
-	adminRole := SystemRoles["admin"]
+	adminRole := SystemRoles["tenant_admin"]
 
 	if !adminRole.CanAdmin(ResourceSettings) {
 		t.Errorf("admin should be able to admin settings")
 	}
 
-	editorRole := SystemRoles["editor"]
-	if editorRole.CanAdmin(ResourceSettings) {
-		t.Errorf("editor should not be able to admin settings")
+	supervisorRole := SystemRoles["tenant_supervisor"]
+	if supervisorRole.CanAdmin(ResourceSettings) {
+		t.Errorf("supervisor should not be able to admin settings")
 	}
 }
 
@@ -103,7 +103,7 @@ func TestNewTenantRole(t *testing.T) {
 }
 
 func TestSystemRoles_All(t *testing.T) {
-	expectedRoles := []string{"superadmin", "admin", "editor", "viewer", "guest"}
+	expectedRoles := []string{"system_admin", "tenant_admin", "tenant_supervisor", "tenant_agent", "hub_admin"}
 
 	for _, roleName := range expectedRoles {
 		if _, ok := SystemRoles[roleName]; !ok {
@@ -113,19 +113,18 @@ func TestSystemRoles_All(t *testing.T) {
 }
 
 func TestSystemRoles_Superadmin(t *testing.T) {
-	superadminRole := SystemRoles["superadmin"]
+	sysAdminRole := SystemRoles["system_admin"]
 
-	// Superadmin should have all permissions
-	if !superadminRole.CanAdmin(ResourceTenant) {
-		t.Errorf("superadmin should be able to admin tenant")
+	if !sysAdminRole.CanAdmin(ResourceTenant) {
+		t.Errorf("system_admin should be able to admin tenant")
 	}
 
-	if !superadminRole.CanAdmin(ResourceMembership) {
-		t.Errorf("superadmin should be able to admin membership")
+	if !sysAdminRole.CanAdmin(ResourceMembership) {
+		t.Errorf("system_admin should be able to admin membership")
 	}
 
-	if !superadminRole.CanAdmin(ResourceSettings) {
-		t.Errorf("superadmin should be able to admin settings")
+	if !sysAdminRole.CanAdmin(ResourceSettings) {
+		t.Errorf("system_admin should be able to admin settings")
 	}
 }
 

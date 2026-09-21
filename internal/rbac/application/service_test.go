@@ -61,13 +61,13 @@ func TestGetSystemRole(t *testing.T) {
 	mockRepo := NewMockRoleRepository()
 	svc := NewRBACService(mockRepo)
 
-	role, err := svc.GetSystemRole(context.Background(), "admin")
+	role, err := svc.GetSystemRole(context.Background(), "tenant_admin")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if role.Name != "admin" {
-		t.Errorf("expected role name 'admin', got %s", role.Name)
+	if role.Name != "tenant_admin" {
+		t.Errorf("expected role name 'tenant_admin', got %s", role.Name)
 	}
 
 	if !role.IsSystem {
@@ -132,13 +132,13 @@ func TestCheckPermission(t *testing.T) {
 	mockRepo := NewMockRoleRepository()
 	svc := NewRBACService(mockRepo)
 
-	adminRole := domain.SystemRoles["admin"]
+	adminRole := domain.SystemRoles["tenant_admin"]
 
 	if !svc.CheckPermission(adminRole, domain.ResourceMembership, domain.ActionAdmin) {
 		t.Errorf("admin should have admin permission on membership")
 	}
 
-	viewerRole := domain.SystemRoles["viewer"]
+	viewerRole := domain.SystemRoles["tenant_agent"]
 	if svc.CheckPermission(viewerRole, domain.ResourceMembership, domain.ActionWrite) {
 		t.Errorf("viewer should not have write permission")
 	}
@@ -148,7 +148,7 @@ func TestCanRead_CanWrite_CanAdmin(t *testing.T) {
 	mockRepo := NewMockRoleRepository()
 	svc := NewRBACService(mockRepo)
 
-	adminRole := domain.SystemRoles["admin"]
+	adminRole := domain.SystemRoles["tenant_admin"]
 
 	if !svc.CanRead(adminRole, domain.ResourceTenant) {
 		t.Errorf("admin should be able to read tenant")
@@ -158,9 +158,9 @@ func TestCanRead_CanWrite_CanAdmin(t *testing.T) {
 		t.Errorf("admin should be able to admin membership")
 	}
 
-	guestRole := domain.SystemRoles["guest"]
-	if svc.CanRead(guestRole, domain.ResourceTenant) {
-		t.Errorf("guest should not be able to read tenant")
+	emptyRole := &domain.Role{}
+	if svc.CanRead(emptyRole, domain.ResourceTenant) {
+		t.Errorf("role without permissions should not be able to read tenant")
 	}
 }
 
@@ -194,7 +194,7 @@ func TestUpdateRolePermissions_SystemRole(t *testing.T) {
 	mockRepo := NewMockRoleRepository()
 	svc := NewRBACService(mockRepo)
 
-	adminRole := domain.SystemRoles["admin"]
+	adminRole := domain.SystemRoles["tenant_admin"]
 	newPerms := []*domain.Permission{}
 
 	// Store admin role so it can be found
