@@ -185,6 +185,21 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 	if payload.FromMe {
 		return result, ErrIgnoredWebhookMessage
 	}
+	// Group chats (@g.us) and status broadcasts are out of scope: the Inbox
+	// models one Contact/Conversation per 1:1 sender, never per group. `from`
+	// on a group message is the GROUP's JID, not any individual's address —
+	// treating it as a sender JID always fails normalizeSender ("unsupported
+	// sender address"), which the caller mapped to a generic 400 "malformed
+	// webhook" and WAHA retried up to 15x per event. On a real, busy account
+	// this was ~90% of all message.any webhook deliveries (measured on
+	// 2026-09-21: 176/196 distinct events in 40 minutes), starving WAHA's
+	// retry budget and risking real 1:1 messages timing out behind it.
+	// Explicitly classifying these as ignored (202, no retry) instead of
+	// malformed (400, retried) is the fix — no group-message support is
+	// added; every non-group path below is unchanged.
+	if strings.HasSuffix(payload.From, "@g.us") || payload.From == "status@broadcast" {
+		return result, ErrUnsupportedWebhookEvent
+	}
 	from, err := normalizeSender(senderJID(payload))
 	if err != nil {
 		return ParsedWebhook{}, err
@@ -413,7 +428,12 @@ func normalizeSender(jid string) (string, error) {
 	if len(parts) != 2 || (parts[1] != "c.us" && parts[1] != "s.whatsapp.net") {
 		return "", fmt.Errorf("waha: unsupported sender address")
 	}
-	value := strings.TrimPrefix(parts[0], "+")
+	// Multi-device JIDs append ":<deviceID>" to the local part (observed in
+	// production 2026-09-21: "559293477602:7@s.whatsapp.net", the ":7" being
+	// the linked device index) — only the phone number is the identity;
+	// the device index is not part of it and must not reach digit validation.
+	local, _, _ := strings.Cut(parts[0], ":")
+	value := strings.TrimPrefix(local, "+")
 	if len(value) < 7 || len(value) > 15 {
 		return "", fmt.Errorf("waha: invalid sender address")
 	}

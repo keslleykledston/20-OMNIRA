@@ -160,6 +160,49 @@ func TestParseInboundResolvesLinkedIDSenderFromSenderAlt(t *testing.T) {
 	}
 }
 
+// Mensagem de grupo: `from` é o JID do GRUPO (@g.us), nunca o de um indivíduo —
+// tratá-lo como remetente sempre falha normalizeSender. Medido em produção
+// (2026-09-21, conta real e ativa): 176 de 196 eventos message.any distintos
+// em 40 minutos falhavam assim, cada um retentado até 15x pelo WAHA como 400
+// "malformed webhook" — ~90% do tráfego de webhook, mascarando falhas reais e
+// arriscando estourar o orçamento de retry para mensagens 1:1 legítimas. O
+// Inbox modela um Contact/Conversation por remetente 1:1, nunca por grupo, de
+// modo que a classificação correta é "evento ignorado" (202, sem retry), não
+// "malformado" (400, retentado) — nenhum suporte a grupo é adicionado aqui.
+func TestParseInboundIgnoresGroupMessagesInsteadOfRejectingAsMalformed(t *testing.T) {
+	conn := webhookConnection()
+	provider := newProvider(t, "secret")
+	group := `{"id":"evt-grp","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"grp-1","timestamp":1710000000,"from":"120363428576999954@g.us","fromMe":false,"body":"certo","participant":"138122474053653@lid","_data":{"Info":{"SenderAlt":"559293477602@s.whatsapp.net"}}}}`
+	_, err := provider.ParseWebhook(conn, []byte(group))
+	if !errors.Is(err, waha.ErrUnsupportedWebhookEvent) {
+		t.Fatalf("group message not classified as unsupported/ignored: %v", err)
+	}
+
+	status := `{"id":"evt-status","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"st-1","timestamp":1710000000,"from":"status@broadcast","fromMe":false,"hasMedia":true,"_data":{"Info":{"SenderAlt":""}}}}`
+	if _, err := provider.ParseWebhook(conn, []byte(status)); !errors.Is(err, waha.ErrUnsupportedWebhookEvent) {
+		t.Fatalf("status broadcast not classified as unsupported/ignored: %v", err)
+	}
+}
+
+// JID multi-device carrega ":<deviceID>" na parte local (observado em
+// produção 2026-09-21: "559293477602:7@s.whatsapp.net") — o índice do
+// dispositivo não é parte da identidade e não pode chegar à validação de
+// dígitos, senão todo remetente resolvido por SenderAlt (o único caminho
+// para o número real de um remetente @lid) é rejeitado como "invalid sender
+// address".
+func TestParseInboundStripsMultiDeviceSuffixFromSenderAlt(t *testing.T) {
+	conn := webhookConnection()
+	provider := newProvider(t, "secret")
+	body := []byte(`{"id":"evt-dev","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"dev-1","timestamp":1710000000,"from":"138122474053653@lid","fromMe":false,"body":"certo","_data":{"Info":{"SenderAlt":"559293477602:7@s.whatsapp.net"}}}}`)
+	parsed, err := provider.ParseWebhook(conn, body)
+	if err != nil {
+		t.Fatalf("multi-device SenderAlt rejected: %v", err)
+	}
+	if parsed.Message == nil || parsed.Message.FromE164 != "+559293477602" {
+		t.Fatalf("device suffix leaked into E.164: %+v", parsed.Message)
+	}
+}
+
 // O nome de perfil (pushName) é escolhido por quem envia, então serve como
 // rótulo de exibição e nunca como identidade — e precisa ser higienizado antes
 // de chegar à UI e aos logs.
