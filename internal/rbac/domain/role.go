@@ -50,11 +50,11 @@ func (r *Role) HasPermission(resource PermissionResource, action PermissionActio
 	}
 
 	for _, perm := range r.Permissions {
-		if perm.Resource == resource && perm.Action == action {
-			return true
+		if perm.Resource != resource {
+			continue
 		}
-		// Admin tem todas as permissões
-		if perm.Action == ActionAdmin {
+		// admin num recurso implica as demais ações somente nesse mesmo recurso.
+		if perm.Action == action || perm.Action == ActionAdmin {
 			return true
 		}
 	}

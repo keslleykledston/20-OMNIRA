@@ -128,6 +128,29 @@ func TestSystemRoles_Superadmin(t *testing.T) {
 	}
 }
 
+func TestHasPermission_AdminDoesNotCrossResources(t *testing.T) {
+	role := &Role{Permissions: []*Permission{{Resource: ResourceMembership, Action: ActionAdmin}}}
+
+	if !role.HasPermission(ResourceMembership, ActionWrite) {
+		t.Errorf("admin on membership should imply write on membership")
+	}
+	for _, other := range []PermissionResource{ResourceTenant, ResourceAudit, ResourceSettings} {
+		if role.HasPermission(other, ActionRead) || role.HasPermission(other, ActionAdmin) {
+			t.Errorf("admin on membership must not authorize %s", other)
+		}
+	}
+}
+
+func TestSystemRoles_NoUnexpectedCrossResourceGrant(t *testing.T) {
+	// tenant_admin has no admin on tenant: must not write tenant via membership admin.
+	if SystemRoles["tenant_admin"].HasPermission(ResourceTenant, ActionAdmin) {
+		t.Errorf("tenant_admin must not have admin on tenant")
+	}
+	if SystemRoles["tenant_agent"].HasPermission(ResourceMembership, ActionRead) {
+		t.Errorf("tenant_agent must not read membership")
+	}
+}
+
 func TestHasPermission_Nil(t *testing.T) {
 	var nilRole *Role
 	if nilRole.HasPermission(ResourceTenant, ActionRead) {
