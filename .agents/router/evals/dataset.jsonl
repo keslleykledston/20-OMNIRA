@@ -1,0 +1,27 @@
+{"id": "eval-001", "domains": "auth", "desc": "adicionar validação de nonce no callback OIDC", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-002", "domains": "rls", "desc": "nova policy de SELECT para membership_invitations", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-003", "domains": "tenancy_security", "desc": "revisar isolamento cross-tenant em novo endpoint de team", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-004", "domains": "crypto", "desc": "trocar AES-256-GCM por outro modo de cifra para credenciais", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-005", "domains": "destructive_migration", "desc": "migration que faz DROP COLUMN em tabela de produção", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-006", "domains": "critical_concurrency", "desc": "revisar lease/reclaim de tasks concorrentes no worker", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-007", "domains": "secret_handling", "desc": "mudar onde o token de convite é hasheado antes de persistir", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-008", "domains": "irreversible_architecture_decision", "desc": "avaliar troca do backend principal de Go", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical"}
+{"id": "eval-009", "domains": "lint", "desc": "rodar golangci-lint no pacote tenancy", "expected_tier": "TOOL", "expected_bypass_jev": true, "category": "deterministic"}
+{"id": "eval-010", "domains": "tests", "desc": "rodar go test ./... e reportar resultado", "expected_tier": "TOOL", "expected_bypass_jev": true, "category": "deterministic"}
+{"id": "eval-011", "domains": "grep_search", "desc": "localizar todos os usos de tenant_id vindo do payload", "expected_tier": "TOOL", "expected_bypass_jev": true, "category": "deterministic"}
+{"id": "eval-012", "domains": "migration_check", "desc": "validar que a migration 000036 roda em banco vazio", "expected_tier": "TOOL", "expected_bypass_jev": true, "category": "deterministic"}
+{"id": "eval-013", "domains": "docker_check", "desc": "checar health dos containers do compose de produção", "expected_tier": "TOOL", "expected_bypass_jev": true, "category": "deterministic"}
+{"id": "eval-014", "domains": "formatting", "desc": "rodar gofmt -l no diff atual", "expected_tier": "TOOL", "expected_bypass_jev": true, "category": "deterministic"}
+{"id": "eval-015", "domains": "summary", "desc": "resumir o log de go test da última execução", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM"], "category": "low_risk"}
+{"id": "eval-016", "domains": "logs", "desc": "triagem do log de erros do worker das últimas 2h", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM"], "category": "low_risk"}
+{"id": "eval-017", "domains": "docs", "desc": "atualizar docs/API.md com o novo endpoint de invitations", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM"], "category": "low_risk"}
+{"id": "eval-018", "domains": "changelog", "desc": "gerar entrada de changelog para a wave IAM2B", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM"], "category": "low_risk"}
+{"id": "eval-019", "domains": "handoff", "desc": "compor o resumo de handoff para o próximo agente", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM"], "category": "low_risk"}
+{"id": "eval-020", "domains": "source_classification", "desc": "classificar se um arquivo alterado é frontend/backend/infra", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM"], "category": "low_risk"}
+{"id": "eval-021", "domains": "ui_visual_design", "desc": "desenhar nova tela de Contact 360", "expected_tier": "LOVABLE", "expected_bypass_jev": true, "category": "design"}
+{"id": "eval-022", "domains": "ux_prototype", "desc": "prototipar fluxo de aceite de convite mobile", "expected_tier": "LOVABLE", "expected_bypass_jev": true, "category": "design"}
+{"id": "eval-023", "domains": "code_review_general", "desc": "revisar PR de refactor do TeamPage sem tocar tenancy", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM", "CHEAP_LLM"], "category": "general"}
+{"id": "eval-024", "domains": "refactor_non_critical", "desc": "extrair helper de formatação de data no frontend", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM", "CHEAP_LLM"], "category": "general"}
+{"id": "eval-025", "domains": "unknown_domain_xyz", "desc": "tarefa sem domain_tag reconhecido", "expected_tier": null, "expected_candidates": ["TOOL", "LOCAL_LLM", "CHEAP_LLM", "FRONTIER_LLM"], "category": "unclassified"}
+{"id": "eval-026", "domains": "auth,lint", "desc": "lint em código de auth — domain ambíguo entre hard_force e deterministic", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical_priority"}
+{"id": "eval-027", "domains": "rls,summary", "desc": "domain conflita entre security-critical e low-risk — deve priorizar segurança", "expected_tier": "FRONTIER_LLM", "expected_bypass_jev": true, "category": "security_critical_priority"}

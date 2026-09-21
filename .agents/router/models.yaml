@@ -1,0 +1,58 @@
+# .agents/router/models.yaml — registro declarativo dos tiers de execução.
+#
+# Sem hardcode de endpoint/modelo espalhado pelo código: route.sh e
+# jev_decide.sh leem só este arquivo + variáveis de ambiente já usadas por
+# tools/ai/lib.sh (LOCAL_AI_*). Custos são estimativas para o ranking de
+# decisão do Jev e para relatório de métricas — não são cobrança real.
+
+version: 1
+
+tiers:
+  TOOL:
+    kind: deterministic
+    description: "Script/lint/test runner/grep — sem LLM."
+    executor: none
+    cost_per_1k_tokens_usd: 0.0
+
+  LOCAL_LLM:
+    kind: llm
+    description: "llama.cpp local, OpenAI-compatible. Ver tools/ai/lib.sh."
+    provider: openai_compatible
+    base_url_env: LOCAL_AI_BASE_URL
+    model_env: LOCAL_AI_MODEL
+    default_model: hermes-3-llama-3.1-8b
+    cost_per_1k_tokens_usd: 0.0
+
+  CHEAP_LLM:
+    kind: llm
+    description: "Modelo cloud barato — sumarização/classificação não crítica."
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    cost_per_1k_input_usd: 0.001
+    cost_per_1k_output_usd: 0.005
+
+  FRONTIER_LLM:
+    kind: llm
+    description: "Modelo frontier — obrigatório para domínios hard_force_frontier em policy.yaml."
+    provider: anthropic
+    model: claude-opus-5
+    cost_per_1k_input_usd: 0.015
+    cost_per_1k_output_usd: 0.075
+
+  LOVABLE:
+    kind: external_agent
+    description: "Lovable MCP — design/UX/frontend visual. Nunca decide segurança/domínio."
+    provider: lovable_mcp
+
+  HUMAN:
+    kind: human
+    description: "Escalação humana — confidence insuficiente ou domínio sem candidato seguro."
+    executor: none
+
+# Modelo usado pelo próprio Jev para classificar/decidir. Fica no tier mais
+# barato por padrão — Jev nunca precisa ser frontier para RECOMENDAR
+# frontier; ele só aponta a política, quem executa é que roda no tier caro.
+jev:
+  decision_tier: LOCAL_LLM
+  fallback_tier: CHEAP_LLM   # usado só se LOCAL_LLM indisponível E ROUTER_MODE=active pedir decisão real
+  max_input_chars: 4000       # contexto mínimo — reduz custo/latência

@@ -24,3 +24,6 @@ logs/*.log
 # Dumps locais da stack de validacao do host
 backups/
 .env.backup.*
+
+# AI task router — decision log local, nao versionar
+.agents/router/logs/

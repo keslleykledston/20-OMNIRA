@@ -1,0 +1,88 @@
+# .agents/router/policy.yaml — Hard policy filtering para o AI task router.
+#
+# Este arquivo é a única fonte de verdade para quais tiers uma tarefa PODE
+# usar. É avaliado ANTES de qualquer chamada ao Jev (o decision router).
+# Jev nunca vê tarefas de domínio hard_force_frontier — nesses casos o
+# frontier é escolhido deterministicamente e Jev é pulado (bypass_jev).
+#
+# Ordem de avaliação em route.sh: hard_force_frontier > candidate_sets
+# (primeira lista cujo domain bate) > default. Confidence baixa do Jev
+# sempre escala para o tier acima na ordem TOOL < LOCAL_LLM < CHEAP_LLM <
+# FRONTIER_LLM < HUMAN — nunca desce.
+
+version: 1
+router_mode_default: shadow  # shadow | active — só active após evals com evidência
+
+tier_order: [TOOL, LOCAL_LLM, CHEAP_LLM, FRONTIER_LLM, HUMAN]
+
+# Domínios security-critical: FRONTIER_LLM obrigatório, Jev nunca decide,
+# nunca há downgrade possível independentemente de confidence.
+hard_force_frontier:
+  domains:
+    - auth
+    - rls
+    - tenancy_security
+    - crypto
+    - destructive_migration
+    - critical_concurrency
+    - secret_handling
+    - irreversible_architecture_decision
+  forced_tier: FRONTIER_LLM
+  bypass_jev: true
+  reason: "Hard policy do OMNIRA (CLAUDE.md/AGENTS.md): mudanças em auth/RLS/tenancy/crypto/migrations destrutivas/concorrência crítica/segredos/arquitetura irreversível exigem revisão humana-grade e nunca são candidatas a downgrade automático."
+
+# Candidatos permitidos por domínio, em ordem de avaliação (primeiro match
+# vence). Jev escolhe SOMENTE dentro do conjunto de candidatos já filtrado
+# aqui — nunca fora dele.
+#
+# IMPORTANTE: a lista `candidates` de cada regra deve estar em ordem
+# crescente de tier (seguindo tier_order acima). route.sh usa o ÚLTIMO
+# item da lista como "tier mais alto permitido" ao escalar por confidence
+# baixa ou falha do Jev — uma lista fora de ordem quebra essa garantia.
+candidate_sets:
+  - domains: [lint, tests, grep_search, migration_check, docker_check, formatting]
+    candidates: [TOOL]
+    reason: "Determinístico — sem ambiguidade, sem necessidade de LLM."
+
+  - domains: [summary, logs, docs, changelog, handoff, source_classification]
+    candidates: [TOOL, LOCAL_LLM]
+    reason: "Baixo risco, sem impacto em runtime/produto — modelo local é suficiente."
+
+  - domains: [ui_visual_design, ux_prototype]
+    candidates: [LOVABLE]
+    reason: "Lovable é a referência de design/UX do projeto (ver CLAUDE.md — Lovable MCP Policy)."
+
+  - domains: [code_review_general, refactor_non_critical, test_authoring]
+    candidates: [TOOL, LOCAL_LLM, CHEAP_LLM]
+    reason: "Trabalho de engenharia comum, sem tocar domínios hard-force."
+
+# Quando nenhum domain_tag bate em nada acima.
+default:
+  candidates: [TOOL, LOCAL_LLM, CHEAP_LLM, FRONTIER_LLM]
+  reason: "Domínio não classificado — não assumir baixo risco; permite escalar até frontier, nunca pula HUMAN se necessário."
+
+confidence:
+  min_threshold: 0.65
+  low_confidence_action: escalate  # nunca downgrade
+  # Se Jev não responde, dá erro de parse, ou timeout: tratar como
+  # confidence 0 → escalar para o próximo tier acima do mais alto
+  # candidato determinístico disponível (nunca assumir TOOL silenciosamente
+  # para tarefas que tinham LLM como candidato).
+  on_jev_unavailable: escalate
+
+# Nunca enviar estes campos/conteúdo ao Jev (reforça tools/ai/lib.sh:ai_sanitize).
+never_send_to_jev:
+  - secrets
+  - credentials
+  - tokens
+  - connection_strings
+  - private_keys
+  - jwts
+  - pii
+
+human_escalation:
+  triggers:
+    - low_confidence_after_frontier
+    - policy_conflict          # domain bate em mais de um candidate_set com listas incompatíveis
+    - jev_unavailable_for_forced_domain
+    - eval_gate_not_met         # ROUTER_MODE=active pedido sem evals/run_evals.py PASS
