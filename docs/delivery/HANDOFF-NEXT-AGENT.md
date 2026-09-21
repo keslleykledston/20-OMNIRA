@@ -326,6 +326,19 @@ files' `login()` helpers.
 
 ---
 
+## 6c. P8 — Inbound WAHA real: evidência de banco (2026-09-21) — PASS
+
+O bloqueio "banco remoto de produção" era falso: a instância roda contra o Postgres local (`omnira-postgres`, banco `omnira_dev`); a busca anterior falhou por query/premissa errada. Ferramenta: `scripts/p8-evidence.sh <texto|prefixo> [banco]` (somente SELECT em `BEGIN READ ONLY`, telefone mascarado, sem payload).
+Resultado para `OMNIRA-E2E-P8-20260921-03`: 1 linha `inbound/received`, criada 18:34:10 UTC (14:34 Manaus), conexão `waha/unofficial`, `webhook_events=1`, `message_rows=1` → **PASS: exactly-once**. Ressalvas: `provider_message_id` vem de remetente `@lid` (D-7 já corrigido); evidência é de leitura, não reexecutei tráfego.
+
+## 6d. E2E de navegador — estado real após corrigir login de channels/ticket-panel
+
+`scripts/e2e-inbox.sh`: 14 passam (inbox+responsive), **4 falham** (antes esses 2 specs nem chegavam a rodar por seletor de login velho):
+- `ticket-panel.spec.ts` (2): usa `.conversation-page` e rota `/inbox/conversations/:id` da UI antiga, substituída pelo workspace de 3 painéis — precisa reescrita.
+- `channels.spec.ts` (1): QR real não aparece em 40 s na stack descartável; investigar (WAHA GOWS no container, ou spec).
+- `inbox.spec.ts:89` "claim, reply": envio devolve 409 "no active text channel" porque a conexão fixture `c001` fica `pending` durante a suíte; a causa exata ainda não está isolada (hipótese: `channels.spec` alterando `c001`; o spec foi corrigido para usar a conexão criada, mas a falha persistiu).
+Outros: `HasPermission` (`internal/rbac/domain/role.go`) libera todos os recursos para qualquer permission `admin` — decisão de segurança pendente.
+
 ## 6. Latest Session Progress (2026-09-21, Session cceb1a5+)
 
 **Workspace 3-painel implemented:**

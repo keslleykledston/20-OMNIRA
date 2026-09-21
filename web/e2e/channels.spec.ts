@@ -43,10 +43,12 @@ test('admin creates a connection with the risk acknowledgement, pairs via a real
   await page.getByRole('checkbox').check();
   await create.click();
 
-  const card = page.locator('[data-testid^="connection-"]').first();
+  // Locate the connection this test created by id (the fixture connection also renders a card).
+  await expect.poll(() => sql(`SELECT count(*) FROM channel_connections WHERE risk_acknowledged_by='${ADMIN.id}'`)).toBe('1');
+  const id = sql(`SELECT id FROM channel_connections WHERE risk_acknowledged_by='${ADMIN.id}'`);
+  const card = page.getByRole('region', { name: 'Integrações conectadas' }).getByTestId(`connection-${id}`);
   await expect(card).toBeVisible();
   await expect(card.getByTestId('conn-status')).toHaveText('Pendente');
-  const id = (await card.getAttribute('data-testid'))!.replace('connection-', '');
   expect(sql(`SELECT provider||'|'||provider_kind||'|'||status||'|'||risk_acknowledged_by FROM channel_connections WHERE id='${id}'`))
     .toBe(`waha|unofficial|pending|${ADMIN.id}`);
   expect(sql(`SELECT count(*) FROM audit_events WHERE resource_id='${id}' AND action='channel.connection_created' AND actor_id='${ADMIN.id}'`)).toBe('1');
