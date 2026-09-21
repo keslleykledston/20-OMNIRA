@@ -3,7 +3,10 @@ import clsx from 'clsx';
 import { Icon } from '../primitives';
 
 interface MessageComposerProps {
-  onSend: (text: string) => void;
+  // Returns whether the send actually succeeded — the composer only clears the
+  // draft on a confirmed success, never optimistically (a 409 "must be
+  // assigned first" must not silently drop what the operator typed).
+  onSend: (text: string) => Promise<boolean> | boolean;
   disabled?: boolean;
   placeholder?: string;
 }
@@ -32,10 +35,10 @@ export default function MessageComposer({
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (text.trim() && !disabled) {
-      onSend(text);
-      setText('');
+      const sent = await onSend(text);
+      if (sent) setText('');
     }
   };
 

@@ -24,6 +24,11 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   const [conversation, setConversation] = useState<ConversationItem | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // One Idempotency-Key per distinct text: a retry after a network failure or a
+  // timeout re-sends the same key, so the backend (required header, 8-128 chars
+  // of [A-Za-z0-9._:-] per contracts/openapi/omnira-v1.yaml) never queues a
+  // duplicate for the same attempt.
+  const pendingSend = useRef<{ text: string; key: string } | null>(null);
 
   // Fetch conversation details
   const { data: conversationData } = useQuery({
@@ -86,23 +91,33 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSendMessage = async (text: string) => {
-    if (!text.trim()) return;
+  const handleSendMessage = async (text: string): Promise<boolean> => {
+    if (!text.trim()) return false;
 
     setSending(true);
     setSendError(null);
 
+    // Reuse the key on a retry of the exact same text; a different text is a
+    // new attempt and gets its own key.
+    if (pendingSend.current?.text !== text) {
+      pendingSend.current = { text, key: crypto.randomUUID() };
+    }
+    const idempotencyKey = pendingSend.current.key;
+
     try {
       await axios.post(
         `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
-        { body: text },
-        { headers: authHeaders() }
+        { text },
+        { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } }
       );
+      pendingSend.current = null;
       // Reset and refetch
       void queryClient.invalidateQueries({ queryKey: ['inbox-messages', tenantId, conversationId] });
+      return true;
     } catch (err: any) {
-      if (isUnauthorized(err)) handleUnauthorized();
-      else setSendError(err?.response?.data?.message || 'Erro ao enviar');
+      if (isUnauthorized(err)) { handleUnauthorized(); return false; }
+      setSendError(describeSendError(err));
+      return false;
     } finally {
       setSending(false);
     }
@@ -169,7 +184,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       {/* Composer */}
       <div className="p-4 border-t border-border-subtle">
         {sendError && (
-          <div className="mb-3 p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
+          <div role="alert" className="mb-3 p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
             {sendError}
           </div>
         )}
@@ -181,4 +196,19 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       </div>
     </div>
   );
+}
+
+// POST .../messages returns a plain-text body on error (internal/messages/adapters/http.go
+// fail()), not JSON — err.response.data is the string itself.
+function describeSendError(err: any): string {
+  const status = err?.response?.status;
+  const body = typeof err?.response?.data === 'string' ? err.response.data : '';
+  if (status === 409) {
+    return body.includes('assigned')
+      ? 'Assuma esta conversa antes de responder.'
+      : 'A conversa mudou, tente novamente.';
+  }
+  if (status === 403) return 'Você não pode responder — esta conversa não está atribuída a você.';
+  if (status === 422) return body || 'Mensagem inválida.';
+  return body || 'Erro ao enviar mensagem.';
 }
