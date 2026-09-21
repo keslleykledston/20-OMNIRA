@@ -1,5 +1,5 @@
-import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import clsx from 'clsx';
 import { ConversationItem } from '../../types/api';
@@ -13,6 +13,48 @@ interface ContextPaneProps {
 
 export default function ContextPane({ conversationId }: ContextPaneProps) {
   const tenantId = getTenantId();
+  const queryClient = useQueryClient();
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  const handleAssign = async () => {
+    setAssignLoading(true);
+    setAssignError(null);
+    try {
+      await axios.post(
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/assign`,
+        {},
+        { headers: authHeaders() }
+      );
+      // Refetch conversation to get updated assigned_to_user_id
+      await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+      await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+    } catch (err: any) {
+      if (isUnauthorized(err)) handleUnauthorized();
+      else setAssignError(err?.response?.data?.message || 'Erro ao assumir conversa');
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const handleUnassign = async () => {
+    setAssignLoading(true);
+    setAssignError(null);
+    try {
+      await axios.post(
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/unassign`,
+        {},
+        { headers: authHeaders() }
+      );
+      await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+      await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+    } catch (err: any) {
+      if (isUnauthorized(err)) handleUnauthorized();
+      else setAssignError(err?.response?.data?.message || 'Erro ao soltar conversa');
+    } finally {
+      setAssignLoading(false);
+    }
+  };
 
   // Fetch conversation (which contains contact info)
   const { data: conversation } = useQuery({
@@ -88,23 +130,53 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
         </div>
       </div>
 
+      {/* Error */}
+      {assignError && (
+        <div className="p-4">
+          <div className="p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
+            {assignError}
+          </div>
+        </div>
+      )}
+
       {/* Actions */}
       <div className="p-4 space-y-2">
+        {conversation?.assigned_to_user_id ? (
+          <button
+            onClick={handleUnassign}
+            disabled={assignLoading}
+            className={clsx(
+              'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
+              'bg-status-danger-soft text-status-danger hover:bg-status-danger-border',
+              'border border-border-subtle',
+              assignLoading && 'opacity-50 cursor-not-allowed'
+            )}
+          >
+            <Icon name="check" className="w-4 h-4 mr-2" />
+            Soltar
+          </button>
+        ) : (
+          <button
+            onClick={handleAssign}
+            disabled={assignLoading}
+            className={clsx(
+              'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
+              'bg-accent-primary text-white hover:bg-accent-primary-hover',
+              'border border-border-subtle',
+              assignLoading && 'opacity-50 cursor-not-allowed'
+            )}
+          >
+            <Icon name="plus" className="w-4 h-4 mr-2" />
+            Assumir
+          </button>
+        )}
         <button className={clsx(
           'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
           'bg-surface text-text-primary hover:bg-surface-muted',
           'border border-border-subtle'
         )}>
-          <Icon name="plus" className="w-4 h-4 mr-2" />
+          <Icon name="info" className="w-4 h-4 mr-2" />
           Transferir
-        </button>
-        <button className={clsx(
-          'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
-          'bg-surface text-text-primary hover:bg-surface-muted',
-          'border border-border-subtle'
-        )}>
-          <Icon name="check" className="w-4 h-4 mr-2" />
-          Resolver
         </button>
         <button className={clsx(
           'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
