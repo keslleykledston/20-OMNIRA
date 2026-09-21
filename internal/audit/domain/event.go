@@ -16,6 +16,8 @@ const (
 	ActionMembershipGranted        AuditAction = "membership.granted"
 	ActionMembershipRevoked        AuditAction = "membership.revoked"
 	ActionMembershipDeactivated    AuditAction = "membership.deactivated"
+	ActionMembershipReactivated    AuditAction = "membership.reactivated"
+	ActionMembershipRoleChanged    AuditAction = "membership.role_changed"
 	ActionConversationAssigned     AuditAction = "conversation.assigned"
 	ActionConversationUnassigned   AuditAction = "conversation.unassigned"
 	ActionConversationTransferred  AuditAction = "conversation.transferred"

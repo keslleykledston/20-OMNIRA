@@ -123,8 +123,8 @@ docker run --rm --network host -v "$PWD/migrations":/migrations:ro -v "$PWD/tool
 |---|---|---|
 | IAM0 | Auth & Access Audit | **DONE** |
 | IAM1 | Secure Login & Session | **DONE** (`bd41007`) |
-| IAM2A | Users & Memberships | próximo |
-| IAM2B | Invitations | — |
+| IAM2A | Users & Memberships | **DONE** |
+| IAM2B | Invitations | próximo |
 | IAM3 | Roles & Permissions | — |
 | IAM4 | Agent Management | — |
 | IAM5 | Access Control / Sessions UI | — |
@@ -140,7 +140,17 @@ o laboratório ativa pelo `.env`.
 
 A ordem é essa porque o modelo de identidade precisa estar correto antes de expandir gestão de usuários e permissões — a base ficou pronta em `0f812b0`, que tornou `(issuer, subject)` a identidade canônica. Account linking (mesma pessoa em dois IdPs) é feature de IAM2+, não existe hoje e não deve ser inferida por e-mail, telefone ou nome.
 
-Ordem corrente: **FR3A (feito) → FR3B Contacts UI → IAM**.
+**IAM2A security hardening (achado durante a implementação da Team UI, não estava no escopo original):** `user_identities` nunca teve RLS desde `000028` — qualquer sessão de tenant conseguia SELECT/INSERT/UPDATE/DELETE sobre a identidade de qualquer usuário do banco, de qualquer tenant. Corrigido na migration `000034`:
+- RLS + FORCE RLS ativados;
+- leitura limitada a self, sistema, ou tenant peer autorizado por `membership.read`;
+- escrita limitada a contexto de sistema (JIT provisioning);
+- DELETE da runtime role revogado;
+- fresh DB 1..34 + `TestRLSCompleteness`/`TestRLSPolicyCoverage` PASS.
+A mesma migration deu a `users` uma policy de leitura entre pares de tenant — sem ela, a listagem de equipe devolvia só a própria linha do ator sob RLS.
+
+`GET/POST/DELETE /api/v1/tenants/{tenant_id}/members` é API legada, candidata a depreciação: sem uso pelo frontend, sem contrato, e sem checagem de permissão em nível de aplicação (RLS ainda protege). Toda UI nova de equipe usa `/team`, `/roles` e `/me/access`. Não adicionar feature nova em `/members`.
+
+Ordem corrente: **FR3A (feito) → FR3B Contacts UI (feito) → IAM**.
    - **Próximo:** Confirmar IdP disponível; caso contrário, manter mock-login para MVP1
 
 **Trabalho paralelo (sem bloqueio):**

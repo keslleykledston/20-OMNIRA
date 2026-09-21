@@ -139,6 +139,7 @@ func TestRLSCompleteness(t *testing.T) {
 var expectedPolicyCoverage = map[string][]string{
 	// users não tem tenant_id, então a varredura por tenant_id não a alcança.
 	"users":                     {"SELECT", "UPDATE", "INSERT"},
+	"user_identities":           {"SELECT", "INSERT", "UPDATE"},
 	"conversation_participants": {"SELECT", "INSERT", "UPDATE"},
 	"contacts":                  {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"conversations":             {"SELECT", "INSERT", "UPDATE", "DELETE"},

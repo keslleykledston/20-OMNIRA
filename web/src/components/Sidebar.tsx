@@ -4,8 +4,10 @@ import { Avatar, Icon } from './primitives'
 import type { IconName } from './primitives/Icon'
 import { useTenantDisplay } from '../lib/tenantContext'
 
-// Only routes that exist in App.tsx. Spec items without a route (Automação,
-// Configurações) stay hidden rather than simulated — docs/architecture/FRONTEND-UX.md.
+// Only routes that exist in App.tsx. Spec items without a route (Automação, o
+// restante de Configurações) stay hidden rather than simulated —
+// docs/architecture/FRONTEND-UX.md. Equipe e acesso é a única seção de
+// Configurações implementada até agora (IAM2A).
 const navItems: { label: string; path: string; icon: IconName }[] = [
   { label: 'Dashboard', path: '/', icon: 'dashboard' },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
@@ -14,6 +16,7 @@ const navItems: { label: string; path: string; icon: IconName }[] = [
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports' },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
+  { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings' },
 ]
 
 export default function Sidebar() {

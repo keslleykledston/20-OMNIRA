@@ -271,10 +271,21 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 	// derivada de membership real, nunca do valor da URL isoladamente).
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.GetTenantMe))))
 
-	// Membros
+	// Membros (legado: sem checagem de permissão em nível de aplicação, mas
+	// protegido por RLS — INSERT/UPDATE em memberships exigem
+	// has_active_admin_membership. Sem uso pelo frontend nem no contrato.)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/members", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.ListMemberships))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/members", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.CreateMembership))))
 	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/members/{membership_id}", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.RevokeMembership))))
+
+	// Equipe e acesso (IAM2A): payload com identidade+papel resolvidos (evita
+	// N+1 no cliente) e autorização por permission (membership.read/manage),
+	// não por comparação de string de role.
+	teamHandler := tenancyadapters.NewTeamHandler(dbPool, auditRepo)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/team", authnMiddleware(tenantSession(http.HandlerFunc(teamHandler.ListTeam))))
+	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/team/{membership_id}", authnMiddleware(tenantSession(http.HandlerFunc(teamHandler.UpdateMembership))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/roles", authnMiddleware(tenantSession(http.HandlerFunc(teamHandler.ListAssignableRoles))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/me/access", authnMiddleware(tenantSession(http.HandlerFunc(teamHandler.MyAccess))))
 
 	// Agentes (para co-atendimento)
 	agentsHandler := tenancyadapters.NewAgentsHandler(dbPool)

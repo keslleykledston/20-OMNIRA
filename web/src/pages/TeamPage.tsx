@@ -1,0 +1,474 @@
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Avatar,
+  Badge,
+  Button,
+  Card,
+  ConfirmDialog,
+  DropdownMenu,
+  EmptyState,
+  ErrorState,
+  Icon,
+  Input,
+  Modal,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+  type IconName,
+  type MenuAction,
+} from '../components/primitives'
+import { getTenantId } from '../lib/session'
+import { teamAPI, teamErrorMessage, type MembershipStatus, type RoleOption, type TeamMember } from '../lib/team'
+
+const ROLE_BADGE: Record<string, { label: string; variant: 'info' | 'default' | 'warning' }> = {
+  tenant_admin: { label: 'Admin', variant: 'info' },
+  tenant_supervisor: { label: 'Supervisor', variant: 'default' },
+  tenant_agent: { label: 'Agente', variant: 'warning' },
+}
+
+// roles.name vem do banco em inglês ("Tenant Administrator"); o seletor usa o
+// mesmo rótulo em português que já aparece nos badges, para não misturar
+// idioma na mesma tela.
+const ROLE_DISPLAY_NAME: Record<string, string> = {
+  tenant_admin: 'Administrador',
+  tenant_supervisor: 'Supervisor',
+  tenant_agent: 'Agente',
+}
+
+const STATUS_BADGE: Record<MembershipStatus, { label: string; tone: 'success' | 'default' | 'danger' }> = {
+  active: { label: 'Ativo', tone: 'success' },
+  inactive: { label: 'Inativo', tone: 'default' },
+  revoked: { label: 'Revogado', tone: 'danger' },
+}
+
+function initials(name: string, fallback: string): string {
+  const source = name.trim() || fallback
+  const parts = source.split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+function formatLastLogin(iso?: string): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const time = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  if (sameDay) return `Hoje, ${time}`
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + time
+}
+
+export default function TeamPage() {
+  const tenantId = getTenantId()
+  const queryClient = useQueryClient()
+
+  const [search, setSearch] = useState('')
+  const [roleFilter, setRoleFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [roleEditTarget, setRoleEditTarget] = useState<TeamMember | null>(null)
+  const [pendingStatus, setPendingStatus] = useState<{ member: TeamMember; status: MembershipStatus } | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const access = useQuery({
+    queryKey: ['team-access', tenantId],
+    queryFn: () => teamAPI.myAccess(),
+    retry: false,
+  })
+  const canManage = access.data?.permissions.includes('membership.manage') ?? false
+
+  const team = useQuery({
+    queryKey: ['team', tenantId],
+    queryFn: () => teamAPI.list(),
+    retry: false,
+    enabled: !access.isError,
+  })
+
+  const roles = useQuery({
+    queryKey: ['team-roles', tenantId],
+    queryFn: () => teamAPI.roles(),
+    retry: false,
+    enabled: canManage,
+  })
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['team', tenantId] })
+
+  const changeRole = useMutation({
+    mutationFn: ({ membershipId, roleKey }: { membershipId: string; roleKey: string }) =>
+      teamAPI.updateRole(membershipId, roleKey),
+    onSuccess: () => {
+      setRoleEditTarget(null)
+      void invalidate()
+    },
+    onError: (e) => setActionError(teamErrorMessage(e, 'Não foi possível alterar a função.')),
+  })
+
+  const changeStatus = useMutation({
+    mutationFn: ({ membershipId, status }: { membershipId: string; status: MembershipStatus }) =>
+      teamAPI.updateStatus(membershipId, status),
+    onSuccess: () => {
+      setPendingStatus(null)
+      void invalidate()
+    },
+    onError: (e) => setActionError(teamErrorMessage(e, 'Não foi possível concluir a operação.')),
+  })
+
+  const members = team.data ?? []
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return members.filter((m) => {
+      if (roleFilter !== 'all' && m.role_key !== roleFilter) return false
+      if (statusFilter !== 'all' && m.status !== statusFilter) return false
+      if (q && !m.name.toLowerCase().includes(q) && !m.email.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [members, search, roleFilter, statusFilter])
+
+  const summary = useMemo(() => {
+    const active = members.filter((m) => m.status === 'active')
+    return {
+      total: active.length,
+      admins: active.filter((m) => m.role_key === 'tenant_admin').length,
+      supervisors: active.filter((m) => m.role_key === 'tenant_supervisor').length,
+      agents: active.filter((m) => m.role_key === 'tenant_agent').length,
+    }
+  }, [members])
+
+  if (access.isError) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Equipe e acesso" />
+        <ErrorState
+          title="Sem acesso"
+          message="Você não tem permissão para gerenciar a equipe."
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Equipe e acesso"
+        description="Gerencie os usuários da sua equipe, defina permissões e controle o acesso à plataforma."
+        actions={
+          <Button variant="primary" disabled title="Disponível na próxima etapa">
+            <Icon name="plus" size={16} />
+            Convidar usuário
+          </Button>
+        }
+      />
+
+      {actionError && (
+        <ErrorState message={actionError} isDismissible onDismiss={() => setActionError(null)} />
+      )}
+
+      {!team.isLoading && !team.isError && (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <SummaryCard icon="contacts" label="Usuários ativos" value={summary.total} />
+          <SummaryCard icon="supervisor" label="Admins" value={summary.admins} />
+          <SummaryCard icon="conversations" label="Supervisores" value={summary.supervisors} />
+          <SummaryCard icon="dashboard" label="Agentes" value={summary.agents} />
+        </div>
+      )}
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex-1">
+          <Input
+            placeholder="Buscar por nome ou e-mail…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <select
+          value={roleFilter}
+          onChange={(e) => setRoleFilter(e.target.value)}
+          className="h-10 rounded-control border border-border-light bg-surface px-3 text-sm text-text-primary"
+        >
+          <option value="all">Todas as funções</option>
+          <option value="tenant_admin">Admin</option>
+          <option value="tenant_supervisor">Supervisor</option>
+          <option value="tenant_agent">Agente</option>
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="h-10 rounded-control border border-border-light bg-surface px-3 text-sm text-text-primary"
+        >
+          <option value="all">Todos os status</option>
+          <option value="active">Ativo</option>
+          <option value="inactive">Inativo</option>
+          <option value="revoked">Revogado</option>
+        </select>
+      </div>
+
+      {team.isLoading && <TeamSkeleton />}
+
+      {team.isError && (
+        <ErrorState
+          message={teamErrorMessage(team.error, 'Não foi possível carregar a equipe.')}
+          action={{ label: 'Tentar novamente', onClick: () => void team.refetch() }}
+        />
+      )}
+
+      {!team.isLoading && !team.isError && filtered.length === 0 && (
+        <EmptyState
+          icon={<Icon name="contacts" />}
+          title="Nenhum membro encontrado."
+          description={members.length > 0 ? 'Ajuste a busca ou os filtros.' : undefined}
+        />
+      )}
+
+      {!team.isLoading && !team.isError && filtered.length > 0 && (
+        <>
+          <div className="hidden md:block overflow-hidden rounded-card border border-border-subtle bg-surface">
+            <table className="w-full text-left">
+              <thead className="border-b border-border-subtle bg-surface-muted">
+                <tr>
+                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Nome</th>
+                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">E-mail</th>
+                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Função</th>
+                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Status</th>
+                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Último login</th>
+                  {canManage && <th className="px-6 py-3" />}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((m) => (
+                  <TeamRow
+                    key={m.membership_id}
+                    member={m}
+                    canManage={canManage}
+                    onEditRole={() => setRoleEditTarget(m)}
+                    onToggleStatus={(status) => setPendingStatus({ member: m, status })}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="md:hidden space-y-3">
+            {filtered.map((m) => (
+              <TeamCard
+                key={m.membership_id}
+                member={m}
+                canManage={canManage}
+                onEditRole={() => setRoleEditTarget(m)}
+                onToggleStatus={(status) => setPendingStatus({ member: m, status })}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {roleEditTarget && (
+        <RoleEditModal
+          member={roleEditTarget}
+          roles={roles.data ?? []}
+          isSaving={changeRole.isPending}
+          onCancel={() => setRoleEditTarget(null)}
+          onConfirm={(roleKey) => changeRole.mutate({ membershipId: roleEditTarget.membership_id, roleKey })}
+        />
+      )}
+
+      {pendingStatus && (
+        <ConfirmDialog
+          open
+          title={statusConfirmTitle(pendingStatus.status)}
+          message={statusConfirmDescription(pendingStatus.member, pendingStatus.status)}
+          confirmLabel={statusConfirmTitle(pendingStatus.status)}
+          destructive={pendingStatus.status !== 'active'}
+          isPending={changeStatus.isPending}
+          onCancel={() => setPendingStatus(null)}
+          onConfirm={() =>
+            changeStatus.mutate({ membershipId: pendingStatus.member.membership_id, status: pendingStatus.status })
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+function SummaryCard({ icon, label, value }: { icon: IconName; label: string; value: number }) {
+  return (
+    <Card padding="compact">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-control bg-accent-primary-soft text-accent-primary">
+          <Icon name={icon} size={20} />
+        </div>
+        <div>
+          <p className="text-sm text-text-secondary">{label}</p>
+          <p className="text-section-md font-semibold text-text-primary">{value}</p>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function memberActions(
+  member: TeamMember,
+  onEditRole: () => void,
+  onToggleStatus: (status: MembershipStatus) => void,
+): MenuAction[] {
+  const actions: MenuAction[] = [
+    { label: 'Alterar função', onSelect: onEditRole, disabled: member.status === 'revoked' },
+  ]
+  if (member.status === 'active') {
+    actions.push({ label: 'Desativar acesso', onSelect: () => onToggleStatus('inactive') })
+  } else if (member.status === 'inactive') {
+    actions.push({ label: 'Reativar', onSelect: () => onToggleStatus('active') })
+  }
+  if (member.status !== 'revoked') {
+    actions.push({ label: 'Remover do tenant', onSelect: () => onToggleStatus('revoked'), destructive: true })
+  }
+  return actions
+}
+
+function TeamRow({
+  member,
+  canManage,
+  onEditRole,
+  onToggleStatus,
+}: {
+  member: TeamMember
+  canManage: boolean
+  onEditRole: () => void
+  onToggleStatus: (status: MembershipStatus) => void
+}) {
+  const role = ROLE_BADGE[member.role_key] ?? { label: member.role_name, variant: 'default' as const }
+  const status = STATUS_BADGE[member.status]
+  return (
+    <tr className="border-b border-border-subtle last:border-0">
+      <td className="px-6 py-4">
+        <div className="flex items-center gap-3">
+          <Avatar alt={member.name || member.email} initials={initials(member.name, member.email)} size="sm" />
+          <span className="font-medium text-text-primary">{member.name || member.email}</span>
+        </div>
+      </td>
+      <td className="px-6 py-4 text-text-secondary">{member.email}</td>
+      <td className="px-6 py-4">
+        <Badge variant={role.variant} size="sm">{role.label}</Badge>
+      </td>
+      <td className="px-6 py-4">
+        <StatusBadge status={status.tone} size="sm">{status.label}</StatusBadge>
+      </td>
+      <td className="px-6 py-4 text-text-secondary">{formatLastLogin(member.last_login_at)}</td>
+      {canManage && (
+        <td className="px-6 py-4 text-right">
+          <DropdownMenu actions={memberActions(member, onEditRole, onToggleStatus)} />
+        </td>
+      )}
+    </tr>
+  )
+}
+
+function TeamCard({
+  member,
+  canManage,
+  onEditRole,
+  onToggleStatus,
+}: {
+  member: TeamMember
+  canManage: boolean
+  onEditRole: () => void
+  onToggleStatus: (status: MembershipStatus) => void
+}) {
+  const role = ROLE_BADGE[member.role_key] ?? { label: member.role_name, variant: 'default' as const }
+  const status = STATUS_BADGE[member.status]
+  return (
+    <div className="rounded-card border border-border-subtle bg-surface p-4">
+      <div className="flex items-center gap-3">
+        <Avatar alt={member.name || member.email} initials={initials(member.name, member.email)} size="md" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-text-primary truncate">{member.name || member.email}</p>
+          <p className="text-sm text-text-secondary truncate">{member.email}</p>
+        </div>
+        {canManage && <DropdownMenu actions={memberActions(member, onEditRole, onToggleStatus)} />}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <Badge variant={role.variant} size="sm">{role.label}</Badge>
+        <StatusBadge status={status.tone} size="sm">{status.label}</StatusBadge>
+        <span className="ml-auto text-xs text-text-tertiary">{formatLastLogin(member.last_login_at)}</span>
+      </div>
+    </div>
+  )
+}
+
+function RoleEditModal({
+  member,
+  roles,
+  isSaving,
+  onCancel,
+  onConfirm,
+}: {
+  member: TeamMember
+  roles: RoleOption[]
+  isSaving: boolean
+  onCancel: () => void
+  onConfirm: (roleKey: string) => void
+}) {
+  const [selected, setSelected] = useState(member.role_key)
+  return (
+    <Modal
+      open
+      title="Alterar função"
+      description={member.name || member.email}
+      onClose={onCancel}
+      footer={
+        <>
+          <Button variant="tertiary" onClick={onCancel} disabled={isSaving}>Cancelar</Button>
+          <Button variant="primary" onClick={() => onConfirm(selected)} disabled={isSaving || selected === member.role_key}>
+            {isSaving ? 'Salvando…' : 'Salvar'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2">
+        {roles.map((r) => (
+          <label
+            key={r.key}
+            className="flex items-center gap-3 rounded-control border border-border-subtle p-3 cursor-pointer hover:bg-surface-hover"
+          >
+            <input
+              type="radio"
+              name="role"
+              value={r.key}
+              checked={selected === r.key}
+              onChange={() => setSelected(r.key)}
+            />
+            <span className="text-sm text-text-primary">{ROLE_DISPLAY_NAME[r.key] ?? r.name}</span>
+          </label>
+        ))}
+      </div>
+    </Modal>
+  )
+}
+
+function statusConfirmTitle(status: MembershipStatus): string {
+  if (status === 'active') return 'Reativar acesso'
+  if (status === 'inactive') return 'Desativar acesso'
+  return 'Remover do tenant'
+}
+
+function statusConfirmDescription(member: TeamMember, status: MembershipStatus): string {
+  const who = member.name || member.email
+  if (status === 'active') return `${who} volta a ter acesso à plataforma.`
+  if (status === 'inactive') return `${who} perde acesso até ser reativado.`
+  return `${who} perde acesso permanentemente. Esta ação não pode ser desfeita pela interface.`
+}
+
+function TeamSkeleton() {
+  return (
+    <div className="rounded-card border border-border-subtle bg-surface p-6 space-y-4">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <Skeleton width="w-8" height="h-8" className="rounded-full shrink-0" />
+          <Skeleton width="w-full" height="h-4" />
+        </div>
+      ))}
+    </div>
+  )
+}
