@@ -57,7 +57,7 @@ func (h *CRMHandlers) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID, convID := r.PathValue("tenantId"), r.PathValue("conversationId")
+	tenantID, convID := r.PathValue("tenant_id"), r.PathValue("conversation_id")
 	if tenantID == "" || convID == "" {
 		http.Error(w, "missing tenant or conversation ID", http.StatusBadRequest)
 		return
@@ -151,7 +151,7 @@ func (h *CRMHandlers) GetTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticketID := r.PathValue("ticketId")
+	ticketID := r.PathValue("ticket_id")
 	if ticketID == "" {
 		http.Error(w, "missing ticket ID", http.StatusBadRequest)
 		return
@@ -182,7 +182,7 @@ func (h *CRMHandlers) UpdateTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticketID := r.PathValue("ticketId")
+	ticketID := r.PathValue("ticket_id")
 	var req CRMTicketRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -220,7 +220,7 @@ func (h *CRMHandlers) CloseTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticketID := r.PathValue("ticketId")
+	ticketID := r.PathValue("ticket_id")
 	err := h.crm.CloseTicket(ctx, ticketID)
 	if err != nil {
 		http.Error(w, "ticket close failed", http.StatusInternalServerError)
@@ -256,7 +256,7 @@ func (h *CRMHandlers) CreateActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID, convID := r.PathValue("tenantId"), r.PathValue("conversationId")
+	tenantID, convID := r.PathValue("tenant_id"), r.PathValue("conversation_id")
 	if tenantID == "" || convID == "" {
 		http.Error(w, "missing tenant or conversation ID", http.StatusBadRequest)
 		return
