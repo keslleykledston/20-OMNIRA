@@ -77,12 +77,15 @@ func (r *Role) CanAdmin(resource PermissionResource) bool {
 	return r.HasPermission(resource, ActionAdmin)
 }
 
-// SystemRoles — roles de sistema pré-definidos
+// SystemRoles — roles de sistema pré-definidos.
+// NOTA: nomes devem corresponder à migração 000002_memberships_rbac (Git source of truth).
+// Ver também: migrations/000002_memberships_rbac.up.sql
 var SystemRoles = map[string]*Role{
-	"superadmin": {
-		Name:     "superadmin",
-		IsSystem: true,
-		Description: "Super administrator - full access across all tenants",
+	// system_admin: full platform access across all tenants
+	"system_admin": {
+		Name:        "system_admin",
+		IsSystem:    true,
+		Description: "System administrator - full platform access",
 		Permissions: []*Permission{
 			{Resource: ResourceTenant, Action: ActionAdmin},
 			{Resource: ResourceMembership, Action: ActionAdmin},
@@ -90,9 +93,10 @@ var SystemRoles = map[string]*Role{
 			{Resource: ResourceSettings, Action: ActionAdmin},
 		},
 	},
-	"admin": {
-		Name:     "admin",
-		IsSystem: true,
+	// tenant_admin: full access within a tenant
+	"tenant_admin": {
+		Name:        "tenant_admin",
+		IsSystem:    true,
 		Description: "Tenant administrator - full access within tenant",
 		Permissions: []*Permission{
 			{Resource: ResourceTenant, Action: ActionRead},
@@ -101,30 +105,36 @@ var SystemRoles = map[string]*Role{
 			{Resource: ResourceSettings, Action: ActionAdmin},
 		},
 	},
-	"editor": {
-		Name:     "editor",
-		IsSystem: true,
-		Description: "Editor - can read and write data",
+	// tenant_supervisor: supervisor/lead role
+	"tenant_supervisor": {
+		Name:        "tenant_supervisor",
+		IsSystem:    true,
+		Description: "Tenant supervisor - can read and review data",
 		Permissions: []*Permission{
 			{Resource: ResourceTenant, Action: ActionRead},
 			{Resource: ResourceMembership, Action: ActionRead},
 			{Resource: ResourceAudit, Action: ActionRead},
 		},
 	},
-	"viewer": {
-		Name:     "viewer",
-		IsSystem: true,
-		Description: "Viewer - read-only access",
+	// tenant_agent: agent/operator role
+	"tenant_agent": {
+		Name:        "tenant_agent",
+		IsSystem:    true,
+		Description: "Tenant agent - basic access to tenant",
 		Permissions: []*Permission{
 			{Resource: ResourceTenant, Action: ActionRead},
-			{Resource: ResourceAudit, Action: ActionRead},
 		},
 	},
-	"guest": {
-		Name:     "guest",
-		IsSystem: true,
-		Description: "Guest - minimal access",
-		Permissions: []*Permission{},
+	// hub_admin: hub-level administrator
+	"hub_admin": {
+		Name:        "hub_admin",
+		IsSystem:    true,
+		Description: "Hub administrator - full hub access",
+		Permissions: []*Permission{
+			{Resource: ResourceTenant, Action: ActionAdmin},
+			{Resource: ResourceMembership, Action: ActionAdmin},
+			{Resource: ResourceAudit, Action: ActionAdmin},
+		},
 	},
 }
 
