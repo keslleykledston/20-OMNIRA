@@ -117,19 +117,26 @@ docker run --rm --network host -v "$PWD/migrations":/migrations:ro -v "$PWD/tool
    - Requisito: credenciais Keycloak/Auth0/Google (cliente + secret)
    - Implementação: já há scaffold em `internal/platform/authn/oidc.go`; falta wiring de session + refresh token
 
-### IAM — aprovado, começa depois de FR3
+### IAM — em andamento
 
-Registro de escopo; **nenhuma destas waves deve ser iniciada agora.**
+| Wave | Escopo | Estado |
+|---|---|---|
+| IAM0 | Auth & Access Audit | **DONE** |
+| IAM1 | Secure Login & Session | **DONE** (`bd41007`) |
+| IAM2A | Users & Memberships | próximo |
+| IAM2B | Invitations | — |
+| IAM3 | Roles & Permissions | — |
+| IAM4 | Agent Management | — |
+| IAM5 | Access Control / Sessions UI | — |
+| IAM6 | Security Hardening | — |
 
-| Wave | Escopo |
-|---|---|
-| IAM0 | Auth & Access Audit |
-| IAM1 | Secure Login & Session |
-| IAM2 | Users / Invitations / Memberships |
-| IAM3 | Roles & Permissions |
-| IAM4 | Agent Management |
-| IAM5 | Access Control UI |
-| IAM6 | Security Hardening |
+**O que IAM1 mudou, e que vale saber antes de mexer em auth:** não existe
+autenticação local por senha. Produção e staging entram só por OIDC/SSO. O
+acesso de desenvolvimento é `POST /api/v1/auth/dev/login` (só e-mail, sem
+senha) e exige ambiente de desenvolvimento **e** `OMNIRA_DEV_AUTH_ENABLED=true`;
+sem isso a rota não é registrada e responde 404, e com a flag ligada em
+staging/production a API recusa o boot. O compose de produção não liga a flag —
+o laboratório ativa pelo `.env`.
 
 A ordem é essa porque o modelo de identidade precisa estar correto antes de expandir gestão de usuários e permissões — a base ficou pronta em `0f812b0`, que tornou `(issuer, subject)` a identidade canônica. Account linking (mesma pessoa em dois IdPs) é feature de IAM2+, não existe hoje e não deve ser inferida por e-mail, telefone ou nome.
 
