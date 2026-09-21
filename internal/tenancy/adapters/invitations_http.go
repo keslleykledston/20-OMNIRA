@@ -50,14 +50,32 @@ type InvitationsHandler struct {
 	// de desenvolvimento. Nunca fica true em produção.
 	devExposeInviteURL bool
 	publicBaseURL      string
+	// deliveryAvailable é a capability real: existe uma forma de o convidado
+	// receber o link. Em dev/lab é o próprio devExposeInviteURL (o admin
+	// copia e entrega manualmente); em produção, só quando um sender de
+	// verdade está configurado — NoopInvitationSender não conta. Sem isso,
+	// CreateInvitation persistiria um convite que ninguém jamais recebe.
+	deliveryAvailable bool
 }
 
 func NewInvitationsHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, sender InvitationSender, devExposeInviteURL bool, publicBaseURL string) *InvitationsHandler {
 	if sender == nil {
 		sender = NoopInvitationSender{}
 	}
-	return &InvitationsHandler{pool: pool, audit: audit, sender: sender, devExposeInviteURL: devExposeInviteURL, publicBaseURL: publicBaseURL}
+	return &InvitationsHandler{
+		pool: pool, audit: audit, sender: sender, devExposeInviteURL: devExposeInviteURL, publicBaseURL: publicBaseURL,
+		deliveryAvailable: devExposeInviteURL || !isNoopSender(sender),
+	}
 }
+
+func isNoopSender(s InvitationSender) bool {
+	_, ok := s.(NoopInvitationSender)
+	return ok
+}
+
+// InvitationDeliveryAvailable expõe a mesma capability para outros handlers
+// (MyAccess) sem duplicar a regra.
+func (h *InvitationsHandler) InvitationDeliveryAvailable() bool { return h.deliveryAvailable }
 
 type Invitation struct {
 	ID         uuid.UUID  `json:"id"`
@@ -106,6 +124,13 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 	tc, err := h.authorize(r, permissionMembershipManage)
 	if err != nil {
 		respondAuthzError(w, err)
+		return
+	}
+	// Fail-closed: sem forma de o convidado receber o link, o convite seria
+	// dado válido porém inútil. Antes de qualquer escrita — nem o registro de
+	// duplicidade nem o insert acontecem.
+	if !h.deliveryAvailable {
+		http.Error(w, "invitation delivery is not configured", http.StatusServiceUnavailable)
 		return
 	}
 	var req CreateInvitationRequest

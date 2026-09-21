@@ -29,6 +29,11 @@ export interface RoleOption {
 export interface MyAccess {
   role_key: string;
   permissions: string[];
+  // Espelha InvitationsHandler.deliveryAvailable: existe alguma forma de o
+  // convidado receber o link (dev auth ativo, ou um provedor de e-mail real
+  // configurado). Sem isso, o backend recusa POST .../invitations com 503 —
+  // esconder o botão aqui é cortesia, não a defesa.
+  invitation_delivery_available: boolean;
 }
 
 const teamBase = () => `${API_BASE}/tenants/${getTenantId()}`;

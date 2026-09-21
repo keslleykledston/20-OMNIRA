@@ -77,7 +77,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterHealthHandlers()
 	s.RegisterAuthHandlers(false) // generates the RSA keys the other registrations need
 	s.RegisterOIDCAuthHandlers(s.authenticator, contractOIDCHandler{})
-	s.RegisterTenancyHandlers(nil)
+	s.RegisterTenancyHandlers(nil, false)
 	s.RegisterInboxHandlers(nil)
 	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))

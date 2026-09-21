@@ -223,7 +223,11 @@ func (s *Server) RegisterOIDCAuthHandlers(authenticator authn.Authenticator, han
 // Management: GET /api/v1/me, GET /api/v1/tenants, GET/PATCH
 // /api/v1/tenants/{tenant_id}, membros e auditoria. Requer que
 // RegisterAuthHandlers já tenha rodado (usa a mesma keypair RSA).
-func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
+// invitationDeliveryAvailable segue a mesma regra que RegisterInvitationHandlers
+// usa para InvitationsHandler.deliveryAvailable: passada aqui também porque
+// MyAccess (servido por este registro) é onde o frontend consulta a
+// capability, e as duas precisam concordar sempre.
+func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliveryAvailable bool) {
 	if s.authenticator == nil {
 		// Sem chave pública não há como verificar tokens; não registrar
 		// rotas que dependeriam de autenticação funcional.
@@ -281,7 +285,7 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 	// Equipe e acesso (IAM2A): payload com identidade+papel resolvidos (evita
 	// N+1 no cliente) e autorização por permission (membership.read/manage),
 	// não por comparação de string de role.
-	teamHandler := tenancyadapters.NewTeamHandler(dbPool, auditRepo)
+	teamHandler := tenancyadapters.NewTeamHandler(dbPool, auditRepo, invitationDeliveryAvailable)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/team", authnMiddleware(tenantSession(http.HandlerFunc(teamHandler.ListTeam))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/team/{membership_id}", authnMiddleware(tenantSession(http.HandlerFunc(teamHandler.UpdateMembership))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/roles", authnMiddleware(tenantSession(http.HandlerFunc(teamHandler.ListAssignableRoles))))

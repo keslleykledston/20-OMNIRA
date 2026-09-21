@@ -120,7 +120,7 @@ func asActor(t *testing.T, pool *pgxpool.Pool, tenantID, actor uuid.UUID, fn fun
 }
 
 func newTeamHandler(app *pgxpool.Pool) *TeamHandler {
-	return NewTeamHandler(app, auditadapters.NewPostgresAuditEventRepository(app))
+	return NewTeamHandler(app, auditadapters.NewPostgresAuditEventRepository(app), false)
 }
 
 func doRequest(t *testing.T, ctx context.Context, method string, fn http.HandlerFunc, pathValues map[string]string, body []byte) *httptest.ResponseRecorder {

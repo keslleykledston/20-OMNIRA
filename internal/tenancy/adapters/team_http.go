@@ -51,10 +51,15 @@ type RoleOption struct {
 type TeamHandler struct {
 	pool  *pgxpool.Pool
 	audit auditports.AuditEventRepository
+	// invitationDeliveryAvailable espelha InvitationsHandler.deliveryAvailable
+	// (mesma regra, calculada uma vez no wiring) — MyAccess é onde o
+	// frontend já consulta permissões, então reaproveitar aqui evita um
+	// endpoint novo só para esta capability.
+	invitationDeliveryAvailable bool
 }
 
-func NewTeamHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository) *TeamHandler {
-	return &TeamHandler{pool: pool, audit: audit}
+func NewTeamHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, invitationDeliveryAvailable bool) *TeamHandler {
+	return &TeamHandler{pool: pool, audit: audit, invitationDeliveryAvailable: invitationDeliveryAvailable}
 }
 
 // authorize resolve a permissão pelo papel da membership ativa do ator, e não
@@ -133,7 +138,10 @@ func (h *TeamHandler) MyAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		permissions = append(permissions, p)
 	}
-	writeTeamJSON(w, map[string]any{"role_key": roleKey, "permissions": permissions})
+	writeTeamJSON(w, map[string]any{
+		"role_key": roleKey, "permissions": permissions,
+		"invitation_delivery_available": h.invitationDeliveryAvailable,
+	})
 }
 
 // ListTeam — GET /api/v1/tenants/{tenant_id}/members

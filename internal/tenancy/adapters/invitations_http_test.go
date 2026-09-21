@@ -31,7 +31,27 @@ func seedUnaffiliatedUser(t *testing.T, pool *pgxpool.Pool, email string) uuid.U
 	return id
 }
 
+// fakeSender simula um provedor de e-mail real configurado (não é
+// NoopInvitationSender), então deliveryAvailable fica true mesmo com
+// devExposeInviteURL=false — o cenário "produção com sender configurado".
+type fakeSender struct{ sent []string }
+
+func (f *fakeSender) Send(_ context.Context, email, _, _ string) error {
+	f.sent = append(f.sent, email)
+	return nil
+}
+
+// newInvitationsHandler simula produção com delivery configurada: sender real,
+// devExposeInviteURL=false. Cobre os testes que não são especificamente sobre
+// a gate de delivery (permissão, escopo por tenant, duplicidade, revogação).
 func newInvitationsHandler(app *pgxpool.Pool) *InvitationsHandler {
+	return NewInvitationsHandler(app, nil, &fakeSender{}, false, "https://app.test")
+}
+
+// newUnavailableInvitationsHandler simula produção sem nenhuma forma de
+// entrega: NoopInvitationSender e sem dev auth. CreateInvitation deve
+// recusar antes de qualquer escrita.
+func newUnavailableInvitationsHandler(app *pgxpool.Pool) *InvitationsHandler {
 	return NewInvitationsHandler(app, nil, nil, false, "https://app.test")
 }
 
@@ -447,5 +467,97 @@ func TestInvitationsTableEnforcesRLS(t *testing.T) {
 func TestInvitationTTLIsSeventyTwoHours(t *testing.T) {
 	if invitationTTL != 72*time.Hour {
 		t.Fatalf("invitationTTL = %v, want 72h", invitationTTL)
+	}
+}
+
+// --- Delivery fail-closed (human gate follow-up) ---
+
+func TestCreateInvitationRejectedWhenDeliveryUnavailable(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	f := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, f.tenantID, "tenant_admin", "active")
+	h := newUnavailableInvitationsHandler(app)
+
+	body, _ := json.Marshal(CreateInvitationRequest{Email: "sem-entrega@empresa.com", RoleKey: "tenant_agent"})
+	if err := asActor(t, app, f.tenantID, admin, func(ctx context.Context) error {
+		rec := doRequest(t, ctx, http.MethodPost, h.CreateInvitation, nil, body)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("create without delivery = %d, want 503", rec.Code)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+
+	var count int
+	if err := seed.QueryRow(context.Background(),
+		`SELECT count(*) FROM membership_invitations WHERE tenant_id=$1`, f.tenantID).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("invitation was persisted despite unavailable delivery: %d rows", count)
+	}
+}
+
+// A permission check ainda vem primeiro: a gate de delivery não deve revelar
+// nada a quem não teria permissão de convidar de qualquer forma.
+func TestDeliveryUnavailableDoesNotBypassPermissionCheck(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	f := seedTeamTenant(t, seed)
+	agent := seedTeamMember(t, seed, f.tenantID, "tenant_agent", "active")
+	h := newUnavailableInvitationsHandler(app)
+
+	body, _ := json.Marshal(CreateInvitationRequest{Email: "x@y.com", RoleKey: "tenant_agent"})
+	if err := asActor(t, app, f.tenantID, agent, func(ctx context.Context) error {
+		rec := doRequest(t, ctx, http.MethodPost, h.CreateInvitation, nil, body)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("agent create (delivery also unavailable) = %d, want 403", rec.Code)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+}
+
+func TestCreateInvitationSucceedsWithConfiguredSender(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	f := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, f.tenantID, "tenant_admin", "active")
+	sender := &fakeSender{}
+	h := NewInvitationsHandler(app, nil, sender, false, "https://app.test")
+
+	inv := createInvitation(t, app, h, f, admin, "entregue@empresa.com", "tenant_agent")
+	if inv.Status != "pending" {
+		t.Fatalf("unexpected invitation: %+v", inv)
+	}
+	if inv.InviteURL != "" {
+		t.Fatal("invite_url must not leak in production even with a real sender")
+	}
+	if len(sender.sent) != 1 || sender.sent[0] != "entregue@empresa.com" {
+		t.Fatalf("sender was not invoked correctly: %+v", sender.sent)
+	}
+}
+
+func TestCreateInvitationSucceedsInDevWithoutSender(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	f := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, f.tenantID, "tenant_admin", "active")
+	hDev := newDevInvitationsHandler(app)
+
+	inv := createInvitation(t, app, hDev, f, admin, "dev-sem-sender@empresa.com", "tenant_agent")
+	if inv.InviteURL == "" {
+		t.Fatal("dev auth active must expose the relative invite_url")
+	}
+}
+
+func TestInvitationDeliveryAvailableReflectsConfiguration(t *testing.T) {
+	if NewInvitationsHandler(nil, nil, nil, false, "").InvitationDeliveryAvailable() {
+		t.Fatal("Noop sender + no dev auth must not be available")
+	}
+	if !NewInvitationsHandler(nil, nil, nil, true, "").InvitationDeliveryAvailable() {
+		t.Fatal("dev auth active must be available regardless of sender")
+	}
+	if !NewInvitationsHandler(nil, nil, &fakeSender{}, false, "").InvitationDeliveryAvailable() {
+		t.Fatal("a real sender must be available regardless of dev auth")
 	}
 }

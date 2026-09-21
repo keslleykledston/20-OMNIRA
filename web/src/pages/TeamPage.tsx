@@ -99,6 +99,8 @@ export default function TeamPage() {
     retry: false,
   })
   const canManage = access.data?.permissions.includes('membership.manage') ?? false
+  const deliveryAvailable = access.data?.invitation_delivery_available ?? false
+  const canInvite = canManage && deliveryAvailable
 
   const team = useQuery({
     queryKey: ['team', tenantId],
@@ -202,13 +204,21 @@ export default function TeamPage() {
         title="Equipe e acesso"
         description="Gerencie os usuários da sua equipe, defina permissões e controle o acesso à plataforma."
         actions={
-          canManage ? (
+          canInvite ? (
             <Button variant="primary" onClick={() => setInviteOpen(true)}>
               <Icon name="plus" size={16} />
               Convidar usuário
             </Button>
           ) : (
-            <Button variant="primary" disabled title="Requer permissão para gerenciar a equipe">
+            <Button
+              variant="primary"
+              disabled
+              title={
+                !canManage
+                  ? 'Requer permissão para gerenciar a equipe'
+                  : 'Envio de convites ainda não está configurado neste ambiente.'
+              }
+            >
               <Icon name="plus" size={16} />
               Convidar usuário
             </Button>

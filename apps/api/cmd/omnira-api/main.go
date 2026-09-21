@@ -79,7 +79,12 @@ func main() {
 	} else {
 		srv.RegisterAuthHandlers(cfg.DevAuthActive(), cfg.AuthCookieSecure)
 	}
-	srv.RegisterTenancyHandlers(dbPool)
+	// Nenhum InvitationSender real está configurado ainda (sem provedor de
+	// e-mail); a capability de entrega hoje é exatamente o dev auth. Quando um
+	// sender de verdade existir, esta conta muda nos dois lugares — ver
+	// InvitationsHandler.deliveryAvailable.
+	invitationDeliveryAvailable := cfg.DevAuthActive()
+	srv.RegisterTenancyHandlers(dbPool, invitationDeliveryAvailable)
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.PublicBaseURL)
 	crmHandler := srv.RegisterInboxHandlers(dbPool)
 	providerRegistry := channelapplication.NewMapProviderRegistry()

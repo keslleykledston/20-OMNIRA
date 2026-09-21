@@ -53,7 +53,7 @@ describe('TeamPage', () => {
 
   it('lists members and summary counts', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({
         items: [
           member({ name: 'Ana Souza', role_key: 'tenant_admin' }),
@@ -80,11 +80,11 @@ describe('TeamPage', () => {
     expect(screen.queryByRole('button', { name: 'Ações' })).toBeNull();
   });
 
-  it('the invite button is disabled with an explanatory title', async () => {
+  it('the invite button is disabled with an explanatory title when lacking permission', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_supervisor', permissions: ['membership.read'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member()] }),
-      '/roles': () => ({ items: ROLES }),
+      '/roles': () => ({ items: [] }),
     });
     page();
 
@@ -93,9 +93,28 @@ describe('TeamPage', () => {
     expect(invite).toHaveAttribute('title', 'Requer permissão para gerenciar a equipe');
   });
 
+  it('the invite button is disabled with a delivery-specific title when unavailable', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: false }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+    });
+    page();
+
+    // O botão existe desde o primeiro render, com o título do estado de
+    // carregamento ("sem permissão" por padrão); espera a equipe carregar —
+    // o que implica access.data já resolvido — antes de checar o título final.
+    await screen.findAllByText('Ana Souza');
+    const invite = screen.getByRole('button', { name: /Convidar usuário/ });
+    expect(invite).toBeDisabled();
+    await waitFor(() =>
+      expect(invite).toHaveAttribute('title', 'Envio de convites ainda não está configurado neste ambiente.'),
+    );
+  });
+
   it('filters by search text across name and email', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({
         items: [member({ name: 'Ana Souza', email: 'ana@empresa.com' }), member({ name: 'Bruno Lima', email: 'bruno@empresa.com' })],
       }),
@@ -112,7 +131,7 @@ describe('TeamPage', () => {
 
   it('shows — when a member never logged in', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member({ last_login_at: undefined })] }),
       '/roles': () => ({ items: ROLES }),
     });
@@ -124,7 +143,7 @@ describe('TeamPage', () => {
 
   it('changes a member role through the modal', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member({ membership_id: 'm1', role_key: 'tenant_agent' })] }),
       '/roles': () => ({ items: ROLES }),
     });
@@ -150,7 +169,7 @@ describe('TeamPage', () => {
 
   it('confirms before revoking a member', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member({ membership_id: 'm1' })] }),
       '/roles': () => ({ items: ROLES }),
     });
@@ -175,7 +194,7 @@ describe('TeamPage', () => {
 
   it('surfaces the last-admin conflict from the backend', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member({ membership_id: 'm1', role_key: 'tenant_admin' })] }),
       '/roles': () => ({ items: ROLES }),
     });
@@ -194,7 +213,7 @@ describe('TeamPage', () => {
 
   it('empty team shows the empty state', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [] }),
       '/roles': () => ({ items: ROLES }),
     });
@@ -225,7 +244,7 @@ describe('TeamPage — convites', () => {
 
   it('opens the invite modal with role options and submits', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member()] }),
       '/roles': () => ({ items: ROLES }),
       '/team/invitations': () => ({ items: [] }),
@@ -256,7 +275,7 @@ describe('TeamPage — convites', () => {
 
   it('validates the email before submitting', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member()] }),
       '/roles': () => ({ items: ROLES }),
       '/team/invitations': () => ({ items: [] }),
@@ -287,7 +306,7 @@ describe('TeamPage — convites', () => {
 
   it('lists pending invitations in the Convites tab', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member()] }),
       '/roles': () => ({ items: ROLES }),
       '/team/invitations': () => ({ items: [invite({ email: 'pendente@empresa.com' })] }),
@@ -303,7 +322,7 @@ describe('TeamPage — convites', () => {
 
   it('revokes a pending invitation after confirmation', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member()] }),
       '/roles': () => ({ items: ROLES }),
       '/team/invitations': () => ({ items: [invite({ id: 'inv-1', email: 'a-revogar@empresa.com' })] }),
@@ -332,7 +351,7 @@ describe('TeamPage — convites', () => {
 
   it('shows an empty state when there are no invitations', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member()] }),
       '/roles': () => ({ items: ROLES }),
       '/team/invitations': () => ({ items: [] }),
@@ -347,7 +366,7 @@ describe('TeamPage — convites', () => {
 
   it('does not offer revoke for an already-accepted invitation', async () => {
     mockRoutes({
-      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),
       '/team': () => ({ items: [member()] }),
       '/roles': () => ({ items: ROLES }),
       '/team/invitations': () => ({ items: [invite({ status: 'accepted', email: 'aceito@empresa.com' })] }),
