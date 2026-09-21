@@ -196,3 +196,30 @@ Ordem corrente: **FR3A (feito) → FR3B Contacts UI (feito) → IAM (IAM0-2B DON
 
 ## 8. Limpeza / estado do repositório
 Árvore limpa em `dd9e191`. Sem containers do projeto além de `omnira-postgres`/`omnira-nats`. Bancos residuais de teste: `omnira_test` (dados de smokes anteriores). Arquivos temporários ficam em `/tmp` (`/tmp/env.bak.omnira`, `/tmp/codex-*`) e no scratchpad da sessão.
+
+---
+
+## IAM3 Status (Pausa Estratégica)
+
+**Phase:** 1/5 — Audit + Domain alignment DONE
+
+**Commits:**
+- 7883917: fix(iam3) align RBAC system roles to migration authority
+
+**What's Next:**
+
+IAM3 is security-critical (FRONTIER_LLM) and requires dedicated focus:
+
+- **IAM3.2**: HTTP CRUD endpoints (roles list/get/create/update/delete)
+- **IAM3.3**: Permission enforcement + privilege escalation tests
+- **IAM3.4**: Adversarial + RLS + Postgres real integration tests
+- **IAM3.5**: OpenAPI contract + final gate
+
+**Architecture ready:** RBAC schema + service logic exist in code. Only HTTP adapters + enforcement + tests remain.
+
+**Security considerations:** System roles immutable, custom roles tenant-scoped, no privilege escalation, RLS on roles table must be verified, runtime role (omnira_app) without BYPASSRLS.
+
+**Audit doc:** docs/delivery/IAM3-AUDIT.md (complete; use as reference).
+
+**Recommendation:** Continue IAM3 in next session with dedicated focus. Do not rush security-critical work.
+
