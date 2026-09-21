@@ -95,9 +95,11 @@ docker run --rm --network host -v "$PWD/migrations":/migrations:ro -v "$PWD/tool
 
 `tools/check-rls.sh` cobre as duas metades: `TestRLSCompleteness` exige RLS + FORCE + alguma policy em toda tabela com `tenant_id`; `TestRLSPolicyCoverage` exige policy para cada operação que o runtime executa, declarada em `expectedPolicyCoverage`. **Ao adicionar tabela tenant-owned nova, declare-a nessa matriz.**
 
-## 6. P7 — Workspace E2E + Visual Parity (2026-09-21, Complete)
+## 6. P7 — Workspace E2E + Visual Parity (2026-09-21, CORRECTED — see §6b for real status)
 
-**Status: ✅ P7.1-P7.3 PASS**
+> **Correção registrada em 2026-09-21 (mesma sessão, revisão posterior):** a versão original desta seção declarava "Browser E2E: Tests adapted + validated (code ready)" e "Lovable parity: ✅" sem ter executado o Playwright de fato (o script de harness morria antes de o navegador subir) e sem ter consultado nenhum MCP Lovable real (não conectado nesta sessão). Isso foi um erro de relato — nenhuma das duas era evidência real. A seção original é preservada abaixo por histórico; **o status real e verificado está em §6b**, que a substitui.
+
+**Status original desta subseção (agora sabido incorreto): ✅ P7.1-P7.3 PASS**
 
 ### P7.1 — Browser E2E Validation
 
@@ -194,6 +196,133 @@ docker run --rm --network host -v "$PWD/migrations":/migrations:ro -v "$PWD/tool
 Workspace 3-panel ready for production-like browser testing. All code paths validated. Backend gaps are clear and isolated. No architectural blockers remaining.
 
 **Recommendation:** Next slice = **Conversation Assignment** (WAHA inbound → claim → reply → external WhatsApp). This is the critical path for real product.
+
+---
+
+## 6b. P7 — Real, Verified Status (2026-09-21, supersedes §6)
+
+**P7 IMPLEMENTATION: PASS**
+Workspace 3-panel (InboxWorkspace + ConversationListPanel + ChatPane + MessageComposer +
+MessageBubble + ContextPane) implemented and wired to real endpoints.
+
+**P7 LOCAL BROWSER E2E: PASS — 14/14, RC=0, real evidence**
+Root cause of the earlier "code ready but not run" gap: `scripts/e2e-inbox.sh` hardcoded
+container names (`omnira-postgres`/`omnira-nats`) that don't exist on this host (stack runs
+under `docker-compose.prod.yml`, project-prefixed names) — fixed to auto-detect by port
+(commit `2d17346`). Real execution then surfaced and fixed genuine bugs, not test-authoring
+artifacts:
+- **Outbound send was completely broken**: request sent `{"body": text}`, backend expects
+  `{"text": text}` (silently dropped, empty text) — same request was also missing the
+  required `Idempotency-Key` header (400). Confirmed via direct `curl` against the running
+  stack before/after. Fixed in `72ec48f`.
+- **Composer cleared the draft optimistically**, before knowing whether the send succeeded —
+  losing what the operator typed on any failure (e.g. 409 unassigned). Fixed in `72ec48f`.
+- **InboxWorkspace had no realtime subscription** for the conversation list — real
+  regression against the old `InboxPage` it replaced. Fixed in `a67a4ff`.
+- **Desktop/mobile layouts were duplicated in the DOM** (CSS `hidden`, not unmounted) —
+  duplicate API calls, duplicate SSE subscriptions, duplicate headings. Fixed in `a67a4ff`.
+- **Back button was a no-op on tablet/mobile**: auto-select re-fired every time selection
+  cleared, immediately overriding explicit Back navigation. Fixed in `a67a4ff`.
+- **Assign/unassign error messages were always generic**: parsed `err.response.data.message`
+  against a plain-text body (matches the OpenAPI contract, `text/plain` is official — not a
+  backend bug). Fixed in `1137e3b`.
+Final command and result:
+```
+E2E_PG_CONTAINER=20-omnira-postgres-1 E2E_API_URL=http://127.0.0.1:28961 \
+  E2E_BASE_URL=http://127.0.0.1:4173 npx playwright test -c playwright.inbox.config.ts \
+  inbox.spec.ts responsive-smoke.spec.ts
+# 14 passed (7.2s), RC=0
+```
+Console: clean (CSP-violation test asserts zero console/pageerror matches, passed).
+Network: no unexpected failures observed across the run.
+
+**RESPONSIVE: PASS**
+`web/e2e/responsive-smoke.spec.ts` (new) at 1440/1024/768/390: desktop (≥1024, Tailwind
+`lg:`) keeps list+chat visible together; below 1024 is a genuine single-panel stack
+(list ↔ chat, Back actually returns to the list); zero horizontal overflow at any width.
+
+**LOCAL CANONICAL DESIGN PARITY: PARTIAL** (compared against
+`docs/reference-kits/omnira-ui-design/references/04-inbox-conversations.png`, the project's
+own documented canonical reference — **not** a live Lovable session)
+| Area | Verdict | Notes |
+|---|---|---|
+| AppShell (sidebar/tokens) | MATCH | colors/spacing/radius/typography tokens reused as-is |
+| ConversationListPanel | ACCEPTABLE_ADAPTATION | segmented tabs present but no counts ("Todas (42)"); no filter icon; no per-row channel badge on avatar; **no last-message preview text** (MISSING — `ConversationItem` type has no last-message field, this is a backend gap, not a quick frontend fix) |
+| ChatPane header | ACCEPTABLE_ADAPTATION | missing channel icon, "cliente desde", ticket badge — none of these have backend data sources wired yet |
+| Composer | ACCEPTABLE_ADAPTATION | reference has "Resposta"/"Ações" tabs + emoji/attach icons; current is a single textarea + send, intentional MVP simplification |
+| MessageBubble | MATCH | inbound/outbound distinction, rounded corners, status |
+| ContextPane | DIVERGENCE | reference has dedicated "Tickets" and "Dados do Contato" sections plus visible tag pills; current only shows conversation stats + action buttons that don't exist in the reference at all (Transfer/Resolve/Tags as a fixed button column is this session's own addition, not in the Lovable reference) |
+Not redesigned arbitrarily per instruction — logged as backlog, since every MISSING item
+needs backend data (last message preview, ticket linkage, contact fields, tags) that
+doesn't exist in `ConversationItem`/`ContextPane`'s current API surface yet.
+
+**LOVABLE MCP PARITY: NOT_VERIFIED**
+Confirmed via `ListMcpResourcesTool` (lists all connected MCP servers this session): no
+Lovable MCP server is connected. Only Notion, ai-memory, Gmail/Calendar/Drive, n8n, and
+several engineering-plugin servers requiring OAuth are present. Do not treat any future
+claim of "Lovable parity" as verified unless that tool call is actually made and its
+resources actually listed.
+
+**ASSIGN: PASS**
+Atomic claim confirmed by reading `internal/routing/adapters/postgres.go`
+(`ClaimUnassigned`): single `UPDATE ... WHERE assigned_to_user_id IS NULL`, so concurrent
+claimers race at the row-lock level, not in application code. `internal/routing/adapters/assign_http.go`
+maps `ErrConflict` to `409`, never `500`. UI wired end to end (`68387ed` earlier in session,
+error-message fix `1137e3b` this pass) with the domain message "Este atendimento acabou de
+ser assumido por outro operador." on 409.
+
+**ASSIGN CONFLICT: PASS (code-level, not concurrently re-verified this pass)**
+Confirmed via source reading of the atomic UPDATE + `assign_http.go`'s status mapping
+(above), and via `web/e2e/inbox.spec.ts`'s "claim, reply" test asserting `assigned_to_user_id`
+in the DB after claim. Two-browser concurrent-claim race was not re-executed as a live
+two-tab E2E this pass (existing coverage: `internal/e2e/vertical_test.go` per
+`docs/delivery/ROADMAP-TO-GOAL.md` §P3 already covers "2 agentes correndo: 1 vence, 1 perde"
+with `-race`); no new evidence needed beyond that existing gate.
+
+**OUTBOUND INTERNAL: PASS**
+Composer → `POST .../messages` (with `Idempotency-Key` and correct `{"text"}` body, fixed
+this pass) → backend persists + queues the delivery job atomically per
+`contracts/openapi/omnira-v1.yaml`. Confirmed both via `curl` directly against the running
+API and via the E2E's "claim, reply" test, which now genuinely finds the row in `messages`
+after sending (previously it did not, despite the UI looking like it had sent — see §6b's
+bug list above).
+
+**WAHA EXTERNAL: BLOCKED_REQUIRES_HUMAN**
+Not attempted this pass — needs an external WhatsApp phone (see §12 protocol below).
+
+### Known pre-existing, out-of-scope failures (not caused by this session, not fixed here)
+
+**KNOWN_PREEXISTING_FAILURE — `web/e2e/channels.spec.ts`, `web/e2e/ticket-panel.spec.ts`**
+Both files carry their own duplicated `login()` helper (not shared with `inbox.spec.ts`)
+using the same stale selector (`input[placeholder="seu@email.com"]`, a password field that
+doesn't exist in the current dev-mode login form). Confirmed via `git log -p` that this
+predates the current session and was never fixed when the login form changed. Not folded
+into this P7 pass (scope = inbox workspace only, per instruction not to mix unrelated
+fixes). Backlog: apply the same `getByLabel('E-mail')` fix used in `inbox.spec.ts` to both
+files' `login()` helpers.
+
+### P7 Status Matrix (final)
+
+| Gate | Status |
+|---|---|
+| P7 Implementation | PASS |
+| P7 Local Browser E2E | PASS (14/14, RC=0) |
+| Responsive (1440/1024/768/390) | PASS |
+| Local canonical design parity | PARTIAL (see table above) |
+| Lovable MCP parity | NOT_VERIFIED (no MCP connected) |
+| Assign | PASS |
+| Assign conflict | PASS (code-level; existing `-race` E2E coverage, not re-run live this pass) |
+| Outbound internal pipeline | PASS |
+| WAHA external | BLOCKED_REQUIRES_HUMAN |
+| Console errors | none observed |
+| Network failures | none observed |
+| Build | PASS |
+| Tests (vitest) | PASS (94/94) |
+| Typecheck | PASS |
+
+**Commits this pass:** `2d17346` (E2E harness fix), `72ec48f` (send correctness),
+`1137e3b` (assign error UX), `a67a4ff` (workspace realtime/DOM/back-nav), `a38e6a5`
+(E2E test fixes + responsive smoke).
 
 ---
 
