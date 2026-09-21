@@ -2,15 +2,28 @@
 # Real-stack browser e2e for the Inbox vertical (Playwright + chromium).
 # Brings up: throwaway DB (omnira_e2e) + seed, a throwaway WAHA, API and worker containers (app role omnira_app,
 # runtime guard on), the built SPA via `vite preview` (proxying /api), then runs
-# web/e2e/inbox.spec.ts and web/e2e/channels.spec.ts (the latter drives a real, throwaway WAHA). Requires containers omnira-postgres (55434) and omnira-nats (4222),
+# web/e2e/inbox.spec.ts and web/e2e/channels.spec.ts (the latter drives a real, throwaway WAHA). Requires
+# something reachable at 127.0.0.1:55434 (Postgres) and 127.0.0.1:4222 (NATS) — any
+# container/compose project, auto-detected by port (see resolve_pg_container below),
 # docker, node/npm (web/node_modules installed) and Playwright's chromium.
 #   scripts/e2e-inbox.sh            run and tear down
 #   scripts/e2e-inbox.sh --keep     leave everything up afterwards
 set -uo pipefail
 cd "$(dirname "$0")/.."
 KEEP=0; [ "${1:-}" = "--keep" ] && KEEP=1
-DB=omnira_e2e; API_PORT=28961; WEB_PORT=4173; WAHA_PORT=23200; WAHA_KEY=e2ekey
-PSQL=(docker exec -i omnira-postgres psql -U omnira -v ON_ERROR_STOP=1 -q)
+DB=omnira_e2e; API_PORT=28961; WEB_PORT=4173; WAHA_PORT=23200; WAHA_KEY=e2ekey; PG_PORT=55434; NATS_PORT="${E2E_NATS_PORT:-4222}"
+# This script only needs (a) a psql-capable exec target for the fixed-port Postgres
+# and (b) NATS reachable on its fixed port — not any particular Compose project or
+# container_name. Resolve the Postgres container by which one actually publishes
+# 127.0.0.1:55434 (works for docker-compose.yml's "omnira-postgres" and for
+# docker-compose.prod.yml's project-prefixed name alike); NATS only needs the port
+# open, no exec. E2E_PG_CONTAINER/E2E_NATS_PORT remain explicit overrides.
+resolve_pg_container() {
+  [ -n "${E2E_PG_CONTAINER:-}" ] && { echo "$E2E_PG_CONTAINER"; return; }
+  docker ps --format '{{.Names}}\t{{.Ports}}' | awk -v p=":$PG_PORT->" '$0 ~ p {print $1; exit}'
+}
+PG_CONTAINER="$(resolve_pg_container)"
+PSQL=(docker exec -i "$PG_CONTAINER" psql -U omnira -v ON_ERROR_STOP=1 -q)
 PREVIEW_PID=""
 cleanup() {
   [ "$KEEP" = 1 ] && { echo "--keep: stack left running (DB $DB, API :$API_PORT, web :$WEB_PORT)"; return; }
@@ -21,8 +34,8 @@ cleanup() {
 trap cleanup EXIT
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-docker ps --format '{{.Names}}' | grep -qx omnira-postgres || die "omnira-postgres not running"
-docker ps --format '{{.Names}}' | grep -qx omnira-nats || die "omnira-nats not running"
+[ -n "$PG_CONTAINER" ] || die "no container publishes 127.0.0.1:$PG_PORT (set E2E_PG_CONTAINER to override)"
+(exec 3<>"/dev/tcp/127.0.0.1/$NATS_PORT") 2>/dev/null || die "nothing reachable at 127.0.0.1:$NATS_PORT (NATS; set E2E_NATS_PORT to override)"
 [ -d web/node_modules ] || die "run npm ci in web/ first"
 
 echo "== database"
@@ -40,10 +53,16 @@ docker run -d --name omnira-e2e-waha -p 127.0.0.1:$WAHA_PORT:3000 --add-host=hos
   devlikeapro/waha:gows-2026.8.2 >/dev/null || die "waha start"
 for i in $(seq 1 40); do curl -sf -o /dev/null -H "X-Api-Key: $WAHA_KEY" localhost:$WAHA_PORT/health && break; sleep 1; done
 KEY=$(head -c 32 /dev/urandom | base64)
-ENVS=(-e OMNIRA_CREDENTIALS_KEY="$KEY" -e OMNIRA_NATS_URL=nats://127.0.0.1:4222
+# OMNIRA_ENV defaults to "development" (config.go), which allows dev auth, but the
+# route only registers when OMNIRA_DEV_AUTH_ENABLED=true is explicit (IAM1 hardening:
+# neither a missing OMNIRA_ENV nor a forgotten flag alone opens the door). Without it
+# /login never renders the email field ("no auth method configured") and every test
+# that logs in times out waiting for a field that doesn't exist.
+ENVS=(-e OMNIRA_CREDENTIALS_KEY="$KEY" -e OMNIRA_NATS_URL="nats://127.0.0.1:$NATS_PORT"
+      -e OMNIRA_ENV=development -e OMNIRA_DEV_AUTH_ENABLED=true
       -e OMNIRA_WAHA_ENABLED=true -e OMNIRA_WAHA_BASE_URL=http://127.0.0.1:$WAHA_PORT -e OMNIRA_WAHA_API_KEY=$WAHA_KEY
       -e OMNIRA_PUBLIC_BASE_URL=http://host.docker.internal:$API_PORT
-      -e OMNIRA_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:55434/$DB?sslmode=disable")
+      -e OMNIRA_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PG_PORT/$DB?sslmode=disable")
 docker run -d --name omnira-e2e-api --network host -e OMNIRA_HTTP_ADDR=127.0.0.1:$API_PORT "${ENVS[@]}" omnira-api:e2e >/dev/null || die "api start"
 docker run -d --name omnira-e2e-worker --network host "${ENVS[@]}" omnira-worker:e2e >/dev/null || die "worker start"
 for i in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:$API_PORT/healthz" && break; sleep 1; done
@@ -57,7 +76,7 @@ for i in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:$WEB_PORT/" && 
 curl -sf -o /dev/null "http://127.0.0.1:$WEB_PORT/" || { cat /tmp/e2e-web-preview.log; die "preview not up"; }
 
 echo "== playwright"
-(cd web && E2E_DB=$DB E2E_WAHA_URL=http://127.0.0.1:$WAHA_PORT E2E_WAHA_KEY=$WAHA_KEY E2E_API_URL=http://127.0.0.1:$API_PORT E2E_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test -c playwright.inbox.config.ts)
+(cd web && E2E_DB=$DB E2E_PG_CONTAINER="$PG_CONTAINER" E2E_WAHA_URL=http://127.0.0.1:$WAHA_PORT E2E_WAHA_KEY=$WAHA_KEY E2E_API_URL=http://127.0.0.1:$API_PORT E2E_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test -c playwright.inbox.config.ts)
 RC=$?
 [ $RC -ne 0 ] && { echo "--- api logs"; docker logs omnira-e2e-api 2>&1 | tail -15; echo "--- worker logs"; docker logs omnira-e2e-worker 2>&1 | grep -v '^published' | tail -8; }
 exit $RC
