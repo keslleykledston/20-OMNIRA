@@ -30,8 +30,13 @@ func writeJSONError(w http.ResponseWriter, message string, status int) {
 	json.NewEncoder(w).Encode(map[string]string{"error": message, "message": message})
 }
 
-// MockLogin — endpoint POST /api/v1/auth/login (APENAS PARA TESTES)
-func (h *AuthHandler) MockLogin(w http.ResponseWriter, r *http.Request) {
+// DevLogin — POST /api/v1/auth/dev/login.
+//
+// Ferramenta de desenvolvimento, não um mecanismo de autenticação: entra quem
+// está na allowlist de mock_login.go, e não há senha porque não existe auth
+// local neste produto. Só é registrada quando o ambiente permite e a flag está
+// explicitamente ligada (ver config.DevAuthActive).
+func (h *AuthHandler) DevLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

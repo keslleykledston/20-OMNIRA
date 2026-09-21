@@ -69,7 +69,7 @@ React Frontend (localhost:3000)
          ↓
 Usuário clica "Login"
          ↓
-Axios → /api/v1/auth/login
+Axios → /api/v1/auth/oidc/start  (ou /api/v1/auth/dev/login em ambiente de dev)
          ↓
 Nginx (80 /api/* → 8080)
          ↓

@@ -8,6 +8,9 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_OTEL_ENDPOINT: http://otel-collector:4317
   OMNIRA_ENV: ${OMNIRA_ENV-development}
   OMNIRA_AUTH_MODE: ${OMNIRA_AUTH_MODE-mock}
+  # Sem isto não existe rota de login de desenvolvimento: a API a registra
+  # apenas com a flag ligada num ambiente permitido.
+  OMNIRA_DEV_AUTH_ENABLED: ${OMNIRA_DEV_AUTH_ENABLED-true}
   OMNIRA_AUTH_ISSUER: ${OMNIRA_AUTH_ISSUER-http://keycloak:8080/realms/omnira}
   OMNIRA_AUTH_AUDIENCE: ${OMNIRA_AUTH_AUDIENCE-omnira-web}
   OMNIRA_AUTH_CLIENT_ID: ${OMNIRA_AUTH_CLIENT_ID-omnira-web}

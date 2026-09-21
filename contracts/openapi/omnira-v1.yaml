@@ -34,31 +34,19 @@ security:
   - bearerAuth: []
   - cookieAuth: []
 paths:
-  /auth/login:
-    post:
-      operationId: login
-      tags: [Auth]
-      summary: Mock login (development only)
-      description: Disabled when `OMNIRA_AUTH_MODE=oidc`; successful development logins also set the HttpOnly session cookie.
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/LoginRequest' }
-      responses:
-        '200':
-          description: Signed JWT (RS256, 24h) and the user's tenant
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/LoginResponse' }
-        '400': { $ref: '#/components/responses/JsonError' }
-        '401': { $ref: '#/components/responses/JsonError' }
+  # POST /auth/dev/login existe apenas quando OMNIRA_DEV_AUTH_ENABLED=true num
+  # ambiente de desenvolvimento, e por isso não faz parte do contrato público:
+  # em staging e produção a rota não é registrada e responde 404. Ver
+  # docs/reference-kits/omnira-ui-design/02-SCREENS/00-LOGIN-SSO.md.
   /auth/mode:
     get:
       operationId: getAuthenticationMode
       tags: [Auth]
-      summary: Return the configured browser authentication mode
+      summary: Return the authentication the server actually offers
+      description: |
+        A tela de login usa isto para não oferecer um caminho que o servidor não atende.
+        `oidc` é o modo de produção; `dev` só aparece quando o login de desenvolvimento está
+        registrado; `unavailable` significa que nenhuma forma de entrar está configurada.
       security: []
       responses:
         '200':
@@ -69,7 +57,10 @@ paths:
                 type: object
                 required: [mode]
                 properties:
-                  mode: { type: string, enum: [mock, oidc] }
+                  mode: { type: string, enum: [oidc, dev, unavailable] }
+                  dev_auth:
+                    type: boolean
+                    description: Se o login de desenvolvimento está registrado neste servidor.
   /auth/oidc/start:
     get:
       operationId: startOIDCLogin
@@ -849,28 +840,6 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
-    LoginRequest:
-      type: object
-      required: [email]
-      properties:
-        email: { type: string, example: admin@omnira.local }
-    LoginResponse:
-      type: object
-      required: [token, expires_in, user, tenant]
-      properties:
-        token: { type: string }
-        expires_in: { type: integer, example: 86400 }
-        user:
-          type: object
-          properties:
-            id: { type: string, format: uuid }
-            email: { type: string }
-            name: { type: string }
-        tenant:
-          type: object
-          properties:
-            id: { type: string, format: uuid }
-            name: { type: string }
     SessionProfile:
       type: object
       required: [user, tenant]

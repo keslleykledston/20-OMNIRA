@@ -138,8 +138,13 @@ func (s *Server) RegisterHealthHandlers() {
 	})
 }
 
-// RegisterAuthHandlers — registra endpoints de autenticação (incluindo mock login para testes)
-func (s *Server) RegisterAuthHandlers(secureCookie ...bool) {
+// RegisterAuthHandlers — endpoints de autenticação quando não há OIDC.
+//
+// devAuthEnabled decide se a rota de login de desenvolvimento passa a existir.
+// Quando é false a rota não é registrada: responder 403 de dentro do handler
+// ainda deixaria a superfície publicada, e o que queremos é que ela não exista.
+// Autoridade é do backend — o frontend esconder o formulário não substitui isto.
+func (s *Server) RegisterAuthHandlers(devAuthEnabled bool, secureCookie ...bool) {
 	// Gerar chave RSA para JWT (use valores reais em produção).
 	// A mesma keypair é reutilizada por RegisterTenancyHandlers para
 	// verificar os tokens emitidos aqui — por isso fica salva no Server em
@@ -156,22 +161,34 @@ func (s *Server) RegisterAuthHandlers(secureCookie ...bool) {
 	}
 
 	if s.privateKey == nil {
-		// Health check apenas
-		s.mux.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		s.mux.HandleFunc("GET /api/v1/auth/mode", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"error": "auth not configured"})
+			_ = json.NewEncoder(w).Encode(authModeResponse{Mode: "unavailable"})
 		})
 		return
 	}
 
 	authHandler := authn.NewAuthHandler(s.privateKey, secureCookie...)
-	s.mux.HandleFunc("POST /api/v1/auth/login", authHandler.MockLogin)
 	s.mux.HandleFunc("GET /api/v1/auth/health", authHandler.HealthCheck)
+
+	mode := "unavailable"
+	if devAuthEnabled {
+		// Caminho próprio, separado de /auth/login: não existe login local de
+		// verdade, e um path genérico faria o mock parecer o mecanismo normal.
+		s.mux.HandleFunc("POST /api/v1/auth/dev/login", authHandler.DevLogin)
+		mode = "dev"
+	}
 	s.mux.HandleFunc("GET /api/v1/auth/mode", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"mode": "mock"})
+		_ = json.NewEncoder(w).Encode(authModeResponse{Mode: mode, DevAuth: devAuthEnabled})
 	})
+}
+
+// authModeResponse diz ao cliente quais formas de entrar existem de fato, para
+// que a tela de login não ofereça um caminho que o servidor não atende.
+type authModeResponse struct {
+	Mode    string `json:"mode"` // oidc | dev | unavailable
+	DevAuth bool   `json:"dev_auth"`
 }
 
 // RegisterOIDCAuthHandlers installs the production authentication boundary.
@@ -197,7 +214,7 @@ func (s *Server) RegisterOIDCAuthHandlers(authenticator authn.Authenticator, han
 	if modePattern == "" {
 		s.mux.HandleFunc("GET /api/v1/auth/mode", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]string{"mode": "oidc"})
+			_ = json.NewEncoder(w).Encode(authModeResponse{Mode: "oidc"})
 		})
 	}
 }

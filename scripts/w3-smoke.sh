@@ -39,7 +39,8 @@ call() { # call TOKEN curl-args... -> body + "\n[code]"
   curl -s -w '\n[%{http_code}]' -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' "$@"
 }
 code() { sed -n 's/^\[\([0-9]*\)\]$/\1/p' | tail -1; }
-login() { curl -s -X POST "$API/auth/login" -H 'Content-Type: application/json' -d "{\"email\":\"$1\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'; }
+# Exige OMNIRA_DEV_AUTH_ENABLED=true no ambiente de lab: a rota não existe sem isso.
+login() { curl -s -X POST "$API/auth/dev/login" -H 'Content-Type: application/json' -d "{\"email\":\"$1\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'; }
 
 say "0/6 Pre-flight"
 for c in docker curl python3; do command -v $c >/dev/null || die "missing $c"; done

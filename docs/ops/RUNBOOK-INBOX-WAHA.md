@@ -32,8 +32,8 @@ Adotar um banco já migrado à mão: `OMNIRA_MIGRATE_BASELINE=<último prefixo a
 
 ## Autenticação
 
-- DEV/teste: `OMNIRA_AUTH_MODE=mock`; `POST /api/v1/auth/login {email}` conhece `test@omnira.local` e `admin@omnira.local`. O seed cria Tenant, Usuários e memberships. O navegador recebe cookie HttpOnly; o JWT não fica no `localStorage`.
-- Ambiente real: `OMNIRA_AUTH_MODE=oidc`, issuer/audience/client/secret/redirect configurados e `OMNIRA_AUTH_COOKIE_SECURE=true`. O IdP deve emitir `sub` igual a `users.external_subject`; Usuário e membership são provisionados antes do login.
+- DEV/teste: `OMNIRA_AUTH_MODE=mock` **e** `OMNIRA_DEV_AUTH_ENABLED=true` (ambos, e só em `local`/`dev`/`development`/`lab`/`test`). `POST /api/v1/auth/dev/login {email}` conhece `test@omnira.local` e `admin@omnira.local` — não há senha, porque não existe autenticação local neste produto. Sem a flag a rota não é registrada e responde 404; com a flag ligada em staging/production a API recusa o boot. O seed cria Tenant, Usuários e memberships. O navegador recebe cookie HttpOnly; o JWT não fica no `localStorage`.
+- Ambiente real: `OMNIRA_AUTH_MODE=oidc`, issuer/audience/client/secret/redirect configurados e `OMNIRA_AUTH_COOKIE_SECURE=true`. A identidade canônica é o par `(issuer, subject)` resolvido por `user_identities` — `users.external_subject` é campo legado e não serve mais como chave de login. O primeiro acesso provisiona o Usuário (JIT); a membership precisa existir para haver TenantContext.
 - O callback não cria acesso a Tenant. Membership/grant persistido continua sendo a única autoridade.
 
 ## Operar o WhatsApp (admin)

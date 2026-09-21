@@ -30,6 +30,7 @@ type Config struct {
 	AuthRedirectURL   string
 	AuthPostLoginURL  string
 	AuthCookieSecure  bool
+	DevAuthEnabled    bool
 	CredentialsKey    []byte
 	credentialsKeyErr error
 	WahaEnabled       bool
@@ -70,6 +71,7 @@ func Load() *Config {
 		AuthRedirectURL:   os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
 		AuthPostLoginURL:  getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
 		AuthCookieSecure:  getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
+		DevAuthEnabled:    getEnv("OMNIRA_DEV_AUTH_ENABLED", "false") == "true",
 		CredentialsKey:    key,
 		credentialsKeyErr: keyErr,
 		WahaEnabled:       getEnv("OMNIRA_WAHA_ENABLED", "false") == "true",
@@ -123,6 +125,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("OMNIRA_AUTH_MODE=mock é proibido em staging/production; exigido: oidc")
 		}
 	}
+	// Fail-closed: a flag ligada fora de um ambiente de desenvolvimento é um
+	// deploy mal configurado. Recusar o boot torna isso visível na hora, em vez
+	// de ignorar a flag em silêncio e deixar a dúvida sobre o que está ativo.
+	if c.DevAuthEnabled && !DevAuthEnvAllowed(c.Env) {
+		return fmt.Errorf("OMNIRA_DEV_AUTH_ENABLED=true é proibido em OMNIRA_ENV=%s", c.Env)
+	}
 	if authMode == "oidc" {
 		if c.AuthIssuer == "" || c.AuthAudience == "" || c.AuthClientID == "" || c.AuthClientSecret == "" || c.AuthRedirectURL == "" {
 			return fmt.Errorf("OIDC exige issuer, audience, client id, client secret e redirect URL")
@@ -154,4 +162,25 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// DevAuthEnvAllowed diz se o ambiente admite o login de desenvolvimento.
+//
+// É metade da defesa: a outra é OMNIRA_DEV_AUTH_ENABLED. Só a combinação
+// ambiente permitido + flag explícita habilita o dev auth, para que nem um
+// OMNIRA_ENV errado nem uma flag esquecida bastem sozinhos.
+func DevAuthEnvAllowed(env string) bool {
+	switch env {
+	case "local", "dev", "development", "lab", "test":
+		return true
+	default:
+		return false
+	}
+}
+
+// DevAuthActive é a resposta única sobre o dev auth estar ligado. Config,
+// registro de rota e o endpoint de descoberta consultam esta função, para que
+// não exista um caminho em que uma delas discorde das outras.
+func (c *Config) DevAuthActive() bool {
+	return c.DevAuthEnabled && DevAuthEnvAllowed(c.Env)
 }

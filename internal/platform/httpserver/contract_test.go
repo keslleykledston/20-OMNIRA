@@ -75,7 +75,7 @@ func specOps(t *testing.T) []op {
 func newRoutedServer(t *testing.T) *Server {
 	s := New("127.0.0.1:0")
 	s.RegisterHealthHandlers()
-	s.RegisterAuthHandlers() // generates the RSA keys the other registrations need
+	s.RegisterAuthHandlers(false) // generates the RSA keys the other registrations need
 	s.RegisterOIDCAuthHandlers(s.authenticator, contractOIDCHandler{})
 	s.RegisterTenancyHandlers(nil)
 	s.RegisterInboxHandlers(nil)

@@ -77,7 +77,7 @@ func main() {
 		srv.RegisterOIDCAuthHandlers(oidcAuth, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
 			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
 	} else {
-		srv.RegisterAuthHandlers(cfg.AuthCookieSecure)
+		srv.RegisterAuthHandlers(cfg.DevAuthActive(), cfg.AuthCookieSecure)
 	}
 	srv.RegisterTenancyHandlers(dbPool)
 	crmHandler := srv.RegisterInboxHandlers(dbPool)

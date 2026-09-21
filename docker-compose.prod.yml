@@ -16,6 +16,11 @@ x-runtime: &runtime
   OMNIRA_NATS_URL: nats://nats:4222
   OMNIRA_AUTH_MODE: mock
   OMNIRA_ENV: lab
+  # Seguro por construção: o artefato de produção nunca liga o login de
+  # desenvolvimento sozinho. A instância de laboratório ativa por fora, no .env
+  # (OMNIRA_DEV_AUTH_ENABLED=true), e mesmo assim a API recusa o boot se o
+  # ambiente não for de desenvolvimento.
+  OMNIRA_DEV_AUTH_ENABLED: ${OMNIRA_DEV_AUTH_ENABLED:-false}
   OMNIRA_CREDENTIALS_KEY: TUlSds2/+c+9Kx7mPNm5E5sZPf9nc0u6zW50k/c5YgE=
   OMNIRA_WAHA_ENABLED: "true"
   OMNIRA_WAHA_BASE_URL: http://waha:3000

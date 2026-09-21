@@ -23,18 +23,20 @@ describe('session', () => {
   });
 });
 
-describe('authAPI.login (real backend)', () => {
-  it('posts the email to /api/v1/auth/login and returns token, user and tenant', async () => {
+describe('authAPI.devLogin', () => {
+  it('posts only the email to the dev route and returns token, user and tenant', async () => {
     const spy = vi.spyOn(axios.Axios.prototype, 'request').mockResolvedValue({
       data: { token: 'jwt', user: { id: 'u1', email: 'a@b', name: 'A' }, tenant: { id: 't1', name: 'T' } },
     } as any);
-    const res = await authAPI.login('a@b', 'ignored');
+    const res = await authAPI.devLogin('a@b');
     expect(res.data.token).toBe('jwt');
     expect(res.data.tenant.id).toBe('t1');
     expect(res.data.user.roles).toEqual([]);
     const cfg = spy.mock.calls[0][0] as any;
-    expect(cfg.url ?? cfg).toContain('/v1/auth/login');
+    // Caminho próprio: o acesso de desenvolvimento não se passa por login normal.
+    expect(cfg.url ?? cfg).toContain('/v1/auth/dev/login');
     const sent = typeof cfg.data === 'string' ? JSON.parse(cfg.data) : cfg.data;
+    // Sem senha: não existe senha a enviar.
     expect(sent).toEqual({ email: 'a@b' });
     spy.mockRestore();
   });

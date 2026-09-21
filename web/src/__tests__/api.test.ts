@@ -1,32 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { authAPI, accountsAPI, ticketsAPI, reportsAPI } from '../lib/api'
+import { accountsAPI, ticketsAPI, reportsAPI } from '../lib/api'
 
+// O login mock que rodava no browser saiu: emitia um JWT com assinatura falsa
+// que o backend nunca aceitou. O acesso de desenvolvimento agora é uma rota do
+// servidor, coberta em session.test.ts.
 describe('API Mock', () => {
-  describe('authAPI', () => {
-    it('deve fazer login com email válido', async () => {
-      const res = await authAPI.mockLogin('test@omnira.local', 'password')
-      expect(res.data).toHaveProperty('token')
-      expect(res.data).toHaveProperty('user')
-      expect(res.data.user.email).toBe('test@omnira.local')
-    })
-
-    it('deve rejeitar email inválido', async () => {
-      try {
-        await authAPI.mockLogin('invalid@email.com', 'password')
-        throw new Error('Should have rejected')
-      } catch (error: any) {
-        expect(error.response.status).toBe(401)
-      }
-    })
-
-    it('token deve ter formato JWT válido', async () => {
-      const res = await authAPI.mockLogin('test@omnira.local', 'pass')
-      const token = res.data.token
-      const parts = token.split('.')
-      expect(parts).toHaveLength(3)
-    })
-  })
-
   describe('accountsAPI', () => {
     it('deve listar contas', async () => {
       const res = await accountsAPI.list()

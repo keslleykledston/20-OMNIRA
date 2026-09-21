@@ -29,79 +29,29 @@ api.interceptors.response.use(
   }
 )
 
-// Mock users para desenvolvimento
-const MOCK_USERS: Record<string, any> = {
-  'test@omnira.local': {
-    id: '22222222-2222-2222-2222-222222222222',
-    email: 'test@omnira.local',
-    name: 'Test User',
-    roles: ['admin']
-  },
-  'admin@omnira.local': {
-    id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-    email: 'admin@omnira.local',
-    name: 'Admin User',
-    roles: ['admin']
-  }
-}
-
-// Gerar JWT mock (para testes apenas)
-const generateMockToken = (email: string) => {
-  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
-  const now = Math.floor(Date.now() / 1000)
-  const payload = btoa(JSON.stringify({
-    sub: email,
-    user_id: MOCK_USERS[email]?.id || 'user-' + Math.random(),
-    tenant_id: '11111111-1111-1111-1111-111111111111',
-    email,
-    iat: now,
-    exp: now + 86400,
-    iss: 'omnira-mock',
-    aud: 'omnira-api'
-  }))
-  const signature = btoa('mock-signature')
-  return `${header}.${payload}.${signature}`
+// Não existe autenticação local por senha neste produto: produção entra por
+// OIDC/SSO. Por isso não há `login(email, password)` — assinatura que existia
+// antes e cujo segundo parâmetro nunca era enviado a lugar nenhum.
+export interface AuthMode {
+  mode: 'oidc' | 'dev' | 'unavailable'
+  dev_auth?: boolean
 }
 
 export const authAPI = {
-  // Real backend login (POST /api/v1/auth/login). Returns the same shape the mock did.
-  // NOTE: the backend endpoint is still a mock IdP (fixed known emails, per-process RS256 keys).
-  login: async (email: string, _password: string) => {
-    const res = await api.post('/v1/auth/login', { email })
+  // O servidor é quem diz o que existe; a tela não deve oferecer outro caminho.
+  mode: () => api.get<AuthMode>('/v1/auth/mode'),
+  startOIDC: () => window.location.assign('/api/v1/auth/oidc/start'),
+  session: () => api.get('/v1/auth/session'),
+  // Ferramenta de desenvolvimento. A rota só existe quando o servidor a
+  // registra (ambiente permitido + OMNIRA_DEV_AUTH_ENABLED), e responde 404
+  // caso contrário. Sem senha, porque não há senha a verificar.
+  devLogin: async (email: string) => {
+    const res = await api.post('/v1/auth/dev/login', { email })
     const { token, user, tenant } = res.data
     return { data: { token, user: { ...user, roles: user?.roles ?? [] }, tenant } }
   },
-  mode: () => api.get<{ mode: 'mock' | 'oidc' }>('/v1/auth/mode'),
-  startOIDC: () => window.location.assign('/api/v1/auth/oidc/start'),
-  session: () => api.get('/v1/auth/session'),
-  // Offline dev/mock mode (VITE_MOCK_AUTH=true): fake unsigned token, NOT accepted by the backend.
-  mockLogin: async (email: string, password: string) => {
-    // Mock login: qualquer email na lista + qualquer senha funciona
-    if (!MOCK_USERS[email]) {
-      return Promise.reject({
-        response: {
-          status: 401,
-          data: { message: 'Email não encontrado. Use: test@omnira.local ou admin@omnira.local' }
-        }
-      })
-    }
-
-    const token = generateMockToken(email)
-    const user = MOCK_USERS[email]
-
-    return Promise.resolve({
-      data: {
-        token,
-        user,
-        tenant: {
-          id: '11111111-1111-1111-1111-111111111111',
-          name: 'Test Company LTDA'
-        }
-      }
-    })
-  },
   logout: async () => {
-	await api.post('/v1/auth/logout').catch(() => undefined)
+    await api.post('/v1/auth/logout').catch(() => undefined)
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     return { data: { status: 'ok' } }
