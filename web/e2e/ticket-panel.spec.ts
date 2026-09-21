@@ -15,9 +15,8 @@ function sql(query: string): string {
 
 async function login(page: Page, email: string) {
   await page.goto('/login');
-  await page.fill('input[placeholder="seu@email.com"]', email);
-  await page.fill('input[type="password"]', 'irrelevant');
-  await page.click('button:has-text("Entrar")');
+  await page.getByLabel('E-mail').fill(email);
+  await page.getByRole('button', { name: /Entrar/ }).click();
   await page.waitForURL('/', { timeout: 10_000 });
 }
 
