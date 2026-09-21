@@ -331,13 +331,17 @@ files' `login()` helpers.
 O bloqueio "banco remoto de produção" era falso: a instância roda contra o Postgres local (`omnira-postgres`, banco `omnira_dev`); a busca anterior falhou por query/premissa errada. Ferramenta: `scripts/p8-evidence.sh <texto|prefixo> [banco]` (somente SELECT em `BEGIN READ ONLY`, telefone mascarado, sem payload).
 Resultado para `OMNIRA-E2E-P8-20260921-03`: 1 linha `inbound/received`, criada 18:34:10 UTC (14:34 Manaus), conexão `waha/unofficial`, `webhook_events=1`, `message_rows=1` → **PASS: exactly-once**. Ressalvas: `provider_message_id` vem de remetente `@lid` (D-7 já corrigido); evidência é de leitura, não reexecutei tráfego.
 
-## 6d. E2E de navegador — estado real após corrigir login de channels/ticket-panel
+## 6d. E2E de navegador — 18/18 PASS (2026-09-21, `scripts/e2e-inbox.sh`)
 
-`scripts/e2e-inbox.sh`: 14 passam (inbox+responsive), **4 falham** (antes esses 2 specs nem chegavam a rodar por seletor de login velho):
-- `ticket-panel.spec.ts` (2): usa `.conversation-page` e rota `/inbox/conversations/:id` da UI antiga, substituída pelo workspace de 3 painéis — precisa reescrita.
-- `channels.spec.ts` (1): QR real não aparece em 40 s na stack descartável; investigar (WAHA GOWS no container, ou spec).
-- `inbox.spec.ts:89` "claim, reply": envio devolve 409 "no active text channel" porque a conexão fixture `c001` fica `pending` durante a suíte; a causa exata ainda não está isolada (hipótese: `channels.spec` alterando `c001`; o spec foi corrigido para usar a conexão criada, mas a falha persistiu).
-Outros: `HasPermission` (`internal/rbac/domain/role.go`) libera todos os recursos para qualquer permission `admin` — decisão de segurança pendente.
+Fechado sem alterar regra de negócio para "passar teste". Causas reais encontradas:
+- `channels.spec`: seletores velhos do QR (alt/modal); e o reconcile do produto (`GET connections/{id}`) rebaixa a fixture `c001` (active sem sessão WAHA) a `pending` — o spec agora a restaura em `afterAll` (era a causa do 409 "no active text channel" no `inbox` claim/reply).
+- **Bug de produto (ticket/atividade CRM):** handlers liam `PathValue("tenantId")` mas as rotas usam `{tenant_id}` (sempre 400), e consultavam o pool cru dentro de `WithTenantSession` (RLS escondia a conversa → 404) com coluna inexistente `contacts.external_identity`. Corrigidos (`5652ae2`, `a104fdc`) com teste de rota.
+- **Feature perdida no swap do P7:** `TicketPanel` (chamado + atividade CRM) estava sem rota; reintegrado ao `ContextPane` com layout do Lovable (projeto "OmniFlow Hub") e tokens do `web/`.
+- `HasPermission` de domínio (`internal/rbac/domain`) liberava qualquer recurso para ação `admin`: era código morto (runtime = SQL de chave exata); corrigido `46264de`.
+- `internal/iam3/security_test.go` (outro agente) não compilava; substituído por matriz exata role→permissão.
+Ambiente: E2E é autocontido (containers `omnira-e2e-*`, banco `omnira_e2e`). O worker em loop do compose `20-omnira` (`OMNIRA_ENV=production` + `AUTH_MODE=mock`) é config recusada de propósito pelo guard; não tem relação com o E2E.
+Pendência de cobertura: atividade CRM só é exercitada com K3G CRM real (a stack de teste não tem; o spec afirma o estado "Nenhuma empresa disponível").
+Regra do dono: trabalho na `main`; frontend/design via MCP Lovable.
 
 ## 6. Latest Session Progress (2026-09-21, Session cceb1a5+)
 
