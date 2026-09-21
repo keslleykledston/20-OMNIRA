@@ -90,7 +90,7 @@ describe('TeamPage', () => {
 
     const invite = await screen.findByRole('button', { name: /Convidar usuário/ });
     expect(invite).toBeDisabled();
-    expect(invite).toHaveAttribute('title', 'Disponível na próxima etapa');
+    expect(invite).toHaveAttribute('title', 'Requer permissão para gerenciar a equipe');
   });
 
   it('filters by search text across name and email', async () => {
@@ -201,5 +201,163 @@ describe('TeamPage', () => {
     page();
 
     expect(await screen.findByText('Nenhum membro encontrado.')).toBeInTheDocument();
+  });
+});
+
+describe('TeamPage — convites', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    setSession();
+  });
+
+  const invite = (over: object = {}) => ({
+    id: 'inv-' + Math.random().toString(36).slice(2),
+    email: 'novo@empresa.com',
+    role_key: 'tenant_agent',
+    role_name: 'Tenant Agent',
+    status: 'pending',
+    created_by_email: 'admin@empresa.com',
+    expires_at: new Date(Date.now() + 71 * 60 * 60 * 1000).toISOString(),
+    created_at: new Date().toISOString(),
+    ...over,
+  });
+
+  it('opens the invite modal with role options and submits', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [] }),
+    });
+    vi.mocked(axios.post).mockResolvedValue({ data: invite() });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('button', { name: /Convidar usuário/ }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Administrador')).toBeInTheDocument();
+    expect(within(dialog).getByText('Supervisor')).toBeInTheDocument();
+    expect(within(dialog).getByText('Agente')).toBeInTheDocument();
+
+    await userEvent.type(within(dialog).getByLabelText('E-mail'), 'novo@empresa.com');
+    await userEvent.selectOptions(within(dialog).getByLabelText('Função'), 'tenant_agent');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Enviar convite' }));
+
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenCalledWith(
+        expect.stringContaining('/team/invitations'),
+        { email: 'novo@empresa.com', role_key: 'tenant_agent' },
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('validates the email before submitting', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [] }),
+    });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('button', { name: /Convidar usuário/ }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Enviar convite' }));
+
+    expect(within(dialog).getByText('Informe um e-mail válido.')).toBeInTheDocument();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('the invite button is hidden/disabled without membership.manage', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_supervisor', permissions: ['membership.read'] }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: [] }),
+      '/team/invitations': () => ({ items: [] }),
+    });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    expect(screen.getByRole('button', { name: /Convidar usuário/ })).toBeDisabled();
+  });
+
+  it('lists pending invitations in the Convites tab', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [invite({ email: 'pendente@empresa.com' })] }),
+    });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+
+    expect((await screen.findAllByText('pendente@empresa.com')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Pendente').length).toBeGreaterThan(0);
+  });
+
+  it('revokes a pending invitation after confirmation', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [invite({ id: 'inv-1', email: 'a-revogar@empresa.com' })] }),
+    });
+    vi.mocked(axios.patch).mockResolvedValue({ data: {} });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+    await screen.findAllByText('a-revogar@empresa.com');
+
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Ações' }))[0]);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Revogar convite' }));
+
+    const confirmDialog = screen.getByRole('dialog');
+    await userEvent.click(within(confirmDialog).getByRole('button', { name: 'Revogar convite' }));
+
+    await waitFor(() =>
+      expect(axios.patch).toHaveBeenCalledWith(
+        expect.stringContaining('/team/invitations/inv-1'),
+        { status: 'revoked' },
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('shows an empty state when there are no invitations', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [] }),
+    });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+
+    expect(await screen.findByText('Nenhum convite enviado ainda.')).toBeInTheDocument();
+  });
+
+  it('does not offer revoke for an already-accepted invitation', async () => {
+    mockRoutes({
+      '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'] }),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [invite({ status: 'accepted', email: 'aceito@empresa.com' })] }),
+    });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+    await screen.findAllByText('aceito@empresa.com');
+
+    expect(screen.queryAllByRole('button', { name: 'Ações' }).length).toBe(0);
   });
 });

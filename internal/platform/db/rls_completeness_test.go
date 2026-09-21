@@ -141,6 +141,7 @@ var expectedPolicyCoverage = map[string][]string{
 	"users":                     {"SELECT", "UPDATE", "INSERT"},
 	"user_identities":           {"SELECT", "INSERT", "UPDATE"},
 	"conversation_participants": {"SELECT", "INSERT", "UPDATE"},
+	"membership_invitations":    {"SELECT", "INSERT", "UPDATE"},
 	"contacts":                  {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"conversations":             {"SELECT", "INSERT", "UPDATE", "DELETE"},
 	"messages":                  {"SELECT", "INSERT", "UPDATE", "DELETE"},

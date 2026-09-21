@@ -13,6 +13,7 @@ import IntegrationsPage from './pages/IntegrationsPage'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TeamPage from './pages/TeamPage'
+import AcceptInvitePage from './pages/AcceptInvitePage'
 import ChannelsPage from './pages/ChannelsPage'
 import WahaWizardPage from './pages/WahaWizardPage'
 import Layout from './components/Layout'
@@ -31,6 +32,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/no-access" element={<NoAccess />} />
+          <Route path="/invite/:token" element={<AcceptInvitePage />} />
           <Route element={<Layout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/accounts" element={<Accounts />} />

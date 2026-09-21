@@ -80,6 +80,7 @@ func main() {
 		srv.RegisterAuthHandlers(cfg.DevAuthActive(), cfg.AuthCookieSecure)
 	}
 	srv.RegisterTenancyHandlers(dbPool)
+	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.PublicBaseURL)
 	crmHandler := srv.RegisterInboxHandlers(dbPool)
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)

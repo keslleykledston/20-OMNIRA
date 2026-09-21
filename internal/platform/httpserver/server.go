@@ -295,6 +295,38 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/audit", authnMiddleware(tenantSession(http.HandlerFunc(auditHandler.ListTenantAuditEvents))))
 }
 
+// RegisterInvitationHandlers — convites de membership (IAM2B).
+//
+// devExposeInviteURL segue o mesmo par ambiente+flag do login de
+// desenvolvimento (config.DevAuthActive): só nesse caso a resposta de criação
+// devolve o link de convite. publicBaseURL monta esse link; sem ele, fica
+// vazio e o link não é exposto de qualquer forma.
+//
+// O aceite não tem tenant_id na URL — quem aceita pode ainda não ter
+// membership em lugar nenhum, e a AuthorizationMiddleware normal exigiria
+// isso. Por isso usa só authnMiddleware, e o handler resolve o tenant a
+// partir do próprio token.
+func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, publicBaseURL string) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.Middleware(s.authenticator)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
+	h := tenancyadapters.NewInvitationsHandler(dbPool, auditRepo, nil, devExposeInviteURL, publicBaseURL)
+
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/team/invitations", authnMiddleware(tenantSession(http.HandlerFunc(h.CreateInvitation))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/team/invitations", authnMiddleware(tenantSession(http.HandlerFunc(h.ListInvitations))))
+	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/team/invitations/{invitation_id}", authnMiddleware(tenantSession(http.HandlerFunc(h.RevokeInvitation))))
+
+	s.mux.Handle("GET /api/v1/invitations/{token}/status", authnMiddleware(http.HandlerFunc(h.InvitationStatus)))
+	s.mux.Handle("POST /api/v1/invitations/{token}/accept", authnMiddleware(http.HandlerFunc(h.AcceptInvitation)))
+}
+
 // RegisterInboxHandlers exposes tenant-scoped, read-only Inbox queries and realtime SSE.
 // Retorna o crmHandler para que possa ser configurado com o K3G CRM client.
 func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) *inboxadapters.CRMHandlers {

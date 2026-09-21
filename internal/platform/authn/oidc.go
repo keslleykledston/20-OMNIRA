@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,22 @@ const (
 	oidcStateCookie    = "omnira_oidc_state"
 	oidcVerifierCookie = "omnira_oidc_verifier"
 	oidcNonceCookie    = "omnira_oidc_nonce"
+	oidcReturnToCookie = "omnira_oidc_return_to"
 )
+
+// allowedOIDCReturnPath é a única forma de path que Start aceita como retorno
+// pós-login além do padrão (h.postLoginURL). Sem allowlist, um return_to
+// arbitrário na query vindo do navegador viraria open redirect — o servidor
+// mandaria o usuário, já autenticado, para qualquer origem que o parâmetro
+// apontasse.
+var allowedOIDCReturnPath = regexp.MustCompile(`^/invite/[A-Za-z0-9_-]{16,}$`)
+
+func sanitizeOIDCReturnTo(raw string) string {
+	if allowedOIDCReturnPath.MatchString(raw) {
+		return raw
+	}
+	return ""
+}
 
 type OIDCDiscovery struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
@@ -281,6 +297,9 @@ func (h *OIDCHandler) Start(w http.ResponseWriter, r *http.Request) {
 	for _, cookie := range []*http.Cookie{h.cookie(oidcStateCookie, state, 600), h.cookie(oidcVerifierCookie, verifier, 600), h.cookie(oidcNonceCookie, nonce, 600)} {
 		http.SetCookie(w, cookie)
 	}
+	if returnTo := sanitizeOIDCReturnTo(r.URL.Query().Get("return_to")); returnTo != "" {
+		http.SetCookie(w, h.cookie(oidcReturnToCookie, returnTo, 600))
+	}
 	params := url.Values{
 		"response_type": {"code"}, "client_id": {h.clientID}, "redirect_uri": {h.redirectURL},
 		"scope": {"openid email profile"}, "state": {state}, "nonce": {nonce},
@@ -351,10 +370,19 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.SetCookie(w, h.cookie(SessionCookieName, sessionID, int(h.sessionTTL.Seconds())))
-	for _, name := range []string{oidcStateCookie, oidcVerifierCookie, oidcNonceCookie} {
+	// Revalidado aqui mesmo vindo de um cookie HttpOnly próprio: nunca confiar
+	// cegamente num valor que atravessou um redirect externo (o IdP), mesmo
+	// que o caminho normal não permita adulteração.
+	redirectTo := h.postLoginURL
+	if returnCookie, err := r.Cookie(oidcReturnToCookie); err == nil {
+		if sanitized := sanitizeOIDCReturnTo(returnCookie.Value); sanitized != "" {
+			redirectTo = sanitized
+		}
+	}
+	for _, name := range []string{oidcStateCookie, oidcVerifierCookie, oidcNonceCookie, oidcReturnToCookie} {
 		http.SetCookie(w, h.cookie(name, "", -1))
 	}
-	http.Redirect(w, r, h.postLoginURL, http.StatusFound)
+	http.Redirect(w, r, redirectTo, http.StatusFound)
 }
 
 func (h *OIDCHandler) Session(w http.ResponseWriter, r *http.Request) {

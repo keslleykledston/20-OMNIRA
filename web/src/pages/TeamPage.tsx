@@ -15,11 +15,14 @@ import {
   PageHeader,
   Skeleton,
   StatusBadge,
+  Tabs,
   type IconName,
   type MenuAction,
+  type TabItem,
 } from '../components/primitives'
 import { getTenantId } from '../lib/session'
 import { teamAPI, teamErrorMessage, type MembershipStatus, type RoleOption, type TeamMember } from '../lib/team'
+import { invitationsAPI, invitationErrorMessage, type Invitation, type InvitationStatus } from '../lib/invitations'
 
 const ROLE_BADGE: Record<string, { label: string; variant: 'info' | 'default' | 'warning' }> = {
   tenant_admin: { label: 'Admin', variant: 'info' },
@@ -40,6 +43,29 @@ const STATUS_BADGE: Record<MembershipStatus, { label: string; tone: 'success' | 
   active: { label: 'Ativo', tone: 'success' },
   inactive: { label: 'Inativo', tone: 'default' },
   revoked: { label: 'Revogado', tone: 'danger' },
+}
+
+const INVITATION_STATUS_BADGE: Record<InvitationStatus, { label: string; tone: 'success' | 'default' | 'danger' | 'warning' }> = {
+  pending: { label: 'Pendente', tone: 'warning' },
+  accepted: { label: 'Aceito', tone: 'success' },
+  revoked: { label: 'Revogado', tone: 'danger' },
+  expired: { label: 'Expirado', tone: 'default' },
+}
+
+type TeamTab = 'users' | 'invitations'
+const TEAM_TABS: TabItem<TeamTab>[] = [
+  { id: 'users', label: 'Usuários' },
+  { id: 'invitations', label: 'Convites' },
+]
+
+function formatExpiresIn(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const diffMs = d.getTime() - Date.now()
+  if (diffMs <= 0) return 'Expirado'
+  const hours = Math.round(diffMs / (1000 * 60 * 60))
+  if (hours < 24) return `Em ${hours}h`
+  return `Em ${Math.round(hours / 24)}d`
 }
 
 function initials(name: string, fallback: string): string {
@@ -65,12 +91,15 @@ export default function TeamPage() {
   const tenantId = getTenantId()
   const queryClient = useQueryClient()
 
+  const [tab, setTab] = useState<TeamTab>('users')
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [roleEditTarget, setRoleEditTarget] = useState<TeamMember | null>(null)
   const [pendingStatus, setPendingStatus] = useState<{ member: TeamMember; status: MembershipStatus } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [inviteOpen, setInviteOpen] = useState(false)
+  const [pendingRevokeInvite, setPendingRevokeInvite] = useState<Invitation | null>(null)
 
   const access = useQuery({
     queryKey: ['team-access', tenantId],
@@ -115,6 +144,32 @@ export default function TeamPage() {
     onError: (e) => setActionError(teamErrorMessage(e, 'Não foi possível concluir a operação.')),
   })
 
+  const invitations = useQuery({
+    queryKey: ['team-invitations', tenantId],
+    queryFn: () => invitationsAPI.list(),
+    retry: false,
+    enabled: !access.isError,
+  })
+  const invalidateInvitations = () => queryClient.invalidateQueries({ queryKey: ['team-invitations', tenantId] })
+
+  const createInvitation = useMutation({
+    mutationFn: ({ email, roleKey }: { email: string; roleKey: string }) => invitationsAPI.create(email, roleKey),
+    onSuccess: () => {
+      setInviteOpen(false)
+      void invalidateInvitations()
+    },
+    onError: (e) => setActionError(invitationErrorMessage(e, 'Não foi possível enviar o convite.')),
+  })
+
+  const revokeInvitation = useMutation({
+    mutationFn: (id: string) => invitationsAPI.revoke(id),
+    onSuccess: () => {
+      setPendingRevokeInvite(null)
+      void invalidateInvitations()
+    },
+    onError: (e) => setActionError(invitationErrorMessage(e, 'Não foi possível revogar o convite.')),
+  })
+
   const members = team.data ?? []
 
   const filtered = useMemo(() => {
@@ -155,10 +210,17 @@ export default function TeamPage() {
         title="Equipe e acesso"
         description="Gerencie os usuários da sua equipe, defina permissões e controle o acesso à plataforma."
         actions={
-          <Button variant="primary" disabled title="Disponível na próxima etapa">
-            <Icon name="plus" size={16} />
-            Convidar usuário
-          </Button>
+          canManage ? (
+            <Button variant="primary" onClick={() => setInviteOpen(true)}>
+              <Icon name="plus" size={16} />
+              Convidar usuário
+            </Button>
+          ) : (
+            <Button variant="primary" disabled title="Requer permissão para gerenciar a equipe">
+              <Icon name="plus" size={16} />
+              Convidar usuário
+            </Button>
+          )
         }
       />
 
@@ -166,6 +228,10 @@ export default function TeamPage() {
         <ErrorState message={actionError} isDismissible onDismiss={() => setActionError(null)} />
       )}
 
+      <Tabs items={TEAM_TABS} value={tab} onChange={setTab} aria-label="Seções de Equipe e acesso" />
+
+      {tab === 'users' && (
+        <>
       {!team.isLoading && !team.isError && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <SummaryCard icon="contacts" label="Usuários ativos" value={summary.total} />
@@ -262,6 +328,38 @@ export default function TeamPage() {
             ))}
           </div>
         </>
+      )}
+        </>
+      )}
+
+      {tab === 'invitations' && (
+        <InvitationsTab
+          invitations={invitations}
+          canManage={canManage}
+          onRevoke={setPendingRevokeInvite}
+        />
+      )}
+
+      {inviteOpen && (
+        <InviteModal
+          roles={roles.data ?? []}
+          isSaving={createInvitation.isPending}
+          onCancel={() => setInviteOpen(false)}
+          onConfirm={(email, roleKey) => createInvitation.mutate({ email, roleKey })}
+        />
+      )}
+
+      {pendingRevokeInvite && (
+        <ConfirmDialog
+          open
+          title="Revogar convite"
+          message={`O convite para ${pendingRevokeInvite.email} deixa de funcionar imediatamente.`}
+          confirmLabel="Revogar convite"
+          destructive
+          isPending={revokeInvitation.isPending}
+          onCancel={() => setPendingRevokeInvite(null)}
+          onConfirm={() => revokeInvitation.mutate(pendingRevokeInvite.id)}
+        />
       )}
 
       {roleEditTarget && (
@@ -470,5 +568,225 @@ function TeamSkeleton() {
         </div>
       ))}
     </div>
+  )
+}
+
+function InvitationsTab({
+  invitations,
+  canManage,
+  onRevoke,
+}: {
+  invitations: ReturnType<typeof useQuery<Invitation[]>>
+  canManage: boolean
+  onRevoke: (invitation: Invitation) => void
+}) {
+  const items = invitations.data ?? []
+
+  if (invitations.isLoading) return <TeamSkeleton />
+
+  if (invitations.isError) {
+    return (
+      <ErrorState
+        message={invitationErrorMessage(invitations.error, 'Não foi possível carregar os convites.')}
+        action={{ label: 'Tentar novamente', onClick: () => void invitations.refetch() }}
+      />
+    )
+  }
+
+  if (items.length === 0) {
+    return (
+      <EmptyState
+        icon={<Icon name="plus" />}
+        title="Nenhum convite enviado ainda."
+        description={canManage ? 'Use "Convidar usuário" para trazer alguém para a equipe.' : undefined}
+      />
+    )
+  }
+
+  return (
+    <>
+      <div className="hidden md:block overflow-hidden rounded-card border border-border-subtle bg-surface">
+        <table className="w-full text-left">
+          <thead className="border-b border-border-subtle bg-surface-muted">
+            <tr>
+              <th className="px-6 py-3 text-sm font-medium text-text-secondary">E-mail</th>
+              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Função</th>
+              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Status</th>
+              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Expira</th>
+              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Enviado por</th>
+              {canManage && <th className="px-6 py-3" />}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((inv) => (
+              <InvitationRow key={inv.id} invitation={inv} canManage={canManage} onRevoke={onRevoke} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="md:hidden space-y-3">
+        {items.map((inv) => (
+          <InvitationCard key={inv.id} invitation={inv} canManage={canManage} onRevoke={onRevoke} />
+        ))}
+      </div>
+    </>
+  )
+}
+
+function invitationActions(invitation: Invitation, onRevoke: (invitation: Invitation) => void): MenuAction[] {
+  const actions: MenuAction[] = []
+  if (invitation.status === 'pending') {
+    actions.push({ label: 'Revogar convite', onSelect: () => onRevoke(invitation), destructive: true })
+  }
+  if (invitation.invite_url) {
+    actions.push({
+      label: 'Copiar link (dev)',
+      onSelect: () => void navigator.clipboard?.writeText(invitation.invite_url!).catch(() => undefined),
+    })
+  }
+  return actions
+}
+
+function InvitationRow({
+  invitation,
+  canManage,
+  onRevoke,
+}: {
+  invitation: Invitation
+  canManage: boolean
+  onRevoke: (invitation: Invitation) => void
+}) {
+  const status = INVITATION_STATUS_BADGE[invitation.status]
+  const actions = invitationActions(invitation, onRevoke)
+  return (
+    <tr className="border-b border-border-subtle last:border-0">
+      <td className="px-6 py-4 text-text-primary">{invitation.email}</td>
+      <td className="px-6 py-4">
+        <Badge variant={ROLE_BADGE[invitation.role_key]?.variant ?? 'default'} size="sm">
+          {ROLE_DISPLAY_NAME[invitation.role_key] ?? invitation.role_name}
+        </Badge>
+      </td>
+      <td className="px-6 py-4">
+        <StatusBadge status={status.tone} size="sm">{status.label}</StatusBadge>
+      </td>
+      <td className="px-6 py-4 text-text-secondary">
+        {invitation.status === 'pending' ? formatExpiresIn(invitation.expires_at) : '—'}
+      </td>
+      <td className="px-6 py-4 text-text-secondary">{invitation.created_by_email}</td>
+      {canManage && (
+        <td className="px-6 py-4 text-right">
+          {actions.length > 0 && <DropdownMenu actions={actions} />}
+        </td>
+      )}
+    </tr>
+  )
+}
+
+function InvitationCard({
+  invitation,
+  canManage,
+  onRevoke,
+}: {
+  invitation: Invitation
+  canManage: boolean
+  onRevoke: (invitation: Invitation) => void
+}) {
+  const status = INVITATION_STATUS_BADGE[invitation.status]
+  const actions = invitationActions(invitation, onRevoke)
+  return (
+    <div className="rounded-card border border-border-subtle bg-surface p-4">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-text-primary truncate">{invitation.email}</p>
+          <p className="text-sm text-text-secondary">
+            {invitation.status === 'pending' ? formatExpiresIn(invitation.expires_at) : status.label}
+          </p>
+        </div>
+        {canManage && actions.length > 0 && <DropdownMenu actions={actions} />}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <Badge variant={ROLE_BADGE[invitation.role_key]?.variant ?? 'default'} size="sm">
+          {ROLE_DISPLAY_NAME[invitation.role_key] ?? invitation.role_name}
+        </Badge>
+        <StatusBadge status={status.tone} size="sm">{status.label}</StatusBadge>
+      </div>
+    </div>
+  )
+}
+
+function InviteModal({
+  roles,
+  isSaving,
+  onCancel,
+  onConfirm,
+}: {
+  roles: RoleOption[]
+  isSaving: boolean
+  onCancel: () => void
+  onConfirm: (email: string, roleKey: string) => void
+}) {
+  const [email, setEmail] = useState('')
+  const [roleKey, setRoleKey] = useState(roles[0]?.key ?? 'tenant_agent')
+  const [touched, setTouched] = useState(false)
+
+  const emailValid = /\S+@\S+\.\S+/.test(email)
+
+  return (
+    <Modal
+      open
+      title="Convidar usuário"
+      description="A pessoa recebe um link de convite para ingressar nesta equipe."
+      onClose={onCancel}
+      footer={
+        <>
+          <Button variant="tertiary" onClick={onCancel} disabled={isSaving}>Cancelar</Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setTouched(true)
+              if (emailValid) onConfirm(email.trim().toLowerCase(), roleKey)
+            }}
+            disabled={isSaving}
+          >
+            {isSaving ? 'Enviando…' : 'Enviar convite'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <label htmlFor="invite-email" className="block text-sm font-medium text-text-primary mb-1">
+            E-mail
+          </label>
+          <Input
+            id="invite-email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onBlur={() => setTouched(true)}
+            error={touched && !emailValid ? 'Informe um e-mail válido.' : undefined}
+            autoComplete="off"
+          />
+        </div>
+        <div>
+          <label htmlFor="invite-role" className="block text-sm font-medium text-text-primary mb-1">
+            Função
+          </label>
+          <select
+            id="invite-role"
+            value={roleKey}
+            onChange={(e) => setRoleKey(e.target.value)}
+            className="h-10 w-full rounded-control border border-border-light bg-surface px-3 text-sm text-text-primary"
+          >
+            {roles.map((r) => (
+              <option key={r.key} value={r.key}>
+                {ROLE_DISPLAY_NAME[r.key] ?? r.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </Modal>
   )
 }

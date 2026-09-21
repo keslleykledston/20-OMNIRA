@@ -40,7 +40,13 @@ export interface AuthMode {
 export const authAPI = {
   // O servidor é quem diz o que existe; a tela não deve oferecer outro caminho.
   mode: () => api.get<AuthMode>('/v1/auth/mode'),
-  startOIDC: () => window.location.assign('/api/v1/auth/oidc/start'),
+  // returnTo é validado de novo no backend contra uma allowlist (só
+  // /invite/:token hoje); um valor fora dela é simplesmente ignorado lá,
+  // nunca vira redirect aberto.
+  startOIDC: (returnTo?: string) => {
+    const url = returnTo ? `/api/v1/auth/oidc/start?return_to=${encodeURIComponent(returnTo)}` : '/api/v1/auth/oidc/start'
+    window.location.assign(url)
+  },
   session: () => api.get('/v1/auth/session'),
   // Ferramenta de desenvolvimento. A rota só existe quando o servidor a
   // registra (ambiente permitido + OMNIRA_DEV_AUTH_ENABLED), e responde 404
