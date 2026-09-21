@@ -248,7 +248,7 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 
 	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
 	auditSvc := auditapplication.NewAuditService(auditRepo)
-	auditHandler := auditadapters.NewAuditAPIHandler(auditSvc)
+	auditHandler := auditadapters.NewAuditAPIHandler(auditSvc, dbPool)
 
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)

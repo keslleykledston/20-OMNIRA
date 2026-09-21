@@ -3,24 +3,51 @@ package adapters
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/audit/application"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
+
+const permissionAuditRead = "audit.read"
 
 // AuditAPIHandler — handlers HTTP para Audit API.
 type AuditAPIHandler struct {
 	auditSvc *application.AuditService
+	pool     *pgxpool.Pool
 }
 
 // NewAuditAPIHandler — cria um novo AuditAPIHandler.
-func NewAuditAPIHandler(auditSvc *application.AuditService) *AuditAPIHandler {
-	return &AuditAPIHandler{auditSvc: auditSvc}
+func NewAuditAPIHandler(auditSvc *application.AuditService, pool *pgxpool.Pool) *AuditAPIHandler {
+	return &AuditAPIHandler{auditSvc: auditSvc, pool: pool}
+}
+
+func (h *AuditAPIHandler) authorize(r *http.Request, permission string) (*tenancydomain.TenantContext, error) {
+	tc, err := tenancydomain.FromContext(r.Context())
+	if err != nil || tc.TenantID.String() == "" {
+		return nil, errors.New("tenant context not found")
+	}
+	var ok bool
+	err = platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
+		SELECT EXISTS(
+		  SELECT 1 FROM memberships m
+		  JOIN role_permissions rp ON rp.role_id = m.role_id
+		  WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND rp.permission_key=$3)`,
+		tc.TenantID, tc.ActorID, permission).Scan(&ok)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("permission denied")
+	}
+	return tc, nil
 }
 
 // AuditEventResponse — resposta de um evento de auditoria.
@@ -40,14 +67,17 @@ type AuditEventResponse struct {
 
 // ListTenantAuditEvents — GET /api/v1/tenants/{tenant_id}/audit/events.
 func (h *AuditAPIHandler) ListTenantAuditEvents(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Extrair TenantContext
-	tc, err := tenancydomain.FromContext(ctx)
+	tc, err := h.authorize(r, permissionAuditRead)
 	if err != nil {
-		http.Error(w, "tenant context not found", http.StatusInternalServerError)
+		if err.Error() == "permission denied" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		} else {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}
 		return
 	}
+
+	ctx := r.Context()
 
 	// Parse query params
 	limit := 20
