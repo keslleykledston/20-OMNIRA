@@ -31,7 +31,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
-      else setAssignError(err?.response?.data?.message || 'Erro ao assumir conversa');
+      else setAssignError(describeAssignError(err));
     } finally {
       setAssignLoading(false);
     }
@@ -50,7 +50,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
-      else setAssignError(err?.response?.data?.message || 'Erro ao soltar conversa');
+      else setAssignError(describeAssignError(err, 'unassign'));
     } finally {
       setAssignLoading(false);
     }
@@ -133,7 +133,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
       {/* Error */}
       {assignError && (
         <div className="p-4">
-          <div className="p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
+          <div role="alert" className="p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
             {assignError}
           </div>
         </div>
@@ -189,4 +189,26 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
       </div>
     </div>
   );
+}
+
+// The assign/unassign endpoints return a plain-text body (http.Error), not JSON —
+// err.response.data is the string itself, not an object with a .message field.
+// Map known statuses to an actionable Portuguese message; anything else falls
+// back to what the backend actually said rather than a made-up "success".
+function describeAssignError(err: any, action: 'assign' | 'unassign' = 'assign'): string {
+  const status = err?.response?.status;
+  const body = typeof err?.response?.data === 'string' ? err.response.data : '';
+  if (status === 409) {
+    return 'Este atendimento acabou de ser assumido por outro operador.';
+  }
+  if (status === 403) {
+    return 'Você não tem permissão para esta ação.';
+  }
+  if (status === 404) {
+    return 'Conversa não encontrada.';
+  }
+  if (status === 422) {
+    return body || 'Operador não elegível para esta conversa.';
+  }
+  return body || (action === 'assign' ? 'Erro ao assumir conversa.' : 'Erro ao soltar conversa.');
 }
