@@ -21,6 +21,15 @@ async function login(page: Page, email: string) {
   await page.waitForURL('/', { timeout: 10_000 });
 }
 
+// Opening /integrations makes the product reconcile every WAHA connection with its live
+// session (GET .../connections/{id}); the fixture connection is 'active' with no WAHA session,
+// so it is correctly demoted to 'pending'. This spec triggers that, so it restores the
+// fixture state it disturbed (declared in fixtures.sql) for the specs that share the tenant.
+const FIXTURE_CONNECTION = 'c0000000-0000-0000-0000-00000000c001';
+test.afterAll(() => {
+  sql(`UPDATE channel_connections SET status='active' WHERE id='${FIXTURE_CONNECTION}'`);
+});
+
 test('a non-admin sees a permission message instead of the connections', async ({ page }) => {
   await login(page, AGENT.email);
   // The sidebar now links to the rebuilt /channels page; this spec still covers
@@ -66,7 +75,8 @@ test('admin creates a connection with the risk acknowledgement, pairs via a real
   sql(`UPDATE channel_connections SET status='pending' WHERE id='${id}'`);
 
   await card.getByRole('button', { name: 'Iniciar sessão' }).click();
-  const qr = card.getByAltText('QR para parear WhatsApp');
+  // The QR renders in a modal (QRPairingModal) inside the card.
+  const qr = card.getByTestId('qr-image');
   await expect(qr).toBeVisible({ timeout: 40_000 }); // real WAHA renders a real QR
   const rendered = await qr.evaluate((img: HTMLImageElement) => new Promise<{ w: number; h: number }>((resolve, reject) => {
     if (img.complete && img.naturalWidth > 0) return resolve({ w: img.naturalWidth, h: img.naturalHeight });
@@ -76,6 +86,8 @@ test('admin creates a connection with the risk acknowledgement, pairs via a real
   expect(rendered.w).toBeGreaterThan(100); // a decodable PNG, not a broken placeholder
   await expect(card.getByText('Sessão: needs qr')).toBeVisible();
 
+  // The modal is a full-screen overlay; close it before using the card's own buttons.
+  await card.getByRole('dialog', { name: /Conectar/ }).getByRole('button', { name: 'Fechar' }).click();
   await card.getByRole('button', { name: 'Parar' }).click();
   await expect(card.getByTestId('conn-status')).toHaveText('Desconectado', { timeout: 15_000 });
   expect(sql(`SELECT status FROM channel_connections WHERE id='${id}'`)).toBe('disconnected');
