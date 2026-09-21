@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Button } from '../components/primitives'
 import { authAPI } from '../lib/api'
 import { invitationAcceptAPI, type AcceptStatus } from '../lib/invitations'
+import { displayRoleName } from '../lib/roles'
 
 type ViewState =
   | { kind: 'loading' }
@@ -38,7 +39,11 @@ export default function AcceptInvitePage() {
       .status(token)
       .then((data) => {
         if (!active) return
-        const info: InvitePreview = { tenantName: data.tenant_name, roleName: data.role_name, maskedEmail: data.masked_email }
+        const info: InvitePreview = {
+          tenantName: data.tenant_name,
+          roleName: displayRoleName(data.role_key, data.role_name ?? ''),
+          maskedEmail: data.masked_email,
+        }
         setState(data.status === 'pending' ? { kind: 'ready', info } : { kind: 'terminal', status: data.status })
       })
       .catch((err) => {

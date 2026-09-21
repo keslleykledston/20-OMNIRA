@@ -23,20 +23,12 @@ import {
 import { getTenantId } from '../lib/session'
 import { teamAPI, teamErrorMessage, type MembershipStatus, type RoleOption, type TeamMember } from '../lib/team'
 import { invitationsAPI, invitationErrorMessage, type Invitation, type InvitationStatus } from '../lib/invitations'
+import { ROLE_DISPLAY_NAME } from '../lib/roles'
 
 const ROLE_BADGE: Record<string, { label: string; variant: 'info' | 'default' | 'warning' }> = {
   tenant_admin: { label: 'Admin', variant: 'info' },
   tenant_supervisor: { label: 'Supervisor', variant: 'default' },
   tenant_agent: { label: 'Agente', variant: 'warning' },
-}
-
-// roles.name vem do banco em inglês ("Tenant Administrator"); o seletor usa o
-// mesmo rótulo em português que já aparece nos badges, para não misturar
-// idioma na mesma tela.
-const ROLE_DISPLAY_NAME: Record<string, string> = {
-  tenant_admin: 'Administrador',
-  tenant_supervisor: 'Supervisor',
-  tenant_agent: 'Agente',
 }
 
 const STATUS_BADGE: Record<MembershipStatus, { label: string; tone: 'success' | 'default' | 'danger' }> = {
@@ -640,9 +632,12 @@ function invitationActions(invitation: Invitation, onRevoke: (invitation: Invita
     actions.push({ label: 'Revogar convite', onSelect: () => onRevoke(invitation), destructive: true })
   }
   if (invitation.invite_url) {
+    // invite_url é um path relativo (o backend não conhece o host que o
+    // navegador está usando); a origem certa é a desta própria aba.
+    const fullLink = window.location.origin + invitation.invite_url
     actions.push({
       label: 'Copiar link (dev)',
-      onSelect: () => void navigator.clipboard?.writeText(invitation.invite_url!).catch(() => undefined),
+      onSelect: () => void navigator.clipboard?.writeText(fullLink).catch(() => undefined),
     })
   }
   return actions

@@ -68,13 +68,13 @@ func newDevInvitationsHandler(app *pgxpool.Pool) *InvitationsHandler {
 	return NewInvitationsHandler(app, nil, nil, true, "https://app.test")
 }
 
-func rawTokenFromURL(t *testing.T, inviteURL string) string {
+func rawTokenFromURL(t *testing.T, invitePath string) string {
 	t.Helper()
-	const prefix = "https://app.test/invite/"
-	if len(inviteURL) <= len(prefix) {
-		t.Fatalf("unexpected invite URL: %s", inviteURL)
+	const prefix = "/invite/"
+	if len(invitePath) <= len(prefix) {
+		t.Fatalf("unexpected invite path: %s", invitePath)
 	}
-	return inviteURL[len(prefix):]
+	return invitePath[len(prefix):]
 }
 
 func TestCreateInvitationByAdmin(t *testing.T) {

@@ -5,8 +5,10 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 export type InvitationStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
 
 // Espelha Invitation em internal/tenancy/adapters/invitations_http.go.
-// invite_url só vem preenchido quando o servidor tem o login de
-// desenvolvimento ativo (mesmo gate do dev auth) — nunca em produção.
+// invite_url é um PATH relativo (ex.: "/invite/<token>"), sem host — o
+// backend não sabe qual origem o navegador está usando. Só vem preenchido
+// quando o servidor tem o login de desenvolvimento ativo (mesmo gate do dev
+// auth) — nunca em produção.
 export interface Invitation {
   id: string;
   email: string;
@@ -32,6 +34,7 @@ export type AcceptStatus =
 export interface InvitationStatusResponse {
   status: AcceptStatus;
   tenant_name?: string;
+  role_key?: string;
   role_name?: string;
   masked_email?: string;
 }

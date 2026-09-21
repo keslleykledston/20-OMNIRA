@@ -70,7 +70,7 @@ type Invitation struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
-	InviteURL  string     `json:"invite_url,omitempty"` // apenas dev/lab, apenas na resposta de criação
+	InviteURL  string     `json:"invite_url,omitempty"` // path relativo (sem host); apenas dev/lab, apenas na resposta de criação
 }
 
 // effectiveStatus deriva "expired" de status=pending + expires_at no passado.
@@ -165,16 +165,22 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 	inv.RoleKey = req.RoleKey
 	inv.Status = "pending"
 	inv.ExpiresAt = expiresAt
+	_ = q.QueryRow(r.Context(), `SELECT COALESCE(email,'') FROM users WHERE id=$1`, tc.ActorID).Scan(&inv.CreatedBy)
 
 	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationCreated, inv.ID, email, req.RoleKey)
 
-	acceptURL := h.publicBaseURL + "/invite/" + raw
-	_ = h.sender.Send(r.Context(), email, "", acceptURL)
+	// Caminho relativo, sem host: publicBaseURL é a URL server-to-server
+	// usada em webhooks (aponta para o hostname interno do container, não
+	// para o que o navegador de quem clica no link enxerga). O e-mail vai
+	// receber isto concatenado ao host correto pelo remetente; em dev, o
+	// frontend concatena com o próprio origin ao copiar.
+	acceptPath := "/invite/" + raw
+	_ = h.sender.Send(r.Context(), email, "", h.publicBaseURL+acceptPath)
 	if h.devExposeInviteURL {
 		// Único lugar onde o token bruto aparece: a resposta desta chamada,
 		// só quando o servidor tem o login de desenvolvimento ativo (mesmo
 		// gate de config.DevAuthActive do login). Nunca aparece em list.
-		inv.InviteURL = acceptURL
+		inv.InviteURL = acceptPath
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -308,6 +314,7 @@ func (h *InvitationsHandler) recordInvitation(ctx context.Context, tc *domain.Te
 type invitationStatusResponse struct {
 	Status      string `json:"status"` // pending | accepted | revoked | expired | wrong_identity | not_found
 	TenantName  string `json:"tenant_name,omitempty"`
+	RoleKey     string `json:"role_key,omitempty"`
 	RoleName    string `json:"role_name,omitempty"`
 	MaskedEmail string `json:"masked_email,omitempty"`
 }
@@ -338,15 +345,15 @@ func (h *InvitationsHandler) InvitationStatus(w http.ResponseWriter, r *http.Req
 
 	var resp invitationStatusResponse
 	err = platformdb.WithTenantSession(r.Context(), h.pool, principal.UserID, true, func(ctx context.Context) error {
-		var email, status, tenantName, roleName string
+		var email, status, tenantName, roleKey, roleName string
 		var expiresAt time.Time
 		q := platformdb.QuerierFromContext(ctx, h.pool)
 		err := q.QueryRow(ctx, `
-			SELECT i.email, i.status, i.expires_at, t.legal_name, r.name
+			SELECT i.email, i.status, i.expires_at, t.legal_name, r.key, r.name
 			FROM membership_invitations i
 			JOIN tenants t ON t.id = i.tenant_id
 			JOIN roles r ON r.id = i.role_id
-			WHERE i.token_hash = $1`, hash).Scan(&email, &status, &expiresAt, &tenantName, &roleName)
+			WHERE i.token_hash = $1`, hash).Scan(&email, &status, &expiresAt, &tenantName, &roleKey, &roleName)
 		if errors.Is(err, pgx.ErrNoRows) {
 			resp.Status = "not_found"
 			return nil
@@ -367,6 +374,7 @@ func (h *InvitationsHandler) InvitationStatus(w http.ResponseWriter, r *http.Req
 		}
 		resp.Status = effectiveStatus(status, expiresAt)
 		resp.TenantName = tenantName
+		resp.RoleKey = roleKey
 		resp.RoleName = roleName
 		resp.MaskedEmail = maskEmail(email)
 		return nil
