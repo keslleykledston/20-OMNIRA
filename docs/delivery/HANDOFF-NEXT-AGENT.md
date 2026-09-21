@@ -167,8 +167,8 @@ A mesma migration deu a `users` uma policy de leitura entre pares de tenant — 
 - classificação generalizada de RLS → IAM6
 - `/members` legado
 
-Ordem corrente: **FR3A (feito) → FR3B Contacts UI (feito) → IAM**.
-   - **Próximo:** Confirmar IdP disponível; caso contrário, manter mock-login para MVP1
+Ordem corrente: **FR3A (feito) → FR3B Contacts UI (feito) → IAM (IAM0-2B DONE, IAM3 próximo)**.
+   - **Próximo:** IAM3 — implementar HTTP CRUD endpoints para roles & permissions (schema + logic já existem em internal/rbac; faltam adapters HTTP). Executor escolhido pode usar opcional `route.sh` do router (`.agents/router/`) para recomendações de tier em tarefas elegíveis — este modo é passivo (shadow only) e não interrompe o desenvolvimento.
 
 **Trabalho paralelo (sem bloqueio):**
 - **I1 (Refactor routes)** — renomear `/channels` → `/integrations`, deprecate `/channels`, ajustar frontend
