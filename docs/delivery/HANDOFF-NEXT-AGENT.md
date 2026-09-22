@@ -38,16 +38,13 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- INBOX.5-A1: Secure inbound media retrieval — FINAL GATES PENDING
-  - **Fixed:** Scan bug in scanMessageItem ✓
-  - **Implemented:** MediaRetriever + GetMedia handler + MessageMedia component ✓
-  - **Wired:** Route registered in httpserver.RegisterInboxHandlers (conditional WAHA_ENABLED) ✓
-  - **Tests:** http_dto_test.go + media_retrieval_test.go (security matrix A-O) ✓
-  - **Frontend build:** SUCCESS (TypeScript + Vite) ✓
-  - **Backend build:** Compilation in progress
-  - **Frozen decisions:** WAHA-only, 25 MiB bounded, no redirects, RLS+TenantContext authz
-  - **Deferred:** streaming/Range, audio/video, outbound, cache, rate-limit, Meta
-  - **Status:** Ready for full gate suite
+- **RELEASE.1 = CLOSED** (2026-09-22). PILOT READY = YES. DESIGN.1 UNBLOCKED = YES. PRODUCTION ACTIVATION = NO (requires separate human authorization).
+  - Gate covered: operator flow, session/tenant, realtime, assignment, media, contact/ticket, responsive, observability, security sanity — all PASS.
+  - Only blocker found (RELEASE.1-B1): `omnira_session` carried a full identity JWT instead of an opaque session id; masked a pre-existing production bug where OIDC login's own opaque cookie was never actually validated by the wired middleware. Resolved in `13274ea` fix(auth): use opaque server-side web sessions — opaque 256-bit session id, `PostgresSessionStore`/`auth_sessions` (reused, no new migration), `authn.WebMiddleware` (cookie → `ResolveSession`, no JWT fallback; Bearer → JWT verify, preserves dev/API consumers), dev login and OIDC login converge on the same session store, logout revokes server-side, production `Secure` cookie enforcement confirmed fail-closed (test added).
+  - Gates: `go test ./...`, `go vet ./...`, API/worker build (via `scripts/e2e-inbox.sh`), full Playwright 25/25, `git diff --check` — all PASS.
+  - Next wave unblocked: DESIGN.1 — App Shell + Design Foundation (not started this session).
+
+- INBOX.5-A1: Secure inbound media retrieval — DONE, see § below.
 
 ## INBOX/CHAT COMPLETION STATUS
 
@@ -121,6 +118,8 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## FOLLOW-UP
 
+- **RELEASE.1:** canonical real-WAHA browser media E2E fixture (proof gates C–G covered server-side; browser fixture deferred).
+- **RELEASE.1:** E2E provisioning automation for `omnira_e2e` — currently manual/scripted via `scripts/e2e-inbox.sh`, works but could be CI-automated.
 - **Inbound/default queue → round-robin A-direct:** pilot tenant não tem fila `is_default`, então `RouteNew` nunca roteia inbound real (WAHA) para a fila round-robin do piloto; A ficou provado só indiretamente. Não é dívida crítica do IAM4.2 — é integração de outro domínio (inbound routing / default queue selection).
 - IAM4.3 (skills): DEFERRED. Só implementar quando existir requirement real (skill-based routing, agent skill matching, queue skill policy) com consumer real — não começar só por ser o próximo número.
 - Dev data hygiene: `omnira_dev` com ~690 tenants de `go test` histórico, não tocado.
