@@ -30,6 +30,7 @@ tags:
   - { name: Realtime, description: SSE stream of reference-only events }
   - { name: Channels, description: "WhatsApp (WAHA) connections, sessions and pairing (admin)" }
   - { name: Webhooks, description: Provider callbacks (server-to-server) }
+  - { name: Tenancy, description: "Tenant access: fixed platform roles (read-only) and the caller's effective permissions" }
 security:
   - bearerAuth: []
   - cookieAuth: []
@@ -107,6 +108,32 @@ paths:
       security: []
       responses:
         '204': { description: Session cookie cleared }
+  /tenants/{tenant_id}/roles:
+    get:
+      operationId: listAssignableRoles
+      tags: [Tenancy]
+      summary: List the fixed platform roles a tenant can assign, with their permission sets (`membership.read`)
+      description: |
+        Read-only. System roles are fixed by the platform (tenant_admin, tenant_supervisor, tenant_agent);
+        system_admin and hub_admin are never listed. There is no create/update/delete of roles.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: Assignable roles, content: { application/json: { schema: { $ref: '#/components/schemas/RoleList' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+  /tenants/{tenant_id}/me/access:
+    get:
+      operationId: getMyAccess
+      tags: [Tenancy]
+      summary: Effective role and permissions of the caller in this tenant
+      description: The UI uses this to show/hide controls; the server remains the authority on every request.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: Caller access, content: { application/json: { schema: { $ref: '#/components/schemas/MyAccess' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/contacts:
     get:
       operationId: listContacts
@@ -840,6 +867,27 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    RoleList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, key, name, permissions]
+            properties:
+              id: { type: string, format: uuid }
+              key: { type: string, example: tenant_supervisor }
+              name: { type: string }
+              permissions: { type: array, items: { type: string, example: conversation.manage } }
+    MyAccess:
+      type: object
+      required: [role_key, permissions, invitation_delivery_available]
+      properties:
+        role_key: { type: string, example: tenant_agent }
+        permissions: { type: array, items: { type: string } }
+        invitation_delivery_available: { type: boolean }
     SessionProfile:
       type: object
       required: [user, tenant]

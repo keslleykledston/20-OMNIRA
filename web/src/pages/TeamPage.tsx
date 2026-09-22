@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Avatar,
@@ -24,6 +25,7 @@ import { getTenantId } from '../lib/session'
 import { teamAPI, teamErrorMessage, type MembershipStatus, type RoleOption, type TeamMember } from '../lib/team'
 import { invitationsAPI, invitationErrorMessage, type Invitation, type InvitationStatus } from '../lib/invitations'
 import { ROLE_DISPLAY_NAME } from '../lib/roles'
+import { useAccess } from '../lib/useAccess'
 
 const ROLE_BADGE: Record<string, { label: string; variant: 'info' | 'default' | 'warning' }> = {
   tenant_admin: { label: 'Admin', variant: 'info' },
@@ -93,12 +95,8 @@ export default function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false)
   const [pendingRevokeInvite, setPendingRevokeInvite] = useState<Invitation | null>(null)
 
-  const access = useQuery({
-    queryKey: ['team-access', tenantId],
-    queryFn: () => teamAPI.myAccess(),
-    retry: false,
-  })
-  const canManage = access.data?.permissions.includes('membership.manage') ?? false
+  const access = useAccess()
+  const canManage = access.can('membership.manage')
   const deliveryAvailable = access.data?.invitation_delivery_available ?? false
   const canInvite = canManage && deliveryAvailable
 
@@ -204,7 +202,14 @@ export default function TeamPage() {
         title="Equipe e acesso"
         description="Gerencie os usuários da sua equipe, defina permissões e controle o acesso à plataforma."
         actions={
-          canInvite ? (
+          <div className="flex flex-wrap items-center gap-2">
+          <Link
+            to="/settings/roles"
+            className="inline-flex items-center rounded-control border border-border-subtle bg-surface-muted px-4 py-3 text-body-sm font-medium text-text-primary hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+          >
+            Funções e permissões
+          </Link>
+          {canInvite ? (
             <Button variant="primary" onClick={() => setInviteOpen(true)}>
               <Icon name="plus" size={16} />
               Convidar usuário
@@ -222,7 +227,8 @@ export default function TeamPage() {
               <Icon name="plus" size={16} />
               Convidar usuário
             </Button>
-          )
+          )}
+          </div>
         }
       />
 

@@ -3,6 +3,14 @@
 > **Comece aqui.** Estado em `master` (branch atual, **FIRST_INTERNAL_PRODUCT_DELIVERY_CONTROLLED = PASS**, iniciando REAL_PRODUCT_VALIDATION_MODE). Nada foi enviado com push nem tag. Atualize este arquivo ao terminar sua sessão.
 > Regras do dono do projeto: só perguntar em dúvida **real** (ordem lógica você decide); nunca `git push`/tag sem ordem; não declarar produção pronta; evidência real antes de dizer PASS; respostas em português, diretas.
 
+## 0. Estado e próximos passos (2026-09-22)
+
+**DONE:** P8 · Browser E2E 20/20 · IAM0 · IAM1 · IAM2A · IAM2B · IAM3 (human gate aprovado 2026-09-22; detalhes em `docs/delivery/IAM3-ENFORCEMENT.md`).
+**NOW:** User access email completion — fechar Admin → convite por e-mail → e-mail entregue → link seguro → confirmação → autenticação (OIDC) → membership ativa. Levantar: sender/provider atual (`NoopInvitationSender`), template, expiração do token, reenviar, revogar, aceite, confirmação de e-mail, estados pending/accepted/expired/revoked, UX. **Não** reconstruir IAM2B; **não** criar senha local (OIDC segue canônico).
+**PARALLEL:** Frontend design via Lovable/MCP — Inbox/Chat (worktree separado, sem editar os mesmos arquivos; integração só após human gate). Brief: 3 painéis — ESQUERDA filas, busca, conversas, unread, prioridade, canal · CENTRO cabeçalho, mensagens, status de entrega, anexos, composer, nota interna, resposta · DIREITA contato, ticket, fila, responsável, tags, histórico/contexto. Preservar Vite+React+TS, Omnira iOS Design System, APIs reais, TenantContext, permissions, SSE. Lovable = design/UX e composição visual; não substitui backend nem arquitetura. TicketPanel já portado. **Bloqueio atual: workspace Lovable sem créditos** (billing do dono); a tela "Funções e permissões" foi feita localmente com os primitivos do `web/` e pode receber passe de design depois.
+**NEXT:** IAM4 Agent Management · FR4/FR5 (tickets: `ticket.read/create/update/assign/resolve`, sem `ticket.manage`) conforme dependências.
+**Decisão canônica IAM3 MVP:** papéis fixos; sem CRUD de roles nem custom roles (DEFERRED).
+
 ## 1. Situação em 5 linhas
 - **Fluxo WhatsApp validado com tráfego real em 2026-09-20**: pareamento por QR → mensagem de cliente real entrando → dois operadores → resposta chegando no aparelho do cliente (`ack=2 DEVICE`), tudo multi-tenant com RLS. Detalhe e evidência em `docs/delivery/GATES-REAL-VALIDATION.md`.
 - **Gates R1, R2, R3, R4, R6 = PASS. R5 (CRM real/IXC) = BLOCKED_REQUIRES_HUMAN** — adapter implementado e testado contra fake server, falta credencial de ambiente real.
@@ -415,7 +423,7 @@ Regra do dono: trabalho na `main`; frontend/design via MCP Lovable.
 | IAM1 | Secure Login & Session | **DONE** (`bd41007`) |
 | IAM2A | Users & Memberships | **DONE** |
 | IAM2B | Invitations | **DONE** (`0c8cbee`, `38b432b`, `65bc73d`) |
-| IAM3 | Roles & Permissions | — |
+| IAM3 | Roles & Permissions (papéis fixos, matriz read-only, enforcement) | **DONE** |
 | IAM4 | Agent Management | — |
 | IAM5 | Access Control / Sessions UI | — |
 | IAM6 | Security Hardening | — |

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -334,6 +335,91 @@ func TestCannotAssignGlobalRole(t *testing.T) {
 			if r.Key == "system_admin" || r.Key == "hub_admin" {
 				t.Fatalf("global role %s offered to tenant administration", r.Key)
 			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+}
+
+// --- Role permission matrix (read-only) ---
+
+func TestListRolesReturnsFixedPermissionMatrixReadOnly(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	supervisor := seedTeamMember(t, seed, a.tenantID, "tenant_supervisor", "active")
+	agent := seedTeamMember(t, seed, a.tenantID, "tenant_agent", "active")
+	h := newTeamHandler(app)
+
+	want := map[string][]string{
+		"tenant_admin": {
+			"audit.read", "channel.manage", "conversation.claim", "conversation.manage",
+			"membership.manage", "membership.read", "tenant.manage", "tenant.read",
+		},
+		"tenant_supervisor": {"audit.read", "conversation.claim", "conversation.manage", "membership.read", "tenant.read"},
+		"tenant_agent":      {"conversation.claim", "tenant.read"},
+	}
+
+	// A member with membership.read (supervisor) sees exactly the three fixed roles and their sets.
+	if err := asActor(t, app, a.tenantID, supervisor, func(ctx context.Context) error {
+		rec := doRequest(t, ctx, http.MethodGet, h.ListAssignableRoles, nil, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Items []RoleOption `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			return err
+		}
+		if len(body.Items) != len(want) {
+			t.Fatalf("got %d roles, want %d", len(body.Items), len(want))
+		}
+		for _, r := range body.Items {
+			exp, ok := want[r.Key]
+			if !ok {
+				t.Fatalf("unexpected role %s", r.Key)
+			}
+			if !reflect.DeepEqual(r.Permissions, exp) {
+				t.Errorf("%s permissions = %v, want %v", r.Key, r.Permissions, exp)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+
+	// An agent lacks membership.read: no matrix for them.
+	if err := asActor(t, app, a.tenantID, agent, func(ctx context.Context) error {
+		if rec := doRequest(t, ctx, http.MethodGet, h.ListAssignableRoles, nil, nil); rec.Code != http.StatusForbidden {
+			t.Fatalf("agent status = %d, want 403", rec.Code)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+}
+
+// --- Agents list requires conversation.manage ---
+
+func TestListAgentsRequiresConversationManage(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	supervisor := seedTeamMember(t, seed, a.tenantID, "tenant_supervisor", "active")
+	agent := seedTeamMember(t, seed, a.tenantID, "tenant_agent", "active")
+	h := NewAgentsHandler(app)
+
+	if err := asActor(t, app, a.tenantID, agent, func(ctx context.Context) error {
+		if rec := doRequest(t, ctx, http.MethodGet, h.ListAgents, nil, nil); rec.Code != http.StatusForbidden {
+			t.Fatalf("agent status = %d, want 403", rec.Code)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	if err := asActor(t, app, a.tenantID, supervisor, func(ctx context.Context) error {
+		if rec := doRequest(t, ctx, http.MethodGet, h.ListAgents, nil, nil); rec.Code != http.StatusOK {
+			t.Fatalf("supervisor status = %d, want 200: %s", rec.Code, rec.Body.String())
 		}
 		return nil
 	}); err != nil {

@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
-	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
 // AgentItem representa um agente/técnico disponível para convite
@@ -30,11 +29,16 @@ func NewAgentsHandler(pool *pgxpool.Pool) *AgentsHandler {
 // GET /tenants/{tenant_id}/users/agents
 // Retorna agentes com role=tenant_agent e status=active
 func (h *AgentsHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := requestTenant(r)
+	// TEMPORARY SEMANTIC COUPLING: este endpoint só alimenta o seletor de convidar/
+	// transferir co-atendente, operações que já exigem conversation.manage do ator
+	// (routing/application/participant.go). Reavaliar quando as permissões de
+	// Agent/Queue forem consolidadas; não criar agent.read só por nomenclatura.
+	tc, err := (&TeamHandler{pool: h.pool}).authorize(r, "conversation.manage")
 	if err != nil {
-		http.Error(w, "tenant context not found", http.StatusInternalServerError)
+		respondAuthzError(w, err)
 		return
 	}
+	tenantID := tc.TenantID
 
 	// Query: usuarios ativos com role tenant_agent
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
@@ -85,10 +89,3 @@ func (h *AgentsHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // Helper para extrair tenant_id da requisição
-func requestTenant(r *http.Request) (uuid.UUID, error) {
-	tc, err := tenancydomain.FromContext(r.Context())
-	if err != nil || tc.TenantID == uuid.Nil {
-		return uuid.Nil, err
-	}
-	return tc.TenantID, nil
-}

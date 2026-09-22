@@ -140,3 +140,24 @@ func TestEveryInboxAndChannelRouteIsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// IAM3 MVP: system roles are fixed and there is no role editor. The legacy /members API
+// (no permission check, unrestricted role_id) was removed. None of these may come back
+// without an explicit decision.
+func TestNoRoleEditingOrLegacyMembersRoutes(t *testing.T) {
+	s := newRoutedServer(t)
+	tenant := "3f9c1b2e-0000-4000-8000-000000000001"
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tenants/" + tenant + "/roles"},
+		{http.MethodPatch, "/api/v1/tenants/" + tenant + "/roles/" + tenant},
+		{http.MethodPut, "/api/v1/tenants/" + tenant + "/roles/" + tenant},
+		{http.MethodDelete, "/api/v1/tenants/" + tenant + "/roles/" + tenant},
+		{http.MethodGet, "/api/v1/tenants/" + tenant + "/members"},
+		{http.MethodPost, "/api/v1/tenants/" + tenant + "/members"},
+		{http.MethodDelete, "/api/v1/tenants/" + tenant + "/members/" + tenant},
+	} {
+		if _, pattern := s.mux.Handler(httptest.NewRequest(c.method, c.path, nil)); pattern != "" {
+			t.Errorf("%s %s must not be routed (matched %q)", c.method, c.path, pattern)
+		}
+	}
+}

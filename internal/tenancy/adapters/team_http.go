@@ -46,6 +46,9 @@ type RoleOption struct {
 	ID   uuid.UUID `json:"id"`
 	Key  string    `json:"key"`
 	Name string    `json:"name"`
+	// Permissions é o conjunto fixo do papel (somente leitura): a matriz da tela
+	// "Funções e permissões". As chaves vêm de role_permissions, nunca de constante.
+	Permissions []string `json:"permissions"`
 }
 
 type TeamHandler struct {
@@ -144,7 +147,7 @@ func (h *TeamHandler) MyAccess(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListTeam — GET /api/v1/tenants/{tenant_id}/members
+// ListTeam — GET /api/v1/tenants/{tenant_id}/team
 //
 // Uma query com join: a tela precisa de nome, e-mail e papel por linha, e
 // resolver isso no cliente seria um N+1 por membro.
@@ -200,9 +203,14 @@ func (h *TeamHandler) ListAssignableRoles(w http.ResponseWriter, r *http.Request
 	_ = tc
 
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
-		SELECT id, key, name FROM roles
-		WHERE tenant_id IS NULL AND key = ANY($1)
-		ORDER BY key`, tenantAssignableRoles)
+		SELECT r.id, r.key, r.name,
+		       COALESCE(array_agg(rp.permission_key ORDER BY rp.permission_key)
+		                FILTER (WHERE rp.permission_key IS NOT NULL), '{}')
+		FROM roles r
+		LEFT JOIN role_permissions rp ON rp.role_id = r.id
+		WHERE r.tenant_id IS NULL AND r.key = ANY($1)
+		GROUP BY r.id, r.key, r.name
+		ORDER BY r.key`, tenantAssignableRoles)
 	if err != nil {
 		http.Error(w, "failed to list roles", http.StatusInternalServerError)
 		return
@@ -212,7 +220,7 @@ func (h *TeamHandler) ListAssignableRoles(w http.ResponseWriter, r *http.Request
 	items := make([]RoleOption, 0, len(tenantAssignableRoles))
 	for rows.Next() {
 		var o RoleOption
-		if err := rows.Scan(&o.ID, &o.Key, &o.Name); err != nil {
+		if err := rows.Scan(&o.ID, &o.Key, &o.Name, &o.Permissions); err != nil {
 			http.Error(w, "failed to read roles", http.StatusInternalServerError)
 			return
 		}
@@ -226,7 +234,7 @@ type UpdateMembershipRequest struct {
 	Status  *string `json:"status,omitempty"`
 }
 
-// UpdateMembership — PATCH /api/v1/tenants/{tenant_id}/members/{membership_id}
+// UpdateMembership — PATCH /api/v1/tenants/{tenant_id}/team/{membership_id}
 func (h *TeamHandler) UpdateMembership(w http.ResponseWriter, r *http.Request) {
 	tc, err := h.authorize(r, permissionMembershipManage)
 	if err != nil {

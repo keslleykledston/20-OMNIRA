@@ -8,7 +8,7 @@ import { useTenantDisplay } from '../lib/tenantContext'
 // restante de Configurações) stay hidden rather than simulated —
 // docs/architecture/FRONTEND-UX.md. Equipe e acesso é a única seção de
 // Configurações implementada até agora (IAM2A).
-const navItems: { label: string; path: string; icon: IconName }[] = [
+const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string }[] = [
   { label: 'Dashboard', path: '/', icon: 'dashboard' },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
   { label: 'Tickets', path: '/tickets', icon: 'tickets' },
@@ -16,7 +16,7 @@ const navItems: { label: string; path: string; icon: IconName }[] = [
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports' },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
-  { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings' },
+  { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings', alsoActiveOn: '/settings/roles' },
 ]
 
 export default function Sidebar() {
@@ -55,7 +55,7 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {navItems.map(item => {
-          const active = isActive(item.path)
+          const active = isActive(item.path) || (item.alsoActiveOn ? isActive(item.alsoActiveOn) : false)
           return (
             <Link
               key={item.path}

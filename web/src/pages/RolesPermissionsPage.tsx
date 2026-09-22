@@ -1,110 +1,148 @@
-/**
- * Funções e permissões — página read-only que exibe a matriz de controle de acesso.
- * IAM3 MVP: apenas visualização, sem criação de papéis customizados.
- */
+import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
+import clsx from 'clsx'
+import { Badge, Card, EmptyState, ErrorState, Icon, PageHeader, Skeleton, Tabs, type TabItem } from '../components/primitives'
+import { getTenantId } from '../lib/session'
+import { teamAPI } from '../lib/team'
 import { useAccess } from '../lib/useAccess'
+import { ROLE_DISPLAY_NAME } from '../lib/roles'
+import { PERMISSION_GROUPS, unlistedPermissions } from '../lib/permissions'
 
-interface PermissionRow {
-  key: string
-  name: string
-  description: string
-}
+const ROLE_ORDER = ['tenant_admin', 'tenant_supervisor', 'tenant_agent']
 
-const PERMISSION_MATRIX: PermissionRow[] = [
-  { key: 'tenant.read', name: 'Ler tenant', description: 'Ver informações do tenant' },
-  { key: 'tenant.manage', name: 'Gerenciar tenant', description: 'Editar configurações do tenant' },
-  { key: 'membership.read', name: 'Ler membros', description: 'Listar membros da equipe' },
-  { key: 'membership.manage', name: 'Gerenciar membros', description: 'Convidar/revogar acesso' },
-  { key: 'audit.read', name: 'Ler auditoria', description: 'Ver logs de auditoria' },
-  { key: 'conversation.read', name: 'Ver conversas', description: 'Acessar conversas' },
-  { key: 'conversation.claim', name: 'Reivindicar conversa', description: 'Reivindicar e responder conversas' },
-  { key: 'conversation.manage', name: 'Gerenciar conversas', description: 'Atribuir conversas a outros agentes' },
-  { key: 'channel.read', name: 'Ver canais', description: 'Acessar canais WhatsApp' },
-  { key: 'channel.manage', name: 'Gerenciar canais', description: 'Criar e operar conexões WhatsApp' },
-]
-
-const ROLE_DESCRIPTIONS: Record<string, string> = {
-  tenant_admin: 'Controle total do tenant. Gerencia equipe, permissões, auditoria e canais.',
-  tenant_supervisor: 'Supervisão de conversas. Acesso a relatórios e auditoria. Sem controle de permissões.',
-  tenant_agent: 'Agente de atendimento. Acesso apenas a conversas próprias.',
-}
-
+// Somente leitura (IAM3 MVP): os papéis são fixos da plataforma. Não há criação,
+// edição nem exclusão de papéis — nenhum controle editável nesta tela.
 export function RolesPermissionsPage() {
+  const tenantId = getTenantId()
   const access = useAccess()
+  const roles = useQuery({
+    queryKey: ['roles', tenantId],
+    queryFn: () => teamAPI.roles(),
+    retry: false,
+  })
+  const [selected, setSelected] = useState<string | null>(null)
+
+  const ordered = useMemo(
+    () =>
+      [...(roles.data ?? [])].sort(
+        (a, b) => ROLE_ORDER.indexOf(a.key) - ROLE_ORDER.indexOf(b.key),
+      ),
+    [roles.data],
+  )
+  const currentKey = access.data?.role_key
+  const activeKey = selected ?? (ordered.find((r) => r.key === currentKey) ?? ordered[0])?.key
+  const active = ordered.find((r) => r.key === activeKey)
+
+  const tabs: TabItem[] = ordered.map((r) => ({
+    id: r.key,
+    label: ROLE_DISPLAY_NAME[r.key] ?? r.name,
+  }))
+
+  const header = (
+    <PageHeader
+      title="Funções e permissões"
+      breadcrumbs={[{ label: 'Equipe e acesso', href: '/settings/team' }, { label: 'Funções e permissões', current: true }]}
+    />
+  )
+
+  if (roles.isLoading) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <Skeleton count={4} height="h-10" />
+      </div>
+    )
+  }
+
+  if (!roles.isError && ordered.length === 0) {
+    return (
+      <div className="space-y-6">
+        {header}
+        <EmptyState title="Nenhuma função disponível" description="Não há funções configuradas nesta organização ainda." />
+      </div>
+    )
+  }
+
+  if (roles.isError || !active) {
+    const forbidden = (roles.error as { response?: { status?: number } } | null)?.response?.status === 403
+    return (
+      <div className="space-y-6">
+        {header}
+        <ErrorState
+          title={forbidden ? 'Sem acesso' : 'Erro ao carregar'}
+          message={
+            forbidden
+              ? 'Você não tem permissão para ver as funções e permissões.'
+              : 'Não foi possível carregar as funções e permissões.'
+          }
+        />
+      </div>
+    )
+  }
+
+  const granted = new Set(active.permissions)
+  const others = unlistedPermissions(active.permissions)
 
   return (
-    <div className="roles-permissions-page p-6 max-w-6xl">
-      <h1 className="text-3xl font-bold mb-2">Funções e Permissões</h1>
-      <p className="text-gray-600 mb-6">
-        Visualize as permissões associadas ao seu papel. Customização de papéis não está disponível no MVP.
+    <div className="space-y-6">
+      {header}
+
+      <div className="space-y-3">
+        <Tabs aria-label="Funções" items={tabs} value={active.key} onChange={setSelected} />
+        <div className="flex flex-wrap items-center gap-2 text-body-sm text-text-secondary">
+          <p>As permissões deste papel são definidas pela plataforma.</p>
+          {active.key === currentKey && <Badge variant="info" size="sm">Seu papel</Badge>}
+        </div>
+      </div>
+
+      <div
+        role="tabpanel"
+        tabIndex={0}
+        aria-label={`Permissões: ${ROLE_DISPLAY_NAME[active.key] ?? active.name}`}
+        className="space-y-4 rounded-card outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+      >
+        {PERMISSION_GROUPS.map((group) => (
+          <MatrixSection
+            key={group.title}
+            title={group.title}
+            rows={group.items.map((i) => ({ key: i.key, label: i.label, allowed: granted.has(i.key) }))}
+          />
+        ))}
+        {others.length > 0 && (
+          <MatrixSection title="Outras" rows={others.map((k) => ({ key: k, label: k, allowed: true }))} />
+        )}
+      </div>
+
+      <p className="text-body-sm text-text-tertiary">
+        <Link to="/settings/team" className="text-accent-primary hover:underline">← Equipe e acesso</Link>
       </p>
-
-      {/* Seu Papel */}
-      <div className="mb-8 p-4 border rounded-lg bg-blue-50">
-        <h2 className="text-lg font-semibold mb-2">Seu Papel Atual</h2>
-        <p className="text-xl font-bold mb-1">{access?.role_key.replace('tenant_', '').toUpperCase()}</p>
-        <p className="text-gray-700">{ROLE_DESCRIPTIONS[access?.role_key || ''] || 'Papel desconhecido'}</p>
-      </div>
-
-      {/* Suas Permissões */}
-      {access?.permissions && (
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold mb-4">Suas Permissões</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {PERMISSION_MATRIX.filter((p) =>
-              access.permissions.includes(p.key)
-            ).map((p) => (
-              <div key={p.key} className="p-3 border rounded bg-green-50 border-green-200">
-                <p className="font-semibold text-green-900">{p.name}</p>
-                <p className="text-sm text-gray-600">{p.description}</p>
-                <code className="text-xs text-gray-500 mt-1 block">{p.key}</code>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Matriz Completa (referência) */}
-      <div className="mt-8">
-        <h2 className="text-lg font-semibold mb-4">Matriz de Permissões Disponíveis</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="border p-2 text-left">Permissão</th>
-                <th className="border p-2 text-left">Nome</th>
-                <th className="border p-2 text-left">Descrição</th>
-                <th className="border p-2 text-center">Você tem?</th>
-              </tr>
-            </thead>
-            <tbody>
-              {PERMISSION_MATRIX.map((p) => (
-                <tr key={p.key} className="hover:bg-gray-50">
-                  <td className="border p-2 font-mono text-xs">{p.key}</td>
-                  <td className="border p-2 font-semibold">{p.name}</td>
-                  <td className="border p-2">{p.description}</td>
-                  <td className="border p-2 text-center">
-                    {access?.permissions.includes(p.key) ? (
-                      <span className="text-green-600 font-bold">✓</span>
-                    ) : (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Nota sobre convites */}
-      {access?.invitation_delivery_available && (
-        <div className="mt-6 p-4 border border-yellow-200 bg-yellow-50 rounded">
-          <p className="text-sm text-gray-700">
-            <strong>Dica:</strong> Você pode convidar novos membros para o tenant se tiver permissão <code className="bg-white px-1">membership.manage</code>.
-          </p>
-        </div>
-      )}
     </div>
+  )
+}
+
+function MatrixSection({ title, rows }: { title: string; rows: { key: string; label: string; allowed: boolean }[] }) {
+  return (
+    <Card>
+      <section aria-labelledby={`perm-${title}`}>
+        <h2 id={`perm-${title}`} className="px-4 pb-1 pt-3 text-[10px] font-bold uppercase tracking-wide text-text-tertiary">{title}</h2>
+        <ul className="divide-y divide-border-subtle border-t border-border-subtle">
+          {rows.map((row) => (
+            <li key={row.key} className="flex min-w-0 items-center justify-between gap-4 px-4 py-2.5 text-body-sm">
+              <span className="text-text-primary">{row.label}</span>
+              <span
+                className={clsx(
+                  'inline-flex items-center gap-1 text-xs font-medium',
+                  row.allowed ? 'text-status-success' : 'text-text-tertiary',
+                )}
+              >
+                <Icon name={row.allowed ? 'check' : 'info'} className="h-4 w-4" aria-hidden="true" />
+                {row.allowed ? 'Permitido' : 'Não permitido'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </Card>
   )
 }

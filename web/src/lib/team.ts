@@ -24,6 +24,8 @@ export interface RoleOption {
   id: string;
   key: string;
   name: string;
+  // Conjunto fixo do papel (somente leitura), vindo de GET /roles.
+  permissions: string[];
 }
 
 export interface MyAccess {

@@ -1,63 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useCallback } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { getTenantId } from './session'
+import { teamAPI } from './team'
 
-export interface AccessData {
-  role_key: string
-  permissions: string[]
-  invitation_delivery_available: boolean
-}
-
-/**
- * Hook para acessar role + permissions do usuário no tenant.
- * Fetcha de GET /api/v1/tenants/{tenant_id}/me/access
- * Fonte única de verdade para capabilities no frontend.
- */
-export function useAccess(): AccessData | null {
-  const [access, setAccess] = useState<AccessData | null>(null)
-  const [error, setError] = useState<string | null>(null)
+// Único ponto de autorização no frontend: as permissões efetivas vêm do backend
+// (GET /me/access) e a UI só pergunta `can('chave')`. Nunca comparar o nome do
+// papel (role_key) para decidir o que mostrar. O backend segue sendo a autoridade
+// em toda requisição; isto só evita oferecer uma ação que ele vai recusar.
+export function useAccess() {
   const tenantId = getTenantId()
-
-  useEffect(() => {
-    if (!tenantId) {
-      setAccess(null)
-      return
-    }
-
-    const fetchAccess = async () => {
-      try {
-        const resp = await fetch(
-          `/api/v1/tenants/${tenantId}/me/access`,
-          { method: 'GET' }
-        )
-        if (!resp.ok) {
-          throw new Error(`HTTP ${resp.status}`)
-        }
-        const data = await resp.json()
-        setAccess(data)
-        setError(null)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'unknown error')
-        setAccess(null)
-      }
-    }
-
-    fetchAccess()
-  }, [tenantId])
-
-  if (error) {
-    console.warn('[useAccess] failed to fetch access:', error)
-  }
-
-  return access
-}
-
-/**
- * Helper para verificar se o usuário tem uma permissão.
- * Uso: if (can('audit.read')) { showAuditButton() }
- */
-export function useCan() {
-  const access = useAccess()
-  return (permission: string) => {
-    return access?.permissions.includes(permission) ?? false
-  }
+  const query = useQuery({
+    queryKey: ['me-access', tenantId],
+    queryFn: () => teamAPI.myAccess(),
+    enabled: !!tenantId,
+    retry: false,
+    staleTime: 30_000,
+  })
+  const permissions = query.data?.permissions
+  const can = useCallback((permission: string) => permissions?.includes(permission) ?? false, [permissions])
+  return { data: query.data, isLoading: query.isLoading, isError: query.isError, can }
 }

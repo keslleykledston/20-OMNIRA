@@ -275,12 +275,9 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 	// derivada de membership real, nunca do valor da URL isoladamente).
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.GetTenantMe))))
 
-	// Membros (legado: sem checagem de permissão em nível de aplicação, mas
-	// protegido por RLS — INSERT/UPDATE em memberships exigem
-	// has_active_admin_membership. Sem uso pelo frontend nem no contrato.)
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/members", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.ListMemberships))))
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/members", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.CreateMembership))))
-	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/members/{membership_id}", authnMiddleware(tenantSession(http.HandlerFunc(tenantHandler.RevokeMembership))))
+	// A API legada /members (GET/POST/DELETE) foi removida no IAM3: não checava permissão
+	// nem restringia o role_id (um tenant_admin podia conceder system_admin/hub_admin).
+	// Equipe e acesso usa /team, /roles e /team/invitations.
 
 	// Equipe e acesso (IAM2A): payload com identidade+papel resolvidos (evita
 	// N+1 no cliente) e autorização por permission (membership.read/manage),
