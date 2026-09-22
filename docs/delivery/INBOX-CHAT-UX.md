@@ -312,7 +312,63 @@ reconnect were already well-implemented.
 
 ---
 
-## IX. PRÓXIMO: QA E MERGE
+## IX. INBOX.5-A1 — SECURE INBOUND MEDIA RETRIEVAL ✅ DONE (2026-09-22)
+
+**Status: FUNCTIONAL COMMIT COMPLETE**
+
+### Implementação:
+
+#### Backend (Functional Commit f4b008b)
+- ✅ `MediaRetriever`: WAHA-origin-only, 25 MiB bounded buffering
+- ✅ Redirects disabled: `CheckRedirect = http.ErrUseLastResponse`
+- ✅ Endpoint `GET /api/v1/tenants/{id}/messages/{id}/media`: RLS + TenantContext authz
+- ✅ MIME sniffing: raster inline (JPEG/PNG/WebP/GIF), active content blocked (415)
+- ✅ Secret leakage prevention: errors sanitized before response
+
+#### Frontend (MessageMedia.tsx)
+- ✅ Safe image rendering with security headers
+- ✅ Conditional inline (images) vs. attachment (unknown types)
+- ✅ Download support with sanitized filenames
+
+#### Security Proof Gates (All PASS)
+- ✅ **C. HTML Masquerade**: Upstream declares image/jpeg but body is HTML → 415, HTML not returned
+- ✅ **D. SVG**: Real SVG bytes with script → 415, SVG not returned
+- ✅ **E. Unknown Benign**: Unrecognized bytes → application/octet-stream + attachment disposition
+- ✅ **F. Secret Leakage**: Forced provider errors containing sentinels (SECRET_MEDIA_REF, SECRET_API_KEY, etc.) → response contains none of them
+- ✅ **G. Cancellation Cleanup**: Cancel request context → retrieval terminates, upstream resources closed, no hang
+
+#### Tests:
+- ✅ `go vet ./...`: PASS
+- ✅ `go test ./...`: PASS (tests C–G added to media_retrieval_test.go)
+- ✅ `git diff --check`: PASS
+- ✅ API build: PASS (existing gates retained)
+- ✅ worker build: PASS (existing gates retained)
+- ✅ tsc: PASS (existing gates retained)
+- ✅ Vitest 113/113: PASS (existing gates retained)
+- ✅ Vite build: PASS (existing gates retained)
+- ✅ Playwright 25/25: PASS (existing gates retained)
+
+### Frozen Decisions (Per ADR/Design Doc):
+- WAHA provider only (Meta Cloud deferred to Wave D3)
+- Bounded buffering (25 MiB limit, NOT true streaming)
+- TenantContext + RLS message-read boundary (no new permission)
+- MIME sniffing required (declared type untrusted)
+- Inline-safe: raster images only (JPEG/PNG/WebP/GIF after sniff)
+- Blocked content: HTML, SVG, executables = 415 (bytes NOT returned)
+- Unknown benign: application/octet-stream + attachment
+- Frontend contract: never expose MediaRef, provider URL, or provider details
+
+### Deferred (INBOX.5-A2+):
+- HTTP Range support (audio/video streaming)
+- Audio/video player components
+- Outbound file attachment/upload
+- Binary cache (in-memory or Valkey)
+- Rate-limit framework
+- Meta Cloud provider adapter
+
+---
+
+## X. PRÓXIMO: QA E MERGE
 
 ### Mudanças realizadas:
 

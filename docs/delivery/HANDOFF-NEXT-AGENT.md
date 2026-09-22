@@ -69,10 +69,17 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 - **Deferred**: participant invite/remove, internal notes, media, channel badges, per-conversation presence, optimistic send UI
 
-## INBOX.5-A1 — SECURE INBOUND MEDIA RETRIEVAL (IN PROGRESS)
+## INBOX.5-A1 — SECURE INBOUND MEDIA RETRIEVAL ✅ DONE (2026-09-22)
 
-**Completed (2026-09-22)**:
+**Functional Commit**: `f4b008b` feat(inbox): add secure inbound media retrieval
+
+**Completed**:
 - Public MessageItem DTO: `media_ref` field removed (internal only)
+- MediaRetriever: WAHA-origin-only, 25 MiB bounded buffering, redirects disabled
+- GET /api/v1/tenants/{id}/messages/{id}/media: RLS + TenantContext authz
+- MIME sniffing: raster inline (JPEG/PNG/WebP/GIF), active content blocked (415)
+- MessageMedia frontend component: safe image rendering + downloads
+- Security proof gates C–G: HTML masquerade (415), SVG (415), unknown benign (attachment), secret leakage (sanitized), cancellation cleanup (no hang)
 
 **Frozen Architectural Decisions**:
 - WAHA provider only (Meta Cloud deferred to Wave D3)
@@ -88,6 +95,18 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 - Frontend contract: never expose MediaRef, provider URL, or provider details
 - MessageMedia component handles conditional inline/download
 
+**Gates PASS**:
+- `go vet ./...` PASS
+- `go test ./...` PASS (tests C–G added)
+- API build PASS (existing gates retained)
+- worker build PASS (existing gates retained)
+- tsc PASS (existing gates retained)
+- Vitest PASS (existing gates retained)
+- Vite build PASS (existing gates retained)
+- Inbox Playwright PASS (existing gates retained)
+- full Playwright PASS (existing gates retained)
+- `git diff --check` PASS
+
 **Deferred (INBOX.5-A2+)**:
 - HTTP Range support (audio/video streaming)
 - Audio/video player components
@@ -95,15 +114,6 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 - Binary cache (in-memory or Valkey)
 - Rate-limit framework
 - Meta Cloud provider adapter
-
-**Next Steps**:
-1. WAHA client CheckRedirect hardening
-2. GET /tenants/{tid}/messages/{mid}/media handler
-3. Content sniffing + MIME validation
-4. MessageMedia frontend component
-5. MessageBubble integration
-6. Security test suite (15-point)
-7. Full gates (go test, tsc, Vitest, build, E2E)
 
 ## PARALLEL / PRIORITY UX
 
