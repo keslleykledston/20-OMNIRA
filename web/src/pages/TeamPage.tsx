@@ -10,17 +10,24 @@ import {
   DropdownMenu,
   EmptyState,
   ErrorState,
+  FilterBar,
   Icon,
   Input,
   Modal,
-  PageHeader,
   Skeleton,
   StatusBadge,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   Tabs,
   type IconName,
   type MenuAction,
   type TabItem,
 } from '../components/primitives'
+import { SettingsShell, SETTINGS_SECTIONS } from '../components/SettingsShell'
 import { getTenantId } from '../lib/session'
 import { teamAPI, teamErrorMessage, type MembershipStatus, type RoleOption, type TeamMember } from '../lib/team'
 import { invitationsAPI, invitationErrorMessage, type Invitation, type InvitationStatus } from '../lib/invitations'
@@ -216,52 +223,51 @@ export default function TeamPage() {
 
   if (access.isError) {
     return (
-      <div className="space-y-6">
-        <PageHeader title="Equipe e acesso" />
+      <SettingsShell sections={SETTINGS_SECTIONS} title="Equipe e acesso">
         <ErrorState
           title="Sem acesso"
           message="Você não tem permissão para gerenciar a equipe."
         />
-      </div>
+      </SettingsShell>
     )
   }
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Equipe e acesso"
-        description="Gerencie os usuários da sua equipe, defina permissões e controle o acesso à plataforma."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-          <Link
-            to="/settings/roles"
-            className="inline-flex items-center rounded-control border border-border-subtle bg-surface-muted px-4 py-3 text-body-sm font-medium text-text-primary hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+    <SettingsShell
+      sections={SETTINGS_SECTIONS}
+      title="Equipe e acesso"
+      description="Gerencie os usuários da sua equipe, defina permissões e controle o acesso à plataforma."
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+        <Link
+          to="/settings/roles"
+          className="inline-flex items-center rounded-control border border-border-subtle bg-surface-muted px-4 py-3 text-body-sm font-medium text-text-primary hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+        >
+          Funções e permissões
+        </Link>
+        {canInvite ? (
+          <Button variant="primary" onClick={() => setInviteOpen(true)}>
+            <Icon name="plus" size={16} />
+            Convidar usuário
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            disabled
+            title={
+              !canManage
+                ? 'Requer permissão para gerenciar a equipe'
+                : 'Envio de convites ainda não está configurado neste ambiente.'
+            }
           >
-            Funções e permissões
-          </Link>
-          {canInvite ? (
-            <Button variant="primary" onClick={() => setInviteOpen(true)}>
-              <Icon name="plus" size={16} />
-              Convidar usuário
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              disabled
-              title={
-                !canManage
-                  ? 'Requer permissão para gerenciar a equipe'
-                  : 'Envio de convites ainda não está configurado neste ambiente.'
-              }
-            >
-              <Icon name="plus" size={16} />
-              Convidar usuário
-            </Button>
-          )}
-          </div>
-        }
-      />
-
+            <Icon name="plus" size={16} />
+            Convidar usuário
+          </Button>
+        )}
+        </div>
+      }
+    >
+      <div className="space-y-6">
       {notice && (
         <div
           role="status"
@@ -288,7 +294,7 @@ export default function TeamPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <FilterBar>
         <div className="flex-1">
           <Input
             placeholder="Buscar por nome ou e-mail…"
@@ -297,6 +303,7 @@ export default function TeamPage() {
           />
         </div>
         <select
+          aria-label="Filtrar por função"
           value={roleFilter}
           onChange={(e) => setRoleFilter(e.target.value)}
           className="h-10 rounded-control border border-border-light bg-surface px-3 text-sm text-text-primary"
@@ -307,6 +314,7 @@ export default function TeamPage() {
           <option value="tenant_agent">Agente</option>
         </select>
         <select
+          aria-label="Filtrar por status"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           className="h-10 rounded-control border border-border-light bg-surface px-3 text-sm text-text-primary"
@@ -316,7 +324,7 @@ export default function TeamPage() {
           <option value="inactive">Inativo</option>
           <option value="revoked">Revogado</option>
         </select>
-      </div>
+      </FilterBar>
 
       {team.isLoading && <TeamSkeleton />}
 
@@ -337,19 +345,19 @@ export default function TeamPage() {
 
       {!team.isLoading && !team.isError && filtered.length > 0 && (
         <>
-          <div className="hidden md:block overflow-hidden rounded-card border border-border-subtle bg-surface">
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-muted">
-                <tr>
-                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Nome</th>
-                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">E-mail</th>
-                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Função</th>
-                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Status</th>
-                  <th className="px-6 py-3 text-sm font-medium text-text-secondary">Último login</th>
-                  {canManage && <th className="px-6 py-3" />}
-                </tr>
-              </thead>
-              <tbody>
+          <div className="hidden md:block">
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Nome</TableHeaderCell>
+                  <TableHeaderCell>E-mail</TableHeaderCell>
+                  <TableHeaderCell>Função</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Último login</TableHeaderCell>
+                  {canManage && <TableHeaderCell />}
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {filtered.map((m) => (
                   <TeamRow
                     key={m.membership_id}
@@ -359,8 +367,8 @@ export default function TeamPage() {
                     onToggleStatus={(status) => setPendingStatus({ member: m, status })}
                   />
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
 
           <div className="md:hidden space-y-3">
@@ -398,6 +406,7 @@ export default function TeamPage() {
           onConfirm={(email, roleKey) => createInvitation.mutate({ email, roleKey })}
         />
       )}
+      </div>
 
       {pendingRevokeInvite && (
         <ConfirmDialog
@@ -436,7 +445,7 @@ export default function TeamPage() {
           }
         />
       )}
-    </div>
+    </SettingsShell>
   )
 }
 
@@ -489,27 +498,27 @@ function TeamRow({
   const role = ROLE_BADGE[member.role_key] ?? { label: member.role_name, variant: 'default' as const }
   const status = STATUS_BADGE[member.status]
   return (
-    <tr className="border-b border-border-subtle last:border-0">
-      <td className="px-6 py-4">
+    <TableRow>
+      <TableCell>
         <div className="flex items-center gap-3">
           <Avatar alt={member.name || member.email} initials={initials(member.name, member.email)} size="sm" />
           <span className="font-medium text-text-primary">{member.name || member.email}</span>
         </div>
-      </td>
-      <td className="px-6 py-4 text-text-secondary">{member.email}</td>
-      <td className="px-6 py-4">
+      </TableCell>
+      <TableCell className="text-text-secondary">{member.email}</TableCell>
+      <TableCell>
         <Badge variant={role.variant} size="sm">{role.label}</Badge>
-      </td>
-      <td className="px-6 py-4">
+      </TableCell>
+      <TableCell>
         <StatusBadge status={status.tone} size="sm">{status.label}</StatusBadge>
-      </td>
-      <td className="px-6 py-4 text-text-secondary">{formatLastLogin(member.last_login_at)}</td>
+      </TableCell>
+      <TableCell className="text-text-secondary">{formatLastLogin(member.last_login_at)}</TableCell>
       {canManage && (
-        <td className="px-6 py-4 text-right">
+        <TableCell className="text-right">
           <DropdownMenu actions={memberActions(member, onEditRole, onToggleStatus)} />
-        </td>
+        </TableCell>
       )}
-    </tr>
+    </TableRow>
   )
 }
 
@@ -664,25 +673,25 @@ function InvitationsTab({
 
   return (
     <>
-      <div className="hidden md:block overflow-hidden rounded-card border border-border-subtle bg-surface">
-        <table className="w-full text-left">
-          <thead className="border-b border-border-subtle bg-surface-muted">
-            <tr>
-              <th className="px-6 py-3 text-sm font-medium text-text-secondary">E-mail</th>
-              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Função</th>
-              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Status</th>
-              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Expira</th>
-              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Enviado em</th>
-              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Enviado por</th>
-              {canManage && <th className="px-6 py-3" />}
-            </tr>
-          </thead>
-          <tbody>
+      <div className="hidden md:block">
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell>E-mail</TableHeaderCell>
+              <TableHeaderCell>Função</TableHeaderCell>
+              <TableHeaderCell>Status</TableHeaderCell>
+              <TableHeaderCell>Expira</TableHeaderCell>
+              <TableHeaderCell>Enviado em</TableHeaderCell>
+              <TableHeaderCell>Enviado por</TableHeaderCell>
+              {canManage && <TableHeaderCell />}
+            </TableRow>
+          </TableHead>
+          <TableBody>
             {items.map((inv) => (
               <InvitationRow key={inv.id} invitation={inv} canManage={canManage} canResend={canResend} resendingId={resendingId} onResend={onResend} onRevoke={onRevoke} />
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       <div className="md:hidden space-y-3">
@@ -733,27 +742,27 @@ function InvitationRow({
   const status = INVITATION_STATUS_BADGE[invitation.status]
   const actions = invitationActions(invitation, { canResend: rest.canResend, resendingId: rest.resendingId, onResend: rest.onResend, onRevoke: rest.onRevoke })
   return (
-    <tr className="border-b border-border-subtle last:border-0">
-      <td className="px-6 py-4 text-text-primary">{invitation.email}</td>
-      <td className="px-6 py-4">
+    <TableRow>
+      <TableCell className="text-text-primary">{invitation.email}</TableCell>
+      <TableCell>
         <Badge variant={ROLE_BADGE[invitation.role_key]?.variant ?? 'default'} size="sm">
           {ROLE_DISPLAY_NAME[invitation.role_key] ?? invitation.role_name}
         </Badge>
-      </td>
-      <td className="px-6 py-4">
+      </TableCell>
+      <TableCell>
         <StatusBadge status={status.tone} size="sm">{status.label}</StatusBadge>
-      </td>
-      <td className="px-6 py-4 text-text-secondary">
+      </TableCell>
+      <TableCell className="text-text-secondary">
         {invitation.status === 'pending' ? formatExpiresIn(invitation.expires_at) : '—'}
-      </td>
-      <td className="px-6 py-4 text-text-secondary">{sentAtLabel(invitation)}</td>
-      <td className="px-6 py-4 text-text-secondary">{invitation.created_by_email}</td>
+      </TableCell>
+      <TableCell className="text-text-secondary">{sentAtLabel(invitation)}</TableCell>
+      <TableCell className="text-text-secondary">{invitation.created_by_email}</TableCell>
       {canManage && (
-        <td className="px-6 py-4 text-right">
+        <TableCell className="text-right">
           {actions.length > 0 && <DropdownMenu actions={actions} />}
-        </td>
+        </TableCell>
       )}
-    </tr>
+    </TableRow>
   )
 }
 
