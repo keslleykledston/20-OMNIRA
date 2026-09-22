@@ -179,3 +179,52 @@ func SessionMiddleware(store SessionStore) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// WebMiddleware is the boundary for browser-facing routes. It supports two
+// authenticated callers with different trust models, never blending them:
+//   - Bearer header: a real JWT/OIDC-token API consumer (dev tooling, API
+//     clients). Verified cryptographically via auth, exactly like Middleware.
+//   - omnira_session cookie: the browser. The cookie is always an opaque
+//     session ID minted by CreateSession; it is resolved server-side via
+//     store.ResolveSession, never parsed as a token. A JWT accidentally
+//     placed in this cookie (e.g. an old client, or a downgrade attempt)
+//     is looked up in auth_sessions, fails to match any row, and is
+//     rejected — there is no fallback from opaque-lookup to JWT-parse for
+//     the cookie path, which is what eliminates the legacy ambiguity.
+func WebMiddleware(auth Authenticator, store SessionStore) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+				parts := strings.SplitN(authHeader, " ", 2)
+				if len(parts) != 2 || parts[0] != "Bearer" {
+					http.Error(w, "invalid authorization header", http.StatusUnauthorized)
+					return
+				}
+				principal, err := auth.Verify(r.Context(), parts[1])
+				if err != nil {
+					http.Error(w, fmt.Sprintf("authentication failed: %v", err), http.StatusUnauthorized)
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
+				return
+			}
+
+			cookie, err := r.Cookie(SessionCookieName)
+			if err != nil {
+				http.Error(w, "missing authentication", http.StatusUnauthorized)
+				return
+			}
+			if store == nil {
+				http.Error(w, "session store not configured", http.StatusInternalServerError)
+				return
+			}
+			userID, err := store.ResolveSession(r.Context(), cookie.Value)
+			if err != nil {
+				http.Error(w, "invalid or expired session", http.StatusUnauthorized)
+				return
+			}
+			principal := &Principal{UserID: userID, Subject: userID.String()}
+			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
+		})
+	}
+}

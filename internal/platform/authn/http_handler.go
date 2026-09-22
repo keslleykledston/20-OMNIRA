@@ -4,22 +4,29 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"net/http"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // AuthHandler — HTTP handlers para autenticação
 type AuthHandler struct {
 	privateKey   *rsa.PrivateKey
 	secureCookie bool
+	sessionStore SessionStore
 }
 
-// NewAuthHandler — cria novo handler de auth
-func NewAuthHandler(privateKey *rsa.PrivateKey, secureCookie ...bool) *AuthHandler {
+// NewAuthHandler — cria novo handler de auth. sessionStore cria a sessão
+// server-side opaca por trás do cookie omnira_session; o JWT continua no
+// corpo da resposta (compat: dev tooling que ainda envia Bearer), mas nunca
+// mais é ele que vai para o cookie.
+func NewAuthHandler(privateKey *rsa.PrivateKey, sessionStore SessionStore, secureCookie ...bool) *AuthHandler {
 	secure := false
 	if len(secureCookie) > 0 {
 		secure = secureCookie[0]
 	}
 	return &AuthHandler{
-		privateKey: privateKey, secureCookie: secure,
+		privateKey: privateKey, secureCookie: secure, sessionStore: sessionStore,
 	}
 }
 
@@ -53,17 +60,46 @@ func (h *AuthHandler) DevLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Gerar token
+	// Gerar token (permanece no corpo da resposta por compat com consumidores
+	// Bearer reais; nunca mais é o que vai para o cookie — ver sessão abaixo).
 	resp, err := MockLoginHandler(req.Email, h.privateKey)
 	if err != nil {
 		writeJSONError(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: resp.Token, Path: "/", MaxAge: resp.ExpiresIn,
+
+	if h.sessionStore == nil {
+		writeJSONError(w, "session store not configured", http.StatusInternalServerError)
+		return
+	}
+	userID, err := uuid.Parse(resp.User.ID)
+	if err != nil {
+		writeJSONError(w, "invalid dev user id", http.StatusInternalServerError)
+		return
+	}
+	ttl := time.Duration(resp.ExpiresIn) * time.Second
+	sessionID, err := h.sessionStore.CreateSession(r.Context(), userID, "dev", ttl)
+	if err != nil {
+		writeJSONError(w, "session creation error", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: sessionID, Path: "/", MaxAge: resp.ExpiresIn,
 		HttpOnly: true, Secure: h.secureCookie, SameSite: http.SameSiteLaxMode})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// Logout — POST /api/v1/auth/logout (dev/mock mode). Mirrors OIDCHandler.Logout:
+// revokes the server-side session and expires the cookie, so a replayed
+// cookie fails authentication instead of merely being absent client-side.
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(SessionCookieName); err == nil && h.sessionStore != nil {
+		_ = h.sessionStore.RevokeSession(r.Context(), cookie.Value)
+	}
+	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: h.secureCookie, SameSite: http.SameSiteLaxMode})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // HealthCheck — endpoint GET /api/v1/auth/health

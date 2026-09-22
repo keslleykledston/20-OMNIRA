@@ -85,17 +85,19 @@ func main() {
 	}
 	srv.SetupRateLimiting()
 	srv.RegisterHealthHandlers()
+	// omnira_session sempre carrega um session id opaco (auth_sessions),
+	// nunca um JWT/ID Token — dev e OIDC usam o mesmo SessionStore.
+	sessionStore := authn.NewPostgresSessionStore(dbPool)
 	if cfg.AuthMode == "oidc" {
 		resolver := authn.NewPostgresIdentityResolver(dbPool)
-		sessionStore := authn.NewPostgresSessionStore(dbPool)
 		oidcAuth, discovery, oidcErr := authn.NewOIDCAuthenticator(context.Background(), cfg.AuthIssuer, cfg.AuthAudience, nil, resolver)
 		if oidcErr != nil {
 			log.Fatalf("OIDC configuration error: %v", oidcErr)
 		}
-		srv.RegisterOIDCAuthHandlers(oidcAuth, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
+		srv.RegisterOIDCAuthHandlers(oidcAuth, sessionStore, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
 			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
 	} else {
-		srv.RegisterAuthHandlers(cfg.DevAuthActive(), cfg.AuthCookieSecure)
+		srv.RegisterAuthHandlers(cfg.DevAuthActive(), sessionStore, cfg.AuthCookieSecure)
 	}
 	// Convites por e-mail: com OMNIRA_SMTP_HOST há um sender SMTP real; sem ele a capability
 	// de entrega é só o dev auth (o admin copia o link). Ver InvitationsHandler.deliveryAvailable.

@@ -115,10 +115,13 @@ func TestValidateOIDCConfig(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*Config){
-		"insecure issuer":       func(c *Config) { c.AuthIssuer = "http://idp.example.com" },
-		"insecure redirect":     func(c *Config) { c.AuthRedirectURL = "http://app.example.com/callback" },
-		"external post-login":   func(c *Config) { c.AuthPostLoginURL = "https://evil.example.com" },
+		"insecure issuer":        func(c *Config) { c.AuthIssuer = "http://idp.example.com" },
+		"insecure redirect":      func(c *Config) { c.AuthRedirectURL = "http://app.example.com/callback" },
+		"external post-login":    func(c *Config) { c.AuthPostLoginURL = "https://evil.example.com" },
 		"scheme-relative target": func(c *Config) { c.AuthPostLoginURL = "//evil.example.com" },
+		// RELEASE.1-B1: omnira_session must be Secure in production — a
+		// non-Secure cookie over plain HTTP is interceptable on the wire.
+		"insecure cookie in production": func(c *Config) { c.AuthCookieSecure = false },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := base

@@ -53,6 +53,7 @@ type Server struct {
 	privateKey    *rsa.PrivateKey
 	publicKey     *rsa.PublicKey
 	authenticator authn.Authenticator
+	sessionStore  authn.SessionStore
 	natsConn      *nats.Conn
 	valkeyClient  *redis.Client
 }
@@ -156,7 +157,7 @@ func (s *Server) RegisterHealthHandlers() {
 // Quando é false a rota não é registrada: responder 403 de dentro do handler
 // ainda deixaria a superfície publicada, e o que queremos é que ela não exista.
 // Autoridade é do backend — o frontend esconder o formulário não substitui isto.
-func (s *Server) RegisterAuthHandlers(devAuthEnabled bool, secureCookie ...bool) {
+func (s *Server) RegisterAuthHandlers(devAuthEnabled bool, sessionStore authn.SessionStore, secureCookie ...bool) {
 	// Gerar chave RSA para JWT (use valores reais em produção).
 	// A mesma keypair é reutilizada por RegisterTenancyHandlers para
 	// verificar os tokens emitidos aqui — por isso fica salva no Server em
@@ -168,6 +169,7 @@ func (s *Server) RegisterAuthHandlers(devAuthEnabled bool, secureCookie ...bool)
 	}
 	s.privateKey = privateKey
 	s.publicKey = publicKey
+	s.sessionStore = sessionStore
 	if publicKey != nil {
 		s.authenticator = authn.NewJWTAuthenticator(publicKey, mockJWTIssuer, mockJWTAudience)
 	}
@@ -180,8 +182,9 @@ func (s *Server) RegisterAuthHandlers(devAuthEnabled bool, secureCookie ...bool)
 		return
 	}
 
-	authHandler := authn.NewAuthHandler(s.privateKey, secureCookie...)
+	authHandler := authn.NewAuthHandler(s.privateKey, sessionStore, secureCookie...)
 	s.mux.HandleFunc("GET /api/v1/auth/health", authHandler.HealthCheck)
+	s.mux.HandleFunc("POST /api/v1/auth/logout", authHandler.Logout)
 
 	mode := "unavailable"
 	if devAuthEnabled {
@@ -213,15 +216,25 @@ type oidcHTTPHandler interface {
 	Logout(http.ResponseWriter, *http.Request)
 }
 
-func (s *Server) RegisterOIDCAuthHandlers(authenticator authn.Authenticator, handler oidcHTTPHandler) {
+func (s *Server) RegisterOIDCAuthHandlers(authenticator authn.Authenticator, sessionStore authn.SessionStore, handler oidcHTTPHandler) {
 	if authenticator == nil || handler == nil {
 		return
 	}
 	s.authenticator = authenticator
+	s.sessionStore = sessionStore
 	s.mux.HandleFunc("GET /api/v1/auth/oidc/start", handler.Start)
 	s.mux.HandleFunc("GET /api/v1/auth/oidc/callback", handler.Callback)
-	s.mux.Handle("GET /api/v1/auth/session", authn.Middleware(authenticator)(http.HandlerFunc(handler.Session)))
-	s.mux.HandleFunc("POST /api/v1/auth/logout", handler.Logout)
+	// /auth/session is reached right after Callback sets the opaque cookie
+	// (never a Bearer header here), so it must resolve through the session
+	// store like every other web route — not authn.Middleware's JWT-only path.
+	s.mux.Handle("GET /api/v1/auth/session", authn.WebMiddleware(authenticator, sessionStore)(http.HandlerFunc(handler.Session)))
+	// Guarded like /auth/mode below: RegisterAuthHandlers may already have
+	// registered its own dev-mode logout (real deployments call exactly one
+	// of the two registrars, but contract tests call both to exercise the
+	// full route surface).
+	if _, logoutPattern := s.mux.Handler(&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/api/v1/auth/logout"}}); logoutPattern == "" {
+		s.mux.HandleFunc("POST /api/v1/auth/logout", handler.Logout)
+	}
 	_, modePattern := s.mux.Handler(&http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/api/v1/auth/mode"}})
 	if modePattern == "" {
 		s.mux.HandleFunc("GET /api/v1/auth/mode", func(w http.ResponseWriter, _ *http.Request) {
@@ -246,7 +259,7 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 		return
 	}
 
-	authnMiddleware := authn.Middleware(s.authenticator)
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 
 	tenantRepo := tenancyadapters.NewPostgresTenantRepository(dbPool)
 	memberRepo := tenancyadapters.NewPostgresMembershipRepository(dbPool)
@@ -333,7 +346,7 @@ func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInvit
 	if s.authenticator == nil {
 		return
 	}
-	authnMiddleware := authn.Middleware(s.authenticator)
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	authzSvc := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(dbPool),
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
@@ -357,7 +370,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	if s.authenticator == nil {
 		return nil
 	}
-	authnMiddleware := authn.Middleware(s.authenticator)
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	authzSvc := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(dbPool),
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
@@ -434,7 +447,7 @@ func (s *Server) RegisterPresenceHandlers(dbPool *pgxpool.Pool) {
 	if s.authenticator == nil {
 		return
 	}
-	authnMiddleware := authn.Middleware(s.authenticator)
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	authzSvc := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(dbPool),
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
@@ -476,7 +489,7 @@ func (s *Server) RegisterWahaConnectionHandlers(dbPool *pgxpool.Pool, h *channel
 	if s.authenticator == nil || h == nil {
 		return
 	}
-	authnMiddleware := authn.Middleware(s.authenticator)
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	authzSvc := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(dbPool),
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
@@ -498,7 +511,7 @@ func (s *Server) RegisterChannelManagementHandlers(dbPool *pgxpool.Pool, h *chan
 	if s.authenticator == nil || h == nil {
 		return
 	}
-	authnMiddleware := authn.Middleware(s.authenticator)
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	authzSvc := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(dbPool),
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
