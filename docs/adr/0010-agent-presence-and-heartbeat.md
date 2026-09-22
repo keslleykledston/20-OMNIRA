@@ -2,7 +2,15 @@
 
 **Date:** 2026-09-22
 
-**Status:** Accepted. IAM4.2-A implemented 2026-09-22 (pending human gate before commit) — see `docs/delivery/HANDOFF-NEXT-AGENT.md` § IAM4.2-A for the file list and gates run. §11-12 enforcement (IAM4.2-B) is not implemented: routing is untouched.
+**Status:** Accepted. IAM4.2-A implemented and committed 2026-09-22 (`9b5bb00`) — see `docs/delivery/HANDOFF-NEXT-AGENT.md` § IAM4.2-A. §11-12 enforcement (IAM4.2-B) is design-approved but **blocked on a routing-liveness prerequisite** (§16 below) — not implemented, routing untouched.
+
+## 16. Addendum — IAM4.2-B design (2026-09-22)
+
+Presence-enforcement design (chunked candidate pagination, `agent_profile_id` as the sole presence identifier, `tenants.routing_require_presence` flag, `ErrPresenceUnavailable` as a distinct transient error) is human-approved. Full delta not duplicated here — see `docs/delivery/IAM4.2-PRESENCE-DESIGN-GATE.md` § IAM4.2-B for the complete design and the routing-liveness finding that blocks turning the flag on for any tenant.
+
+**Blocking finding:** `job.routing.assign.v1` is published exactly once per conversation (`internal/inbox/adapters/postgres.go` `RouteNew`), and the JetStream consumer gives up silently after `MaxDeliver:10` (~50s of `NakWithDelay(5s)`) with no re-trigger mechanism anywhere in the repo. This is a **pre-existing IAM4.1 gap** (today's `ErrNoEligibleAgent` can already strand a conversation this way), but IAM4.2-B's fail-closed `ErrPresenceUnavailable` on Valkey outages makes hitting it far more likely and consequential. **IAM4.2-B1 (the enforcement flag) may not be enabled for any tenant until IAM4.2-B0 (routing liveness: a presence-online wakeup + a slow bounded safety sweep, both reusing the existing outbox/NATS/consumer pipeline unchanged) ships first.**
+
+**IAM4.2-B0 status (2026-09-22): DONE.** Human gate approved; committed as `fix(routing): retrigger stale unassigned conversations`. Durable retry state (`conversations.routing_retry_at`, migration `000040`) plus a presence-online wakeup and a slow bounded safety sweep (`internal/worker/routing.Sweep`/`.PresenceWakeup`), both re-enqueueing `job.routing.assign.v1` through the unmodified outbox/NATS/consumer/`AssignRoundRobin` pipeline. `MaxDeliver`/backoff untouched; no presence-enforcement code (`routing_require_presence`, Valkey lookups in `AssignRoundRobin`, `ErrPresenceUnavailable`) written — that remains entirely IAM4.2-B1, now unblocked. **Migration ownership:** `000040` = routing liveness (B0); `000041` = presence enforcement flag (B1, not yet created).
 
 **Context:** IAM4.2 introduces agent presence — the ability to know if an agent is currently active and eligible to receive work. This is distinct from `queue_members.available`, which is administrative eligibility per queue. Presence must be transient, realtime and integrated with existing SSE infrastructure (NATS bridge).
 

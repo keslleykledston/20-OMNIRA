@@ -33,12 +33,14 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- IAM4.2-A: IMPLEMENTED = YES, VERIFIED = YES (2026-09-22). Commit `feat(iam): add realtime agent presence`. Tree clean pós-commit.
+- IAM4.2-A = DONE (2026-09-22). Commit `feat(iam): add realtime agent presence` (`9b5bb00`). Tree clean.
+- IAM4.2-B0 = DONE (2026-09-22) after commit `fix(routing): retrigger stale unassigned conversations`. Tree clean.
+- IAM4.2-B1 = NEXT.
 
 ## NEXT
 
-- IAM4.2-B (gate separado, futuro): habilitar presence como requisito de elegibilidade no routing, primeiro no pilot tenant, com fail-closed semantics quando Valkey estiver indisponível pós-enforcement. Nenhum código de enforcement foi escrito nesta slice — apenas o ponto de extensão foi preservado (routing continua idêntico ao IAM4.1).
-- Ver `docs/adr/0010-agent-presence-and-heartbeat.md` (normativo, Accepted) e `docs/delivery/IAM4.2-PRESENCE-DESIGN-GATE.md` (contexto). Skills → IAM4.3.
+- **IAM4.2-B1 (presence enforcement flag, next up):** habilitar a flag `tenants.routing_require_presence` (migration `000041` — `000040` já pertence ao B0's `routing_retry_at`/index, default `false`) como requisito de elegibilidade no routing automático (`AssignRoundRobin` apenas; claim/assign manual inalterados), primeiro no pilot tenant via `UPDATE tenants SET routing_require_presence=true WHERE id=$tenant` (SQL revisável, registrar aqui quando executado). Design completo (chunking, identificador `agent_profile_id`, `ErrPresenceUnavailable`) aprovado em `docs/delivery/IAM4.2-PRESENCE-DESIGN-GATE.md`. Desbloqueado agora que IAM4.2-B0 está commitado.
+- Ver `docs/adr/0010-agent-presence-and-heartbeat.md` § 16 (normativo, Accepted) e `docs/delivery/IAM4.2-PRESENCE-DESIGN-GATE.md` (design completo B0/B1). Skills → IAM4.3.
 
 ## IAM4.2-A — IMPLEMENTATION SUMMARY (2026-09-22, DONE)
 
@@ -74,6 +76,8 @@ Escopo implementado, todo o resto da ADR-0010 preservado:
 
 ## GATES
 
+- Migration ownership: `000039` = agent_profiles.last_seen_at (IAM4.2-A); `000040` = routing liveness (IAM4.2-B0, `conversations.routing_retry_at` + índice parcial); `000041` = presence enforcement flag (IAM4.2-B1, `tenants.routing_require_presence`, ainda não criada).
+- IAM4.2-B0 (2026-09-22): fresh migrations `000001..000040`, up/down/up `000040`, RLS completeness, `go build`/`go vet`/`go test ./...` (repo inteiro, real Postgres+RLS), Docker builds (api, worker), 20 novos testes (11 real-Postgres + 9 unit) — PASS. Sem alteração frontend nesta wave (backend-only; Vitest/Playwright não re-executados por não haver mudança de UI/comportamento browser).
 - IAM4.1 (2026-09-22): fresh migrations `000001..000038`, up/down/up `000038`, backfill A/B, RLS, `go test ./...`, `go vet ./...`, Docker API/worker builds, TypeScript, Vitest 106/106, web build, IAM4 Playwright 2/2 e full Playwright 23/23: PASS.
 
 - Antes de migration: banco vazio → migrations completas → RLS → `go test ./...`.

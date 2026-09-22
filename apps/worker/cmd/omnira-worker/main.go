@@ -134,6 +134,20 @@ func main() {
 	// Realtime: Postgres NOTIFY (row triggers) -> NATS -> SSE. Best effort, ephemeral.
 	go realtime.NewBridge(dbPool, nc).Run(workerCtx)
 
+	// Routing liveness (IAM4.2-B0): re-enqueues job.routing.assign.v1 for
+	// conversations still durably unassigned after JetStream redelivery gave
+	// up — never assigns anything itself, and does not gate on presence
+	// (IAM4.2-B1 is separate and not implemented). Safety sweep is
+	// unconditional; the presence wakeup only needs NATS, already required.
+	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool)
+	go routingworker.NewSweep(livenessRepo).Run(workerCtx)
+	presenceWakeup := routingworker.NewPresenceWakeup(livenessRepo, nc)
+	if err := presenceWakeup.Start(workerCtx); err != nil {
+		log.Printf("warning: failed to start routing liveness presence wakeup: %v", err)
+	} else {
+		defer presenceWakeup.Stop()
+	}
+
 	// Presence reaper (IAM4.2-A, ADR-0010): the deterministic expiry loop that
 	// detects online->offline. Never depends on Valkey keyspace notifications.
 	// Optional at boot like NATS/WAHA above: a misconfigured/unreachable

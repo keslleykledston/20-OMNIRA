@@ -88,7 +88,13 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		WITH selected AS (
 		  SELECT id,mode FROM queues WHERE tenant_id=$1 AND is_default ORDER BY id LIMIT 1
 		), routed AS (
-		  UPDATE conversations c SET queue_id=selected.id,updated_at=now()
+		  -- routing_retry_at starts comfortably past the JetStream in-flight
+		  -- window (routing.SweepRetryBackoff, internal/worker/routing/liveness.go)
+		  -- so the IAM4.2-B0 safety sweep never fires on a conversation still
+		  -- being retried by its original job. NULL for non-round_robin
+		  -- (manual) queues: the sweep already excludes them by mode.
+		  UPDATE conversations c SET queue_id=selected.id,updated_at=now(),
+		    routing_retry_at = CASE WHEN selected.mode='round_robin' THEN now() + interval '90 seconds' ELSE NULL END
 		  FROM selected WHERE c.tenant_id=$1 AND c.id=$2 AND c.queue_id IS NULL
 		  RETURNING c.id,selected.mode
 		)
