@@ -74,6 +74,25 @@ describe('AcceptInvitePage', () => {
     expect(screen.queryByRole('button', { name: 'Aceitar convite' })).toBeNull();
   });
 
+  it('tells the invitee when the identity provider has not verified their e-mail', async () => {
+    setSession();
+    vi.mocked(invitationAcceptAPI.status).mockResolvedValue({ status: 'email_unverified', masked_email: 'n***@empresa.com' });
+    page();
+
+    expect(await screen.findByText(/ainda não confirmou este e-mail/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Aceitar convite' })).toBeNull();
+  });
+
+  it('maps a 403 on accept to the unverified-email message', async () => {
+    setSession();
+    vi.mocked(invitationAcceptAPI.status).mockResolvedValue({ status: 'pending', tenant_name: 'Empresa X', role_name: 'Agente' });
+    vi.mocked(invitationAcceptAPI.accept).mockRejectedValue({ response: { status: 403 } });
+    page();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Aceitar convite' }));
+    expect(await screen.findByText(/ainda não confirmou este e-mail/)).toBeInTheDocument();
+  });
+
   it('shows expired state without an accept action', async () => {
     setSession();
     vi.mocked(invitationAcceptAPI.status).mockResolvedValue({ status: 'expired' });

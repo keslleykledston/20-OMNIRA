@@ -56,7 +56,8 @@ type OIDCIdentityResolver interface {
 	// the pair, never the subject alone.
 	ResolveUserID(ctx context.Context, issuer, subject string) (uuid.UUID, error)
 	ResolveIdentity(context.Context, string, string) (uuid.UUID, error)
-	ProvisionIdentity(context.Context, string, string, string, string) (uuid.UUID, error)
+	// emailVerified só é true quando o IdP afirmou explicitamente email_verified=true.
+	ProvisionIdentity(ctx context.Context, issuer, subject, email, displayName string, emailVerified bool) (uuid.UUID, error)
 	SessionProfile(context.Context, uuid.UUID) (SessionProfile, error)
 }
 
@@ -79,10 +80,24 @@ type SessionTenant struct {
 type oidcClaims struct {
 	Nonce       string `json:"nonce,omitempty"`
 	Email       string `json:"email,omitempty"`
+	// email_verified: bool no padrão OIDC, mas alguns IdPs enviam a string "true".
+	EmailVerified any `json:"email_verified,omitempty"`
 	Name        string `json:"name,omitempty"`
 	GivenName   string `json:"given_name,omitempty"`
 	FamilyName  string `json:"family_name,omitempty"`
 	jwt.RegisteredClaims
+}
+
+// emailVerified interpreta o claim de forma estrita: só true (bool) ou "true" (string)
+// contam; ausente, false ou qualquer outro valor é "não verificado".
+func (c oidcClaims) emailVerified() bool {
+	switch v := c.EmailVerified.(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
 }
 
 type OIDCAuthenticator struct {
@@ -356,7 +371,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			displayName += " " + claims.FamilyName
 		}
 	}
-	_, err = h.resolver.ProvisionIdentity(r.Context(), h.issuer, principal.Subject, claims.Email, displayName)
+	_, err = h.resolver.ProvisionIdentity(r.Context(), h.issuer, principal.Subject, claims.Email, displayName, claims.emailVerified())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("identity provisioning error: %v", err), http.StatusInternalServerError)
 		return

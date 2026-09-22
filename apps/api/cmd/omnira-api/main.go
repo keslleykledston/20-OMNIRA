@@ -27,6 +27,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
 func main() {
@@ -79,13 +80,22 @@ func main() {
 	} else {
 		srv.RegisterAuthHandlers(cfg.DevAuthActive(), cfg.AuthCookieSecure)
 	}
-	// Nenhum InvitationSender real está configurado ainda (sem provedor de
-	// e-mail); a capability de entrega hoje é exatamente o dev auth. Quando um
-	// sender de verdade existir, esta conta muda nos dois lugares — ver
-	// InvitationsHandler.deliveryAvailable.
-	invitationDeliveryAvailable := cfg.DevAuthActive()
+	// Convites por e-mail: com OMNIRA_SMTP_HOST há um sender SMTP real; sem ele a capability
+	// de entrega é só o dev auth (o admin copia o link). Ver InvitationsHandler.deliveryAvailable.
+	var invitationSender tenancyadapters.InvitationSender
+	if cfg.SMTPHost != "" {
+		smtpSender, smtpErr := tenancyadapters.NewSMTPInvitationSender(tenancyadapters.SMTPConfig{
+			Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword,
+			From: cfg.SMTPFrom, ReplyTo: cfg.SMTPReplyTo, TLSMode: cfg.SMTPTLS,
+		})
+		if smtpErr != nil {
+			log.Fatalf("SMTP configuration error: %v", smtpErr)
+		}
+		invitationSender = smtpSender
+	}
+	invitationDeliveryAvailable := cfg.DevAuthActive() || invitationSender != nil
 	srv.RegisterTenancyHandlers(dbPool, invitationDeliveryAvailable)
-	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.PublicBaseURL)
+	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
 	crmHandler := srv.RegisterInboxHandlers(dbPool)
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)

@@ -11,7 +11,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 KEEP=0; [ "${1:-}" = "--keep" ] && KEEP=1
-DB=omnira_e2e; API_PORT=28961; WEB_PORT=4173; WAHA_PORT=23200; WAHA_KEY=e2ekey; PG_PORT=55434; NATS_PORT="${E2E_NATS_PORT:-4222}"
+DB=omnira_e2e; API_PORT=28961; WEB_PORT=4173; WAHA_PORT=23200; SMTP_PORT=12525; WAHA_KEY=e2ekey; PG_PORT=55434; NATS_PORT="${E2E_NATS_PORT:-4222}"
 # This script only needs (a) a psql-capable exec target for the fixed-port Postgres
 # and (b) NATS reachable on its fixed port — not any particular Compose project or
 # container_name. Resolve the Postgres container by which one actually publishes
@@ -62,6 +62,9 @@ ENVS=(-e OMNIRA_CREDENTIALS_KEY="$KEY" -e OMNIRA_NATS_URL="nats://127.0.0.1:$NAT
       -e OMNIRA_ENV=development -e OMNIRA_DEV_AUTH_ENABLED=true
       -e OMNIRA_WAHA_ENABLED=true -e OMNIRA_WAHA_BASE_URL=http://127.0.0.1:$WAHA_PORT -e OMNIRA_WAHA_API_KEY=$WAHA_KEY
       -e OMNIRA_PUBLIC_BASE_URL=http://host.docker.internal:$API_PORT
+      # invitation e-mail: the invitation-email spec runs its own plaintext SMTP sink on this port
+      -e OMNIRA_WEB_BASE_URL=http://127.0.0.1:$WEB_PORT -e OMNIRA_SMTP_HOST=127.0.0.1 -e OMNIRA_SMTP_PORT=$SMTP_PORT
+      -e OMNIRA_SMTP_TLS=none -e OMNIRA_SMTP_FROM=no-reply@omnira.test
       -e OMNIRA_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PG_PORT/$DB?sslmode=disable")
 docker run -d --name omnira-e2e-api --network host -e OMNIRA_HTTP_ADDR=127.0.0.1:$API_PORT "${ENVS[@]}" omnira-api:e2e >/dev/null || die "api start"
 docker run -d --name omnira-e2e-worker --network host "${ENVS[@]}" omnira-worker:e2e >/dev/null || die "worker start"
@@ -76,7 +79,7 @@ for i in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:$WEB_PORT/" && 
 curl -sf -o /dev/null "http://127.0.0.1:$WEB_PORT/" || { cat /tmp/e2e-web-preview.log; die "preview not up"; }
 
 echo "== playwright"
-(cd web && E2E_DB=$DB E2E_PG_CONTAINER="$PG_CONTAINER" E2E_WAHA_URL=http://127.0.0.1:$WAHA_PORT E2E_WAHA_KEY=$WAHA_KEY E2E_API_URL=http://127.0.0.1:$API_PORT E2E_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test -c playwright.inbox.config.ts)
+(cd web && E2E_DB=$DB E2E_PG_CONTAINER="$PG_CONTAINER" E2E_WAHA_URL=http://127.0.0.1:$WAHA_PORT E2E_WAHA_KEY=$WAHA_KEY E2E_API_URL=http://127.0.0.1:$API_PORT E2E_SMTP_PORT=$SMTP_PORT E2E_BASE_URL="http://127.0.0.1:$WEB_PORT" npx playwright test -c playwright.inbox.config.ts)
 RC=$?
 [ $RC -ne 0 ] && { echo "--- api logs"; docker logs omnira-e2e-api 2>&1 | tail -15; echo "--- worker logs"; docker logs omnira-e2e-worker 2>&1 | grep -v '^published' | tail -8; }
 exit $RC

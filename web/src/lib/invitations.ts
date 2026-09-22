@@ -18,6 +18,8 @@ export interface Invitation {
   created_by_email: string;
   expires_at: string;
   created_at: string;
+  // Última entrega bem-sucedida do e-mail; ausente = ainda não entregue.
+  sent_at?: string;
   accepted_at?: string;
   revoked_at?: string;
   invite_url?: string;
@@ -29,6 +31,7 @@ export type AcceptStatus =
   | 'revoked'
   | 'expired'
   | 'wrong_identity'
+  | 'email_unverified'
   | 'not_found';
 
 export interface InvitationStatusResponse {
@@ -54,6 +57,8 @@ export const invitationsAPI = {
   list: () => call<{ items: Invitation[] }>(() => axios.get(teamBase(), { headers: authHeaders() })).then((d) => d.items),
   create: (email: string, roleKey: string) =>
     call<Invitation>(() => axios.post(teamBase(), { email, role_key: roleKey }, { headers: authHeaders() })),
+  resend: (id: string) =>
+    call<Invitation>(() => axios.post(`${teamBase()}/${id}/resend`, {}, { headers: authHeaders() })),
   revoke: (id: string) =>
     call<void>(() => axios.patch(`${teamBase()}/${id}`, { status: 'revoked' }, { headers: authHeaders() })),
 };
@@ -75,11 +80,15 @@ export function invitationErrorMessage(err: any, fallback = 'Não foi possível 
     case 404:
       return 'Convite não encontrado.';
     case 409:
-      return 'Já existe um convite pendente para este e-mail.';
+      return 'Não foi possível: a pessoa já é membro ativo ou o convite não está mais pendente.';
     case 410:
       return 'Este convite expirou.';
     case 422:
       return 'Essa função não pode ser atribuída aqui.';
+    case 502:
+      return 'O convite foi registrado, mas o e-mail não pôde ser entregue. Use "Reenviar convite" na lista.';
+    case 503:
+      return 'O envio de convites não está configurado neste ambiente.';
     default:
       return fallback;
   }

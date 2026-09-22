@@ -73,7 +73,8 @@ export default function AcceptInvitePage() {
       setTimeout(() => navigate('/', { replace: true }), 1500)
     } catch (err: any) {
       const status = err.response?.status
-      if (status === 409) setState({ kind: 'terminal', status: 'accepted' })
+      if (status === 403) setState({ kind: 'terminal', status: 'email_unverified' })
+      else if (status === 409) setState({ kind: 'terminal', status: 'accepted' })
       else if (status === 410) setState({ kind: 'terminal', status: 'expired' })
       else if (status === 404) setState({ kind: 'terminal', status: 'not_found' })
       else setState({ kind: 'error' })
@@ -146,6 +147,8 @@ function TerminalMessage({ status }: { status: AcceptStatus }) {
     expired: 'Este convite expirou.',
     wrong_identity:
       'Este convite foi enviado para outro e-mail. Saia e entre novamente com a conta correta.',
+    email_unverified:
+      'Seu provedor de login ainda não confirmou este e-mail. Confirme o e-mail na sua conta e abra o convite novamente.',
     not_found: 'Convite não encontrado.',
   }
   return (

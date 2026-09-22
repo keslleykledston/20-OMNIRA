@@ -5,8 +5,10 @@
 
 ## 0. Estado e próximos passos (2026-09-22)
 
-**DONE:** P8 · Browser E2E 20/20 · IAM0 · IAM1 · IAM2A · IAM2B · IAM3 (human gate aprovado 2026-09-22; detalhes em `docs/delivery/IAM3-ENFORCEMENT.md`).
-**NOW:** User access email completion — fechar Admin → convite por e-mail → e-mail entregue → link seguro → confirmação → autenticação (OIDC) → membership ativa. Levantar: sender/provider atual (`NoopInvitationSender`), template, expiração do token, reenviar, revogar, aceite, confirmação de e-mail, estados pending/accepted/expired/revoked, UX. **Não** reconstruir IAM2B; **não** criar senha local (OIDC segue canônico).
+**DONE:** P8 · Browser E2E 20/20 · IAM0 · IAM1 · IAM2A · IAM2B · IAM3 · IAM2C (human gate aprovado 2026-09-22; convite por SMTP, reenvio, `sent_at`, `email_verified`, token single-use/72h, isolamento de tenant e ativação de membership; migration 000037 aplicada em `omnira_dev`). Detalhes em `docs/delivery/IAM2C-INVITATION-EMAIL.md`. **Não** há senha local (OIDC segue canônico).
+**IAM2C PRODUCTION PREREQUISITES:** SMTP real configurado; `PUBLIC/WEB` base URL correta; IdP real deve fornecer `email` e `email_verified=true`; TLS obrigatório. A dependência do IdP é **DEPLOYMENT/PILOT CONFIGURATION GATE**, não bloqueia o commit. Antes do piloto, provar esses dois claims no IdP real.
+**IAM2C DEFERRED DEBT:** endpoints de invitation no OpenAPI; entrega assíncrona de e-mail; handlers legados de membership sem rota; provider SMTP dedicado no futuro, se necessário.
+**NOW:** IAM4 — Agent Management.
 **PARALLEL:** Frontend design via Lovable/MCP — Inbox/Chat (worktree separado, sem editar os mesmos arquivos; integração só após human gate). Brief: 3 painéis — ESQUERDA filas, busca, conversas, unread, prioridade, canal · CENTRO cabeçalho, mensagens, status de entrega, anexos, composer, nota interna, resposta · DIREITA contato, ticket, fila, responsável, tags, histórico/contexto. Preservar Vite+React+TS, Omnira iOS Design System, APIs reais, TenantContext, permissions, SSE. Lovable = design/UX e composição visual; não substitui backend nem arquitetura. TicketPanel já portado. **Bloqueio atual: workspace Lovable sem créditos** (billing do dono); a tela "Funções e permissões" foi feita localmente com os primitivos do `web/` e pode receber passe de design depois.
 **NEXT:** IAM4 Agent Management · FR4/FR5 (tickets: `ticket.read/create/update/assign/resolve`, sem `ticket.manage`) conforme dependências.
 **Decisão canônica IAM3 MVP:** papéis fixos; sem CRUD de roles nem custom roles (DEFERRED).
@@ -520,4 +522,3 @@ IAM3 is security-critical (FRONTIER_LLM) and requires dedicated focus:
 **Audit doc:** docs/delivery/IAM3-AUDIT.md (complete; use as reference).
 
 **Recommendation:** Continue IAM3 in next session with dedicated focus. Do not rush security-critical work.
-

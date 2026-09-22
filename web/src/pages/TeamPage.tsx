@@ -62,6 +62,13 @@ function formatExpiresIn(iso: string): string {
   return `Em ${Math.round(hours / 24)}d`
 }
 
+function formatDateTime(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+}
+
 function initials(name: string, fallback: string): string {
   const source = name.trim() || fallback
   const parts = source.split(/\s+/).filter(Boolean)
@@ -92,6 +99,7 @@ export default function TeamPage() {
   const [roleEditTarget, setRoleEditTarget] = useState<TeamMember | null>(null)
   const [pendingStatus, setPendingStatus] = useState<{ member: TeamMember; status: MembershipStatus } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [pendingRevokeInvite, setPendingRevokeInvite] = useState<Invitation | null>(null)
 
@@ -146,11 +154,33 @@ export default function TeamPage() {
 
   const createInvitation = useMutation({
     mutationFn: ({ email, roleKey }: { email: string; roleKey: string }) => invitationsAPI.create(email, roleKey),
-    onSuccess: () => {
+    onSuccess: (inv) => {
       setInviteOpen(false)
+      setActionError(null)
+      setNotice(inv.sent_at ? `Convite enviado para ${inv.email}.` : `Convite criado para ${inv.email}. Copie o link em "Convites".`)
       void invalidateInvitations()
     },
-    onError: (e) => setActionError(invitationErrorMessage(e, 'Não foi possível enviar o convite.')),
+    onError: (e) => {
+      setInviteOpen(false)
+      setNotice(null)
+      setActionError(invitationErrorMessage(e, 'Não foi possível enviar o convite.'))
+      // 502: o convite foi registrado sem entrega; a lista precisa mostrá-lo para reenviar.
+      void invalidateInvitations()
+    },
+  })
+
+  const resendInvitation = useMutation({
+    mutationFn: (id: string) => invitationsAPI.resend(id),
+    onSuccess: (inv) => {
+      setActionError(null)
+      setNotice(`Convite reenviado para ${inv.email}.`)
+      void invalidateInvitations()
+    },
+    onError: (e) => {
+      setNotice(null)
+      setActionError(invitationErrorMessage(e, 'Não foi possível reenviar o convite.'))
+      void invalidateInvitations()
+    },
   })
 
   const revokeInvitation = useMutation({
@@ -232,6 +262,15 @@ export default function TeamPage() {
         }
       />
 
+      {notice && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 rounded-card border border-status-success-border bg-status-success-soft px-4 py-3 text-body-sm text-status-success"
+        >
+          <span>{notice}</span>
+          <button type="button" className="underline" onClick={() => setNotice(null)}>Fechar</button>
+        </div>
+      )}
       {actionError && (
         <ErrorState message={actionError} isDismissible onDismiss={() => setActionError(null)} />
       )}
@@ -344,6 +383,9 @@ export default function TeamPage() {
         <InvitationsTab
           invitations={invitations}
           canManage={canManage}
+          canResend={canInvite}
+          resendingId={resendInvitation.isPending ? resendInvitation.variables : undefined}
+          onResend={(inv) => resendInvitation.mutate(inv.id)}
           onRevoke={setPendingRevokeInvite}
         />
       )}
@@ -579,15 +621,24 @@ function TeamSkeleton() {
   )
 }
 
+interface InvitationActionProps {
+  canManage: boolean
+  canResend: boolean
+  resendingId?: string
+  onResend: (invitation: Invitation) => void
+  onRevoke: (invitation: Invitation) => void
+}
+
 function InvitationsTab({
   invitations,
   canManage,
+  canResend,
+  resendingId,
+  onResend,
   onRevoke,
 }: {
   invitations: ReturnType<typeof useQuery<Invitation[]>>
-  canManage: boolean
-  onRevoke: (invitation: Invitation) => void
-}) {
+} & InvitationActionProps) {
   const items = invitations.data ?? []
 
   if (invitations.isLoading) return <TeamSkeleton />
@@ -621,13 +672,14 @@ function InvitationsTab({
               <th className="px-6 py-3 text-sm font-medium text-text-secondary">Função</th>
               <th className="px-6 py-3 text-sm font-medium text-text-secondary">Status</th>
               <th className="px-6 py-3 text-sm font-medium text-text-secondary">Expira</th>
+              <th className="px-6 py-3 text-sm font-medium text-text-secondary">Enviado em</th>
               <th className="px-6 py-3 text-sm font-medium text-text-secondary">Enviado por</th>
               {canManage && <th className="px-6 py-3" />}
             </tr>
           </thead>
           <tbody>
             {items.map((inv) => (
-              <InvitationRow key={inv.id} invitation={inv} canManage={canManage} onRevoke={onRevoke} />
+              <InvitationRow key={inv.id} invitation={inv} canManage={canManage} canResend={canResend} resendingId={resendingId} onResend={onResend} onRevoke={onRevoke} />
             ))}
           </tbody>
         </table>
@@ -635,15 +687,22 @@ function InvitationsTab({
 
       <div className="md:hidden space-y-3">
         {items.map((inv) => (
-          <InvitationCard key={inv.id} invitation={inv} canManage={canManage} onRevoke={onRevoke} />
+          <InvitationCard key={inv.id} invitation={inv} canManage={canManage} canResend={canResend} resendingId={resendingId} onResend={onResend} onRevoke={onRevoke} />
         ))}
       </div>
     </>
   )
 }
 
-function invitationActions(invitation: Invitation, onRevoke: (invitation: Invitation) => void): MenuAction[] {
+function invitationActions(
+  invitation: Invitation,
+  { canResend, resendingId, onResend, onRevoke }: Pick<InvitationActionProps, 'canResend' | 'resendingId' | 'onResend' | 'onRevoke'>,
+): MenuAction[] {
   const actions: MenuAction[] = []
+  // Reenviar reemite o link e renova o prazo; serve para pendente (também vencido) ou não entregue.
+  if (canResend && (invitation.status === 'pending' || invitation.status === 'expired') && resendingId !== invitation.id) {
+    actions.push({ label: 'Reenviar convite', onSelect: () => onResend(invitation) })
+  }
   if (invitation.status === 'pending') {
     actions.push({ label: 'Revogar convite', onSelect: () => onRevoke(invitation), destructive: true })
   }
@@ -659,17 +718,20 @@ function invitationActions(invitation: Invitation, onRevoke: (invitation: Invita
   return actions
 }
 
+function sentAtLabel(invitation: Invitation): string {
+  if (invitation.sent_at) return formatDateTime(invitation.sent_at)
+  return invitation.status === 'pending' || invitation.status === 'expired' ? 'Não entregue' : '—'
+}
+
 function InvitationRow({
   invitation,
   canManage,
-  onRevoke,
+  ...rest
 }: {
   invitation: Invitation
-  canManage: boolean
-  onRevoke: (invitation: Invitation) => void
-}) {
+} & InvitationActionProps) {
   const status = INVITATION_STATUS_BADGE[invitation.status]
-  const actions = invitationActions(invitation, onRevoke)
+  const actions = invitationActions(invitation, { canResend: rest.canResend, resendingId: rest.resendingId, onResend: rest.onResend, onRevoke: rest.onRevoke })
   return (
     <tr className="border-b border-border-subtle last:border-0">
       <td className="px-6 py-4 text-text-primary">{invitation.email}</td>
@@ -684,6 +746,7 @@ function InvitationRow({
       <td className="px-6 py-4 text-text-secondary">
         {invitation.status === 'pending' ? formatExpiresIn(invitation.expires_at) : '—'}
       </td>
+      <td className="px-6 py-4 text-text-secondary">{sentAtLabel(invitation)}</td>
       <td className="px-6 py-4 text-text-secondary">{invitation.created_by_email}</td>
       {canManage && (
         <td className="px-6 py-4 text-right">
@@ -697,14 +760,12 @@ function InvitationRow({
 function InvitationCard({
   invitation,
   canManage,
-  onRevoke,
+  ...rest
 }: {
   invitation: Invitation
-  canManage: boolean
-  onRevoke: (invitation: Invitation) => void
-}) {
+} & InvitationActionProps) {
   const status = INVITATION_STATUS_BADGE[invitation.status]
-  const actions = invitationActions(invitation, onRevoke)
+  const actions = invitationActions(invitation, { canResend: rest.canResend, resendingId: rest.resendingId, onResend: rest.onResend, onRevoke: rest.onRevoke })
   return (
     <div className="rounded-card border border-border-subtle bg-surface p-4">
       <div className="flex items-center gap-3">
@@ -712,6 +773,7 @@ function InvitationCard({
           <p className="font-medium text-text-primary truncate">{invitation.email}</p>
           <p className="text-sm text-text-secondary">
             {invitation.status === 'pending' ? formatExpiresIn(invitation.expires_at) : status.label}
+            {' · '}Enviado em: {sentAtLabel(invitation)}
           </p>
         </div>
         {canManage && actions.length > 0 && <DropdownMenu actions={actions} />}

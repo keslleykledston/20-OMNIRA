@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,11 +35,26 @@ func seedUnaffiliatedUser(t *testing.T, pool *pgxpool.Pool, email string) uuid.U
 // fakeSender simula um provedor de e-mail real configurado (não é
 // NoopInvitationSender), então deliveryAvailable fica true mesmo com
 // devExposeInviteURL=false — o cenário "produção com sender configurado".
-type fakeSender struct{ sent []string }
+type fakeSender struct {
+	sent []InvitationMessage
+	err  error // quando não nil, simula falha do provedor
+}
 
-func (f *fakeSender) Send(_ context.Context, email, _, _ string) error {
-	f.sent = append(f.sent, email)
+func (f *fakeSender) Send(_ context.Context, msg InvitationMessage) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.sent = append(f.sent, msg)
 	return nil
+}
+
+func tokenFromAcceptURL(t *testing.T, acceptURL string) string {
+	t.Helper()
+	i := strings.LastIndex(acceptURL, "/invite/")
+	if i < 0 {
+		t.Fatalf("unexpected accept url shape: %q", acceptURL)
+	}
+	return acceptURL[i+len("/invite/"):]
 }
 
 // newInvitationsHandler simula produção com delivery configurada: sender real,
@@ -533,7 +549,7 @@ func TestCreateInvitationSucceedsWithConfiguredSender(t *testing.T) {
 	if inv.InviteURL != "" {
 		t.Fatal("invite_url must not leak in production even with a real sender")
 	}
-	if len(sender.sent) != 1 || sender.sent[0] != "entregue@empresa.com" {
+	if len(sender.sent) != 1 || sender.sent[0].To != "entregue@empresa.com" {
 		t.Fatalf("sender was not invoked correctly: %+v", sender.sent)
 	}
 }

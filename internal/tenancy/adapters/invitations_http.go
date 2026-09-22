@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ const invitationTTL = 72 * time.Hour
 // entrega são propositalmente independentes: sem isso, "não temos provedor de
 // e-mail ainda" viraria desculpa para não ter convite nenhum.
 type InvitationSender interface {
-	Send(ctx context.Context, email, tenantName, acceptURL string) error
+	Send(ctx context.Context, msg InvitationMessage) error
 }
 
 // NoopInvitationSender não envia nada. É o sender de produção enquanto não
@@ -39,7 +40,7 @@ type InvitationSender interface {
 // devExposeInviteURL para o caminho de dev/lab).
 type NoopInvitationSender struct{}
 
-func (NoopInvitationSender) Send(context.Context, string, string, string) error { return nil }
+func (NoopInvitationSender) Send(context.Context, InvitationMessage) error { return nil }
 
 type InvitationsHandler struct {
 	pool   *pgxpool.Pool
@@ -49,7 +50,9 @@ type InvitationsHandler struct {
 	// (config.DevAuthActive) — o mesmo par ambiente+flag que já guarda o login
 	// de desenvolvimento. Nunca fica true em produção.
 	devExposeInviteURL bool
-	publicBaseURL      string
+	// webBaseURL é o host que o NAVEGADOR do convidado enxerga (OMNIRA_WEB_BASE_URL),
+	// usado só para montar o link do e-mail — não a URL server-to-server dos webhooks.
+	webBaseURL string
 	// deliveryAvailable é a capability real: existe uma forma de o convidado
 	// receber o link. Em dev/lab é o próprio devExposeInviteURL (o admin
 	// copia e entrega manualmente); em produção, só quando um sender de
@@ -58,12 +61,12 @@ type InvitationsHandler struct {
 	deliveryAvailable bool
 }
 
-func NewInvitationsHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, sender InvitationSender, devExposeInviteURL bool, publicBaseURL string) *InvitationsHandler {
+func NewInvitationsHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, sender InvitationSender, devExposeInviteURL bool, webBaseURL string) *InvitationsHandler {
 	if sender == nil {
 		sender = NoopInvitationSender{}
 	}
 	return &InvitationsHandler{
-		pool: pool, audit: audit, sender: sender, devExposeInviteURL: devExposeInviteURL, publicBaseURL: publicBaseURL,
+		pool: pool, audit: audit, sender: sender, devExposeInviteURL: devExposeInviteURL, webBaseURL: webBaseURL,
 		deliveryAvailable: devExposeInviteURL || !isNoopSender(sender),
 	}
 }
@@ -78,14 +81,16 @@ func isNoopSender(s InvitationSender) bool {
 func (h *InvitationsHandler) InvitationDeliveryAvailable() bool { return h.deliveryAvailable }
 
 type Invitation struct {
-	ID         uuid.UUID  `json:"id"`
-	Email      string     `json:"email"`
-	RoleKey    string     `json:"role_key"`
-	RoleName   string     `json:"role_name"`
-	Status     string     `json:"status"` // pending | accepted | revoked | expired (derivado)
-	CreatedBy  string     `json:"created_by_email"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	RoleKey   string    `json:"role_key"`
+	RoleName  string    `json:"role_name"`
+	Status    string    `json:"status"` // pending | accepted | revoked | expired (derivado)
+	CreatedBy string    `json:"created_by_email"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+	// SentAt: última entrega bem-sucedida do e-mail (nil = ainda não entregue).
+	SentAt     *time.Time `json:"sent_at,omitempty"`
 	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	InviteURL  string     `json:"invite_url,omitempty"` // path relativo (sem host); apenas dev/lab, apenas na resposta de criação
@@ -156,6 +161,13 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 
+	// Quem já é membro ativo não precisa de convite; mudar o papel é PATCH /team
+	// (com o invariante do último admin), nunca via convite.
+	if h.isActiveMember(r.Context(), q, tc.TenantID, email) {
+		http.Error(w, "user is already an active member", http.StatusConflict)
+		return
+	}
+
 	// Política de duplicidade: no máximo um pending por (tenant, email). Um
 	// novo convite substitui o anterior — revoga e insere na mesma
 	// transação — em vez de deixar dois pendentes indistinguíveis, ou de
@@ -194,18 +206,16 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 
 	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationCreated, inv.ID, email, req.RoleKey)
 
-	// Caminho relativo, sem host: publicBaseURL é a URL server-to-server
-	// usada em webhooks (aponta para o hostname interno do container, não
-	// para o que o navegador de quem clica no link enxerga). O e-mail vai
-	// receber isto concatenado ao host correto pelo remetente; em dev, o
-	// frontend concatena com o próprio origin ao copiar.
 	acceptPath := "/invite/" + raw
-	_ = h.sender.Send(r.Context(), email, "", h.publicBaseURL+acceptPath)
 	if h.devExposeInviteURL {
 		// Único lugar onde o token bruto aparece: a resposta desta chamada,
 		// só quando o servidor tem o login de desenvolvimento ativo (mesmo
 		// gate de config.DevAuthActive do login). Nunca aparece em list.
 		inv.InviteURL = acceptPath
+	}
+	if err := h.deliver(r.Context(), q, tc, &inv, raw); err != nil {
+		http.Error(w, "invitation created but the e-mail could not be delivered; use resend", http.StatusBadGateway)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -221,7 +231,7 @@ func (h *InvitationsHandler) ListInvitations(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
-		SELECT i.id, i.email, r.key, r.name, i.status, i.expires_at, i.created_at,
+		SELECT i.id, i.email, r.key, r.name, i.status, i.expires_at, i.created_at, i.sent_at,
 		       i.accepted_at, i.revoked_at, COALESCE(u.email, '')
 		FROM membership_invitations i
 		JOIN roles r ON r.id = i.role_id
@@ -238,7 +248,7 @@ func (h *InvitationsHandler) ListInvitations(w http.ResponseWriter, r *http.Requ
 	for rows.Next() {
 		var inv Invitation
 		if err := rows.Scan(&inv.ID, &inv.Email, &inv.RoleKey, &inv.RoleName, &inv.Status,
-			&inv.ExpiresAt, &inv.CreatedAt, &inv.AcceptedAt, &inv.RevokedAt, &inv.CreatedBy); err != nil {
+			&inv.ExpiresAt, &inv.CreatedAt, &inv.SentAt, &inv.AcceptedAt, &inv.RevokedAt, &inv.CreatedBy); err != nil {
 			http.Error(w, "failed to read invitations", http.StatusInternalServerError)
 			return
 		}
@@ -290,6 +300,115 @@ func (h *InvitationsHandler) RevokeInvitation(w http.ResponseWriter, r *http.Req
 
 	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationRevoked, invitationID, email, "")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deliver entrega o e-mail do convite e registra sent_at. Sem sender real (dev/lab com dev
+// auth) não há e-mail: o admin copia o invite_url. Falha do provedor vira erro para o
+// chamador responder 502; o convite continua pending com sent_at nulo e pode ser reenviado.
+// O log traz só o id do convite — nunca o token, o link nem o corpo do erro do provedor.
+func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, tc *domain.TenantContext, inv *Invitation, raw string) error {
+	if isNoopSender(h.sender) {
+		return nil
+	}
+	var tenantName, inviter string
+	_ = q.QueryRow(ctx, `SELECT COALESCE(legal_name,'') FROM tenants WHERE id=$1`, tc.TenantID).Scan(&tenantName)
+	_ = q.QueryRow(ctx, `SELECT COALESCE(email,'') FROM users WHERE id=$1`, tc.ActorID).Scan(&inviter)
+	msg := InvitationMessage{
+		To: inv.Email, TenantName: tenantName, InviterEmail: inviter,
+		AcceptURL: strings.TrimRight(h.webBaseURL, "/") + "/invite/" + raw,
+		ExpiresAt: inv.ExpiresAt,
+	}
+	if err := h.sender.Send(ctx, msg); err != nil {
+		log.Printf("tenancy: invitation %s e-mail delivery failed", inv.ID)
+		return err
+	}
+	var sentAt time.Time
+	if err := q.QueryRow(ctx, `UPDATE membership_invitations SET sent_at=now(), updated_at=now()
+		WHERE id=$1 AND tenant_id=$2 RETURNING sent_at`, inv.ID, tc.TenantID).Scan(&sentAt); err != nil {
+		return err
+	}
+	inv.SentAt = &sentAt
+	return nil
+}
+
+func (h *InvitationsHandler) isActiveMember(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, email string) bool {
+	var ok bool
+	_ = q.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id
+		              WHERE m.tenant_id=$1 AND m.status='active' AND lower(u.email)=lower($2))`,
+		tenantID, email).Scan(&ok)
+	return ok
+}
+
+// ResendInvitation — POST /api/v1/tenants/{tenant_id}/team/invitations/{invitation_id}/resend
+//
+// Reemite o token (o link anterior deixa de funcionar), renova o prazo e reenvia o e-mail.
+// Só vale para convite ainda pending (inclusive vencido); aceito ou revogado não é reaberto.
+func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permissionMembershipManage)
+	if err != nil {
+		respondAuthzError(w, err)
+		return
+	}
+	if !h.deliveryAvailable {
+		http.Error(w, "invitation delivery is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	invitationID, err := uuid.Parse(r.PathValue("invitation_id"))
+	if err != nil {
+		http.Error(w, "invalid invitation_id", http.StatusBadRequest)
+		return
+	}
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+
+	var inv Invitation
+	var status string
+	err = q.QueryRow(r.Context(), `
+		SELECT i.id, i.email, r.key, r.name, i.status, i.created_at
+		FROM membership_invitations i JOIN roles r ON r.id = i.role_id
+		WHERE i.id=$1 AND i.tenant_id=$2 FOR UPDATE OF i`, invitationID, tc.TenantID,
+	).Scan(&inv.ID, &inv.Email, &inv.RoleKey, &inv.RoleName, &status, &inv.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "invitation not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to read invitation", http.StatusInternalServerError)
+		return
+	}
+	if status != "pending" {
+		http.Error(w, "only pending invitations can be resent", http.StatusConflict)
+		return
+	}
+	if h.isActiveMember(r.Context(), q, tc.TenantID, inv.Email) {
+		http.Error(w, "user is already an active member", http.StatusConflict)
+		return
+	}
+
+	raw, hash, err := generateInvitationToken()
+	if err != nil {
+		http.Error(w, "failed to generate invitation", http.StatusInternalServerError)
+		return
+	}
+	inv.ExpiresAt = time.Now().UTC().Add(invitationTTL)
+	if _, err := q.Exec(r.Context(), `
+		UPDATE membership_invitations
+		SET token_hash=$3, expires_at=$4, sent_at=NULL, updated_at=now()
+		WHERE id=$1 AND tenant_id=$2`, invitationID, tc.TenantID, hash, inv.ExpiresAt); err != nil {
+		http.Error(w, "failed to reissue invitation", http.StatusInternalServerError)
+		return
+	}
+	inv.Status = "pending"
+	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationResent, inv.ID, inv.Email, inv.RoleKey)
+
+	if h.devExposeInviteURL {
+		inv.InviteURL = "/invite/" + raw
+	}
+	if err := h.deliver(r.Context(), q, tc, &inv, raw); err != nil {
+		http.Error(w, "invitation reissued but the e-mail could not be delivered; try again", http.StatusBadGateway)
+		return
+	}
+	writeTeamJSON(w, inv)
 }
 
 func (h *InvitationsHandler) authorize(r *http.Request, permission string) (*domain.TenantContext, error) {
@@ -397,6 +516,11 @@ func (h *InvitationsHandler) InvitationStatus(w http.ResponseWriter, r *http.Req
 			resp.MaskedEmail = maskEmail(email)
 			return nil
 		}
+		if !h.emailVerified(ctx, q, principal.UserID, email) {
+			resp.Status = "email_unverified"
+			resp.MaskedEmail = maskEmail(email)
+			return nil
+		}
 		resp.Status = effectiveStatus(status, expiresAt)
 		resp.TenantName = tenantName
 		resp.RoleKey = roleKey
@@ -453,6 +577,9 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		if !strings.EqualFold(actorEmail, email) {
 			return errInvitationNotFound
 		}
+		if !h.emailVerified(ctx, q, principal.UserID, email) {
+			return errInvitationEmailUnverified
+		}
 		switch effectiveStatus(status, expiresAt) {
 		case "accepted":
 			return errInvitationAlreadyUsed
@@ -468,14 +595,16 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 			WHERE id=$1`, invitationID, principal.UserID); err != nil {
 			return err
 		}
-		// Reativa/reatribui se já existia uma membership (ex.: revogada
-		// antes e convidada de novo), em vez de deixar um estado antigo
-		// sobreviver a um convite novo e deliberado.
+		// Reativa uma membership antiga (ex.: revogada e convidada de novo) com o papel
+		// do convite. Se já estiver ativa, o papel atual é preservado: um convite não
+		// rebaixa nem promove quem já é membro (isso é PATCH /team, com o invariante do
+		// último admin).
 		if _, err := q.Exec(ctx, `
 			INSERT INTO memberships (id, tenant_id, user_id, role_id, status)
 			VALUES ($1, $2, $3, $4, 'active')
 			ON CONFLICT (tenant_id, user_id)
-			DO UPDATE SET role_id = EXCLUDED.role_id, status = 'active', updated_at = now()`,
+			DO UPDATE SET role_id = CASE WHEN memberships.status = 'active' THEN memberships.role_id ELSE EXCLUDED.role_id END,
+			              status = 'active', updated_at = now()`,
 			uuid.New(), tenantID, principal.UserID, roleID); err != nil {
 			return err
 		}
@@ -494,6 +623,8 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invitation was revoked", http.StatusConflict)
 	case errors.Is(err, errInvitationExpired):
 		http.Error(w, "invitation expired", http.StatusGone)
+	case errors.Is(err, errInvitationEmailUnverified):
+		http.Error(w, "email not verified by the identity provider", http.StatusForbidden)
 	case err != nil:
 		http.Error(w, "failed to accept invitation", http.StatusInternalServerError)
 	default:
@@ -502,8 +633,22 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 }
 
 var (
-	errInvitationNotFound    = errors.New("invitation not found")
-	errInvitationAlreadyUsed = errors.New("invitation already accepted")
-	errInvitationRevoked     = errors.New("invitation revoked")
-	errInvitationExpired     = errors.New("invitation expired")
+	errInvitationNotFound        = errors.New("invitation not found")
+	errInvitationAlreadyUsed     = errors.New("invitation already accepted")
+	errInvitationRevoked         = errors.New("invitation revoked")
+	errInvitationExpired         = errors.New("invitation expired")
+	errInvitationEmailUnverified = errors.New("invitation e-mail not verified by the identity provider")
 )
+
+// emailVerified: o e-mail do convite só vale como prova de identidade se o IdP afirmou
+// email_verified=true para uma identidade deste usuário com esse mesmo e-mail. Com o dev
+// auth ativo (dev/lab) não há IdP, então a regra não se aplica; nunca fica true em produção.
+func (h *InvitationsHandler) emailVerified(ctx context.Context, q platformdb.Querier, userID uuid.UUID, email string) bool {
+	if h.devExposeInviteURL {
+		return true
+	}
+	var ok bool
+	_ = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_identities
+		WHERE user_id=$1 AND email_verified AND lower(email)=lower($2))`, userID, email).Scan(&ok)
+	return ok
+}

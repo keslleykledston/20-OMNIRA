@@ -349,6 +349,108 @@ describe('TeamPage — convites', () => {
     );
   });
 
+  const ADMIN_ACCESS = (delivery = true) => () => ({
+    role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: delivery,
+  });
+
+  it('shows when each e-mail was sent, and flags the ones that never arrived', async () => {
+    mockRoutes({
+      '/me/access': ADMIN_ACCESS(),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({
+        items: [
+          invite({ id: 'i1', email: 'entregue@empresa.com', sent_at: '2026-09-22T12:30:00Z' }),
+          invite({ id: 'i2', email: 'falhou@empresa.com' }),
+        ],
+      }),
+    });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+    expect(await screen.findByRole('columnheader', { name: 'Enviado em' })).toBeInTheDocument();
+    expect(screen.getAllByText('Não entregue').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/22\/09\/2026/).length).toBeGreaterThan(0);
+  });
+
+  it('resends a pending invitation and confirms it', async () => {
+    mockRoutes({
+      '/me/access': ADMIN_ACCESS(),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [invite({ id: 'inv-9', email: 'reenviar@empresa.com' })] }),
+    });
+    vi.mocked(axios.post).mockResolvedValue({ data: invite({ id: 'inv-9', email: 'reenviar@empresa.com', sent_at: new Date().toISOString() }) });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+    await screen.findAllByText('reenviar@empresa.com');
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Ações' }))[0]);
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Reenviar convite' }));
+
+    await waitFor(() =>
+      expect(axios.post).toHaveBeenCalledWith(expect.stringContaining('/team/invitations/inv-9/resend'), {}, expect.anything()),
+    );
+    expect(await screen.findByText('Convite reenviado para reenviar@empresa.com.')).toBeInTheDocument();
+  });
+
+  it('does not offer resend when delivery is unavailable or the invitation is no longer pending', async () => {
+    mockRoutes({
+      '/me/access': ADMIN_ACCESS(false),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [invite({ id: 'p1', email: 'pendente-sem-envio@empresa.com' })] }),
+    });
+    page();
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+    await screen.findAllByText('pendente-sem-envio@empresa.com');
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Ações' }))[0]);
+    expect(screen.queryByRole('menuitem', { name: 'Reenviar convite' })).toBeNull();
+  });
+
+  it('never offers resend for an accepted invitation', async () => {
+    mockRoutes({
+      '/me/access': ADMIN_ACCESS(),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [invite({ status: 'accepted', email: 'aceito2@empresa.com' })] }),
+    });
+    page();
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('tab', { name: 'Convites' }));
+    await screen.findAllByText('aceito2@empresa.com');
+    expect(screen.queryByRole('button', { name: 'Ações' })).toBeNull();
+  });
+
+  it('confirms a sent invitation and explains a delivery failure (502) pointing to resend', async () => {
+    mockRoutes({
+      '/me/access': ADMIN_ACCESS(),
+      '/team': () => ({ items: [member()] }),
+      '/roles': () => ({ items: ROLES }),
+      '/team/invitations': () => ({ items: [] }),
+    });
+    vi.mocked(axios.post)
+      .mockResolvedValueOnce({ data: invite({ email: 'ok@empresa.com', sent_at: new Date().toISOString() }) })
+      .mockRejectedValueOnce({ response: { status: 502 } });
+    page();
+
+    await screen.findAllByText('Ana Souza');
+    const invitePerson = async (email: string) => {
+      await userEvent.click(screen.getByRole('button', { name: /Convidar usuário/ }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByLabelText('E-mail'), email);
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Enviar convite' }));
+    };
+    await invitePerson('ok@empresa.com');
+    expect(await screen.findByText('Convite enviado para ok@empresa.com.')).toBeInTheDocument();
+
+    await invitePerson('falha@empresa.com');
+    expect(await screen.findByText(/não pôde ser entregue.*Reenviar convite/)).toBeInTheDocument();
+  });
+
   it('shows an empty state when there are no invitations', async () => {
     mockRoutes({
       '/me/access': () => ({ role_key: 'tenant_admin', permissions: ['membership.read', 'membership.manage'], invitation_delivery_available: true }),

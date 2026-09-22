@@ -29,7 +29,7 @@ func (r fakeOIDCResolver) ResolveUserID(_ context.Context, issuer, subject strin
 func (r fakeOIDCResolver) ResolveIdentity(context.Context, string, string) (uuid.UUID, error) {
 	return r.userID, nil
 }
-func (r fakeOIDCResolver) ProvisionIdentity(context.Context, string, string, string, string) (uuid.UUID, error) {
+func (r fakeOIDCResolver) ProvisionIdentity(context.Context, string, string, string, string, bool) (uuid.UUID, error) {
 	return r.userID, nil
 }
 func (r fakeOIDCResolver) SessionProfile(context.Context, uuid.UUID) (SessionProfile, error) {
@@ -164,5 +164,25 @@ func TestOIDCCallbackRejectsStateMismatchBeforeTokenExchange(t *testing.T) {
 	h.Callback(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEmailVerifiedClaimIsStrict(t *testing.T) {
+	for name, c := range map[string]struct {
+		claim any
+		want  bool
+	}{
+		"bool true":    {true, true},
+		"string true":  {"true", true},
+		"bool false":   {false, false},
+		"string false": {"false", false},
+		"absent":       {nil, false},
+		"number 1":     {float64(1), false},
+		"string yes":   {"yes", false},
+		"string True":  {"True", false},
+	} {
+		if got := (oidcClaims{EmailVerified: c.claim}).emailVerified(); got != c.want {
+			t.Errorf("%s: got %v, want %v", name, got, c.want)
+		}
 	}
 }

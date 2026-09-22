@@ -39,6 +39,16 @@ type Config struct {
 	WahaEngine        string
 	MetaEnabled       bool
 	PublicBaseURL     string
+	// WebBaseURL: host do frontend como o navegador enxerga (links de e-mail). Diferente
+	// de PublicBaseURL, que é a URL server-to-server usada por webhooks.
+	WebBaseURL        string
+	SMTPHost          string
+	SMTPPort          int
+	SMTPUsername      string
+	SMTPPassword      string
+	SMTPFrom          string
+	SMTPReplyTo       string
+	SMTPTLS           string // starttls (padrão) | implicit | none (só dev)
 	AllowPrivilegedDB bool
 	MetaVerifyToken   string
 	MetaAppSecret     string
@@ -80,6 +90,14 @@ func Load() *Config {
 		WahaEngine:        getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
 		MetaEnabled:       getEnv("OMNIRA_META_ENABLED", "false") == "true",
 		PublicBaseURL:     os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
+		WebBaseURL:        os.Getenv("OMNIRA_WEB_BASE_URL"),
+		SMTPHost:          os.Getenv("OMNIRA_SMTP_HOST"),
+		SMTPPort:          getEnvInt("OMNIRA_SMTP_PORT", 587),
+		SMTPUsername:      os.Getenv("OMNIRA_SMTP_USERNAME"),
+		SMTPPassword:      os.Getenv("OMNIRA_SMTP_PASSWORD"),
+		SMTPFrom:          os.Getenv("OMNIRA_SMTP_FROM"),
+		SMTPReplyTo:       os.Getenv("OMNIRA_SMTP_REPLY_TO"),
+		SMTPTLS:           getEnv("OMNIRA_SMTP_TLS", "starttls"),
 		AllowPrivilegedDB: getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
 		MetaVerifyToken:   os.Getenv("OMNIRA_META_VERIFY_TOKEN"),
 		MetaAppSecret:     os.Getenv("OMNIRA_META_APP_SECRET"),
@@ -151,6 +169,24 @@ func (c *Config) Validate() error {
 		}
 		if c.Env == "production" && (issuerURL.Scheme != "https" || redirectURL.Scheme != "https") {
 			return fmt.Errorf("OIDC em produção exige issuer e redirect URL HTTPS")
+		}
+	}
+	if c.SMTPHost != "" {
+		if c.SMTPFrom == "" {
+			return fmt.Errorf("SMTP habilitado exige OMNIRA_SMTP_FROM")
+		}
+		if c.SMTPTLS != "starttls" && c.SMTPTLS != "implicit" && c.SMTPTLS != "none" {
+			return fmt.Errorf("OMNIRA_SMTP_TLS deve ser starttls, implicit ou none")
+		}
+		if (c.Env == "staging" || c.Env == "production") && c.SMTPTLS == "none" {
+			return fmt.Errorf("OMNIRA_SMTP_TLS=none é proibido em staging/production")
+		}
+		webURL, err := url.Parse(c.WebBaseURL)
+		if err != nil || webURL.Host == "" || (webURL.Scheme != "http" && webURL.Scheme != "https") {
+			return fmt.Errorf("SMTP habilitado exige OMNIRA_WEB_BASE_URL como URL HTTP(S) absoluta (host do frontend usado nos links de e-mail)")
+		}
+		if c.Env == "production" && webURL.Scheme != "https" {
+			return fmt.Errorf("OMNIRA_WEB_BASE_URL deve ser HTTPS em produção")
 		}
 	}
 	if c.WahaEnabled {

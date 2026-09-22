@@ -20,6 +20,7 @@ const (
 	ActionMembershipRoleChanged    AuditAction = "membership.role_changed"
 	ActionInvitationCreated        AuditAction = "membership.invitation.created"
 	ActionInvitationRevoked        AuditAction = "membership.invitation.revoked"
+	ActionInvitationResent         AuditAction = "membership.invitation.resent"
 	ActionInvitationAccepted       AuditAction = "membership.invitation.accepted"
 	ActionConversationAssigned     AuditAction = "conversation.assigned"
 	ActionConversationUnassigned   AuditAction = "conversation.unassigned"

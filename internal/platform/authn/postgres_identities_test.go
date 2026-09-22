@@ -40,7 +40,7 @@ func TestPostgresProvisionIdentity(t *testing.T) {
 	email := "user@test.local"
 	displayName := "Test User"
 
-	userID, err := resolver.ProvisionIdentity(ctx, issuer, subject, email, displayName)
+	userID, err := resolver.ProvisionIdentity(ctx, issuer, subject, email, displayName, false)
 	if err != nil {
 		t.Fatalf("provision failed: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestPostgresProvisionIdentity(t *testing.T) {
 	}
 
 	// Test: Provision same identity (idempotent)
-	userID2, err := resolver.ProvisionIdentity(ctx, issuer, subject, "updated@test.local", "Updated Name")
+	userID2, err := resolver.ProvisionIdentity(ctx, issuer, subject, "updated@test.local", "Updated Name", false)
 	if err != nil {
 		t.Fatalf("reprovision failed: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestPostgresProvisionIdentity(t *testing.T) {
 	// Test: Different issuer, same subject = different user
 	subject2 := "user-123" // same subject
 	issuer2 := "https://other-idp.test/realms/other"
-	userID3, err := resolver.ProvisionIdentity(ctx, issuer2, subject2, "other@test.local", "Other User")
+	userID3, err := resolver.ProvisionIdentity(ctx, issuer2, subject2, "other@test.local", "Other User", false)
 	if err != nil {
 		t.Fatalf("provision with different issuer failed: %v", err)
 	}
@@ -132,17 +132,17 @@ func TestIdentityIsScopedToIssuer(t *testing.T) {
 	issuerA := "https://idp-a.test/realms/" + uuid.NewString()
 	issuerB := "https://idp-b.test/realms/" + uuid.NewString()
 
-	userA, err := resolver.ProvisionIdentity(ctx, issuerA, subject, "a@test.local", "User A")
+	userA, err := resolver.ProvisionIdentity(ctx, issuerA, subject, "a@test.local", "User A", false)
 	if err != nil {
 		t.Fatalf("provision A: %v", err)
 	}
 	// Same identity again is idempotent.
-	again, err := resolver.ProvisionIdentity(ctx, issuerA, subject, "a@test.local", "User A")
+	again, err := resolver.ProvisionIdentity(ctx, issuerA, subject, "a@test.local", "User A", false)
 	if err != nil || again != userA {
 		t.Fatalf("reprovision A: user=%s err=%v", again, err)
 	}
 
-	userB, err := resolver.ProvisionIdentity(ctx, issuerB, subject, "b@test.local", "User B")
+	userB, err := resolver.ProvisionIdentity(ctx, issuerB, subject, "b@test.local", "User B", false)
 	if err != nil {
 		t.Fatalf("provision B: %v", err)
 	}
@@ -167,5 +167,51 @@ func TestIdentityIsScopedToIssuer(t *testing.T) {
 	}
 	if _, err := resolver.ResolveUserID(ctx, issuerA, "no-such-subject-"+uuid.NewString()); err == nil {
 		t.Fatal("an unknown subject resolved to a user")
+	}
+}
+
+// email_verified is evidence from the IdP, refreshed on every login: it must be stored as
+// asserted and must not survive a later login where the IdP no longer asserts it.
+func TestProvisionIdentityStoresAndRefreshesEmailVerified(t *testing.T) {
+	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if seedURL == "" || appURL == "" {
+		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	resolver := NewPostgresIdentityResolver(app)
+	issuer, subject := "https://idp.test/realms/ev-"+uuid.NewString(), "sub-"+uuid.NewString()
+	userID, err := resolver.ProvisionIdentity(ctx, issuer, subject, "ev@test.local", "EV", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID) })
+
+	read := func() bool {
+		var v bool
+		if err := seed.QueryRow(ctx, `SELECT email_verified FROM user_identities WHERE issuer=$1 AND subject=$2`, issuer, subject).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if !read() {
+		t.Fatal("email_verified=true from the IdP was not stored")
+	}
+	if _, err := resolver.ProvisionIdentity(ctx, issuer, subject, "ev@test.local", "EV", false); err != nil {
+		t.Fatal(err)
+	}
+	if read() {
+		t.Fatal("email_verified must be refreshed to false when the IdP stops asserting it")
 	}
 }

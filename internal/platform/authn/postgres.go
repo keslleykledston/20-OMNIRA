@@ -92,7 +92,7 @@ func (r *PostgresIdentityResolver) ResolveIdentity(ctx context.Context, issuer, 
 // ProvisionIdentity creates or updates a UserIdentity, and returns the user ID.
 // Idempotent: same issuer+subject always maps to the same user.
 // Email/display_name are attributes and are updated on each login.
-func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer, subject, email, displayName string) (uuid.UUID, error) {
+func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer, subject, email, displayName string, emailVerified bool) (uuid.UUID, error) {
 	var userID uuid.UUID
 	err := platformdb.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(scoped context.Context) error {
 		q := platformdb.QuerierFromContext(scoped, r.pool)
@@ -101,9 +101,9 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 		`, issuer, subject).Scan(&userID); err == nil {
 			if _, err := q.Exec(scoped, `
 				UPDATE user_identities
-				SET email=$3, display_name=$4, last_login_at=NOW()
+				SET email=$3, display_name=$4, email_verified=$5, last_login_at=NOW()
 				WHERE issuer=$1 AND subject=$2
-			`, issuer, subject, email, displayName); err != nil {
+			`, issuer, subject, email, displayName, emailVerified); err != nil {
 				return err
 			}
 			// Os atributos vêm do IdP a cada login e users é o que o resto da
@@ -126,9 +126,9 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 			return err
 		}
 		if _, err := q.Exec(scoped, `
-			INSERT INTO user_identities(user_id, issuer, subject, email, display_name, last_login_at)
-			VALUES ($1, $2, $3, $4, $5, NOW())
-		`, userID, issuer, subject, email, displayName); err != nil {
+			INSERT INTO user_identities(user_id, issuer, subject, email, display_name, email_verified, last_login_at)
+			VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		`, userID, issuer, subject, email, displayName, emailVerified); err != nil {
 			return err
 		}
 		return nil
