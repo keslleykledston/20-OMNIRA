@@ -7,8 +7,15 @@ import {
   ErrorState,
   Icon,
   PageHeader,
+  Pagination,
   Skeleton,
   StatusBadge,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
 } from '../components/primitives'
 import { contactErrorMessage, contactsAPI, type Contact } from '../lib/contacts'
 import { getTenantId } from '../lib/session'
@@ -97,42 +104,38 @@ export default function ContactsPage() {
       {!contacts.isLoading && !contacts.isError && items.length > 0 && (
         <>
           {/* Desktop: table. Mobile falls back to cards below. */}
-          <div className="hidden md:block overflow-hidden rounded-card border border-border-subtle bg-surface">
-            <table className="w-full text-left">
-              <thead className="border-b border-border-subtle bg-surface-muted">
-                <tr>
-                  <th scope="col" className="px-6 py-3 text-sm font-medium text-text-secondary">Nome</th>
-                  <th scope="col" className="px-6 py-3 text-sm font-medium text-text-secondary">Telefone</th>
-                  <th scope="col" className="px-6 py-3 text-sm font-medium text-text-secondary">E-mail</th>
-                  <th scope="col" className="px-6 py-3 text-sm font-medium text-text-secondary">Situação</th>
-                  <th scope="col" className="px-6 py-3 text-sm font-medium text-text-secondary">Atualizado</th>
-                </tr>
-              </thead>
-              <tbody>
+          <div className="hidden md:block">
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Nome</TableHeaderCell>
+                  <TableHeaderCell>Telefone</TableHeaderCell>
+                  <TableHeaderCell>E-mail</TableHeaderCell>
+                  <TableHeaderCell>Situação</TableHeaderCell>
+                  <TableHeaderCell>Atualizado</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {items.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => navigate(`/contacts/${c.id}`)}
-                    className="border-b border-border-subtle last:border-0 cursor-pointer hover:bg-surface-hover transition-colors"
-                  >
-                    <td className="px-6 py-4">
+                  <TableRow key={c.id} interactive onClick={() => navigate(`/contacts/${c.id}`)}>
+                    <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar alt={c.display_name} initials={initials(c.display_name)} size="sm" />
                         <span className="font-medium text-text-primary">{c.display_name}</span>
                       </div>
-                    </td>
-                    <td className="px-6 py-4 text-text-secondary tabular-nums">{formatPhone(c.phone_e164)}</td>
-                    <td className="px-6 py-4 text-text-secondary">{c.email || '—'}</td>
-                    <td className="px-6 py-4">
+                    </TableCell>
+                    <TableCell className="text-text-secondary tabular-nums">{formatPhone(c.phone_e164)}</TableCell>
+                    <TableCell className="text-text-secondary">{c.email || '—'}</TableCell>
+                    <TableCell>
                       <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
                         {STATUS_LABELS[c.status].label}
                       </StatusBadge>
-                    </td>
-                    <td className="px-6 py-4 text-text-secondary">{formatDate(c.updated_at)}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className="text-text-secondary">{formatDate(c.updated_at)}</TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
 
           <div className="md:hidden space-y-3">
@@ -156,29 +159,13 @@ export default function ContactsPage() {
             ))}
           </div>
 
-          <nav className="flex items-center justify-between" aria-label="Paginação">
-            <p className="text-sm text-text-secondary">
-              {page?.count ?? 0} {page?.count === 1 ? 'contato' : 'contatos'} nesta página
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setCursorStack((s) => s.slice(0, -1))}
-                disabled={cursorStack.length === 0}
-                className="h-10 px-4 rounded-control border border-border-light text-sm font-medium text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                Anterior
-              </button>
-              <button
-                type="button"
-                onClick={() => page?.next_cursor && setCursorStack((s) => [...s, page.next_cursor!])}
-                disabled={!page?.has_more || !page?.next_cursor}
-                className="h-10 px-4 rounded-control border border-border-light text-sm font-medium text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                Próxima
-              </button>
-            </div>
-          </nav>
+          <Pagination
+            hasPrevious={cursorStack.length > 0}
+            hasNext={Boolean(page?.has_more && page?.next_cursor)}
+            onPrevious={() => setCursorStack((s) => s.slice(0, -1))}
+            onNext={() => page?.next_cursor && setCursorStack((s) => [...s, page.next_cursor!])}
+            label={`${page?.count ?? 0} ${page?.count === 1 ? 'contato' : 'contatos'} nesta página`}
+          />
         </>
       )}
     </div>
