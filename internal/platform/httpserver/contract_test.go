@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	"github.com/omnira/omnira/internal/platform/config"
 )
 
 // Drift guard between contracts/openapi/omnira-v1.yaml and the routes the server really registers.
@@ -78,7 +79,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterAuthHandlers(false) // generates the RSA keys the other registrations need
 	s.RegisterOIDCAuthHandlers(s.authenticator, contractOIDCHandler{})
 	s.RegisterTenancyHandlers(nil, false)
-	s.RegisterInboxHandlers(nil)
+	s.RegisterInboxHandlers(nil, &config.Config{})
 	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
 	s.RegisterWahaWebhook(http.NotFoundHandler())

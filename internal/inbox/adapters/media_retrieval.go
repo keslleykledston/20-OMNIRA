@@ -6,17 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
-	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
 const maxMediaBytes = 25 * 1024 * 1024 // 25 MiB

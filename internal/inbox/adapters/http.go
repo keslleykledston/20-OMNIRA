@@ -206,8 +206,8 @@ func scanMessageItem(row rowScanner) (MessageItem, error) {
 	var item MessageItem
 	var direction, status string
 	var created time.Time
-	var _ interface{} // discard media_ref from DB row; never expose to public DTO
-	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &_, &item.MimeType, &item.SizeBytes, &status, &created)
+	var mediaRef interface{} // discard media_ref from DB row; never expose to public DTO
+	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &mediaRef, &item.MimeType, &item.SizeBytes, &status, &created)
 	item.Direction, item.Status, item.CreatedAt = direction, status, created.UTC().Format(time.RFC3339Nano)
 	return item, err
 }
