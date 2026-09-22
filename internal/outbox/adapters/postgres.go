@@ -77,12 +77,24 @@ func (r *PostgresOutboxRepository) FindByID(ctx context.Context, id uuid.UUID) (
 }
 
 // FindUnpublished — busca eventos não publicados.
+//
+// A row whose aggregate_id/correlation_id/causation_id (loosely-typed TEXT
+// columns every current writer nonetheless always populates with a UUID
+// string) is not a valid UUID is a permanent, isolated failure — not a
+// transient one — and must not abort the batch for every valid event behind
+// it in created_at order (confirmed live during IAM4.2 pilot verification:
+// one malformed row wedged the publisher indefinitely). Such a row is
+// quarantined (marked, never deleted — evidence stays queryable) and
+// excluded from future scans; the loop continues to the next row. A scan
+// failure NOT explained by one of these three columns is treated as before
+// (aborts the batch) — that class is a real DB/connection anomaly, which is
+// transient and should be retried, not permanently isolated.
 func (r *PostgresOutboxRepository) FindUnpublished(ctx context.Context, limit int) ([]*domain.OutboxEvent, error) {
 	query := `
 		SELECT id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, causation_id,
 		       payload, published_at, attempts, created_at
 		FROM outbox_events
-		WHERE published_at IS NULL
+		WHERE published_at IS NULL AND quarantined_at IS NULL
 		ORDER BY created_at ASC
 		LIMIT $1
 	`
@@ -91,22 +103,57 @@ func (r *PostgresOutboxRepository) FindUnpublished(ctx context.Context, limit in
 	if err != nil {
 		return nil, fmt.Errorf("failed to query unpublished events: %w", err)
 	}
-	defer rows.Close()
 
 	var events []*domain.OutboxEvent
+	var toQuarantine []quarantineCandidate
 	for rows.Next() {
-		event, err := scanOutboxEvent(rows)
+		event, invalid, err := scanOutboxEventTolerant(rows)
 		if err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("failed to scan event: %w", err)
+		}
+		if invalid != nil {
+			toQuarantine = append(toQuarantine, *invalid)
+			continue
 		}
 		events = append(events, event)
 	}
-
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+	rows.Close()
+
+	for _, q := range toQuarantine {
+		// Best-effort: a failure to record the quarantine must not itself
+		// block the valid events already collected above from publishing.
+		// The row remains in the next batch's WHERE scan and gets retried
+		// (harmless — the same isolation logic applies again).
+		_, _ = platformdb.QuerierFromContext(ctx, r.pool).Exec(ctx,
+			`UPDATE outbox_events SET quarantined_at = now(), quarantine_reason = $2
+			 WHERE id = $1 AND quarantined_at IS NULL`,
+			q.id, q.reason)
 	}
 
 	return events, nil
+}
+
+// quarantineCandidate names one row found to be permanently unpublishable
+// and why — bounded, no payload/PII, only the specific column and parse
+// error class.
+type quarantineCandidate struct {
+	id     uuid.UUID
+	reason string
+}
+
+const maxQuarantineReasonLen = 200
+
+func quarantineReason(column string, err error) string {
+	reason := fmt.Sprintf("invalid %s: %v", column, err)
+	if len(reason) > maxQuarantineReasonLen {
+		reason = reason[:maxQuarantineReasonLen]
+	}
+	return reason
 }
 
 // Update — atualiza um evento.
@@ -240,4 +287,87 @@ func scanOutboxEvent(row interface {
 	}
 
 	return event, nil
+}
+
+// scanOutboxEventTolerant is FindUnpublished's scan path: aggregate_id,
+// correlation_id and causation_id are scanned as raw strings first — never
+// directly into uuid.UUID — so a single malformed value can never abort
+// row.Scan for the whole row (which is what let one poisoned row wedge the
+// entire batch, see FindUnpublished). Returns (event, nil, nil) on success,
+// (nil, invalid, nil) when this specific row is unpublishable but the scan
+// itself succeeded (quarantine it and keep going), or (nil, nil, err) only
+// for a genuine, unrelated scan/connection failure (still batch-aborting —
+// that class is transient, not a poisoned row).
+func scanOutboxEventTolerant(row interface {
+	Scan(dest ...interface{}) error
+}) (*domain.OutboxEvent, *quarantineCandidate, error) {
+	var (
+		id               uuid.UUID
+		tenantID         uuid.UUID
+		eventType        string
+		aggregateType    string
+		aggregateIDStr   string
+		correlationIDStr *string
+		causationIDStr   *string
+		payloadJSON      []byte
+		publishedAt      *time.Time
+		attempts         int
+		createdAt        time.Time
+	)
+
+	if err := row.Scan(
+		&id,
+		&tenantID,
+		&eventType,
+		&aggregateType,
+		&aggregateIDStr,
+		&correlationIDStr,
+		&causationIDStr,
+		&payloadJSON,
+		&publishedAt,
+		&attempts,
+		&createdAt,
+	); err != nil {
+		return nil, nil, err
+	}
+
+	aggregateID, err := uuid.Parse(aggregateIDStr)
+	if err != nil {
+		return nil, &quarantineCandidate{id: id, reason: quarantineReason("aggregate_id", err)}, nil
+	}
+
+	var correlationID uuid.UUID
+	if correlationIDStr != nil {
+		if correlationID, err = uuid.Parse(*correlationIDStr); err != nil {
+			return nil, &quarantineCandidate{id: id, reason: quarantineReason("correlation_id", err)}, nil
+		}
+	}
+
+	var causationID uuid.UUID
+	if causationIDStr != nil {
+		if causationID, err = uuid.Parse(*causationIDStr); err != nil {
+			return nil, &quarantineCandidate{id: id, reason: quarantineReason("causation_id", err)}, nil
+		}
+	}
+
+	var payload map[string]interface{}
+	if len(payloadJSON) > 0 {
+		if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+			return nil, &quarantineCandidate{id: id, reason: quarantineReason("payload", err)}, nil
+		}
+	}
+
+	return &domain.OutboxEvent{
+		ID:            id,
+		TenantID:      tenantID,
+		EventType:     domain.EventType(eventType),
+		AggregateType: domain.AggregateType(aggregateType),
+		AggregateID:   aggregateID,
+		CorrelationID: correlationID,
+		CausationID:   causationID,
+		Payload:       payload,
+		PublishedAt:   publishedAt,
+		Attempts:      attempts,
+		CreatedAt:     createdAt,
+	}, nil, nil
 }
