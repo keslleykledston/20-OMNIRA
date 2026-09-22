@@ -98,6 +98,15 @@ func (a *Assigner) Assign(ctx context.Context, conversationID, target uuid.UUID)
 	if !found {
 		return AssignResult{}, ErrNotFound
 	}
+	if eligibility, ok := a.repo.(ports.OperationalEligibility); ok {
+		eligible, err := eligibility.IsEligibleForConversation(ctx, conversationID, target)
+		if err != nil {
+			return AssignResult{}, err
+		}
+		if !eligible {
+			return AssignResult{}, ErrInvalidAssignee
+		}
+	}
 	if current != nil && *current == target {
 		return AssignResult{AssignedTo: current}, nil
 	}

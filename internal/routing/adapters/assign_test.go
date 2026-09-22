@@ -95,6 +95,9 @@ func newAssignEnv(t *testing.T) *assignEnv {
 	member(e.tenantA, e.viewer, viewerRole, "active")
 	member(e.tenantA, e.revoked, role("tenant_agent"), "revoked")
 	member(e.tenantB, e.outsiderB, role("tenant_admin"), "active")
+	// IAM4 profiles are an explicit operational enablement, independent of role.
+	e.exec(`INSERT INTO agent_profiles(tenant_id,membership_id,status)
+		SELECT tenant_id,id,'active' FROM memberships WHERE tenant_id=$1 AND user_id IN ($2,$3,$4,$5)`, e.tenantA, e.agent1, e.agent2, e.supervisor, e.admin)
 
 	authz := tenancyapplication.NewAuthorizationService(
 		tenancyadapters.NewPostgresMembershipRepository(app), tenancyadapters.NewPostgresTenantRepository(app))
@@ -341,4 +344,20 @@ func TestAssignTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestOperationalProfileAndMembershipRevocationImmediatelyBlockRouting(t *testing.T) {
+	e := newAssignEnv(t)
+	queue := uuid.New()
+	e.exec(`INSERT INTO queues(id,tenant_id,name,mode) VALUES($1,$2,'IAM4 routing','manual')`, queue, e.tenantA)
+	e.exec(`INSERT INTO queue_members(tenant_id,queue_id,user_id,available,capacity) VALUES($1,$2,$3,true,2)`, e.tenantA, queue, e.agent1)
+
+	conversation := e.conversation(e.tenantA)
+	e.exec(`UPDATE conversations SET queue_id=$1 WHERE id=$2`, queue, conversation)
+	e.exec(`UPDATE agent_profiles SET status='disabled' WHERE tenant_id=$1 AND membership_id=(SELECT id FROM memberships WHERE tenant_id=$1 AND user_id=$2)`, e.tenantA, e.agent1)
+	want(t, e.call(e.admin, e.tenantA, conversation, "assign", `{"assignee_user_id":"`+e.agent1.String()+`"}`), 422, "disabled profile is ineligible")
+
+	e.exec(`UPDATE agent_profiles SET status='active' WHERE tenant_id=$1 AND membership_id=(SELECT id FROM memberships WHERE tenant_id=$1 AND user_id=$2)`, e.tenantA, e.agent1)
+	e.exec(`UPDATE memberships SET status='revoked' WHERE tenant_id=$1 AND user_id=$2`, e.tenantA, e.agent1)
+	want(t, e.call(e.admin, e.tenantA, conversation, "assign", `{"assignee_user_id":"`+e.agent1.String()+`"}`), 422, "revoked membership is immediately ineligible")
 }

@@ -18,9 +18,9 @@ type MockLoginRequest struct {
 
 // MockLoginResponse — response com JWT token
 type MockLoginResponse struct {
-	Token     string    `json:"token"`
-	ExpiresIn int       `json:"expires_in"`
-	User      MockUser  `json:"user"`
+	Token     string     `json:"token"`
+	ExpiresIn int        `json:"expires_in"`
+	User      MockUser   `json:"user"`
 	Tenant    MockTenant `json:"tenant"`
 }
 
@@ -52,6 +52,11 @@ func MockLoginHandler(email string, privateKey *rsa.PrivateKey) (*MockLoginRespo
 			userID:   "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 			tenantID: "11111111-1111-1111-1111-111111111111",
 			name:     "Admin User",
+		},
+		"supervisor@omnira.local": {
+			userID:   "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+			tenantID: "11111111-1111-1111-1111-111111111111",
+			name:     "Supervisor User",
 		},
 	}
 

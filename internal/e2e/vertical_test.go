@@ -180,6 +180,12 @@ func newStack(t *testing.T) *stack {
 	member(s.tenantA, s.agent1, "tenant_agent")
 	member(s.tenantA, s.agent2, "tenant_agent")
 	member(s.tenantB, s.agentB, "tenant_admin")
+	// IAM4 routing requires an explicit operational profile; role alone remains insufficient.
+	s.exec(`INSERT INTO agent_profiles(tenant_id,membership_id,status)
+		SELECT tenant_id,id,'active' FROM memberships WHERE tenant_id=$1 AND user_id IN ($2,$3)`, s.tenantA, s.agent1, s.agent2)
+	s.exec(`INSERT INTO queue_members(tenant_id,queue_id,user_id,available,capacity)
+		SELECT q.tenant_id,q.id,u.id,true,2 FROM queues q CROSS JOIN (VALUES ($2::uuid),($3::uuid)) AS u(id)
+		WHERE q.tenant_id=$1 AND q.is_default`, s.tenantA, s.agent1, s.agent2)
 
 	// Real wiring, as in apps/api and apps/worker.
 	cipher, err := channelcrypto.NewAESGCM([]byte("01234567890123456789012345678901"))

@@ -28,10 +28,18 @@ func (r *PostgresAssignmentRepository) ClaimUnassigned(ctx context.Context, conv
 	}
 	var claimed bool
 	err = platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx, `
-		WITH claimed AS (
+		WITH eligible AS (
+		  SELECT 1 FROM conversations c
+		  JOIN memberships m ON m.tenant_id=c.tenant_id AND m.user_id=$3 AND m.status='active'
+		  JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
+		  WHERE c.tenant_id=$1 AND c.id=$2 AND (c.queue_id IS NULL OR EXISTS (
+		    SELECT 1 FROM queue_members qm WHERE qm.tenant_id=c.tenant_id AND qm.queue_id=c.queue_id AND qm.user_id=$3
+		    AND qm.active AND qm.available AND (SELECT count(*) FROM conversations active WHERE active.tenant_id=qm.tenant_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity
+		  ))
+		), claimed AS (
 		  UPDATE conversations
 		  SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
-		  WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL
+		  WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND EXISTS(SELECT 1 FROM eligible)
 		  RETURNING tenant_id, id
 		), recorded AS (
 		  INSERT INTO assignment_events(tenant_id,conversation_id,from_user_id,to_user_id,changed_by,reason)
@@ -56,6 +64,9 @@ func (r *PostgresAssignmentRepository) AssignRoundRobin(ctx context.Context, con
 		), candidate AS (
 		  SELECT qm.id,qm.user_id
 		  FROM queue_members qm JOIN target t ON t.tenant_id=qm.tenant_id AND t.queue_id=qm.queue_id
+		  JOIN memberships m ON m.tenant_id=qm.tenant_id AND m.user_id=qm.user_id AND m.status='active'
+		  JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
+		  -- available is queue eligibility, never human presence.
 		  WHERE qm.active AND qm.available
 		    AND (SELECT count(*) FROM conversations active
 		         WHERE active.tenant_id=qm.tenant_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity

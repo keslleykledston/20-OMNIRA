@@ -96,6 +96,28 @@ func (r *PostgresConversationAssigner) HasPermission(ctx context.Context, userID
 	return ok, nil
 }
 
+// IsEligibleForConversation aligns manual routing with round-robin: active
+// membership/profile plus queue-local availability and existing capacity.
+func (r *PostgresConversationAssigner) IsEligibleForConversation(ctx context.Context, conversationID, userID uuid.UUID) (bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return false, err
+	}
+	var ok bool
+	err = platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM conversations c
+		 JOIN memberships m ON m.tenant_id=c.tenant_id AND m.user_id=$3 AND m.status='active'
+		 JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
+		 WHERE c.tenant_id=$1 AND c.id=$2 AND (c.queue_id IS NULL OR EXISTS (
+		   SELECT 1 FROM queue_members qm WHERE qm.tenant_id=c.tenant_id AND qm.queue_id=c.queue_id AND qm.user_id=$3
+		   AND qm.active AND qm.available AND (SELECT count(*) FROM conversations active WHERE active.tenant_id=qm.tenant_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity
+		 )))`, tenantID, conversationID, userID).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("routing: check operational eligibility: %w", err)
+	}
+	return ok, nil
+}
+
 // AuditRecorder writes conversation.assigned / conversation.unassigned
 // through the existing audit repository, in the same transaction.
 type AuditRecorder struct {

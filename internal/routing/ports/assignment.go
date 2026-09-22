@@ -29,6 +29,12 @@ type ConversationAssigner interface {
 	HasPermission(ctx context.Context, userID uuid.UUID, permission string) (bool, error)
 }
 
+// OperationalEligibility is implemented by production routing adapters. It is
+// separate to keep existing co-attendance test doubles focused on their port.
+type OperationalEligibility interface {
+	IsEligibleForConversation(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+}
+
 // AuditRecorder appends an audit event in the caller's transaction.
 type AuditRecorder interface {
 	ConversationAssignmentChanged(ctx context.Context, change AssignmentChange) error

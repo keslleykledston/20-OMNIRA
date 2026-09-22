@@ -2,7 +2,8 @@
 -- Tenant 1111.. = main tenant (agent test@ / admin admin@ of the mock login), tenant 2222.. = foreign tenant.
 INSERT INTO users(id,external_subject,email,status) VALUES
  ('22222222-2222-2222-2222-222222222222','test@omnira.local','test@omnira.local','active'),
- ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','admin@omnira.local','admin@omnira.local','active')
+ ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','admin@omnira.local','admin@omnira.local','active'),
+ ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb','supervisor@omnira.local','supervisor@omnira.local','active')
  ON CONFLICT DO NOTHING;
 INSERT INTO tenants(id,legal_name,status) VALUES
  ('11111111-1111-1111-1111-111111111111','E2E Co','active'),
@@ -13,7 +14,16 @@ INSERT INTO memberships(tenant_id,user_id,role_id,status)
 INSERT INTO memberships(tenant_id,user_id,role_id,status)
  SELECT '11111111-1111-1111-1111-111111111111','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',id,'active' FROM roles WHERE key='tenant_admin' AND tenant_id IS NULL
  ON CONFLICT DO NOTHING;
-INSERT INTO queues(tenant_id,name,mode,is_default) VALUES ('11111111-1111-1111-1111-111111111111','Default','manual',true) ON CONFLICT DO NOTHING;
+INSERT INTO memberships(tenant_id,user_id,role_id,status)
+ SELECT '11111111-1111-1111-1111-111111111111','bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',id,'active' FROM roles WHERE key='tenant_supervisor' AND tenant_id IS NULL
+ ON CONFLICT DO NOTHING;
+INSERT INTO queues(id,tenant_id,name,mode,is_default) VALUES ('dddddddd-dddd-dddd-dddd-dddddddddddd','11111111-1111-1111-1111-111111111111','Default','manual',true) ON CONFLICT DO NOTHING;
+INSERT INTO agent_profiles(tenant_id,membership_id,status)
+ SELECT m.tenant_id,m.id,'active' FROM memberships m WHERE m.tenant_id='11111111-1111-1111-1111-111111111111' AND m.user_id IN ('22222222-2222-2222-2222-222222222222','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')
+ ON CONFLICT (tenant_id,membership_id) DO NOTHING;
+INSERT INTO queue_members(tenant_id,queue_id,user_id,available,capacity)
+ VALUES ('11111111-1111-1111-1111-111111111111','dddddddd-dddd-dddd-dddd-dddddddddddd','22222222-2222-2222-2222-222222222222',true,1)
+ ON CONFLICT (tenant_id,queue_id,user_id) DO NOTHING;
 INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities)
  VALUES ('c0000000-0000-0000-0000-00000000c001','11111111-1111-1111-1111-111111111111','whatsapp','waha','unofficial','e2e-number','active','["text"]')
  ON CONFLICT DO NOTHING;

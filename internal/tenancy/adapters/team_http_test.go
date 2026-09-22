@@ -353,10 +353,10 @@ func TestListRolesReturnsFixedPermissionMatrixReadOnly(t *testing.T) {
 
 	want := map[string][]string{
 		"tenant_admin": {
-			"audit.read", "channel.manage", "conversation.claim", "conversation.manage",
+			"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
 			"membership.manage", "membership.read", "tenant.manage", "tenant.read",
 		},
-		"tenant_supervisor": {"audit.read", "conversation.claim", "conversation.manage", "membership.read", "tenant.read"},
+		"tenant_supervisor": {"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "membership.read", "tenant.read"},
 		"tenant_agent":      {"conversation.claim", "tenant.read"},
 	}
 

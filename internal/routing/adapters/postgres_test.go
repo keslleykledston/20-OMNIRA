@@ -50,6 +50,9 @@ func TestAtomicClaimHasExactlyOneWinner(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := seed.Exec(ctx, `INSERT INTO agent_profiles(tenant_id,membership_id,status) SELECT tenant_id,id,'active' FROM memberships WHERE tenant_id=$1`, tenantID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := seed.Exec(ctx, `INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'Contato','+5511999999999')`, contactID, tenantID); err != nil {
 		t.Fatal(err)
 	}

@@ -69,6 +69,12 @@ func (s *ParticipantService) Invite(
 	if ok, err := s.conv.HasPermission(ctx, targetUserID, "conversation.claim"); err != nil || !ok {
 		return InviteResult{}, errors.New("participant: target is not an eligible agent")
 	}
+	if eligibility, ok := s.conv.(ports.OperationalEligibility); ok {
+		eligible, err := eligibility.IsEligibleForConversation(ctx, conversationID, targetUserID)
+		if err != nil || !eligible {
+			return InviteResult{}, errors.New("participant: target is not an eligible agent")
+		}
+	}
 
 	// Se já existe participant, retornar idempotente (no-op)
 	existing, _ := s.repo.FindByUserAndConversation(ctx, conversationID, targetUserID)
@@ -145,6 +151,12 @@ func (s *ParticipantService) Transfer(
 	// Verificar se target é eligible
 	if ok, err := s.conv.HasPermission(ctx, targetUserID, "conversation.claim"); err != nil || !ok {
 		return TransferResult{}, errors.New("participant: target is not an eligible agent")
+	}
+	if eligibility, ok := s.conv.(ports.OperationalEligibility); ok {
+		eligible, err := eligibility.IsEligibleForConversation(ctx, conversationID, targetUserID)
+		if err != nil || !eligible {
+			return TransferResult{}, errors.New("participant: target is not an eligible agent")
+		}
 	}
 
 	// Se já atribuído ao target, retornar idempotente

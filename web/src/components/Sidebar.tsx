@@ -17,6 +17,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Relatórios', path: '/reports', icon: 'reports' },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
   { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings', alsoActiveOn: '/settings/roles' },
+  { label: 'Agentes', path: '/settings/agents', icon: 'supervisor' },
 ]
 
 export default function Sidebar() {

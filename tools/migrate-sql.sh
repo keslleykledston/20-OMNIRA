@@ -3,6 +3,7 @@
 #
 #   migrate-sql.sh up        apply pending migrations/*.up.sql in order, one transaction each,
 #                            recorded in schema_migrations
+#   migrate-sql.sh down <migration> roll back latest applied migration only
 #   migrate-sql.sh status    list applied and pending versions
 #
 # Connection: standard libpq env (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE) or DATABASE_URL.
@@ -64,8 +65,18 @@ case "$CMD" in
       echo "omnira_app password set from APP_DB_PASSWORD"
     fi
     ;;
+  down)
+    v="${2:-}"
+    [ -n "$v" ] || { echo "usage: $0 down <migration>" >&2; exit 2; }
+    f="$DIR/$v.down.sql"
+    [ -f "$f" ] || { echo "down migration not found: $v" >&2; exit 2; }
+    current="$(q "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")"
+    [ "$current" = "$v" ] || { echo "refusing down: $v is not latest applied migration ($current)" >&2; exit 2; }
+    echo "rolling back $v"
+    psql_run -1 -f "$f" -c "DELETE FROM schema_migrations WHERE version='$v'"
+    ;;
   *)
-    echo "usage: $0 up|status" >&2
+    echo "usage: $0 up|down <migration>|status" >&2
     exit 2
     ;;
 esac

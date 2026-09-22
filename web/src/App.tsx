@@ -12,6 +12,7 @@ import IntegrationsPage from './pages/IntegrationsPage'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TeamPage from './pages/TeamPage'
+import AgentsPage from './pages/AgentsPage'
 import { RolesPermissionsPage } from './pages/RolesPermissionsPage'
 import AcceptInvitePage from './pages/AcceptInvitePage'
 import ChannelsPage from './pages/ChannelsPage'
@@ -39,6 +40,7 @@ export default function App() {
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
             <Route path="/settings/team" element={<TeamPage />} />
+            <Route path="/settings/agents" element={<AgentsPage />} />
             <Route path="/settings/roles" element={<RolesPermissionsPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />

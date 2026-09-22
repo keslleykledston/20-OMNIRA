@@ -17,11 +17,11 @@ import (
 // internal/tenancy/adapters/team_http_test.go.
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
-		"audit.read", "channel.manage", "conversation.claim", "conversation.manage",
+		"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
 		"membership.manage", "membership.read", "tenant.manage", "tenant.read",
 	},
 	"tenant_supervisor": {
-		"audit.read", "conversation.claim", "conversation.manage", "membership.read", "tenant.read",
+		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "membership.read", "tenant.read",
 	},
 	"tenant_agent": {"conversation.claim", "tenant.read"},
 	"hub_admin":    {"hub.manage", "hub.read"},
