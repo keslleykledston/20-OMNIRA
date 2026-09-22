@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,9 +16,17 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-type InboxAPIHandler struct{ pool *pgxpool.Pool }
+type InboxAPIHandler struct {
+	pool    *pgxpool.Pool
+	media   *MediaRetriever
+}
 
 func NewInboxAPIHandler(pool *pgxpool.Pool) *InboxAPIHandler { return &InboxAPIHandler{pool: pool} }
+
+func (h *InboxAPIHandler) WithMediaRetriever(m *MediaRetriever) *InboxAPIHandler {
+	h.media = m
+	return h
+}
 
 type ConversationItem struct {
 	ID                  uuid.UUID  `json:"id"`
@@ -43,7 +52,6 @@ type MessageItem struct {
 	Direction           string     `json:"direction"`
 	MessageType         string     `json:"message_type"`
 	Body                string     `json:"body,omitempty"`
-	MediaRef            string     `json:"media_ref,omitempty"`
 	MimeType            string     `json:"mime_type,omitempty"`
 	SizeBytes           int64      `json:"size_bytes,omitempty"`
 	Status              string     `json:"status"`
@@ -198,7 +206,8 @@ func scanMessageItem(row rowScanner) (MessageItem, error) {
 	var item MessageItem
 	var direction, status string
 	var created time.Time
-	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &item.MediaRef, &item.MimeType, &item.SizeBytes, &status, &created)
+	var _ interface{} // discard media_ref from DB row; never expose to public DTO
+	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &_, &item.MimeType, &item.SizeBytes, &status, &created)
 	item.Direction, item.Status, item.CreatedAt = direction, status, created.UTC().Format(time.RFC3339Nano)
 	return item, err
 }
@@ -227,4 +236,102 @@ func parseTime(value string) time.Time {
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// GetMedia returns media bytes for a message with security constraints:
+// - Message must be readable by tenant (RLS)
+// - Origin must match configured trusted WAHA URL exactly
+// - Content-Type is sniffed, not trusted
+// - Active content (HTML, SVG, etc.) returns 415, bytes not returned
+// - Safe inline: raster images only (jpeg, png, webp, gif)
+// - Everything else: attachment with safe filename
+func (h *InboxAPIHandler) GetMedia(w http.ResponseWriter, r *http.Request) {
+	if h.media == nil {
+		http.Error(w, "media retrieval not configured", http.StatusInternalServerError)
+		return
+	}
+
+	tenantID, err := requestTenant(r)
+	if err != nil {
+		http.Error(w, "tenant context not found", http.StatusInternalServerError)
+		return
+	}
+
+	messageID, err := uuid.Parse(r.PathValue("message_id"))
+	if err != nil {
+		http.Error(w, "invalid message_id", http.StatusBadRequest)
+		return
+	}
+
+	body, mimeType, err := h.media.Retrieve(r.Context(), tenantID, messageID)
+	if err != nil {
+		// Log the error for observability, but return generic response to client.
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, "media not found", http.StatusNotFound)
+		} else if strings.Contains(err.Error(), "not allowed") || strings.Contains(err.Error(), "type not allowed") {
+			http.Error(w, "media type not allowed", http.StatusUnsupportedMediaType)
+		} else if strings.Contains(err.Error(), "too large") {
+			http.Error(w, "media too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "failed to retrieve media", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Set security headers.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+
+	// Determine if inline or attachment.
+	isInline := isInlineImage(mimeType)
+	if isInline {
+		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		filename := sanitizeFilename("media_" + messageID.String() + extensionForMime(mimeType))
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	}
+
+	w.Header().Set("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+	_, _ = w.Write(body)
+}
+
+func isInlineImage(mimeType string) bool {
+	normalized := strings.ToLower(strings.Split(mimeType, ";")[0])
+	switch normalized {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return true
+	}
+	return false
+}
+
+func extensionForMime(mimeType string) string {
+	normalized := strings.ToLower(strings.Split(mimeType, ";")[0])
+	switch normalized {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".bin"
+	}
+}
+
+func sanitizeFilename(name string) string {
+	// Remove path separators and null bytes.
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, "\x00", "")
+	// Remove control characters.
+	return strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return '_'
+		}
+		return r
+	}, name)
 }

@@ -30,7 +30,10 @@ export interface MessageItem {
   status: 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'pending';
   created_at: string;
   created_by?: string;
-  media_urls?: string[];
+  message_type?: string; // 'text', 'image', 'document', etc.
+  mime_type?: string; // 'image/jpeg', 'application/pdf', etc.
+  size_bytes?: number; // Media file size in bytes
+  media_urls?: string[]; // DEPRECATED: use /api/v1/tenants/{id}/messages/{id}/media instead
 }
 
 export interface PageResult<T> {

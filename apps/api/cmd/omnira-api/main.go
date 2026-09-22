@@ -114,7 +114,7 @@ func main() {
 	srv.RegisterTenancyHandlers(dbPool, invitationDeliveryAvailable)
 	srv.RegisterPresenceHandlers(dbPool)
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
-	crmHandler := srv.RegisterInboxHandlers(dbPool)
+	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions)

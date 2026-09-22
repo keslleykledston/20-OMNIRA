@@ -20,6 +20,7 @@ import (
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
+	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
@@ -352,7 +353,7 @@ func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInvit
 
 // RegisterInboxHandlers exposes tenant-scoped, read-only Inbox queries and realtime SSE.
 // Retorna o crmHandler para que possa ser configurado com o K3G CRM client.
-func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) *inboxadapters.CRMHandlers {
+func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config) *inboxadapters.CRMHandlers {
 	if s.authenticator == nil {
 		return nil
 	}
@@ -372,6 +373,14 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) *inboxadapters.CRMH
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
+	// Media retrieval: GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media
+	// Only wired if WAHA is enabled; otherwise media endpoint is not registered.
+	if cfg.WahaEnabled && cfg.WahaBaseURL != "" {
+		if mediaRetriever, err := inboxadapters.NewMediaRetriever(dbPool, cfg.WahaBaseURL); err == nil {
+			handler = handler.WithMediaRetriever(mediaRetriever)
+			s.mux.Handle("GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetMedia))))
+		}
+	}
 
 	contactsHandler := contactsadapters.NewContactsAPIHandler(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContacts))))

@@ -2,12 +2,15 @@ import React from 'react';
 import clsx from 'clsx';
 import { MessageItem } from '../../types/api';
 import { Icon } from '../primitives';
+import MessageMedia from './MessageMedia';
+import { getTenantId } from '../../lib/session';
 
 interface MessageBubbleProps {
   message: MessageItem;
 }
 
 export default function MessageBubble({ message }: MessageBubbleProps) {
+  const tenantId = getTenantId();
   const isOutbound = message.direction === 'outbound';
 
   // Delivery status visual symbol
@@ -36,7 +39,10 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
           ? 'bg-accent-primary text-white rounded-br-none'
           : 'bg-surface-muted text-text-primary rounded-bl-none'
       )}>
-        <p className="break-words">{message.body}</p>
+        {message.body && <p className="break-words">{message.body}</p>}
+
+        {/* Media content */}
+        {tenantId && <MessageMedia message={message} tenantId={tenantId} />}
 
         {/* Timestamp inside bubble */}
         <footer className={clsx(

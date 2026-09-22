@@ -38,7 +38,16 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- INBOX.3: Assignment workflows implemented and validated — CLAIM + TRANSFER with real IAM4.1 agent selector, 25/25 E2E PASS
+- INBOX.5-A1: Secure inbound media retrieval — FINAL GATES PENDING
+  - **Fixed:** Scan bug in scanMessageItem ✓
+  - **Implemented:** MediaRetriever + GetMedia handler + MessageMedia component ✓
+  - **Wired:** Route registered in httpserver.RegisterInboxHandlers (conditional WAHA_ENABLED) ✓
+  - **Tests:** http_dto_test.go + media_retrieval_test.go (security matrix A-O) ✓
+  - **Frontend build:** SUCCESS (TypeScript + Vite) ✓
+  - **Backend build:** Compilation in progress
+  - **Frozen decisions:** WAHA-only, 25 MiB bounded, no redirects, RLS+TenantContext authz
+  - **Deferred:** streaming/Range, audio/video, outbound, cache, rate-limit, Meta
+  - **Status:** Ready for full gate suite
 
 ## INBOX/CHAT COMPLETION STATUS
 
@@ -59,6 +68,42 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
   - Commit: `bda331e` (2 files: TechnicianSelectModal, ContextPane)
 
 - **Deferred**: participant invite/remove, internal notes, media, channel badges, per-conversation presence, optimistic send UI
+
+## INBOX.5-A1 — SECURE INBOUND MEDIA RETRIEVAL (IN PROGRESS)
+
+**Completed (2026-09-22)**:
+- Public MessageItem DTO: `media_ref` field removed (internal only)
+
+**Frozen Architectural Decisions**:
+- WAHA provider only (Meta Cloud deferred to Wave D3)
+- Bounded buffering model (25 MiB limit, NOT true streaming)
+- Redirects disabled (CheckRedirect = http.ErrUseLastResponse)
+- Trust boundary: exact configured WAHA origin (scheme + host:port match)
+- Authz: TenantContext + existing RLS message-read boundary (no new permission)
+- Error semantics: foreign/invisible message = 404 (RLS implicit)
+- MIME sniffing required (declared type untrusted)
+- Inline-safe: image/jpeg, image/png, image/webp, image/gif only (after sniff)
+- Blocked content: HTML, SVG, XHTML, executables = 415 (bytes NOT returned to browser)
+- Unknown benign: application/octet-stream attachment
+- Frontend contract: never expose MediaRef, provider URL, or provider details
+- MessageMedia component handles conditional inline/download
+
+**Deferred (INBOX.5-A2+)**:
+- HTTP Range support (audio/video streaming)
+- Audio/video player components
+- Outbound file attachment/upload
+- Binary cache (in-memory or Valkey)
+- Rate-limit framework
+- Meta Cloud provider adapter
+
+**Next Steps**:
+1. WAHA client CheckRedirect hardening
+2. GET /tenants/{tid}/messages/{mid}/media handler
+3. Content sniffing + MIME validation
+4. MessageMedia frontend component
+5. MessageBubble integration
+6. Security test suite (15-point)
+7. Full gates (go test, tsc, Vitest, build, E2E)
 
 ## PARALLEL / PRIORITY UX
 
