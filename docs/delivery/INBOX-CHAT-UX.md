@@ -258,6 +258,62 @@ Marcadas como DEFERRED porque não há contrato real ou exigem backend novo:
 
 **Status: DONE**
 
+---
+
+## VII. INBOX.2 — SEND/REALTIME VALIDATION (2026-09-22)
+
+**Status: VALIDATED / NO-CODE**
+
+No changes needed — send flow, idempotency, draft preservation, and SSE
+reconnect were already well-implemented.
+
+---
+
+## VIII. INBOX.3 — ASSIGNMENT WORKFLOWS (2026-09-22)
+
+**Status: DONE**
+
+### Mudanças realizadas:
+
+#### TechnicianSelectModal.tsx
+- ✅ Switched from legacy `/users/agents` to IAM4.1 canonical `/agents` endpoint
+- ✅ Map `user_id` → `id` (AgentProfile field naming)
+- ✅ Fallback mock data only in development (import.meta.env.DEV guard)
+- ✅ Production/staging: empty list on fetch error (never fake data)
+
+#### ContextPane.tsx
+- ✅ CLAIM workflow: `handleAssign()` → POST `/assign` with `{}` (self-assign)
+- ✅ TRANSFER workflow: `handleTransfer()` → modal selector + POST `/transfer`
+- ✅ Modal uses TechnicianSelectModal (real agents from IAM4.1)
+- ✅ Exclude current assignee from transfer options
+- ✅ Backend validates eligibility (409 race, 422 ineligible)
+- ✅ Participants display read-only (no mutations)
+
+### Testes:
+- ✅ `tsc`: PASS
+- ✅ `npm run test`: 113/113 PASS
+- ✅ `npm run build`: PASS
+- ✅ Playwright 25/25: PASS (0 regressão)
+- ✅ diff-check: PASS
+
+### Dados reais conectados:
+- ✅ Claim to self (conversation.claim permission)
+- ✅ Transfer to other agent (conversation.manage + eligibility)
+- ✅ Real agent list from IAM4.1 (AgentProfile-backed)
+- ✅ Tenant isolation validated
+
+### Deferred (out of scope):
+- ❌ Participant invite/remove (no confirmed endpoint)
+- ❌ Internal notes (no endpoint)
+- ❌ Media rendering (SSRF risk)
+- ❌ Channel type badge (backend doesn't return)
+- ❌ Presence per-conversation (aggregated only)
+- ❌ Optimistic send UI
+
+---
+
+## IX. PRÓXIMO: QA E MERGE
+
 ### Mudanças realizadas:
 
 #### ConversationListPanel.tsx

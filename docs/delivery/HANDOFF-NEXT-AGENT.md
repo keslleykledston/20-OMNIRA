@@ -38,11 +38,31 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- INBOX.1: Port Lovable design to OMNIRA (base visual + real data) — CODE REVIEW PASS, VISUAL VERIFIED, E2E RUNNING
+- INBOX.3: Assignment workflows implemented and validated — CLAIM + TRANSFER with real IAM4.1 agent selector, 25/25 E2E PASS
+
+## INBOX/CHAT COMPLETION STATUS
+
+- **INBOX.1 (Port Lovable Design)**: ✅ DONE (2026-09-22)
+  - 3-panel layout, delivery status visual, day separators, real data
+  - Vitest 113/113 + Playwright 25/25 PASS
+
+- **INBOX.2 (Send/Realtime Validation)**: ✅ VALIDATED / NO-CODE (2026-09-22)
+  - Idempotency, draft preservation, SSE reconnect already well-implemented
+  - No changes needed
+
+- **INBOX.3 (Assignment Workflows)**: ✅ DONE (2026-09-22)
+  - CLAIM (self-assign via POST /assign {})
+  - TRANSFER (modal selector from IAM4.1 /agents endpoint)
+  - Backend authority for eligibility (409 race, 422 ineligible)
+  - 25/25 E2E PASS
+  - Participants read-only (no mutations in this slice)
+  - Commit: `bda331e` (2 files: TechnicianSelectModal, ContextPane)
+
+- **Deferred**: participant invite/remove, internal notes, media, channel badges, per-conversation presence, optimistic send UI
 
 ## PARALLEL / PRIORITY UX
 
-- Inbox & Chat redesign via Lovable/MCP — 3-panel operational workspace (esquerda: filas/busca/conversations/unread/canal; centro: conversa/mensagens/delivery state/anexos/composer/notas internas; direita: contato/ticket/fila/assignee/tags/histórico). Lovable limita-se a UX/layout/composição de componentes; OMNIRA continua autoridade de API, RBAC, RLS, TenantContext, realtime, routing e contratos de dados.
+- None currently pending (Inbox/Chat core is feature-complete per MVP scope)
 
 ## FOLLOW-UP
 
