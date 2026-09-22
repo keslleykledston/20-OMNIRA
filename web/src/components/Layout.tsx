@@ -5,6 +5,7 @@ import MobileNav from './MobileNav'
 import { useEffect } from 'react'
 import { hasSession } from '../lib/session'
 import { LoadingState } from './primitives'
+import { usePresenceHeartbeat } from '../hooks/usePresenceHeartbeat'
 
 export default function Layout() {
   const navigate = useNavigate()
@@ -15,6 +16,10 @@ export default function Layout() {
       navigate('/login', { replace: true })
     }
   }, [authenticated, navigate])
+
+  // ADR-0010: any authenticated session heartbeats; the backend silently
+  // ignores it (403) when the user has no active AgentProfile.
+  usePresenceHeartbeat(authenticated)
 
   if (!authenticated) {
     return (

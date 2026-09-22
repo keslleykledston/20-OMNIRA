@@ -24,12 +24,15 @@ import (
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
+	presenceadapters "github.com/omnira/omnira/internal/presence/adapters"
+	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	"github.com/omnira/omnira/internal/worker/realtime"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -130,6 +133,28 @@ func main() {
 
 	// Realtime: Postgres NOTIFY (row triggers) -> NATS -> SSE. Best effort, ephemeral.
 	go realtime.NewBridge(dbPool, nc).Run(workerCtx)
+
+	// Presence reaper (IAM4.2-A, ADR-0010): the deterministic expiry loop that
+	// detects online->offline. Never depends on Valkey keyspace notifications.
+	// Optional at boot like NATS/WAHA above: a misconfigured/unreachable
+	// Valkey means presence stays unobserved, not that the worker refuses to
+	// start (IAM4.2-A does not gate routing on presence).
+	if cfg.ValkeyURL != "" {
+		if valkeyOpts, valkeyErr := redis.ParseURL(cfg.ValkeyURL); valkeyErr != nil {
+			log.Printf("warning: invalid OMNIRA_VALKEY_URL: %v\n", valkeyErr)
+		} else {
+			valkeyClient := redis.NewClient(valkeyOpts)
+			defer valkeyClient.Close()
+			if pingErr := valkeyClient.Ping(context.Background()).Err(); pingErr != nil {
+				log.Printf("warning: failed to connect to Valkey: %v\n", pingErr)
+			}
+			presenceStore := presenceadapters.NewStore(valkeyClient)
+			presencePublisher := presenceadapters.NewNatsTransitionPublisher(nc)
+			presenceLastSeen := presenceadapters.NewCoalescedLastSeenWriter(dbPool)
+			go presenceLastSeen.RunFlushLoop(workerCtx, 2*time.Minute)
+			go presenceapplication.NewReaper(presenceStore, presencePublisher, presenceLastSeen).Run(workerCtx)
+		}
+	}
 
 	// Outbound channel delivery (unofficial WhatsApp via WAHA).
 	if cfg.WahaEnabled {

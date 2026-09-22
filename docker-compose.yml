@@ -5,6 +5,7 @@
 x-omnira-runtime: &omnira-runtime
   OMNIRA_DATABASE_URL: postgres://omnira_app:${OMNIRA_APP_DB_PASSWORD:-omnira_app}@postgres:5432/${OMNIRA_DB_NAME:-omnira_dev}?sslmode=disable
   OMNIRA_NATS_URL: nats://nats:4222
+  OMNIRA_VALKEY_URL: redis://valkey:6379/0
   OMNIRA_OTEL_ENDPOINT: http://otel-collector:4317
   OMNIRA_ENV: ${OMNIRA_ENV-development}
   OMNIRA_AUTH_MODE: ${OMNIRA_AUTH_MODE-mock}
@@ -72,6 +73,24 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    networks:
+      - omnira-network
+    restart: unless-stopped
+
+  # Presence (IAM4.2-A, ADR-0010): ephemeral realtime store only. Never a
+  # source of durable/critical data (docs/adr/0006, docs/operations/DISASTER-RECOVERY.md) —
+  # last_seen_at checkpoints live in Postgres, coalesced.
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: omnira-valkey
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     networks:
       - omnira-network
     restart: unless-stopped
@@ -265,6 +284,8 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
+      valkey:
+        condition: service_healthy
     restart: unless-stopped
 
   # Publishes the Outbox to NATS and runs the routing and outbound-delivery
@@ -290,6 +311,8 @@ services:
       postgres:
         condition: service_healthy
       nats:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     restart: unless-stopped
 

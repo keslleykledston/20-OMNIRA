@@ -28,6 +28,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -66,6 +67,22 @@ func main() {
 
 	srv := httpserver.New(cfg.HTTPAddr)
 	srv.SetupHealth(dbPool, nc)
+
+	// Valkey (presence, IAM4.2-A): optional at boot like NATS above — a
+	// heartbeat fails closed (503) rather than the API refusing to start.
+	if cfg.ValkeyURL != "" {
+		opts, valkeyErr := redis.ParseURL(cfg.ValkeyURL)
+		if valkeyErr != nil {
+			log.Printf("warning: invalid OMNIRA_VALKEY_URL: %v\n", valkeyErr)
+		} else {
+			valkeyClient := redis.NewClient(opts)
+			defer valkeyClient.Close()
+			if pingErr := valkeyClient.Ping(context.Background()).Err(); pingErr != nil {
+				log.Printf("warning: failed to connect to Valkey: %v\n", pingErr)
+			}
+			srv.SetupPresence(valkeyClient)
+		}
+	}
 	srv.SetupRateLimiting()
 	srv.RegisterHealthHandlers()
 	if cfg.AuthMode == "oidc" {
@@ -95,6 +112,7 @@ func main() {
 	}
 	invitationDeliveryAvailable := cfg.DevAuthActive() || invitationSender != nil
 	srv.RegisterTenancyHandlers(dbPool, invitationDeliveryAvailable)
+	srv.RegisterPresenceHandlers(dbPool)
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
 	crmHandler := srv.RegisterInboxHandlers(dbPool)
 	providerRegistry := channelapplication.NewMapProviderRegistry()

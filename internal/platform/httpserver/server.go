@@ -23,11 +23,14 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
+	presenceadapters "github.com/omnira/omnira/internal/presence/adapters"
+	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/redis/go-redis/v9"
 )
 
 // Issuer/audience do JWT mock — precisam bater com os valores gravados nas
@@ -50,6 +53,14 @@ type Server struct {
 	publicKey     *rsa.PublicKey
 	authenticator authn.Authenticator
 	natsConn      *nats.Conn
+	valkeyClient  *redis.Client
+}
+
+// SetupPresence wires the Valkey client used by presence heartbeats
+// (ADR-0010). Optional: when nil, RegisterPresenceHandlers still registers
+// routes but every heartbeat fails closed with 503 (never a silent "online").
+func (s *Server) SetupPresence(valkeyClient *redis.Client) {
+	s.valkeyClient = valkeyClient
 }
 
 func New(addr string) *Server {
@@ -403,6 +414,51 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool) *inboxadapters.CRMH
 	s.mux.Handle("GET /api/v1/integrations/companies", authnMiddleware(http.HandlerFunc(crmHandler.ListCompanies)))
 
 	return crmHandler
+}
+
+// RegisterPresenceHandlers wires IAM4.2-A: self-scoped heartbeat, supervisor
+// snapshot + SSE. Presence never gates routing here — that is IAM4.2-B, a
+// separate, explicitly gated rollout (ADR-0010 §11-12). The reaper (offline
+// detection) runs in the worker process, not here — see
+// internal/presence/application.Reaper and apps/worker/cmd/omnira-worker.
+func (s *Server) RegisterPresenceHandlers(dbPool *pgxpool.Pool) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.Middleware(s.authenticator)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+
+	var store *presenceadapters.Store
+	if s.valkeyClient != nil {
+		store = presenceadapters.NewStore(s.valkeyClient)
+	}
+	publisher := presenceadapters.NewNatsTransitionPublisher(s.natsConn)
+	lastSeenWriter := presenceadapters.NewCoalescedLastSeenWriter(dbPool)
+	svc := presenceapplication.NewService(store, publisher, lastSeenWriter)
+	handler := presenceadapters.NewHandler(dbPool, svc)
+
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/me/presence/heartbeat", authnMiddleware(tenantSession(http.HandlerFunc(handler.Heartbeat))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/agents/presence", authnMiddleware(tenantSession(http.HandlerFunc(handler.Snapshot))))
+
+	streamAuth := presenceadapters.NewStreamAuthorizer(dbPool, authzSvc)
+	streamHandler := presenceadapters.NewStreamHandler(s.natsConn, streamAuth, presenceadapters.StreamOptions{})
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/agents/presence/events", authnMiddleware(streamHandler.Middleware(http.HandlerFunc(streamHandler.Stream))))
+
+	// Coalesced flush loop: one instance per API process, stopped when the
+	// server shuts down. Never per-heartbeat (ADR-0010 §9-10).
+	go func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			<-s.Done()
+			cancel()
+		}()
+		lastSeenWriter.RunFlushLoop(ctx, 2*time.Minute)
+	}()
 }
 
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session

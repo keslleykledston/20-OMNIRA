@@ -21,6 +21,7 @@ type Config struct {
 	HTTPAddr          string
 	DatabaseURL       string
 	NatsURL           string
+	ValkeyURL         string
 	OtelEndpoint      string
 	AuthIssuer        string
 	AuthAudience      string
@@ -72,6 +73,7 @@ func Load() *Config {
 		HTTPAddr:          getEnv("OMNIRA_HTTP_ADDR", ":8080"),
 		DatabaseURL:       getEnv("OMNIRA_DATABASE_URL", ""),
 		NatsURL:           getEnv("OMNIRA_NATS_URL", "nats://localhost:4222"),
+		ValkeyURL:         getEnv("OMNIRA_VALKEY_URL", "redis://localhost:6379/0"),
 		OtelEndpoint:      getEnv("OMNIRA_OTEL_ENDPOINT", "http://localhost:4317"),
 		AuthIssuer:        getEnv("OMNIRA_AUTH_ISSUER", "http://localhost:8080"),
 		AuthAudience:      getEnv("OMNIRA_AUTH_AUDIENCE", "omnira"),

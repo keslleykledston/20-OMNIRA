@@ -33,11 +33,25 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- IAM4.1 DONE; nenhum trabalho de implementação ativo nesta slice.
+- IAM4.2-A: IMPLEMENTED = YES, VERIFIED = YES (2026-09-22). Commit `feat(iam): add realtime agent presence`. Tree clean pós-commit.
 
 ## NEXT
 
-- IAM4.2 — design gate. Presence, heartbeat/last_seen e global capacity exigem decisão própria; skills fica para IAM4.3.
+- IAM4.2-B (gate separado, futuro): habilitar presence como requisito de elegibilidade no routing, primeiro no pilot tenant, com fail-closed semantics quando Valkey estiver indisponível pós-enforcement. Nenhum código de enforcement foi escrito nesta slice — apenas o ponto de extensão foi preservado (routing continua idêntico ao IAM4.1).
+- Ver `docs/adr/0010-agent-presence-and-heartbeat.md` (normativo, Accepted) e `docs/delivery/IAM4.2-PRESENCE-DESIGN-GATE.md` (contexto). Skills → IAM4.3.
+
+## IAM4.2-A — IMPLEMENTATION SUMMARY (2026-09-22, DONE)
+
+Escopo implementado, todo o resto da ADR-0010 preservado:
+
+- **Backend:** `internal/presence/{domain,ports,application,adapters}` — heartbeat self-scoped (`POST /api/v1/tenants/{tenant_id}/me/presence/heartbeat`), Valkey store (Lua scripts atômicos para touch/expire, sem SCAN), reaper determinístico (worker), publisher NATS de transições agregadas (`presence.changed.{tenant_id}`), snapshot (`GET /api/v1/tenants/{tenant_id}/agents/presence`) + SSE incremental (`GET /api/v1/tenants/{tenant_id}/agents/presence/events`), last_seen coalescido em Postgres.
+- **Migration:** `000039_agent_profiles_last_seen` — coluna `last_seen_at` nullable em `agent_profiles`. Sem tabela de presence realtime em Postgres.
+- **Infra:** dependência `github.com/redis/go-redis/v9`; serviço `valkey` (valkey/valkey:8-alpine, sem volume — ephemeral por design) em `docker-compose.yml`; `OMNIRA_VALKEY_URL` em config/api/worker.
+- **Frontend:** `web/src/lib/presence.ts`, `hooks/usePresenceHeartbeat.ts`, `hooks/usePresenceEvents.ts`; heartbeat automático em `Layout.tsx` (qualquer sessão autenticada); indicador read-only Online/Offline em `AgentsPage.tsx`.
+- **Routing:** inalterado — nenhuma dependência de presence adicionada a `SelectNext`/`ClaimUnassigned`/`AssignRoundRobin`.
+- **Gates rodados:** `go build`/`go vet`/`go test ./...` (repo inteiro, incluindo testes reais contra Postgres + RLS + Valkey real via Docker) todos PASS; migration fresh + up/down/up + RLS completeness PASS; Docker build API e worker PASS; frontend `tsc`, Vitest (113/113), `vite build` PASS.
+- **E2E:** `scripts/e2e-inbox.sh` estendido com uma instância Valkey própria e descartável (`omnira-e2e-valkey`, porta 26379, sem tocar nos containers de dev já em execução); novo `web/e2e/presence.spec.ts` (2 specs: heartbeat→online com atualização SSE ao vivo em página já aberta, e heartbeat repetido/múltiplas sessões sem transição duplicada); `playwright.inbox.config.ts` passou a incluir `presence` no `testMatch`. Full Playwright: **25/25 PASS** (23 pré-existentes + 2 novos), zero regressão.
+- **Correção técnica registrada no ADR-0010 (§3.1):** o reaper de expiração é determinístico (poll periódico sobre índice ordenado por score, nunca full scan) e não depende de keyspace notifications do Valkey/Redis como mecanismo de confiança para a transição online→offline; notificações, se adicionadas no futuro, seriam apenas otimização sobre o reaper, nunca substituto.
 
 ## PARALLEL
 
@@ -53,7 +67,9 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## PENDING DECISIONS
 
-- IAM4.2+: presence/heartbeat/last_seen, global capacity e dashboard realtime continuam fora da slice; skills → IAM4.3; migração do legado `/users/agents` futura.
+- **IAM4.2 — RESOLVIDO** (2026-09-22, ADR-0010 Accepted). Nenhuma decisão de design pendente para IAM4.2-A; ver ADR para os 15 pontos normativos (presence model, heartbeat, TTL 120s, Valkey como source of truth realtime, multi-sessão, endpoint self-scoped, NATS só transições agregadas, SSE snapshot+incremental, last_seen coalescido, routing não habilitado no primeiro deploy, failure semantics, sem auditoria de heartbeat individual).
+- **IAM4.2-B pendente:** decisão operacional de quando/como habilitar presence como requisito de elegibilidade no routing, após IAM4.2-A validado no pilot tenant.
+- IAM4.3: skills → defer; global capacity → defer se sem ADR explícito; migração legado `/users/agents` → dívida futura.
 - Rollout IAM4.1: `000038` faz backfill exclusivamente de memberships comprovadas por `queue_members`, e aborta se houver inconsistência tenant-aware; nunca infere por role.
 
 ## GATES
