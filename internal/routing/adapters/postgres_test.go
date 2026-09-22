@@ -66,7 +66,7 @@ func TestAtomicClaimHasExactlyOneWinner(t *testing.T) {
 		_, _ = seed.Exec(context.Background(), `DELETE FROM tenants WHERE id=$1`, tenantID)
 		_, _ = seed.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1,$2)`, userA, userB)
 	})
-	svc := application.NewService(NewPostgresAssignmentRepository(app))
+	svc := application.NewService(NewPostgresAssignmentRepository(app, nil))
 	results := make(chan error, 2)
 	var wg sync.WaitGroup
 	for _, actor := range []uuid.UUID{userA, userB} {

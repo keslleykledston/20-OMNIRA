@@ -32,9 +32,14 @@ func (s *Service) AssignRoundRobin(ctx context.Context, conversationID uuid.UUID
 	}
 	userID, assigned, err := s.repo.AssignRoundRobin(ctx, conversationID, "round_robin")
 	status := "success"
-	if err != nil {
+	switch {
+	case errors.Is(err, ports.ErrPresenceUnavailable):
+		// Distinct from "no eligible agent": the presence backend itself
+		// could not be consulted (IAM4.2-B1). Never folded into "unavailable".
+		status = "presence_unavailable"
+	case err != nil:
 		status = "error"
-	} else if !assigned {
+	case !assigned:
 		status = "unavailable"
 	}
 	if s.claims != nil {

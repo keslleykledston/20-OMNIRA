@@ -170,3 +170,30 @@ func (s *Store) Snapshot(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, 
 	}
 	return out, nil
 }
+
+// OnlineMembers checks a bounded batch of agent_profile_ids against the
+// tenant's online set in one round trip (SMISMEMBER) — used by IAM4.2-B1
+// routing presence enforcement to avoid a Valkey call per candidate. Never
+// call this once per candidate; the caller chunks its candidate list and
+// calls this once per chunk.
+func (s *Store) OnlineMembers(ctx context.Context, tenantID uuid.UUID, agentProfileIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	if len(agentProfileIDs) == 0 {
+		return map[uuid.UUID]bool{}, nil
+	}
+	if s.cli == nil {
+		return nil, fmt.Errorf("presence: store not configured for online lookup")
+	}
+	args := make([]interface{}, len(agentProfileIDs))
+	for i, id := range agentProfileIDs {
+		args[i] = id.String()
+	}
+	res, err := s.cli.SMIsMember(ctx, onlineKey(tenantID), args...).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]bool, len(agentProfileIDs))
+	for i, online := range res {
+		out[agentProfileIDs[i]] = online
+	}
+	return out, nil
+}

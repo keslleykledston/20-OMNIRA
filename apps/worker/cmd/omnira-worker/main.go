@@ -28,6 +28,7 @@ import (
 	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapp "github.com/omnira/omnira/internal/routing/application"
+	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	"github.com/omnira/omnira/internal/worker/realtime"
@@ -87,6 +88,33 @@ func main() {
 		log.Fatalf("failed to create JetStream context: %v", err)
 	}
 
+	// Valkey (presence, IAM4.2-A/B1): optional at boot like NATS/WAHA — a
+	// misconfigured/unreachable Valkey means presence stays unobserved (and,
+	// for any tenant with routing_require_presence=true, automated routing
+	// fails closed with ports.ErrPresenceUnavailable), never that the worker
+	// refuses to start. presenceChecker is declared as the interface type
+	// itself and left as a true nil interface unless Valkey is actually
+	// configured — assigning a nil *presenceadapters.Store to it directly
+	// would produce a non-nil interface wrapping a nil pointer, defeating
+	// PostgresAssignmentRepository's nil-safety check. The reaper/last-seen
+	// goroutines that also use this store are started further down, once
+	// workerCtx exists.
+	var presenceStore *presenceadapters.Store
+	var presenceChecker routingports.PresenceChecker
+	if cfg.ValkeyURL != "" {
+		if valkeyOpts, valkeyErr := redis.ParseURL(cfg.ValkeyURL); valkeyErr != nil {
+			log.Printf("warning: invalid OMNIRA_VALKEY_URL: %v\n", valkeyErr)
+		} else {
+			valkeyClient := redis.NewClient(valkeyOpts)
+			defer valkeyClient.Close()
+			if pingErr := valkeyClient.Ping(context.Background()).Err(); pingErr != nil {
+				log.Printf("warning: failed to connect to Valkey: %v\n", pingErr)
+			}
+			presenceStore = presenceadapters.NewStore(valkeyClient)
+			presenceChecker = presenceStore
+		}
+	}
+
 	// Repositories
 	outboxRepo := adapters.NewPostgresOutboxRepository(dbPool)
 	outboxSvc := application.NewOutboxService(outboxRepo)
@@ -98,7 +126,7 @@ func main() {
 	})
 	routingHandler, err := routingworker.NewHandler(
 		routingworker.NewPostgresConversationRunner(dbPool),
-		routingapp.NewService(routingadapters.NewPostgresAssignmentRepository(dbPool)),
+		routingapp.NewService(routingadapters.NewPostgresAssignmentRepository(dbPool, presenceChecker)),
 	)
 	if err != nil {
 		log.Fatalf("failed to configure routing worker: %v", err)
@@ -150,24 +178,14 @@ func main() {
 
 	// Presence reaper (IAM4.2-A, ADR-0010): the deterministic expiry loop that
 	// detects online->offline. Never depends on Valkey keyspace notifications.
-	// Optional at boot like NATS/WAHA above: a misconfigured/unreachable
-	// Valkey means presence stays unobserved, not that the worker refuses to
-	// start (IAM4.2-A does not gate routing on presence).
-	if cfg.ValkeyURL != "" {
-		if valkeyOpts, valkeyErr := redis.ParseURL(cfg.ValkeyURL); valkeyErr != nil {
-			log.Printf("warning: invalid OMNIRA_VALKEY_URL: %v\n", valkeyErr)
-		} else {
-			valkeyClient := redis.NewClient(valkeyOpts)
-			defer valkeyClient.Close()
-			if pingErr := valkeyClient.Ping(context.Background()).Err(); pingErr != nil {
-				log.Printf("warning: failed to connect to Valkey: %v\n", pingErr)
-			}
-			presenceStore := presenceadapters.NewStore(valkeyClient)
-			presencePublisher := presenceadapters.NewNatsTransitionPublisher(nc)
-			presenceLastSeen := presenceadapters.NewCoalescedLastSeenWriter(dbPool)
-			go presenceLastSeen.RunFlushLoop(workerCtx, 2*time.Minute)
-			go presenceapplication.NewReaper(presenceStore, presencePublisher, presenceLastSeen).Run(workerCtx)
-		}
+	// Reuses the presenceStore connected above; nil when Valkey is not
+	// configured or unreachable, in which case presence simply stays
+	// unobserved rather than the worker refusing to start.
+	if presenceStore != nil {
+		presencePublisher := presenceadapters.NewNatsTransitionPublisher(nc)
+		presenceLastSeen := presenceadapters.NewCoalescedLastSeenWriter(dbPool)
+		go presenceLastSeen.RunFlushLoop(workerCtx, 2*time.Minute)
+		go presenceapplication.NewReaper(presenceStore, presencePublisher, presenceLastSeen).Run(workerCtx)
 	}
 
 	// Outbound channel delivery (unofficial WhatsApp via WAHA).
