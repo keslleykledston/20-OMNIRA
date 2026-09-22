@@ -7,6 +7,7 @@ import { API_BASE } from '../../lib/config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { Icon } from '../primitives';
 import { TicketPanel } from '../TicketPanel';
+import { TechnicianSelectModal } from '../TechnicianSelectModal';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -17,6 +18,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
   const queryClient = useQueryClient();
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
+  const [showTransferModal, setShowTransferModal] = useState(false);
 
   const handleAssign = async () => {
     setAssignLoading(true);
@@ -27,12 +29,11 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
         {},
         { headers: authHeaders() }
       );
-      // Refetch conversation to get updated assigned_to_user_id
       await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
-      else setAssignError(describeAssignError(err));
+      else setAssignError(describeAssignError(err, 'assign'));
     } finally {
       setAssignLoading(false);
     }
@@ -52,6 +53,35 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
       else setAssignError(describeAssignError(err, 'unassign'));
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const handleTransfer = async () => {
+    if (!conversation?.assigned_to_user_id) {
+      setAssignError('Conversa não atribuída. Assuma antes de transferir.');
+      return;
+    }
+    setShowTransferModal(true);
+  };
+
+  const handleTransferToTechnician = async (technicianId: string) => {
+    setAssignLoading(true);
+    setAssignError(null);
+    try {
+      await axios.post(
+        `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/transfer`,
+        { assignee_user_id: technicianId },
+        { headers: authHeaders() }
+      );
+      await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+      await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+      setShowTransferModal(false);
+    } catch (err: any) {
+      if (isUnauthorized(err)) handleUnauthorized();
+      else setAssignError(describeAssignError(err, 'transfer'));
+      throw err;
     } finally {
       setAssignLoading(false);
     }
@@ -122,14 +152,40 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
               {conversation?.status === 'active' ? 'Ativo' : conversation?.status === 'closed' ? 'Fechado' : 'Pendente'}
             </span>
           </div>
-          {conversation?.assigned_to_user_id && (
-            <div className="flex justify-between items-center">
-              <span className="text-text-secondary">Atribuído</span>
-              <span className="text-xs font-medium text-accent-primary">Sim</span>
-            </div>
-          )}
         </div>
       </div>
+
+      {/* Assignment */}
+      {conversation?.assigned_to_user_id && (
+        <div className="p-4 border-b border-border-subtle">
+          <h4 className="text-xs font-semibold text-text-tertiary mb-2 uppercase">Atendimento</h4>
+          <div className="text-sm">
+            <span className="inline-flex rounded-md bg-accent-primary-soft px-2 py-1 text-xs font-medium text-accent-primary">
+              Atribuído a você
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Participants */}
+      {conversation?.participants && conversation.participants.length > 0 && (
+        <div className="p-4 border-b border-border-subtle">
+          <h4 className="text-xs font-semibold text-text-tertiary mb-3 uppercase">Participantes</h4>
+          <div className="space-y-2">
+            {conversation.participants.map((p) => (
+              <div key={p.id} className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full bg-secondary text-xs font-bold text-secondary-foreground flex items-center justify-center">
+                  {p.user_id?.[0]?.toUpperCase() || '?'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-text-primary truncate">{p.user_id}</p>
+                  <p className="text-[10px] text-text-tertiary">{p.role}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Chamado + atividade CRM */}
       <TicketPanel conversationId={conversationId} crmContactId={conversation?.crm_contact_id} />
@@ -174,45 +230,54 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
             Assumir
           </button>
         )}
-        <button className={clsx(
-          'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
-          'bg-surface text-text-primary hover:bg-surface-muted',
-          'border border-border-subtle'
-        )}>
+        <button
+          onClick={handleTransfer}
+          disabled={assignLoading || !conversation?.assigned_to_user_id}
+          className={clsx(
+            'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
+            conversation?.assigned_to_user_id
+              ? 'bg-surface text-text-primary hover:bg-surface-muted'
+              : 'bg-surface-muted text-text-tertiary cursor-not-allowed',
+            'border border-border-subtle',
+            assignLoading && 'opacity-50 cursor-not-allowed'
+          )}
+        >
           <Icon name="info" className="w-4 h-4 mr-2" />
           Transferir
         </button>
-        <button className={clsx(
-          'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
-          'bg-surface text-text-primary hover:bg-surface-muted',
-          'border border-border-subtle'
-        )}>
-          <Icon name="info" className="w-4 h-4 mr-2" />
-          Tags
-        </button>
       </div>
+
+      {/* Transfer Modal */}
+      <TechnicianSelectModal
+        isOpen={showTransferModal}
+        title="Transferir para um técnico"
+        onSelect={handleTransferToTechnician}
+        onClose={() => setShowTransferModal(false)}
+        excludeUserIds={conversation?.assigned_to_user_id ? [conversation.assigned_to_user_id] : []}
+      />
     </div>
   );
 }
 
-// The assign/unassign endpoints return a plain-text body (http.Error), not JSON —
-// err.response.data is the string itself, not an object with a .message field.
-// Map known statuses to an actionable Portuguese message; anything else falls
-// back to what the backend actually said rather than a made-up "success".
-function describeAssignError(err: any, action: 'assign' | 'unassign' = 'assign'): string {
+function describeAssignError(err: any, action: 'assign' | 'unassign' | 'transfer' = 'assign'): string {
   const status = err?.response?.status;
   const body = typeof err?.response?.data === 'string' ? err.response.data : '';
   if (status === 409) {
-    return 'Este atendimento acabou de ser assumido por outro operador.';
+    return 'Este atendimento acabou de ser modificado por outro operador.';
   }
   if (status === 403) {
     return 'Você não tem permissão para esta ação.';
   }
   if (status === 404) {
-    return 'Conversa não encontrada.';
+    return 'Conversa ou operador não encontrado.';
   }
   if (status === 422) {
-    return body || 'Operador não elegível para esta conversa.';
+    return body || 'Operador não elegível para esta ação.';
   }
-  return body || (action === 'assign' ? 'Erro ao assumir conversa.' : 'Erro ao soltar conversa.');
+  const messages = {
+    assign: 'Erro ao assumir conversa.',
+    unassign: 'Erro ao soltar conversa.',
+    transfer: 'Erro ao transferir conversa.'
+  };
+  return body || messages[action];
 }

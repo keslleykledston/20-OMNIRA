@@ -38,17 +38,26 @@ export function TechnicianSelectModal({
       setError(null);
       try {
         const res = await axios.get(
-          `${API_BASE}/tenants/${tenantId}/users/agents`,
+          `${API_BASE}/tenants/${tenantId}/agents`,
           { headers: authHeaders() }
         );
-        setTechnicians((res.data.items || []).filter((t: Technician) => !excludeUserIds.includes(t.id)));
+        const agents = (res.data.items || []).map((a: any) => ({
+          id: a.user_id,
+          email: a.email,
+          name: a.name || a.email,
+        }));
+        setTechnicians(agents.filter((t: Technician) => !excludeUserIds.includes(t.id)));
       } catch (err: any) {
         setError(err.response?.data?.message || 'Erro ao carregar técnicos');
-        // Fallback para dados mockados se endpoint falhar
-        setTechnicians([
-          { id: '22222222-2222-2222-2222-222222222222', email: 'alice@omnira.local', name: 'Alice' },
-          { id: '33333333-3333-3333-3333-333333333333', email: 'bob@omnira.local', name: 'Bob' },
-        ].filter((t) => !excludeUserIds.includes(t.id)));
+        // Fallback para mock only in development (never in production/staging)
+        if (import.meta.env.DEV) {
+          setTechnicians([
+            { id: '22222222-2222-2222-2222-222222222222', email: 'alice@omnira.local', name: 'Alice' },
+            { id: '33333333-3333-3333-3333-333333333333', email: 'bob@omnira.local', name: 'Bob' },
+          ].filter((t) => !excludeUserIds.includes(t.id)));
+        } else {
+          setTechnicians([]);
+        }
       } finally {
         setLoading(false);
       }
