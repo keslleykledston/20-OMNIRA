@@ -13,6 +13,9 @@ export { Card, CardHeader, CardBody, CardFooter } from './Card';
 export { Badge, StatusBadge } from './Badge';
 export { Input, SearchField, TextArea } from './Input';
 export { Avatar, AvatarGroup } from './Avatar';
+export { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from './Table';
+export { FilterBar } from './FilterBar';
+export { Pagination } from './Pagination';
 export {
   Skeleton,
   EmptyState,
