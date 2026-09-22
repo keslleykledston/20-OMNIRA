@@ -174,9 +174,31 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             Nenhuma mensagem
           </div>
         ) : (
-          messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))
+          messages.map((msg, idx) => {
+            const currentDate = new Date(msg.created_at).toLocaleDateString('pt-BR');
+            const prevDate = idx > 0 ? new Date(messages[idx - 1].created_at).toLocaleDateString('pt-BR') : null;
+            const showDateSeparator = !prevDate || currentDate !== prevDate;
+
+            return (
+              <div key={msg.id}>
+                {showDateSeparator && (
+                  <div className="flex items-center gap-3 my-4">
+                    <span className="flex-1 h-px bg-border-subtle" />
+                    <span className="text-xs text-text-tertiary">
+                      {new Date(msg.created_at).toLocaleDateString('pt-BR', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      })}
+                    </span>
+                    <span className="flex-1 h-px bg-border-subtle" />
+                  </div>
+                )}
+                <MessageBubble message={msg} />
+              </div>
+            );
+          })
         )}
         <div ref={timelineEndRef} />
       </div>

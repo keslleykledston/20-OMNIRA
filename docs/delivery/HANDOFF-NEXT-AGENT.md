@@ -38,7 +38,7 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- Product/frontend delivery.
+- INBOX.1: Port Lovable design to OMNIRA (base visual + real data) — CODE REVIEW PASS, VISUAL VERIFIED, E2E RUNNING
 
 ## PARALLEL / PRIORITY UX
 

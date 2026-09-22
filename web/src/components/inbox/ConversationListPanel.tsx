@@ -103,18 +103,19 @@ export default function ConversationListPanel({
                   <p className="text-xs text-text-secondary truncate">
                     {conv.contact_phone}
                   </p>
-                  <div className="flex gap-2 items-center mt-1">
+                  <p className="text-xs text-text-tertiary truncate mt-1">
+                    {/* Preview: últimas palavras da última mensagem */}
+                    Sem preview recente
+                  </p>
+                  <div className="flex gap-2 items-center mt-1.5">
                     <span className={clsx(
-                      'text-xs px-1.5 py-0.5 rounded-pill font-medium',
+                      'text-xs px-1.5 py-0.5 rounded-full font-medium',
                       conv.status === 'active' ? 'bg-status-success-soft text-status-success' :
                       conv.status === 'closed' ? 'bg-status-muted text-text-secondary' :
                       'bg-status-warning-soft text-status-warning'
                     )}>
                       {conv.status === 'active' ? 'Ativo' : conv.status === 'closed' ? 'Fechado' : 'Pendente'}
                     </span>
-                    {conv.assigned_to_user_id && (
-                      <span className="text-xs text-text-tertiary">Atribuído</span>
-                    )}
                   </div>
                 </div>
 
