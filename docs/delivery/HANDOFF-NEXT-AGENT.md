@@ -38,11 +38,11 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- **BPO.0 = DONE** (2026-09-23). Orphaned BPO Domain Fate Gate — pure architecture/investigation, no code touched.
-  - **Decision: `internal/bpo` = RETIRE.** Full reasoning and future rules recorded in `docs/adr/0011-retire-orphaned-bpo-domain.md` (Accepted) — not duplicated here.
-  - **Reusable concepts only** (not approved code/schema): `SLAConfiguration`/`SLAMetrics` shape, `AccountType` (`operator`/`contact_center`/`reseller`) as conceptual reference for a future real design.
-  - **Do not resurrect**: `bpo.Ticket` (conflicts with the canonical Inbox/conversation direction), the raw-pool repository pattern (no RLS/tenant filter), the parallel `SupervisorRole` permission strings, the separate `AuditEvent` model.
-  - **Next**: `BPO.1 — Safe Retirement of internal/bpo` (delete the package; no migrations exist to revert, nothing registered in the router, so this is a pure deletion slice).
+- **BPO.1 = DONE** (2026-09-23). Safe Retirement of `internal/bpo` (`f3d519a` refactor(bpo): remove orphaned legacy domain).
+  - `internal/bpo` REMOVED — 32 files deleted, no replacement implementation created. Decision and full reasoning: `docs/adr/0011-retire-orphaned-bpo-domain.md` (Accepted, BPO.0) — not duplicated here. Key future rules from that ADR remain binding: do not resurrect `bpo.Ticket`; do not reuse the raw-pool repository pattern (no RLS/tenant filter); a future Supervisor must align with canonical IAM/presence(Valkey)/routing; BPO Account is not automatically Tenant or CRM Company; `SLAConfiguration`/`AccountType` are concept references only.
+  - **Architectural invariants confirmed unchanged**: router, migrations, database schema, frontend, IAM/RBAC, RLS, Inbox/conversation ticket domain, presence/routing, `audit_events` — all untouched by this deletion.
+  - **Validation**: `go build ./...` PASS, `go vet ./...` PASS, `go test ./...` PASS (all packages `ok`, zero `FAIL`, `internal/bpo` no longer listed), `git diff --check` PASS. Zero references to `internal/bpo`/`bpo_accounts`/`bpo_tickets` remain outside git history.
+  - **Next**: `PRODUCT.0 — Real Capability Prioritization Gate` — decide which currently mock-contained surface (Dashboard, Tickets, Supervisor, Accounts, Reports) becomes real first. Not started.
 
 - **DESIGN.5-A = DONE** (2026-09-23). Channels Legacy Retirement (`7853f89` refactor(web): retire legacy channels integration surface).
   - **Final routes**: `/channels` (canonical), `/channels/whatsapp/new` (canonical WAHA wizard), `/integrations` → compatibility redirect to `/channels`. One Channels frontend implementation, no duplication.
