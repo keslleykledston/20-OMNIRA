@@ -1,4 +1,4 @@
-import { Badge, Card, DropdownMenu, Icon, Skeleton, type MenuAction } from '../../../components/primitives'
+import { Badge, Button, Card, DropdownMenu, Icon, Skeleton, type MenuAction } from '../../../components/primitives'
 import type { ChannelConnection, ProviderDescriptor } from '../../../lib/integrations'
 import {
   PROVIDER_KIND_LABEL,
@@ -79,15 +79,14 @@ export function ChannelConnectionCard({ connection, provider, actions, onOpenDet
         </dl>
       </div>
 
-      <div className="flex flex-shrink-0 items-center gap-1">
+      <div className="flex flex-shrink-0 items-center gap-2">
+        {/* Only rendered for qr_required: this is the one state that needs the
+            operator's action right now, so it gets primary emphasis instead of
+            sitting at the same visual weight as the secondary menu actions. */}
         {onOpenDetails && (
-          <button
-            type="button"
-            onClick={onOpenDetails}
-            className="rounded-control px-3 py-2 text-body-sm font-medium text-accent-primary transition-colors hover:bg-accent-primary-soft focus-visible:ring-2 focus-visible:ring-accent-primary"
-          >
+          <Button variant="primary" size="sm" onClick={onOpenDetails}>
             Detalhes
-          </button>
+          </Button>
         )}
         <DropdownMenu actions={actions} label={`Ações de ${name}`} />
       </div>
