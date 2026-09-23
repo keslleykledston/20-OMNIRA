@@ -18,14 +18,14 @@ import {
   type ProviderDescriptor,
 } from '../lib/integrations'
 import { getTenantId } from '../lib/session'
-import { CHANNEL_TABS, toConnectionState } from '../features/channels/types'
+import { CHANNEL_TABS } from '../features/channels/types'
 import {
   ChannelCardSkeleton,
   ChannelConnectionCard,
 } from '../features/channels/components/ChannelConnectionCard'
 import { UnofficialProviderCallout } from '../features/channels/components/InfoCallout'
 import { AddChannelDialog } from '../features/channels/components/AddChannelDialog'
-import { connectionsKey } from '../features/channels/data/useChannelSession'
+import { connectionsKey, useLiveConnection } from '../features/channels/data/useChannelSession'
 
 export default function ChannelsPage() {
   const navigate = useNavigate()
@@ -87,25 +87,6 @@ export default function ChannelsPage() {
     return channel === tab
   })
 
-  const actionsFor = (c: ChannelConnection): MenuAction[] => {
-    const state = toConnectionState(c)
-    const live = state === 'connected' || state === 'degraded'
-    return [
-      { label: 'Testar conexão', onSelect: () => test.mutate(c.id), disabled: test.isPending },
-      {
-        label: state === 'connected' ? 'Reiniciar sessão' : 'Reconectar',
-        onSelect: () => start.mutate(c.id),
-        disabled: start.isPending,
-      },
-      {
-        label: 'Desconectar',
-        onSelect: () => setPendingStop(c),
-        destructive: true,
-        disabled: !live && state !== 'qr_required' && state !== 'connecting',
-      },
-    ]
-  }
-
   const onPickProvider = (p: ProviderDescriptor) => {
     setAddOpen(false)
     if (p.connect_method === 'qr_session') {
@@ -159,16 +140,15 @@ export default function ChannelsPage() {
             />
           ) : (
             visible.map((c) => (
-              <ChannelConnectionCard
+              <LiveChannelConnectionCard
                 key={c.id}
                 connection={c}
                 provider={providerById.get(c.provider)}
-                actions={actionsFor(c)}
-                onOpenDetails={
-                  toConnectionState(c) === 'qr_required'
-                    ? () => navigate(`/channels/whatsapp/new?connection=${c.id}`)
-                    : undefined
-                }
+                onTest={(id) => test.mutate(id)}
+                onStart={(id) => start.mutate(id)}
+                onRequestStop={setPendingStop}
+                testPending={test.isPending}
+                startPending={start.isPending}
               />
             ))
           )}
@@ -195,5 +175,60 @@ export default function ChannelsPage() {
         onCancel={() => setPendingStop(null)}
       />
     </div>
+  )
+}
+
+/**
+ * List() (backend) never reconciles live WAHA session state — only Get(id) does. This
+ * wrapper reconciles each row against the server the same way the wizard already does
+ * (useLiveConnection, existing polling contract), so a card correctly reflects
+ * qr_required/connected/disconnected instead of staying stuck on whatever List()
+ * returned when the page loaded. The base list query remains the source of which
+ * connections exist; this only refines their live state — status authority stays
+ * server-side (toConnectionState never runs on a frontend timer/assumption).
+ */
+function LiveChannelConnectionCard({
+  connection,
+  provider,
+  onTest,
+  onStart,
+  onRequestStop,
+  testPending,
+  startPending,
+}: {
+  connection: ChannelConnection
+  provider?: ProviderDescriptor
+  onTest: (id: string) => void
+  onStart: (id: string) => void
+  onRequestStop: (c: ChannelConnection) => void
+  testPending: boolean
+  startPending: boolean
+}) {
+  const navigate = useNavigate()
+  const { connection: live, state } = useLiveConnection(connection)
+  const isLive = state === 'connected' || state === 'degraded'
+
+  const actions: MenuAction[] = [
+    { label: 'Testar conexão', onSelect: () => onTest(live.id), disabled: testPending },
+    {
+      label: state === 'connected' ? 'Reiniciar sessão' : 'Reconectar',
+      onSelect: () => onStart(live.id),
+      disabled: startPending,
+    },
+    {
+      label: 'Desconectar',
+      onSelect: () => onRequestStop(live),
+      destructive: true,
+      disabled: !isLive && state !== 'qr_required' && state !== 'connecting',
+    },
+  ]
+
+  return (
+    <ChannelConnectionCard
+      connection={live}
+      provider={provider}
+      actions={actions}
+      onOpenDetails={state === 'qr_required' ? () => navigate(`/channels/whatsapp/new?connection=${live.id}`) : undefined}
+    />
   )
 }
