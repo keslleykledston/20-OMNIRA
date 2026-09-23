@@ -1,18 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import Dashboard from '../pages/Dashboard';
 import ReportsPage from '../pages/Reports';
 import Accounts from '../pages/Accounts';
 import { renderAt, setSession } from './testUtils';
 
 // FRONTEND.1: mock-backed pages must never present fabricated business data
-// as if it were real outside development. The three pages here have no real
+// as if it were real outside development. The two pages here have no real
 // backend behind them (see docs/delivery/HANDOFF-NEXT-AGENT.md DESIGN.5).
-// Supervisor became real in PRODUCT.1, Tickets in PRODUCT.2-B — neither is
-// contained anymore; see SupervisorDashboard.test.tsx / Tickets.test.tsx.
+// Supervisor became real in PRODUCT.1, Tickets in PRODUCT.2-B, Dashboard in
+// PRODUCT.3-B — none of the three is contained anymore; see
+// SupervisorDashboard.test.tsx / Tickets.test.tsx / Dashboard.test.tsx.
 
 const MOCK_SURFACES: Array<{ title: string; Component: () => JSX.Element }> = [
-  { title: 'Dashboard', Component: Dashboard },
   { title: 'Relatórios', Component: ReportsPage },
   { title: 'Contas', Component: Accounts },
 ];
@@ -40,12 +39,4 @@ describe('mock surface containment', () => {
       expect(screen.queryByText(/Conformidade SLA/)).not.toBeInTheDocument();
     });
   }
-
-  it('Dashboard: keeps its normal fixture-backed content in development (unchanged behavior)', async () => {
-    // import.meta.env.DEV is true under the default Vitest ("test") mode —
-    // exercising the real, un-stubbed default confirms dev behavior is intact.
-    setSession();
-    renderAt(<Dashboard />);
-    expect(await screen.findByText('Aqui está o resumo do seu atendimento hoje.')).toBeInTheDocument();
-  });
 });

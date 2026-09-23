@@ -250,34 +250,4 @@ export const reportsAPI = {
     })
 }
 
-export const dashboardAPI = {
-  getMetrics: () =>
-    Promise.resolve({
-      data: {
-        totalAccounts: 5,
-        openTickets: 12,
-        slaCompliance: 94.5,
-        activeAlerts: 2,
-        ticketsByStatus: {
-          open: 8,
-          in_progress: 3,
-          resolved: 1,
-          closed: 0
-        },
-        accountsHealth: {
-          active: 4,
-          inactive: 1,
-          suspended: 0
-        },
-        recentActivities: [
-          { id: '1', action: 'Ticket criado', timestamp: new Date(Date.now() - 5 * 60000), actor: 'Test User' },
-          { id: '2', action: 'Conta ativada', timestamp: new Date(Date.now() - 15 * 60000), actor: 'Admin User' },
-          { id: '3', action: 'SLA report gerado', timestamp: new Date(Date.now() - 45 * 60000), actor: 'System' },
-          { id: '4', action: 'Membership criada', timestamp: new Date(Date.now() - 2 * 3600000), actor: 'Admin User' },
-          { id: '5', action: 'Tenant criado', timestamp: new Date(Date.now() - 24 * 3600000), actor: 'System' }
-        ]
-      }
-    })
-}
-
 export default api

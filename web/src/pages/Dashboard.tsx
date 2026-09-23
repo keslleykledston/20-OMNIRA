@@ -1,144 +1,130 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Card, ErrorState, Icon, PageHeader, Skeleton } from '../components/primitives'
+import type { IconName } from '../components/primitives/Icon'
+import { dashboardAPI, dashboardErrorMessage } from '../lib/dashboard'
+import { presenceAPI } from '../lib/presence'
+import { usePresenceEvents } from '../hooks/usePresenceEvents'
+import { useAccess } from '../lib/useAccess'
+import { getTenantId } from '../lib/session'
 import { useAuthStore } from '../lib/store'
-import { EmptyState, ErrorState, Skeleton } from '../components/primitives'
-import { PageHeader } from '../components/primitives/PageHeader'
-import { dashboardRepository } from '../features/dashboard/data/repository'
-import type { PeriodId } from '../features/dashboard/types'
-import { MetricCard, MetricCardSkeleton } from '../features/dashboard/components/MetricCard'
-import { PeriodSelector } from '../features/dashboard/components/PeriodSelector'
-import { SectionCard } from '../features/dashboard/components/SectionCard'
-import { ChannelBarChart, ChannelLegend } from '../features/dashboard/components/ChannelBarChart'
-import { TicketStatusDonut, TicketStatusLegend } from '../features/dashboard/components/TicketStatusDonut'
-import { ConversationRow, PriorityTicketRow } from '../features/dashboard/components/ActivityRows'
-import { isDevSurface, UnavailableSurface } from '../components/UnavailableSurface'
 
-const CHART_HEIGHT = 'h-[200px]'
-
+// PRODUCT.3-B: real operational snapshot only. Three durable Postgres counts
+// (open conversations/tickets, total contacts) behind dashboard.read, plus
+// agents online composed from the existing Valkey-backed presence snapshot
+// (PRODUCT.1) — no second presence implementation, no polling loop of its
+// own. No charts, no trends, no SLA, no fabricated activity feed: those
+// require semantics/sources that do not exist yet (see PRODUCT.3 gate).
 function firstName(full?: string) {
   return full?.trim().split(/\s+/)[0] ?? ''
 }
 
-export default function Dashboard() {
-  const navigate = useNavigate()
-  const { user } = useAuthStore()
-  const [period, setPeriod] = useState<PeriodId>('last_24h')
+interface StatCard {
+  label: string
+  value: number | undefined
+  icon: IconName
+}
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['dashboard', period],
-    queryFn: () => dashboardRepository.getDashboard(period),
-    staleTime: 30_000,
+export default function Dashboard() {
+  const { user } = useAuthStore()
+  const tenantId = getTenantId()
+  const access = useAccess()
+  const canViewDashboard = access.can('dashboard.read')
+  const canViewPresence = access.can('agent.read')
+
+  const snapshot = useQuery({
+    queryKey: ['dashboard-snapshot', tenantId],
+    queryFn: dashboardAPI.snapshot,
+    enabled: canViewDashboard,
+    retry: false,
   })
 
-  const dateLabel = new Date().toLocaleDateString('pt-BR', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
+  const presenceSnapshot = useQuery({
+    queryKey: ['agents-presence', tenantId],
+    queryFn: presenceAPI.snapshot,
+    enabled: canViewPresence,
+    retry: false,
+  })
+  const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    if (presenceSnapshot.data) setOnlineIds(new Set(presenceSnapshot.data.online_agent_profile_ids))
+  }, [presenceSnapshot.data])
+  usePresenceEvents({
+    tenantId: tenantId ?? '',
+    enabled: canViewPresence,
+    onEvent: (event) => {
+      setOnlineIds((current) => {
+        const next = new Set(current)
+        if (event.status === 'online') next.add(event.agent_profile_id)
+        else next.delete(event.agent_profile_id)
+        return next
+      })
+    },
   })
 
   const greeting = firstName(user?.name)
-
-  // dashboardRepository is a fixture (no Go API endpoint exists yet) — never
-  // present it as real business data outside development.
-  if (!isDevSurface()) return <UnavailableSurface title="Dashboard" />
+  const cards: StatCard[] = [
+    { label: 'Conversas abertas', value: snapshot.data?.open_conversations, icon: 'conversations' },
+    { label: 'Tickets abertos', value: snapshot.data?.open_tickets, icon: 'tickets' },
+    { label: 'Contatos', value: snapshot.data?.total_contacts, icon: 'contacts' },
+    { label: 'Agentes online', value: canViewPresence ? onlineIds.size : undefined, icon: 'supervisor' },
+  ]
 
   return (
     <div className="px-6 py-6 lg:px-8 lg:py-8">
       <PageHeader
         title={greeting ? `Olá, ${greeting} 👋` : 'Olá 👋'}
-        description="Aqui está o resumo do seu atendimento hoje."
+        description="Resumo operacional do seu tenant agora."
         className="mb-6 border-b-0 bg-transparent p-0"
-        actions={<PeriodSelector value={period} onChange={setPeriod} dateLabel={dateLabel} />}
       />
 
-      {isError ? (
+      {!access.isLoading && !canViewDashboard && (
+        <ErrorState title="Sem permissão" message="Você não tem permissão para visualizar o Dashboard." />
+      )}
+
+      {canViewDashboard && snapshot.isError && (
         <ErrorState
-          message="Não foi possível carregar os indicadores do período selecionado."
-          action={{ label: 'Tentar novamente', onClick: () => void refetch() }}
+          message={dashboardErrorMessage(snapshot.error)}
+          action={{ label: 'Tentar novamente', onClick: () => void snapshot.refetch() }}
         />
-      ) : (
-        <div className="space-y-6">
-          {/* KPIs */}
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-            {isLoading
-              ? Array.from({ length: 4 }).map((_, i) => <MetricCardSkeleton key={i} />)
-              : data!.metrics.map((m) => <MetricCard key={m.id} metric={m} />)}
-          </div>
+      )}
 
-          {/* Analytics */}
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <SectionCard title="Conversas por canal">
-              {isLoading ? (
-                <Skeleton width="w-full" height="h-[248px]" />
-              ) : data!.channels.length === 0 ? (
-                <EmptyState title="Sem conversas no período" description="Nenhum canal registrou conversas." />
-              ) : (
-                <>
-                  <div className={CHART_HEIGHT}>
-                    <ChannelBarChart series={data!.channels} />
-                  </div>
-                  <ChannelLegend series={data!.channels} />
-                </>
-              )}
-            </SectionCard>
-
-            <SectionCard title="Status dos tickets">
-              {isLoading ? (
-                <Skeleton width="w-full" height="h-[248px]" />
-              ) : data!.ticketStatus.length === 0 ? (
-                <EmptyState title="Sem tickets no período" description="Nada para exibir por aqui ainda." />
-              ) : (
-                <div className="flex flex-col items-center gap-6 sm:flex-row sm:gap-8">
-                  <TicketStatusDonut slices={data!.ticketStatus} />
-                  <TicketStatusLegend slices={data!.ticketStatus} />
-                </div>
-              )}
-            </SectionCard>
-          </div>
-
-          {/* Activity */}
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <SectionCard
-              title="Conversas recentes"
-              action={{ label: 'Ver todas', onClick: () => navigate('/inbox') }}
-            >
-              {isLoading ? (
-                <Skeleton width="w-full" height="h-14" count={4} />
-              ) : data!.recentConversations.length === 0 ? (
-                <EmptyState title="Nenhuma conversa recente" description="Novas conversas aparecem aqui." />
-              ) : (
-                <ul className="divide-y divide-border-subtle">
-                  {data!.recentConversations.map((c) => (
-                    <li key={c.id}>
-                      <ConversationRow conversation={c} onOpen={() => navigate('/inbox')} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title="Tickets prioritários"
-              action={{ label: 'Ver todos', onClick: () => navigate('/tickets') }}
-            >
-              {isLoading ? (
-                <Skeleton width="w-full" height="h-14" count={4} />
-              ) : data!.priorityTickets.length === 0 ? (
-                <EmptyState title="Nenhum ticket prioritário" description="Sua fila está em dia." />
-              ) : (
-                <ul className="divide-y divide-border-subtle">
-                  {data!.priorityTickets.map((t) => (
-                    <li key={t.id}>
-                      <PriorityTicketRow ticket={t} onOpen={() => navigate('/tickets')} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </SectionCard>
-          </div>
+      {canViewDashboard && !snapshot.isError && (
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+          {snapshot.isLoading
+            ? Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
+            : cards.map((c) => <StatCardView key={c.label} card={c} />)}
         </div>
       )}
     </div>
+  )
+}
+
+function StatCardView({ card }: { card: StatCard }) {
+  return (
+    <Card padding="compact" className="h-full">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-body-sm text-text-secondary truncate">{card.label}</p>
+          <p className="mt-2 text-display-md font-bold text-text-primary">
+            {card.value ?? '—'}
+          </p>
+        </div>
+        <span className="flex-shrink-0 rounded-card p-2.5 bg-accent-primary-soft text-accent-primary">
+          <Icon name={card.icon} size={22} />
+        </span>
+      </div>
+    </Card>
+  )
+}
+
+function StatCardSkeleton() {
+  return (
+    <Card padding="compact" className="h-full">
+      <Skeleton width="w-24" height="h-4" />
+      <div className="mt-3">
+        <Skeleton width="w-16" height="h-8" />
+      </div>
+    </Card>
   )
 }

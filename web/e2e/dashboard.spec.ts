@@ -1,47 +1,63 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test'
 
-test.describe('Dashboard', () => {
-  test.beforeEach(async ({ page }) => {
-    // Login antes de cada teste
-    await page.goto('/login');
-    await page.fill('input[placeholder="seu@email.com"]', 'test@omnira.local');
-    await page.fill('input[type="password"]', 'pass');
-    await page.click('button:has-text("Entrar")');
-    await page.waitForURL('/');
-  });
+// PRODUCT.3-B: `/` is now a REAL V1 operational snapshot — three durable
+// Postgres counts (GET .../dashboard/snapshot, dashboard.read-gated) plus
+// agents online composed from the same real presence snapshot/SSE already
+// proven by presence.spec.ts/supervisor.spec.ts. No mock chart/trend/SLA
+// content.
+const ADMIN = 'admin@omnira.local'
+const AGENT = 'test@omnira.local'
 
-  test('exibir KPI cards', async ({ page }) => {
-    // Verificar cards
-    await expect(page.locator('text=Total de Contas')).toBeVisible();
-    await expect(page.locator('text=Tickets Abertos')).toBeVisible();
-    await expect(page.locator('text=Conformidade SLA')).toBeVisible();
-    await expect(page.locator('text=Alertas Ativos')).toBeVisible();
-  });
+async function login(page: Page, email: string) {
+  await page.goto('/login')
+  await page.getByLabel('E-mail').fill(email)
+  await page.getByRole('button', { name: /Entrar/ }).click()
+  await page.waitForURL('/inbox', { timeout: 10_000 })
+}
 
-  test('exibir atividades recentes', async ({ page }) => {
-    // Verificar seção de atividades
-    await expect(page.locator('text=Atividade Recente')).toBeVisible();
+test('admin sees the four real V1 cards with real Postgres-backed counts', async ({ page }) => {
+  await login(page, ADMIN)
+  await page.goto('/')
 
-    // Verificar se tem atividades listadas
-    const activities = page.locator('[class*="flex items-center gap-4"]');
-    const count = await activities.count();
-    expect(count).toBeGreaterThan(0);
-  });
+  const main = page.locator('main')
+  for (const label of ['Conversas abertas', 'Tickets abertos', 'Contatos', 'Agentes online']) {
+    const card = main.getByText(label, { exact: true }).locator('xpath=..')
+    await expect(card).toBeVisible()
+    // Real numeric value, not the '—' placeholder shown only while unauthorized/loading.
+    await expect(card.getByText(/^\d+$/)).toBeVisible()
+  }
 
-  test('exibir resumo do usuário', async ({ page }) => {
-    // Verificar bem-vindo
-    await expect(page.locator('text=Bem-vindo')).toBeVisible();
+  // No content from the retired mock Dashboard (charts, trends, fake activity, SLA).
+  await expect(page.getByText('Conversas por canal')).toHaveCount(0)
+  await expect(page.getByText('Status dos tickets')).toHaveCount(0)
+  await expect(page.getByText(/Conformidade SLA/)).toHaveCount(0)
+})
 
-    // Verificar info do usuário
-    await expect(page.locator('text=test@omnira.local')).toBeVisible();
-  });
+test('agents online reflects a real presence transition via the same SSE mechanism', async ({ browser }) => {
+  const adminContext = await browser.newContext()
+  const adminPage = await adminContext.newPage()
+  await login(adminPage, ADMIN)
+  await adminPage.goto('/')
+  const agentsCard = adminPage.locator('main').getByText('Agentes online', { exact: true }).locator('xpath=..')
+  await expect(agentsCard).toBeVisible()
 
-  test('navegar para outras páginas', async ({ page }) => {
-    // Clique em Contas no sidebar
-    await page.click('a:has-text("Contatos")');
-    await page.waitForURL('/accounts');
+  const agentContext = await browser.newContext()
+  const agentPage = await agentContext.newPage()
+  await login(agentPage, AGENT)
+  // Layout fires a heartbeat on any authenticated route — no navigation to
+  // /settings/agents needed on the agent's side (same mechanism as
+  // presence.spec.ts/supervisor.spec.ts).
 
-    // Verificar que está em Contas
-    await expect(page.locator('text=Contas BPO')).toBeVisible();
-  });
-});
+  // No reload on the admin page: only passes if the SSE transition arrived.
+  await expect(agentsCard.getByText(/^[1-9]\d*$/)).toBeVisible({ timeout: 10_000 })
+
+  await adminContext.close()
+  await agentContext.close()
+})
+
+test('a user without dashboard.read is denied, not shown a fabricated snapshot', async ({ page }) => {
+  await login(page, AGENT)
+  await page.goto('/')
+  await expect(page.getByText('Você não tem permissão para visualizar o Dashboard.')).toBeVisible()
+  await expect(page.getByText('Conversas abertas')).toHaveCount(0)
+})

@@ -16,6 +16,7 @@ import (
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
+	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
@@ -402,6 +403,9 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 
 	ticketsHandler := ticketsadapters.NewHandler(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/tickets", authnMiddleware(tenantSession(http.HandlerFunc(ticketsHandler.List))))
+
+	dashboardHandler := dashboardadapters.NewHandler(dbPool)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/dashboard/snapshot", authnMiddleware(tenantSession(http.HandlerFunc(dashboardHandler.GetSnapshot))))
 
 	auditRec := routingadapters.NewAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool))
 	assignHandler := routingadapters.NewAssignHandler(routingapplication.NewAssigner(
