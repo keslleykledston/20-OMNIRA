@@ -44,6 +44,30 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+// PRODUCT.6-D (ADR-0013): a ticket's origin, never redesigned into a full
+// ERP-sync UI here — just enough for an operator to tell a legacy/local
+// row apart from one backed by a real external ticket. provider is
+// rendered as-is (never a hardcoded IXC/SGP/HubSoft/K3G label): no real
+// connector is wired for any tenant yet, so today every ticket is "Local";
+// projected rows only exist in this slice's test fixtures.
+function TicketOrigin({ ticket }: { ticket: Ticket }) {
+  if (!ticket.provider) {
+    return (
+      <StatusBadge status="default" size="sm">
+        Local
+      </StatusBadge>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+      <StatusBadge status="info" size="sm">
+        {ticket.provider}
+      </StatusBadge>
+      {ticket.external_ticket_id && <span className="text-text-tertiary">#{ticket.external_ticket_id}</span>}
+    </span>
+  )
+}
+
 export default function TicketsPage() {
   const tenantId = getTenantId()
   const access = useAccess()
@@ -167,6 +191,7 @@ export default function TicketsPage() {
                   <TableHeaderCell>Assunto</TableHeaderCell>
                   <TableHeaderCell>Prioridade</TableHeaderCell>
                   <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Origem</TableHeaderCell>
                   <TableHeaderCell>Atualizado</TableHeaderCell>
                 </TableRow>
               </TableHead>
@@ -181,6 +206,9 @@ export default function TicketsPage() {
                       <StatusBadge status={STATUS_LABELS[t.status].tone} size="sm">
                         {STATUS_LABELS[t.status].label}
                       </StatusBadge>
+                    </TableCell>
+                    <TableCell>
+                      <TicketOrigin ticket={t} />
                     </TableCell>
                     <TableCell className="text-text-secondary">{formatDate(t.updated_at)}</TableCell>
                   </TableRow>
@@ -198,6 +226,7 @@ export default function TicketsPage() {
                   <StatusBadge status={STATUS_LABELS[t.status].tone} size="sm">
                     {STATUS_LABELS[t.status].label}
                   </StatusBadge>
+                  <TicketOrigin ticket={t} />
                 </div>
                 <p className="mt-2 text-xs text-text-tertiary">{formatDate(t.updated_at)}</p>
               </div>

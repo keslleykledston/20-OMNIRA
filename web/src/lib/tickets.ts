@@ -15,6 +15,16 @@ export interface Ticket {
   assigned_to: string | null;
   created_at: string;
   updated_at: string;
+  // PRODUCT.6-D (ADR-0013): external ERP ticket projection/link, all null
+  // for a local-only ticket — no real ticketing connector is wired for any
+  // tenant yet (PRODUCT.6-B containment). provider is a free-form value
+  // from the backend, never a hardcoded provider name on the client.
+  provider: string | null;
+  external_ticket_id: string | null;
+  external_status: string | null;
+  external_status_label: string | null;
+  sync_status: string | null;
+  last_synced_at: string | null;
 }
 
 export interface TicketPage {

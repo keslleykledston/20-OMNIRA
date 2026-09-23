@@ -139,6 +139,70 @@ func TestExportCSVHeaderAndRow(t *testing.T) {
 	}
 }
 
+// PRODUCT.6-D (ADR-0013): CSV must carry the projection columns after the
+// canonical set, so an operator can reconcile the OMNIRA row with the
+// external ERP ticket. Legacy rows (no projection) export empty cells,
+// never fabricated values.
+func TestExportCSVProjectionColumns(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "exportproj")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	synced := now.Truncate(time.Second)
+	seedTicket(t, seed, tenantID, "Legacy row", "open", "medium", now)
+	seedTicketWithProjection(t, seed, tenantID, "External row", "open", "medium", now.Add(time.Second), ticketProjection{
+		Provider: "k3g_crm", ExternalTicketID: "28176", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: synced,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets/export.csv", h.ExportCSV)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export = %d %q", rec.Code, rec.Body.String())
+	}
+	rows := parseCSV(t, rec)
+	wantHeader := []string{
+		"id", "conversation_id", "subject", "status", "priority", "assigned_to", "created_at", "updated_at",
+		"provider", "external_ticket_id", "external_status", "external_status_label", "sync_status", "last_synced_at",
+	}
+	if len(rows[0]) != len(wantHeader) {
+		t.Fatalf("header has %d columns, want %d: %v", len(rows[0]), len(wantHeader), rows[0])
+	}
+	for i, col := range wantHeader {
+		if rows[0][i] != col {
+			t.Fatalf("header[%d] = %q, want %q", i, rows[0][i], col)
+		}
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 2 data rows (newest first), got %d: %v", len(rows)-1, rows)
+	}
+
+	// Newest first (updated_at DESC): "External row" comes before "Legacy row".
+	extRow := rows[1]
+	if extRow[2] != "External row" {
+		t.Fatalf("row[1] subject = %q, want %q", extRow[2], "External row")
+	}
+	wantExt := map[int]string{8: "k3g_crm", 9: "28176", 10: "1", 11: "Novo", 12: "synced"}
+	for idx, want := range wantExt {
+		if extRow[idx] != want {
+			t.Fatalf("external row col[%d] = %q, want %q (full row: %v)", idx, extRow[idx], want, extRow)
+		}
+	}
+	if _, err := time.Parse(time.RFC3339, extRow[13]); err != nil {
+		t.Fatalf("last_synced_at not RFC3339: %v (row: %v)", err, extRow)
+	}
+
+	legacyRow := rows[2]
+	if legacyRow[2] != "Legacy row" {
+		t.Fatalf("row[2] subject = %q, want %q", legacyRow[2], "Legacy row")
+	}
+	for idx := 8; idx <= 13; idx++ {
+		if legacyRow[idx] != "" {
+			t.Fatalf("legacy row col[%d] should be empty, got %q (full row: %v)", idx, legacyRow[idx], legacyRow)
+		}
+	}
+}
+
 func TestExportCSVIsScopedToTheSessionTenant(t *testing.T) {
 	seed, app := seedPool(t), appPool(t)
 	tenantA, tenantB := seedTenant(t, seed, "exportA"), seedTenant(t, seed, "exportB")

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,6 +135,46 @@ func seedTicket(t *testing.T, pool *pgxpool.Pool, tenantID uuid.UUID, subject, s
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
 		ticketID, tenantID, conversationID, status, priority, subject, updatedAt); err != nil {
 		t.Fatalf("seed ticket: %v", err)
+	}
+	return ticketID
+}
+
+// ticketProjection groups the PRODUCT.6-D (ADR-0013) external-ERP projection
+// columns for seeding — never populated by any write endpoint yet (none
+// exists), only by direct test fixture inserts, exactly as PRODUCT.6-B
+// established for test-only connector injection.
+type ticketProjection struct {
+	Provider            string
+	ExternalTicketID    string
+	ExternalStatus      string
+	ExternalStatusLabel string
+	SyncStatus          string
+	LastSyncedAt        time.Time
+}
+
+func seedTicketWithProjection(t *testing.T, pool *pgxpool.Pool, tenantID uuid.UUID, subject, status, priority string, updatedAt time.Time, proj ticketProjection) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	contactID := uuid.New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO contacts (id, tenant_id, display_name, phone_e164, email, status) VALUES ($1,$2,$3,$4,'','active')`,
+		contactID, tenantID, "Contact "+contactID.String()[:8], nextPhone()); err != nil {
+		t.Fatalf("seed contact: %v", err)
+	}
+	conversationID := uuid.New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO conversations (id, tenant_id, contact_id, status) VALUES ($1,$2,$3,'open')`,
+		conversationID, tenantID, contactID); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	ticketID := uuid.New()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, created_at, updated_at,
+		 provider, external_ticket_id, external_status, external_status_label, sync_status, last_synced_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13)`,
+		ticketID, tenantID, conversationID, status, priority, subject, updatedAt,
+		proj.Provider, proj.ExternalTicketID, proj.ExternalStatus, proj.ExternalStatusLabel, proj.SyncStatus, proj.LastSyncedAt); err != nil {
+		t.Fatalf("seed projected ticket: %v", err)
 	}
 	return ticketID
 }
@@ -342,6 +383,187 @@ func TestListTicketsInvalidStatusIsRejected(t *testing.T) {
 	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets?status=bogus", h.List)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d %q, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// PRODUCT.6-D (ADR-0013): a legacy/local-only ticket (the only kind that
+// exists today — no real connector is wired anywhere) must keep reading
+// correctly after the additive migration, with every projection field
+// present in the JSON shape as an explicit null, never omitted or defaulted
+// to a fabricated value.
+func TestListTicketsLegacyTicketHasNullProjectionFields(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "legacyproj")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	seedTicket(t, seed, tenantID, "Legacy only", "open", "medium", time.Now().UTC())
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 1 {
+		t.Fatalf("expected 1 ticket, got %d", len(p.Items))
+	}
+	item := p.Items[0]
+	for _, key := range []string{"provider", "external_ticket_id", "external_status", "external_status_label", "sync_status", "last_synced_at"} {
+		v, present := item[key]
+		if !present {
+			t.Fatalf("legacy ticket JSON must include key %q (as null), got %v", key, item)
+		}
+		if v != nil {
+			t.Fatalf("legacy ticket %q should be null, got %v", key, v)
+		}
+	}
+}
+
+// External projection fields must round-trip through List exactly as
+// stored — no normalization, no truncation, raw provider values preserved.
+func TestListTicketsExternalProjectionRoundTrips(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "extproj")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	synced := time.Now().UTC().Truncate(time.Second)
+	seedTicketWithProjection(t, seed, tenantID, "K3G-backed", "open", "medium", time.Now().UTC(), ticketProjection{
+		Provider: "k3g_crm", ExternalTicketID: "28176", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: synced,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 1 {
+		t.Fatalf("expected 1 ticket, got %d", len(p.Items))
+	}
+	item := p.Items[0]
+	want := map[string]string{
+		"provider": "k3g_crm", "external_ticket_id": "28176",
+		"external_status": "1", "external_status_label": "Novo", "sync_status": "synced",
+	}
+	for key, wantVal := range want {
+		if got, _ := item[key].(string); got != wantVal {
+			t.Fatalf("%s = %v, want %q", key, item[key], wantVal)
+		}
+	}
+	if item["last_synced_at"] == nil {
+		t.Fatalf("last_synced_at should be non-null for a projected ticket")
+	}
+}
+
+// A local-only ticket and an ERP-projected ticket must both be listed
+// side by side — this slice does not filter or hide either kind.
+func TestListTicketsIncludesBothLegacyAndProjectedTickets(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "mixedproj")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	seedTicket(t, seed, tenantID, "Local only", "open", "medium", now)
+	seedTicketWithProjection(t, seed, tenantID, "External backed", "open", "medium", now.Add(time.Second), ticketProjection{
+		Provider: "k3g_crm", ExternalTicketID: "999", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 2 {
+		t.Fatalf("expected both tickets listed, got %d: %v", len(p.Items), p.Items)
+	}
+}
+
+// PRODUCT.6-D (ADR-0013): tenant_id + provider + external_ticket_id must be
+// unique whenever both provider and external_ticket_id are set — a second
+// local ticket must never silently duplicate the same external ticket.
+// Exercised directly against the schema (no write endpoint exists yet to
+// exercise through HTTP).
+func TestTicketsUniqueProviderExternalIDPerTenant(t *testing.T) {
+	seed := seedPool(t)
+	tenantID := seedTenant(t, seed, "uniqproj")
+	seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+
+	seedTicketWithProjection(t, seed, tenantID, "First", "open", "medium", now, ticketProjection{
+		Provider: "k3g_crm", ExternalTicketID: "DUP-1", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	contactID := uuid.New()
+	if _, err := seed.Exec(context.Background(),
+		`INSERT INTO contacts (id, tenant_id, display_name, phone_e164, email, status) VALUES ($1,$2,$3,$4,'','active')`,
+		contactID, tenantID, "Dup contact", nextPhone()); err != nil {
+		t.Fatalf("seed contact: %v", err)
+	}
+	conversationID := uuid.New()
+	if _, err := seed.Exec(context.Background(),
+		`INSERT INTO conversations (id, tenant_id, contact_id, status) VALUES ($1,$2,$3,'open')`,
+		conversationID, tenantID, contactID); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	_, err := seed.Exec(context.Background(),
+		`INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, provider, external_ticket_id)
+		 VALUES ($1,$2,$3,'open','medium','Second','k3g_crm','DUP-1')`,
+		uuid.New(), tenantID, conversationID)
+	if err == nil {
+		t.Fatalf("expected unique violation inserting a duplicate tenant+provider+external_ticket_id")
+	}
+}
+
+// Two different tenants MAY have local tickets projecting the same external
+// ticket ID from the same provider — uniqueness is per-tenant, not global.
+func TestTicketsSameExternalIDAllowedAcrossTenants(t *testing.T) {
+	seed := seedPool(t)
+	tenantA := seedTenant(t, seed, "uniqA")
+	tenantB := seedTenant(t, seed, "uniqB")
+	now := time.Now().UTC()
+
+	seedTicketWithProjection(t, seed, tenantA, "Tenant A", "open", "medium", now, ticketProjection{
+		Provider: "k3g_crm", ExternalTicketID: "SHARED-ID", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+	// Must not panic/fatal: seedTicketWithProjection calls t.Fatalf on error.
+	seedTicketWithProjection(t, seed, tenantB, "Tenant B", "open", "medium", now, ticketProjection{
+		Provider: "k3g_crm", ExternalTicketID: "SHARED-ID", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+}
+
+// Multiple legacy/local-only tickets (provider AND external_ticket_id both
+// NULL) must be allowed to coexist — the partial unique index only applies
+// when both columns are non-null.
+func TestTicketsMultipleLegacyNullRowsAllowed(t *testing.T) {
+	seed := seedPool(t)
+	tenantID := seedTenant(t, seed, "legacymulti")
+	now := time.Now().UTC()
+	seedTicket(t, seed, tenantID, "Legacy 1", "open", "medium", now)
+	seedTicket(t, seed, tenantID, "Legacy 2", "open", "medium", now)
+	seedTicket(t, seed, tenantID, "Legacy 3", "open", "medium", now)
+}
+
+// PRODUCT.6-D (ADR-0013) RLS focus: an ERP-projected ticket in tenant B must
+// never be visible — or leak its projection metadata — through tenant A's
+// session. Same isolation mechanism as every other ticket field (RLS/FORCE
+// RLS on the tickets table itself, established since PRODUCT.2-A); this
+// slice adds no second isolation mechanism, just proves the additive
+// columns inherit the existing one.
+func TestListTicketsProjectionMetadataDoesNotCrossTenant(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantA := seedTenant(t, seed, "rlsprojA")
+	tenantB := seedTenant(t, seed, "rlsprojB")
+	userA := seedMember(t, seed, tenantA, "tenant_admin", "active")
+	now := time.Now().UTC()
+
+	seedTicket(t, seed, tenantA, "Tenant A local", "open", "medium", now)
+	seedTicketWithProjection(t, seed, tenantB, "Tenant B external", "open", "medium", now, ticketProjection{
+		Provider: "k3g_crm", ExternalTicketID: "SECRET-B-ID", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantA, userA, "/api/v1/tenants/"+tenantA.String()+"/tickets", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 1 || p.Items[0]["subject"] != "Tenant A local" {
+		t.Fatalf("tenant A should see exactly its own ticket, got %v", p.Items)
+	}
+	if strings.Contains(rec.Body.String(), "SECRET-B-ID") {
+		t.Fatalf("tenant B's external_ticket_id must never appear in tenant A's response body: %s", rec.Body.String())
 	}
 }
 

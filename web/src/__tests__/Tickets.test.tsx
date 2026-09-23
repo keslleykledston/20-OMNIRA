@@ -17,6 +17,15 @@ const ticket = (over: object = {}) => ({
   assigned_to: null,
   created_at: '2026-09-20T10:00:00Z',
   updated_at: '2026-09-20T10:00:00Z',
+  // PRODUCT.6-D (ADR-0013): every real ticket today is local-only — no
+  // connector is wired for any tenant (PRODUCT.6-B). Explicit null here
+  // (not omitted) mirrors exactly what the real backend now always sends.
+  provider: null,
+  external_ticket_id: null,
+  external_status: null,
+  external_status_label: null,
+  sync_status: null,
+  last_synced_at: null,
   ...over,
 });
 
@@ -167,6 +176,57 @@ describe('TicketsPage', () => {
       fireEvent.click(await screen.findByRole('button', { name: /Exportar CSV/ }));
 
       expect(await screen.findByText('A exportação excede 5000 tickets. Refine os filtros e tente novamente.')).toBeInTheDocument();
+    });
+  });
+
+  // PRODUCT.6-D (ADR-0013): honest origin labeling, no fake K3G/IXC/SGP
+  // projections in runtime data — only a test fixture explicitly sets
+  // provider/external_ticket_id here.
+  describe('ticket origin', () => {
+    it('shows a "Local" badge for a legacy ticket with no provider', async () => {
+      setSession();
+      mockGets({
+        '/tickets': { items: [ticket({ subject: 'Legacy one' })], has_more: false, count: 1, limit: 20 },
+      });
+      renderAt(<TicketsPage />);
+
+      await screen.findAllByText('Legacy one');
+      expect(screen.getAllByText('Local').length).toBeGreaterThan(0);
+    });
+
+    it('shows the real provider and external ticket ID for a projected ticket', async () => {
+      setSession();
+      mockGets({
+        '/tickets': {
+          items: [ticket({ subject: 'External one', provider: 'k3g_crm', external_ticket_id: '28176' })],
+          has_more: false,
+          count: 1,
+          limit: 20,
+        },
+      });
+      renderAt(<TicketsPage />);
+
+      await screen.findAllByText('External one');
+      expect(screen.getAllByText('k3g_crm').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('#28176').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Local')).not.toBeInTheDocument();
+    });
+
+    it('shows the provider badge without an ID suffix when external_ticket_id is absent', async () => {
+      setSession();
+      mockGets({
+        '/tickets': {
+          items: [ticket({ subject: 'Provider only', provider: 'ixc' })],
+          has_more: false,
+          count: 1,
+          limit: 20,
+        },
+      });
+      renderAt(<TicketsPage />);
+
+      await screen.findAllByText('Provider only');
+      expect(screen.getAllByText('ixc').length).toBeGreaterThan(0);
+      expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
     });
   });
 });

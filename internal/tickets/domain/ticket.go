@@ -34,6 +34,19 @@ type Ticket struct {
 	UpdatedAt      time.Time
 	ResolvedAt     *time.Time
 	ClosedAt       *time.Time
+
+	// PRODUCT.6-D (ADR-0013): external ERP ticket projection/link, all
+	// nullable. A ticket created locally (still the only path today — see
+	// internal/inbox/application/inbound.go) has every one of these fields
+	// nil: it is not yet — and may never become — backed by a real tenant
+	// ERP connector. No provider-specific type here; the domain must stay
+	// implementable against any future provider, not just K3G.
+	Provider            *string
+	ExternalTicketID    *string
+	ExternalStatus      *string
+	ExternalStatusLabel *string
+	SyncStatus          *string
+	LastSyncedAt        *time.Time
 }
 
 func NewTicket(tenantID, conversationID uuid.UUID, subject string) (*Ticket, error) {

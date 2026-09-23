@@ -28,6 +28,19 @@ type TicketItem struct {
 	AssignedTo     *uuid.UUID `json:"assigned_to"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// PRODUCT.6-D (ADR-0013): external ERP ticket projection metadata, added
+	// additively. All nil/null for the legacy/local-only tickets that are
+	// the only kind that exists today — never omitted from the JSON shape
+	// (encoding/json renders a nil *string as null, not an absent key), so
+	// existing clients see the new keys with null values rather than a
+	// silently different response shape.
+	Provider            *string    `json:"provider"`
+	ExternalTicketID    *string    `json:"external_ticket_id"`
+	ExternalStatus      *string    `json:"external_status"`
+	ExternalStatusLabel *string    `json:"external_status_label"`
+	SyncStatus          *string    `json:"sync_status"`
+	LastSyncedAt        *time.Time `json:"last_synced_at"`
 }
 
 type Handler struct {
@@ -63,7 +76,8 @@ func (h *Handler) authorizeTicketRead(r *http.Request, tc *tenancydomain.TenantC
 var validStatus = map[string]bool{"open": true, "in_progress": true, "waiting": true, "resolved": true, "closed": true}
 var validPriority = map[string]bool{"critical": true, "high": true, "medium": true, "low": true}
 
-const ticketColumns = `id, conversation_id, status, priority, subject, assigned_to, created_at, updated_at`
+const ticketColumns = `id, conversation_id, status, priority, subject, assigned_to, created_at, updated_at,
+	provider, external_ticket_id, external_status, external_status_label, sync_status, last_synced_at`
 
 // parseTicketFilters validates status/priority against the canonical Ticket
 // enums, shared by List and ExportCSV so both apply the exact same
@@ -100,7 +114,8 @@ func scanTicketItem(rows interface {
 	Scan(dest ...any) error
 }) (TicketItem, error) {
 	var item TicketItem
-	err := rows.Scan(&item.ID, &item.ConversationID, &item.Status, &item.Priority, &item.Subject, &item.AssignedTo, &item.CreatedAt, &item.UpdatedAt)
+	err := rows.Scan(&item.ID, &item.ConversationID, &item.Status, &item.Priority, &item.Subject, &item.AssignedTo, &item.CreatedAt, &item.UpdatedAt,
+		&item.Provider, &item.ExternalTicketID, &item.ExternalStatus, &item.ExternalStatusLabel, &item.SyncStatus, &item.LastSyncedAt)
 	return item, err
 }
 
@@ -204,7 +219,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 // narrow it — the export never silently truncates.
 const exportMaxRows = 5000
 
-var csvHeader = []string{"id", "conversation_id", "subject", "status", "priority", "assigned_to", "created_at", "updated_at"}
+// PRODUCT.6-D (ADR-0013): projection columns appended after the existing
+// canonical set — never inserted in the middle — so a spreadsheet an
+// operator already has saved against the old header still aligns on the
+// columns it knows.
+var csvHeader = []string{
+	"id", "conversation_id", "subject", "status", "priority", "assigned_to", "created_at", "updated_at",
+	"provider", "external_ticket_id", "external_status", "external_status_label", "sync_status", "last_synced_at",
+}
 
 // sanitizeCSVField neutralizes spreadsheet formula injection (OWASP CSV
 // injection guidance) for user/provider-controlled text. The check looks at
@@ -304,9 +326,34 @@ func (h *Handler) ExportCSV(w http.ResponseWriter, r *http.Request) {
 			assignedTo,
 			item.CreatedAt.UTC().Format(time.RFC3339),
 			item.UpdatedAt.UTC().Format(time.RFC3339),
+			// Legacy/local-only tickets (the only kind that exists today)
+			// export these six as empty cells — never a fabricated value.
+			// Provider-supplied text is sanitized the same as subject: it
+			// comes from an external system, same trust level as operator
+			// input.
+			sanitizeCSVField(strPtrOr(item.Provider, "")),
+			sanitizeCSVField(strPtrOr(item.ExternalTicketID, "")),
+			sanitizeCSVField(strPtrOr(item.ExternalStatus, "")),
+			sanitizeCSVField(strPtrOr(item.ExternalStatusLabel, "")),
+			sanitizeCSVField(strPtrOr(item.SyncStatus, "")),
+			timePtrOrEmpty(item.LastSyncedAt),
 		})
 	}
 	cw.Flush()
+}
+
+func strPtrOr(s *string, fallback string) string {
+	if s == nil {
+		return fallback
+	}
+	return *s
+}
+
+func timePtrOrEmpty(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
