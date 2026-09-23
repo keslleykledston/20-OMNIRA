@@ -34,18 +34,62 @@ type CRMHandlers struct {
 	k3gClient *connectors.K3GCRMClient
 }
 
-// NewCRMHandlers — cria novo CRM handler
+// NewCRMHandlers — cria novo CRM handler.
+//
+// PRODUCT.6-B: no ticketing connector is installed here. There is no
+// tenant-scoped ERP ticket-provider resolution/configuration model yet
+// (IXCConnector implements the real interface but is intentionally left
+// unwired — see docs/adr/... future ERP ticket projection ADR). Until a
+// real per-tenant connector exists, every ticket CRUD request must fail
+// explicitly rather than silently succeed against an in-memory fake —
+// see ticketingUnavailable / errTicketingNotConfigured below.
 func NewCRMHandlers(dbPool *pgxpool.Pool) *CRMHandlers {
-	// Use mock CRM for now
-	return &CRMHandlers{
-		dbPool: dbPool,
-		crm:    connectors.NewMockCRMConnector(),
-	}
+	return &CRMHandlers{dbPool: dbPool}
+}
+
+// SetCRMConnector — test-only injection point. Canonical runtime
+// composition (server.go) must never call this: a mock/fake ticketing
+// connector must not become product runtime authority (PRODUCT.6-B).
+func (h *CRMHandlers) SetCRMConnector(crm connectors.CRMConnector) {
+	h.crm = crm
 }
 
 // SetK3GCRMClient — configura o cliente K3G CRM
 func (h *CRMHandlers) SetK3GCRMClient(client *connectors.K3GCRMClient) {
 	h.k3gClient = client
+}
+
+// ticketingUnavailable writes the canonical response for "no real ERP
+// ticketing connector is configured for this tenant" — 503, matching the
+// exact convention already used by the frontend for the same class of
+// problem (web/src/lib/integrations.ts: "Integração indisponível: o
+// servidor não está configurado para este provedor."). Never a fake
+// 200/201, never a fallback to local-only storage.
+func ticketingUnavailable(w http.ResponseWriter) {
+	http.Error(w, "ticketing integration not configured for this tenant", http.StatusServiceUnavailable)
+}
+
+// GetCurrentTicket — reports whether a real ERP ticketing connector is
+// configured for this tenant, so TicketPanel can render an honest
+// unavailable state proactively (PRODUCT.6-B) instead of only discovering
+// it reactively when the operator tries to create a ticket. It never
+// fabricates or returns a ticket: with no connector configured (the only
+// state possible today), it always answers 503.
+// GET /api/v1/tenants/{tenantId}/conversations/{conversationId}/ticket
+func (h *CRMHandlers) GetCurrentTicket(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, err := authn.FromContext(ctx); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if h.crm == nil {
+		ticketingUnavailable(w)
+		return
+	}
+	// A real connector exists but there is no per-conversation ticket
+	// lookup yet (no local projection model — PRODUCT.6-A). Nothing to
+	// report until that lands.
+	http.Error(w, "no ticket associated with this conversation", http.StatusNotFound)
 }
 
 // CreateTicket — cria ticket para uma conversa
@@ -54,6 +98,10 @@ func (h *CRMHandlers) CreateTicket(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := authn.FromContext(ctx); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if h.crm == nil {
+		ticketingUnavailable(w)
 		return
 	}
 
@@ -139,6 +187,10 @@ func (h *CRMHandlers) GetTicket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	if h.crm == nil {
+		ticketingUnavailable(w)
+		return
+	}
 
 	ticketID := r.PathValue("ticket_id")
 	if ticketID == "" {
@@ -168,6 +220,10 @@ func (h *CRMHandlers) UpdateTicket(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := authn.FromContext(ctx); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if h.crm == nil {
+		ticketingUnavailable(w)
 		return
 	}
 
@@ -206,6 +262,10 @@ func (h *CRMHandlers) CloseTicket(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := authn.FromContext(ctx); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if h.crm == nil {
+		ticketingUnavailable(w)
 		return
 	}
 

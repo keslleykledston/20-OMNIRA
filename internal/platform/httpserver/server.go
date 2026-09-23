@@ -435,6 +435,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 
 	// CRM ticket handlers
 	crmHandler := inboxadapters.NewCRMHandlers(dbPool)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetCurrentTicket))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateTicket))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetTicket))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicket))))

@@ -8,6 +8,7 @@ const CONV_WITH_CRM = 'd0d0d0d0-0000-0000-0000-000000000002';
 const CRM_CONTACT = { id: 'c0c0c0c0-0000-0000-0000-0000000000c2', name: 'Carla CRM', phone: '+5511955554444' };
 const CRM_CONTACT_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const AGENT = { email: 'test@omnira.local' };
+const API_URL = process.env.E2E_API_URL || 'http://127.0.0.1:28961';
 
 function sql(query: string): string {
   return execFileSync('docker', ['exec', PG, 'psql', '-U', 'omnira', '-d', DB, '-tA', '-c', query], { encoding: 'utf8' }).trim();
@@ -29,29 +30,47 @@ async function openConversation(page: Page, contactName: string) {
   await expect(page.getByRole('heading', { name: 'Chamado' })).toBeVisible({ timeout: 10_000 });
 }
 
-test.describe('TicketPanel — CRM.5: operador humano', () => {
-  test('operador: cria, atualiza status e fecha ticket via UI (fluxo completo)', async ({ page }) => {
+// PRODUCT.6-B: these tests used to prove MockCRMConnector create/update/close
+// "succeeded" — that was only ever proof of legacy in-memory-mock behavior,
+// never proof of durable ticket persistence (see docs/delivery, PRODUCT.6-B
+// human gate). No real ERP ticketing connector is wired into any tenant
+// today, so the honest, correct behavior is that the panel refuses to offer
+// ticket mutation at all. These tests now prove containment/honesty instead.
+test.describe('TicketPanel — PRODUCT.6-B: containment sem conector ERP real', () => {
+  test('operador: painel mostra indisponibilidade honesta e nunca oferece criar/atualizar/fechar chamado', async ({ page }) => {
     await login(page, AGENT.email);
     await openConversation(page, 'Maria Souza');
 
-    await page.getByPlaceholder('Novo chamado...').fill('Solicitação de mudança de plano');
-    const open = page.getByRole('button', { name: 'Abrir', exact: true });
-    await expect(open).toBeEnabled();
-    await open.click();
+    await expect(page.getByText('Chamados no ERP não configurados')).toBeVisible({ timeout: 10_000 });
 
-    await expect(page.getByText('Solicitação de mudança de plano')).toBeVisible();
-    await expect(page.getByText('open', { exact: true })).toBeVisible();
-
-    await page.getByRole('button', { name: 'Trabalhando' }).click();
-    await expect(page.getByText('in_progress', { exact: true })).toBeVisible();
-
-    await page.getByRole('button', { name: 'Resolvido' }).click();
-    await expect(page.getByText('resolved', { exact: true })).toBeVisible();
-
-    await page.getByRole('button', { name: 'Fechar', exact: true }).click();
-    await expect(page.getByText('closed', { exact: true })).toBeVisible();
+    await expect(page.getByPlaceholder('Novo chamado...')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Abrir', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Trabalhando' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Resolvido' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Fechar', exact: true })).toHaveCount(0);
 
     await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('backend: mutação direta de chamado é rejeitada mesmo contornando a UI', async ({ page, request }) => {
+    await login(page, AGENT.email);
+    const token = await page.evaluate(() => localStorage.getItem('token'));
+    const tenantId = await page.evaluate(() => localStorage.getItem('tenantId'));
+
+    // The containment check runs before any conversation lookup (see
+    // CRMHandlers.CreateTicket), so a nonexistent conversation ID is
+    // sufficient to prove the backend never falls through to mock/local
+    // state — no dependency on fixtures from the other test in this file.
+    const res = await request.post(
+      `${API_URL}/api/v1/tenants/${tenantId}/conversations/99999999-9999-9999-9999-999999999999/ticket`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        data: { subject: 'Tentativa de contornar containment' },
+      }
+    );
+
+    expect(res.status()).toBe(503);
+    expect(await res.text()).toContain('ticketing integration not configured for this tenant');
   });
 
   test('R5.2: painel de atividade CRM aparece e reflete a ausência de empresas (sem CRM configurado)', async ({ page }) => {

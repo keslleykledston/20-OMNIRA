@@ -45,6 +45,33 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
   const [newSubject, setNewSubject] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // PRODUCT.6-B: no real ERP ticketing connector is configured for any
+  // tenant today (internal/tool/connectors.CRMConnector has no wired
+  // implementation in production/pilot runtime — see the containment
+  // human gate). Checked proactively on mount via GET .../ticket so the
+  // panel never shows the create form only to fail on submit.
+  const [ticketingUnavailable, setTicketingUnavailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const checkTicketing = async () => {
+      try {
+        await axios.get(`${API_BASE}/tenants/${tenantId}/conversations/${conversationId}/ticket`, { headers: authHeaders() });
+        if (active) setTicketingUnavailable(false);
+      } catch (err: any) {
+        if (!active) return;
+        // 503 = no real connector configured (PRODUCT.6-B). Any other
+        // status (e.g. 404 "no ticket for this conversation" once a real
+        // connector exists) means the integration itself is available.
+        setTicketingUnavailable(err.response?.status === 503);
+      }
+    };
+    void checkTicketing();
+    return () => {
+      active = false;
+    };
+  }, [tenantId, conversationId]);
+
   // R5.2: CRM Activity
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
@@ -169,7 +196,12 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
       <section className="py-3" aria-labelledby="ticket-panel-heading">
         <h3 id="ticket-panel-heading" className={SECTION_TITLE}>Chamado</h3>
 
-        {ticket ? (
+        {ticketingUnavailable === null ? null : ticketingUnavailable ? (
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
+            <p className="font-semibold text-text-primary">Chamados no ERP não configurados</p>
+            <p className="mt-1">Abrir, atualizar e fechar chamados requer a integração de ERP do tenant, que ainda não está configurada.</p>
+          </div>
+        ) : ticket ? (
           <div className="rounded-control border border-border-subtle bg-surface p-3">
             <div className="flex min-w-0 items-start justify-between gap-2">
               <div className="min-w-0">
