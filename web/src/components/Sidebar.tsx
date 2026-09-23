@@ -11,9 +11,11 @@ import { isDevSurface } from './UnavailableSurface'
 // Configurações implementada até agora (IAM2A).
 //
 // mockBacked: destination has no real backend behind it (Dashboard/Tickets/
-// Relatórios/Supervisor — DESIGN.5 reality gate, FRONTEND.1). Filtered out of
+// Relatórios — DESIGN.5 reality gate, FRONTEND.1). Filtered out of
 // operational navigation outside development so it never implies active
 // production capability; the route itself still exists (see UnavailableSurface).
+// Supervisor became real in PRODUCT.1 (agent roster + Valkey presence) and is
+// no longer contained.
 const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string; mockBacked?: boolean }[] = [
   { label: 'Dashboard', path: '/', icon: 'dashboard', mockBacked: true },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
@@ -21,7 +23,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Contatos', path: '/contacts', icon: 'contacts' },
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
-  { label: 'Supervisor', path: '/supervisor', icon: 'supervisor', mockBacked: true },
+  { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
   { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings', alsoActiveOn: '/settings/roles' },
   { label: 'Agentes', path: '/settings/agents', icon: 'supervisor' },
 ]
