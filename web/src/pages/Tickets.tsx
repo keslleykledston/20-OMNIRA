@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ticketsAPI } from '../lib/api'
 import type { Ticket } from '../lib/types'
 import clsx from 'clsx'
+import { isDevSurface, UnavailableSurface } from '../components/UnavailableSurface'
 
 const statusConfig = {
   open: { color: 'bg-red-100', text: 'text-red-800', label: 'Aberto' },
@@ -73,6 +74,11 @@ export default function TicketsPage() {
       setSelectedTicket(null)
     }
   })
+
+  // ticketsAPI is a frontend fixture — the real backend only models a ticket
+  // per conversation (see Inbox's TicketPanel), never a standalone list.
+  // Never present the fixture as if it were real business data.
+  if (!isDevSurface()) return <UnavailableSurface title="Tickets" />
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()

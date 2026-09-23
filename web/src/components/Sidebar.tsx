@@ -3,19 +3,25 @@ import clsx from 'clsx'
 import { Avatar, Icon } from './primitives'
 import type { IconName } from './primitives/Icon'
 import { useTenantDisplay } from '../lib/tenantContext'
+import { isDevSurface } from './UnavailableSurface'
 
 // Only routes that exist in App.tsx. Spec items without a route (Automação, o
 // restante de Configurações) stay hidden rather than simulated —
 // docs/architecture/FRONTEND-UX.md. Equipe e acesso é a única seção de
 // Configurações implementada até agora (IAM2A).
-const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string }[] = [
-  { label: 'Dashboard', path: '/', icon: 'dashboard' },
+//
+// mockBacked: destination has no real backend behind it (Dashboard/Tickets/
+// Relatórios/Supervisor — DESIGN.5 reality gate, FRONTEND.1). Filtered out of
+// operational navigation outside development so it never implies active
+// production capability; the route itself still exists (see UnavailableSurface).
+const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string; mockBacked?: boolean }[] = [
+  { label: 'Dashboard', path: '/', icon: 'dashboard', mockBacked: true },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
-  { label: 'Tickets', path: '/tickets', icon: 'tickets' },
+  { label: 'Tickets', path: '/tickets', icon: 'tickets', mockBacked: true },
   { label: 'Contatos', path: '/contacts', icon: 'contacts' },
   { label: 'Canais', path: '/channels', icon: 'channels' },
-  { label: 'Relatórios', path: '/reports', icon: 'reports' },
-  { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
+  { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
+  { label: 'Supervisor', path: '/supervisor', icon: 'supervisor', mockBacked: true },
   { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings', alsoActiveOn: '/settings/roles' },
   { label: 'Agentes', path: '/settings/agents', icon: 'supervisor' },
 ]
@@ -23,6 +29,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
 export default function Sidebar() {
   const location = useLocation()
   const tenant = useTenantDisplay()
+  const visibleNavItems = navItems.filter((item) => !item.mockBacked || isDevSurface())
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(path + '/')
@@ -55,7 +62,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        {navItems.map(item => {
+        {visibleNavItems.map(item => {
           const active = isActive(item.path) || (item.alsoActiveOn ? isActive(item.alsoActiveOn) : false)
           return (
             <Link

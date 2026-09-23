@@ -12,6 +12,7 @@ import { SectionCard } from '../features/dashboard/components/SectionCard'
 import { ChannelBarChart, ChannelLegend } from '../features/dashboard/components/ChannelBarChart'
 import { TicketStatusDonut, TicketStatusLegend } from '../features/dashboard/components/TicketStatusDonut'
 import { ConversationRow, PriorityTicketRow } from '../features/dashboard/components/ActivityRows'
+import { isDevSurface, UnavailableSurface } from '../components/UnavailableSurface'
 
 const CHART_HEIGHT = 'h-[200px]'
 
@@ -37,6 +38,10 @@ export default function Dashboard() {
   })
 
   const greeting = firstName(user?.name)
+
+  // dashboardRepository is a fixture (no Go API endpoint exists yet) — never
+  // present it as real business data outside development.
+  if (!isDevSurface()) return <UnavailableSurface title="Dashboard" />
 
   return (
     <div className="px-6 py-6 lg:px-8 lg:py-8">

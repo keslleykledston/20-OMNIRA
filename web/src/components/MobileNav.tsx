@@ -2,17 +2,20 @@ import { Link, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 import { Icon } from './primitives'
 import type { IconName } from './primitives/Icon'
+import { isDevSurface } from './UnavailableSurface'
 
-const items: { label: string; path: string; icon: IconName }[] = [
-  { label: 'Dashboard', path: '/', icon: 'dashboard' },
+// mockBacked: see Sidebar.tsx — same DESIGN.5/FRONTEND.1 rationale.
+const items: { label: string; path: string; icon: IconName; mockBacked?: boolean }[] = [
+  { label: 'Dashboard', path: '/', icon: 'dashboard', mockBacked: true },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
-  { label: 'Tickets', path: '/tickets', icon: 'tickets' },
+  { label: 'Tickets', path: '/tickets', icon: 'tickets', mockBacked: true },
 ]
 
 export default function MobileNav() {
   const location = useLocation()
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)
+  const visibleItems = items.filter((item) => !item.mockBacked || isDevSurface())
 
   const slot = 'flex flex-col items-center justify-center gap-1 flex-1 min-h-[44px] text-xs no-underline'
 
@@ -21,7 +24,7 @@ export default function MobileNav() {
       aria-label="Navegação principal"
       className="lg:hidden fixed bottom-0 inset-x-0 h-16 bg-surface border-t border-border-subtle flex items-stretch px-2"
     >
-      {items.map((item) => {
+      {visibleItems.map((item) => {
         const active = isActive(item.path)
         return (
           <Link

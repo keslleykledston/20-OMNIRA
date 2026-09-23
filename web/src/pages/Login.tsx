@@ -15,6 +15,13 @@ type Status =
 // está na tela; o usuário vê sempre o mesmo texto e o detalhe fica no console.
 const OIDC_ERROR = 'Não foi possível concluir o login. Tente novamente ou contate o administrador.'
 
+// Destino padrão pós-login sem return/next explícito (FRONTEND.1): "/" pode
+// renderizar UnavailableSurface fora de desenvolvimento (Dashboard é mock),
+// então nunca é um destino seguro de login. /inbox é a superfície operacional
+// real. Convites (/invite/:token) continuam preservados via redirect do
+// próprio backend OIDC antes de a página chegar aqui.
+const DEFAULT_AUTHENTICATED_ROUTE = '/inbox'
+
 export default function Login() {
   const navigate = useNavigate()
   const { setUser, setToken } = useAuthStore()
@@ -41,7 +48,7 @@ export default function Login() {
             const { user, tenant } = session.data
             setUser({ ...user, roles: user.roles ?? [] })
             saveSession('', tenant?.id, user)
-            navigate(tenant?.id ? '/' : '/no-access', { replace: true })
+            navigate(tenant?.id ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
             return
           } catch (err: any) {
             if (!active) return
@@ -165,7 +172,7 @@ function DevLoginCard() {
       setToken(data.token)
       setUser(data.user)
       saveSession(data.token, data.tenant?.id, data.user)
-      navigate('/', { replace: true })
+      navigate(DEFAULT_AUTHENTICATED_ROUTE, { replace: true })
     } catch (err: any) {
       // 404 significa que a rota não está registrada neste servidor.
       setError(

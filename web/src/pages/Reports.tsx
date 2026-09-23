@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { reportsAPI } from '../lib/api'
+import { isDevSurface, UnavailableSurface } from '../components/UnavailableSurface'
 
 export default function ReportsPage() {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
@@ -44,6 +45,10 @@ export default function ReportsPage() {
   })
 
   const templates = templatesData || []
+
+  // reportsAPI is a frontend fixture (no real report backend) — never
+  // present it as real business data outside development.
+  if (!isDevSurface()) return <UnavailableSurface title="Relatórios" />
 
   return (
     <div className="space-y-6">

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { dashboardAPI, accountsAPI } from '../lib/api'
 import clsx from 'clsx'
+import { isDevSurface, UnavailableSurface } from '../components/UnavailableSurface'
 
 export default function SupervisorDashboardPage() {
   const { data: metricsData } = useQuery({
@@ -27,6 +28,11 @@ export default function SupervisorDashboardPage() {
     if (account.status === 'inactive') return { color: 'bg-gray-100', text: 'text-gray-800', label: 'Inativo' }
     return { color: 'bg-green-100', text: 'text-green-800', label: 'Ativo' }
   }
+
+  // dashboardAPI/accountsAPI are frontend fixtures (no real supervisor/KPI
+  // backend is wired) — never present them as real business data outside
+  // development.
+  if (!isDevSurface()) return <UnavailableSurface title="Supervisor" />
 
   return (
     <div className="space-y-6">

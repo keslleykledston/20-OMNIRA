@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { accountsAPI } from '../lib/api'
+import { isDevSurface, UnavailableSurface } from '../components/UnavailableSurface'
 
 export default function Accounts() {
   const queryClient = useQueryClient()
@@ -36,6 +37,11 @@ export default function Accounts() {
       queryClient.invalidateQueries({ queryKey: ['accounts'] })
     }
   })
+
+  // accountsAPI is a frontend fixture — no real "account" backend domain
+  // exists outside the orphaned internal/bpo package (never wired to HTTP).
+  // Never present fixture data as if it were real business data.
+  if (!isDevSurface()) return <UnavailableSurface title="Contas" />
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
