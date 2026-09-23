@@ -38,13 +38,15 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
-- **PRODUCT.4-A = DONE** (2026-09-23). Reports Legacy Retirement Decision — pure architecture decision, no code touched.
-  - **Decision: `internal/reports` = RETIRE.** Full reasoning recorded in `docs/adr/0012-retire-orphaned-reports-domain.md` (Accepted) — not duplicated here. Re-confirmed PRODUCT.3's evidence: zero active imports, zero router wiring, zero migrations, zero DB/RLS access anywhere (`ReportService` has no repository; `GenerateReport` fabricates in-memory rows; `ExportHandlers` hardcode a placeholder report), tests are compile-only or against fabricated data.
+- **PRODUCT.4 = DONE** (2026-09-23). Reports Legacy Retirement — PRODUCT.4-A (`ae0f54b` docs(architecture): retire orphaned reports domain, ADR-0012) + PRODUCT.4-B (`8a6cc73` refactor(reports): remove orphaned legacy domain).
+  - `internal/reports` REMOVED (6 files, physically deleted, mirrors `BPO.1`). Active references after removal: ZERO. Full reasoning: `docs/adr/0012-retire-orphaned-reports-domain.md` (Accepted) — not duplicated here.
   - **Preserved concept only** (not approved code/contract): `ReportTemplate`/`ReportColumn`/`ReportFilter` shape as a conceptual reference for a future real design.
   - **Rejected semantics**: SLA reports, account-health reports, financial/productivity reports, the `ReportType` enum — all tied to domains that remain undefined (SLA, Accounts per ADR-0011).
   - **Future Reports principle**: must start from a concrete canonical capability (e.g. export the real ticket list to CSV), never resurrect `internal/reports`; needs its own explicit permission decision (do not shortcut with `dashboard.read`/`ticket.read`/`agent.read`).
-  - `/reports` stays MOCK-CONTAINED — no product change in this decision.
-  - **Next**: `PRODUCT.4-B — Remove Orphaned Legacy Reports Package` (delete the package; no migrations exist to revert, nothing registered in the router — pure deletion slice, mirrors `BPO.1`). Not started.
+  - `/reports` stays MOCK-CONTAINED — no product change. Router/composition-root/migration/schema/RLS/permission deltas: NONE.
+  - **Validation**: zero active `internal/reports` references (before and after removal), `go build`/`go vet` PASS, `git diff --check` PASS. Known test debt (not a regression): `go test ./...` still shows the previously documented pre-existing `internal/inbox/adapters` `external_id`/`external_number_id` failure.
+  - **Current frontend reality**: REAL/CANONICAL — `/`, `/inbox`, `/contacts`, `/channels`, `/supervisor`, `/tickets`, `/settings/team`, `/settings/agents`, `/settings/roles`. MOCK-CONTAINED — `/reports`, `/accounts`. NOT IMPLEMENTED — Automations.
+  - **Next**: `PRODUCT.5 — Capability Prioritization Gate` — compare remaining directions (real Reports capability, Accounts domain, Automations, any higher-priority operational gap) using repository reality before selecting exactly one next slice. Not started.
 
 - **PRODUCT.3 = DONE** (2026-09-23). Real Operational Dashboard Snapshot — PRODUCT.3-A (`b63d019` feat(iam): add tenant dashboard read permission) + PRODUCT.3-B (`112eae7` feat(dashboard): add real operational snapshot).
   - `/` = REAL/CANONICAL. `GET /api/v1/tenants/{tenant_id}/dashboard/snapshot` — gated by `dashboard.read`, three independent tenant-scoped `COUNT` queries (open conversations, open tickets, total contacts) against already-real RLS-live tables, no cross-domain join, no Valkey access from this endpoint. `agents_online` is composed on the frontend from the existing canonical presence snapshot/SSE (PRODUCT.1) — never re-derived from Postgres, never a second presence implementation.
