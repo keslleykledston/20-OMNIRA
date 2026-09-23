@@ -17,7 +17,7 @@ async function login(page: Page, email: string) {
   await page.goto('/login');
   await page.getByLabel('E-mail').fill(email);
   await page.getByRole('button', { name: /Entrar/ }).click();
-  await page.waitForURL('/', { timeout: 10_000 });
+  await page.waitForURL('/inbox', { timeout: 10_000 });
 }
 
 // The inbox workspace lists conversations as h4 rows; the context pane hosts the TicketPanel.

@@ -21,7 +21,7 @@ async function login(page: Page, email: string) {
   await page.goto('/login');
   await page.getByLabel('E-mail').fill(email);
   await page.getByRole('button', { name: /Entrar/ }).click();
-  await page.waitForURL('/', { timeout: 10_000 });
+  await page.waitForURL('/inbox', { timeout: 10_000 });
 }
 
 // Runs regardless of where the test fails, so a failed run never leaves a

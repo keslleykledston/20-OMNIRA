@@ -19,7 +19,7 @@ async function login(page: Page, email: string) {
   // password. The form has no placeholder — the field is labeled "E-mail".
   await page.getByLabel('E-mail').fill(email);
   await page.getByRole('button', { name: /Entrar/ }).click();
-  await page.waitForURL('/', { timeout: 10_000 });
+  await page.waitForURL('/inbox', { timeout: 10_000 });
 }
 
 test.beforeEach(() => {

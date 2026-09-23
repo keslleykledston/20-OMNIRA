@@ -14,7 +14,7 @@ async function login(page: Page, email: string) {
   await page.goto('/login')
   await page.getByLabel('E-mail').fill(email)
   await page.getByRole('button', { name: /Entrar/ }).click()
-  await page.waitForURL('/', { timeout: 10_000 })
+  await page.waitForURL('/inbox', { timeout: 10_000 })
 }
 
 test('agent heartbeat turns presence online and the already-open supervisor view updates live via SSE', async ({ browser }) => {
