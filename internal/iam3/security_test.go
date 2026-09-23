@@ -18,10 +18,10 @@ import (
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
 		"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-		"membership.manage", "membership.read", "tenant.manage", "tenant.read",
+		"membership.manage", "membership.read", "ticket.read", "tenant.manage", "tenant.read",
 	},
 	"tenant_supervisor": {
-		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "membership.read", "tenant.read",
+		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "membership.read", "ticket.read", "tenant.read",
 	},
 	"tenant_agent": {"conversation.claim", "tenant.read"},
 	"hub_admin":    {"hub.manage", "hub.read"},
