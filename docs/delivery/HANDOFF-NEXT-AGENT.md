@@ -38,6 +38,12 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## NOW
 
+- **BPO.0 = DONE** (2026-09-23). Orphaned BPO Domain Fate Gate — pure architecture/investigation, no code touched.
+  - **Decision: `internal/bpo` = RETIRE.** Full reasoning and future rules recorded in `docs/adr/0011-retire-orphaned-bpo-domain.md` (Accepted) — not duplicated here.
+  - **Reusable concepts only** (not approved code/schema): `SLAConfiguration`/`SLAMetrics` shape, `AccountType` (`operator`/`contact_center`/`reseller`) as conceptual reference for a future real design.
+  - **Do not resurrect**: `bpo.Ticket` (conflicts with the canonical Inbox/conversation direction), the raw-pool repository pattern (no RLS/tenant filter), the parallel `SupervisorRole` permission strings, the separate `AuditEvent` model.
+  - **Next**: `BPO.1 — Safe Retirement of internal/bpo` (delete the package; no migrations exist to revert, nothing registered in the router, so this is a pure deletion slice).
+
 - **DESIGN.5-A = DONE** (2026-09-23). Channels Legacy Retirement (`7853f89` refactor(web): retire legacy channels integration surface).
   - **Final routes**: `/channels` (canonical), `/channels/whatsapp/new` (canonical WAHA wizard), `/integrations` → compatibility redirect to `/channels`. One Channels frontend implementation, no duplication.
   - **Removed**: `IntegrationsPage.tsx`, `QRPairingModal.tsx`, `IntegrationsPage.test.tsx`, legacy `channels.spec.ts`, and the dead "Integrações" item from `SETTINGS_SECTIONS` (`SettingsShell.tsx`) — its only meaning was the retired page; Sidebar/MobileNav never linked to it. `lib/integrations.ts` (`integrationsAPI`) kept as-is — shared real infra still consumed by canonical Channels, not renamed.
