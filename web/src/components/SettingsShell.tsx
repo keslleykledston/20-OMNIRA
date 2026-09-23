@@ -16,7 +16,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { key: 'team', label: 'Equipe e acesso', href: '/settings/team' },
   { key: 'agents', label: 'Agentes', href: '/settings/agents' },
   { key: 'accounts', label: 'Contas', href: '/accounts' },
-  { key: 'integrations', label: 'Integrações', href: '/integrations' },
 ]
 
 interface SettingsShellProps {

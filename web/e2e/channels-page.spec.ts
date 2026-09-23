@@ -2,16 +2,17 @@ import { test, expect, Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 
 // Real stack incl. a throwaway WAHA (real QR). Seeded by scripts/e2e-inbox.sh.
-// This spec proves the CANONICAL /channels frontend (ChannelsPage + WahaWizardPage +
-// features/channels/*) — not the legacy /integrations shell, which web/e2e/channels.spec.ts
-// still covers separately (DESIGN.4-0). Same real backend/provider fixture mechanism,
-// no mocked QR, no fake state — the id/status assertions read the real database.
+// This spec is the sole product E2E for Channels (DESIGN.5-A retired the legacy
+// /integrations shell + its own spec) — ChannelsPage + WahaWizardPage +
+// features/channels/*. Same real backend/provider fixture mechanism, no mocked
+// QR, no fake state — the id/status assertions read the real database.
 const DB = process.env.E2E_DB || 'omnira_e2e';
 const PG = process.env.E2E_PG_CONTAINER || 'omnira-postgres';
 const WAHA_URL = process.env.E2E_WAHA_URL || 'http://127.0.0.1:23200';
 const WAHA_KEY = process.env.E2E_WAHA_KEY || 'e2ekey';
 const API_URL = process.env.E2E_API_URL || 'http://127.0.0.1:28961';
 const ADMIN = { email: 'admin@omnira.local', id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' };
+const AGENT = { email: 'test@omnira.local' };
 
 function sql(query: string): string {
   return execFileSync('docker', ['exec', PG, 'psql', '-U', 'omnira', '-d', DB, '-tA', '-c', query], { encoding: 'utf8' }).trim();
@@ -25,10 +26,48 @@ async function login(page: Page, email: string) {
 }
 
 // Runs regardless of where the test fails, so a failed run never leaves a
-// residual row that would break channels.spec.ts's own risk_acknowledged_by
-// count (both specs query the same admin id).
+// residual row that would break another test in this file that queries the
+// same admin id's risk_acknowledged_by count.
 test.afterEach(() => {
   sql(`DELETE FROM channel_connections WHERE risk_acknowledged_by='${ADMIN.id}'`);
+});
+
+// Visiting /channels as admin renders every connection through
+// LiveChannelConnectionCard (useLiveConnection), which reconciles each row
+// against its real WAHA session — this is real ChannelsPage behavior, not a
+// test artifact. The seeded fixture connection has no real WAHA session, so
+// it gets demoted from 'active' to 'pending' the first time any test here
+// renders the list as admin. web/e2e/inbox.spec.ts's fixture conversation
+// uses this exact connection and requires it 'active' to accept a reply
+// (internal/messages/application/send.go: ErrChannelUnavailable otherwise) —
+// this restores what visiting /channels disturbs, for every spec that shares
+// the tenant and runs after this file (found via TEST.2-A: without this,
+// inbox.spec.ts's send test fails whenever a channels-page test runs first).
+const FIXTURE_CONNECTION = 'c0000000-0000-0000-0000-00000000c001';
+test.afterAll(() => {
+  sql(`UPDATE channel_connections SET status='active' WHERE id='${FIXTURE_CONNECTION}'`);
+});
+
+// DESIGN.5-A: /integrations was the legacy duplicate Channels UI, now retired.
+// The route is kept only as a compatibility redirect for old bookmarks/links.
+test('/integrations redirects to the canonical /channels page', async ({ page }) => {
+  await login(page, ADMIN.email);
+  await page.goto('/integrations');
+  await expect(page).toHaveURL(/\/channels$/);
+  await expect(page.getByRole('heading', { name: 'Canais' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Adicionar canal' })).toBeVisible();
+});
+
+// Migrated from the retired legacy spec (DESIGN.5-A): non-admin authorization is
+// a real backend invariant (403 on providers/connections), not legacy-UI-specific
+// — integrationErrorMessage() maps 403 to the same "Somente administradores..."
+// text on both pages, ChannelsPage just renders it inside the generic ErrorState
+// instead of a page-level banner.
+test('a non-admin sees a permission message instead of the connections', async ({ page }) => {
+  await login(page, AGENT.email);
+  await page.goto('/channels');
+  await expect(page.getByText('Somente administradores do tenant gerenciam integrações.')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Ações de/ })).toHaveCount(0);
 });
 
 // DESIGN.4-0.1: WahaConnectionService.List (backend) never reconciles live WAHA

@@ -44,11 +44,11 @@ describe('SettingsShell', () => {
 
   it('renders optional actions region', () => {
     renderAt(
-      <SettingsShell sections={SETTINGS_SECTIONS} title="Integrações" actions={<button>Nova conexão</button>}>
+      <SettingsShell sections={SETTINGS_SECTIONS} title="Contas" actions={<button>Nova conta</button>}>
         <p>Conteúdo</p>
       </SettingsShell>,
-      '/integrations'
+      '/accounts'
     );
-    expect(screen.getByRole('button', { name: 'Nova conexão' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nova conta' })).toBeInTheDocument();
   });
 });

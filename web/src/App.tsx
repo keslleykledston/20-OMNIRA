@@ -8,7 +8,6 @@ import Tickets from './pages/Tickets'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
 import InboxWorkspace from './pages/InboxWorkspace'
-import IntegrationsPage from './pages/IntegrationsPage'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TeamPage from './pages/TeamPage'
@@ -42,7 +41,8 @@ export default function App() {
             <Route path="/settings/team" element={<TeamPage />} />
             <Route path="/settings/agents" element={<AgentsPage />} />
             <Route path="/settings/roles" element={<RolesPermissionsPage />} />
-            <Route path="/integrations" element={<IntegrationsPage />} />
+            {/* Legacy duplicate retired (DESIGN.5-A) — /channels is the sole Channels UI. */}
+            <Route path="/integrations" element={<Navigate to="/channels" replace />} />
             <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/channels/whatsapp/new" element={<WahaWizardPage />} />
             <Route path="*" element={<Navigate to="/" />} />
