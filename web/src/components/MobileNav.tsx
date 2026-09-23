@@ -2,20 +2,21 @@ import { Link, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 import { Icon } from './primitives'
 import type { IconName } from './primitives/Icon'
-import { isDevSurface } from './UnavailableSurface'
 
-// mockBacked: see Sidebar.tsx — same DESIGN.5/FRONTEND.1 rationale.
-const items: { label: string; path: string; icon: IconName; mockBacked?: boolean }[] = [
-  { label: 'Dashboard', path: '/', icon: 'dashboard', mockBacked: true },
+// Real operational surfaces only (FRONTEND.2). Dashboard/Tickets were mock-
+// backed and are gone from here entirely, in dev too — mocks stay reachable
+// directly via their existing routes, no special-casing needed on mobile nav.
+const items: { label: string; path: string; icon: IconName }[] = [
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
-  { label: 'Tickets', path: '/tickets', icon: 'tickets', mockBacked: true },
+  { label: 'Contatos', path: '/contacts', icon: 'contacts' },
+  { label: 'Canais', path: '/channels', icon: 'channels' },
 ]
 
 export default function MobileNav() {
   const location = useLocation()
-  const isActive = (path: string) =>
-    path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)
-  const visibleItems = items.filter((item) => !item.mockBacked || isDevSurface())
+  // startsWith keeps child routes (e.g. /contacts/:id, /channels/whatsapp/new)
+  // active under their parent item.
+  const isActive = (path: string) => location.pathname.startsWith(path)
 
   const slot = 'flex flex-col items-center justify-center gap-1 flex-1 min-h-[44px] text-xs no-underline'
 
@@ -24,7 +25,7 @@ export default function MobileNav() {
       aria-label="Navegação principal"
       className="lg:hidden fixed bottom-0 inset-x-0 h-16 bg-surface border-t border-border-subtle flex items-stretch px-2"
     >
-      {visibleItems.map((item) => {
+      {items.map((item) => {
         const active = isActive(item.path)
         return (
           <Link
@@ -38,16 +39,6 @@ export default function MobileNav() {
           </Link>
         )
       })}
-      {/* "Mais" menu is deferred to FR10; rendered inert instead of linking nowhere. */}
-      <button
-        type="button"
-        aria-disabled="true"
-        title="Disponível em breve"
-        className={clsx(slot, 'text-text-tertiary')}
-      >
-        <Icon name="more" size={22} />
-        <span>Mais</span>
-      </button>
     </nav>
   )
 }
