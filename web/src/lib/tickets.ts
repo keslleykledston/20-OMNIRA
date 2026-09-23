@@ -41,6 +41,19 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
   }
 }
 
+export interface TicketExport {
+  blob: Blob;
+  filename: string;
+}
+
+// Extracts the filename from a real Content-Disposition header
+// (attachment; filename="tickets.csv"); falls back to the canonical name
+// if the header is absent or unparsable for any reason.
+function filenameFromContentDisposition(header: string | undefined): string {
+  const match = header?.match(/filename="?([^"]+)"?/);
+  return match?.[1] ?? 'tickets.csv';
+}
+
 export const ticketsAPI = {
   list: (cursor?: string, limit?: number, filters?: TicketFilters) =>
     call<TicketPage>(() =>
@@ -54,12 +67,32 @@ export const ticketsAPI = {
         },
       }),
     ),
+  // Exports the full filtered result (bounded server-side, PRODUCT.5-A) —
+  // never just the currently visible pagination page.
+  exportCSV: async (filters?: TicketFilters): Promise<TicketExport> => {
+    try {
+      const res = await axios.get(`${ticketsBase()}/export.csv`, {
+        headers: authHeaders(),
+        responseType: 'blob',
+        params: {
+          ...(filters?.status ? { status: filters.status } : {}),
+          ...(filters?.priority ? { priority: filters.priority } : {}),
+        },
+      });
+      return { blob: res.data, filename: filenameFromContentDisposition(res.headers['content-disposition']) };
+    } catch (err) {
+      if (isUnauthorized(err)) handleUnauthorized();
+      throw err;
+    }
+  },
 };
 
 export function ticketErrorMessage(err: any, fallback = 'Não foi possível carregar os tickets'): string {
   switch (err?.response?.status) {
     case 403:
       return 'Você não tem permissão para visualizar os tickets deste tenant.';
+    case 413:
+      return 'A exportação excede 5000 tickets. Refine os filtros e tente novamente.';
     default:
       return fallback;
   }

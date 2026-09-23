@@ -1,10 +1,12 @@
 package adapters
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,6 +65,45 @@ var validPriority = map[string]bool{"critical": true, "high": true, "medium": tr
 
 const ticketColumns = `id, conversation_id, status, priority, subject, assigned_to, created_at, updated_at`
 
+// parseTicketFilters validates status/priority against the canonical Ticket
+// enums, shared by List and ExportCSV so both apply the exact same
+// semantics — never a second, drifted definition.
+func parseTicketFilters(r *http.Request) (status, priority string, err error) {
+	status = r.URL.Query().Get("status")
+	if status != "" && !validStatus[status] {
+		return "", "", errors.New("invalid status")
+	}
+	priority = r.URL.Query().Get("priority")
+	if priority != "" && !validPriority[priority] {
+		return "", "", errors.New("invalid priority")
+	}
+	return status, priority, nil
+}
+
+// ticketFilterWhere builds the shared tenant+status+priority WHERE clause;
+// callers append their own cursor/limit predicates and args afterwards.
+func ticketFilterWhere(tenantID uuid.UUID, status, priority string) (string, []any) {
+	where := `WHERE tenant_id = $1`
+	args := []any{tenantID}
+	if status != "" {
+		args = append(args, status)
+		where += ` AND status = $` + strconv.Itoa(len(args))
+	}
+	if priority != "" {
+		args = append(args, priority)
+		where += ` AND priority = $` + strconv.Itoa(len(args))
+	}
+	return where, args
+}
+
+func scanTicketItem(rows interface {
+	Scan(dest ...any) error
+}) (TicketItem, error) {
+	var item TicketItem
+	err := rows.Scan(&item.ID, &item.ConversationID, &item.Status, &item.Priority, &item.Subject, &item.AssignedTo, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
 // List returns one page of the TenantContext tenant's tickets, newest
 // activity first, gated by ticket.read. Ordering matches the leading
 // (tenant_id, ...) columns tickets already has via
@@ -95,27 +136,13 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := r.URL.Query().Get("status")
-	if status != "" && !validStatus[status] {
-		http.Error(w, "invalid status", http.StatusBadRequest)
-		return
-	}
-	priority := r.URL.Query().Get("priority")
-	if priority != "" && !validPriority[priority] {
-		http.Error(w, "invalid priority", http.StatusBadRequest)
+	status, priority, filterErr := parseTicketFilters(r)
+	if filterErr != nil {
+		http.Error(w, filterErr.Error(), http.StatusBadRequest)
 		return
 	}
 
-	where := `WHERE tenant_id = $1`
-	args := []any{tc.TenantID}
-	if status != "" {
-		args = append(args, status)
-		where += ` AND status = $` + strconv.Itoa(len(args))
-	}
-	if priority != "" {
-		args = append(args, priority)
-		where += ` AND priority = $` + strconv.Itoa(len(args))
-	}
+	where, args := ticketFilterWhere(tc.TenantID, status, priority)
 	if cursor != nil {
 		cursorID, parseErr := uuid.Parse(cursor.ID)
 		if parseErr != nil {
@@ -137,8 +164,8 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]TicketItem, 0, opts.Limit)
 	for rows.Next() {
-		var item TicketItem
-		if scanErr := rows.Scan(&item.ID, &item.ConversationID, &item.Status, &item.Priority, &item.Subject, &item.AssignedTo, &item.CreatedAt, &item.UpdatedAt); scanErr != nil {
+		item, scanErr := scanTicketItem(rows)
+		if scanErr != nil {
 			http.Error(w, "failed to read tickets", http.StatusInternalServerError)
 			return
 		}
@@ -170,6 +197,116 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	pagination.WritePaginationHeaders(w, result)
 	writeJSON(w, result)
+}
+
+// exportMaxRows is the V1 safety ceiling (PRODUCT.5-A): no async export
+// job, no object storage. A tenant whose filtered result exceeds this must
+// narrow it — the export never silently truncates.
+const exportMaxRows = 5000
+
+var csvHeader = []string{"id", "conversation_id", "subject", "status", "priority", "assigned_to", "created_at", "updated_at"}
+
+// sanitizeCSVField neutralizes spreadsheet formula injection (OWASP CSV
+// injection guidance) for user/provider-controlled text. The check looks at
+// the first MEANINGFUL character — skipping leading whitespace/control
+// characters a spreadsheet application would itself skip before evaluating
+// a cell as a formula (space, tab, CR, LF) — not merely byte 0, so
+// " =1+1", "\t=1+1" and "\r=1+1" are caught the same as "=1+1". When that
+// character is one of = + - @, a leading apostrophe is prepended to the
+// ORIGINAL (untrimmed) value so spreadsheet applications render the whole
+// cell as text. Stored data is never mutated; this is serialization-only.
+func sanitizeCSVField(s string) string {
+	trimmed := strings.TrimLeft(s, " \t\r\n")
+	if trimmed == "" {
+		return s
+	}
+	switch trimmed[0] {
+	case '=', '+', '-', '@':
+		return "'" + s
+	default:
+		return s
+	}
+}
+
+// ExportCSV streams the TenantContext tenant's full matching ticket set
+// (up to exportMaxRows) as CSV, gated by ticket.read — the same permission
+// as List, since export serves the exact same authorized data. Ordering
+// and filter semantics are identical to List (shared helpers); export
+// scope is the full filtered result, never a single pagination page.
+func (h *Handler) ExportCSV(w http.ResponseWriter, r *http.Request) {
+	tc, err := tenancydomain.FromContext(r.Context())
+	if err != nil || tc.TenantID == uuid.Nil {
+		http.Error(w, "tenant context not found", http.StatusInternalServerError)
+		return
+	}
+	if err := h.authorizeTicketRead(r, tc); err != nil {
+		if errors.Is(err, errPermissionDenied) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	status, priority, filterErr := parseTicketFilters(r)
+	if filterErr != nil {
+		http.Error(w, filterErr.Error(), http.StatusBadRequest)
+		return
+	}
+
+	where, args := ticketFilterWhere(tc.TenantID, status, priority)
+	args = append(args, exportMaxRows+1)
+	query := `SELECT ` + ticketColumns + ` FROM tickets ` + where + ` ORDER BY updated_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args))
+
+	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), query, args...)
+	if err != nil {
+		http.Error(w, "failed to export tickets", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	items := make([]TicketItem, 0, exportMaxRows)
+	for rows.Next() {
+		item, scanErr := scanTicketItem(rows)
+		if scanErr != nil {
+			http.Error(w, "failed to read tickets", http.StatusInternalServerError)
+			return
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "failed to read tickets", http.StatusInternalServerError)
+		return
+	}
+
+	if len(items) > exportMaxRows {
+		http.Error(w, "export exceeds 5000 tickets. Narrow the result using filters.", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="tickets.csv"`)
+	w.Header().Set("Cache-Control", "no-store")
+
+	cw := csv.NewWriter(w)
+	_ = cw.Write(csvHeader)
+	for _, item := range items {
+		assignedTo := ""
+		if item.AssignedTo != nil {
+			assignedTo = item.AssignedTo.String()
+		}
+		_ = cw.Write([]string{
+			item.ID.String(),
+			item.ConversationID.String(),
+			sanitizeCSVField(item.Subject),
+			item.Status,
+			item.Priority,
+			assignedTo,
+			item.CreatedAt.UTC().Format(time.RFC3339),
+			item.UpdatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	cw.Flush()
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
+  Button,
   EmptyState,
   ErrorState,
   FilterBar,
@@ -18,6 +19,7 @@ import {
 } from '../components/primitives'
 import { ticketErrorMessage, ticketsAPI, type Ticket, type TicketFilters } from '../lib/tickets'
 import { getTenantId } from '../lib/session'
+import { useAccess } from '../lib/useAccess'
 
 const PAGE_SIZE = 20
 
@@ -44,7 +46,9 @@ function formatDate(iso: string): string {
 
 export default function TicketsPage() {
   const tenantId = getTenantId()
+  const access = useAccess()
   const [filters, setFilters] = useState<TicketFilters>({})
+  const [exportError, setExportError] = useState<string | null>(null)
 
   // The API paginates by cursor, so going back is not "page - 1": we keep the
   // cursor that opened each page and pop it to return (same pattern as
@@ -66,9 +70,42 @@ export default function TicketsPage() {
     setFilters((prev) => ({ ...prev, ...patch }))
   }
 
+  // Exports the full filtered result (server-bounded), never just the
+  // currently visible pagination page.
+  const exportMutation = useMutation({
+    mutationFn: () => ticketsAPI.exportCSV(filters),
+    onSuccess: ({ blob, filename }) => {
+      setExportError(null)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    },
+    onError: (err) => setExportError(ticketErrorMessage(err, 'Não foi possível exportar os tickets')),
+  })
+
   return (
     <div className="space-y-6">
-      <PageHeader title="Tickets" description="Solicitações de suporte vinculadas às conversas do Inbox." />
+      <PageHeader
+        title="Tickets"
+        description="Solicitações de suporte vinculadas às conversas do Inbox."
+        actions={
+          access.can('ticket.read') && (
+            <Button variant="secondary" size="md" isLoading={exportMutation.isPending} onClick={() => exportMutation.mutate()}>
+              <Icon name="reports" size={18} />
+              Exportar CSV
+            </Button>
+          )
+        }
+      />
+
+      {exportError && (
+        <ErrorState message={exportError} isDismissible onDismiss={() => setExportError(null)} />
+      )}
 
       <FilterBar>
         <select

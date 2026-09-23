@@ -71,3 +71,30 @@ test('status filter narrows the real list via the real API', async ({ page }) =>
   await page.getByLabel('Filtrar por status').selectOption('open')
   await expect(row).toBeVisible()
 })
+
+// PRODUCT.5-A: real CSV export — GET .../tickets/export.csv, same
+// ticket.read gate, real Postgres-backed rows, real browser download.
+test('admin exports the real filtered ticket list as a real CSV download', async ({ page }) => {
+  await login(page, ADMIN)
+  await page.goto('/tickets')
+  await expect(page.getByRole('row', { name: new RegExp(SEEDED_SUBJECT) })).toBeVisible()
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: /Exportar CSV/ }).click()
+  const download = await downloadPromise
+
+  expect(download.suggestedFilename()).toBe('tickets.csv')
+  const path = await download.path()
+  const fs = await import('node:fs')
+  const content = fs.readFileSync(path!, 'utf8')
+
+  expect(content).toContain('id,conversation_id,subject,status,priority,assigned_to,created_at,updated_at')
+  expect(content).toContain(SEEDED_SUBJECT)
+  expect(content).not.toMatch(/TKT-\d/)
+})
+
+test('a user without ticket.read cannot see or trigger the export action', async ({ page }) => {
+  await login(page, AGENT)
+  await page.goto('/tickets')
+  await expect(page.getByRole('button', { name: /Exportar CSV/ })).toHaveCount(0)
+})
