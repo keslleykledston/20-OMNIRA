@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { accountsAPI, ticketsAPI, reportsAPI } from '../lib/api'
+import { accountsAPI, reportsAPI } from '../lib/api'
 
 // O login mock que rodava no browser saiu: emitia um JWT com assinatura falsa
 // que o backend nunca aceitou. O acesso de desenvolvimento agora é uma rota do
@@ -30,34 +30,6 @@ describe('API Mock', () => {
       expect(res.data).toHaveProperty('id')
       expect(res.data.name).toBe('Test Account')
       expect(res.data).toHaveProperty('created_at')
-    })
-  })
-
-  describe('ticketsAPI', () => {
-    it('deve listar tickets', async () => {
-      const res = await ticketsAPI.list()
-      expect(Array.isArray(res.data)).toBe(true)
-    })
-
-    it('deve filtrar por status', async () => {
-      const res = await ticketsAPI.list({ status: 'open' })
-      res.data.forEach((t: any) => {
-        expect(t.status).toBe('open')
-      })
-    })
-
-    it('deve criar ticket', async () => {
-      const res = await ticketsAPI.create({
-        title: 'Test Ticket',
-        priority: 'high'
-      })
-      expect(res.data).toHaveProperty('id')
-      expect(res.data.status).toBe('open')
-    })
-
-    it('deve resolver ticket', async () => {
-      const res = await ticketsAPI.resolve('TKT-001')
-      expect(res.data.status).toBe('resolved')
     })
   })
 

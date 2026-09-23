@@ -10,16 +10,17 @@ import { isDevSurface } from './UnavailableSurface'
 // docs/architecture/FRONTEND-UX.md. Equipe e acesso é a única seção de
 // Configurações implementada até agora (IAM2A).
 //
-// mockBacked: destination has no real backend behind it (Dashboard/Tickets/
+// mockBacked: destination has no real backend behind it (Dashboard/
 // Relatórios — DESIGN.5 reality gate, FRONTEND.1). Filtered out of
 // operational navigation outside development so it never implies active
 // production capability; the route itself still exists (see UnavailableSurface).
-// Supervisor became real in PRODUCT.1 (agent roster + Valkey presence) and is
-// no longer contained.
+// Supervisor became real in PRODUCT.1 (agent roster + Valkey presence) and
+// Tickets in PRODUCT.2-B (canonical ticket listing) — neither is contained
+// anymore.
 const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string; mockBacked?: boolean }[] = [
   { label: 'Dashboard', path: '/', icon: 'dashboard', mockBacked: true },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
-  { label: 'Tickets', path: '/tickets', icon: 'tickets', mockBacked: true },
+  { label: 'Tickets', path: '/tickets', icon: 'tickets' },
   { label: 'Contatos', path: '/contacts', icon: 'contacts' },
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },

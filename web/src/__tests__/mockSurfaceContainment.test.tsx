@@ -1,20 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import Dashboard from '../pages/Dashboard';
-import TicketsPage from '../pages/Tickets';
 import ReportsPage from '../pages/Reports';
 import Accounts from '../pages/Accounts';
 import { renderAt, setSession } from './testUtils';
 
 // FRONTEND.1: mock-backed pages must never present fabricated business data
-// as if it were real outside development. The four pages here have no real
+// as if it were real outside development. The three pages here have no real
 // backend behind them (see docs/delivery/HANDOFF-NEXT-AGENT.md DESIGN.5).
-// Supervisor became real in PRODUCT.1 and is no longer contained — see
-// SupervisorDashboard.test.tsx instead.
+// Supervisor became real in PRODUCT.1, Tickets in PRODUCT.2-B — neither is
+// contained anymore; see SupervisorDashboard.test.tsx / Tickets.test.tsx.
 
 const MOCK_SURFACES: Array<{ title: string; Component: () => JSX.Element }> = [
   { title: 'Dashboard', Component: Dashboard },
-  { title: 'Tickets', Component: TicketsPage },
   { title: 'Relatórios', Component: ReportsPage },
   { title: 'Contas', Component: Accounts },
 ];

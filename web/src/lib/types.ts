@@ -14,26 +14,6 @@ export interface SLAConfig {
   resolution_target_hours: number
 }
 
-export interface Ticket {
-  id: string
-  account_id: string
-  title?: string
-  priority: 'low' | 'medium' | 'high' | 'critical'
-  status: 'open' | 'in_progress' | 'resolved' | 'closed'
-  assigned_to?: string
-  sla_metrics?: SLAMetrics
-  created_at: string
-  updated_at: string
-}
-
-export interface SLAMetrics {
-  first_response_target: string
-  resolution_target: string
-  first_response_met: boolean
-  resolution_met: boolean
-  breached_at?: string
-}
-
 export interface Report {
   id: string
   template_id: string
