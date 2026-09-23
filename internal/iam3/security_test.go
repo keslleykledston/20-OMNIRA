@@ -18,12 +18,16 @@ import (
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
 		"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-		"dashboard.read", "membership.manage", "membership.read", "ticket.read", "tenant.manage", "tenant.read",
+		"dashboard.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "tenant.manage", "tenant.read",
 	},
 	"tenant_supervisor": {
-		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "ticket.read", "tenant.read",
+		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "ticket.create", "ticket.read", "tenant.read",
 	},
-	"tenant_agent": {"conversation.claim", "tenant.read"},
+	// PRODUCT.6-F: ticket.create does NOT imply ticket.read — an agent may
+	// create a ticket from a conversation they are already authorized to
+	// operate, but tenant-wide ticket visibility remains a separate grant
+	// (see migration 000043's own rationale, unchanged by this one).
+	"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create"},
 	"hub_admin":    {"hub.manage", "hub.read"},
 }
 
