@@ -27,13 +27,14 @@ import (
 // shape a real per-tenant adapter (K3G or otherwise) will satisfy once its
 // write contract is validated (PRODUCT.6-C3, not yet run).
 //
-// V1 is deliberately read-only: PRODUCT.6-C1 validated GET
-// /api/support/tickets/{id} against the real K3G API, but no write payload
-// (POST create, PUT status/priority/assignee) — inventing those shapes now
-// would repeat the exact mistake IXCConnector already made (a contract
-// built from assumption, never exercised against a real environment).
-// CreateTicket/UpdateTicket/CloseTicket are deferred until PRODUCT.6-C3
-// validates real request/response payloads.
+// PRODUCT.6-C1 validated GET /api/support/tickets/{id} against the real K3G
+// API; PRODUCT.6-H1 went further and directly validated CREATE with one
+// authorized, controlled production POST (ticket.id 28180, HTTP 201,
+// source="crm"). UpdateTicket/CloseTicket remain deferred — no write
+// payload for status/priority/assignee mutation has been validated yet,
+// and inventing one now would repeat the exact mistake IXCConnector made
+// (a contract built from assumption, never exercised against a real
+// environment).
 type TicketingConnector interface {
 	// Name identifies the provider (e.g. "k3g", "ixc") for logging/audit —
 	// never used for behavior branching in caller code.
@@ -45,6 +46,35 @@ type TicketingConnector interface {
 	// TicketingErrorCode the caller can act on, never a bare error the
 	// caller has to string-match.
 	GetTicket(ctx context.Context, externalTicketID string) (*ExternalTicket, error)
+
+	// CreateTicket opens a new external ticket. Implementations MUST NOT
+	// retry the underlying write on their own — PRODUCT.6-H1 confirmed K3G
+	// offers no Idempotency-Key/externalReference/correlationId, so a
+	// blind retry after a timeout or ambiguous transport error could create
+	// a duplicate ticket with no way to detect it. Exactly one write
+	// attempt per call; application-level idempotency/reconciliation is a
+	// future slice's responsibility, not this connector's.
+	CreateTicket(ctx context.Context, req CreateTicketRequest) (*ExternalTicket, error)
+}
+
+// CreateTicketRequest is the provider-neutral V1 create command — OMNIRA
+// business intent, never a provider's wire shape. Deliberately minimal:
+// PRODUCT.6-H1's controlled production create proved a company reference +
+// subject + description is sufficient for a real, successful K3G ticket
+// (HTTP 201, ticket.id 28180). Requester, category, service, priority,
+// urgency, assignee and status are all out of V1 scope — none of them were
+// sent in the validated call, and the provider applied sane defaults
+// (priority/urgency both defaulted to 3) without them.
+//
+// CustomerExternalID names the provider's own identifier for "which
+// customer/company this ticket belongs to" (K3G's companyId) — not an
+// OMNIRA domain concept, and deliberately not named CompanyID: OMNIRA has
+// no company entity of its own, and a future non-K3G provider may key this
+// by something other than a company (e.g. a subscriber/contract ID).
+type CreateTicketRequest struct {
+	CustomerExternalID string
+	Subject            string
+	Description        string
 }
 
 // ExternalTicket is the provider-neutral read shape returned by

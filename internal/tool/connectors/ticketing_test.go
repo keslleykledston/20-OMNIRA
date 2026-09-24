@@ -27,6 +27,12 @@ func (f *fakeTicketingConnector) GetTicket(ctx context.Context, externalTicketID
 	return nil, &TicketingError{Code: TicketingNotFound, Message: "no such ticket"}
 }
 
+func (f *fakeTicketingConnector) CreateTicket(ctx context.Context, req CreateTicketRequest) (*ExternalTicket, error) {
+	t := &ExternalTicket{ExternalID: "fake-1", ExternalStatus: "1", ExternalStatusLabel: "Novo"}
+	f.tickets[t.ExternalID] = t
+	return t, nil
+}
+
 func TestTicketingConnectorIsIndependentOfCRMCustomerIntegration(t *testing.T) {
 	var _ TicketingConnector = (*fakeTicketingConnector)(nil)
 
