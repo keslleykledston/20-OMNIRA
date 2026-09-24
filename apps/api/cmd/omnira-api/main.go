@@ -295,6 +295,18 @@ func main() {
 			ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials),
 		)
 		crmHandler.SetExternalTicketService(externalTicketService)
+
+		// PRODUCT.6-O1: ativa o caminho real de leitura de ticket
+		// escopado por conversa — LOCAL apenas, nunca chama o provider
+		// (PRODUCT.6-O0: READ STRATEGY = LOCAL + EXPLICIT REFRESH).
+		// Reaproveita exatamente os mesmos ConversationAuthorizer/
+		// LocalTicketStore já construídos acima.
+		readTicketService := ticketsapplication.NewReadConversationTicketService(
+			channeladapters.NewPostgresPermissionChecker(dbPool),
+			ticketsadapters.NewConversationAuthorizer(dbPool),
+			ticketsadapters.NewLocalTicketStore(dbPool),
+		)
+		crmHandler.SetReadTicketService(readTicketService)
 	}
 
 	errChan := make(chan error, 1)

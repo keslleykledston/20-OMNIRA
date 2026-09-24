@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,6 +44,9 @@ type CRMHandlers struct {
 	// canonical runtime composition root, never a handler-built service
 	// graph.
 	externalTicketService externalTicketCreator
+	// readTicketService is the real, conversation-scoped, LOCAL-ONLY
+	// ticket read path (PRODUCT.6-O1). Nil until server.go wires it.
+	readTicketService conversationTicketReader
 }
 
 // NewCRMHandlers — cria novo CRM handler.
@@ -78,6 +82,15 @@ func (h *CRMHandlers) SetExternalTicketService(svc externalTicketCreator) {
 	h.externalTicketService = svc
 }
 
+// SetReadTicketService wires the real, conversation-scoped ticket read
+// path (PRODUCT.6-O1). Canonical runtime composition (server.go/main.go)
+// calls this with a Postgres-backed
+// *ticketsapplication.ReadConversationTicketService; tests may inject a
+// fake satisfying conversationTicketReader.
+func (h *CRMHandlers) SetReadTicketService(svc conversationTicketReader) {
+	h.readTicketService = svc
+}
+
 // ticketingUnavailable writes the canonical response for "no real ERP
 // ticketing connector is configured for this tenant" — 503, matching the
 // exact convention already used by the frontend for the same class of
@@ -88,12 +101,41 @@ func ticketingUnavailable(w http.ResponseWriter) {
 	http.Error(w, "ticketing integration not configured for this tenant", http.StatusServiceUnavailable)
 }
 
-// GetCurrentTicket — reports whether a real ERP ticketing connector is
-// configured for this tenant, so TicketPanel can render an honest
-// unavailable state proactively (PRODUCT.6-B) instead of only discovering
-// it reactively when the operator tries to create a ticket. It never
-// fabricates or returns a ticket: with no connector configured (the only
-// state possible today), it always answers 503.
+// conversationTicketReader is the seam PRODUCT.6-O1's GetCurrentTicket
+// calls through — narrow on purpose so HTTP tests can inject a fake
+// without a real Postgres-backed application service.
+// *ticketsapplication.ReadConversationTicketService satisfies this without
+// any adapter.
+type conversationTicketReader interface {
+	ReadConversationTicket(ctx context.Context, cmd ticketsapplication.ReadConversationTicketCommand) (*ticketsapplication.TicketReadResult, error)
+}
+
+// conversationTicketResponse is the provider-neutral read shape
+// (PRODUCT.6-O1 section 5) — no raw K3G payload, no credential/Bearer
+// identity, no K3G-specific field names. Nullable fields are simply
+// omitted (empty string / absent) when Linked is false.
+type conversationTicketResponse struct {
+	LocalTicketID       uuid.UUID  `json:"local_ticket_id"`
+	Linked              bool       `json:"linked"`
+	Provider            string     `json:"provider,omitempty"`
+	ExternalTicketID    string     `json:"external_ticket_id,omitempty"`
+	ExternalStatus      string     `json:"external_status,omitempty"`
+	ExternalStatusLabel string     `json:"external_status_label,omitempty"`
+	SyncStatus          string     `json:"sync_status,omitempty"`
+	LastSyncedAt        *time.Time `json:"last_synced_at,omitempty"`
+}
+
+// GetCurrentTicket — PRODUCT.6-O1: the real, conversation-scoped, LOCAL-ONLY
+// ticket read. Authorized by conversation ownership (assignee or
+// conversation.manage — the same primitive CreateExternalTicket uses),
+// NEVER by tenant-wide ticket.read (PRODUCT.6-F: that permission stays
+// reserved for the tenant-wide list/export surface, internal/tickets/
+// adapters.Handler). Never calls the provider — a K3G outage or missing
+// tenant configuration has no effect on this route (PRODUCT.6-O0 section 2:
+// READ STRATEGY = LOCAL + EXPLICIT REFRESH; refresh is PRODUCT.6-O1R).
+// Gated on h.readTicketService, never the legacy h.crm connector (which
+// still gates the separately-contained GET-by-ticket-id/UPDATE/CLOSE
+// routes below).
 // GET /api/v1/tenants/{tenantId}/conversations/{conversationId}/ticket
 func (h *CRMHandlers) GetCurrentTicket(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -101,14 +143,65 @@ func (h *CRMHandlers) GetCurrentTicket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if h.crm == nil {
+	if h.readTicketService == nil {
 		ticketingUnavailable(w)
 		return
 	}
-	// A real connector exists but there is no per-conversation ticket
-	// lookup yet (no local projection model — PRODUCT.6-A). Nothing to
-	// report until that lands.
-	http.Error(w, "no ticket associated with this conversation", http.StatusNotFound)
+
+	tenantID, convID := r.PathValue("tenant_id"), r.PathValue("conversation_id")
+	if tenantID == "" || convID == "" {
+		http.Error(w, "missing tenant or conversation ID", http.StatusBadRequest)
+		return
+	}
+	tid, err := uuid.Parse(tenantID)
+	if err != nil {
+		http.Error(w, "invalid tenant ID", http.StatusBadRequest)
+		return
+	}
+	cid, err := uuid.Parse(convID)
+	if err != nil {
+		http.Error(w, "invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.ActorID == uuid.Nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	result, err := h.readTicketService.ReadConversationTicket(ctx, ticketsapplication.ReadConversationTicketCommand{
+		TenantID: tid, ConversationID: cid, ActorUserID: tc.ActorID,
+	})
+	if err != nil {
+		failReadConversationTicket(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(conversationTicketResponse{
+		LocalTicketID: result.LocalTicketID, Linked: result.Linked, Provider: result.Provider,
+		ExternalTicketID: result.ExternalTicketID, ExternalStatus: result.ExternalStatus,
+		ExternalStatusLabel: result.ExternalStatusLabel, SyncStatus: result.SyncStatus, LastSyncedAt: result.LastSyncedAt,
+	})
+}
+
+// failReadConversationTicket maps ReadConversationTicket's application
+// errors to HTTP — reusing the exact same authorization error identifiers
+// CreateExternalTicket already defines (ErrForbidden, ErrConversationNotFound,
+// ErrUnassigned, ErrNotAssignedToYou), since conversation-scoped
+// authorization is one concept shared by both routes.
+func failReadConversationTicket(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ticketsapplication.ErrForbidden), errors.Is(err, ticketsapplication.ErrUnassigned), errors.Is(err, ticketsapplication.ErrNotAssignedToYou):
+		http.Error(w, "forbidden", http.StatusForbidden)
+	case errors.Is(err, ticketsapplication.ErrConversationNotFound), errors.Is(err, ticketsapplication.ErrNoActiveTicket):
+		http.Error(w, "no active ticket for this conversation", http.StatusNotFound)
+	case errors.Is(err, ticketsapplication.ErrInconsistentExternalLink):
+		http.Error(w, "ticket has inconsistent external linkage and requires reconciliation", http.StatusConflict)
+	default:
+		log.Printf("tickets read conversation ticket: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
 }
 
 // externalTicketCreator is the seam PRODUCT.6-M's CreateTicket route calls

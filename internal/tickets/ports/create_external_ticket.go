@@ -76,8 +76,15 @@ type CompanyDirectory interface {
 // Never creates a ticket — CreateExternalTicket only enriches an existing
 // one.
 type LocalTicketStore interface {
-	// FindEnrichmentCandidate returns the conversation's canonical
-	// non-closed/non-resolved ticket, or nil if none exists.
+	// FindActiveByConversation returns the conversation's canonical
+	// non-closed/non-resolved ticket, or nil if none exists (PRODUCT.6-O1:
+	// the read-oriented name for the same primitive CreateExternalTicket
+	// calls FindEnrichmentCandidate).
+	FindActiveByConversation(ctx context.Context, conversationID uuid.UUID) (*ticketsdomain.Ticket, error)
+	// FindEnrichmentCandidate is the create path's name for
+	// FindActiveByConversation — same query, same semantics, kept as a
+	// separate interface method only so PRODUCT.6-K2 call sites read
+	// naturally as "the ticket I am about to enrich".
 	FindEnrichmentCandidate(ctx context.Context, conversationID uuid.UUID) (*ticketsdomain.Ticket, error)
 	// EnrichExternalProjection sets the PRODUCT.6-D projection columns on
 	// an existing ticket. Idempotent: repeating it with the same values is

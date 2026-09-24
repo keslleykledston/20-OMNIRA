@@ -69,6 +69,32 @@ func TestTicketsActiveConversationUniqueConstraintPreventsSecondEligibleTicket(t
 	}
 }
 
+// PRODUCT.6-O1 sections 9/15 A-C: FindActiveByConversation (the read-path
+// name for the exact same primitive FindEnrichmentCandidate calls) returns
+// the ticket for each of the three eligible statuses individually.
+func TestLocalTicketStoreFindActiveByConversationReturnsEachEligibleStatus(t *testing.T) {
+	for _, status := range []string{"open", "in_progress", "waiting"} {
+		t.Run(status, func(t *testing.T) {
+			f, _ := requireAttemptStack(t)
+			store := NewLocalTicketStore(f.app)
+			want := insertTestTicket(t, f, status, time.Now().UTC())
+			err := f.withSystemSession(t, func(ctx context.Context) error {
+				ticket, err := store.FindActiveByConversation(ctx, f.conversationID)
+				if err != nil {
+					return err
+				}
+				if ticket == nil || ticket.ID != want {
+					t.Fatalf("FindActiveByConversation(%s) = %+v, want id=%s", status, ticket, want)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 // FindEnrichmentCandidate still correctly returns THE (singular, guaranteed
 // by the DB) eligible ticket when one exists.
 func TestLocalTicketStoreFindEnrichmentCandidateReturnsTheEligibleTicket(t *testing.T) {

@@ -192,6 +192,10 @@ func (f *fakeLocalTickets) FindEnrichmentCandidate(ctx context.Context, conversa
 	return &cp, nil
 }
 
+func (f *fakeLocalTickets) FindActiveByConversation(ctx context.Context, conversationID uuid.UUID) (*ticketsdomain.Ticket, error) {
+	return f.FindEnrichmentCandidate(ctx, conversationID)
+}
+
 func (f *fakeLocalTickets) EnrichExternalProjection(ctx context.Context, ticketID uuid.UUID, provider, externalTicketID, externalStatus, externalStatusLabel string, syncedAt time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

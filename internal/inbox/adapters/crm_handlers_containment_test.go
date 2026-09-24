@@ -52,20 +52,29 @@ func TestCRMHandlersInjectedLegacyCRMConnectorDoesNotBypassCreateTicketContainme
 	}
 }
 
-// GetCurrentTicket/GetTicket/UpdateTicket/CloseTicket remain gated on the
-// legacy h.crm field (PRODUCT.6-B containment, unchanged by PRODUCT.6-M —
-// no proven real path exists for them yet). Proven here with the mock only
-// as a test utility (SetCRMConnector is explicitly documented as test-only;
-// canonical runtime composition in server.go must never call it).
-func TestCRMHandlersGetCurrentTicketFunctionsWithAnInjectedConnector(t *testing.T) {
+// PRODUCT.6-O1 superseded assertion: GetCurrentTicket's containment check
+// used to be h.crm == nil. Since PRODUCT.6-O1, GetCurrentTicket is gated on
+// h.readTicketService instead (the real, local-only, conversation-scoped
+// read path) — the legacy h.crm field no longer controls this route at
+// all. Injecting it must neither activate nor otherwise change
+// GetCurrentTicket's behavior; see
+// TestReadConversationTicketHTTPLegacyCRMConnectorDoesNotControlRoute and
+// TestReadConversationTicketHTTPUnwiredServiceIsContained
+// (crm_handlers_read_conversation_ticket_test.go) for the current proof.
+// GetTicket/UpdateTicket/CloseTicket remain gated on the legacy h.crm field
+// (PRODUCT.6-B containment, unchanged — no proven real path exists for
+// them yet).
+func TestCRMHandlersLegacyCRMConnectorNoLongerControlsGetCurrentTicket(t *testing.T) {
 	h := NewCRMHandlers(nil)
 	h.SetCRMConnector(connectors.NewMockCRMConnector())
 
 	rec := httptest.NewRecorder()
 	req := authedRequest(http.MethodGet, "/api/v1/tenants/"+uuid.NewString()+"/conversations/"+uuid.NewString()+"/ticket", "")
 	h.GetCurrentTicket(rec, req)
-	if rec.Code == http.StatusServiceUnavailable {
-		t.Fatalf("an injected connector must bypass GetCurrentTicket's containment check, got 503: %s", rec.Body.String())
+	// No readTicketService wired -> still contained (503), regardless of
+	// the legacy connector being set.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("legacy h.crm injection must not activate GetCurrentTicket, want 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

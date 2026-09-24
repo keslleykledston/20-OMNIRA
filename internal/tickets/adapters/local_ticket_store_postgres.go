@@ -29,14 +29,19 @@ func NewLocalTicketStore(pool *pgxpool.Pool) *LocalTicketStore {
 	return &LocalTicketStore{pool: pool}
 }
 
-// FindEnrichmentCandidate reuses, verbatim, the selection rule already
+// FindActiveByConversation reuses, verbatim, the selection rule already
 // established and shipped by internal/inbox/adapters.
 // PostgresInboundStore.FindOpenByConversation (PRODUCT.6-K2 section 1
 // audit): the tenant's non-closed/non-resolved ticket for this
 // conversation, most recently updated first, tie-broken by id. This is the
-// only deterministic "canonical open ticket" rule that exists anywhere in
-// the product today — CreateExternalTicket does not invent a different one.
-func (s *LocalTicketStore) FindEnrichmentCandidate(ctx context.Context, conversationID uuid.UUID) (*domain.Ticket, error) {
+// only deterministic "canonical active ticket" rule that exists anywhere
+// in the product today. Migration 000016's tickets_active_conversation_uq
+// guarantees at most one such row per (tenant_id, conversation_id), so the
+// ORDER BY/LIMIT here is defensive, never load-bearing (PRODUCT.6-M4
+// audit). This is the single read primitive both CreateExternalTicket
+// (enrichment target) and ReadConversationTicket (PRODUCT.6-O1, read-only)
+// use — one query, two callers, never duplicated SQL.
+func (s *LocalTicketStore) FindActiveByConversation(ctx context.Context, conversationID uuid.UUID) (*domain.Ticket, error) {
 	tenantID, err := attemptTenantOf(ctx)
 	if err != nil {
 		return nil, err
@@ -56,9 +61,17 @@ func (s *LocalTicketStore) FindEnrichmentCandidate(ctx context.Context, conversa
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("tickets: find enrichment candidate: %w", err)
+		return nil, fmt.Errorf("tickets: find active ticket by conversation: %w", err)
 	}
 	return t, nil
+}
+
+// FindEnrichmentCandidate is CreateExternalTicket's name for the same
+// primitive as FindActiveByConversation — kept as a thin alias so the
+// PRODUCT.6-K2 create path's own vocabulary ("the ticket I am about to
+// enrich") stays intact without a second query.
+func (s *LocalTicketStore) FindEnrichmentCandidate(ctx context.Context, conversationID uuid.UUID) (*domain.Ticket, error) {
+	return s.FindActiveByConversation(ctx, conversationID)
 }
 
 // EnrichExternalProjection is idempotent (repeating with the same values is

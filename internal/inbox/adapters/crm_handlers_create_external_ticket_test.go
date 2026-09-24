@@ -58,6 +58,10 @@ func (f *httpFakeLocalTickets) FindEnrichmentCandidate(ctx context.Context, conv
 	cp := *f.candidate
 	return &cp, nil
 }
+
+func (f *httpFakeLocalTickets) FindActiveByConversation(ctx context.Context, conversationID uuid.UUID) (*ticketsdomain.Ticket, error) {
+	return f.FindEnrichmentCandidate(ctx, conversationID)
+}
 func (f *httpFakeLocalTickets) EnrichExternalProjection(ctx context.Context, ticketID uuid.UUID, provider, externalTicketID, externalStatus, externalStatusLabel string, syncedAt time.Time) error {
 	return nil
 }
@@ -446,6 +450,10 @@ type failingProjectionLocalTickets struct{ candidate *ticketsdomain.Ticket }
 func (f *failingProjectionLocalTickets) FindEnrichmentCandidate(ctx context.Context, conversationID uuid.UUID) (*ticketsdomain.Ticket, error) {
 	cp := *f.candidate
 	return &cp, nil
+}
+
+func (f *failingProjectionLocalTickets) FindActiveByConversation(ctx context.Context, conversationID uuid.UUID) (*ticketsdomain.Ticket, error) {
+	return f.FindEnrichmentCandidate(ctx, conversationID)
 }
 func (f *failingProjectionLocalTickets) EnrichExternalProjection(ctx context.Context, ticketID uuid.UUID, provider, externalTicketID, externalStatus, externalStatusLabel string, syncedAt time.Time) error {
 	return errors.New("db down")
