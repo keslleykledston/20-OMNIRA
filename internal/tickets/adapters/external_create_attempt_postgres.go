@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/tickets/domain"
+	"github.com/omnira/omnira/internal/tickets/ports"
 
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -17,8 +18,11 @@ import (
 // ErrAttemptIdempotencyMismatch: the same idempotency key was already used
 // with a different request (different request_hash) — mirrors
 // internal/messages/application.ErrIdempotencyMismatch's semantics for this
-// table.
-var ErrAttemptIdempotencyMismatch = errors.New("tickets: Idempotency-Key was already used with a different request")
+// table. Kept as the same value as ports.ErrIdempotencyMismatch (PRODUCT.6-K2)
+// so callers can match on either identifier via errors.Is, while
+// internal/tickets/application only ever needs to know about the
+// ports-level one.
+var ErrAttemptIdempotencyMismatch = ports.ErrIdempotencyMismatch
 
 // ErrAttemptInvalidTransition: a state transition was attempted from a
 // state that does not permit it (e.g. confirming success on a row that is
