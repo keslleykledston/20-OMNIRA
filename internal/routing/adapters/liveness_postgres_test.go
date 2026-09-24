@@ -116,7 +116,12 @@ func TestRetrigger_DueUnassignedRoundRobin_IsRetriggered(t *testing.T) {
 	repo := NewPostgresLivenessRepository(f.app)
 	conv := f.conversation(t, &f.roundRobinQueue, nil, "open", past())
 
-	n, err := repo.Retrigger(context.Background(), nil, nil, 10, time.Minute)
+	// TEST.3: scoped to this fixture's own tenant — Retrigger(nil, nil, ...)
+	// sweeps every tenant in the shared real-Postgres database, so an exact
+	// count assertion is only deterministic when scoped. See
+	// TestRetrigger_TenantIsolation below, which already proves scoping
+	// works; every exact-count test in this file follows that pattern now.
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +141,7 @@ func TestRetrigger_StillWithinBackoffWindow_IsNotRetriggered(t *testing.T) {
 	repo := NewPostgresLivenessRepository(f.app)
 	conv := f.conversation(t, &f.roundRobinQueue, nil, "open", future())
 
-	n, err := repo.Retrigger(context.Background(), nil, nil, 10, time.Minute)
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +163,7 @@ func TestRetrigger_AlreadyAssigned_IsNeverRetriggered(t *testing.T) {
 	t.Cleanup(func() { _, _ = f.seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, someone) })
 	conv := f.conversation(t, &f.roundRobinQueue, &someone, "open", past())
 
-	n, err := repo.Retrigger(context.Background(), nil, nil, 10, time.Minute)
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +180,7 @@ func TestRetrigger_ClosedConversation_IsNeverRetriggered(t *testing.T) {
 	repo := NewPostgresLivenessRepository(f.app)
 	conv := f.conversation(t, &f.roundRobinQueue, nil, "closed", past())
 
-	n, err := repo.Retrigger(context.Background(), nil, nil, 10, time.Minute)
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +197,7 @@ func TestRetrigger_ManualQueue_IsNeverRetriggered(t *testing.T) {
 	repo := NewPostgresLivenessRepository(f.app)
 	conv := f.conversation(t, &f.manualQ, nil, "open", past())
 
-	n, err := repo.Retrigger(context.Background(), nil, nil, 10, time.Minute)
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +215,7 @@ func TestRetrigger_BatchIsBounded(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		f.conversation(t, &f.roundRobinQueue, nil, "open", past())
 	}
-	n, err := repo.Retrigger(context.Background(), nil, nil, 2, time.Minute)
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 2, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +233,7 @@ func TestRetrigger_ProgressGuarantee_RepeatedCallsMakeForwardProgress(t *testing
 	}
 	seen := map[uuid.UUID]bool{}
 	for i := 0; i < 3; i++ {
-		n, err := repo.Retrigger(context.Background(), nil, nil, 1, time.Minute)
+		n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 1, time.Minute)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +253,7 @@ func TestRetrigger_ProgressGuarantee_RepeatedCallsMakeForwardProgress(t *testing
 		t.Fatalf("expected all 3 distinct conversations to be retriggered exactly once across 3 calls, got %d distinct: %v", len(seen), seen)
 	}
 	// A 4th call must find nothing left due — proves no starvation and no re-selection within the backoff.
-	n, err := repo.Retrigger(context.Background(), nil, nil, 1, time.Minute)
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 1, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +300,7 @@ func TestRetrigger_QueueScoped_OnlyMatchingQueueRetriggered(t *testing.T) {
 	outOfScope := f.conversation(t, &otherQueue, nil, "open", past())
 
 	scopedQueue := f.roundRobinQueue
-	n, err := repo.Retrigger(context.Background(), nil, &scopedQueue, 10, time.Minute)
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, &scopedQueue, 10, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
