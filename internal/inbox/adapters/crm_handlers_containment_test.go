@@ -33,22 +33,39 @@ func TestCRMHandlersRepeatedGetDoesNotRevealFakeState(t *testing.T) {
 	}
 }
 
-// The containment check must not break the underlying request logic when a
-// real connector IS configured — proven here with the mock only as a test
-// utility (SetCRMConnector is explicitly documented as test-only; canonical
-// runtime composition in server.go must never call it).
-func TestCRMHandlersFunctionWithAnInjectedConnector(t *testing.T) {
+// PRODUCT.6-M superseded assertion: CreateTicket's containment check used
+// to be h.crm == nil (the same field GET/UPDATE/CLOSE still use below).
+// Since PRODUCT.6-M, CreateTicket is gated on h.externalTicketService
+// instead — a real per-tenant application service, never the legacy
+// CRMConnector mock. Injecting the OLD h.crm connector must NOT bypass
+// CreateTicket's containment anymore (that would silently reopen the
+// PRODUCT.6-B hole this test used to guard against).
+func TestCRMHandlersInjectedLegacyCRMConnectorDoesNotBypassCreateTicketContainment(t *testing.T) {
 	h := NewCRMHandlers(nil)
 	h.SetCRMConnector(connectors.NewMockCRMConnector())
 
 	rec := httptest.NewRecorder()
 	req := authedRequest(http.MethodPost, "/api/v1/tenants/"+uuid.NewString()+"/conversations/"+uuid.NewString()+"/ticket", `{}`)
 	h.CreateTicket(rec, req)
-	// No h.dbPool in this unit test, so this fails downstream (conversation
-	// lookup) rather than at the containment check — the point is only that
-	// it does NOT return 503 "not configured" once a connector is set.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("legacy h.crm injection must not activate CreateTicket, want 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// GetCurrentTicket/GetTicket/UpdateTicket/CloseTicket remain gated on the
+// legacy h.crm field (PRODUCT.6-B containment, unchanged by PRODUCT.6-M —
+// no proven real path exists for them yet). Proven here with the mock only
+// as a test utility (SetCRMConnector is explicitly documented as test-only;
+// canonical runtime composition in server.go must never call it).
+func TestCRMHandlersGetCurrentTicketFunctionsWithAnInjectedConnector(t *testing.T) {
+	h := NewCRMHandlers(nil)
+	h.SetCRMConnector(connectors.NewMockCRMConnector())
+
+	rec := httptest.NewRecorder()
+	req := authedRequest(http.MethodGet, "/api/v1/tenants/"+uuid.NewString()+"/conversations/"+uuid.NewString()+"/ticket", "")
+	h.GetCurrentTicket(rec, req)
 	if rec.Code == http.StatusServiceUnavailable {
-		t.Fatalf("an injected connector must bypass the containment check, got 503: %s", rec.Body.String())
+		t.Fatalf("an injected connector must bypass GetCurrentTicket's containment check, got 503: %s", rec.Body.String())
 	}
 }
 

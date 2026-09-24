@@ -99,8 +99,13 @@ type Result struct {
 	AttemptID        uuid.UUID
 	AttemptState     ticketsdomain.AttemptState
 	ExternalTicketID string
-	LocalTicketID    uuid.UUID
-	FailureCode      connectors.TicketingErrorCode
+	// Provider identifies which external system ExternalTicketID belongs
+	// to (PRODUCT.6-M section 8, e.g. "k3g") — set whenever
+	// ExternalTicketID is, taken from TicketingConnector.Name(), never a
+	// hardcoded literal.
+	Provider      string
+	LocalTicketID uuid.UUID
+	FailureCode   connectors.TicketingErrorCode
 	// Severe marks the narrow PRODUCT.6-K2 section 9 crash window: the
 	// provider confirmed success but persisting CONFIRMED_SUCCESS itself
 	// failed. The external ticket exists; OMNIRA's durable record of that
@@ -292,7 +297,8 @@ func (s *Service) replay(ctx context.Context, attempt *ticketsdomain.ExternalCre
 	case ticketsdomain.AttemptConfirmedSuccess:
 		if attempt.ProjectionSyncedAt != nil {
 			return &Result{Outcome: OutcomeReplaySuccess, AttemptID: attempt.ID, AttemptState: attempt.State,
-				ExternalTicketID: derefOr(attempt.ExternalTicketID, ""), LocalTicketID: derefUUIDOr(attempt.LocalTicketID, localTicket.ID)}, nil
+				ExternalTicketID: derefOr(attempt.ExternalTicketID, ""), Provider: derefOr(attempt.Provider, ""),
+				LocalTicketID: derefUUIDOr(attempt.LocalTicketID, localTicket.ID)}, nil
 		}
 		// Provider success is durable but the local projection never
 		// synced (section 11) — retry ONLY the projection, never a
@@ -352,7 +358,7 @@ func (s *Service) createAndRecord(ctx context.Context, attempt *ticketsdomain.Ex
 		// explicitly — surfaced as Severe so callers/ops treat it with
 		// higher urgency than an ordinary reconciliation case.
 		return &Result{Outcome: OutcomeReconciliationRequired, AttemptID: attempt.ID, AttemptState: ticketsdomain.AttemptInFlight,
-			ExternalTicketID: ticket.ExternalID, Severe: true}, fmt.Errorf("tickets: external ticket %s created but not durably recorded: %w", ticket.ExternalID, err)
+			ExternalTicketID: ticket.ExternalID, Provider: ticketing.Name(), Severe: true}, fmt.Errorf("tickets: external ticket %s created but not durably recorded: %w", ticket.ExternalID, err)
 	}
 
 	result, err := s.syncProjection(ctx, confirmed, localTicket)
@@ -383,7 +389,7 @@ func (s *Service) syncProjection(ctx context.Context, attempt *ticketsdomain.Ext
 		// even though local enrichment failed. Never retries the
 		// provider; a later replay retries only this projection step.
 		return &Result{Outcome: OutcomeReconciliationRequired, AttemptID: attempt.ID, AttemptState: attempt.State,
-			ExternalTicketID: *attempt.ExternalTicketID, LocalTicketID: localTicket.ID}, nil
+			ExternalTicketID: *attempt.ExternalTicketID, Provider: *attempt.Provider, LocalTicketID: localTicket.ID}, nil
 	}
 	synced, err := s.attempts.MarkProjectionSynced(ctx, attempt.ID, localTicket.ID)
 	if err != nil {
@@ -392,10 +398,10 @@ func (s *Service) syncProjection(ctx context.Context, attempt *ticketsdomain.Ext
 		// future replay re-runs EnrichExternalProjection (idempotent,
 		// no-op) and retries MarkProjectionSynced.
 		return &Result{Outcome: OutcomeReconciliationRequired, AttemptID: attempt.ID, AttemptState: attempt.State,
-			ExternalTicketID: *attempt.ExternalTicketID, LocalTicketID: localTicket.ID}, nil
+			ExternalTicketID: *attempt.ExternalTicketID, Provider: *attempt.Provider, LocalTicketID: localTicket.ID}, nil
 	}
 	return &Result{Outcome: OutcomeReplaySuccess, AttemptID: synced.ID, AttemptState: synced.State,
-		ExternalTicketID: *attempt.ExternalTicketID, LocalTicketID: localTicket.ID}, nil
+		ExternalTicketID: *attempt.ExternalTicketID, Provider: *attempt.Provider, LocalTicketID: localTicket.ID}, nil
 }
 
 func derefOr(s *string, fallback string) string {

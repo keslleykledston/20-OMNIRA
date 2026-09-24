@@ -28,6 +28,8 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
+	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
+	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -276,6 +278,23 @@ func main() {
 	// R5.2: Configura K3G CRM client no handler para ListCompanies
 	if crmHandler != nil && k3gClientForAPI != nil {
 		crmHandler.SetK3GCRMClient(k3gClientForAPI)
+	}
+
+	// PRODUCT.6-M: ativa o caminho real de criação de ticket externo.
+	// Reaproveita exatamente os mesmos erpConnections/erpCredentials já
+	// construídos acima para a aba de Integrações (REUSE — nenhuma
+	// credencial duplicada, nenhum registro de ERP genérico). O resolver é
+	// tenant-scoped e resolvido a cada chamada (PRODUCT.6-L) — nenhum
+	// conector/credencial global é compartilhado entre tenants aqui.
+	if crmHandler != nil {
+		externalTicketService := ticketsapplication.NewService(
+			channeladapters.NewPostgresPermissionChecker(dbPool),
+			ticketsadapters.NewConversationAuthorizer(dbPool),
+			ticketsadapters.NewAttemptStore(dbPool),
+			ticketsadapters.NewLocalTicketStore(dbPool),
+			ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials),
+		)
+		crmHandler.SetExternalTicketService(externalTicketService)
 	}
 
 	errChan := make(chan error, 1)
