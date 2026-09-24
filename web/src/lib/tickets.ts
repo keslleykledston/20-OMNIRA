@@ -275,3 +275,62 @@ export async function readConversationTicket(conversationId: string): Promise<Co
     }
   }
 }
+
+// PRODUCT.6-O1RF: explicit provider projection refresh (backend:
+// internal/inbox/adapters.RefreshTicket, PRODUCT.6-O1R). A COMMAND (POST),
+// never a read — it performs exactly one provider GetTicket and updates
+// only provider-owned freshness metadata. No body: refresh carries no
+// CREATE-style intent (no company/subject/description, no
+// Idempotency-Key — there is no write-duplication risk to guard against,
+// since the provider is only ever read).
+export type ConversationTicketRefreshResult =
+  | { kind: 'ok'; data: ConversationTicketReadResponse }
+  // 404: no active local ticket at all (should not normally be reachable —
+  // refresh is only offered once a local ticket is known to be linked).
+  | { kind: 'not_found' }
+  // 409: covers every reconciliation-required refresh outcome the backend
+  // defines (PRODUCT.6-O1R section 12) — ticket not linked, inconsistent
+  // local linkage, a resolved-provider mismatch, an external id mismatch,
+  // and provider NOT_FOUND/NOT_MIGRATED. The backend's HTTP contract does
+  // not distinguish these with a machine-readable code (plain-text 409
+  // body, same as failReadConversationTicket's existing convention), and
+  // every one of them requires the exact same safe UI treatment: keep the
+  // existing durable link visible, show "Verificação necessária", offer no
+  // CREATE, make no further automatic request. A single case is therefore
+  // the correct modeling, not a missing distinction.
+  | { kind: 'reconciliation' }
+  | { kind: 'forbidden' }
+  | { kind: 'unavailable' }
+  | { kind: 'network_error' };
+
+export async function refreshConversationTicket(conversationId: string): Promise<ConversationTicketRefreshResult> {
+  try {
+    const res = await axios.post(
+      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket/refresh`,
+      undefined,
+      { headers: authHeaders() },
+    );
+    return { kind: 'ok', data: res.data };
+  } catch (err: any) {
+    if (isUnauthorized(err)) {
+      handleUnauthorized();
+      return { kind: 'forbidden' };
+    }
+    const status = err?.response?.status;
+    switch (status) {
+      case 403:
+        return { kind: 'forbidden' };
+      case 404:
+        return { kind: 'not_found' };
+      case 409:
+        return { kind: 'reconciliation' };
+      case 503:
+        return { kind: 'unavailable' };
+      default:
+        // No HTTP status at all: transport failure. The existing local
+        // projection remains the last known evidence — never reinterpreted
+        // as unlinked, never automatically retried.
+        return { kind: 'network_error' };
+    }
+  }
+}

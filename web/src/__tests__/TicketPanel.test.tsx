@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import axios from 'axios';
@@ -37,6 +38,23 @@ function mockRead(outcome: { status: number; data?: unknown } | 'network_error')
     return Promise.reject({ response: { status: 404 } });
   });
 }
+
+// PRODUCT.6-O1RF: answers axios.post's REFRESH route
+// (.../ticket/refresh) by outcome, without touching the CREATE route
+// (.../ticket) — each is a separate mockImplementation set per-test, so
+// this never interferes with the create-flow tests above.
+function mockRefresh(outcome: { status: number; data?: unknown } | 'network_error') {
+  vi.mocked(axios.post).mockImplementation(async (url: string) => {
+    if (url.endsWith('/ticket/refresh')) {
+      if (outcome === 'network_error') return Promise.reject({ message: 'Network Error' });
+      if (outcome.status === 200) return { data: outcome.data };
+      return Promise.reject({ response: { status: outcome.status, data: outcome.data } });
+    }
+    return Promise.reject({ response: { status: 404 } });
+  });
+}
+
+const LINKED = { local_ticket_id: 'lt-1', linked: true, provider: 'k3g', external_ticket_id: '28182', external_status: '1', external_status_label: 'Novo', sync_status: 'synced' };
 
 async function fillForm(subject = 'Assunto', description = 'Descricao') {
   await screen.findByLabelText('Empresa');
@@ -468,7 +486,9 @@ describe('TicketPanel — PRODUCT.6-O1F conversation ticket read', () => {
     expect(keyAfter).toBe(keyBefore);
   });
 
-  // O — no provider refresh call exists (PRODUCT.6-O1R is a later slice).
+  // O — mount/GET alone never triggers a refresh call (PRODUCT.6-O1RF:
+  // refresh exists but is strictly user-initiated — see the dedicated
+  // describe block below for the click-triggered behavior).
   it('never calls a provider refresh endpoint', async () => {
     mockRead({ status: 200, data: { local_ticket_id: 'lt-1', linked: true, provider: 'k3g', external_ticket_id: '28182', sync_status: 'synced' } });
     renderAt(<TicketPanel conversationId={CONV} />);
@@ -483,6 +503,269 @@ describe('TicketPanel — PRODUCT.6-O1F conversation ticket read', () => {
     mockRead({ status: 200, data: { local_ticket_id: 'lt-1', linked: true, provider: 'k3g', external_ticket_id: '28182', sync_status: 'synced' } });
     renderAt(<TicketPanel conversationId={CONV} />);
     await screen.findByText('Chamado vinculado');
+    expect(screen.queryByRole('button', { name: /Trabalhando/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Resolvido/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Fechar/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('TicketPanel — PRODUCT.6-O1RF explicit provider refresh', () => {
+  // A
+  it('linked=true: refresh button visible', async () => {
+    mockRead({ status: 200, data: LINKED });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    expect(await screen.findByRole('button', { name: 'Atualizar' })).toBeInTheDocument();
+  });
+
+  // B
+  it('linked=false: refresh button absent', async () => {
+    mockRead({ status: 200, data: { local_ticket_id: 'lt-1', linked: false } });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByLabelText('Empresa');
+    expect(screen.queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument();
+  });
+
+  // C, U
+  it('initial mount: conversation GET happens, refresh POST does not happen automatically', async () => {
+    mockRead({ status: 200, data: LINKED });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    expect(vi.mocked(axios.get).mock.calls.some((c) => (c[0] as string).endsWith('/ticket'))).toBe(true);
+    expect(vi.mocked(axios.post)).not.toHaveBeenCalled();
+  });
+
+  // D, E
+  it('refresh click: exactly one POST to the canonical refresh route, with no request body', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 200, data: LINKED });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1));
+    const [url, body] = vi.mocked(axios.post).mock.calls[0];
+    expect((url as string).endsWith(`/tenants/${TENANT}/conversations/${CONV}/ticket/refresh`)).toBe(true);
+    expect(body).toBeUndefined();
+  });
+
+  // F
+  it('double click: exactly one request while pending', async () => {
+    mockRead({ status: 200, data: LINKED });
+    let resolvePost: (v: unknown) => void = () => {};
+    vi.mocked(axios.post).mockImplementation(
+      (url: string) =>
+        new Promise((resolve, reject) => {
+          if (!(url as string).endsWith('/ticket/refresh')) {
+            reject({ response: { status: 404 } });
+            return;
+          }
+          resolvePost = resolve;
+        }),
+    );
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    const button = screen.getByRole('button', { name: 'Atualizar' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    resolvePost({ data: LINKED });
+    await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1));
+  });
+
+  // G
+  it('pending refresh: existing linked data remains visible, button disabled/loading', async () => {
+    mockRead({ status: 200, data: LINKED });
+    let resolvePost: (v: unknown) => void = () => {};
+    vi.mocked(axios.post).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve;
+        }),
+    );
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    const button = screen.getByRole('button', { name: 'Atualizar' });
+    fireEvent.click(button);
+    expect(screen.getByText('28182')).toBeInTheDocument();
+    expect(button).toBeDisabled();
+    resolvePost({ data: LINKED });
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  // H, I, J
+  it('successful refresh updates external_status/label/last_synced_at', async () => {
+    mockRead({ status: 200, data: LINKED });
+    const refreshed = { ...LINKED, external_status: '2', external_status_label: 'Em atendimento', last_synced_at: '2026-01-01T12:00:00Z' };
+    mockRefresh({ status: 200, data: refreshed });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Em atendimento');
+    expect(screen.getByText(new Date('2026-01-01T12:00:00Z').toLocaleString('pt-BR'))).toBeInTheDocument();
+  });
+
+  // K
+  it('successful refresh: external identity (provider/external_ticket_id) unchanged', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 200, data: { ...LINKED, external_status: '2', external_status_label: 'Em atendimento' } });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Em atendimento');
+    expect(screen.getByText('28182')).toBeInTheDocument();
+    expect(screen.getByText('k3g')).toBeInTheDocument();
+  });
+
+  // defensive frontend guard on top of the backend's own identity guard
+  it('a response that unexpectedly changes external identity is treated as reconciliation, never silently applied', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 200, data: { ...LINKED, external_ticket_id: '99999' } });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Verificação necessária');
+    // the ORIGINAL identity remains displayed — never silently swapped.
+    expect(screen.getByText('28182')).toBeInTheDocument();
+    expect(screen.queryByText('99999')).not.toBeInTheDocument();
+  });
+
+  // L
+  it('503: existing linked data remains visible, non-destructive error shown, no CREATE form', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 503 });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Não foi possível atualizar o chamado agora.');
+    expect(screen.getByText('28182')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Empresa')).not.toBeInTheDocument();
+  });
+
+  // M
+  it('409 reconciliation: existing link remains visible, verification-required state shown, no CREATE form', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 409 });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Verificação necessária');
+    expect(screen.getByText('28182')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Empresa')).not.toBeInTheDocument();
+  });
+
+  // N — the backend has no machine-readable distinction for provider
+  // NOT_FOUND/NOT_MIGRATED vs. other reconciliation-required refresh
+  // outcomes (all plain-text 409s); the safe UI treatment is identical.
+  it('provider NOT_FOUND/not-migrated-style 409: external link not cleared, no CREATE offered', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 409, data: 'external ticket not found' });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Verificação necessária');
+    expect(screen.getByText('28182')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Empresa')).not.toBeInTheDocument();
+  });
+
+  // O
+  it('network error: linked state preserved, manual refresh remains possible, no automatic retry', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh('network_error');
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Falha de conexão ao atualizar o chamado.');
+    expect(screen.getByText('28182')).toBeInTheDocument();
+    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1); // no automatic retry
+    expect(screen.getByRole('button', { name: 'Atualizar' })).not.toBeDisabled(); // manual retry remains possible
+  });
+
+  // P
+  it('unauthorized refresh: permission state shown, no create fallback', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 403 });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Sem permissão para atualizar o chamado desta conversa.');
+    expect(screen.queryByLabelText('Empresa')).not.toBeInTheDocument();
+  });
+
+  // Q
+  it('conversation switch while a refresh request is pending: a late response for the old conversation does not overwrite the new one', async () => {
+    mockRead({ status: 200, data: LINKED });
+    let resolveOldRefresh: (v: unknown) => void = () => {};
+    vi.mocked(axios.post).mockImplementation(
+      (url: string) =>
+        new Promise((resolve, reject) => {
+          if (!(url as string).endsWith('/ticket/refresh')) {
+            reject({ response: { status: 404 } });
+            return;
+          }
+          resolveOldRefresh = resolve;
+        }),
+    );
+
+    function Switcher() {
+      const [conv, setConv] = useState(CONV);
+      return (
+        <div>
+          <button onClick={() => setConv('c-2')}>switch conversation</button>
+          <TicketPanel conversationId={conv} />
+        </div>
+      );
+    }
+    renderAt(<Switcher />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'switch conversation' }));
+    await screen.findByText('Chamado vinculado'); // conversation c-2's own GET resolves
+
+    // The stale refresh (from conversation CONV) now resolves with data
+    // that must never be applied to the panel now showing conversation c-2.
+    resolveOldRefresh({ data: { ...LINKED, external_ticket_id: 'STALE-FROM-OLD-CONVERSATION' } });
+    await waitFor(() => {});
+    expect(screen.queryByText('STALE-FROM-OLD-CONVERSATION')).not.toBeInTheDocument();
+  });
+
+  // R
+  it('localStorage: refresh result never becomes linkage authority / is not persisted there', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 200, data: { ...LINKED, external_status: '2', external_status_label: 'Em atendimento' } });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await screen.findByText('Em atendimento');
+    const persisted = JSON.parse(localStorage.getItem(`omnira.ticket-create.${CONV}`) || '{}');
+    expect(persisted.phase).not.toBe('linked');
+    expect(JSON.stringify(persisted)).not.toContain('Em atendimento');
+  });
+
+  // S — refresh work must not regress the linked=false CREATE flow.
+  it('CREATE regression: linked=false create flow still works end to end', async () => {
+    mockRead({ status: 200, data: { local_ticket_id: 'lt-1', linked: false } });
+    vi.mocked(axios.post).mockImplementation(async (url: string) => {
+      if (url.endsWith('/ticket')) {
+        return {
+          status: 201,
+          data: { local_ticket_id: 'lt-1', external_ticket_id: '28180', provider: 'k3g', sync_status: 'synced', replayed: false },
+        };
+      }
+      return Promise.reject({ response: { status: 404 } });
+    });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await fillForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir chamado' }));
+    await screen.findByText('Chamado criado');
+  });
+
+  // T
+  it('UPDATE/CLOSE controls remain absent after a successful refresh', async () => {
+    mockRead({ status: 200, data: LINKED });
+    mockRefresh({ status: 200, data: LINKED });
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByText('Chamado vinculado');
+    fireEvent.click(screen.getByRole('button', { name: 'Atualizar' }));
+    await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('button', { name: /Trabalhando/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Resolvido/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Fechar/i })).not.toBeInTheDocument();

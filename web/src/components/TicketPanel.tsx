@@ -5,6 +5,7 @@ import { authHeaders, getTenantId } from '../lib/session';
 import {
   createExternalTicket,
   readConversationTicket,
+  refreshConversationTicket,
   type ConversationTicketReadResponse,
   type ExternalTicketCreateResponse,
   type ExternalTicketProblem,
@@ -96,6 +97,13 @@ function saveState(conversationId: string, state: PersistedState): void {
 // duplicate-prevention boundary regardless of what this panel renders).
 type ReadPhase = 'loading' | 'linked' | 'unlinked' | 'not_found' | 'inconsistent' | 'forbidden' | 'unavailable' | 'network_error';
 
+// PRODUCT.6-O1RF: explicit, user-initiated provider projection refresh.
+// Deliberately component state, never persisted — refresh has no
+// CREATE-style intent that must survive a reload (section 14: localStorage
+// never becomes a second source of projection truth). Idle on every fresh
+// mount/conversation switch; only ever changes in response to a click.
+type RefreshState = 'idle' | 'pending' | 'reconciliation' | 'unavailable' | 'forbidden' | 'network_error';
+
 export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) {
   const tenantId = getTenantId();
 
@@ -144,6 +152,69 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
       active = false;
     };
   }, [conversationId]);
+
+  // PRODUCT.6-O1RF state. refreshRequestIdRef is bumped on every new
+  // refresh click AND on every conversation switch — a stale response
+  // (section 15: a late refresh reply from conversation A arriving after
+  // the panel has already moved on to conversation B) is detected by
+  // comparing the id captured at request time against the ref's CURRENT
+  // value when the response resolves, and simply discarded if they differ.
+  const [refreshState, setRefreshState] = useState<RefreshState>('idle');
+  const refreshRequestIdRef = useRef(0);
+  // A ref, not React state, for the SAME reason inFlightRef exists above:
+  // two clicks fired in the same tick both close over the same
+  // pre-re-render refreshState, so state alone cannot reliably stop the
+  // second one. Updates synchronously, before any await.
+  const refreshInFlightRef = useRef(false);
+
+  useEffect(() => {
+    refreshRequestIdRef.current += 1;
+    refreshInFlightRef.current = false;
+    setRefreshState('idle');
+  }, [conversationId]);
+
+  const refreshTicket = async () => {
+    if (refreshInFlightRef.current) return; // synchronous double-click guard
+    refreshInFlightRef.current = true;
+    const requestId = (refreshRequestIdRef.current += 1);
+    setRefreshState('pending');
+    const result = await refreshConversationTicket(conversationId);
+    refreshInFlightRef.current = false;
+    if (requestId !== refreshRequestIdRef.current) return; // superseded by a conversation switch or a newer click
+
+    switch (result.kind) {
+      case 'ok': {
+        const next = result.data;
+        // Section 6: provider + external_ticket_id are durable identity —
+        // refresh must never look like "ticket replaced". The backend
+        // already guards this server-side; this is a defensive frontend
+        // check on top, not a substitute for it.
+        if (
+          linkedTicket &&
+          (next.provider !== linkedTicket.provider || next.external_ticket_id !== linkedTicket.external_ticket_id)
+        ) {
+          setRefreshState('reconciliation');
+          break;
+        }
+        setLinkedTicket(next);
+        setRefreshState('idle');
+        break;
+      }
+      case 'not_found':
+      case 'reconciliation':
+        setRefreshState('reconciliation');
+        break;
+      case 'forbidden':
+        setRefreshState('forbidden');
+        break;
+      case 'unavailable':
+        setRefreshState('unavailable');
+        break;
+      case 'network_error':
+        setRefreshState('network_error');
+        break;
+    }
+  };
 
   // PRODUCT.6-O1F FINAL AUTHORITY FIX: distinguishes a terminal phase that
   // was just produced by a REAL HTTP response received during this mount
@@ -424,7 +495,18 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
           // gone. Same visual shape, sourced from the GET response instead
           // of a create response.
           <div className="rounded-control border border-border-subtle bg-surface p-3">
-            <p className="font-semibold text-text-primary">Chamado vinculado</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold text-text-primary">Chamado vinculado</p>
+              <Button
+                type="button"
+                size="sm"
+                isLoading={refreshState === 'pending'}
+                disabled={refreshState === 'pending'}
+                onClick={() => void refreshTicket()}
+              >
+                Atualizar
+              </Button>
+            </div>
             <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
               <dt className="text-text-tertiary">ID externo</dt>
               <dd className="font-mono text-text-primary">{linkedTicket.external_ticket_id}</dd>
@@ -445,6 +527,28 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
                 </>
               )}
             </dl>
+            {/* PRODUCT.6-O1RF: refresh is a read-only provider operation —
+                its own errors never blank this card or fall back to
+                linked=false/CREATE. The last known projection above remains
+                visible and useful regardless of the outcome below. */}
+            {refreshState === 'reconciliation' && (
+              <div className="mt-2 rounded-control border border-status-warning-border bg-status-warning-soft p-2 text-[11px] text-status-warning">
+                <p className="font-semibold">Verificação necessária</p>
+                <p className="mt-1">
+                  Chamado vinculado, mas não foi possível confirmá-lo no provedor agora. O vínculo existente foi
+                  preservado.
+                </p>
+              </div>
+            )}
+            {refreshState === 'unavailable' && (
+              <p className="mt-2 text-[11px] text-status-danger">Não foi possível atualizar o chamado agora.</p>
+            )}
+            {refreshState === 'forbidden' && (
+              <p className="mt-2 text-[11px] text-status-danger">Sem permissão para atualizar o chamado desta conversa.</p>
+            )}
+            {refreshState === 'network_error' && (
+              <p className="mt-2 text-[11px] text-status-danger">Falha de conexão ao atualizar o chamado.</p>
+            )}
           </div>
         ) : readPhase === 'not_found' ? (
           <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
