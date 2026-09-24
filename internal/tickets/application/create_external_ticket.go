@@ -114,14 +114,19 @@ type Result struct {
 type Service struct {
 	perms        ports.PermissionChecker
 	conversation ports.ConversationAuthorizer
-	companies    ports.CompanyDirectory
 	attempts     ports.AttemptStore
 	localTickets ports.LocalTicketStore
-	ticketing    connectors.TicketingConnector
+	// runtime resolves the tenant-scoped CompanyDirectory/TicketingConnector
+	// pair (PRODUCT.6-L) — resolved per call, never bound at construction
+	// time, so one long-lived Service instance can safely serve every
+	// tenant: it never caches or reuses a connector/credential across
+	// tenants (see runtime.Resolve, called once per CreateExternalTicket
+	// call, right after conversation authorization).
+	runtime ports.TicketingRuntimeResolver
 }
 
-func NewService(perms ports.PermissionChecker, conversation ports.ConversationAuthorizer, companies ports.CompanyDirectory, attempts ports.AttemptStore, localTickets ports.LocalTicketStore, ticketing connectors.TicketingConnector) *Service {
-	return &Service{perms: perms, conversation: conversation, companies: companies, attempts: attempts, localTickets: localTickets, ticketing: ticketing}
+func NewService(perms ports.PermissionChecker, conversation ports.ConversationAuthorizer, attempts ports.AttemptStore, localTickets ports.LocalTicketStore, runtime ports.TicketingRuntimeResolver) *Service {
+	return &Service{perms: perms, conversation: conversation, attempts: attempts, localTickets: localTickets, runtime: runtime}
 }
 
 // requestHash fingerprints the effective external-create intent
@@ -198,7 +203,17 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		}
 	}
 
-	validatedCustomerExternalID, err := s.validateSelectedCompany(ctx, cmd.SelectedCustomerExternalID)
+	// PRODUCT.6-L: resolve THIS tenant's CompanyDirectory/TicketingConnector
+	// pair fresh for this call — never a shared/global connector, never
+	// another tenant's credential. Resolved after authorization (an
+	// unauthorized caller never triggers a credential decrypt) and before
+	// company validation (which needs CompanyDirectory).
+	rt, err := s.runtime.Resolve(ctx, cmd.TenantID)
+	if err != nil {
+		return nil, err
+	}
+
+	validatedCustomerExternalID, err := s.validateSelectedCompany(ctx, rt.CompanyDirectory, cmd.SelectedCustomerExternalID)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +239,7 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		return s.replay(ctx, attempt, localTicket)
 	}
 
-	return s.createAndRecord(ctx, attempt, localTicket, validatedCustomerExternalID, cmd)
+	return s.createAndRecord(ctx, attempt, localTicket, validatedCustomerExternalID, cmd, rt.TicketingConnector)
 }
 
 func validateCommand(cmd CreateExternalTicketCommand) error {
@@ -247,12 +262,12 @@ func validateCommand(cmd CreateExternalTicketCommand) error {
 // browser-provided SelectedCustomerExternalID is never trusted directly. It
 // must exactly match, uniquely, one ACTIVE company returned by the
 // tenant's real trusted company source.
-func (s *Service) validateSelectedCompany(ctx context.Context, selected string) (string, error) {
+func (s *Service) validateSelectedCompany(ctx context.Context, directory ports.CompanyDirectory, selected string) (string, error) {
 	selected = strings.TrimSpace(selected)
 	if selected == "" {
 		return "", ErrInvalidCompany
 	}
-	companies, err := s.companies.ListCompanies(ctx)
+	companies, err := directory.ListCompanies(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -306,8 +321,8 @@ func (s *Service) replay(ctx context.Context, attempt *ticketsdomain.ExternalCre
 // provider CreateTicket call, durable recording of its outcome BEFORE any
 // local projection write, and — only after that durable record succeeds —
 // enrichment of the local ticket.
-func (s *Service) createAndRecord(ctx context.Context, attempt *ticketsdomain.ExternalCreateAttempt, localTicket *ticketsdomain.Ticket, validatedCustomerExternalID string, cmd CreateExternalTicketCommand) (*Result, error) {
-	ticket, err := s.ticketing.CreateTicket(ctx, connectors.CreateTicketRequest{
+func (s *Service) createAndRecord(ctx context.Context, attempt *ticketsdomain.ExternalCreateAttempt, localTicket *ticketsdomain.Ticket, validatedCustomerExternalID string, cmd CreateExternalTicketCommand, ticketing connectors.TicketingConnector) (*Result, error) {
+	ticket, err := ticketing.CreateTicket(ctx, connectors.CreateTicketRequest{
 		CustomerExternalID: validatedCustomerExternalID, // cmd.ActorUserID never enters this request (section 12)
 		Subject:            cmd.Subject,
 		Description:        cmd.Description,
@@ -328,7 +343,7 @@ func (s *Service) createAndRecord(ctx context.Context, attempt *ticketsdomain.Ex
 
 	// Section 9: the durable attempt record is the recovery anchor and
 	// MUST be written before any local projection touch.
-	confirmed, err := s.attempts.MarkConfirmedSuccess(ctx, attempt.ID, "k3g", ticket.ExternalID)
+	confirmed, err := s.attempts.MarkConfirmedSuccess(ctx, attempt.ID, ticketing.Name(), ticket.ExternalID)
 	if err != nil {
 		// The provider already created a real external ticket
 		// (ticket.ExternalID is known) but OMNIRA could not durably

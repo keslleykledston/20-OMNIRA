@@ -187,6 +187,25 @@ type fakeTicketing struct {
 	gotReq connectors.CreateTicketRequest
 }
 
+// fakeRuntimeResolver implements ports.TicketingRuntimeResolver
+// (PRODUCT.6-L), returning the harness's fakeCompanies/fakeTicketing on
+// every call — proves the service resolves per-call rather than caching a
+// fixed dependency, and lets tests inject resolution failures.
+type fakeRuntimeResolver struct {
+	companies ports.CompanyDirectory
+	ticketing connectors.TicketingConnector
+	err       error
+	calls     int32
+}
+
+func (f *fakeRuntimeResolver) Resolve(ctx context.Context, tenantID uuid.UUID) (*ports.TicketingRuntime, error) {
+	atomic.AddInt32(&f.calls, 1)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &ports.TicketingRuntime{CompanyDirectory: f.companies, TicketingConnector: f.ticketing}, nil
+}
+
 func (f *fakeTicketing) Name() string { return "fake" }
 func (f *fakeTicketing) GetTicket(ctx context.Context, externalTicketID string) (*connectors.ExternalTicket, error) {
 	return nil, errors.New("not used in these tests")
@@ -222,6 +241,7 @@ type harness struct {
 	attempts     *fakeAttempts
 	localTickets *fakeLocalTickets
 	ticketing    *fakeTicketing
+	runtime      *fakeRuntimeResolver
 	svc          *Service
 }
 
@@ -237,7 +257,8 @@ func newHarness(actorAssigned bool, actorID uuid.UUID) *harness {
 	if actorAssigned {
 		h.conversation.assignedTo = &actorID
 	}
-	h.svc = NewService(h.perms, h.conversation, h.companies, h.attempts, h.localTickets, h.ticketing)
+	h.runtime = &fakeRuntimeResolver{companies: h.companies, ticketing: h.ticketing}
+	h.svc = NewService(h.perms, h.conversation, h.attempts, h.localTickets, h.runtime)
 	return h
 }
 
@@ -317,6 +338,27 @@ func TestCreateExternalTicketAllowsConversationManage(t *testing.T) {
 	}
 	if res.Outcome != OutcomeCreated {
 		t.Fatalf("outcome = %q, want created", res.Outcome)
+	}
+}
+
+// PRODUCT.6-L: runtime resolution failure (e.g. NO_CONFIGURATION) must
+// propagate before company validation or any provider work, and the
+// service must resolve fresh per call (never cache/share a connector).
+func TestCreateExternalTicketPropagatesRuntimeResolutionFailure(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	h.runtime.err = &ports.ResolutionError{Code: ports.ResolutionNoConfiguration, Message: "no K3G connection configured"}
+	cmd := testCommand(nil)
+	h.conversation.assignedTo = &cmd.ActorUserID
+	_, err := h.svc.CreateExternalTicket(withTenantContext(cmd.TenantID, cmd.ActorUserID), cmd)
+	var resErr *ports.ResolutionError
+	if !errors.As(err, &resErr) || resErr.Code != ports.ResolutionNoConfiguration {
+		t.Fatalf("err = %v, want *ports.ResolutionError{Code: NO_CONFIGURATION}", err)
+	}
+	if h.ticketing.calls != 0 {
+		t.Fatalf("provider must not be called, got %d", h.ticketing.calls)
+	}
+	if h.runtime.calls != 1 {
+		t.Fatalf("runtime resolver called %d times, want 1", h.runtime.calls)
 	}
 }
 
