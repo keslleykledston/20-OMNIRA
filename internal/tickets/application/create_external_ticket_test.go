@@ -63,7 +63,7 @@ func newFakeAttempts() *fakeAttempts {
 	return &fakeAttempts{byKey: map[string]*ticketsdomain.ExternalCreateAttempt{}}
 }
 
-func (f *fakeAttempts) Acquire(ctx context.Context, conversationID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*ticketsdomain.ExternalCreateAttempt, bool, error) {
+func (f *fakeAttempts) Acquire(ctx context.Context, conversationID, localTicketID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*ticketsdomain.ExternalCreateAttempt, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if existing, ok := f.byKey[idempotencyKey]; ok {
@@ -73,14 +73,34 @@ func (f *fakeAttempts) Acquire(ctx context.Context, conversationID, actorUserID 
 		cp := *existing
 		return &cp, false, nil
 	}
+	if blocking := f.findBlockingByLocalTicket(localTicketID); blocking != nil {
+		cp := *blocking
+		return &cp, false, ports.ErrLocalTicketBlocked
+	}
 	a := &ticketsdomain.ExternalCreateAttempt{
-		ID: uuid.New(), ConversationID: conversationID, ActorUserID: actorUserID,
+		ID: uuid.New(), ConversationID: conversationID, ActorUserID: actorUserID, LocalTicketID: &localTicketID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash, State: ticketsdomain.AttemptInFlight,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}
 	f.byKey[idempotencyKey] = a
 	cp := *a
 	return &cp, true, nil
+}
+
+// findBlockingByLocalTicket mirrors the real AttemptStore's partial unique
+// index (migration 000048, PRODUCT.6-M5): at most one attempt in a
+// blocking state may exist per local ticket, across ALL idempotency keys.
+func (f *fakeAttempts) findBlockingByLocalTicket(localTicketID uuid.UUID) *ticketsdomain.ExternalCreateAttempt {
+	for _, a := range f.byKey {
+		if a.LocalTicketID == nil || *a.LocalTicketID != localTicketID {
+			continue
+		}
+		switch a.State {
+		case ticketsdomain.AttemptInFlight, ticketsdomain.AttemptConfirmedSuccess, ticketsdomain.AttemptOutcomeUnknown:
+			return a
+		}
+	}
+	return nil
 }
 
 func (f *fakeAttempts) MarkConfirmedSuccess(ctx context.Context, attemptID uuid.UUID, provider, externalTicketID string) (*ticketsdomain.ExternalCreateAttempt, error) {
@@ -536,7 +556,7 @@ func TestCreateExternalTicketInFlightReplayNeverPosts(t *testing.T) {
 	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
 
 	hash := requestHash(cmd.TenantID, cmd.ConversationID, testCompanyID, cmd.Subject, cmd.Description)
-	if _, _, err := h.attempts.Acquire(ctx, cmd.ConversationID, cmd.ActorUserID, cmd.IdempotencyKey, hash); err != nil {
+	if _, _, err := h.attempts.Acquire(ctx, cmd.ConversationID, h.localTickets.candidate.ID, cmd.ActorUserID, cmd.IdempotencyKey, hash); err != nil {
 		t.Fatalf("seed acquire: %v", err)
 	}
 	res, err := h.svc.CreateExternalTicket(ctx, cmd)
@@ -558,7 +578,7 @@ func TestCreateExternalTicketOutcomeUnknownReplayNeverPosts(t *testing.T) {
 	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
 
 	hash := requestHash(cmd.TenantID, cmd.ConversationID, testCompanyID, cmd.Subject, cmd.Description)
-	attempt, _, err := h.attempts.Acquire(ctx, cmd.ConversationID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
+	attempt, _, err := h.attempts.Acquire(ctx, cmd.ConversationID, h.localTickets.candidate.ID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
 	if err != nil {
 		t.Fatalf("seed acquire: %v", err)
 	}
@@ -584,7 +604,7 @@ func TestCreateExternalTicketConfirmedFailureReplayNeverPosts(t *testing.T) {
 	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
 
 	hash := requestHash(cmd.TenantID, cmd.ConversationID, testCompanyID, cmd.Subject, cmd.Description)
-	attempt, _, err := h.attempts.Acquire(ctx, cmd.ConversationID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
+	attempt, _, err := h.attempts.Acquire(ctx, cmd.ConversationID, h.localTickets.candidate.ID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
 	if err != nil {
 		t.Fatalf("seed acquire: %v", err)
 	}
@@ -751,6 +771,113 @@ func TestCreateExternalTicketRecoveryExternalIDMismatchIsReconciliationRequired(
 	}
 }
 
+// ---- PRODUCT.6-M5: existing external link guard --------------------------
+
+// Section 14: an active local ticket already consistently linked
+// (Provider + ExternalTicketID both set) must never reach AttemptStore or
+// the provider merely because this call uses a brand-new Idempotency-Key.
+func TestCreateExternalTicketAlreadyLinkedNeverAcquiresOrCallsProvider(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	provider, externalID := "k3g", "28182"
+	h.localTickets.candidate = &ticketsdomain.Ticket{ID: uuid.New(), Provider: &provider, ExternalTicketID: &externalID}
+	cmd := testCommand(nil) // fresh IdempotencyKey, unrelated to any prior attempt
+	h.conversation.assignedTo = &cmd.ActorUserID
+
+	res, err := h.svc.CreateExternalTicket(withTenantContext(cmd.TenantID, cmd.ActorUserID), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Outcome != OutcomeAlreadyLinked {
+		t.Fatalf("result = %+v, want already_linked", res)
+	}
+	if res.ExternalTicketID != externalID || res.Provider != provider {
+		t.Fatalf("result identity = %+v, want %s/%s", res, provider, externalID)
+	}
+	if len(h.attempts.byKey) != 0 {
+		t.Fatalf("AttemptStore.Acquire must not be called, but %d attempt(s) exist", len(h.attempts.byKey))
+	}
+	if h.ticketing.calls != 0 {
+		t.Fatalf("CreateTicket called %d times, want 0", h.ticketing.calls)
+	}
+	if h.ticketing.getCalls != 0 {
+		t.Fatalf("GetTicket called %d times, want 0", h.ticketing.getCalls)
+	}
+	if h.localTickets.enrichCalls != 0 {
+		t.Fatalf("EnrichExternalProjection called %d times, want 0", h.localTickets.enrichCalls)
+	}
+}
+
+// Section 15: inconsistent linkage (one of Provider/ExternalTicketID set,
+// the other not) is a data-integrity state, never "repaired" by creating
+// another ERP ticket.
+func TestCreateExternalTicketInconsistentLinkIsReconciliationRequired(t *testing.T) {
+	externalID := "28182"
+	cases := []struct {
+		name string
+		set  func(*ticketsdomain.Ticket)
+	}{
+		{"external_ticket_id without provider", func(tk *ticketsdomain.Ticket) { tk.ExternalTicketID = &externalID }},
+		{"provider without external_ticket_id", func(tk *ticketsdomain.Ticket) { p := "k3g"; tk.Provider = &p }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(false, uuid.Nil)
+			ticket := &ticketsdomain.Ticket{ID: uuid.New()}
+			c.set(ticket)
+			h.localTickets.candidate = ticket
+			cmd := testCommand(nil)
+			h.conversation.assignedTo = &cmd.ActorUserID
+
+			res, err := h.svc.CreateExternalTicket(withTenantContext(cmd.TenantID, cmd.ActorUserID), cmd)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Outcome != OutcomeReconciliationRequired || !res.Severe {
+				t.Fatalf("result = %+v, want severe reconciliation_required", res)
+			}
+			if len(h.attempts.byKey) != 0 {
+				t.Fatalf("AttemptStore.Acquire must not be called, but %d attempt(s) exist", len(h.attempts.byKey))
+			}
+			if h.ticketing.calls != 0 || h.ticketing.getCalls != 0 {
+				t.Fatalf("provider must not be called, CreateTicket=%d GetTicket=%d", h.ticketing.calls, h.ticketing.getCalls)
+			}
+			if h.localTickets.enrichCalls != 0 {
+				t.Fatalf("EnrichExternalProjection called %d times, want 0", h.localTickets.enrichCalls)
+			}
+		})
+	}
+}
+
+// Cross-key blocking at the application layer (fake proves orchestration;
+// real-Postgres atomic proof lives in
+// internal/tickets/adapters/external_create_attempt_postgres_test.go).
+func TestCreateExternalTicketDifferentKeyBlockedByInFlightAttemptNeverPosts(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	cmd := testCommand(nil)
+	h.conversation.assignedTo = &cmd.ActorUserID
+	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
+
+	// Seed an in_flight attempt under a DIFFERENT key for the same local ticket.
+	otherHash := requestHash(cmd.TenantID, cmd.ConversationID, testCompanyID, "different subject", cmd.Description)
+	if _, _, err := h.attempts.Acquire(ctx, cmd.ConversationID, h.localTickets.candidate.ID, cmd.ActorUserID, "other-key-0001", otherHash); err != nil {
+		t.Fatalf("seed acquire: %v", err)
+	}
+
+	res, err := h.svc.CreateExternalTicket(ctx, cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Outcome != OutcomeReconciliationRequired || res.AttemptState != ticketsdomain.AttemptInFlight {
+		t.Fatalf("result = %+v, want reconciliation_required/in_flight", res)
+	}
+	if h.ticketing.calls != 0 {
+		t.Fatalf("provider must not be called, got %d", h.ticketing.calls)
+	}
+	if len(h.attempts.byKey) != 1 {
+		t.Fatalf("a blocked different-key call must not create a second attempt row, got %d", len(h.attempts.byKey))
+	}
+}
+
 // ---- projection ---------------------------------------------------------
 
 func TestCreateExternalTicketNoLocalTicketToEnrichIsRejected(t *testing.T) {
@@ -855,7 +982,7 @@ func TestCreateExternalTicketProjectionFailureKeepsConfirmedSuccessNoSecondPOST(
 	}
 	// attempt row must remain confirmed_success durably.
 	hash := requestHash(cmd.TenantID, cmd.ConversationID, testCompanyID, cmd.Subject, cmd.Description)
-	attempt, acquired, err := h.attempts.Acquire(ctx, cmd.ConversationID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
+	attempt, acquired, err := h.attempts.Acquire(ctx, cmd.ConversationID, h.localTickets.candidate.ID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
 	if err != nil || acquired {
 		t.Fatalf("Acquire replay: attempt=%+v acquired=%v err=%v", attempt, acquired, err)
 	}

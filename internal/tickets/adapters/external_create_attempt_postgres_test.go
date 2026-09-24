@@ -27,6 +27,10 @@ type attemptFixture struct {
 	tenantID       uuid.UUID
 	actorUserID    uuid.UUID
 	conversationID uuid.UUID
+	// localTicketID (PRODUCT.6-M5): Acquire now requires a real, existing
+	// local ticket at creation time (FK-enforced), so every fixture seeds
+	// exactly one.
+	localTicketID uuid.UUID
 }
 
 func requireAttemptStack(t *testing.T) (*attemptFixture, *AttemptStore) {
@@ -99,7 +103,20 @@ func newAttemptFixture(t *testing.T, seed, app *pgxpool.Pool) *attemptFixture {
 		t.Fatalf("seed conversation: %v", err)
 	}
 
-	return &attemptFixture{seed: seed, app: app, tenantID: tenantID, actorUserID: userID, conversationID: conversationID}
+	// status='closed': AttemptStore.Acquire only needs SOME existing ticket
+	// row to satisfy the FK to tickets(tenant_id, id) — it has no opinion
+	// on ticket status. Seeding it 'closed' (rather than the 'open'
+	// default) avoids colliding with tickets_active_conversation_uq
+	// (migration 000016) in test files that separately seed their OWN
+	// open/in_progress/waiting ticket on this same conversation (e.g.
+	// local_ticket_store_postgres_test.go).
+	localTicketID := uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO tickets(id, tenant_id, conversation_id, subject, status) VALUES ($1,$2,$3,'PRODUCT.6-K1 fixture ticket','closed')`,
+		localTicketID, tenantID, conversationID); err != nil {
+		t.Fatalf("seed local ticket: %v", err)
+	}
+
+	return &attemptFixture{seed: seed, app: app, tenantID: tenantID, actorUserID: userID, conversationID: conversationID, localTicketID: localTicketID}
 }
 
 // withSystemSession runs fn under a full-access (is_system_admin) session
@@ -120,7 +137,7 @@ func TestAttemptStoreAcquireNewKeyIsInFlight(t *testing.T) {
 	var acquired bool
 	err := f.withSystemSession(t, func(ctx context.Context) error {
 		var err error
-		attempt, acquired, err = store.Acquire(ctx, f.conversationID, f.actorUserID, "gate-A-"+uuid.New().String(), "hash-1")
+		attempt, acquired, err = store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-A-"+uuid.New().String(), "hash-1")
 		return err
 	})
 	if err != nil {
@@ -141,11 +158,11 @@ func TestAttemptStoreSameKeySameHashReturnsExistingWithoutSecondAcquire(t *testi
 	var acquiredFirst, acquiredSecond bool
 	err := f.withSystemSession(t, func(ctx context.Context) error {
 		var err error
-		first, acquiredFirst, err = store.Acquire(ctx, f.conversationID, f.actorUserID, key, "hash-1")
+		first, acquiredFirst, err = store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-1")
 		if err != nil {
 			return err
 		}
-		second, acquiredSecond, err = store.Acquire(ctx, f.conversationID, f.actorUserID, key, "hash-1")
+		second, acquiredSecond, err = store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-1")
 		return err
 	})
 	if err != nil {
@@ -166,10 +183,10 @@ func TestAttemptStoreSameKeyDifferentHashMismatch(t *testing.T) {
 	f, store := requireAttemptStack(t)
 	key := "gate-D-" + uuid.New().String()
 	err := f.withSystemSession(t, func(ctx context.Context) error {
-		if _, _, err := store.Acquire(ctx, f.conversationID, f.actorUserID, key, "hash-1"); err != nil {
+		if _, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-1"); err != nil {
 			return err
 		}
-		_, _, err := store.Acquire(ctx, f.conversationID, f.actorUserID, key, "hash-2-different")
+		_, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-2-different")
 		return err
 	})
 	if !errors.Is(err, ErrAttemptIdempotencyMismatch) {
@@ -195,7 +212,7 @@ func TestAttemptStoreConcurrentSameKeyAcquiresExactlyOnce(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			err := f.withSystemSession(t, func(ctx context.Context) error {
-				_, acquired, err := store.Acquire(ctx, f.conversationID, f.actorUserID, key, "hash-concurrent")
+				_, acquired, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-concurrent")
 				if err != nil {
 					return err
 				}
@@ -225,7 +242,7 @@ func TestAttemptStoreConfirmedSuccessTransitionAndReplay(t *testing.T) {
 	f, store := requireAttemptStack(t)
 	var attempt *domain.ExternalCreateAttempt
 	err := f.withSystemSession(t, func(ctx context.Context) error {
-		a, _, err := store.Acquire(ctx, f.conversationID, f.actorUserID, "gate-success-"+uuid.New().String(), "hash-1")
+		a, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-success-"+uuid.New().String(), "hash-1")
 		if err != nil {
 			return err
 		}
@@ -271,7 +288,7 @@ func TestAttemptStoreConfirmedSuccessTransitionAndReplay(t *testing.T) {
 func TestAttemptStoreConfirmedFailureTransition(t *testing.T) {
 	f, store := requireAttemptStack(t)
 	err := f.withSystemSession(t, func(ctx context.Context) error {
-		a, _, err := store.Acquire(ctx, f.conversationID, f.actorUserID, "gate-fail-"+uuid.New().String(), "hash-1")
+		a, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-fail-"+uuid.New().String(), "hash-1")
 		if err != nil {
 			return err
 		}
@@ -302,7 +319,7 @@ func TestAttemptStoreOutcomeUnknownNeverBecomesRetryable(t *testing.T) {
 	f, store := requireAttemptStack(t)
 	key := "gate-unknown-" + uuid.New().String()
 	err := f.withSystemSession(t, func(ctx context.Context) error {
-		a, _, err := store.Acquire(ctx, f.conversationID, f.actorUserID, key, "hash-1")
+		a, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-1")
 		if err != nil {
 			return err
 		}
@@ -314,7 +331,7 @@ func TestAttemptStoreOutcomeUnknownNeverBecomesRetryable(t *testing.T) {
 			t.Fatalf("state = %q, want outcome_unknown", unknown.State)
 		}
 		// Same key again: must NOT acquire (no automatic retry path).
-		replay, acquired, err := store.Acquire(ctx, f.conversationID, f.actorUserID, key, "hash-1")
+		replay, acquired, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-1")
 		if err != nil {
 			return err
 		}
@@ -341,23 +358,21 @@ func TestAttemptStoreOutcomeUnknownNeverBecomesRetryable(t *testing.T) {
 func TestAttemptStoreProjectionSyncedIsIdempotentAndGuarded(t *testing.T) {
 	f, store := requireAttemptStack(t)
 	err := f.withSystemSession(t, func(ctx context.Context) error {
-		a, _, err := store.Acquire(ctx, f.conversationID, f.actorUserID, "gate-projection-"+uuid.New().String(), "hash-1")
+		a, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-projection-"+uuid.New().String(), "hash-1")
 		if err != nil {
 			return err
 		}
 		// Projection completion requires confirmed_success first.
-		if _, err := store.MarkProjectionSynced(ctx, a.ID, uuid.New()); !errors.Is(err, ErrAttemptInvalidTransition) {
+		if _, err := store.MarkProjectionSynced(ctx, a.ID, f.localTicketID); !errors.Is(err, ErrAttemptInvalidTransition) {
 			t.Fatalf("err = %v, want ErrAttemptInvalidTransition before confirmed_success", err)
 		}
 		if _, err := store.MarkConfirmedSuccess(ctx, a.ID, "k3g", "28180"); err != nil {
 			return err
 		}
-		localTicketID := uuid.New()
-		if _, err := f.seed.Exec(context.Background(),
-			`INSERT INTO tickets(id, tenant_id, conversation_id, subject) VALUES ($1,$2,$3,'PRODUCT.6-K1 local ticket')`,
-			localTicketID, f.tenantID, f.conversationID); err != nil {
-			return err
-		}
+		// PRODUCT.6-M5: Acquire already set local_ticket_id = f.localTicketID
+		// at creation time — MarkProjectionSynced must be called with that
+		// SAME identity, never a different one.
+		localTicketID := f.localTicketID
 		synced, err := store.MarkProjectionSynced(ctx, a.ID, localTicketID)
 		if err != nil {
 			return err
@@ -406,13 +421,13 @@ func TestAttemptStoreCrossTenantSameKeyIsIndependent(t *testing.T) {
 
 	var acquiredA, acquiredB bool
 	if err := fa.withSystemSession(t, func(ctx context.Context) error {
-		_, acquiredA, err = store.Acquire(ctx, fa.conversationID, fa.actorUserID, key, "hash-a")
+		_, acquiredA, err = store.Acquire(ctx, fa.conversationID, fa.localTicketID, fa.actorUserID, key, "hash-a")
 		return err
 	}); err != nil {
 		t.Fatalf("tenant A acquire: %v", err)
 	}
 	if err := fb.withSystemSession(t, func(ctx context.Context) error {
-		_, acquiredB, err = store.Acquire(ctx, fb.conversationID, fb.actorUserID, key, "hash-b")
+		_, acquiredB, err = store.Acquire(ctx, fb.conversationID, fb.localTicketID, fb.actorUserID, key, "hash-b")
 		return err
 	}); err != nil {
 		t.Fatalf("tenant B acquire: %v", err)
@@ -449,7 +464,7 @@ func TestAttemptStoreCrossTenantIsolationEnforcedByRLS(t *testing.T) {
 
 	var victimAttemptID uuid.UUID
 	if err := victim.withSystemSession(t, func(ctx context.Context) error {
-		a, _, err := store.Acquire(ctx, victim.conversationID, victim.actorUserID, "gate-F-"+uuid.New().String(), "hash-1")
+		a, _, err := store.Acquire(ctx, victim.conversationID, victim.localTicketID, victim.actorUserID, "gate-F-"+uuid.New().String(), "hash-1")
 		if err != nil {
 			return err
 		}
@@ -474,6 +489,178 @@ func TestAttemptStoreCrossTenantIsolationEnforcedByRLS(t *testing.T) {
 		}
 		if found != nil {
 			t.Fatal("attacker session must not be able to read another tenant's attempt row via RLS")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// ---- PRODUCT.6-M5: cross-key atomic reservation (real Postgres) ---------
+
+// Mandatory concurrency proof: N goroutines, DIFFERENT valid idempotency
+// keys, ALL targeting the SAME local ticket. The database's partial unique
+// index (migration 000048) — not a Go-level check — must let exactly one
+// through.
+func TestAttemptStoreCrossKeyConcurrentAcquireExactlyOneWins(t *testing.T) {
+	f, store := requireAttemptStack(t)
+
+	const n = 8
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	acquiredCount := 0
+	blockedCount := 0
+	errs := make([]error, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			err := f.withSystemSession(t, func(ctx context.Context) error {
+				key := fmt.Sprintf("gate-crosskey-%d-%s", idx, uuid.New().String())
+				_, acquired, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, key, "hash-crosskey")
+				if err != nil {
+					if errors.Is(err, ErrAttemptLocalTicketBlocked) {
+						mu.Lock()
+						blockedCount++
+						mu.Unlock()
+						return nil
+					}
+					return err
+				}
+				if acquired {
+					mu.Lock()
+					acquiredCount++
+					mu.Unlock()
+				}
+				return nil
+			})
+			errs[idx] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Acquire failed: %v", err)
+		}
+	}
+	if acquiredCount != 1 {
+		t.Fatalf("acquiredCount = %d, want exactly 1", acquiredCount)
+	}
+	if blockedCount != n-1 {
+		t.Fatalf("blockedCount = %d, want %d", blockedCount, n-1)
+	}
+
+	var rowCount int
+	if err := f.seed.QueryRow(context.Background(), `
+		SELECT count(*) FROM ticket_external_create_attempts
+		WHERE tenant_id = $1 AND local_ticket_id = $2 AND state IN ('in_flight','confirmed_success','outcome_unknown')`,
+		f.tenantID, f.localTicketID).Scan(&rowCount); err != nil {
+		t.Fatalf("count blocking rows: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("blocking attempt rows for local ticket = %d, want exactly 1", rowCount)
+	}
+}
+
+// Section 17: IN_FLIGHT blocks a new key.
+func TestAttemptStoreInFlightBlocksDifferentKey(t *testing.T) {
+	f, store := requireAttemptStack(t)
+	err := f.withSystemSession(t, func(ctx context.Context) error {
+		if _, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-inflight-"+uuid.New().String(), "hash-1"); err != nil {
+			return err
+		}
+		blocking, acquired, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-inflight-other-"+uuid.New().String(), "hash-2")
+		if !errors.Is(err, ErrAttemptLocalTicketBlocked) {
+			t.Fatalf("err = %v, want ErrAttemptLocalTicketBlocked", err)
+		}
+		if acquired {
+			t.Fatal("must not acquire")
+		}
+		if blocking == nil || blocking.State != domain.AttemptInFlight {
+			t.Fatalf("blocking attempt = %+v, want in_flight", blocking)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Section 17: OUTCOME_UNKNOWN blocks a new key.
+func TestAttemptStoreOutcomeUnknownBlocksDifferentKey(t *testing.T) {
+	f, store := requireAttemptStack(t)
+	err := f.withSystemSession(t, func(ctx context.Context) error {
+		a, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-unknown-"+uuid.New().String(), "hash-1")
+		if err != nil {
+			return err
+		}
+		if _, err := store.MarkOutcomeUnknown(ctx, a.ID); err != nil {
+			return err
+		}
+		_, acquired, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-unknown-other-"+uuid.New().String(), "hash-2")
+		if !errors.Is(err, ErrAttemptLocalTicketBlocked) {
+			t.Fatalf("err = %v, want ErrAttemptLocalTicketBlocked", err)
+		}
+		if acquired {
+			t.Fatal("must not acquire")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Section 17: CONFIRMED_SUCCESS blocks a new key.
+func TestAttemptStoreConfirmedSuccessBlocksDifferentKey(t *testing.T) {
+	f, store := requireAttemptStack(t)
+	err := f.withSystemSession(t, func(ctx context.Context) error {
+		a, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-success-"+uuid.New().String(), "hash-1")
+		if err != nil {
+			return err
+		}
+		if _, err := store.MarkConfirmedSuccess(ctx, a.ID, "k3g", "28182"); err != nil {
+			return err
+		}
+		blocking, acquired, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-success-other-"+uuid.New().String(), "hash-2")
+		if !errors.Is(err, ErrAttemptLocalTicketBlocked) {
+			t.Fatalf("err = %v, want ErrAttemptLocalTicketBlocked", err)
+		}
+		if acquired {
+			t.Fatal("must not acquire")
+		}
+		if blocking == nil || blocking.ExternalTicketID == nil || *blocking.ExternalTicketID != "28182" {
+			t.Fatalf("blocking attempt = %+v, want external_ticket_id=28182", blocking)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// Section 17: CONFIRMED_FAILURE does NOT block a later new key — the
+// provider definitively rejected that attempt, so a corrected retry with a
+// new key must be able to acquire.
+func TestAttemptStoreConfirmedFailureAllowsDifferentKeyToAcquire(t *testing.T) {
+	f, store := requireAttemptStack(t)
+	err := f.withSystemSession(t, func(ctx context.Context) error {
+		a, _, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-failure-"+uuid.New().String(), "hash-1")
+		if err != nil {
+			return err
+		}
+		if _, err := store.MarkConfirmedFailure(ctx, a.ID); err != nil {
+			return err
+		}
+		_, acquired, err := store.Acquire(ctx, f.conversationID, f.localTicketID, f.actorUserID, "gate-m5-failure-retry-"+uuid.New().String(), "hash-2")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !acquired {
+			t.Fatal("a new key must be able to acquire after a confirmed_failure — it must not permanently block")
 		}
 		return nil
 	})

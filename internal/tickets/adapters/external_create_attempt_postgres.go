@@ -24,6 +24,11 @@ import (
 // ports-level one.
 var ErrAttemptIdempotencyMismatch = ports.ErrIdempotencyMismatch
 
+// ErrAttemptLocalTicketBlocked (PRODUCT.6-M5): same value as
+// ports.ErrLocalTicketBlocked, for the same reason
+// ErrAttemptIdempotencyMismatch mirrors ports.ErrIdempotencyMismatch.
+var ErrAttemptLocalTicketBlocked = ports.ErrLocalTicketBlocked
+
 // ErrAttemptInvalidTransition: a state transition was attempted from a
 // state that does not permit it (e.g. confirming success on a row that is
 // already confirmed_failure). Guarded UPDATEs make this structurally rare,
@@ -71,20 +76,28 @@ func scanAttempt(row pgx.Row) (*domain.ExternalCreateAttempt, error) {
 // Acquire atomically claims an idempotency key for a new external create
 // attempt, or returns the existing attempt if the key was already used.
 //
-//   - new key: inserts state=in_flight, returns (attempt, acquired=true).
-//     Only the caller that acquired=true owns the right to perform the
-//     provider POST.
+//   - new key, no blocking attempt on this local ticket: inserts
+//     state=in_flight with local_ticket_id already set, returns (attempt,
+//     acquired=true). Only the caller that acquired=true owns the right to
+//     perform the provider POST.
 //   - same key + same requestHash: returns the existing durable attempt,
 //     acquired=false. The caller must NOT POST again — it must instead act
 //     on the existing attempt's State (replay confirmed_success, surface
 //     confirmed_failure, or report reconciliation-required for in_flight/
 //     outcome_unknown).
 //   - same key + different requestHash: ErrAttemptIdempotencyMismatch.
+//   - DIFFERENT key, but another attempt already blocks this local ticket
+//     (PRODUCT.6-M5 — in_flight/confirmed_success/outcome_unknown never
+//     confirmed_failure): (blockingAttempt, false, ErrAttemptLocalTicketBlocked).
+//     The returned attempt is the BLOCKER's, not a row owned by this key.
 //
 // Concurrency: two simultaneous Acquire calls with the same key rely on the
-// database's UNIQUE(tenant_id, idempotency_key) constraint, never a process
-// mutex — exactly one caller receives acquired=true.
-func (s *AttemptStore) Acquire(ctx context.Context, conversationID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*domain.ExternalCreateAttempt, bool, error) {
+// database's UNIQUE(tenant_id, idempotency_key) constraint; two simultaneous
+// calls with DIFFERENT keys for the SAME local ticket rely on
+// ticket_external_create_attempts_blocking_local_ticket_uq (migration
+// 000048) — never a process mutex. Exactly one caller ever receives
+// acquired=true for a given local ticket at a time.
+func (s *AttemptStore) Acquire(ctx context.Context, conversationID, localTicketID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*domain.ExternalCreateAttempt, bool, error) {
 	tenantID, err := attemptTenantOf(ctx)
 	if err != nil {
 		return nil, false, err
@@ -93,11 +106,11 @@ func (s *AttemptStore) Acquire(ctx context.Context, conversationID, actorUserID 
 	id := uuid.New()
 	row := q.QueryRow(ctx, `
 		INSERT INTO ticket_external_create_attempts
-		  (id, tenant_id, conversation_id, actor_user_id, idempotency_key, request_hash, state)
-		VALUES ($1, $2, $3, $4, $5, $6, 'in_flight')
-		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+		  (id, tenant_id, conversation_id, actor_user_id, idempotency_key, request_hash, state, local_ticket_id)
+		VALUES ($1, $2, $3, $4, $5, $6, 'in_flight', $7)
+		ON CONFLICT DO NOTHING
 		RETURNING `+attemptColumns,
-		id, tenantID, conversationID, actorUserID, idempotencyKey, requestHash)
+		id, tenantID, conversationID, actorUserID, idempotencyKey, requestHash, localTicketID)
 	attempt, err := scanAttempt(row)
 	if err == nil {
 		return attempt, true, nil
@@ -106,17 +119,37 @@ func (s *AttemptStore) Acquire(ctx context.Context, conversationID, actorUserID 
 		return nil, false, fmt.Errorf("tickets: acquire external create attempt: %w", err)
 	}
 
-	existing, err := scanAttempt(q.QueryRow(ctx, `
+	// The unqualified ON CONFLICT DO NOTHING above fires for EITHER unique
+	// constraint (idempotency_key or the blocking local_ticket_id index) —
+	// determine which one by checking the idempotency_key first (a real
+	// same-key replay takes priority over blocking classification).
+	existing, loadErr := scanAttempt(q.QueryRow(ctx, `
 		SELECT `+attemptColumns+`
 		FROM ticket_external_create_attempts
 		WHERE tenant_id = $1 AND idempotency_key = $2`, tenantID, idempotencyKey))
-	if err != nil {
-		return nil, false, fmt.Errorf("tickets: load existing external create attempt: %w", err)
+	if loadErr == nil {
+		if existing.RequestHash != requestHash {
+			return nil, false, ErrAttemptIdempotencyMismatch
+		}
+		return existing, false, nil
 	}
-	if existing.RequestHash != requestHash {
-		return nil, false, ErrAttemptIdempotencyMismatch
+	if !errors.Is(loadErr, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("tickets: load existing external create attempt: %w", loadErr)
 	}
-	return existing, false, nil
+
+	// Not a same-key conflict — must be the blocking local_ticket_id index.
+	blocking, blockErr := scanAttempt(q.QueryRow(ctx, `
+		SELECT `+attemptColumns+`
+		FROM ticket_external_create_attempts
+		WHERE tenant_id = $1 AND local_ticket_id = $2 AND state IN ('in_flight', 'confirmed_success', 'outcome_unknown')`,
+		tenantID, localTicketID))
+	if errors.Is(blockErr, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("tickets: acquire conflicted but no matching idempotency-key or blocking local-ticket row was found")
+	}
+	if blockErr != nil {
+		return nil, false, fmt.Errorf("tickets: load blocking external create attempt: %w", blockErr)
+	}
+	return blocking, false, ErrAttemptLocalTicketBlocked
 }
 
 // MarkConfirmedSuccess transitions an in_flight attempt to
@@ -216,10 +249,14 @@ func (s *AttemptStore) reconcileNoOpTransition(ctx context.Context, tenantID, at
 
 // MarkProjectionSynced records that the local ticket projection was
 // enriched for a confirmed_success attempt. Idempotent: if
-// ProjectionSyncedAt is already set, the row is returned unchanged (the
-// local_ticket_id is never replaced). Refused (ErrAttemptInvalidTransition)
-// if the attempt is not confirmed_success — projection completion is only
-// meaningful once provider success is durable.
+// ProjectionSyncedAt is already set, the row is returned unchanged.
+// Refused (ErrAttemptInvalidTransition) if the attempt is not
+// confirmed_success — projection completion is only meaningful once
+// provider success is durable. Since PRODUCT.6-M5, Acquire already sets
+// local_ticket_id at creation time; the guard here (local_ticket_id IS
+// NULL OR = $3) preserves/validates that identity rather than
+// establishing it for the first time, and still refuses to silently
+// repoint an attempt at a different local ticket.
 func (s *AttemptStore) MarkProjectionSynced(ctx context.Context, attemptID, localTicketID uuid.UUID) (*domain.ExternalCreateAttempt, error) {
 	tenantID, err := attemptTenantOf(ctx)
 	if err != nil {
@@ -230,6 +267,7 @@ func (s *AttemptStore) MarkProjectionSynced(ctx context.Context, attemptID, loca
 		UPDATE ticket_external_create_attempts
 		SET local_ticket_id = $3, projection_synced_at = now(), updated_at = now()
 		WHERE tenant_id = $1 AND id = $2 AND state = 'confirmed_success' AND projection_synced_at IS NULL
+		  AND (local_ticket_id IS NULL OR local_ticket_id = $3)
 		RETURNING `+attemptColumns,
 		tenantID, attemptID, localTicketID))
 	if err == nil {
@@ -249,6 +287,9 @@ func (s *AttemptStore) MarkProjectionSynced(ctx context.Context, attemptID, loca
 		return nil, fmt.Errorf("tickets: reconcile projection sync: %w", loadErr)
 	}
 	if current.State != domain.AttemptConfirmedSuccess || current.ProjectionSyncedAt == nil {
+		return nil, ErrAttemptInvalidTransition
+	}
+	if current.LocalTicketID != nil && *current.LocalTicketID != localTicketID {
 		return nil, ErrAttemptInvalidTransition
 	}
 	return current, nil

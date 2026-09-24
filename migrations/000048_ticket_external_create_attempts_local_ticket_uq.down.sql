@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS ticket_external_create_attempts_blocking_local_ticket_uq;

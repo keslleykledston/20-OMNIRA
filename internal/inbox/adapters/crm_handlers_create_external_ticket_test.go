@@ -103,7 +103,7 @@ type httpFakeAttempts struct {
 func newHTTPFakeAttempts() *httpFakeAttempts {
 	return &httpFakeAttempts{byKey: map[string]*ticketsdomain.ExternalCreateAttempt{}}
 }
-func (f *httpFakeAttempts) Acquire(ctx context.Context, conversationID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*ticketsdomain.ExternalCreateAttempt, bool, error) {
+func (f *httpFakeAttempts) Acquire(ctx context.Context, conversationID, localTicketID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*ticketsdomain.ExternalCreateAttempt, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if existing, ok := f.byKey[idempotencyKey]; ok {
@@ -113,7 +113,7 @@ func (f *httpFakeAttempts) Acquire(ctx context.Context, conversationID, actorUse
 		cp := *existing
 		return &cp, false, nil
 	}
-	a := &ticketsdomain.ExternalCreateAttempt{ID: uuid.New(), ConversationID: conversationID, ActorUserID: actorUserID,
+	a := &ticketsdomain.ExternalCreateAttempt{ID: uuid.New(), ConversationID: conversationID, ActorUserID: actorUserID, LocalTicketID: &localTicketID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash, State: ticketsdomain.AttemptInFlight,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	f.byKey[idempotencyKey] = a
@@ -463,6 +463,33 @@ func TestCreateExternalTicketHTTPNoConfigurationMapsToUnavailable(t *testing.T) 
 	}
 	if !strings.Contains(rec.Body.String(), "ticketing integration not configured for this tenant") {
 		t.Fatalf("body must reuse the exact PRODUCT.6-B unavailable text: %s", rec.Body.String())
+	}
+}
+
+// PRODUCT.6-M5: an already-linked local ticket maps to 409
+// TICKET_ALREADY_LINKED, never a plain success and never a provider call,
+// even with a brand-new Idempotency-Key.
+func TestCreateExternalTicketHTTPAlreadyLinkedMapsTo409(t *testing.T) {
+	h := newExternalTicketHarness(t)
+	provider, externalID := "k3g", "28182"
+	svc := ticketsapplication.NewService(h.perms, h.conversation, newHTTPFakeAttempts(),
+		&httpFakeLocalTickets{candidate: &ticketsdomain.Ticket{ID: uuid.New(), Provider: &provider, ExternalTicketID: &externalID}}, h.runtime)
+	h.handler.SetExternalTicketService(svc)
+
+	rec := httptest.NewRecorder()
+	h.mux().ServeHTTP(rec, h.request(`{"selected_customer_external_id":"`+httpTestCompanyID+`","subject":"s","description":"d"}`, validKey))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var problem externalTicketProblemResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if problem.Code != "TICKET_ALREADY_LINKED" || problem.ExternalTicketID != externalID || problem.Provider != provider {
+		t.Fatalf("unexpected problem body: %+v", problem)
+	}
+	if h.ticketing.calls != 0 {
+		t.Fatalf("provider must not be called, got %d", h.ticketing.calls)
 	}
 }
 

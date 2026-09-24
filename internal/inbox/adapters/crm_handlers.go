@@ -150,9 +150,22 @@ type externalTicketProblemResponse struct {
 	Code              string `json:"code"`
 	AttemptID         string `json:"attempt_id,omitempty"`
 	AttemptState      string `json:"attempt_state,omitempty"`
+	LocalTicketID     string `json:"local_ticket_id,omitempty"`
+	Provider          string `json:"provider,omitempty"`
 	ExternalTicketID  string `json:"external_ticket_id,omitempty"`
+	SyncStatus        string `json:"sync_status,omitempty"`
 	Severe            bool   `json:"severe,omitempty"`
 	ProviderErrorCode string `json:"provider_error_code,omitempty"`
+}
+
+// attemptIDOrEmpty omits a zero-value UUID (no real attempt exists, e.g.
+// OutcomeAlreadyLinked) rather than rendering it as a fake-looking
+// "00000000-0000-0000-0000-000000000000" attempt id.
+func attemptIDOrEmpty(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 // CreateTicket — cria ticket externo real via CreateExternalTicket
@@ -276,14 +289,27 @@ func writeExternalTicketResult(w http.ResponseWriter, res *ticketsapplication.Re
 			AttemptID: res.AttemptID.String(), ProviderErrorCode: string(res.FailureCode),
 		})
 	case ticketsapplication.OutcomeReconciliationRequired:
-		// Covers WRITE_OUTCOME_UNKNOWN, an in-flight replay, and a
-		// confirmed provider success whose durable record or local
-		// projection is not (yet) complete — never an automatic retry.
+		// Covers WRITE_OUTCOME_UNKNOWN, an in-flight replay, a confirmed
+		// provider success whose durable record or local projection is not
+		// (yet) complete, and a different key blocked by another
+		// in-progress attempt on the same local ticket (PRODUCT.6-M5) —
+		// never an automatic retry.
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(externalTicketProblemResponse{
 			Error: "ticket creation outcome requires reconciliation before any retry", Code: "TICKET_RECONCILIATION_REQUIRED",
-			AttemptID: res.AttemptID.String(), AttemptState: string(res.AttemptState),
+			AttemptID: attemptIDOrEmpty(res.AttemptID), AttemptState: string(res.AttemptState),
 			ExternalTicketID: res.ExternalTicketID, Severe: res.Severe,
+		})
+	case ticketsapplication.OutcomeAlreadyLinked:
+		// PRODUCT.6-M5: the active local ticket already has a consistent
+		// external link from a DIFFERENT create intent (different
+		// Idempotency-Key) — never treated as this call's own replay
+		// (Replayed stays false), never a second provider call.
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(externalTicketProblemResponse{
+			Error: "conversation's local ticket is already linked to an external ticket", Code: "TICKET_ALREADY_LINKED",
+			LocalTicketID: res.LocalTicketID.String(), Provider: res.Provider, ExternalTicketID: res.ExternalTicketID,
+			SyncStatus: "synced",
 		})
 	default:
 		log.Printf("tickets create external: unknown outcome %q", res.Outcome)

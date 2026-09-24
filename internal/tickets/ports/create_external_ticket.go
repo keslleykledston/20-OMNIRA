@@ -21,6 +21,19 @@ import (
 // importing internal/tickets/adapters.
 var ErrIdempotencyMismatch = errors.New("tickets: Idempotency-Key was already used with a different request")
 
+// ErrLocalTicketBlocked (PRODUCT.6-M5) is the canonical sentinel
+// AttemptStore.Acquire returns when a DIFFERENT idempotency key already
+// owns a blocking external-create attempt (in_flight, confirmed_success,
+// or outcome_unknown) for the same local ticket. This is NOT an
+// idempotency-key mismatch — the keys are both individually valid, the
+// conflict is over which one may hold external-CREATE permission for one
+// local ticket. When this error is returned, the accompanying
+// *ticketsdomain.ExternalCreateAttempt is the BLOCKING attempt (owned by
+// the other key), not a new or the caller's own attempt — so the caller
+// can classify/report it (e.g. its ExternalTicketID if already known)
+// without acquiring anything itself.
+var ErrLocalTicketBlocked = errors.New("tickets: another request already owns external ticket creation for this local ticket")
+
 // PermissionChecker resolves role permissions of a user in the
 // TenantContext tenant. Structurally identical to (and satisfied without
 // change by) internal/channels/adapters.PostgresPermissionChecker and
@@ -78,7 +91,13 @@ type LocalTicketStore interface {
 // (internal/tickets/adapters.AttemptStore satisfies this without
 // modification — same method set).
 type AttemptStore interface {
-	Acquire(ctx context.Context, conversationID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*ticketsdomain.ExternalCreateAttempt, bool, error)
+	// Acquire also enforces (PRODUCT.6-M5) that at most one blocking
+	// attempt (in_flight/confirmed_success/outcome_unknown) may exist per
+	// (tenant, localTicketID) — a durable DB invariant, not a process
+	// mutex, so it holds across browsers/devices/processes. localTicketID
+	// is required and stored on the newly acquired row immediately, before
+	// any provider call.
+	Acquire(ctx context.Context, conversationID, localTicketID, actorUserID uuid.UUID, idempotencyKey, requestHash string) (*ticketsdomain.ExternalCreateAttempt, bool, error)
 	MarkConfirmedSuccess(ctx context.Context, attemptID uuid.UUID, provider, externalTicketID string) (*ticketsdomain.ExternalCreateAttempt, error)
 	MarkConfirmedFailure(ctx context.Context, attemptID uuid.UUID) (*ticketsdomain.ExternalCreateAttempt, error)
 	MarkOutcomeUnknown(ctx context.Context, attemptID uuid.UUID) (*ticketsdomain.ExternalCreateAttempt, error)

@@ -77,6 +77,16 @@ const (
 	// durably recorded. AttemptState and Severe distinguish these for
 	// callers/ops; no automatic provider retry ever happens here.
 	OutcomeReconciliationRequired Outcome = "reconciliation_required"
+	// OutcomeAlreadyLinked (PRODUCT.6-M5): the active local ticket already
+	// carries a consistent external link (Provider AND ExternalTicketID
+	// both set) BEFORE this call ever touched AttemptStore or the
+	// provider. This is deliberately distinct from OutcomeReplaySuccess:
+	// the caller used a genuinely different Idempotency-Key — this is not
+	// "the same request replayed", it is "a different request reaching a
+	// local ticket that turned out to already be linked". No attempt is
+	// acquired, no provider call is made, the existing identity is
+	// returned unchanged.
+	OutcomeAlreadyLinked Outcome = "already_linked"
 )
 
 // CreateExternalTicketCommand is the provider-neutral V1 create intent
@@ -231,11 +241,36 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		return nil, ErrNoLocalTicketToEnrich
 	}
 
+	// PRODUCT.6-M5 Problem A: an already-linked local ticket must never
+	// reach AttemptStore/the provider merely because this call uses a
+	// different Idempotency-Key than whatever created the existing link.
+	hasProvider := localTicket.Provider != nil && strings.TrimSpace(*localTicket.Provider) != ""
+	hasExternalID := localTicket.ExternalTicketID != nil && strings.TrimSpace(*localTicket.ExternalTicketID) != ""
+	if hasProvider && hasExternalID {
+		return &Result{Outcome: OutcomeAlreadyLinked, LocalTicketID: localTicket.ID,
+			Provider: *localTicket.Provider, ExternalTicketID: *localTicket.ExternalTicketID}, nil
+	}
+	if hasProvider != hasExternalID {
+		// Inconsistent linkage (one set, the other not) — a data
+		// integrity state, never "repaired" by creating another ERP
+		// ticket. No attempt acquired, no provider call, no projection
+		// write.
+		return &Result{Outcome: OutcomeReconciliationRequired, LocalTicketID: localTicket.ID, Severe: true}, nil
+	}
+
 	hash := requestHash(cmd.TenantID, cmd.ConversationID, validatedCustomerExternalID, cmd.Subject, cmd.Description)
-	attempt, acquired, err := s.attempts.Acquire(ctx, cmd.ConversationID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
+	attempt, acquired, err := s.attempts.Acquire(ctx, cmd.ConversationID, localTicket.ID, cmd.ActorUserID, cmd.IdempotencyKey, hash)
 	if err != nil {
 		if errors.Is(err, ports.ErrIdempotencyMismatch) {
 			return nil, ErrIdempotencyMismatch
+		}
+		if errors.Is(err, ports.ErrLocalTicketBlocked) {
+			// PRODUCT.6-M5 Problem B: a DIFFERENT key already owns a
+			// blocking attempt for this exact local ticket. `attempt`
+			// here is that blocker's row, not a row this call owns.
+			return &Result{Outcome: OutcomeReconciliationRequired, AttemptID: attempt.ID, AttemptState: attempt.State,
+				ExternalTicketID: derefOr(attempt.ExternalTicketID, ""), Provider: derefOr(attempt.Provider, ""),
+				LocalTicketID: localTicket.ID}, nil
 		}
 		return nil, err
 	}
