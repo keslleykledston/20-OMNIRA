@@ -190,8 +190,11 @@ func TestK3GTicketingCreateTicketNeverRetriesOnFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if got := TicketingErrorCodeOf(err); got != TicketingProviderUnavailable {
-		t.Fatalf("code = %q, want PROVIDER_UNAVAILABLE", got)
+	// PRODUCT.6-K1: a 5xx on a mutating create is a possible write, not
+	// "safe to consider unwritten" — classified WRITE_OUTCOME_UNKNOWN, not
+	// PROVIDER_UNAVAILABLE.
+	if got := TicketingErrorCodeOf(err); got != TicketingWriteOutcomeUnknown {
+		t.Fatalf("code = %q, want WRITE_OUTCOME_UNKNOWN", got)
 	}
 	if got := atomic.LoadInt64(&attempts); got != 1 {
 		t.Fatalf("server received %d requests, want exactly 1 (no automatic retry)", got)
@@ -224,11 +227,78 @@ func TestK3GTicketingCreateTicketNeverRetriesOnTransportFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected a transport error")
 	}
-	if got := TicketingErrorCodeOf(err); got != TicketingProviderUnavailable {
-		t.Fatalf("code = %q, want PROVIDER_UNAVAILABLE", got)
+	// PRODUCT.6-K1: an abrupt close during a mutating create leaves the
+	// write outcome unknown — the request may have reached and been
+	// processed by the server before the connection dropped.
+	if got := TicketingErrorCodeOf(err); got != TicketingWriteOutcomeUnknown {
+		t.Fatalf("code = %q, want WRITE_OUTCOME_UNKNOWN", got)
 	}
 	if got := atomic.LoadInt64(&attempts); got != 1 {
 		t.Fatalf("server received %d connection attempts, want exactly 1 (no automatic retry)", got)
+	}
+}
+
+// PRODUCT.6-K1 (spec section 15/18 J-O): CreateTicket must distinguish
+// DEFINITIVE_FAILURE from WRITE_OUTCOME_UNKNOWN. 400/401/403 stay
+// definitive (the provider explicitly rejected the request); 429/5xx/
+// malformed 2xx/missing ticket id all become WRITE_OUTCOME_UNKNOWN because
+// K3G gives no guarantee the ticket was not created before the failure
+// became visible.
+func TestK3GTicketingCreateTicketWriteOutcomeClassification(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   int
+		body     string
+		wantCode TicketingErrorCode
+	}{
+		{"400 -> definitive VALIDATION_ERROR", http.StatusBadRequest, `{"error":"bad request"}`, TicketingValidationError},
+		{"401 -> definitive UNAUTHORIZED", http.StatusUnauthorized, `{"error":"unauthorized"}`, TicketingUnauthorized},
+		{"403 -> definitive UNAUTHORIZED", http.StatusForbidden, `{"error":"forbidden"}`, TicketingUnauthorized},
+		{"429 -> WRITE_OUTCOME_UNKNOWN", http.StatusTooManyRequests, `{"error":"rate limited"}`, TicketingWriteOutcomeUnknown},
+		{"500 -> WRITE_OUTCOME_UNKNOWN", http.StatusInternalServerError, `{"error":"boom"}`, TicketingWriteOutcomeUnknown},
+		{"503 -> WRITE_OUTCOME_UNKNOWN", http.StatusServiceUnavailable, `{"error":"unavailable"}`, TicketingWriteOutcomeUnknown},
+		{"malformed 201 body -> WRITE_OUTCOME_UNKNOWN", http.StatusCreated, `not json`, TicketingWriteOutcomeUnknown},
+		{"201 ok=false -> WRITE_OUTCOME_UNKNOWN", http.StatusCreated, `{"ok":false}`, TicketingWriteOutcomeUnknown},
+		{"201 missing ticket id -> WRITE_OUTCOME_UNKNOWN", http.StatusCreated, `{"ok":true,"ticket":{"id":0}}`, TicketingWriteOutcomeUnknown},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			conn, _ := newTestK3GTicketingConnector(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(c.status)
+				_, _ = w.Write([]byte(c.body))
+			})
+			_, err := conn.CreateTicket(context.Background(), CreateTicketRequest{CustomerExternalID: "c", Subject: "s", Description: "d"})
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			if got := TicketingErrorCodeOf(err); got != c.wantCode {
+				t.Fatalf("code = %q, want %q (err=%v)", got, c.wantCode, err)
+			}
+		})
+	}
+}
+
+// GetTicket (a read) must keep its existing PROVIDER_UNAVAILABLE
+// classification for transport/5xx failures — the write-outcome ambiguity
+// is specific to the create path, which has duplicate-write risk that a
+// read does not.
+func TestK3GTicketingGetTicketKeepsProviderUnavailableOnTransportAndServerErrors(t *testing.T) {
+	server5xx, _ := newTestK3GTicketingConnector(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"unavailable"}`))
+	})
+	_, err := server5xx.GetTicket(context.Background(), "1")
+	if got := TicketingErrorCodeOf(err); got != TicketingProviderUnavailable {
+		t.Fatalf("GetTicket 503 code = %q, want PROVIDER_UNAVAILABLE", got)
+	}
+
+	transport, err := NewK3GTicketingConnector(K3GTicketingConfig{BaseURL: "http://127.0.0.1:1", Token: "t"})
+	if err != nil {
+		t.Fatalf("NewK3GTicketingConnector: %v", err)
+	}
+	_, err = transport.GetTicket(context.Background(), "1")
+	if got := TicketingErrorCodeOf(err); got != TicketingProviderUnavailable {
+		t.Fatalf("GetTicket transport error code = %q, want PROVIDER_UNAVAILABLE", got)
 	}
 }
 

@@ -121,6 +121,21 @@ const (
 	// this connector does not recognize. Never silently treated as any of
 	// the categories above.
 	TicketingUnknownProviderError TicketingErrorCode = "UNKNOWN_PROVIDER_ERROR"
+	// TicketingWriteOutcomeUnknown (PRODUCT.6-K1): a mutating call (today,
+	// only CreateTicket) may or may not have been committed by the
+	// provider — a transport failure, a 5xx/429 response, or a malformed/
+	// incomplete 2xx (no usable ticket id) all leave OMNIRA unable to prove
+	// success or failure. K3G offers no Idempotency-Key/externalReference/
+	// correlationId (PRODUCT.6-H1/6-I), so none of these outcomes may ever
+	// be collapsed into TicketingProviderUnavailable (which implies "safe
+	// to consider not-written") nor trigger an automatic retry anywhere in
+	// this connector or its callers. A caller that sees this code MUST
+	// treat the write as possibly-succeeded and route to durable
+	// reconciliation, never a second CreateTicket call for the same
+	// intent. This code is create-path specific: GetTicket is a read and
+	// keeps using TicketingProviderUnavailable for its own transport/5xx
+	// failures, since a failed read has no write-duplication risk.
+	TicketingWriteOutcomeUnknown TicketingErrorCode = "WRITE_OUTCOME_UNKNOWN"
 )
 
 // TicketingError is the error type every TicketingConnector method returns

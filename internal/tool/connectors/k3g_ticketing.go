@@ -111,18 +111,32 @@ func (c *K3GTicketingConnector) CreateTicket(ctx context.Context, req CreateTick
 		"name":      req.Subject,
 		"content":   req.Description,
 	}
-	body, err := c.doOnce(ctx, http.MethodPost, "/api/support/tickets", payload)
+	// mutating=true: PRODUCT.6-K1 — a transport failure or 5xx/429 here
+	// leaves the write outcome unknown, never "safe to consider
+	// not-written" (TicketingProviderUnavailable), because K3G gives no
+	// way to tell whether the POST reached the server and committed.
+	body, err := c.doOnce(ctx, http.MethodPost, "/api/support/tickets", payload, true)
 	if err != nil {
 		return nil, err
 	}
 	var resp k3gCreateResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &TicketingError{Code: TicketingUnknownProviderError, Message: "malformed create response", Err: err}
+		// A 2xx response that fails to decode is exactly the ambiguous
+		// case PRODUCT.6-K1 calls out: the provider returned success but
+		// OMNIRA cannot read the ticket identity out of it.
+		return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "malformed create response on a successful status", Err: err}
 	}
 	if !resp.OK {
-		return nil, &TicketingError{Code: TicketingUnknownProviderError, Message: "provider returned ok=false for a 2xx create response"}
+		return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "provider returned ok=false for a 2xx create response"}
 	}
-	return resp.Ticket.toExternalTicket()
+	ticket, err := resp.Ticket.toExternalTicket()
+	if err != nil {
+		// 2xx with no usable ticket.id: the provider claimed success but
+		// gave no identity to record — cannot be trusted as a definitive
+		// success, and must not be silently ignored as a failure either.
+		return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "successful create response is missing a usable ticket id", Err: err}
+	}
+	return ticket, nil
 }
 
 // GetTicket is read-only and equally single-attempt (no retry logic exists
@@ -132,7 +146,7 @@ func (c *K3GTicketingConnector) GetTicket(ctx context.Context, externalTicketID 
 	if strings.TrimSpace(externalTicketID) == "" {
 		return nil, &TicketingError{Code: TicketingValidationError, Message: "externalTicketID is required"}
 	}
-	body, err := c.doOnce(ctx, http.MethodGet, "/api/support/tickets/"+externalTicketID, nil)
+	body, err := c.doOnce(ctx, http.MethodGet, "/api/support/tickets/"+externalTicketID, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +161,7 @@ func (c *K3GTicketingConnector) GetTicket(ctx context.Context, externalTicketID 
 // *TicketingError on any non-2xx result or transport failure. "Once" is
 // structural: there is no loop, no backoff, nothing here that could ever
 // send a second request for a single doOnce call.
-func (c *K3GTicketingConnector) doOnce(ctx context.Context, method, path string, jsonBody any) ([]byte, error) {
+func (c *K3GTicketingConnector) doOnce(ctx context.Context, method, path string, jsonBody any, mutating bool) ([]byte, error) {
 	var reader io.Reader
 	if jsonBody != nil {
 		b, err := json.Marshal(jsonBody)
@@ -170,25 +184,46 @@ func (c *K3GTicketingConnector) doOnce(ctx context.Context, method, path string,
 	if err != nil {
 		// Network timeout, connection reset, DNS failure, etc. — never
 		// retried by this method; the caller decides what happens next.
+		// For a mutating call (PRODUCT.6-K1) the request may have reached
+		// the provider before the transport failed, so the write outcome
+		// is unknown, not "unavailable" (which implies safe-to-retry).
+		if mutating {
+			return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "transport error during a mutating request; write outcome unknown", Err: err}
+		}
 		return nil, &TicketingError{Code: TicketingProviderUnavailable, Message: "transport error", Err: err}
 	}
 	defer res.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if readErr != nil {
+		if mutating {
+			return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "failed to read response body of a mutating request; write outcome unknown", Err: readErr}
+		}
 		return nil, &TicketingError{Code: TicketingUnknownProviderError, Message: "failed to read response body", Err: readErr}
 	}
 
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return body, nil
 	}
-	return nil, classifyK3GError(res.StatusCode, body)
+	return nil, classifyK3GError(res.StatusCode, body, mutating)
 }
 
 // classifyK3GError maps an HTTP failure into the provider-neutral
 // TicketingErrorCode model (PRODUCT.6-E), using K3G's stable "code" field
 // (PRODUCT.6-C1 confirmed {"error":..., "code":"CRM_TICKET_NOT_MIGRATED"})
 // in preference to matching on the human-readable Portuguese message.
-func classifyK3GError(status int, body []byte) *TicketingError {
+// classifyK3GError maps an HTTP failure into the provider-neutral
+// TicketingErrorCode model (PRODUCT.6-E), using K3G's stable "code" field
+// (PRODUCT.6-C1 confirmed {"error":..., "code":"CRM_TICKET_NOT_MIGRATED"})
+// in preference to matching on the human-readable Portuguese message.
+//
+// mutating (PRODUCT.6-K1) narrows 5xx and 429 to TicketingWriteOutcomeUnknown
+// instead of TicketingProviderUnavailable: for CreateTicket, K3G gives no
+// guarantee that a request answered with a server error or rate-limit was
+// never processed, so these must be treated as a possible write, never as
+// safe-to-retry. 400/401/403/404 stay definitive even when mutating — they
+// are the provider explicitly rejecting the request before/without
+// committing a ticket, not an ambiguous server-side failure.
+func classifyK3GError(status int, body []byte, mutating bool) *TicketingError {
 	var parsed struct {
 		Error string `json:"error"`
 		Code  string `json:"code"`
@@ -205,8 +240,14 @@ func classifyK3GError(status int, body []byte) *TicketingError {
 	case status == http.StatusNotFound:
 		return &TicketingError{Code: TicketingNotFound, Message: "ticket not found", Err: bodyErr(status, parsed.Error)}
 	case status == http.StatusTooManyRequests:
+		if mutating {
+			return &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "rate limited on a mutating request; write outcome unknown", Err: bodyErr(status, parsed.Error)}
+		}
 		return &TicketingError{Code: TicketingProviderUnavailable, Message: "rate limited", Err: bodyErr(status, parsed.Error)}
 	case status >= 500:
+		if mutating {
+			return &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "provider server error on a mutating request; write outcome unknown", Err: bodyErr(status, parsed.Error)}
+		}
 		return &TicketingError{Code: TicketingProviderUnavailable, Message: "provider server error", Err: bodyErr(status, parsed.Error)}
 	default:
 		return &TicketingError{Code: TicketingUnknownProviderError, Message: "unclassified provider response", Err: bodyErr(status, parsed.Error)}
