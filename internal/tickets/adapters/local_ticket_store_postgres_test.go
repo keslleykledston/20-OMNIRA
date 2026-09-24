@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -168,6 +169,133 @@ func TestLocalTicketStoreFindEnrichmentCandidateReturnsNilWhenNoneEligible(t *te
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// ---- PRODUCT.6-O1R real-Postgres proof: EnrichExternalProjection ---------
+//
+// RefreshTicketProjectionService writes through this exact same method
+// (reused verbatim from PRODUCT.6-K2/M4's create/recovery path) — these
+// tests prove the SQL-level guarantees a refresh depends on: durable
+// external identity cannot be replaced, only provider-owned freshness
+// metadata changes, and tenant isolation holds.
+
+func linkTestTicket(t *testing.T, f *attemptFixture, ticketID uuid.UUID, provider, externalID string) {
+	t.Helper()
+	if _, err := f.seed.Exec(context.Background(),
+		`UPDATE tickets SET provider=$2, external_ticket_id=$3, external_status='1', external_status_label='Novo', sync_status='synced', last_synced_at=now()
+		 WHERE id=$1`, ticketID, provider, externalID); err != nil {
+		t.Fatalf("link test ticket: %v", err)
+	}
+}
+
+// Provider/external identity cannot be changed by a refresh: a mismatched
+// external_ticket_id is refused, and the row is left exactly as it was.
+func TestLocalTicketStoreEnrichExternalProjectionRefusesExternalIdentityReplacement(t *testing.T) {
+	f, _ := requireAttemptStack(t)
+	store := NewLocalTicketStore(f.app)
+	ticketID := insertTestTicket(t, f, "open", time.Now().UTC())
+	linkTestTicket(t, f, ticketID, "k3g", "28182")
+
+	err := f.withSystemSession(t, func(ctx context.Context) error {
+		return store.EnrichExternalProjection(ctx, ticketID, "k3g", "99999", "2", "Em atendimento", time.Now().UTC())
+	})
+	if !errors.Is(err, ErrLocalTicketExternalIdentityMismatch) {
+		t.Fatalf("err = %v, want ErrLocalTicketExternalIdentityMismatch", err)
+	}
+
+	// The row must be left exactly as it was before the refused call.
+	var externalID, status string
+	if scanErr := f.seed.QueryRow(context.Background(),
+		`SELECT external_ticket_id, external_status FROM tickets WHERE id=$1`, ticketID).Scan(&externalID, &status); scanErr != nil {
+		t.Fatalf("reload ticket: %v", scanErr)
+	}
+	if externalID != "28182" || status != "1" {
+		t.Fatalf("ticket = external_ticket_id=%q external_status=%q, want unchanged 28182/1", externalID, status)
+	}
+}
+
+// Only the intended provider-owned projection fields change: identity
+// (provider, external_ticket_id, conversation_id, local ticket id) and
+// every local lifecycle field (status, priority, subject, assigned_to) are
+// preserved exactly across a refresh write.
+func TestLocalTicketStoreEnrichExternalProjectionUpdatesOnlyFreshnessFields(t *testing.T) {
+	f, _ := requireAttemptStack(t)
+	store := NewLocalTicketStore(f.app)
+	ticketID := insertTestTicket(t, f, "in_progress", time.Now().UTC())
+	linkTestTicket(t, f, ticketID, "k3g", "28182")
+
+	syncedAt := time.Now().UTC().Truncate(time.Millisecond)
+	err := f.withSystemSession(t, func(ctx context.Context) error {
+		return store.EnrichExternalProjection(ctx, ticketID, "k3g", "28182", "2", "Em atendimento", syncedAt)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var status, provider, externalID, extStatus, extStatusLabel, syncStatus, convID string
+	var lastSyncedAt time.Time
+	if scanErr := f.seed.QueryRow(context.Background(),
+		`SELECT status, provider, external_ticket_id, external_status, external_status_label, sync_status, conversation_id::text, last_synced_at
+		 FROM tickets WHERE id=$1`, ticketID).Scan(&status, &provider, &externalID, &extStatus, &extStatusLabel, &syncStatus, &convID, &lastSyncedAt); scanErr != nil {
+		t.Fatalf("reload ticket: %v", scanErr)
+	}
+	// Identity and local lifecycle: unchanged.
+	if status != "in_progress" || provider != "k3g" || externalID != "28182" || convID != f.conversationID.String() {
+		t.Fatalf("identity/lifecycle changed: status=%q provider=%q external_ticket_id=%q conversation_id=%q",
+			status, provider, externalID, convID)
+	}
+	// Provider-owned freshness metadata: updated to the refreshed snapshot.
+	if extStatus != "2" || extStatusLabel != "Em atendimento" || syncStatus != "synced" {
+		t.Fatalf("freshness metadata = status=%q label=%q sync=%q, want 2/Em atendimento/synced", extStatus, extStatusLabel, syncStatus)
+	}
+	if !lastSyncedAt.Equal(syncedAt) && lastSyncedAt.Sub(syncedAt).Abs() > time.Second {
+		t.Fatalf("last_synced_at = %v, want ~%v", lastSyncedAt, syncedAt)
+	}
+}
+
+// Tenant isolation: a session scoped to tenant A must not be able to
+// refresh/update tenant B's ticket projection at all — the tenant-scoped
+// WHERE clause (tenant_id = $1) must exclude the row entirely, surfacing as
+// the same "not found" reconciliation path a refresh would hit for any
+// other missing-row case, never a cross-tenant write.
+func TestLocalTicketStoreEnrichExternalProjectionEnforcesTenantIsolation(t *testing.T) {
+	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if seedURL == "" || appURL == "" {
+		t.Skip("database URLs required")
+	}
+	ctx := context.Background()
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	tenantA := newAttemptFixture(t, seed, app)
+	tenantB := newAttemptFixture(t, seed, app)
+	store := NewLocalTicketStore(app)
+
+	ticketB := insertTestTicket(t, tenantB, "open", time.Now().UTC())
+	linkTestTicket(t, tenantB, ticketB, "k3g", "28182")
+
+	err = tenantA.withSystemSession(t, func(ctx context.Context) error {
+		return store.EnrichExternalProjection(ctx, ticketB, "k3g", "28182", "2", "Em atendimento", time.Now().UTC())
+	})
+	if err == nil {
+		t.Fatal("tenant A session must not be able to enrich tenant B's ticket")
+	}
+
+	var extStatus string
+	if scanErr := seed.QueryRow(context.Background(), `SELECT external_status FROM tickets WHERE id=$1`, ticketB).Scan(&extStatus); scanErr != nil {
+		t.Fatalf("reload tenant B ticket: %v", scanErr)
+	}
+	if extStatus != "1" {
+		t.Fatalf("tenant B ticket external_status = %q, want unchanged 1 (cross-tenant write must never land)", extStatus)
 	}
 }
 

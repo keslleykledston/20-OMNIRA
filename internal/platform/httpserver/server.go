@@ -17,7 +17,6 @@ import (
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
-	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
@@ -33,6 +32,7 @@ import (
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -437,6 +437,12 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	crmHandler := inboxadapters.NewCRMHandlers(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetCurrentTicket))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateTicket))))
+	// PRODUCT.6-O1R: explicit provider projection refresh (a command, never
+	// a GET). Registered before the {ticket_id} wildcard route below —
+	// net/http's ServeMux resolves the more specific literal segment first
+	// regardless of registration order, but keeping it adjacent to the
+	// other conversation-scoped ticket routes documents intent.
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/refresh", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.RefreshTicket))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetTicket))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicket))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}/close", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CloseTicket))))

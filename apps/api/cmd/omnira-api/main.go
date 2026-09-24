@@ -307,6 +307,19 @@ func main() {
 			ticketsadapters.NewLocalTicketStore(dbPool),
 		)
 		crmHandler.SetReadTicketService(readTicketService)
+
+		// PRODUCT.6-O1R: ativa o caminho real de refresh explícito da
+		// projeção a partir do provider. Reaproveita exatamente os mesmos
+		// erpConnections/erpCredentials/ConversationAuthorizer/
+		// LocalTicketStore já construídos acima — nenhuma credencial
+		// duplicada, nenhum resolver global.
+		refreshTicketService := ticketsapplication.NewRefreshTicketProjectionService(
+			channeladapters.NewPostgresPermissionChecker(dbPool),
+			ticketsadapters.NewConversationAuthorizer(dbPool),
+			ticketsadapters.NewLocalTicketStore(dbPool),
+			ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials),
+		)
+		crmHandler.SetRefreshTicketService(refreshTicketService)
 	}
 
 	errChan := make(chan error, 1)

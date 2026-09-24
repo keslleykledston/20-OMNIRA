@@ -47,6 +47,10 @@ type CRMHandlers struct {
 	// readTicketService is the real, conversation-scoped, LOCAL-ONLY
 	// ticket read path (PRODUCT.6-O1). Nil until server.go wires it.
 	readTicketService conversationTicketReader
+	// refreshTicketService is the real, conversation-scoped, EXPLICIT
+	// provider projection refresh path (PRODUCT.6-O1R). Nil until
+	// server.go wires it.
+	refreshTicketService ticketProjectionRefresher
 }
 
 // NewCRMHandlers — cria novo CRM handler.
@@ -89,6 +93,15 @@ func (h *CRMHandlers) SetExternalTicketService(svc externalTicketCreator) {
 // fake satisfying conversationTicketReader.
 func (h *CRMHandlers) SetReadTicketService(svc conversationTicketReader) {
 	h.readTicketService = svc
+}
+
+// SetRefreshTicketService wires the real, conversation-scoped provider
+// projection refresh path (PRODUCT.6-O1R). Canonical runtime composition
+// (server.go/main.go) calls this with a Postgres/K3G-backed
+// *ticketsapplication.RefreshTicketProjectionService; tests may inject a
+// fake satisfying ticketProjectionRefresher.
+func (h *CRMHandlers) SetRefreshTicketService(svc ticketProjectionRefresher) {
+	h.refreshTicketService = svc
 }
 
 // ticketingUnavailable writes the canonical response for "no real ERP
@@ -200,6 +213,103 @@ func failReadConversationTicket(w http.ResponseWriter, err error) {
 		http.Error(w, "ticket has inconsistent external linkage and requires reconciliation", http.StatusConflict)
 	default:
 		log.Printf("tickets read conversation ticket: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
+}
+
+// ticketProjectionRefresher is the seam PRODUCT.6-O1R's RefreshTicket route
+// calls through — narrow on purpose so HTTP tests can inject a fake without
+// a real Postgres/K3G-backed application service.
+// *ticketsapplication.RefreshTicketProjectionService satisfies this without
+// any adapter.
+type ticketProjectionRefresher interface {
+	RefreshTicketProjection(ctx context.Context, cmd ticketsapplication.RefreshTicketProjectionCommand) (*ticketsapplication.TicketReadResult, error)
+}
+
+// RefreshTicket — PRODUCT.6-O1R: the real, conversation-scoped, EXPLICIT
+// provider projection refresh. Authorized identically to CreateTicket
+// (ticket.create + conversation ownership) — never tenant-wide ticket.read.
+// Makes exactly one outbound TicketingConnector.GetTicket call and writes
+// only provider-owned projection metadata; never creates, updates, or
+// closes an external ticket, and never establishes a new link. A command,
+// not a read — POST, never GET.
+// POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/refresh
+func (h *CRMHandlers) RefreshTicket(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, err := authn.FromContext(ctx); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if h.refreshTicketService == nil {
+		ticketingUnavailable(w)
+		return
+	}
+
+	tenantID, convID := r.PathValue("tenant_id"), r.PathValue("conversation_id")
+	if tenantID == "" || convID == "" {
+		http.Error(w, "missing tenant or conversation ID", http.StatusBadRequest)
+		return
+	}
+	tid, err := uuid.Parse(tenantID)
+	if err != nil {
+		http.Error(w, "invalid tenant ID", http.StatusBadRequest)
+		return
+	}
+	cid, err := uuid.Parse(convID)
+	if err != nil {
+		http.Error(w, "invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.ActorID == uuid.Nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	result, err := h.refreshTicketService.RefreshTicketProjection(ctx, ticketsapplication.RefreshTicketProjectionCommand{
+		TenantID: tid, ConversationID: cid, ActorUserID: tc.ActorID,
+	})
+	if err != nil {
+		failRefreshTicketProjection(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(conversationTicketResponse{
+		LocalTicketID: result.LocalTicketID, Linked: result.Linked, Provider: result.Provider,
+		ExternalTicketID: result.ExternalTicketID, ExternalStatus: result.ExternalStatus,
+		ExternalStatusLabel: result.ExternalStatusLabel, SyncStatus: result.SyncStatus, LastSyncedAt: result.LastSyncedAt,
+	})
+}
+
+// failRefreshTicketProjection maps RefreshTicketProjection's application
+// errors to HTTP. No branch here ever implies CREATE is a valid recovery —
+// every error either fails closed (409/403/404/503) or is an ordinary
+// input problem (400).
+func failRefreshTicketProjection(w http.ResponseWriter, err error) {
+	var resErr *ticketsports.ResolutionError
+	switch {
+	case errors.As(err, &resErr):
+		// PRODUCT.6-L: no/ambiguous/invalid tenant ticketing configuration.
+		ticketingUnavailable(w)
+	case errors.Is(err, ticketsapplication.ErrForbidden), errors.Is(err, ticketsapplication.ErrNotAssignedToYou):
+		http.Error(w, "forbidden", http.StatusForbidden)
+	case errors.Is(err, ticketsapplication.ErrConversationNotFound), errors.Is(err, ticketsapplication.ErrNoActiveTicket):
+		http.Error(w, "no active ticket for this conversation", http.StatusNotFound)
+	case errors.Is(err, ticketsapplication.ErrUnassigned):
+		http.Error(w, "conversation must be assigned before its ticket can be refreshed", http.StatusConflict)
+	case errors.Is(err, ticketsapplication.ErrTicketNotLinked):
+		// Active local ticket exists but has no external link yet — refresh
+		// is a freshness operation on an EXISTING link, never a path to
+		// CREATE one.
+		http.Error(w, "active ticket is not linked to an external ticket", http.StatusConflict)
+	case errors.Is(err, ticketsapplication.ErrInconsistentExternalLink), errors.Is(err, ticketsapplication.ErrProviderMismatch),
+		errors.Is(err, ticketsapplication.ErrExternalTicketNotFound), errors.Is(err, ticketsapplication.ErrExternalIDMismatch):
+		http.Error(w, "ticket requires reconciliation before it can be refreshed", http.StatusConflict)
+	case errors.Is(err, ticketsapplication.ErrProviderUnavailable):
+		http.Error(w, "ticketing provider unavailable", http.StatusServiceUnavailable)
+	default:
+		log.Printf("tickets refresh projection: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
 }
