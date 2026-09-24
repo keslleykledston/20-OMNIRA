@@ -241,7 +241,7 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 	}
 
 	if !acquired {
-		return s.replay(ctx, attempt, localTicket)
+		return s.replay(ctx, attempt, localTicket, rt.TicketingConnector)
 	}
 
 	return s.createAndRecord(ctx, attempt, localTicket, validatedCustomerExternalID, cmd, rt.TicketingConnector)
@@ -290,20 +290,23 @@ func (s *Service) validateSelectedCompany(ctx context.Context, directory ports.C
 	return selected, nil
 }
 
-// replay implements PRODUCT.6-K2 section 7. It NEVER calls
-// TicketingConnector — every branch here is a durable-state readback.
-func (s *Service) replay(ctx context.Context, attempt *ticketsdomain.ExternalCreateAttempt, localTicket *ticketsdomain.Ticket) (*Result, error) {
+// replay implements PRODUCT.6-K2 section 7 and PRODUCT.6-M4's recovery
+// extension. It NEVER calls TicketingConnector.CreateTicket — a
+// confirmed_success attempt whose projection never synced recovers the
+// provider's current status via the READ-only GetTicket instead (section
+// 4), never by re-creating.
+func (s *Service) replay(ctx context.Context, attempt *ticketsdomain.ExternalCreateAttempt, localTicket *ticketsdomain.Ticket, ticketing connectors.TicketingConnector) (*Result, error) {
 	switch attempt.State {
 	case ticketsdomain.AttemptConfirmedSuccess:
 		if attempt.ProjectionSyncedAt != nil {
+			// PRODUCT.6-M3 invariant, preserved exactly: an already-synced
+			// confirmed_success attempt returns immediately — no GetTicket,
+			// no CreateTicket, no projection write, no attempt mutation.
 			return &Result{Outcome: OutcomeReplaySuccess, AttemptID: attempt.ID, AttemptState: attempt.State,
 				ExternalTicketID: derefOr(attempt.ExternalTicketID, ""), Provider: derefOr(attempt.Provider, ""),
 				LocalTicketID: derefUUIDOr(attempt.LocalTicketID, localTicket.ID)}, nil
 		}
-		// Provider success is durable but the local projection never
-		// synced (section 11) — retry ONLY the projection, never a
-		// second POST.
-		return s.syncProjection(ctx, attempt, localTicket)
+		return s.recoverProjection(ctx, attempt, localTicket, ticketing)
 	case ticketsdomain.AttemptConfirmedFailure:
 		// Section 7: the original TicketingErrorCode is deliberately not
 		// reproduced on replay — see the OutcomeDefinitiveFailure doc
@@ -361,7 +364,7 @@ func (s *Service) createAndRecord(ctx context.Context, attempt *ticketsdomain.Ex
 			ExternalTicketID: ticket.ExternalID, Provider: ticketing.Name(), Severe: true}, fmt.Errorf("tickets: external ticket %s created but not durably recorded: %w", ticket.ExternalID, err)
 	}
 
-	result, err := s.syncProjection(ctx, confirmed, localTicket)
+	result, err := s.syncProjection(ctx, confirmed, localTicket, ticket)
 	if err != nil {
 		return nil, err
 	}
@@ -371,20 +374,49 @@ func (s *Service) createAndRecord(ctx context.Context, attempt *ticketsdomain.Ex
 	return result, nil
 }
 
-// syncProjection enriches the local ticket from a CONFIRMED_SUCCESS
-// attempt's durable external identity and marks the attempt's projection
-// synced. Idempotent and safe to call repeatedly (replay of an unsynced
-// confirmed_success attempt reaches this same path, section 11).
-func (s *Service) syncProjection(ctx context.Context, attempt *ticketsdomain.ExternalCreateAttempt, localTicket *ticketsdomain.Ticket) (*Result, error) {
+// recoverProjection implements PRODUCT.6-M4 section 4-7: a confirmed_success
+// attempt whose local projection never synced recovers the provider's
+// current snapshot via a READ (TicketingConnector.GetTicket), never a
+// second CreateTicket — the attempt store intentionally does not duplicate
+// mutable ERP ticket status (section 18), so recovery re-reads it fresh.
+func (s *Service) recoverProjection(ctx context.Context, attempt *ticketsdomain.ExternalCreateAttempt, localTicket *ticketsdomain.Ticket, ticketing connectors.TicketingConnector) (*Result, error) {
 	if attempt.Provider == nil || attempt.ExternalTicketID == nil {
 		return nil, fmt.Errorf("tickets: confirmed_success attempt %s missing provider/external_ticket_id", attempt.ID)
 	}
-	externalStatus, externalStatusLabel := "", ""
-	// PRODUCT.6-K2 does not re-fetch the provider's raw status on replay —
-	// GetTicket is a separate, already-existing read path
-	// (TicketingConnector.GetTicket) a future reconciliation/list flow can
-	// use; this service only persists what CreateTicket itself returned.
-	if err := s.localTickets.EnrichExternalProjection(ctx, localTicket.ID, *attempt.Provider, *attempt.ExternalTicketID, externalStatus, externalStatusLabel, time.Now().UTC()); err != nil {
+	// Section 5: never query a potentially different provider than the one
+	// that durably owns this attempt — no silent provider substitution.
+	if ticketing.Name() != *attempt.Provider {
+		return &Result{Outcome: OutcomeReconciliationRequired, AttemptID: attempt.ID, AttemptState: attempt.State,
+			ExternalTicketID: *attempt.ExternalTicketID, Provider: *attempt.Provider}, nil
+	}
+	snapshot, err := ticketing.GetTicket(ctx, *attempt.ExternalTicketID)
+	if err != nil {
+		// Section 6: PROVIDER_UNAVAILABLE / NOT_FOUND / NOT_MIGRATED /
+		// malformed response all leave the attempt exactly as it was —
+		// confirmed_success, projection still unsynced — never a reason to
+		// call CreateTicket.
+		return &Result{Outcome: OutcomeReconciliationRequired, AttemptID: attempt.ID, AttemptState: attempt.State,
+			ExternalTicketID: *attempt.ExternalTicketID, Provider: *attempt.Provider}, nil
+	}
+	// Section 7: the provider's answer must be about the SAME ticket this
+	// attempt owns — never overwrite the durable external identity.
+	if snapshot.ExternalID != *attempt.ExternalTicketID {
+		return &Result{Outcome: OutcomeReconciliationRequired, AttemptID: attempt.ID, AttemptState: attempt.State,
+			ExternalTicketID: *attempt.ExternalTicketID, Provider: *attempt.Provider}, nil
+	}
+	return s.syncProjection(ctx, attempt, localTicket, snapshot)
+}
+
+// syncProjection enriches the local ticket from a CONFIRMED_SUCCESS
+// attempt's durable external identity plus a fresh provider snapshot
+// (normal create: CreateTicket's own response; recovery: a GetTicket
+// read-back, PRODUCT.6-M4), and marks the attempt's projection synced.
+// Idempotent and safe to call repeatedly.
+func (s *Service) syncProjection(ctx context.Context, attempt *ticketsdomain.ExternalCreateAttempt, localTicket *ticketsdomain.Ticket, snapshot *connectors.ExternalTicket) (*Result, error) {
+	if attempt.Provider == nil || attempt.ExternalTicketID == nil {
+		return nil, fmt.Errorf("tickets: confirmed_success attempt %s missing provider/external_ticket_id", attempt.ID)
+	}
+	if err := s.localTickets.EnrichExternalProjection(ctx, localTicket.ID, *attempt.Provider, *attempt.ExternalTicketID, snapshot.ExternalStatus, snapshot.ExternalStatusLabel, time.Now().UTC()); err != nil {
 		// Section 11: provider success remains durable on the attempt row
 		// even though local enrichment failed. Never retries the
 		// provider; a later replay retries only this projection step.

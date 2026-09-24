@@ -160,6 +160,8 @@ type fakeLocalTickets struct {
 	candidate    *ticketsdomain.Ticket
 	enrichCalls  int32
 	enrichErrSeq []error // consumed in order, then nil forever
+
+	gotProvider, gotExternalTicketID, gotExternalStatus, gotExternalStatusLabel string
 }
 
 func (f *fakeLocalTickets) FindEnrichmentCandidate(ctx context.Context, conversationID uuid.UUID) (*ticketsdomain.Ticket, error) {
@@ -174,6 +176,7 @@ func (f *fakeLocalTickets) EnrichExternalProjection(ctx context.Context, ticketI
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	idx := int(atomic.AddInt32(&f.enrichCalls, 1)) - 1
+	f.gotProvider, f.gotExternalTicketID, f.gotExternalStatus, f.gotExternalStatusLabel = provider, externalTicketID, externalStatus, externalStatusLabel
 	if idx < len(f.enrichErrSeq) {
 		return f.enrichErrSeq[idx]
 	}
@@ -181,10 +184,17 @@ func (f *fakeLocalTickets) EnrichExternalProjection(ctx context.Context, ticketI
 }
 
 type fakeTicketing struct {
+	name string // defaults to "fake" (see Name()) when empty
+
 	calls  int32
 	result *connectors.ExternalTicket
 	err    error
 	gotReq connectors.CreateTicketRequest
+
+	getCalls  int32
+	getResult *connectors.ExternalTicket
+	getErr    error
+	gotGetID  string
 }
 
 // fakeRuntimeResolver implements ports.TicketingRuntimeResolver
@@ -206,9 +216,22 @@ func (f *fakeRuntimeResolver) Resolve(ctx context.Context, tenantID uuid.UUID) (
 	return &ports.TicketingRuntime{CompanyDirectory: f.companies, TicketingConnector: f.ticketing}, nil
 }
 
-func (f *fakeTicketing) Name() string { return "fake" }
+func (f *fakeTicketing) Name() string {
+	if f.name == "" {
+		return "fake"
+	}
+	return f.name
+}
 func (f *fakeTicketing) GetTicket(ctx context.Context, externalTicketID string) (*connectors.ExternalTicket, error) {
-	return nil, errors.New("not used in these tests")
+	atomic.AddInt32(&f.getCalls, 1)
+	f.gotGetID = externalTicketID
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if f.getResult != nil {
+		return f.getResult, nil
+	}
+	return nil, errors.New("fakeTicketing: GetTicket not configured for this test")
 }
 func (f *fakeTicketing) CreateTicket(ctx context.Context, req connectors.CreateTicketRequest) (*connectors.ExternalTicket, error) {
 	atomic.AddInt32(&f.calls, 1)
@@ -458,6 +481,14 @@ func TestCreateExternalTicketSameKeySameCommandReplaysWithoutSecondPOST(t *testi
 	if second.Outcome != OutcomeReplaySuccess || second.ExternalTicketID != first.ExternalTicketID {
 		t.Fatalf("replay result mismatch: first=%+v second=%+v", first, second)
 	}
+	// PRODUCT.6-M4 section 16 (M3 regression): an already-synced
+	// confirmed_success replay must never call GetTicket either.
+	if h.ticketing.getCalls != 0 {
+		t.Fatalf("GetTicket called %d times on an already-synced replay, want 0", h.ticketing.getCalls)
+	}
+	if h.localTickets.enrichCalls != 1 {
+		t.Fatalf("EnrichExternalProjection called %d times, want exactly 1 (replay must not rewrite projection)", h.localTickets.enrichCalls)
+	}
 }
 
 func TestCreateExternalTicketDifferentHashIsMismatch(t *testing.T) {
@@ -613,6 +644,111 @@ func TestCreateExternalTicketSuccessMarksConfirmedSuccess(t *testing.T) {
 	if res.Outcome != OutcomeCreated || res.ExternalTicketID != "28180" {
 		t.Fatalf("result = %+v, want created/28180", res)
 	}
+	// PRODUCT.6-M4: the provider's raw status/label must reach the local
+	// projection unchanged — never a hardcoded empty placeholder.
+	if h.localTickets.gotExternalStatus != "1" || h.localTickets.gotExternalStatusLabel != "Novo" {
+		t.Fatalf("projected external_status=%q external_status_label=%q, want \"1\"/\"Novo\"",
+			h.localTickets.gotExternalStatus, h.localTickets.gotExternalStatusLabel)
+	}
+	if h.localTickets.gotProvider != "fake" || h.localTickets.gotExternalTicketID != "28180" {
+		t.Fatalf("projected provider=%q external_ticket_id=%q, want fake/28180", h.localTickets.gotProvider, h.localTickets.gotExternalTicketID)
+	}
+	if h.ticketing.getCalls != 0 {
+		t.Fatalf("GetTicket called %d times on a normal create, want 0", h.ticketing.getCalls)
+	}
+}
+
+// PRODUCT.6-M4 section 13: confirmed_success + projection not synced +
+// GetTicket failure during recovery must never fall back to CreateTicket.
+func TestCreateExternalTicketRecoveryGetTicketFailureNeverRetriesCreate(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	h.localTickets.enrichErrSeq = []error{errors.New("db down")}
+	cmd := testCommand(nil)
+	h.conversation.assignedTo = &cmd.ActorUserID
+	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
+
+	if _, err := h.svc.CreateExternalTicket(ctx, cmd); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	h.ticketing.getErr = &connectors.TicketingError{Code: connectors.TicketingProviderUnavailable, Message: "down"}
+	res, err := h.svc.CreateExternalTicket(ctx, cmd)
+	if err != nil {
+		t.Fatalf("replay error: %v", err)
+	}
+	if res.Outcome != OutcomeReconciliationRequired {
+		t.Fatalf("result = %+v, want reconciliation_required", res)
+	}
+	if h.ticketing.calls != 1 {
+		t.Fatalf("CreateTicket called %d times, want exactly 1 (never retried after GetTicket failure)", h.ticketing.calls)
+	}
+	if h.ticketing.getCalls != 1 {
+		t.Fatalf("GetTicket called %d times, want exactly 1", h.ticketing.getCalls)
+	}
+	if h.localTickets.enrichCalls != 1 {
+		t.Fatalf("EnrichExternalProjection called %d times, want 1 (recovery must not attempt projection after a failed GetTicket)", h.localTickets.enrichCalls)
+	}
+}
+
+// PRODUCT.6-M4 section 14: the durable attempt's provider must match the
+// currently resolved connector's Name() before recovery may query it — no
+// silent provider substitution.
+func TestCreateExternalTicketRecoveryProviderMismatchIsReconciliationRequired(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	h.localTickets.enrichErrSeq = []error{errors.New("db down")}
+	cmd := testCommand(nil)
+	h.conversation.assignedTo = &cmd.ActorUserID
+	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
+
+	if _, err := h.svc.CreateExternalTicket(ctx, cmd); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	h.ticketing.name = "a-different-provider"
+	res, err := h.svc.CreateExternalTicket(ctx, cmd)
+	if err != nil {
+		t.Fatalf("replay error: %v", err)
+	}
+	if res.Outcome != OutcomeReconciliationRequired {
+		t.Fatalf("result = %+v, want reconciliation_required", res)
+	}
+	if h.ticketing.getCalls != 0 {
+		t.Fatalf("GetTicket called %d times, want 0 (provider mismatch must never be queried)", h.ticketing.getCalls)
+	}
+	if h.ticketing.calls != 1 {
+		t.Fatalf("CreateTicket called %d times, want exactly 1", h.ticketing.calls)
+	}
+	if h.localTickets.enrichCalls != 1 {
+		t.Fatalf("EnrichExternalProjection called %d times, want 1 (no recovery attempt on provider mismatch)", h.localTickets.enrichCalls)
+	}
+}
+
+// PRODUCT.6-M4 section 15: if GetTicket unexpectedly returns a DIFFERENT
+// external ID than the one durably owned by the attempt, never overwrite
+// the projection or the attempt's identity.
+func TestCreateExternalTicketRecoveryExternalIDMismatchIsReconciliationRequired(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	h.localTickets.enrichErrSeq = []error{errors.New("db down")}
+	cmd := testCommand(nil)
+	h.conversation.assignedTo = &cmd.ActorUserID
+	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
+
+	if _, err := h.svc.CreateExternalTicket(ctx, cmd); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	h.ticketing.getResult = &connectors.ExternalTicket{ExternalID: "99999", ExternalStatus: "1", ExternalStatusLabel: "Novo"}
+	res, err := h.svc.CreateExternalTicket(ctx, cmd)
+	if err != nil {
+		t.Fatalf("replay error: %v", err)
+	}
+	if res.Outcome != OutcomeReconciliationRequired {
+		t.Fatalf("result = %+v, want reconciliation_required", res)
+	}
+	if h.ticketing.calls != 1 {
+		t.Fatalf("CreateTicket called %d times, want exactly 1", h.ticketing.calls)
+	}
+	// EnrichExternalProjection must NOT be called again with the mismatched ID.
+	if h.localTickets.enrichCalls != 1 {
+		t.Fatalf("EnrichExternalProjection called %d times, want 1 (mismatch must not reach projection)", h.localTickets.enrichCalls)
+	}
 }
 
 // ---- projection ---------------------------------------------------------
@@ -727,7 +863,9 @@ func TestCreateExternalTicketProjectionFailureKeepsConfirmedSuccessNoSecondPOST(
 		t.Fatalf("attempt state = %q, want confirmed_success", attempt.State)
 	}
 
-	// Replay: retries ONLY the projection, no second POST.
+	// Replay: retries ONLY the projection via a GetTicket read-back
+	// (PRODUCT.6-M4), never a second CreateTicket POST.
+	h.ticketing.getResult = &connectors.ExternalTicket{ExternalID: "28180", ExternalStatus: "1", ExternalStatusLabel: "Novo"}
 	res2, err := h.svc.CreateExternalTicket(ctx, cmd)
 	if err != nil {
 		t.Fatalf("replay error: %v", err)
@@ -736,6 +874,12 @@ func TestCreateExternalTicketProjectionFailureKeepsConfirmedSuccessNoSecondPOST(
 		t.Fatalf("replay after projection recovery = %+v, want a success outcome", res2)
 	}
 	if h.ticketing.calls != 1 {
-		t.Fatalf("provider called %d times across both attempts, want exactly 1", h.ticketing.calls)
+		t.Fatalf("provider CreateTicket called %d times across both attempts, want exactly 1", h.ticketing.calls)
+	}
+	if h.ticketing.getCalls != 1 {
+		t.Fatalf("provider GetTicket called %d times, want exactly 1", h.ticketing.getCalls)
+	}
+	if h.localTickets.enrichCalls != 2 {
+		t.Fatalf("EnrichExternalProjection called %d times, want 2 (initial failure + recovery retry)", h.localTickets.enrichCalls)
 	}
 }
