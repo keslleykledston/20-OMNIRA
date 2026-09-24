@@ -211,3 +211,67 @@ export async function createExternalTicket(
     }
   }
 }
+
+// PRODUCT.6-O1F: provider-neutral conversation ticket READ (backend:
+// internal/inbox/adapters.GetCurrentTicket, PRODUCT.6-O1). Local
+// projection only — this never triggers a K3G call. Kept as its own
+// function/types, separate from createExternalTicket's request/response
+// shapes, even though they share the same route: read and create are
+// different HTTP methods with different contracts.
+export interface ConversationTicketReadResponse {
+  local_ticket_id: string;
+  linked: boolean;
+  provider?: string;
+  external_ticket_id?: string;
+  external_status?: string;
+  external_status_label?: string;
+  sync_status?: string;
+  last_synced_at?: string;
+}
+
+// ConversationTicketReadResult mirrors createExternalTicket's discriminated-
+// result convention: every backend-defined outcome (PRODUCT.6-O1 section 3)
+// is a stable case, not a thrown error.
+export type ConversationTicketReadResult =
+  | { kind: 'ok'; data: ConversationTicketReadResponse }
+  // 404: no active local ticket for this conversation. NOT the same as
+  // linked=false — CreateExternalTicket requires an existing active local
+  // ticket, so this must never be interpreted as "safe to offer CREATE".
+  | { kind: 'not_found' }
+  // 409: fail-closed inconsistent partial linkage (PRODUCT.6-O1 section 4).
+  | { kind: 'inconsistent'; problem?: ExternalTicketProblem }
+  | { kind: 'forbidden' }
+  | { kind: 'unavailable' }
+  | { kind: 'network_error' };
+
+export async function readConversationTicket(conversationId: string): Promise<ConversationTicketReadResult> {
+  try {
+    const res = await axios.get(
+      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket`,
+      { headers: authHeaders() },
+    );
+    return { kind: 'ok', data: res.data };
+  } catch (err: any) {
+    if (isUnauthorized(err)) {
+      handleUnauthorized();
+      return { kind: 'forbidden' };
+    }
+    const status = err?.response?.status;
+    const body = err?.response?.data;
+    switch (status) {
+      case 403:
+        return { kind: 'forbidden' };
+      case 404:
+        return { kind: 'not_found' };
+      case 409:
+        return { kind: 'inconsistent', problem: body && typeof body === 'object' ? (body as ExternalTicketProblem) : undefined };
+      case 503:
+        return { kind: 'unavailable' };
+      default:
+        // No HTTP status at all: transport failure. Never assumed safe to
+        // interpret as "no active ticket" or "not linked" — fail closed
+        // with respect to offering CREATE.
+        return { kind: 'network_error' };
+    }
+  }
+}

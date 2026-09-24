@@ -4,6 +4,8 @@ import { API_BASE } from '../lib/config';
 import { authHeaders, getTenantId } from '../lib/session';
 import {
   createExternalTicket,
+  readConversationTicket,
+  type ConversationTicketReadResponse,
   type ExternalTicketCreateResponse,
   type ExternalTicketProblem,
 } from '../lib/tickets';
@@ -86,15 +88,78 @@ function saveState(conversationId: string, state: PersistedState): void {
   }
 }
 
+// PRODUCT.6-O1F: server-truth read of the conversation's ticket projection
+// (PRODUCT.6-O1, local-only, no provider call). This decides whether the
+// CREATE form may be offered at all — localStorage (PersistedState above)
+// is create-intent UX persistence ONLY and is never authoritative for
+// whether an external link already exists (PRODUCT.6-M5 remains the real
+// duplicate-prevention boundary regardless of what this panel renders).
+type ReadPhase = 'loading' | 'linked' | 'unlinked' | 'not_found' | 'inconsistent' | 'forbidden' | 'unavailable' | 'network_error';
+
 export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) {
   const tenantId = getTenantId();
 
   const [state, setState] = useState<PersistedState>(() => loadState(conversationId));
 
+  const [readPhase, setReadPhase] = useState<ReadPhase>('loading');
+  const [linkedTicket, setLinkedTicket] = useState<ConversationTicketReadResponse | null>(null);
+
+  // Runs once per conversation: fetches the real O1 GET before rendering
+  // anything create/linked-shaped, so the form never flashes on screen
+  // only to be replaced a moment later (section 10).
+  useEffect(() => {
+    let active = true;
+    setReadPhase('loading');
+    setLinkedTicket(null);
+    void (async () => {
+      const result = await readConversationTicket(conversationId);
+      if (!active) return;
+      switch (result.kind) {
+        case 'ok':
+          if (result.data.linked) {
+            setLinkedTicket(result.data);
+            setReadPhase('linked');
+          } else {
+            setReadPhase('unlinked');
+          }
+          break;
+        case 'not_found':
+          setReadPhase('not_found');
+          break;
+        case 'inconsistent':
+          setReadPhase('inconsistent');
+          break;
+        case 'forbidden':
+          setReadPhase('forbidden');
+          break;
+        case 'unavailable':
+          setReadPhase('unavailable');
+          break;
+        case 'network_error':
+          setReadPhase('network_error');
+          break;
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [conversationId]);
+
+  // PRODUCT.6-O1F FINAL AUTHORITY FIX: distinguishes a terminal phase that
+  // was just produced by a REAL HTTP response received during this mount
+  // (section 3: "fresh in-session create may continue updating the UI
+  // immediately without an extra GET") from one merely LOADED from
+  // localStorage (a prior session/browser tab, possibly stale). Only the
+  // latter is subject to the contradiction check below — a fresh result is
+  // definitionally in agreement with the current server state, since the
+  // request that produced it just round-tripped to that same server.
+  const freshLocalResultRef = useRef(false);
+
   // A genuinely new create intent starts only when the panel switches to a
   // different conversation — never merely because of a re-render, a
   // network retry, or a page reload of the SAME conversation.
   useEffect(() => {
+    freshLocalResultRef.current = false;
     setState(loadState(conversationId));
   }, [conversationId]);
 
@@ -138,6 +203,24 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
   const alreadyLinked = state.phase === 'already_linked';
   const blocked = state.phase === 'reconciliation_required';
 
+  // PRODUCT.6-O1F FINAL AUTHORITY FIX: localStorage may assert that this
+  // conversation's ticket is externally linked (created/replayed/
+  // already_linked, persisted from a PRIOR successful create in THIS
+  // browser). That assertion is UX diagnostic evidence only — it is NEVER
+  // authoritative over a successful server GET. If the canonical GET
+  // (readPhase resolved to 'unlinked' or 'not_found') contradicts it, the
+  // backend has no unlink capability, so this combination can only mean
+  // the local evidence is stale (data restore, dev reset, manual repair,
+  // reconciliation elsewhere) — fail closed: never show the stale linked
+  // card, never offer CREATE automatically, never contact the provider.
+  const localAssertsLinked = finished || alreadyLinked;
+  const localServerContradiction =
+    localAssertsLinked &&
+    !freshLocalResultRef.current &&
+    (readPhase === 'unlinked' || readPhase === 'not_found');
+  const diagnosticExternalTicketId = state.result?.external_ticket_id ?? state.problem?.external_ticket_id ?? null;
+  const diagnosticProvider = state.result?.provider ?? state.problem?.provider ?? null;
+
   // A ref, not React state, guards against a real double-click: two clicks
   // fired in the same tick both close over the same pre-re-render state,
   // so state.phase alone cannot reliably stop the second one from also
@@ -163,9 +246,11 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
 
     switch (outcome.kind) {
       case 'created':
+        freshLocalResultRef.current = true;
         patch({ phase: 'created', result: outcome.data, errorMessage: null });
         break;
       case 'replayed':
+        freshLocalResultRef.current = true;
         patch({ phase: 'replayed', result: outcome.data, errorMessage: null });
         break;
       case 'reconciliation_required':
@@ -173,6 +258,7 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
         // happened. The Idempotency-Key is preserved (never regenerated)
         // and the form stays blocked; only explicit human verification
         // (outside this panel) resolves it.
+        freshLocalResultRef.current = true;
         patch({ phase: 'reconciliation_required', problem: outcome.problem, errorMessage: null });
         break;
       case 'already_linked':
@@ -182,6 +268,7 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
         // This is deliberately NOT the same phase as 'replayed': no new
         // ticket was created by this call, and it is not this call's own
         // request being replayed.
+        freshLocalResultRef.current = true;
         patch({ phase: 'already_linked', problem: outcome.problem, errorMessage: null });
         break;
       case 'definitive_failure':
@@ -259,7 +346,28 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
           </div>
         )}
 
-        {finished && state.result ? (
+        {readPhase === 'loading' ? (
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary" aria-busy="true">
+            Carregando chamado…
+          </div>
+        ) : localServerContradiction ? (
+          // PRODUCT.6-O1F: server projection authority wins. This is a
+          // fail-closed LOCAL/SERVER STATE INCONSISTENCY, not a server
+          // "unlink" — CREATE is never offered automatically and no
+          // provider contact happens here; only explicit human
+          // verification (outside this panel) resolves it.
+          <div className="rounded-control border border-status-warning-border bg-status-warning-soft p-3 text-xs text-status-warning">
+            <p className="font-semibold">Verificação necessária</p>
+            <p className="mt-1">
+              O estado salvo neste navegador diverge do estado atual do servidor para esta conversa. Verificação
+              necessária antes de qualquer nova ação.
+            </p>
+            {diagnosticExternalTicketId && (
+              <p className="mt-1 font-mono text-[10px]">ID externo possível: {diagnosticExternalTicketId}</p>
+            )}
+            {diagnosticProvider && <p className="mt-1 font-mono text-[10px]">Provedor possível: {diagnosticProvider}</p>}
+          </div>
+        ) : finished && state.result ? (
           <div className="rounded-control border border-border-subtle bg-surface p-3">
             <p className="font-semibold text-text-primary">
               {state.phase === 'replayed' ? 'Chamado já criado' : 'Chamado criado'}
@@ -306,6 +414,61 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
             {state.problem?.external_ticket_id && (
               <p className="mt-1 font-mono text-[10px]">ID externo possível: {state.problem.external_ticket_id}</p>
             )}
+          </div>
+        ) : readPhase === 'linked' && linkedTicket ? (
+          // PRODUCT.6-O1F: server truth (this session's own create/replay
+          // result, if any, is rendered above via `finished`/`alreadyLinked`
+          // — this branch is reached when the LINK was established by
+          // something this panel instance never itself observed: another
+          // browser/device/agent, or a prior session whose localStorage is
+          // gone. Same visual shape, sourced from the GET response instead
+          // of a create response.
+          <div className="rounded-control border border-border-subtle bg-surface p-3">
+            <p className="font-semibold text-text-primary">Chamado vinculado</p>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
+              <dt className="text-text-tertiary">ID externo</dt>
+              <dd className="font-mono text-text-primary">{linkedTicket.external_ticket_id}</dd>
+              <dt className="text-text-tertiary">Provedor</dt>
+              <dd className="text-text-primary">{linkedTicket.provider}</dd>
+              {linkedTicket.external_status_label && (
+                <>
+                  <dt className="text-text-tertiary">Status</dt>
+                  <dd className="text-text-primary">{linkedTicket.external_status_label}</dd>
+                </>
+              )}
+              <dt className="text-text-tertiary">Sincronização</dt>
+              <dd className="text-text-primary">{linkedTicket.sync_status}</dd>
+              {linkedTicket.last_synced_at && (
+                <>
+                  <dt className="text-text-tertiary">Última sincronização</dt>
+                  <dd className="text-text-primary">{new Date(linkedTicket.last_synced_at).toLocaleString('pt-BR')}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        ) : readPhase === 'not_found' ? (
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
+            Não há chamado ativo nesta conversa para vincular ao ERP.
+          </div>
+        ) : readPhase === 'inconsistent' ? (
+          <div className="rounded-control border border-status-warning-border bg-status-warning-soft p-3 text-xs text-status-warning">
+            <p className="font-semibold">Verificação necessária</p>
+            <p className="mt-1">
+              O vínculo deste chamado com o ERP está inconsistente. Verificação necessária antes de qualquer nova
+              ação.
+            </p>
+          </div>
+        ) : readPhase === 'forbidden' ? (
+          <div className="rounded-control border border-status-danger-border bg-status-danger-soft p-3 text-xs text-status-danger">
+            Sem permissão para ver o chamado desta conversa.
+          </div>
+        ) : readPhase === 'unavailable' ? (
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
+            Integração de chamados não configurada para este tenant.
+          </div>
+        ) : readPhase === 'network_error' ? (
+          <div className="rounded-control border border-status-danger-border bg-status-danger-soft p-3 text-xs text-status-danger">
+            Falha ao carregar o chamado desta conversa. Tente novamente mais tarde.
           </div>
         ) : (
           <form
