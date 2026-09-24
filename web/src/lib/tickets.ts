@@ -107,3 +107,107 @@ export function ticketErrorMessage(err: any, fallback = 'Não foi possível carr
       return fallback;
   }
 }
+
+// PRODUCT.6-N: provider-neutral external ticket creation (backend:
+// internal/inbox/adapters.CreateTicket, PRODUCT.6-M/6-M4). Mirrors the
+// HTTP contract exactly — no K3G field names (companyId/name/content)
+// ever appear here.
+export interface ExternalTicketCreateRequest {
+  selected_customer_external_id: string;
+  subject: string;
+  description: string;
+}
+
+export interface ExternalTicketCreateResponse {
+  local_ticket_id: string;
+  external_ticket_id: string;
+  provider: string;
+  sync_status: string;
+  replayed: boolean;
+}
+
+export interface ExternalTicketProblem {
+  error: string;
+  code: string;
+  attempt_id?: string;
+  attempt_state?: string;
+  local_ticket_id?: string;
+  provider?: string;
+  external_ticket_id?: string;
+  sync_status?: string;
+  severe?: boolean;
+  provider_error_code?: string;
+}
+
+// ExternalTicketCreateResult is a discriminated result, not a thrown
+// error, for every outcome the backend defines a stable meaning for
+// (PRODUCT.6-M sections 8-10) — a 409 TICKET_RECONCILIATION_REQUIRED is
+// exactly as "successful" an HTTP round trip as a 201, it just carries a
+// different safe next action. Only truly unexpected transport failures
+// (no response at all) become 'network_error'.
+export type ExternalTicketCreateResult =
+  | { kind: 'created'; data: ExternalTicketCreateResponse }
+  | { kind: 'replayed'; data: ExternalTicketCreateResponse }
+  | { kind: 'reconciliation_required'; problem: ExternalTicketProblem }
+  | { kind: 'already_linked'; problem: ExternalTicketProblem }
+  | { kind: 'definitive_failure'; problem: ExternalTicketProblem }
+  | { kind: 'unavailable' }
+  | { kind: 'conflict' }
+  | { kind: 'invalid'; message: string }
+  | { kind: 'forbidden' }
+  | { kind: 'not_found' }
+  | { kind: 'network_error' };
+
+export async function createExternalTicket(
+  conversationId: string,
+  idempotencyKey: string,
+  req: ExternalTicketCreateRequest,
+): Promise<ExternalTicketCreateResult> {
+  try {
+    const res = await axios.post(
+      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket`,
+      req,
+      { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey, 'Content-Type': 'application/json' } },
+    );
+    return res.status === 201 ? { kind: 'created', data: res.data } : { kind: 'replayed', data: res.data };
+  } catch (err: any) {
+    if (isUnauthorized(err)) {
+      handleUnauthorized();
+      return { kind: 'forbidden' };
+    }
+    const status = err?.response?.status;
+    const body = err?.response?.data;
+    switch (status) {
+      case 400:
+        return { kind: 'invalid', message: typeof body === 'string' ? body : 'Dados inválidos.' };
+      case 403:
+        return { kind: 'forbidden' };
+      case 404:
+        return { kind: 'not_found' };
+      case 409:
+        if (body && typeof body === 'object' && body.code === 'TICKET_DEFINITIVE_FAILURE') {
+          return { kind: 'definitive_failure', problem: body as ExternalTicketProblem };
+        }
+        if (body && typeof body === 'object' && body.code === 'TICKET_RECONCILIATION_REQUIRED') {
+          return { kind: 'reconciliation_required', problem: body as ExternalTicketProblem };
+        }
+        if (body && typeof body === 'object' && body.code === 'TICKET_ALREADY_LINKED') {
+          // PRODUCT.6-M5: the active local ticket was already linked
+          // before this (NEW Idempotency-Key) create intent — never a
+          // replay of THIS call, never reconciliation-required, never a
+          // retryable error.
+          return { kind: 'already_linked', problem: body as ExternalTicketProblem };
+        }
+        return { kind: 'invalid', message: typeof body === 'string' ? body : 'Conflito de estado da conversa.' };
+      case 422:
+        return { kind: 'conflict' };
+      case 503:
+        return { kind: 'unavailable' };
+      default:
+        // No HTTP status at all (network/timeout/CORS/abort): the request
+        // may or may not have reached the backend — never assumed safe to
+        // silently retry with a new key.
+        return { kind: 'network_error' };
+    }
+  }
+}
