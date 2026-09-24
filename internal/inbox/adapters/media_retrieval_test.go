@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
 func TestMediaRetrieverOriginValidation(t *testing.T) {
@@ -298,6 +299,73 @@ func TestMediaRetrieverSecurityMatrix(t *testing.T) {
 	}
 }
 
+// seedRetrievableMessage seeds a real tenant/user/membership/channel
+// connection/contact/conversation/message row with media_ref pointing at
+// mediaRef, so MediaRetriever.Retrieve's real DB lookup (tenant_id + id,
+// under RLS) finds it — this exercises the actual code path Retrieve takes
+// in production, not a bypass. Returns the app (RLS-enforced) pool plus the
+// tenant/user/message IDs; the caller must run Retrieve inside
+// platformdb.WithTenantSession(ctx, app, userID, false, ...) for the
+// RLS-scoped SELECT to see the row (messages_read_tenant policy requires
+// has_active_membership under a real session; there is no session/GUC set
+// on a bare context).
+func seedRetrievableMessage(t *testing.T, seedURL, appURL, mediaRef string) (app *pgxpool.Pool, tenantID, userID, messageID uuid.UUID) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	app, err = pgxpool.New(context.Background(), appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := seed.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+
+	tenantID, userID = uuid.New(), uuid.New()
+	exec(`INSERT INTO users(id,external_subject,email,status) VALUES($1,$2,$3,'active')`, userID, userID, userID.String()+"@invalid")
+	exec(`INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tenantID, tenantID.String())
+	var role uuid.UUID
+	if err := seed.QueryRow(ctx, `SELECT id FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, tenantID, userID, role)
+
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = seed.Exec(bg, `DELETE FROM tenants WHERE id=$1`, tenantID)
+		_, _ = seed.Exec(bg, `DELETE FROM users WHERE id=$1`, userID)
+	})
+
+	channelConnID := uuid.New()
+	exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status)
+	      VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active')`, channelConnID, tenantID, channelConnID.String())
+
+	contactID := uuid.New()
+	exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'Media Test','+15559990000')`, contactID, tenantID)
+
+	convID := uuid.New()
+	exec(`INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status,title,created_at,updated_at)
+	      VALUES($1,$2,$3,$4,'open','Media Test',NOW(),NOW())`, convID, tenantID, contactID, channelConnID)
+
+	messageID = uuid.New()
+	exec(`INSERT INTO messages(id,tenant_id,conversation_id,channel_connection_id,direction,message_type,body,media_ref,mime_type,size_bytes,status,created_at,updated_at)
+	      VALUES($1,$2,$3,$4,'inbound','image','',$5,'application/octet-stream',4,'received',NOW(),NOW())`,
+		messageID, tenantID, convID, channelConnID, mediaRef)
+
+	return app, tenantID, userID, messageID
+}
+
 // TestMediaRetrieverHTMLMasquerade: gate C.
 // Upstream declares image/jpeg but body is HTML; expect 415, HTML not returned.
 func TestMediaRetrieverHTMLMasquerade(t *testing.T) {
@@ -305,13 +373,6 @@ func TestMediaRetrieverHTMLMasquerade(t *testing.T) {
 	if seedURL == "" || appURL == "" {
 		t.Skip("OMNIRA_DATABASE_URL required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	app, err := pgxpool.New(ctx, appURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer app.Close()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -319,17 +380,24 @@ func TestMediaRetrieverHTMLMasquerade(t *testing.T) {
 	}))
 	defer server.Close()
 
+	app, tenantID, userID, messageID := seedRetrievableMessage(t, seedURL, appURL, server.URL+"/media/html-masquerade")
 	retriever, err := inboxadapters.NewMediaRetriever(app, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tenantID := uuid.New()
-	messageID := uuid.New()
+	var body []byte
+	var mimeType string
+	var retrieveErr error
+	if sessionErr := platformdb.WithTenantSession(context.Background(), app, userID, false, func(sessionCtx context.Context) error {
+		body, mimeType, retrieveErr = retriever.Retrieve(sessionCtx, tenantID, messageID)
+		return nil
+	}); sessionErr != nil {
+		t.Fatalf("tenant session: %v", sessionErr)
+	}
 
-	body, mimeType, err := retriever.Retrieve(ctx, tenantID, messageID)
-	if err == nil || !strings.Contains(err.Error(), "type not allowed") {
-		t.Errorf("expected 'type not allowed' error, got %v", err)
+	if retrieveErr == nil || !strings.Contains(retrieveErr.Error(), "type not allowed") {
+		t.Errorf("expected 'type not allowed' error, got %v", retrieveErr)
 	}
 	if body != nil && len(body) > 0 {
 		t.Errorf("expected empty body for rejected HTML, got %d bytes", len(body))
@@ -347,13 +415,6 @@ func TestMediaRetrieverSVG(t *testing.T) {
 	if seedURL == "" || appURL == "" {
 		t.Skip("OMNIRA_DATABASE_URL required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	app, err := pgxpool.New(ctx, appURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer app.Close()
 
 	svgBody := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -362,17 +423,24 @@ func TestMediaRetrieverSVG(t *testing.T) {
 	}))
 	defer server.Close()
 
+	app, tenantID, userID, messageID := seedRetrievableMessage(t, seedURL, appURL, server.URL+"/media/svg")
 	retriever, err := inboxadapters.NewMediaRetriever(app, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tenantID := uuid.New()
-	messageID := uuid.New()
+	var body []byte
+	var mimeType string
+	var retrieveErr error
+	if sessionErr := platformdb.WithTenantSession(context.Background(), app, userID, false, func(sessionCtx context.Context) error {
+		body, mimeType, retrieveErr = retriever.Retrieve(sessionCtx, tenantID, messageID)
+		return nil
+	}); sessionErr != nil {
+		t.Fatalf("tenant session: %v", sessionErr)
+	}
 
-	body, mimeType, err := retriever.Retrieve(ctx, tenantID, messageID)
-	if err == nil || !strings.Contains(err.Error(), "type not allowed") {
-		t.Errorf("expected 'type not allowed' error, got %v", err)
+	if retrieveErr == nil || !strings.Contains(retrieveErr.Error(), "type not allowed") {
+		t.Errorf("expected 'type not allowed' error, got %v", retrieveErr)
 	}
 	if body != nil && len(body) > 0 {
 		t.Errorf("expected empty body for rejected SVG, got %d bytes", len(body))
@@ -390,13 +458,6 @@ func TestMediaRetrieverUnknownBenign(t *testing.T) {
 	if seedURL == "" || appURL == "" {
 		t.Skip("OMNIRA_DATABASE_URL required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	app, err := pgxpool.New(ctx, appURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer app.Close()
 
 	unknownBody := []byte{0x89, 0x50, 0x4E, 0x47} // PNG magic but treated as unknown for this test
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -405,23 +466,117 @@ func TestMediaRetrieverUnknownBenign(t *testing.T) {
 	}))
 	defer server.Close()
 
+	app, tenantID, userID, messageID := seedRetrievableMessage(t, seedURL, appURL, server.URL+"/media/unknown-benign")
 	retriever, err := inboxadapters.NewMediaRetriever(app, server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tenantID := uuid.New()
-	messageID := uuid.New()
+	var body []byte
+	var mimeType string
+	var retrieveErr error
+	if sessionErr := platformdb.WithTenantSession(context.Background(), app, userID, false, func(sessionCtx context.Context) error {
+		body, mimeType, retrieveErr = retriever.Retrieve(sessionCtx, tenantID, messageID)
+		return nil
+	}); sessionErr != nil {
+		t.Fatalf("tenant session: %v", sessionErr)
+	}
 
-	body, mimeType, err := retriever.Retrieve(ctx, tenantID, messageID)
-	if err != nil {
-		t.Errorf("expected success for unknown benign, got %v", err)
+	if retrieveErr != nil {
+		t.Errorf("expected success for unknown benign, got %v", retrieveErr)
 	}
 	if mimeType != "application/octet-stream" {
 		t.Errorf("expected application/octet-stream, got %s", mimeType)
 	}
 	if len(body) == 0 {
 		t.Errorf("expected body to be returned for unknown benign type")
+	}
+}
+
+// TestMediaRetrieverSafeRaster: regression proving a real, recognizable
+// raster signature is still accepted and reported with its exact safe MIME
+// type — the classifier rewrite (INBOX.MEDIA.2) must not turn legitimate
+// images into generic attachments.
+func TestMediaRetrieverSafeRaster(t *testing.T) {
+	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if seedURL == "" || appURL == "" {
+		t.Skip("OMNIRA_DATABASE_URL required")
+	}
+
+	// Real PNG signature (8 bytes) — enough for http.DetectContentType to
+	// recognize it as image/png; the classifier must return that exact
+	// MIME type, not a generic attachment.
+	pngBody := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(pngBody)
+	}))
+	defer server.Close()
+
+	app, tenantID, userID, messageID := seedRetrievableMessage(t, seedURL, appURL, server.URL+"/media/safe-raster")
+	retriever, err := inboxadapters.NewMediaRetriever(app, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var body []byte
+	var mimeType string
+	var retrieveErr error
+	if sessionErr := platformdb.WithTenantSession(context.Background(), app, userID, false, func(sessionCtx context.Context) error {
+		body, mimeType, retrieveErr = retriever.Retrieve(sessionCtx, tenantID, messageID)
+		return nil
+	}); sessionErr != nil {
+		t.Fatalf("tenant session: %v", sessionErr)
+	}
+
+	if retrieveErr != nil {
+		t.Fatalf("expected success for a real PNG signature, got %v", retrieveErr)
+	}
+	if mimeType != "image/png" {
+		t.Errorf("expected image/png, got %s", mimeType)
+	}
+	if !bytes.Equal(body, pngBody) {
+		t.Errorf("expected the exact PNG bytes back, got %d bytes", len(body))
+	}
+}
+
+// TestMediaRetrieverSVGWithXMLDeclarationAndBOM: proves isLikelySVG's
+// bounded lexical detection tolerates the prefixes real SVG files commonly
+// carry (UTF-8 BOM, XML declaration, leading whitespace) — not just a bare
+// "<svg" first byte, which real-world SVG exports rarely produce as-is.
+func TestMediaRetrieverSVGWithXMLDeclarationAndBOM(t *testing.T) {
+	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if seedURL == "" || appURL == "" {
+		t.Skip("OMNIRA_DATABASE_URL required")
+	}
+
+	svgBody := append([]byte{0xEF, 0xBB, 0xBF}, []byte("\n  <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>")...)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Write(svgBody)
+	}))
+	defer server.Close()
+
+	app, tenantID, userID, messageID := seedRetrievableMessage(t, seedURL, appURL, server.URL+"/media/svg-with-decl")
+	retriever, err := inboxadapters.NewMediaRetriever(app, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var body []byte
+	var retrieveErr error
+	if sessionErr := platformdb.WithTenantSession(context.Background(), app, userID, false, func(sessionCtx context.Context) error {
+		body, _, retrieveErr = retriever.Retrieve(sessionCtx, tenantID, messageID)
+		return nil
+	}); sessionErr != nil {
+		t.Fatalf("tenant session: %v", sessionErr)
+	}
+
+	if retrieveErr == nil || !strings.Contains(retrieveErr.Error(), "type not allowed") {
+		t.Errorf("expected 'type not allowed' error for BOM+XML-declaration SVG, got %v", retrieveErr)
+	}
+	if len(body) > 0 {
+		t.Errorf("expected empty body for rejected SVG, got %d bytes", len(body))
 	}
 }
 

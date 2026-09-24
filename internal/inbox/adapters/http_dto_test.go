@@ -63,10 +63,15 @@ func TestMessageItemNeverExposesMediaRef(t *testing.T) {
 	})
 
 	channelConnID := uuid.New()
-	exec(`INSERT INTO channel_connections(id,tenant_id,provider,status,external_id) VALUES($1,$2,'whatsapp','active',$3)`, channelConnID, tenantID, "12345")
+	// external_number_id is unique per (provider, external_number_id) — derive
+	// it from the connection's own ID (like other packages' nextPhone()-style
+	// helpers) instead of a fixed literal, so concurrent/repeated runs never
+	// collide on a leftover row.
+	exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status)
+	      VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active')`, channelConnID, tenantID, channelConnID.String())
 
 	contactID := uuid.New()
-	exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'Test','15551234567')`, contactID, tenantID)
+	exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'Test','+15551234567')`, contactID, tenantID)
 
 	convID := uuid.New()
 	exec(`INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status,title,created_at,updated_at)

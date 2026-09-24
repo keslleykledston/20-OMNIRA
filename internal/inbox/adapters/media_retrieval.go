@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -48,7 +49,11 @@ func NewMediaRetriever(pool *pgxpool.Pool, origin string) (*MediaRetriever, erro
 			// - Phishing redirects to attacker-controlled servers
 			return http.ErrUseLastResponse
 		},
-		Timeout: 30,
+		// TEST.2/INBOX.MEDIA.1: was the bare int 30 — time.Duration is
+		// nanoseconds, so that meant ~30ns, not 30s. Every real WAHA fetch
+		// timed out instantly; masked until TEST.2 gave the media-type
+		// tests a real message row to reach this call at all.
+		Timeout: 30 * time.Second,
 	}
 
 	return &MediaRetriever{
@@ -172,49 +177,68 @@ func (r *MediaRetriever) retrieveAndSniff(ctx context.Context, mediaRef string) 
 		return nil, "", fmt.Errorf("media exceeds %d byte limit", maxMediaBytes)
 	}
 
-	// Sniff MIME type from bytes.
-	contentType := sniffMimeType(buf.Bytes(), resp.Header.Get("Content-Type"))
-
-	// Verify content is safe to inline or download.
-	if !isSafeContent(contentType) {
-		return nil, "", fmt.Errorf("media type not allowed (%s)", contentType)
+	// Classify content from actual bytes — never trust the provider's
+	// declared Content-Type header (INBOX.MEDIA.2).
+	contentType, err := classifyMedia(buf.Bytes())
+	if err != nil {
+		return nil, "", err
 	}
 
 	return buf.Bytes(), contentType, nil
 }
 
-// sniffMimeType uses Go's standard MIME detection to sniff actual content,
-// preferring detected type over declared header value.
-func sniffMimeType(data []byte, declaredType string) string {
-	// Go's net/http.DetectContentType sniffs the first 512 bytes.
-	detected := http.DetectContentType(data)
-
-	// Prefer detected type, but respect empty result.
-	if detected != "application/octet-stream" {
-		return detected
+// classifyMedia decides the MIME type OMNIRA will report for retrieved
+// bytes, and rejects active content outright (returns an error, no bytes).
+//
+// INBOX.MEDIA.2: this replaces a version that sniffed with
+// http.DetectContentType and asked isSafeContent whether the RESULT looked
+// dangerous. That order is unsafe for SVG specifically: Go's stdlib sniffer
+// (net/http.DetectContentType) has no signature for SVG at all — a real
+// `<svg>...<script>...</script></svg>` payload sniffs as plain
+// "text/plain; charset=utf-8", which is neither in the safe raster list nor
+// in any dangerous-prefix list, so the old code fell through to its "unknown
+// type, treat as safe attachment" default and let it through. Checking for
+// SVG explicitly, before consulting DetectContentType at all, closes that
+// gap without needing a real XML parser.
+//
+// Order matters and is deliberate:
+//  1. Explicit SVG lexical check (isLikelySVG) — independent of whatever
+//     DetectContentType would have guessed.
+//  2. DetectContentType's own dangerous-prefix matches (HTML, executables,
+//     etc.) — kept for defense in depth even where its signature table
+//     does cover the format.
+//  3. Known-safe raster signatures → that exact MIME type, inline-eligible.
+//  4. Everything else (including a weak/ambiguous sniff like "text/plain"
+//     for a handful of unrecognized bytes, or the provider's own declared
+//     header) is never trusted as authoritative: always normalized to
+//     "application/octet-stream", never inline-eligible
+//     (internal/inbox/adapters/http.go's isInlineImage only allows the
+//     four raster MIME types from step 3, so this is enforced twice).
+func classifyMedia(data []byte) (string, error) {
+	if isLikelySVG(data) {
+		return "", errors.New("media type not allowed (image/svg+xml)")
 	}
-	return declaredType
+
+	detected := http.DetectContentType(data)
+	normalized := strings.ToLower(strings.TrimSpace(strings.SplitN(detected, ";", 2)[0]))
+
+	if isDangerousMime(normalized) {
+		return "", fmt.Errorf("media type not allowed (%s)", normalized)
+	}
+
+	switch normalized {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return normalized, nil
+	}
+
+	return "application/octet-stream", nil
 }
 
-// isSafeContent returns true if the MIME type is safe to return to the browser.
-// Unsafe types (HTML, SVG, executables) must be rejected with 415.
-func isSafeContent(mimeType string) bool {
-	// Normalize MIME type.
-	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
-
-	// Remove charset/boundary parameters.
-	if idx := strings.Index(mimeType, ";"); idx >= 0 {
-		mimeType = mimeType[:idx]
-	}
-	mimeType = strings.TrimSpace(mimeType)
-
-	// Safe inline content.
-	switch mimeType {
-	case "image/jpeg", "image/png", "image/webp", "image/gif":
-		return true
-	}
-
-	// Dangerous content — never return bytes.
+// isDangerousMime reports whether a sniffed MIME type is known active
+// content that must never be returned. "image/svg" is kept here as defense
+// in depth even though DetectContentType never actually produces it today —
+// classifyMedia's isLikelySVG check is what actually catches real SVG.
+func isDangerousMime(mimeType string) bool {
 	dangerousPrefixes := []string{
 		"text/html",
 		"image/svg",
@@ -230,13 +254,46 @@ func isSafeContent(mimeType string) bool {
 	}
 	for _, dangerous := range dangerousPrefixes {
 		if strings.HasPrefix(mimeType, dangerous) {
-			return false
+			return true
 		}
 	}
+	return false
+}
 
-	// Unknown MIME type — treat as safe attachment (application/octet-stream).
-	// The browser will download, not inline.
-	return true
+// isLikelySVG performs bounded lexical detection of an SVG root element —
+// not a real XML parser: no entity expansion, no DTD/external-resource
+// resolution, no recursion, and inspection is capped to the first 4096
+// bytes. It tolerates the prefixes real SVG files commonly have before the
+// root element (UTF-8 BOM, leading whitespace, an XML declaration, a
+// DOCTYPE, leading comments) so it isn't fooled by trivial reordering, but
+// it deliberately does not try to be a general-purpose XML sniffer.
+func isLikelySVG(data []byte) bool {
+	b := data
+	if len(b) > 4096 {
+		b = b[:4096]
+	}
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM
+	b = bytes.TrimLeft(b, " \t\r\n")
+
+	if bytes.HasPrefix(b, []byte("<?xml")) {
+		if idx := bytes.Index(b, []byte("?>")); idx >= 0 {
+			b = bytes.TrimLeft(b[idx+2:], " \t\r\n")
+		}
+	}
+	if len(b) >= 9 && strings.EqualFold(string(b[:9]), "<!doctype") {
+		if idx := bytes.IndexByte(b, '>'); idx >= 0 {
+			b = bytes.TrimLeft(b[idx+1:], " \t\r\n")
+		}
+	}
+	for bytes.HasPrefix(b, []byte("<!--")) {
+		idx := bytes.Index(b, []byte("-->"))
+		if idx < 0 {
+			break
+		}
+		b = bytes.TrimLeft(b[idx+3:], " \t\r\n")
+	}
+
+	return len(b) >= 4 && strings.EqualFold(string(b[:4]), "<svg")
 }
 
 // ValidateOriginForTest checks if a URL origin matches the trusted WAHA origin.
