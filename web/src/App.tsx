@@ -5,6 +5,7 @@ import NoAccess from './pages/NoAccess'
 import Dashboard from './pages/Dashboard'
 import Accounts from './pages/Accounts'
 import Tickets from './pages/Tickets'
+import TicketReconciliationPage from './pages/TicketReconciliationPage'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
 import InboxWorkspace from './pages/InboxWorkspace'
@@ -33,6 +34,7 @@ export default function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/tickets" element={<Tickets />} />
+            <Route path="/ticket-reconciliation" element={<TicketReconciliationPage />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/supervisor" element={<SupervisorDashboard />} />
             <Route path="/inbox" element={<InboxWorkspace />} />

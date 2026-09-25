@@ -20,6 +20,11 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Dashboard', path: '/', icon: 'dashboard' },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
   { label: 'Tickets', path: '/tickets', icon: 'tickets' },
+  // PRODUCT.7A2: always visible in the sidebar, same convention as
+  // Supervisor — access itself is gated inside the page
+  // (useAccess().can('ticket.reconcile') + PermissionState), never by
+  // hiding the nav entry.
+  { label: 'Reconciliação', path: '/ticket-reconciliation', icon: 'clock' },
   { label: 'Contatos', path: '/contacts', icon: 'contacts' },
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
