@@ -341,6 +341,46 @@ func TestStatusAttemptStoreTransitionPreservesProviderAndExternalIdentity(t *tes
 	}
 }
 
+// PRODUCT.6-O2B3: MarkConfirmedSuccess must also accept a source state of
+// outcome_unknown — the ambiguous-write reconciliation path (exactly one
+// GetTicket confirming durable identity + matching status) promotes
+// outcome_unknown directly to confirmed_success, never through in_flight
+// again (that would look like an automatic retry). Also proves the
+// resulting confirmed_success releases the unresolved-operation barrier
+// for a new key, exactly like a fresh in_flight->confirmed_success would.
+func TestStatusAttemptStoreMarkConfirmedSuccessFromOutcomeUnknown(t *testing.T) {
+	f := requireStatusAttemptStack(t)
+	store := newStatusStore(f)
+	err := f.withSystemSession(t, func(ctx context.Context) error {
+		a, _, err := store.Acquire(ctx, acquireCmd(f, "status-outcome-unknown-reconcile-"+uuid.New().String(), "hash-1", "5"))
+		if err != nil {
+			return err
+		}
+		if _, err := store.MarkOutcomeUnknown(ctx, a.ID); err != nil {
+			return err
+		}
+		confirmed, err := store.MarkConfirmedSuccess(ctx, a.ID, "5", "Resolvido")
+		if err != nil {
+			return err
+		}
+		if confirmed.State != domain.AttemptConfirmedSuccess || confirmed.Provider != "k3g" || confirmed.ExternalTicketID != "28182" || confirmed.TargetStatus != "5" {
+			t.Fatalf("unexpected attempt after reconciliation: %+v", confirmed)
+		}
+		// Barrier released: a different key may now acquire.
+		_, outcome, err := store.Acquire(ctx, acquireCmd(f, "status-outcome-unknown-reconcile-next-"+uuid.New().String(), "hash-2", "2"))
+		if err != nil {
+			return err
+		}
+		if outcome != ports.AcquireAcquired {
+			t.Fatalf("outcome = %q, want acquired after outcome_unknown->confirmed_success reconciliation", outcome)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // K. MarkProjectionSynced only affects the expected attempt, and is
 // idempotent.
 func TestStatusAttemptStoreMarkProjectionSyncedOnlyAffectsExpectedAttempt(t *testing.T) {

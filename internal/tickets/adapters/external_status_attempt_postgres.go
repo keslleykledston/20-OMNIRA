@@ -113,11 +113,17 @@ func (s *StatusMutationAttemptStore) Acquire(ctx context.Context, cmd ports.Acqu
 	return blocking, ports.AcquireBlockedByUnresolvedOperation, nil
 }
 
-// MarkConfirmedSuccess transitions an in_flight attempt to
-// confirmed_success, recording the reconciled provider snapshot.
-// Replay-safe: a no-op if already confirmed_success with the SAME
-// confirmed status; refused (ErrStatusAttemptInvalidTransition) for any
-// other existing state or a different confirmed status.
+// MarkConfirmedSuccess transitions an in_flight OR outcome_unknown attempt
+// to confirmed_success, recording the reconciled provider snapshot.
+// outcome_unknown is a valid source state here — unlike
+// ticket_external_create_attempts, PRODUCT.6-O2B3's ambiguous-write
+// reconciliation path (exactly one GetTicket confirming the durable
+// external id and a matching status) legitimately promotes an
+// outcome_unknown attempt to confirmed_success; CREATE has no equivalent
+// path because a create's identity does not exist until the provider
+// responds. Replay-safe: a no-op if already confirmed_success with the
+// SAME confirmed status; refused (ErrStatusAttemptInvalidTransition) for
+// any other existing state or a different confirmed status.
 func (s *StatusMutationAttemptStore) MarkConfirmedSuccess(ctx context.Context, attemptID uuid.UUID, confirmedExternalStatus, confirmedExternalStatusLabel string) (*domain.ExternalStatusAttempt, error) {
 	tenantID, err := attemptTenantOf(ctx)
 	if err != nil {
@@ -127,7 +133,7 @@ func (s *StatusMutationAttemptStore) MarkConfirmedSuccess(ctx context.Context, a
 	updated, err := scanStatusAttempt(q.QueryRow(ctx, `
 		UPDATE ticket_external_status_attempts
 		SET state = 'confirmed_success', confirmed_external_status = $3, confirmed_external_status_label = $4, updated_at = now()
-		WHERE tenant_id = $1 AND id = $2 AND state = 'in_flight'
+		WHERE tenant_id = $1 AND id = $2 AND state IN ('in_flight', 'outcome_unknown')
 		RETURNING `+statusAttemptColumns,
 		tenantID, attemptID, confirmedExternalStatus, confirmedExternalStatusLabel))
 	if err == nil {
