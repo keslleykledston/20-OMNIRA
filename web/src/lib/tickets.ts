@@ -334,3 +334,112 @@ export async function refreshConversationTicket(conversationId: string): Promise
     }
   }
 }
+
+// PRODUCT.6-O2BF: provider-neutral external ticket STATUS MUTATION
+// (backend: internal/inbox/adapters.UpdateTicketStatus, PRODUCT.6-O2BH).
+// target_status is an OPAQUE provider status code end to end — this client
+// never renames it into a OMNIRA lifecycle word (start/pending/resolve/
+// close). Mirrors the HTTP contract exactly: only target_status in the
+// body, Idempotency-Key header, no provider/external_ticket_id/actor/
+// tenant in the body.
+export interface UpdateExternalTicketStatusResponse {
+  local_ticket_id: string;
+  provider: string;
+  external_ticket_id: string;
+  external_status: string;
+  external_status_label: string;
+  sync_status: string;
+  last_synced_at: string | null;
+  replayed: boolean;
+  reconciled: boolean;
+}
+
+// UpdateExternalTicketStatusResult mirrors createExternalTicket/
+// readConversationTicket's discriminated-result convention. 'unprocessable'
+// (422) is deliberately a SINGLE case: the backend maps both an
+// idempotency-key/different-request mismatch AND a provider-rejected
+// target to the same HTTP 422 with a plain-text body
+// (internal/inbox/adapters/crm_handlers.go UpdateTicketStatus /
+// failUpdateTicketStatus) — there is no machine-readable field
+// distinguishing them, so this client never guesses which one occurred;
+// both get the same safe, non-retrying treatment.
+export type UpdateExternalTicketStatusResult =
+  | { kind: 'ok'; data: UpdateExternalTicketStatusResponse }
+  | { kind: 'reconciliation_required' }
+  | { kind: 'unprocessable' }
+  | { kind: 'forbidden' }
+  | { kind: 'not_found' }
+  | { kind: 'unavailable' }
+  | { kind: 'invalid'; message: string }
+  | { kind: 'network_error' };
+
+export async function updateConversationTicketStatus(params: {
+  conversationId: string;
+  targetStatus: string;
+  idempotencyKey: string;
+}): Promise<UpdateExternalTicketStatusResult> {
+  const { conversationId, targetStatus, idempotencyKey } = params;
+  try {
+    const res = await axios.post(
+      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket/status`,
+      { target_status: targetStatus },
+      { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey, 'Content-Type': 'application/json' } },
+    );
+    return { kind: 'ok', data: res.data };
+  } catch (err: any) {
+    if (isUnauthorized(err)) {
+      handleUnauthorized();
+      return { kind: 'forbidden' };
+    }
+    const status = err?.response?.status;
+    const body = err?.response?.data;
+    switch (status) {
+      case 400:
+        return { kind: 'invalid', message: typeof body === 'string' ? body : 'Dados inválidos.' };
+      case 403:
+        return { kind: 'forbidden' };
+      case 404:
+        return { kind: 'not_found' };
+      case 409:
+        return { kind: 'reconciliation_required' };
+      case 422:
+        return { kind: 'unprocessable' };
+      case 503:
+        return { kind: 'unavailable' };
+      default:
+        // No HTTP status at all: transport failure. The write may or may
+        // not have reached the backend — never assumed safe, never
+        // automatically retried with a new key.
+        return { kind: 'network_error' };
+    }
+  }
+}
+
+// PRODUCT.6-O2BF: UI-presentation-only provider status registry. NOT a
+// universal OMNIRA lifecycle enum — target_status remains an opaque
+// provider code (see UpdateExternalTicketStatusResult above). Only "k3g"
+// (internal/tool/connectors/k3g_ticketing.go, K3GTicketingConnector.Name())
+// has a known, officially confirmed vocabulary (k3gStatusCodes,
+// PRODUCT.6-O2A2 — codes 1..6, live-exercised for 1 and 5). Any other
+// provider value has no entry here; the panel falls back to a read-only
+// external-status display rather than guessing a selector for it.
+export interface ProviderStatusOption {
+  code: string;
+  label: string;
+}
+
+export const PROVIDER_STATUS_OPTIONS: Record<string, ProviderStatusOption[]> = {
+  k3g: [
+    { code: '1', label: 'Novo' },
+    { code: '2', label: 'Em atendimento' },
+    { code: '3', label: 'Planejado' },
+    { code: '4', label: 'Pendente' },
+    { code: '5', label: 'Resolvido' },
+    { code: '6', label: 'Encerrado' },
+  ],
+};
+
+export function providerStatusOptions(provider: string | null | undefined): ProviderStatusOption[] | null {
+  if (!provider) return null;
+  return PROVIDER_STATUS_OPTIONS[provider] ?? null;
+}

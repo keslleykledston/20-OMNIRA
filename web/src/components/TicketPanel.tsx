@@ -6,11 +6,13 @@ import {
   createExternalTicket,
   readConversationTicket,
   refreshConversationTicket,
+  updateConversationTicketStatus,
+  providerStatusOptions,
   type ConversationTicketReadResponse,
   type ExternalTicketCreateResponse,
   type ExternalTicketProblem,
 } from '../lib/tickets';
-import { Button } from './primitives';
+import { Button, ConfirmDialog } from './primitives';
 
 interface Company {
   id: string;
@@ -103,6 +105,59 @@ type ReadPhase = 'loading' | 'linked' | 'unlinked' | 'not_found' | 'inconsistent
 // never becomes a second source of projection truth). Idle on every fresh
 // mount/conversation switch; only ever changes in response to a click.
 type RefreshState = 'idle' | 'pending' | 'reconciliation' | 'unavailable' | 'forbidden' | 'network_error';
+
+// PRODUCT.6-O2BF: a status-mutation intent this browser confirmed but could
+// not confirm the outcome of (a POST that failed with no HTTP response at
+// all — section 14). Persisted ONLY at that moment, separately from the
+// CREATE flow's own storage key/shape (a different concern, a different
+// endpoint) — never proactively persisted before every confirm, since an
+// ordinary 409 (a DIFFERENT, unrelated unresolved attempt blocking a brand
+// new key) must never be mistaken for THIS intent being ambiguous.
+interface PendingStatusIntent {
+  tenantId: string;
+  conversationId: string;
+  localTicketId: string;
+  provider: string;
+  externalTicketId: string;
+  targetStatus: string;
+  idempotencyKey: string;
+}
+
+type MutationPhase =
+  | 'idle'
+  | 'pending'
+  | 'network_ambiguous'
+  | 'reconciliation_required'
+  | 'unprocessable'
+  | 'forbidden'
+  | 'not_found'
+  | 'unavailable';
+
+function statusIntentStorageKey(conversationId: string): string {
+  return `omnira.ticket-status.${conversationId}`;
+}
+
+function loadStatusIntent(conversationId: string): PendingStatusIntent | null {
+  try {
+    const raw = localStorage.getItem(statusIntentStorageKey(conversationId));
+    if (!raw) return null;
+    return JSON.parse(raw) as PendingStatusIntent;
+  } catch {
+    return null;
+  }
+}
+
+function saveStatusIntent(conversationId: string, intent: PendingStatusIntent | null): void {
+  try {
+    if (intent === null) {
+      localStorage.removeItem(statusIntentStorageKey(conversationId));
+    } else {
+      localStorage.setItem(statusIntentStorageKey(conversationId), JSON.stringify(intent));
+    }
+  } catch {
+    // Best-effort only.
+  }
+}
 
 export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) {
   const tenantId = getTenantId();
@@ -215,6 +270,234 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
         break;
     }
   };
+
+  // PRODUCT.6-O2BF: external ticket STATUS MUTATION state — deliberately
+  // separate from RefreshState above. "Atualizar" (refresh) and this
+  // mutation are two distinct backend operations (section 16) and must
+  // never share state, messaging, or triggers.
+  const [selectedTarget, setSelectedTarget] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [mutationPhase, setMutationPhase] = useState<MutationPhase>('idle');
+  const [mutationNote, setMutationNote] = useState<string | null>(null);
+  const [pendingIntent, setPendingIntent] = useState<PendingStatusIntent | null>(() => loadStatusIntent(conversationId));
+
+  const statusRequestIdRef = useRef(0);
+  const statusInFlightRef = useRef(false);
+
+  useEffect(() => {
+    statusRequestIdRef.current += 1;
+    statusInFlightRef.current = false;
+    setSelectedTarget('');
+    setConfirmOpen(false);
+    setMutationPhase('idle');
+    setMutationNote(null);
+    setPendingIntent(loadStatusIntent(conversationId));
+  }, [conversationId]);
+
+  // Section 10: a persisted intent may be reused only if the CURRENT server
+  // projection still matches the exact identity it was recorded against.
+  // Server projection always wins — this is re-checked on every render,
+  // never trusted merely because it once loaded from storage.
+  const canVerifyPendingIntent = Boolean(
+    pendingIntent &&
+      linkedTicket &&
+      pendingIntent.tenantId === tenantId &&
+      pendingIntent.conversationId === conversationId &&
+      pendingIntent.localTicketId === linkedTicket.local_ticket_id &&
+      pendingIntent.provider === linkedTicket.provider &&
+      pendingIntent.externalTicketId === linkedTicket.external_ticket_id,
+  );
+
+  // Stale-intent cleanup: merely IGNORING a mismatched persisted intent
+  // (via canVerifyPendingIntent above) is not enough — once the canonical
+  // O1F projection has actually resolved, a stale intent must be deleted
+  // from both component state and localStorage, never just left inert.
+  // Guarded to run only after readPhase leaves 'loading': a request still
+  // in flight carries no server authority yet, so nothing may be deleted
+  // on its account (section 2).
+  useEffect(() => {
+    if (readPhase === 'loading' || !pendingIntent) return;
+
+    if (readPhase === 'linked' && linkedTicket) {
+      const matches =
+        pendingIntent.tenantId === tenantId &&
+        pendingIntent.conversationId === conversationId &&
+        pendingIntent.localTicketId === linkedTicket.local_ticket_id &&
+        pendingIntent.provider === linkedTicket.provider &&
+        pendingIntent.externalTicketId === linkedTicket.external_ticket_id;
+      if (!matches) {
+        setPendingIntent(null);
+        saveStatusIntent(conversationId, null);
+      }
+      return;
+    }
+
+    if (readPhase === 'unlinked' || readPhase === 'not_found') {
+      // Canonical projection confirms there is no active external link at
+      // all — a stale mutation intent can never be recovery authority for
+      // a ticket the server no longer confirms as linked.
+      setPendingIntent(null);
+      saveStatusIntent(conversationId, null);
+      return;
+    }
+
+    // inconsistent/forbidden/unavailable/network_error: no POSITIVE proof
+    // the identity actually differs (matches existing O1F fail-closed
+    // treatment of these outcomes) — conservatively RETAIN. This can never
+    // establish linkage on its own: canVerifyPendingIntent above requires a
+    // truthy linkedTicket, which none of these outcomes ever provide.
+  }, [readPhase, linkedTicket, pendingIntent, conversationId, tenantId]);
+
+  // runStatusMutation NEVER persists anything itself — the intent (section
+  // 1) is always already durably saved by its caller BEFORE this function's
+  // POST fires, whether that caller is a fresh confirm or a verify resend.
+  // This function only ever CLEARS it (on a terminal/definitive outcome) or
+  // leaves it exactly as-is (409 / network ambiguity — section 3/4).
+  const runStatusMutation = async (targetStatus: string, idempotencyKey: string) => {
+    if (statusInFlightRef.current || !linkedTicket) return; // synchronous double-click guard
+    statusInFlightRef.current = true;
+    const requestId = (statusRequestIdRef.current += 1);
+    setMutationPhase('pending');
+
+    const result = await updateConversationTicketStatus({ conversationId, targetStatus, idempotencyKey });
+
+    statusInFlightRef.current = false;
+    if (requestId !== statusRequestIdRef.current) return; // superseded by a conversation switch or a newer attempt
+
+    const clearIntent = () => {
+      setPendingIntent(null);
+      saveStatusIntent(conversationId, null);
+    };
+
+    switch (result.kind) {
+      case 'ok': {
+        // Section 2: EVERY terminal 200 (normal, replayed, reconciled)
+        // clears the intent — there is nothing left to verify or retry.
+        const data = result.data;
+        setLinkedTicket((prev) =>
+          prev
+            ? {
+                ...prev,
+                provider: data.provider,
+                external_ticket_id: data.external_ticket_id,
+                external_status: data.external_status,
+                external_status_label: data.external_status_label,
+                sync_status: data.sync_status,
+                last_synced_at: data.last_synced_at ?? undefined,
+              }
+            : prev,
+        );
+        clearIntent();
+        setSelectedTarget('');
+        setMutationPhase('idle');
+        setMutationNote(
+          data.reconciled
+            ? 'Status confirmado após verificação.'
+            : data.replayed
+              ? 'Alteração já confirmada.'
+              : 'Status atualizado.',
+        );
+        break;
+      }
+      case 'reconciliation_required':
+        // Section 3: the intent was already persisted before this request
+        // fired — retain it exactly as-is. A 409 here may mean THIS SAME
+        // key's own provider write is ambiguous and reconciliation could
+        // not resolve it (O2BH: outcome_unknown persists under this exact
+        // key), or that it is blocked by an earlier unresolved operation —
+        // either way, "Verificar alteração" resending this SAME key is the
+        // correct recovery action, never a new one.
+        setMutationPhase('reconciliation_required');
+        break;
+      case 'network_error':
+        // Section 4: already persisted before the POST fired — nothing to
+        // add or change, only the visible phase changes.
+        setMutationPhase('network_ambiguous');
+        break;
+      case 'unprocessable':
+      case 'invalid':
+        // 422 (idempotency mismatch OR provider-rejected target — the
+        // backend gives no machine-readable way to tell them apart) is a
+        // definitive client-consistency failure: never auto-retried, and
+        // the intent it invalidates is cleared rather than reused.
+        clearIntent();
+        setMutationPhase('unprocessable');
+        break;
+      case 'forbidden':
+        // Section 5: a definitive authorization failure — clear.
+        clearIntent();
+        setMutationPhase('forbidden');
+        break;
+      case 'not_found':
+        // A definitive identity failure (no active ticket at all) — clear.
+        clearIntent();
+        setMutationPhase('not_found');
+        break;
+      case 'unavailable':
+        // Section 5: every /ticket/status 503 path (missing service wiring
+        // at the top of the handler, or TicketingRuntime resolution failure
+        // — internal/tickets/application/update_external_ticket_status.go
+        // resolves the runtime BEFORE ever calling Acquire) is confirmed,
+        // from the backend's own source ordering rather than any error
+        // string, to occur strictly before an attempt row can exist or a
+        // provider call can happen. Never ambiguous: safe to clear.
+        clearIntent();
+        setMutationPhase('unavailable');
+        break;
+    }
+  };
+
+  // A genuinely NEW user intent: only reachable when no matching unresolved
+  // intent already exists (confirmStatusMutation and the render below both
+  // gate on !canVerifyPendingIntent) — so persisting here can never
+  // overwrite an intent that still needs recovery (section 7).
+  const confirmStatusMutation = async () => {
+    if (!linkedTicket || canVerifyPendingIntent) return;
+    const targetStatus = selectedTarget;
+    const idempotencyKey = crypto.randomUUID();
+    const intent: PendingStatusIntent = {
+      tenantId,
+      conversationId,
+      localTicketId: linkedTicket.local_ticket_id,
+      provider: linkedTicket.provider ?? '',
+      externalTicketId: linkedTicket.external_ticket_id ?? '',
+      targetStatus,
+      idempotencyKey,
+    };
+    // Section 1: persist BEFORE the first POST. UX recovery evidence only —
+    // never linkage/identity authority.
+    setPendingIntent(intent);
+    saveStatusIntent(conversationId, intent);
+    // The dialog stays open (isPending disables both its actions, section
+    // 22) until the request actually resolves — a same-tick second click
+    // lands on an already-disabled Confirm button, and runStatusMutation's
+    // own ref guard is the authoritative backstop either way.
+    await runStatusMutation(targetStatus, idempotencyKey);
+    setConfirmOpen(false);
+  };
+
+  // Section 15: the SAME target + SAME Idempotency-Key, never a new one —
+  // this is a verification resend of an already-unresolved intent, not a
+  // new user intent (section 8).
+  const verifyPendingIntent = async () => {
+    if (!pendingIntent) return;
+    await runStatusMutation(pendingIntent.targetStatus, pendingIntent.idempotencyKey);
+  };
+
+  const providerOptions = linkedTicket ? providerStatusOptions(linkedTicket.provider) : null;
+  const hasLinkedIdentity = Boolean(linkedTicket?.provider && linkedTicket?.external_ticket_id);
+  const hasKnownProviderOptions = Boolean(providerOptions && providerOptions.length > 0);
+
+  // An unresolved persisted intent must be dealt with (verified) before any
+  // new, potentially conflicting intent is offered; 403 is a permanent
+  // lock (section 19); mid-flight always locks (section 24).
+  const statusControlsLocked =
+    mutationPhase === 'pending' || mutationPhase === 'forbidden' || canVerifyPendingIntent;
+  const alterarStatusDisabled =
+    statusControlsLocked || !selectedTarget || selectedTarget === linkedTicket?.external_status;
+
+  const currentStatusLabel = linkedTicket?.external_status_label || linkedTicket?.external_status || '';
+  const targetStatusLabel = providerOptions?.find((o) => o.code === selectedTarget)?.label ?? selectedTarget;
 
   // PRODUCT.6-O1F FINAL AUTHORITY FIX: distinguishes a terminal phase that
   // was just produced by a REAL HTTP response received during this mount
@@ -494,6 +777,7 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
           // browser/device/agent, or a prior session whose localStorage is
           // gone. Same visual shape, sourced from the GET response instead
           // of a create response.
+          <>
           <div className="rounded-control border border-border-subtle bg-surface p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="font-semibold text-text-primary">Chamado vinculado</p>
@@ -527,6 +811,92 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
                 </>
               )}
             </dl>
+
+            {/* PRODUCT.6-O2BF: status mutation controls — only when the
+                ticket carries a real external identity (provider +
+                external_ticket_id), never for the projection-read
+                loading/unlinked/404/inconsistent branches (those never
+                reach this JSX branch at all). */}
+            {hasLinkedIdentity && (
+              <div className="mt-3 border-t border-border-subtle pt-3">
+                <p className={SECTION_TITLE}>Status externo</p>
+
+                {canVerifyPendingIntent ? (
+                  <div className="rounded-control border border-status-warning-border bg-status-warning-soft p-2 text-[11px] text-status-warning">
+                    <p className="font-semibold">
+                      {mutationPhase === 'network_ambiguous'
+                        ? 'Não foi possível confirmar a alteração.'
+                        : 'Verificação necessária'}
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="mt-2"
+                      isLoading={mutationPhase === 'pending'}
+                      disabled={mutationPhase === 'pending'}
+                      onClick={() => void verifyPendingIntent()}
+                    >
+                      Verificar alteração
+                    </Button>
+                  </div>
+                ) : hasKnownProviderOptions ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <select
+                        id="ticket-status-select"
+                        className={FIELD}
+                        aria-label="Status externo"
+                        value={selectedTarget}
+                        onChange={(e) => {
+                          setSelectedTarget(e.target.value);
+                          setMutationNote(null);
+                        }}
+                        disabled={statusControlsLocked}
+                      >
+                        <option value="">Selecionar status</option>
+                        {providerOptions!.map((opt) => (
+                          <option key={opt.code} value={opt.code}>
+                            {opt.label} ({opt.code})
+                          </option>
+                        ))}
+                      </select>
+                      <Button
+                        type="button"
+                        size="sm"
+                        isLoading={mutationPhase === 'pending'}
+                        disabled={alterarStatusDisabled}
+                        onClick={() => setConfirmOpen(true)}
+                      >
+                        Alterar status
+                      </Button>
+                    </div>
+                    {mutationNote && <p className="mt-2 text-[11px] text-text-secondary">{mutationNote}</p>}
+                    {mutationPhase === 'unprocessable' && (
+                      <p className="mt-2 text-[11px] text-status-danger">
+                        Não foi possível confirmar esta alteração de status. Revise o status atual e tente novamente
+                        com uma nova seleção.
+                      </p>
+                    )}
+                    {mutationPhase === 'forbidden' && (
+                      <p className="mt-2 text-[11px] text-status-danger">
+                        Sem permissão para alterar o status deste chamado.
+                      </p>
+                    )}
+                    {mutationPhase === 'unavailable' && (
+                      <p className="mt-2 text-[11px] text-status-danger">
+                        Não foi possível confirmar a alteração agora.
+                      </p>
+                    )}
+                    {mutationPhase === 'not_found' && (
+                      <p className="mt-2 text-[11px] text-status-warning">
+                        Verificação necessária antes de tentar novamente.
+                      </p>
+                    )}
+                  </>
+                ) : null}
+              </div>
+            )}
+
             {/* PRODUCT.6-O1RF: refresh is a read-only provider operation —
                 its own errors never blank this card or fall back to
                 linked=false/CREATE. The last known projection above remains
@@ -550,6 +920,16 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
               <p className="mt-2 text-[11px] text-status-danger">Falha de conexão ao atualizar o chamado.</p>
             )}
           </div>
+          <ConfirmDialog
+            open={confirmOpen}
+            title="Alterar status do chamado"
+            message={`Alterar status do chamado externo de "${currentStatusLabel}" para "${targetStatusLabel}"?`}
+            confirmLabel="Confirmar alteração"
+            isPending={mutationPhase === 'pending'}
+            onCancel={() => setConfirmOpen(false)}
+            onConfirm={() => void confirmStatusMutation()}
+          />
+          </>
         ) : readPhase === 'not_found' ? (
           <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
             Não há chamado ativo nesta conversa para vincular ao ERP.
