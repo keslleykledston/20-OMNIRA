@@ -354,11 +354,12 @@ func TestListRolesReturnsFixedPermissionMatrixReadOnly(t *testing.T) {
 	want := map[string][]string{
 		"tenant_admin": {
 			"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-			"dashboard.read", "membership.manage", "membership.read", "tenant.manage", "tenant.read", "ticket.create", "ticket.read",
+			"dashboard.read", "membership.manage", "membership.read", "tenant.manage", "tenant.read", "ticket.create", "ticket.read", "ticket.update",
 		},
-		"tenant_supervisor": {"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "tenant.read", "ticket.create", "ticket.read"},
+		"tenant_supervisor": {"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "tenant.read", "ticket.create", "ticket.read", "ticket.update"},
 		// PRODUCT.6-F: ticket.create does not imply ticket.read.
-		"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create"},
+		// PRODUCT.6-O2B1: ticket.update follows the same rationale.
+		"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create", "ticket.update"},
 	}
 
 	// A member with membership.read (supervisor) sees exactly the three fixed roles and their sets.

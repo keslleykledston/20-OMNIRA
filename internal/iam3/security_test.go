@@ -18,16 +18,20 @@ import (
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
 		"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-		"dashboard.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "tenant.manage", "tenant.read",
+		"dashboard.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "ticket.update", "tenant.manage", "tenant.read",
 	},
 	"tenant_supervisor": {
-		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "ticket.create", "ticket.read", "tenant.read",
+		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "ticket.create", "ticket.read", "ticket.update", "tenant.read",
 	},
 	// PRODUCT.6-F: ticket.create does NOT imply ticket.read — an agent may
 	// create a ticket from a conversation they are already authorized to
 	// operate, but tenant-wide ticket visibility remains a separate grant
 	// (see migration 000043's own rationale, unchanged by this one).
-	"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create"},
+	// PRODUCT.6-O2B1: ticket.update follows the exact same rationale as
+	// ticket.create (migration 000049) — mutate the lifecycle of an
+	// already-linked ticket from a conversation the actor is authorized to
+	// operate, still never implying tenant-wide ticket.read.
+	"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create", "ticket.update"},
 	"hub_admin":    {"hub.manage", "hub.read"},
 }
 
