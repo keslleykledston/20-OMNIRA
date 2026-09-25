@@ -17,9 +17,12 @@ import (
 // runtime state today, see NewCRMHandlers), every ticket CRUD route must
 // fail with the explicit "not configured" response before reaching any
 // request-shape validation — never a fake success, never a fallback to
-// mock/local state. CreateActivity is unaffected: it is the K3G
-// company/activity path, a semantically separate feature that does not use
-// h.crm.
+// mock/local state. CreateActivity (PRODUCT.7B1B) now shares the same
+// fail-closed convention: with no companyDirectoryResolver/
+// activityConversations/activityPermissions wired, it also returns the
+// same "not configured" response before reaching request-shape
+// validation — it no longer uses h.crm/h.k3gClient (removed), but it is
+// not "unaffected" by this test's premise anymore.
 func TestCRMHandlersReadRouteWildcards(t *testing.T) {
 	h := NewCRMHandlers(nil)
 	mux := http.NewServeMux()
@@ -42,7 +45,7 @@ func TestCRMHandlersReadRouteWildcards(t *testing.T) {
 		{"get ticket unavailable", "GET", base + "/ticket/T-1", ``, http.StatusServiceUnavailable, unavailable},
 		{"update ticket unavailable", "PATCH", base + "/ticket/T-1", `{"status":"resolved"}`, http.StatusServiceUnavailable, unavailable},
 		{"close ticket unavailable", "POST", base + "/ticket/T-1/close", ``, http.StatusServiceUnavailable, unavailable},
-		{"create activity (unaffected)", "POST", base + "/crm/activity", `{}`, http.StatusBadRequest, "subject, contact_id and company_id required"},
+		{"create activity unavailable (PRODUCT.7B1B: dependencies unwired)", "POST", base + "/crm/activity", `{}`, http.StatusServiceUnavailable, unavailable},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

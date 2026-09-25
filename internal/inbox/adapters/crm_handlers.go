@@ -7,12 +7,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/platform/authn"
-	"github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
 	ticketsports "github.com/omnira/omnira/internal/tickets/ports"
@@ -36,19 +36,30 @@ type CRMTicketResponse struct {
 
 // CRMHandlers — handlers para CRM
 type CRMHandlers struct {
-	dbPool    *pgxpool.Pool
-	crm       connectors.CRMConnector
-	k3gClient *connectors.K3GCRMClient
-	// companyDirectoryResolver is the tenant-scoped K3G company-directory
-	// resolver ListCompanies uses (PRODUCT.7B1A). Reuses PRODUCT.6-L's
-	// ticketsports.TicketingRuntimeResolver exactly as-is: CompanyDirectory
-	// and TicketingConnector are derived from the SAME per-tenant K3G
-	// credential, so this route gets a real, fail-closed, tenant-scoped
-	// resolver for free instead of a second one. Replaces the confirmed
-	// PRODUCT.7B P0 (a single globally-bootstrapped k3gClient shared by
-	// every tenant) for THIS route only — h.k3gClient below is still
-	// required by CreateActivity (PRODUCT.7B1B, not yet fixed).
+	dbPool *pgxpool.Pool
+	crm    connectors.CRMConnector
+	// companyDirectoryResolver is the tenant-scoped K3G runtime resolver
+	// (PRODUCT.7B1A). Reuses PRODUCT.6-L's ticketsports.TicketingRuntimeResolver
+	// exactly as-is. Used ONLY by ListCompanies today: CreateActivity does
+	// NOT use it (PRODUCT.7B1B security correction — see CreateActivity's
+	// containment comment: CompanyDirectory membership is not sufficient
+	// authorization for an external write). Replaces the confirmed
+	// PRODUCT.7B P0: a single globally-bootstrapped k3gClient shared by
+	// every tenant — fully retired, no remaining usage in this file.
 	companyDirectoryResolver ticketsports.TicketingRuntimeResolver
+	// activityConversations loads the canonical, tenant-scoped conversation
+	// facts CreateActivity needs (PRODUCT.7B1B): who it is assigned to
+	// (authorization) and its persisted crm_contact_id. CreateActivity is
+	// currently CONTAINED (never calls a provider) — see its doc comment —
+	// but authorization and the crm_contact_id precondition are still real,
+	// enforced checks, never req.ContactID (which no longer exists in the
+	// request contract).
+	activityConversations activityConversationReader
+	// activityPermissions checks conversation.manage for CreateActivity's
+	// "assignee or conversation.manage" authorization (PRODUCT.7B1B) — the
+	// same primitive CreateExternalTicket/Send already use. This route
+	// previously had NO authorization beyond "authenticated".
+	activityPermissions ticketsports.PermissionChecker
 	// externalTicketService is the real, tenant-scoped external ticket
 	// creation path (PRODUCT.6-M). Nil until server.go wires it — the
 	// canonical runtime composition root, never a handler-built service
@@ -87,19 +98,34 @@ func (h *CRMHandlers) SetCRMConnector(crm connectors.CRMConnector) {
 	h.crm = crm
 }
 
-// SetK3GCRMClient — configura o cliente K3G CRM
-func (h *CRMHandlers) SetK3GCRMClient(client *connectors.K3GCRMClient) {
-	h.k3gClient = client
-}
-
-// SetCompanyDirectoryResolver wires the tenant-scoped company-directory
-// resolver ListCompanies uses (PRODUCT.7B1A). Canonical runtime
+// SetCompanyDirectoryResolver wires the tenant-scoped K3G runtime resolver
+// ListCompanies uses (PRODUCT.7B1A). CreateActivity does NOT use this —
+// see its containment comment (PRODUCT.7B1B). Canonical runtime
 // composition (server.go/main.go) passes the SAME
 // *ticketsadapters.K3GTicketingRuntimeResolver instance already
 // constructed for ticketing (REUSE, not a second resolver/credential);
 // tests may inject a fake satisfying ticketsports.TicketingRuntimeResolver.
 func (h *CRMHandlers) SetCompanyDirectoryResolver(resolver ticketsports.TicketingRuntimeResolver) {
 	h.companyDirectoryResolver = resolver
+}
+
+// SetActivityConversationReader wires the canonical, tenant-scoped
+// conversation reader CreateActivity uses to derive crm_contact_id and
+// check assignment (PRODUCT.7B1B). Canonical runtime composition
+// (server.go/main.go) passes a *PostgresActivityConversations; tests may
+// inject a fake satisfying activityConversationReader.
+func (h *CRMHandlers) SetActivityConversationReader(reader activityConversationReader) {
+	h.activityConversations = reader
+}
+
+// SetActivityPermissionChecker wires CreateActivity's conversation.manage
+// check (PRODUCT.7B1B). Canonical runtime composition (server.go/main.go)
+// passes the SAME channeladapters.PostgresPermissionChecker instance
+// already used by ticketing/messaging (REUSE, not a new permission
+// primitive); tests may inject a fake satisfying
+// ticketsports.PermissionChecker.
+func (h *CRMHandlers) SetActivityPermissionChecker(checker ticketsports.PermissionChecker) {
+	h.activityPermissions = checker
 }
 
 // SetExternalTicketService wires the real CreateExternalTicket application
@@ -799,29 +825,76 @@ func (h *CRMHandlers) CloseTicket(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// CRMActivityRequest — payload para criar activity (atendimento)
+// activityConversation is the canonical, tenant-scoped conversation facts
+// CreateActivity needs (PRODUCT.7B1B): who it is assigned to
+// (authorization) and its persisted crm_contact_id — the ONLY trusted CRM
+// contact identity for the provider write.
+type activityConversation struct {
+	AssignedToUserID *uuid.UUID
+	CRMContactID     *uuid.UUID
+}
+
+// activityConversationReader is the seam CreateActivity uses to load
+// activityConversation. Narrow on purpose so tests can inject a fake
+// without a real Postgres conversation. *PostgresActivityConversations
+// satisfies this without any adapter.
+type activityConversationReader interface {
+	LoadForActivity(ctx context.Context, conversationID uuid.UUID) (*activityConversation, bool, error)
+}
+
+// CRMActivityRequest — payload para criar activity (atendimento).
+//
+// PRODUCT.7B1B: contact_id and company_id were REMOVED from this
+// contract. contact_id was previously trusted directly from the browser
+// with zero validation; company_id was trusted as soon as it matched
+// SOME active company in the tenant's directory — which only proves the
+// company exists for the tenant, never that it is the company associated
+// with THIS conversation/contact (confirmed P0: an untrusted external-
+// write target either way). The server now derives the only trusted
+// contact identity from the conversation's own persisted crm_contact_id;
+// no authoritative company identity exists today (see CreateActivity's
+// containment below), so the field was dropped rather than kept and
+// half-trusted. A client that still sends contact_id/company_id has them
+// silently ignored by json.Unmarshal (unknown fields) — never read, never
+// able to influence server behavior.
 type CRMActivityRequest struct {
-	Subject   string `json:"subject"`
-	CompanyID string `json:"company_id"`
-	ContactID string `json:"contact_id"`
+	Subject string `json:"subject"`
 }
 
-// CRMActivityResponse — resposta de activity
-type CRMActivityResponse struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Subject   string `json:"subject"`
-	ContactID string `json:"contact_id"`
-	CompanyID string `json:"company_id"`
-	CreatedAt string `json:"created_at"`
-}
-
-// CreateActivity — cria activity (atendimento WHATSAPP) para uma conversa
-// POST /api/v1/tenants/{tenantId}/conversations/{conversationId}/crm/activity
+// CreateActivity — TEMPORARILY CONTAINED (PRODUCT.7B1B security
+// correction).
+// POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/crm/activity
+//
+// This route previously (a) trusted req.ContactID/req.CompanyID directly
+// — contact_id with zero validation, company_id with only "exists in the
+// tenant's CompanyDirectory" — before writing to real K3G, and (b)
+// depended on a single globally-bootstrapped h.k3gClient. Both were
+// confirmed P0 untrusted-external-write-target/cross-tenant gaps.
+//
+// PRODUCT.7B1B closed the contact_id and global-client gaps, but a
+// security review found CompanyDirectory membership alone is NOT
+// sufficient authorization: it proves a company exists and is active for
+// the tenant, never that it is the company associated with this
+// conversation's CRM contact. No authoritative Contact/Conversation→
+// Company relationship exists anywhere in this codebase today, and no
+// K3G read contract can prove one from crm_contact_id alone (audited:
+// K3GCRMClient has ListCompanies/FindCustomerByPhone/CreateContact/
+// CreateActivity — no GetContact(id) or company-membership read).
+//
+// This route therefore still authenticates, authorizes (assignee or
+// conversation.manage), and requires the conversation to have a linked
+// CRM contact — then ALWAYS fails closed before any provider
+// interaction. It never calls a provider. Restored once PRODUCT.7B2
+// establishes a real Contact/Conversation→Company linkage, or K3G
+// exposes a contract able to prove it.
 func (h *CRMHandlers) CreateActivity(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := authn.FromContext(ctx); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if h.activityConversations == nil || h.activityPermissions == nil {
+		ticketingUnavailable(w)
 		return
 	}
 
@@ -830,53 +903,84 @@ func (h *CRMHandlers) CreateActivity(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing tenant or conversation ID", http.StatusBadRequest)
 		return
 	}
-
-	// Parse request
-	var req CRMActivityRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-
-	if req.Subject == "" || req.ContactID == "" || req.CompanyID == "" {
-		http.Error(w, "subject, contact_id and company_id required", http.StatusBadRequest)
-		return
-	}
-
-	// Get tenant ID
-	tid, err := uuid.Parse(tenantID)
-	if err != nil {
+	if _, err := uuid.Parse(tenantID); err != nil {
 		http.Error(w, "invalid tenant ID", http.StatusBadRequest)
 		return
 	}
-
-	// Check tenant access via RLS
-	activityID := ""
-	err = db.WithTenantSession(ctx, h.dbPool, tid, false, func(sessionCtx context.Context) error {
-		// Create activity in CRM (type is always WHATSAPP in this context)
-		activity, crErr := h.k3gClient.CreateActivity(sessionCtx, "WHATSAPP", req.Subject, req.ContactID, req.CompanyID)
-		if crErr != nil {
-			return crErr
-		}
-		activityID = activity.ID
-		return nil
-	})
+	cid, err := uuid.Parse(convID)
 	if err != nil {
-		http.Error(w, "activity creation failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.ActorID == uuid.Nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	// Return response
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(CRMActivityResponse{
-		ID:        activityID,
-		Type:      "WHATSAPP",
-		Subject:   req.Subject,
-		ContactID: req.ContactID,
-		CompanyID: req.CompanyID,
-		CreatedAt: "", // CRM retorna, mas não temos aqui
-	})
+	var req CRMActivityRequest
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<10))
+	if err != nil || json.Unmarshal(body, &req) != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.Subject = strings.TrimSpace(req.Subject)
+	if req.Subject == "" {
+		http.Error(w, "subject required", http.StatusBadRequest)
+		return
+	}
+
+	// Authorization: assignee or conversation.manage — the same primitive
+	// CreateExternalTicket/Send already use for "who may act on this
+	// conversation's CRM/messaging surface". This route previously had
+	// NO authorization beyond "authenticated". Checked, and enforced,
+	// BEFORE the containment response below — an unauthorized actor gets
+	// its own 403/409, never a response that would confirm a linkable
+	// conversation exists.
+	conv, found, err := h.activityConversations.LoadForActivity(ctx, cid)
+	if err != nil {
+		log.Printf("crm create activity: load conversation: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+	if conv.AssignedToUserID == nil {
+		http.Error(w, "conversation must be assigned before an activity can be created", http.StatusConflict)
+		return
+	}
+	if *conv.AssignedToUserID != tc.ActorID {
+		canManage, permErr := h.activityPermissions.HasPermission(ctx, tc.ActorID, ticketsapplication.PermissionConversationManage)
+		if permErr != nil {
+			log.Printf("crm create activity: check permission: %v", permErr)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !canManage {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+
+	// The ONLY trusted CRM contact identity: the conversation's own
+	// persisted crm_contact_id. A conversation with none fails closed —
+	// automatic CRM-contact creation is the separate, already-audited
+	// inbound flow (internal/inbox/application.InboundService.Ingest),
+	// never invoked from here.
+	if conv.CRMContactID == nil {
+		http.Error(w, "conversation has no linked CRM contact", http.StatusConflict)
+		return
+	}
+
+	// PRODUCT.7B1B containment: even with a linked CRM contact, there is
+	// no authoritative source today proving which company that contact
+	// belongs to. Accepting "exists in this tenant's CompanyDirectory" as
+	// sufficient authorization would still let the browser pick the
+	// actual write target — exactly the gap this slice exists to close.
+	// Fail closed, never call the provider.
+	http.Error(w, "CRM company context for this conversation is not yet authoritative", http.StatusConflict)
 }
 
 // CompanyItem — representação de uma empresa

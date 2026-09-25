@@ -1340,3 +1340,28 @@ describe('TicketPanel — PRODUCT.6-O2BF status mutation', () => {
   // body = {"target_status": "5"} only (no provider/external_ticket_id/
   // statusId/actor_user_id).
 });
+
+describe('TicketPanel — PRODUCT.7B1B CRM activity (security correction: contained)', () => {
+  // I. the backend now always refuses activity creation (no authoritative
+  // Contact→Company linkage exists yet — PRODUCT.7B1B security
+  // correction). The UI must never offer a form the server will silently
+  // reject: no company picker, no subject field, no submit button — only
+  // a truthful unavailable message, and no POST is ever attempted.
+  it('renders an honest unavailable message instead of a working create form, and never posts', async () => {
+    renderAt(<TicketPanel conversationId={CONV} crmContactId="crm-contact-xyz" />);
+    await screen.findByLabelText('Empresa');
+    await screen.findByText(/indisponível/i);
+    expect(screen.queryByLabelText('Empresa da atividade')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Descrição da atividade')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Criar Atividade' })).not.toBeInTheDocument();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  // The CRM activity section is only shown once a conversation has a
+  // known CRM contact — otherwise there is nothing CRM-related to say.
+  it('does not render the CRM activity section at all when the conversation has no crmContactId', async () => {
+    renderAt(<TicketPanel conversationId={CONV} />);
+    await screen.findByLabelText('Empresa');
+    expect(screen.queryByText(/indisponível/i)).not.toBeInTheDocument();
+  });
+});

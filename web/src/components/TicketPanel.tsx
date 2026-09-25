@@ -523,16 +523,12 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
 
   const patch = (partial: Partial<PersistedState>) => setState((prev) => ({ ...prev, ...partial }));
 
-  // R5.2: CRM Activity + the trusted, provider-backed company source
-  // (PRODUCT.6-K0/6-K2: browser-provided IDs are never trusted directly —
-  // this list is the ONLY source the create form offers, so an arbitrary
-  // free-text external ID cannot be submitted through this UI).
+  // R5.2/PRODUCT.6-K0: the trusted, provider-backed company source — the
+  // ticket-create form below is the ONLY place this list feeds a browser
+  // selection, so an arbitrary free-text external ID can never be
+  // submitted through this UI.
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [activitySubject, setActivitySubject] = useState('');
-  const [activityCompanyId, setActivityCompanyId] = useState('');
   const [loadingCompanies, setLoadingCompanies] = useState(false);
-  const [activityError, setActivityError] = useState<string | null>(null);
-  const [activityLoading, setActivityLoading] = useState(false);
 
   useEffect(() => {
     const loadCompanies = async () => {
@@ -544,7 +540,6 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
         const res = await axios.get(`${API_BASE}/tenants/${tenantId}/crm/companies`, { headers: authHeaders() });
         const items: Company[] = res.data.items || [];
         setCompanies(items);
-        if (items.length > 0) setActivityCompanyId((prev) => prev || items[0].id);
       } catch (err) {
         console.error('Erro ao carregar empresas:', err);
         // Not critical: the panels show "Nenhuma empresa disponível".
@@ -665,27 +660,6 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
   };
 
   const noCompanies = !loadingCompanies && companies.length === 0;
-
-  // R5.2: Create activity in CRM (unrelated to external ticket creation;
-  // PRODUCT.6-K0 already flagged this flow's company_id as an unfixed
-  // trust gap — left unchanged in this slice).
-  const createActivity = async () => {
-    if (!activitySubject.trim() || !activityCompanyId || !crmContactId) return;
-    setActivityLoading(true);
-    setActivityError(null);
-    try {
-      await axios.post(
-        `${API_BASE}/tenants/${tenantId}/conversations/${conversationId}/crm/activity`,
-        { subject: activitySubject, company_id: activityCompanyId, contact_id: crmContactId },
-        { headers: authHeaders() },
-      );
-      setActivitySubject('');
-    } catch (err: any) {
-      setActivityError(err.response?.data?.message || 'Erro ao criar atividade no CRM');
-    } finally {
-      setActivityLoading(false);
-    }
-  };
 
   return (
     <div className="border-b border-border-subtle px-4">
@@ -1015,49 +989,19 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
           <h3 id="crm-activity-heading" className={SECTION_TITLE}>
             Atividade CRM
           </h3>
-          {activityError && (
-            <div
-              role="alert"
-              className="mb-2 rounded-control border border-status-danger-border bg-status-danger-soft px-3 py-2 text-xs text-status-danger"
-            >
-              {activityError}
-            </div>
-          )}
-          <form
-            className="grid gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void createActivity();
-            }}
-          >
-            <select
-              className={FIELD}
-              aria-label="Empresa da atividade"
-              value={activityCompanyId}
-              onChange={(e) => setActivityCompanyId(e.target.value)}
-              disabled={activityLoading || loadingCompanies || companies.length === 0}
-            >
-              {companies.length === 0 && <option value="">Selecionar empresa</option>}
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {c.cnpj ? ` (${c.cnpj})` : ''}
-                </option>
-              ))}
-            </select>
-            {noCompanies && <p className="m-0 text-[10px] text-text-tertiary">Nenhuma empresa disponível</p>}
-            <input
-              className={FIELD}
-              value={activitySubject}
-              onChange={(e) => setActivitySubject(e.target.value)}
-              placeholder="Descrição da atividade..."
-              aria-label="Descrição da atividade"
-              disabled={activityLoading}
-            />
-            <Button type="submit" size="sm" isLoading={activityLoading} disabled={activityLoading || !activitySubject.trim() || !activityCompanyId}>
-              Criar Atividade
-            </Button>
-          </form>
+          {/*
+            PRODUCT.7B1B (security correction): activity creation is
+            TEMPORARILY CONTAINED. A security review found that knowing a
+            company exists in the tenant's CRM directory does not prove it
+            is the company associated with this conversation — no
+            authoritative link exists yet, so the create form (which
+            offered a company picker to the browser) was removed rather
+            than kept while the server silently refuses every submission.
+            Restored once PRODUCT.7B2 establishes that linkage.
+          */}
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
+            Criação de atividade indisponível até que o vínculo com a empresa do cliente seja estabelecido.
+          </div>
         </section>
       )}
     </div>

@@ -275,11 +275,6 @@ func main() {
 		})
 	}
 
-	// R5.2: Configura K3G CRM client no handler para ListCompanies
-	if crmHandler != nil && k3gClientForAPI != nil {
-		crmHandler.SetK3GCRMClient(k3gClientForAPI)
-	}
-
 	// PRODUCT.6-M: ativa o caminho real de criação de ticket externo.
 	// Reaproveita exatamente os mesmos erpConnections/erpCredentials já
 	// construídos acima para a aba de Integrações (REUSE — nenhuma
@@ -288,11 +283,26 @@ func main() {
 	// conector/credencial global é compartilhado entre tenants aqui.
 	if crmHandler != nil {
 		// PRODUCT.7B1A: ListCompanies (GET /tenants/{tenant_id}/crm/companies)
-		// now resolves companies through the SAME tenant-scoped
-		// K3GTicketingRuntimeResolver as ticket creation below — REUSE, not a
-		// second resolver/credential — replacing the removed global
-		// k3gClientForAPI dependency (the confirmed P0 cross-tenant leak).
+		// resolves through the SAME tenant-scoped K3GTicketingRuntimeResolver
+		// as ticket creation below — REUSE, not a second resolver/credential —
+		// replacing the removed global k3gClientForAPI dependency (the
+		// confirmed P0 cross-tenant leak from PRODUCT.7B). The old
+		// crmHandler.SetK3GCRMClient(k3gClientForAPI) wiring is gone: nothing
+		// in crmHandler reads a global K3G client anymore.
 		crmHandler.SetCompanyDirectoryResolver(ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials))
+		// PRODUCT.7B1B: CreateActivity's authorization ("assignee or
+		// conversation.manage") and canonical crm_contact_id lookup — reusing
+		// the SAME permissions checker already constructed above for
+		// ticketing/messaging, and a small Postgres reader scoped to this one
+		// narrow need (REUSE → EXTEND → CREATE). CreateActivity does NOT use
+		// companyDirectoryResolver: a security review found CompanyDirectory
+		// membership insufficient authorization for an external write (it
+		// proves a company exists for the tenant, never that it belongs to
+		// this conversation's CRM contact), so the route is contained to
+		// never call a K3G provider until PRODUCT.7B2 establishes a real
+		// Contact/Conversation→Company linkage.
+		crmHandler.SetActivityPermissionChecker(permissions)
+		crmHandler.SetActivityConversationReader(inboxadapters.NewPostgresActivityConversations(dbPool))
 
 		externalTicketService := ticketsapplication.NewService(
 			channeladapters.NewPostgresPermissionChecker(dbPool),
