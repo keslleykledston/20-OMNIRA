@@ -322,6 +322,85 @@ describe('TicketsPage', () => {
       expect(await screen.findByText('Nenhum chamado com esse ID externo')).toBeInTheDocument();
     });
 
+    // PRODUCT.6-O2D2 section 13: conversation navigation from a ticket row.
+    describe('Abrir conversa navigation', () => {
+      // A, B
+      it('a row with conversation_id shows Abrir conversa, linking to the frozen deep-link contract', async () => {
+        setSession();
+        mockGets({
+          '/tickets': {
+            items: [ticket({ subject: 'Linked ticket', conversation_id: 'c-123' })],
+            has_more: false,
+            count: 1,
+            limit: 20,
+          },
+        });
+        renderAt(<TicketsPage />);
+        await screen.findAllByText('Linked ticket');
+
+        const links = screen.getAllByRole('link', { name: 'Abrir conversa' });
+        expect(links.length).toBeGreaterThan(0);
+        expect(links[0]).toHaveAttribute('href', '/inbox?conversation_id=c-123');
+      });
+
+      // C
+      it('a row without a usable conversation_id renders no broken action', async () => {
+        setSession();
+        mockGets({
+          '/tickets': {
+            items: [ticket({ subject: 'No conversation', conversation_id: '' })],
+            has_more: false,
+            count: 1,
+            limit: 20,
+          },
+        });
+        renderAt(<TicketsPage />);
+        await screen.findAllByText('No conversation');
+        expect(screen.queryByRole('link', { name: 'Abrir conversa' })).not.toBeInTheDocument();
+      });
+
+      // D
+      it('external ID search result still shows a working Abrir conversa action', async () => {
+        setSession();
+        mockGets({
+          '/tickets': {
+            items: [ticket({ subject: 'Found via search', conversation_id: 'c-999', provider: 'k3g', external_ticket_id: '28182' })],
+            has_more: false,
+            count: 1,
+            limit: 20,
+          },
+        });
+        renderAt(<TicketsPage />);
+        const { fireEvent } = await import('@testing-library/react');
+        await screen.findAllByText('Found via search');
+        const input = screen.getByLabelText('ID do chamado externo');
+        fireEvent.change(input, { target: { value: '28182' } });
+        fireEvent.submit(input.closest('form')!);
+        await screen.findAllByText('Found via search');
+
+        const links = screen.getAllByRole('link', { name: 'Abrir conversa' });
+        expect(links[0]).toHaveAttribute('href', '/inbox?conversation_id=c-999');
+      });
+
+      // E
+      it('never calls a mutation endpoint when the conversation action is present', async () => {
+        setSession();
+        mockGets({
+          '/tickets': {
+            items: [ticket({ subject: 'Linked ticket', conversation_id: 'c-123' })],
+            has_more: false,
+            count: 1,
+            limit: 20,
+          },
+        });
+        renderAt(<TicketsPage />);
+        await screen.findAllByText('Linked ticket');
+        expect(vi.mocked(axios.post)).not.toHaveBeenCalled();
+        expect(vi.mocked(axios.patch)).not.toHaveBeenCalled();
+        expect(vi.mocked(axios.delete)).not.toHaveBeenCalled();
+      });
+    });
+
     // I
     it('never calls a mutation endpoint from the search flow', async () => {
       setSession();

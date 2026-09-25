@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Button,
@@ -66,6 +67,25 @@ function TicketOrigin({ ticket }: { ticket: Ticket }) {
       </StatusBadge>
       {ticket.external_ticket_id && <span className="text-text-tertiary">#{ticket.external_ticket_id}</span>}
     </span>
+  )
+}
+
+// PRODUCT.6-O2D2: navigates to the canonical, already-routed InboxWorkspace
+// via the frozen /inbox?conversation_id=<uuid> deep-link contract — never a
+// second URL pattern, never window.location (react-router Link, matching
+// existing navigation conventions elsewhere in this app). conversation_id
+// is currently non-null on every ticket row per schema, but this stays
+// defensive: a missing/blank value renders no action at all rather than a
+// broken link.
+function OpenConversationAction({ conversationId }: { conversationId: string | null | undefined }) {
+  if (!conversationId) return null
+  return (
+    <Link
+      to={`/inbox?conversation_id=${encodeURIComponent(conversationId)}`}
+      className="inline-flex items-center rounded-control px-2 py-1 text-xs font-medium text-accent-primary hover:bg-accent-primary-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary"
+    >
+      Abrir conversa
+    </Link>
   )
 }
 
@@ -226,6 +246,7 @@ export default function TicketsPage() {
                   <TableHeaderCell>Status</TableHeaderCell>
                   <TableHeaderCell>Origem</TableHeaderCell>
                   <TableHeaderCell>Atualizado</TableHeaderCell>
+                  <TableHeaderCell>Ação</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -244,6 +265,9 @@ export default function TicketsPage() {
                       <TicketOrigin ticket={t} />
                     </TableCell>
                     <TableCell className="text-text-secondary">{formatDate(t.updated_at)}</TableCell>
+                    <TableCell>
+                      <OpenConversationAction conversationId={t.conversation_id} />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -261,7 +285,10 @@ export default function TicketsPage() {
                   </StatusBadge>
                   <TicketOrigin ticket={t} />
                 </div>
-                <p className="mt-2 text-xs text-text-tertiary">{formatDate(t.updated_at)}</p>
+                <div className="mt-2 flex items-center justify-between">
+                  <p className="text-xs text-text-tertiary">{formatDate(t.updated_at)}</p>
+                  <OpenConversationAction conversationId={t.conversation_id} />
+                </div>
               </div>
             ))}
           </div>

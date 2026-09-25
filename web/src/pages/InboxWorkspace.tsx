@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import clsx from 'clsx';
@@ -8,6 +9,15 @@ import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import ConversationListPanel from '../components/inbox/ConversationListPanel';
 import ChatPane from '../components/inbox/ChatPane';
 import ContextPane from '../components/inbox/ContextPane';
+
+// PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
+// <uuid> — never /inbox/:id (that path pattern is dead, see InboxPage.tsx/
+// ConversationPage.tsx, neither routed in App.tsx). A malformed value is
+// treated exactly like an absent one: ignored client-side before ever
+// reaching the network, never forwarded as a request.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type DeepLinkState = 'idle' | 'resolving' | 'not_found';
 
 /**
  * InboxWorkspace — workspace 3-painel
@@ -21,6 +31,18 @@ export default function InboxWorkspace() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [segment, setSegment] = useState<'all' | 'unread' | 'mine'>('all');
   const [showContext, setShowContext] = useState(true);
+
+  // PRODUCT.6-O2D2 deep link: conversation_id is UNTRUSTED navigation
+  // input, never authority. It is resolved through the exact same
+  // tenant-scoped, RLS-backed read ChatPane already uses
+  // (GET /inbox/conversations/{id}) — reusing its query key so react-query
+  // dedupes the request once ChatPane mounts, rather than adding a second
+  // implementation or a new backend endpoint.
+  const [searchParams] = useSearchParams();
+  const rawDeepLinkId = searchParams.get('conversation_id');
+  const deepLinkId = rawDeepLinkId && UUID_RE.test(rawDeepLinkId) ? rawDeepLinkId : null;
+  const [deepLinkState, setDeepLinkState] = useState<DeepLinkState>('idle');
+  const deepLinkRequestIdRef = useRef(0);
 
   // Fetch conversation list
   const { data: conversationsData, isLoading: listLoading } = useQuery({
@@ -61,13 +83,56 @@ export default function InboxWorkspace() {
   // (which sets selectedConversationId to null) got immediately overridden by
   // this same effect re-selecting conversations[0], making Back a no-op on
   // tablet/mobile (confirmed by a real browser E2E run, not a hypothetical).
+  // A present deep-link id suppresses this entirely (section 5/10 of
+  // PRODUCT.6-O2D2): a deep link must never be silently replaced by
+  // "whatever happens to be first in the list", including while it is
+  // still resolving or if it ultimately fails.
   const autoSelectedRef = useRef(false);
   useEffect(() => {
-    if (!autoSelectedRef.current && !selectedConversationId && conversations.length > 0) {
+    if (!autoSelectedRef.current && !selectedConversationId && !deepLinkId && conversations.length > 0) {
       autoSelectedRef.current = true;
       setSelectedConversationId(conversations[0].id);
     }
-  }, [conversations, selectedConversationId]);
+  }, [conversations, selectedConversationId, deepLinkId]);
+
+  // PRODUCT.6-O2D2: resolve the deep-link id against the real backend
+  // BEFORE ever selecting it — never construct a fake Conversation object
+  // from the URL alone. tenantID + RLS on the backend remain the only
+  // authorization authority; an unknown id and a cross-tenant id are
+  // deliberately indistinguishable here, exactly mirroring
+  // InboxAPIHandler.GetConversation's own documented 404 contract.
+  useEffect(() => {
+    if (!deepLinkId || !tenantId) {
+      setDeepLinkState('idle');
+      return;
+    }
+    let cancelled = false;
+    const requestId = (deepLinkRequestIdRef.current += 1);
+    setDeepLinkState('resolving');
+    void (async () => {
+      try {
+        await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations/${deepLinkId}`, {
+          headers: authHeaders(),
+        });
+        if (cancelled || requestId !== deepLinkRequestIdRef.current) return; // superseded by a newer deep link or unmount
+        autoSelectedRef.current = true; // a resolved deep link counts as an explicit selection
+        setSelectedConversationId(deepLinkId);
+        setDeepLinkState('idle');
+      } catch (err) {
+        if (cancelled || requestId !== deepLinkRequestIdRef.current) return;
+        if (isUnauthorized(err)) {
+          handleUnauthorized();
+          return;
+        }
+        // 404 covers both "unknown" and "another tenant's conversation" —
+        // never distinguished, never leaked, never a constructed fallback.
+        setDeepLinkState('not_found');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deepLinkId, tenantId]);
 
   // Single mount per panel: visibility toggles via Tailwind breakpoint classes
   // instead of two parallel JSX trees. A duplicated tree (one hidden by CSS,
@@ -104,6 +169,14 @@ export default function InboxWorkspace() {
               onBack={() => setSelectedConversationId(null)}
               onToggleContext={() => setShowContext(!showContext)}
             />
+          ) : deepLinkState === 'resolving' ? (
+            <div className="flex-1 flex items-center justify-center text-text-secondary">
+              Abrindo conversa…
+            </div>
+          ) : deepLinkState === 'not_found' ? (
+            <div className="flex-1 flex items-center justify-center text-text-secondary">
+              Conversa não encontrada ou sem acesso.
+            </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-text-secondary">
               Selecione uma conversa
