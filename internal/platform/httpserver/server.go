@@ -404,6 +404,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	ticketsHandler := ticketsadapters.NewHandler(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/tickets", authnMiddleware(tenantSession(http.HandlerFunc(ticketsHandler.List))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/tickets/export.csv", authnMiddleware(tenantSession(http.HandlerFunc(ticketsHandler.ExportCSV))))
+	// PRODUCT.7A1: read-only ticket reconciliation/audit surface, gated on
+	// ticket.reconcile — GET only, no mutation route exists for this path.
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/ticket-reconciliation/create", authnMiddleware(tenantSession(http.HandlerFunc(ticketsHandler.ListCreateAttempts))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/ticket-reconciliation/status", authnMiddleware(tenantSession(http.HandlerFunc(ticketsHandler.ListStatusAttempts))))
 
 	dashboardHandler := dashboardadapters.NewHandler(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/dashboard/snapshot", authnMiddleware(tenantSession(http.HandlerFunc(dashboardHandler.GetSnapshot))))

@@ -18,10 +18,10 @@ import (
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
 		"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-		"dashboard.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "ticket.update", "tenant.manage", "tenant.read",
+		"dashboard.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.manage", "tenant.read",
 	},
 	"tenant_supervisor": {
-		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "ticket.create", "ticket.read", "ticket.update", "tenant.read",
+		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read",
 	},
 	// PRODUCT.6-F: ticket.create does NOT imply ticket.read — an agent may
 	// create a ticket from a conversation they are already authorized to
@@ -31,6 +31,9 @@ var systemRolePermissions = map[string][]string{
 	// ticket.create (migration 000049) — mutate the lifecycle of an
 	// already-linked ticket from a conversation the actor is authorized to
 	// operate, still never implying tenant-wide ticket.read.
+	// PRODUCT.7A1: ticket.reconcile (migration 000051) is never granted to
+	// tenant_agent — it is a support/admin operational-visibility
+	// capability, not an operating-agent one.
 	"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create", "ticket.update"},
 	"hub_admin":    {"hub.manage", "hub.read"},
 }

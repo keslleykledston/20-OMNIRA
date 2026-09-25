@@ -354,11 +354,14 @@ func TestListRolesReturnsFixedPermissionMatrixReadOnly(t *testing.T) {
 	want := map[string][]string{
 		"tenant_admin": {
 			"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-			"dashboard.read", "membership.manage", "membership.read", "tenant.manage", "tenant.read", "ticket.create", "ticket.read", "ticket.update",
+			"dashboard.read", "membership.manage", "membership.read", "tenant.manage", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update",
 		},
-		"tenant_supervisor": {"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "tenant.read", "ticket.create", "ticket.read", "ticket.update"},
+		"tenant_supervisor": {"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update"},
 		// PRODUCT.6-F: ticket.create does not imply ticket.read.
 		// PRODUCT.6-O2B1: ticket.update follows the same rationale.
+		// PRODUCT.7A1: ticket.reconcile (migration 000051) never granted to
+		// tenant_agent — support/admin operational visibility, not an
+		// operating-agent capability.
 		"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create", "ticket.update"},
 	}
 
