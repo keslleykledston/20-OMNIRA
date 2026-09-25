@@ -80,6 +80,9 @@ func (f *httpFakeTicketing) CreateTicket(ctx context.Context, req connectors.Cre
 	f.calls++
 	return f.result, f.err
 }
+func (f *httpFakeTicketing) UpdateTicketStatus(ctx context.Context, externalID string, target connectors.ExternalStatusTarget) (*connectors.ExternalTicket, error) {
+	return nil, errors.New("not used")
+}
 
 type httpFakeRuntimeResolver struct {
 	companies ticketsports.CompanyDirectory

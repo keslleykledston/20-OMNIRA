@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,6 +56,9 @@ func (f *refreshHTTPFakeTicketing) GetTicket(ctx context.Context, externalTicket
 func (f *refreshHTTPFakeTicketing) CreateTicket(ctx context.Context, req connectors.CreateTicketRequest) (*connectors.ExternalTicket, error) {
 	f.createCalls++
 	return nil, nil
+}
+func (f *refreshHTTPFakeTicketing) UpdateTicketStatus(ctx context.Context, externalID string, target connectors.ExternalStatusTarget) (*connectors.ExternalTicket, error) {
+	return nil, errors.New("not used")
 }
 
 type refreshTicketHarness struct {

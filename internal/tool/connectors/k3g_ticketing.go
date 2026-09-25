@@ -70,7 +70,11 @@ type k3gTicketWire struct {
 	StatusLabel string      `json:"statusLabel"`
 }
 
-type k3gCreateResponse struct {
+// k3gMutationResponse is the shared shape of every K3G mutating ticket
+// response confirmed real so far: CreateTicket (PRODUCT.6-H1, ticket
+// 28180) and UpdateTicketStatus (PRODUCT.6-O2A3, ticket 9115) both return
+// exactly {ok, ticket, source, ...} on success.
+type k3gMutationResponse struct {
 	OK     bool          `json:"ok"`
 	Ticket k3gTicketWire `json:"ticket"`
 	Source string        `json:"source"`
@@ -119,7 +123,7 @@ func (c *K3GTicketingConnector) CreateTicket(ctx context.Context, req CreateTick
 	if err != nil {
 		return nil, err
 	}
-	var resp k3gCreateResponse
+	var resp k3gMutationResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		// A 2xx response that fails to decode is exactly the ambiguous
 		// case PRODUCT.6-K1 calls out: the provider returned success but
@@ -155,6 +159,78 @@ func (c *K3GTicketingConnector) GetTicket(ctx context.Context, externalTicketID 
 		return nil, &TicketingError{Code: TicketingUnknownProviderError, Message: "malformed get response", Err: err}
 	}
 	return resp.Ticket.toExternalTicket()
+}
+
+// k3gStatusCodes is the official K3G ticket status vocabulary confirmed by
+// the K3G team (PRODUCT.6-O2A2) and exercised live for codes 1 (create,
+// ticket 28180) and 5 (status mutation, ticket 9115, PRODUCT.6-O2A3). 2/3/
+// 4/6 are documented but not yet live-mutated — they are accepted here
+// because the OFFICIAL vocabulary, not live-mutation history, is what
+// bounds which requests this adapter will ever send to the provider.
+var k3gStatusCodes = map[string]int{"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6}
+
+// k3gStatusWireValue validates target.Code against the official K3G
+// vocabulary BEFORE any network call — an empty string, "0", "7", a
+// lifecycle-intent word ("resolved"/"closed"), a zero-padded variant
+// ("05"), or any whitespace-padded variant (" 1", "1 ") are all rejected
+// here, never forwarded to the provider. Deliberately an EXACT map lookup,
+// no trimming/normalization: a code this strict-by-construction type
+// doesn't accidentally accept is safer than one that silently tolerates
+// near-misses from a caller.
+func k3gStatusWireValue(target ExternalStatusTarget) (int, error) {
+	v, ok := k3gStatusCodes[target.Code]
+	if !ok {
+		return 0, &TicketingError{Code: TicketingValidationError, Message: fmt.Sprintf("unsupported external status code %q", target.Code)}
+	}
+	return v, nil
+}
+
+// UpdateTicketStatus implements TicketingConnector.UpdateTicketStatus
+// (PRODUCT.6-O2B2) against the confirmed real K3G contract
+// (PRODUCT.6-O2A3): PUT /api/support/tickets/{id}/status, body
+// {"status": <int>}. Exactly one HTTP attempt — no retry, no pre-GET (a
+// same-target resubmission is provider-confirmed safe, but that is
+// application-level orchestration's concern, PRODUCT.6-O2B3, never this
+// adapter's).
+func (c *K3GTicketingConnector) UpdateTicketStatus(ctx context.Context, externalID string, target ExternalStatusTarget) (*ExternalTicket, error) {
+	if strings.TrimSpace(externalID) == "" {
+		return nil, &TicketingError{Code: TicketingValidationError, Message: "externalTicketID is required"}
+	}
+	statusValue, err := k3gStatusWireValue(target)
+	if err != nil {
+		return nil, err
+	}
+	// mutating=true: same PRODUCT.6-K1 reasoning as CreateTicket — K3G
+	// gives no way to tell whether a PUT that failed ambiguously (timeout,
+	// 5xx, 429) actually committed.
+	body, err := c.doOnce(ctx, http.MethodPut, "/api/support/tickets/"+externalID+"/status", map[string]int{"status": statusValue}, true)
+	if err != nil {
+		return nil, err
+	}
+	var resp k3gMutationResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "malformed status mutation response on a successful status", Err: err}
+	}
+	if !resp.OK {
+		return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "provider returned ok=false for a 2xx status mutation response"}
+	}
+	ticket, err := resp.Ticket.toExternalTicket()
+	if err != nil {
+		// 2xx with no usable ticket.id: the provider claimed success but
+		// gave no identity to record. Never silently substitute the
+		// requested externalID — the caller's O2B3 reconciliation compares
+		// the RETURNED id against durable local identity.
+		return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "successful status mutation response is missing a usable ticket id", Err: err}
+	}
+	// Success integrity (PRODUCT.6-O2B2 section 9): a syntactically valid
+	// 2xx whose returned status does not match the requested target is not
+	// a trustworthy success — never pretend the mutation applied when the
+	// provider's own echo disagrees.
+	if ticket.ExternalStatus != target.Code {
+		return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown,
+			Message: fmt.Sprintf("provider returned status %q for a mutation targeting %q", ticket.ExternalStatus, target.Code)}
+	}
+	return ticket, nil
 }
 
 // doOnce issues exactly one HTTP request and classifies the outcome into a
@@ -220,8 +296,8 @@ func (c *K3GTicketingConnector) doOnce(ctx context.Context, method, path string,
 // instead of TicketingProviderUnavailable: for CreateTicket, K3G gives no
 // guarantee that a request answered with a server error or rate-limit was
 // never processed, so these must be treated as a possible write, never as
-// safe-to-retry. 400/401/403/404 stay definitive even when mutating — they
-// are the provider explicitly rejecting the request before/without
+// safe-to-retry. 400/401/403/404/422 stay definitive even when mutating —
+// they are the provider explicitly rejecting the request before/without
 // committing a ticket, not an ambiguous server-side failure.
 func classifyK3GError(status int, body []byte, mutating bool) *TicketingError {
 	var parsed struct {
@@ -235,6 +311,16 @@ func classifyK3GError(status int, body []byte, mutating bool) *TicketingError {
 		return &TicketingError{Code: TicketingUnauthorized, Message: "credential rejected", Err: bodyErr(status, parsed.Error)}
 	case status == http.StatusBadRequest:
 		return &TicketingError{Code: TicketingValidationError, Message: "request rejected as invalid", Err: bodyErr(status, parsed.Error)}
+	case status == http.StatusUnprocessableEntity:
+		// 422 "entidade compreendida mas semanticamente inválida" (K3G
+		// OpenAPI, PRODUCT.6-O2A1) is a definitive semantic rejection, same
+		// as 400 — the provider understood the request and refused it, no
+		// ambiguity about whether a write occurred. No dedicated
+		// TicketingErrorCode exists for this distinction (PRODUCT.6-O2B2:
+		// inventing one without an observed real 422 response to justify a
+		// different caller reaction would be speculative), so it shares
+		// TicketingValidationError's category, never TicketingWriteOutcomeUnknown.
+		return &TicketingError{Code: TicketingValidationError, Message: "request rejected as semantically invalid", Err: bodyErr(status, parsed.Error)}
 	case status == http.StatusNotFound && parsed.Code == "CRM_TICKET_NOT_MIGRATED":
 		return &TicketingError{Code: TicketingNotMigrated, Message: "ticket not yet available in CRM-native mode", Err: bodyErr(status, parsed.Error)}
 	case status == http.StatusNotFound:

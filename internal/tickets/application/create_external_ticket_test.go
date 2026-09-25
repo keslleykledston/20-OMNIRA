@@ -219,6 +219,12 @@ type fakeTicketing struct {
 	getResult *connectors.ExternalTicket
 	getErr    error
 	gotGetID  string
+
+	updateCalls     int32
+	updateResult    *connectors.ExternalTicket
+	updateErr       error
+	gotUpdateID     string
+	gotUpdateTarget connectors.ExternalStatusTarget
 }
 
 // fakeRuntimeResolver implements ports.TicketingRuntimeResolver
@@ -261,6 +267,17 @@ func (f *fakeTicketing) CreateTicket(ctx context.Context, req connectors.CreateT
 	atomic.AddInt32(&f.calls, 1)
 	f.gotReq = req
 	return f.result, f.err
+}
+func (f *fakeTicketing) UpdateTicketStatus(ctx context.Context, externalID string, target connectors.ExternalStatusTarget) (*connectors.ExternalTicket, error) {
+	atomic.AddInt32(&f.updateCalls, 1)
+	f.gotUpdateID, f.gotUpdateTarget = externalID, target
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	if f.updateResult != nil {
+		return f.updateResult, nil
+	}
+	return nil, errors.New("fakeTicketing: UpdateTicketStatus not configured for this test")
 }
 
 // ---- test fixture -------------------------------------------------------

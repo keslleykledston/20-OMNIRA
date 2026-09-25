@@ -33,6 +33,15 @@ func (f *fakeTicketingConnector) CreateTicket(ctx context.Context, req CreateTic
 	return t, nil
 }
 
+func (f *fakeTicketingConnector) UpdateTicketStatus(ctx context.Context, externalID string, target ExternalStatusTarget) (*ExternalTicket, error) {
+	t, ok := f.tickets[externalID]
+	if !ok {
+		return nil, &TicketingError{Code: TicketingNotFound, Message: "no such ticket"}
+	}
+	t.ExternalStatus = target.Code
+	return t, nil
+}
+
 func TestTicketingConnectorIsIndependentOfCRMCustomerIntegration(t *testing.T) {
 	var _ TicketingConnector = (*fakeTicketingConnector)(nil)
 

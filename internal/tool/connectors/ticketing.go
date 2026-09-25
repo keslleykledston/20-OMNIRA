@@ -55,6 +55,30 @@ type TicketingConnector interface {
 	// attempt per call; application-level idempotency/reconciliation is a
 	// future slice's responsibility, not this connector's.
 	CreateTicket(ctx context.Context, req CreateTicketRequest) (*ExternalTicket, error)
+
+	// UpdateTicketStatus mutates an EXISTING external ticket's lifecycle
+	// status (PRODUCT.6-O2A3/O2B2 — confirmed real against K3G:
+	// PUT /api/support/tickets/{id}/status, {"status":<int>}). Same
+	// no-automatic-retry rule as CreateTicket, for the same reason (no
+	// provider idempotency mechanism): exactly one write attempt per call.
+	// Unlike CreateTicket, a same-target resubmission is confirmed safe by
+	// the provider (PRODUCT.6-O2A3 real evidence, ticket 9115) — but that
+	// fact belongs to application-level orchestration (O2B3), never a
+	// reason for this method to add its own pre-GET or retry logic.
+	UpdateTicketStatus(ctx context.Context, externalID string, target ExternalStatusTarget) (*ExternalTicket, error)
+}
+
+// ExternalStatusTarget is the provider-neutral status mutation command
+// (PRODUCT.6-O2A3 section 5, PRODUCT.6-O2B2). Code is an OPAQUE string to
+// OMNIRA/HTTP/frontend — never a K3G field name ("status"/"statusId") and
+// never an OMNIRA lifecycle-intent enum (start/pend/resolve/close): K3G's
+// own OpenAPI still ships this route as untyped ("pendente tipagem Zod",
+// PRODUCT.6-O2A1), so freezing an intent vocabulary now would repeat the
+// exact mistake IXCConnector already made. Each provider's own adapter
+// owns validating/mapping Code into its real wire request — for K3G, the
+// official vocabulary "1".."6" (PRODUCT.6-O2A2/O2A3).
+type ExternalStatusTarget struct {
+	Code string
 }
 
 // CreateTicketRequest is the provider-neutral V1 create command — OMNIRA
@@ -121,20 +145,25 @@ const (
 	// this connector does not recognize. Never silently treated as any of
 	// the categories above.
 	TicketingUnknownProviderError TicketingErrorCode = "UNKNOWN_PROVIDER_ERROR"
-	// TicketingWriteOutcomeUnknown (PRODUCT.6-K1): a mutating call (today,
-	// only CreateTicket) may or may not have been committed by the
-	// provider — a transport failure, a 5xx/429 response, or a malformed/
-	// incomplete 2xx (no usable ticket id) all leave OMNIRA unable to prove
+	// TicketingWriteOutcomeUnknown (PRODUCT.6-K1, generalized to status
+	// mutation in PRODUCT.6-O2B2): a mutating call (CreateTicket or
+	// UpdateTicketStatus) may or may not have been committed by the
+	// provider — a transport failure, a 5xx/429 response, a malformed/
+	// incomplete 2xx (no usable ticket id), or — for UpdateTicketStatus
+	// specifically — a syntactically valid 2xx whose returned status does
+	// not match the requested target, all leave OMNIRA unable to prove
 	// success or failure. K3G offers no Idempotency-Key/externalReference/
 	// correlationId (PRODUCT.6-H1/6-I), so none of these outcomes may ever
 	// be collapsed into TicketingProviderUnavailable (which implies "safe
 	// to consider not-written") nor trigger an automatic retry anywhere in
 	// this connector or its callers. A caller that sees this code MUST
 	// treat the write as possibly-succeeded and route to durable
-	// reconciliation, never a second CreateTicket call for the same
-	// intent. This code is create-path specific: GetTicket is a read and
-	// keeps using TicketingProviderUnavailable for its own transport/5xx
-	// failures, since a failed read has no write-duplication risk.
+	// reconciliation, never a second CreateTicket/UpdateTicketStatus call
+	// for the same intent (PRODUCT.6-O2A3: at most one safe reconciliation
+	// GetTicket read is allowed at the APPLICATION layer, never inside this
+	// connector). GetTicket itself is a read and keeps using
+	// TicketingProviderUnavailable for its own transport/5xx failures,
+	// since a failed read has no write-duplication risk.
 	TicketingWriteOutcomeUnknown TicketingErrorCode = "WRITE_OUTCOME_UNKNOWN"
 )
 
