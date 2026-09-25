@@ -38,6 +38,10 @@ export interface TicketPage {
 export interface TicketFilters {
   status?: Ticket['status'];
   priority?: Ticket['priority'];
+  // PRODUCT.6-O2D: exact match against the local projection only — an
+  // opaque provider identifier, never a partial/free-text search, never a
+  // live provider lookup.
+  externalTicketId?: string;
 }
 
 const ticketsBase = () => `${API_BASE}/tenants/${getTenantId()}/tickets`;
@@ -74,6 +78,7 @@ export const ticketsAPI = {
           ...(limit ? { limit } : {}),
           ...(filters?.status ? { status: filters.status } : {}),
           ...(filters?.priority ? { priority: filters.priority } : {}),
+          ...(filters?.externalTicketId ? { external_ticket_id: filters.externalTicketId } : {}),
         },
       }),
     ),
@@ -87,6 +92,7 @@ export const ticketsAPI = {
         params: {
           ...(filters?.status ? { status: filters.status } : {}),
           ...(filters?.priority ? { priority: filters.priority } : {}),
+          ...(filters?.externalTicketId ? { external_ticket_id: filters.externalTicketId } : {}),
         },
       });
       return { blob: res.data, filename: filenameFromContentDisposition(res.headers['content-disposition']) };

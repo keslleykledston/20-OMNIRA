@@ -229,4 +229,113 @@ describe('TicketsPage', () => {
       expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
     });
   });
+
+  // PRODUCT.6-O2D: exact external_ticket_id search against the local
+  // projection only — no provider call, no free-text search.
+  describe('external ticket ID search', () => {
+    // A
+    it('renders a labeled search input for external ticket ID', async () => {
+      setSession();
+      mockGets({ '/tickets': { items: [ticket()], has_more: false, count: 1, limit: 20 } });
+      renderAt(<TicketsPage />);
+      await screen.findAllByText('Preciso de ajuda com meu pedido');
+      expect(screen.getByLabelText('ID do chamado externo')).toBeInTheDocument();
+    });
+
+    // B
+    it('submitting a search sends external_ticket_id to the canonical list endpoint', async () => {
+      setSession();
+      mockGets({
+        '/tickets': {
+          items: [ticket({ subject: 'External one', provider: 'k3g', external_ticket_id: '28182' })],
+          has_more: false,
+          count: 1,
+          limit: 20,
+        },
+      });
+      renderAt(<TicketsPage />);
+      await screen.findAllByText('External one');
+
+      const { fireEvent } = await import('@testing-library/react');
+      const input = screen.getByLabelText('ID do chamado externo');
+      fireEvent.change(input, { target: { value: '28182' } });
+      fireEvent.submit(input.closest('form')!);
+
+      await screen.findAllByText('External one');
+      const call = [...vi.mocked(axios.get).mock.calls].reverse().find(([url]) => (url as string).endsWith('/tickets'));
+      expect(call?.[1]).toMatchObject({ params: expect.objectContaining({ external_ticket_id: '28182' }) });
+    });
+
+    // C
+    it('clearing the search restores the unfiltered list (no external_ticket_id param)', async () => {
+      setSession();
+      mockGets({ '/tickets': { items: [ticket()], has_more: false, count: 1, limit: 20 } });
+      renderAt(<TicketsPage />);
+      await screen.findAllByText('Preciso de ajuda com meu pedido');
+
+      const { fireEvent } = await import('@testing-library/react');
+      const input = screen.getByLabelText('ID do chamado externo');
+      fireEvent.change(input, { target: { value: '28182' } });
+      fireEvent.submit(input.closest('form')!);
+      await vi.waitFor(() => {
+        const call = [...vi.mocked(axios.get).mock.calls].reverse().find(([url]) => (url as string).endsWith('/tickets'));
+        expect(call?.[1]).toMatchObject({ params: expect.objectContaining({ external_ticket_id: '28182' }) });
+      });
+
+      fireEvent.click(screen.getByLabelText('Limpar pesquisa'));
+      await vi.waitFor(() => {
+        const call = [...vi.mocked(axios.get).mock.calls].reverse().find(([url]) => (url as string).endsWith('/tickets'));
+        expect(call?.[1]?.params).not.toHaveProperty('external_ticket_id');
+      });
+    });
+
+    // D
+    it('renders the matching ticket for a found external ID', async () => {
+      setSession();
+      mockGets({
+        '/tickets': {
+          items: [ticket({ subject: 'Found ticket', provider: 'k3g', external_ticket_id: '28182' })],
+          has_more: false,
+          count: 1,
+          limit: 20,
+        },
+      });
+      renderAt(<TicketsPage />);
+      const { fireEvent } = await import('@testing-library/react');
+      await screen.findAllByText('Found ticket');
+      const input = screen.getByLabelText('ID do chamado externo');
+      fireEvent.change(input, { target: { value: '28182' } });
+      fireEvent.submit(input.closest('form')!);
+      expect((await screen.findAllByText('Found ticket')).length).toBeGreaterThan(0);
+    });
+
+    // E
+    it('shows a search-specific empty state when no ticket matches the external ID', async () => {
+      setSession();
+      mockGets({ '/tickets': { items: [], has_more: false, count: 0, limit: 20 } });
+      renderAt(<TicketsPage />);
+      const { fireEvent } = await import('@testing-library/react');
+      await screen.findByText('Nenhum ticket encontrado');
+      const input = screen.getByLabelText('ID do chamado externo');
+      fireEvent.change(input, { target: { value: 'does-not-exist' } });
+      fireEvent.submit(input.closest('form')!);
+      expect(await screen.findByText('Nenhum chamado com esse ID externo')).toBeInTheDocument();
+    });
+
+    // I
+    it('never calls a mutation endpoint from the search flow', async () => {
+      setSession();
+      mockGets({ '/tickets': { items: [ticket()], has_more: false, count: 1, limit: 20 } });
+      renderAt(<TicketsPage />);
+      const { fireEvent } = await import('@testing-library/react');
+      await screen.findAllByText('Preciso de ajuda com meu pedido');
+      const input = screen.getByLabelText('ID do chamado externo');
+      fireEvent.change(input, { target: { value: '28182' } });
+      fireEvent.submit(input.closest('form')!);
+      await vi.waitFor(() => {});
+      expect(vi.mocked(axios.post)).not.toHaveBeenCalled();
+      expect(vi.mocked(axios.patch)).not.toHaveBeenCalled();
+      expect(vi.mocked(axios.delete)).not.toHaveBeenCalled();
+    });
+  });
 });

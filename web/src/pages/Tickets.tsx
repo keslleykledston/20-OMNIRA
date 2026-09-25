@@ -8,6 +8,7 @@ import {
   Icon,
   PageHeader,
   Pagination,
+  SearchField,
   Skeleton,
   StatusBadge,
   Table,
@@ -73,6 +74,12 @@ export default function TicketsPage() {
   const access = useAccess()
   const [filters, setFilters] = useState<TicketFilters>({})
   const [exportError, setExportError] = useState<string | null>(null)
+  // PRODUCT.6-O2D: local, uncommitted search text — kept separate from
+  // filters.externalTicketId (the applied filter that actually drives the
+  // query) so typing never fires a request per keystroke. Same local-state
+  // convention the page already uses for status/priority; no URL/global
+  // state introduced.
+  const [externalIdInput, setExternalIdInput] = useState('')
 
   // The API paginates by cursor, so going back is not "page - 1": we keep the
   // cursor that opened each page and pop it to return (same pattern as
@@ -81,7 +88,7 @@ export default function TicketsPage() {
   const cursor = cursorStack[cursorStack.length - 1]
 
   const tickets = useQuery({
-    queryKey: ['tickets', tenantId, cursor ?? 'first', filters.status ?? '', filters.priority ?? ''],
+    queryKey: ['tickets', tenantId, cursor ?? 'first', filters.status ?? '', filters.priority ?? '', filters.externalTicketId ?? ''],
     queryFn: () => ticketsAPI.list(cursor, PAGE_SIZE, filters),
     retry: false,
   })
@@ -132,6 +139,24 @@ export default function TicketsPage() {
       )}
 
       <FilterBar>
+        <form
+          className="w-full sm:w-64"
+          onSubmit={(e) => {
+            e.preventDefault()
+            updateFilter({ externalTicketId: externalIdInput.trim() || undefined })
+          }}
+        >
+          <SearchField
+            aria-label="ID do chamado externo"
+            placeholder="ID do chamado externo"
+            value={externalIdInput}
+            onChange={(e) => setExternalIdInput(e.target.value)}
+            onClear={() => {
+              setExternalIdInput('')
+              updateFilter({ externalTicketId: undefined })
+            }}
+          />
+        </form>
         <select
           aria-label="Filtrar por status"
           value={filters.status ?? ''}
@@ -168,11 +193,19 @@ export default function TicketsPage() {
       {!tickets.isLoading && !tickets.isError && items.length === 0 && (
         <EmptyState
           icon={<Icon name="tickets" />}
-          title={cursorStack.length > 0 ? 'Nada nesta página' : 'Nenhum ticket encontrado'}
+          title={
+            cursorStack.length > 0
+              ? 'Nada nesta página'
+              : filters.externalTicketId
+                ? 'Nenhum chamado com esse ID externo'
+                : 'Nenhum ticket encontrado'
+          }
           description={
             cursorStack.length > 0
               ? 'Volte para a página anterior.'
-              : 'Tickets aparecem aqui conforme surgem a partir das conversas do Inbox.'
+              : filters.externalTicketId
+                ? `Nenhum ticket local está vinculado ao ID externo "${filters.externalTicketId}".`
+                : 'Tickets aparecem aqui conforme surgem a partir das conversas do Inbox.'
           }
           action={
             cursorStack.length > 0

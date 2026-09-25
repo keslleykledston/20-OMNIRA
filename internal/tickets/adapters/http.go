@@ -81,22 +81,29 @@ const ticketColumns = `id, conversation_id, status, priority, subject, assigned_
 
 // parseTicketFilters validates status/priority against the canonical Ticket
 // enums, shared by List and ExportCSV so both apply the exact same
-// semantics — never a second, drifted definition.
-func parseTicketFilters(r *http.Request) (status, priority string, err error) {
+// semantics — never a second, drifted definition. external_ticket_id
+// (PRODUCT.6-O2D) is an opaque provider identifier, like target_status in
+// the status-mutation contract — no enum, no normalization, exact match
+// only against the local projection (never a provider lookup).
+func parseTicketFilters(r *http.Request) (status, priority, externalTicketID string, err error) {
 	status = r.URL.Query().Get("status")
 	if status != "" && !validStatus[status] {
-		return "", "", errors.New("invalid status")
+		return "", "", "", errors.New("invalid status")
 	}
 	priority = r.URL.Query().Get("priority")
 	if priority != "" && !validPriority[priority] {
-		return "", "", errors.New("invalid priority")
+		return "", "", "", errors.New("invalid priority")
 	}
-	return status, priority, nil
+	externalTicketID = r.URL.Query().Get("external_ticket_id")
+	return status, priority, externalTicketID, nil
 }
 
-// ticketFilterWhere builds the shared tenant+status+priority WHERE clause;
-// callers append their own cursor/limit predicates and args afterwards.
-func ticketFilterWhere(tenantID uuid.UUID, status, priority string) (string, []any) {
+// ticketFilterWhere builds the shared tenant+status+priority+external_ticket_id
+// WHERE clause; callers append their own cursor/limit predicates and args
+// afterwards. An external_ticket_id predicate is an ordinary SQL equality —
+// it never matches a NULL external_ticket_id row (legacy/local-only
+// tickets), by plain SQL NULL-comparison semantics, with no extra code.
+func ticketFilterWhere(tenantID uuid.UUID, status, priority, externalTicketID string) (string, []any) {
 	where := `WHERE tenant_id = $1`
 	args := []any{tenantID}
 	if status != "" {
@@ -106,6 +113,10 @@ func ticketFilterWhere(tenantID uuid.UUID, status, priority string) (string, []a
 	if priority != "" {
 		args = append(args, priority)
 		where += ` AND priority = $` + strconv.Itoa(len(args))
+	}
+	if externalTicketID != "" {
+		args = append(args, externalTicketID)
+		where += ` AND external_ticket_id = $` + strconv.Itoa(len(args))
 	}
 	return where, args
 }
@@ -151,13 +162,13 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, priority, filterErr := parseTicketFilters(r)
+	status, priority, externalTicketID, filterErr := parseTicketFilters(r)
 	if filterErr != nil {
 		http.Error(w, filterErr.Error(), http.StatusBadRequest)
 		return
 	}
 
-	where, args := ticketFilterWhere(tc.TenantID, status, priority)
+	where, args := ticketFilterWhere(tc.TenantID, status, priority, externalTicketID)
 	if cursor != nil {
 		cursorID, parseErr := uuid.Parse(cursor.ID)
 		if parseErr != nil {
@@ -270,13 +281,13 @@ func (h *Handler) ExportCSV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, priority, filterErr := parseTicketFilters(r)
+	status, priority, externalTicketID, filterErr := parseTicketFilters(r)
 	if filterErr != nil {
 		http.Error(w, filterErr.Error(), http.StatusBadRequest)
 		return
 	}
 
-	where, args := ticketFilterWhere(tc.TenantID, status, priority)
+	where, args := ticketFilterWhere(tc.TenantID, status, priority, externalTicketID)
 	args = append(args, exportMaxRows+1)
 	query := `SELECT ` + ticketColumns + ` FROM tickets ` + where + ` ORDER BY updated_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args))
 

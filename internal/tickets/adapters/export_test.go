@@ -250,6 +250,30 @@ func TestExportCSVPriorityFilter(t *testing.T) {
 	}
 }
 
+// PRODUCT.6-O2D section 7: the shared filter helper means the CSV export
+// naturally honors external_ticket_id too — no separate implementation.
+func TestExportCSVExternalIDFilter(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "exportextid")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	seedTicketWithProjection(t, seed, tenantID, "Target ticket", "open", "medium", now, ticketProjection{
+		Provider: "k3g", ExternalTicketID: "28182", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+	seedTicketWithProjection(t, seed, tenantID, "Other ticket", "open", "medium", now.Add(time.Second), ticketProjection{
+		Provider: "k3g", ExternalTicketID: "99999", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets/export.csv?external_ticket_id=28182", h.ExportCSV)
+	rows := parseCSV(t, rec)
+	if len(rows) != 2 || rows[1][2] != "Target ticket" {
+		t.Fatalf("external_ticket_id=28182 export should return exactly the matching ticket, got %v", rows)
+	}
+}
+
 func TestExportCSVInvalidStatusIsRejected(t *testing.T) {
 	seed, app := seedPool(t), appPool(t)
 	tenantID := seedTenant(t, seed, "exportbadstatus")

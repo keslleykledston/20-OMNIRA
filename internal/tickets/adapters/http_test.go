@@ -374,6 +374,149 @@ func TestListTicketsPriorityFilter(t *testing.T) {
 	}
 }
 
+// PRODUCT.6-O2D section 12.A/B/C/E: exact external_ticket_id search against
+// the local projection only — no provider call, no free-text/partial match.
+
+// A: no filter → existing (unfiltered) behavior unchanged.
+func TestListTicketsNoExternalIDFilterReturnsUnfilteredResults(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "extidnofilter")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	seedTicket(t, seed, tenantID, "Legacy one", "open", "medium", now)
+	seedTicketWithProjection(t, seed, tenantID, "Projected one", "open", "medium", now.Add(time.Second), ticketProjection{
+		Provider: "k3g", ExternalTicketID: "28182", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 2 {
+		t.Fatalf("no external_ticket_id filter should list both tickets unchanged, got %d: %v", len(p.Items), p.Items)
+	}
+}
+
+// B: exact external_ticket_id match returns exactly that ticket.
+func TestListTicketsExternalIDFilterExactMatch(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "extidmatch")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	seedTicketWithProjection(t, seed, tenantID, "Target ticket", "open", "medium", now, ticketProjection{
+		Provider: "k3g", ExternalTicketID: "28182", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+	seedTicketWithProjection(t, seed, tenantID, "Other ticket", "open", "medium", now.Add(time.Second), ticketProjection{
+		Provider: "k3g", ExternalTicketID: "99999", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets?external_ticket_id=28182", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 1 || p.Items[0]["subject"] != "Target ticket" {
+		t.Fatalf("external_ticket_id=28182 should return exactly the matching ticket, got %v", p.Items)
+	}
+	if p.Items[0]["external_ticket_id"] != "28182" {
+		t.Fatalf("returned row external_ticket_id = %v, want 28182", p.Items[0]["external_ticket_id"])
+	}
+}
+
+// C: unknown external_ticket_id → 200 with an empty collection, never an error.
+func TestListTicketsExternalIDFilterUnknownReturnsEmpty(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "extidunknown")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	seedTicketWithProjection(t, seed, tenantID, "Some ticket", "open", "medium", time.Now().UTC(), ticketProjection{
+		Provider: "k3g", ExternalTicketID: "28182", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: time.Now().UTC(),
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets?external_ticket_id=does-not-exist", h.List)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unknown external_ticket_id: HTTP %d, want 200", rec.Code)
+	}
+	p := decodePage(t, rec)
+	if len(p.Items) != 0 {
+		t.Fatalf("unknown external_ticket_id should return an empty collection, got %v", p.Items)
+	}
+}
+
+// D: tenant isolation — tenant A must never find tenant B's external ID,
+// even though the value is a plain string with no cross-tenant uniqueness
+// constraint (tickets_tenant_provider_external_id_uq is scoped by tenant).
+func TestListTicketsExternalIDFilterDoesNotCrossTenant(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantA := seedTenant(t, seed, "extidisoA")
+	tenantB := seedTenant(t, seed, "extidisoB")
+	userA := seedMember(t, seed, tenantA, "tenant_admin", "active")
+	now := time.Now().UTC()
+	seedTicketWithProjection(t, seed, tenantB, "Tenant B ticket", "open", "medium", now, ticketProjection{
+		Provider: "k3g", ExternalTicketID: "SHARED-ID", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantA, userA, "/api/v1/tenants/"+tenantA.String()+"/tickets?external_ticket_id=SHARED-ID", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 0 {
+		t.Fatalf("tenant A must never find tenant B's external_ticket_id, got %v", p.Items)
+	}
+	if strings.Contains(rec.Body.String(), "Tenant B ticket") {
+		t.Fatalf("tenant B's ticket subject must never appear in tenant A's response: %s", rec.Body.String())
+	}
+}
+
+// E: a legacy ticket with a NULL external_ticket_id must never falsely
+// match a non-empty filter value — plain SQL equality already guarantees
+// this (NULL = 'anything' is never true), proven here end to end.
+func TestListTicketsExternalIDFilterNeverMatchesNullRows(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "extidnull")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	seedTicket(t, seed, tenantID, "Legacy null-projection ticket", "open", "medium", time.Now().UTC())
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets?external_ticket_id=28182", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 0 {
+		t.Fatalf("a NULL external_ticket_id row must never match a filter value, got %v", p.Items)
+	}
+}
+
+// F: existing cursor pagination remains valid when combined with the new filter.
+func TestListTicketsExternalIDFilterPreservesPagination(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "extidpage")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	// Two DIFFERENT tickets sharing the SAME external_ticket_id would violate
+	// the per-tenant unique index, so pagination is proven against the
+	// ordinary (status) filter combined with a present external_ticket_id on
+	// every row — confirming the filter composes with cursor logic rather
+	// than bypassing it.
+	seedTicketWithProjection(t, seed, tenantID, "First", "open", "medium", now, ticketProjection{
+		Provider: "k3g", ExternalTicketID: "111", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+	seedTicketWithProjection(t, seed, tenantID, "Second", "open", "medium", now.Add(time.Second), ticketProjection{
+		Provider: "k3g", ExternalTicketID: "222", ExternalStatus: "1", ExternalStatusLabel: "Novo",
+		SyncStatus: "synced", LastSyncedAt: now,
+	})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets?external_ticket_id=222", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 1 || p.Items[0]["subject"] != "Second" {
+		t.Fatalf("expected exactly the matching row, got %v", p.Items)
+	}
+	if p.HasMore {
+		t.Fatalf("a single-match filtered page should not report has_more")
+	}
+}
+
 func TestListTicketsInvalidStatusIsRejected(t *testing.T) {
 	seed, app := seedPool(t), appPool(t)
 	tenantID := seedTenant(t, seed, "badstatus")
