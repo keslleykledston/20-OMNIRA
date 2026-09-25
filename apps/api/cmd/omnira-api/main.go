@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -153,9 +152,6 @@ func main() {
 	if !cfg.WahaEnabled {
 		wahaReason = "WAHA está desabilitado na configuração do servidor."
 	}
-	// Compartilhado entre os wirings WAHA e Meta: o cliente CRM é resolvido no
-	// primeiro bloco que executa e reaproveitado pelo outro.
-	var k3gClientForAPI *toolconnectors.K3GCRMClient
 
 	if cfg.WahaEnabled {
 		cipher, cipherErr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
@@ -179,40 +175,6 @@ func main() {
 		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
-
-		// R5: Wiring de CRM (K3G) no webhook inbound. Quando mensagem chega,
-		// procura contato no CRM; se não existe, cria automaticamente.
-		if k3gConnection, k3gErr := erpConnections.FindByTenant(context.Background(), uuid.Nil); k3gErr == nil && k3gConnection != nil {
-			for _, conn := range k3gConnection {
-				if conn.Provider == "k3g_crm" && conn.Status == "active" {
-					k3gCred, credErr := erpCredentials.Resolve(context.Background(), conn.SecretRef)
-					if credErr == nil && k3gCred.Fields != nil {
-						k3gClient, clientErr := toolconnectors.NewK3GCRMClient(toolconnectors.K3GCRMConfig{
-							BaseURL: k3gCred.Fields["base_url"],
-							Token:   k3gCred.Fields["token"],
-						})
-						if clientErr == nil && k3gClient != nil {
-							companies, listErr := k3gClient.ListCompanies(context.Background())
-							if listErr == nil && len(companies) > 0 {
-								var acmeCompanyID string
-								for _, co := range companies {
-									if strings.Contains(strings.ToUpper(co.Name), "ACME") {
-										acmeCompanyID = co.ID
-										break
-									}
-								}
-								if acmeCompanyID != "" {
-									crmConnector := toolconnectors.NewK3GCRMConnector(k3gClient)
-									inboundService.WithCRM(crmConnector, acmeCompanyID)
-									k3gClientForAPI = k3gClient
-								}
-							}
-						}
-					}
-					break
-				}
-			}
-		}
 
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).
@@ -241,32 +203,6 @@ func main() {
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
 
-		// R5: mesmo wiring de CRM para Meta webhook (reutiliza k3gClientForAPI se já foi configurado)
-		if k3gClientForAPI != nil {
-			// Use o cliente já configurado
-			if k3gConnection, k3gErr := erpConnections.FindByTenant(context.Background(), uuid.Nil); k3gErr == nil && k3gConnection != nil {
-				for _, conn := range k3gConnection {
-					if conn.Provider == "k3g_crm" && conn.Status == "active" {
-						companies, listErr := k3gClientForAPI.ListCompanies(context.Background())
-						if listErr == nil && len(companies) > 0 {
-							var acmeCompanyID string
-							for _, co := range companies {
-								if strings.Contains(strings.ToUpper(co.Name), "ACME") {
-									acmeCompanyID = co.ID
-									break
-								}
-							}
-							if acmeCompanyID != "" {
-								crmConnector := toolconnectors.NewK3GCRMConnector(k3gClientForAPI)
-								inboundService.WithCRM(crmConnector, acmeCompanyID)
-							}
-						}
-						break
-					}
-				}
-			}
-		}
-
 		srv.RegisterMetaWebhook(metachannel.Handler{
 			VerifyToken: cfg.MetaVerifyToken,
 			AppSecret:   cfg.MetaAppSecret,
@@ -284,11 +220,8 @@ func main() {
 	if crmHandler != nil {
 		// PRODUCT.7B1A: ListCompanies (GET /tenants/{tenant_id}/crm/companies)
 		// resolves through the SAME tenant-scoped K3GTicketingRuntimeResolver
-		// as ticket creation below — REUSE, not a second resolver/credential —
-		// replacing the removed global k3gClientForAPI dependency (the
-		// confirmed P0 cross-tenant leak from PRODUCT.7B). The old
-		// crmHandler.SetK3GCRMClient(k3gClientForAPI) wiring is gone: nothing
-		// in crmHandler reads a global K3G client anymore.
+		// as ticket creation below — REUSE, not a second resolver/credential.
+		// Nothing in crmHandler reads a global K3G client.
 		crmHandler.SetCompanyDirectoryResolver(ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials))
 		// PRODUCT.7B1B: CreateActivity's authorization ("assignee or
 		// conversation.manage") and canonical crm_contact_id lookup — reusing
