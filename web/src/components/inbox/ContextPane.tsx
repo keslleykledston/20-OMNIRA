@@ -107,7 +107,11 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
 
   return (
     <div className="flex flex-col h-full bg-surface-muted overflow-y-auto">
-      {/* Contact Card */}
+      {/* Contact Card. PRODUCT.7B1C: the "Ver perfil 360°" link that used
+          to sit here was removed — it pointed crm_contact_id (a K3G
+          identity) at /contacts/:id (an OMNIRA-internal contact id), two
+          different identity domains, and the app uses BrowserRouter so
+          its #/contacts/... hash fragment never resolved to anything. */}
       <div className="p-4 border-b border-border-subtle">
         <h4 className="text-xs font-semibold text-text-tertiary mb-3 uppercase">Contato</h4>
         <div className="flex gap-3 items-start">
@@ -121,14 +125,6 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
             <p className="text-sm text-text-secondary break-words">
               {conversation?.contact_phone}
             </p>
-            {conversation?.crm_contact_id && (
-              <a
-                href={`#/contacts/${conversation.crm_contact_id}`}
-                className="text-xs text-accent-primary hover:underline mt-1 block"
-              >
-                Ver perfil 360°
-              </a>
-            )}
           </div>
         </div>
       </div>
@@ -167,25 +163,13 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
         </div>
       )}
 
-      {/* Participants */}
-      {conversation?.participants && conversation.participants.length > 0 && (
-        <div className="p-4 border-b border-border-subtle">
-          <h4 className="text-xs font-semibold text-text-tertiary mb-3 uppercase">Participantes</h4>
-          <div className="space-y-2">
-            {conversation.participants.map((p) => (
-              <div key={p.id} className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded-full bg-secondary text-xs font-bold text-secondary-foreground flex items-center justify-center">
-                  {p.user_id?.[0]?.toUpperCase() || '?'}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-text-primary truncate">{p.user_id}</p>
-                  <p className="text-[10px] text-text-tertiary">{p.role}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* PRODUCT.7B1C: a "Participantes" section used to render here from
+          conversation.participants, but the canonical Inbox conversation
+          read (internal/inbox/adapters/http.go GetConversation/
+          ListConversations) never selects or joins that field — it was
+          always undefined here, so the section could never actually
+          render. Removed rather than left as unreachable dead code.
+          External/group participant modeling is future scope. */}
 
       {/* Chamado + atividade CRM */}
       <TicketPanel conversationId={conversationId} crmContactId={conversation?.crm_contact_id} />
