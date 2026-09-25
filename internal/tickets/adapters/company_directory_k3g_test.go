@@ -25,7 +25,7 @@ func (f *fakeK3GCompanyLister) ListCompanies(ctx context.Context) ([]connectors.
 
 func TestK3GCompanyDirectoryMapsFields(t *testing.T) {
 	d := NewK3GCompanyDirectory(&fakeK3GCompanyLister{companies: []connectors.CRMCompany{
-		{ID: "d38e7970-635d-490b-a119-749ee6f1fe23", Name: "ACME_TESTE", IsActive: true},
+		{ID: "d38e7970-635d-490b-a119-749ee6f1fe23", Name: "ACME_TESTE", CNPJ: "79.191.760/0001-83", IsActive: true},
 		{ID: "inactive-co", Name: "Inactive Co", IsActive: false},
 	}})
 	got, err := d.ListCompanies(context.Background())
@@ -34,6 +34,11 @@ func TestK3GCompanyDirectoryMapsFields(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].ExternalID != "d38e7970-635d-490b-a119-749ee6f1fe23" || !got[0].Active || got[1].Active {
 		t.Fatalf("unexpected mapping: %+v", got)
+	}
+	// PRODUCT.7B1A: Name/CNPJ must also be carried through — this is the
+	// same directory GET /crm/companies now reuses for its display fields.
+	if got[0].Name != "ACME_TESTE" || got[0].CNPJ != "79.191.760/0001-83" {
+		t.Fatalf("Name/CNPJ not mapped: %+v", got[0])
 	}
 }
 

@@ -31,7 +31,7 @@ func (d *K3GCompanyDirectory) ListCompanies(ctx context.Context) ([]ports.Compan
 	}
 	out := make([]ports.Company, 0, len(companies))
 	for _, c := range companies {
-		out = append(out, ports.Company{ExternalID: c.ID, Active: c.IsActive})
+		out = append(out, ports.Company{ExternalID: c.ID, Name: c.Name, CNPJ: c.CNPJ, Active: c.IsActive})
 	}
 	return out, nil
 }

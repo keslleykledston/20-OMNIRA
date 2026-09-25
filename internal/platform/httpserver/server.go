@@ -453,8 +453,14 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}/close", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CloseTicket))))
 	// R5.2: Create activity (atendimento WHATSAPP) in CRM
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/crm/activity", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateActivity))))
-	// R5.2: List companies from K3G CRM (without tenant_id in path, just authn)
-	s.mux.Handle("GET /api/v1/integrations/companies", authnMiddleware(http.HandlerFunc(crmHandler.ListCompanies)))
+	// PRODUCT.7B1A: tenant-scoped company directory. Was previously
+	// GET /api/v1/integrations/companies with authnMiddleware only (no
+	// tenantSession) — a confirmed P0 cross-tenant leak, since every
+	// tenant's request resolved through one globally-bootstrapped K3G
+	// client. Moved under /tenants/{tenant_id}/ so tenantSession
+	// authorizes the path tenant against the caller's membership before
+	// the handler ever resolves a K3G credential.
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/crm/companies", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.ListCompanies))))
 
 	return crmHandler
 }

@@ -39,6 +39,16 @@ type CRMHandlers struct {
 	dbPool    *pgxpool.Pool
 	crm       connectors.CRMConnector
 	k3gClient *connectors.K3GCRMClient
+	// companyDirectoryResolver is the tenant-scoped K3G company-directory
+	// resolver ListCompanies uses (PRODUCT.7B1A). Reuses PRODUCT.6-L's
+	// ticketsports.TicketingRuntimeResolver exactly as-is: CompanyDirectory
+	// and TicketingConnector are derived from the SAME per-tenant K3G
+	// credential, so this route gets a real, fail-closed, tenant-scoped
+	// resolver for free instead of a second one. Replaces the confirmed
+	// PRODUCT.7B P0 (a single globally-bootstrapped k3gClient shared by
+	// every tenant) for THIS route only — h.k3gClient below is still
+	// required by CreateActivity (PRODUCT.7B1B, not yet fixed).
+	companyDirectoryResolver ticketsports.TicketingRuntimeResolver
 	// externalTicketService is the real, tenant-scoped external ticket
 	// creation path (PRODUCT.6-M). Nil until server.go wires it — the
 	// canonical runtime composition root, never a handler-built service
@@ -80,6 +90,16 @@ func (h *CRMHandlers) SetCRMConnector(crm connectors.CRMConnector) {
 // SetK3GCRMClient — configura o cliente K3G CRM
 func (h *CRMHandlers) SetK3GCRMClient(client *connectors.K3GCRMClient) {
 	h.k3gClient = client
+}
+
+// SetCompanyDirectoryResolver wires the tenant-scoped company-directory
+// resolver ListCompanies uses (PRODUCT.7B1A). Canonical runtime
+// composition (server.go/main.go) passes the SAME
+// *ticketsadapters.K3GTicketingRuntimeResolver instance already
+// constructed for ticketing (REUSE, not a second resolver/credential);
+// tests may inject a fake satisfying ticketsports.TicketingRuntimeResolver.
+func (h *CRMHandlers) SetCompanyDirectoryResolver(resolver ticketsports.TicketingRuntimeResolver) {
+	h.companyDirectoryResolver = resolver
 }
 
 // SetExternalTicketService wires the real CreateExternalTicket application
@@ -871,35 +891,73 @@ type CompanyListResponse struct {
 	Items []CompanyItem `json:"items"`
 }
 
-// ListCompanies — lista empresas do CRM K3G
-// GET /api/v1/integrations/companies
+// ListCompanies — lista empresas do CRM K3G do tenant autenticado.
+// GET /api/v1/tenants/{tenant_id}/crm/companies
+//
+// PRODUCT.7B1A: this route no longer depends on h.k3gClient (a single
+// globally-bootstrapped client shared by every tenant, resolved once at
+// boot from a hardcoded "ACME"-matching connection — the confirmed P0
+// cross-tenant company-directory leak from PRODUCT.7B). It now resolves
+// the SAME per-tenant runtime CreateExternalTicket already uses
+// (PRODUCT.6-L): one K3G credential per tenant, decrypted fresh for this
+// request, never shared across tenants, never falling back to another
+// tenant's or a global client. A tenant with no/ambiguous/invalid K3G
+// configuration fails closed (503, ticketingUnavailable) — it never
+// receives another tenant's directory.
 func (h *CRMHandlers) ListCompanies(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := authn.FromContext(ctx); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	// Check if K3G CRM client is configured
-	if h.k3gClient == nil {
-		// Return empty list if CRM not configured
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(CompanyListResponse{Items: []CompanyItem{}})
+	if h.companyDirectoryResolver == nil {
+		ticketingUnavailable(w)
 		return
 	}
 
-	// List companies from K3G CRM
-	companies, err := h.k3gClient.ListCompanies(ctx)
+	tenantID := r.PathValue("tenant_id")
+	if tenantID == "" {
+		http.Error(w, "missing tenant ID", http.StatusBadRequest)
+		return
+	}
+	tid, err := uuid.Parse(tenantID)
 	if err != nil {
-		http.Error(w, "failed to list companies: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "invalid tenant ID", http.StatusBadRequest)
 		return
 	}
 
-	// Convert to response format
+	// K3GTicketingRuntimeResolver.Resolve itself checks the requested
+	// tenantID against the session's own TenantContext (tenantSession
+	// already authorized {tenant_id} against this principal's membership)
+	// and fails closed on ANY mismatch — the same defense-in-depth
+	// CreateExternalTicket relies on, reused here for free.
+	rt, err := h.companyDirectoryResolver.Resolve(ctx, tid)
+	if err != nil {
+		var resErr *ticketsports.ResolutionError
+		if errors.As(err, &resErr) {
+			// No/ambiguous/invalid tenant K3G configuration is exactly the
+			// class of problem ticketingUnavailable already communicates —
+			// same status, same body, no new convention (mirrors
+			// failExternalTicketCreate/failRefreshTicketProjection).
+			ticketingUnavailable(w)
+			return
+		}
+		log.Printf("crm list companies: resolve runtime: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	companies, err := rt.CompanyDirectory.ListCompanies(ctx)
+	if err != nil {
+		log.Printf("crm list companies: %v", err)
+		http.Error(w, "failed to list companies", http.StatusInternalServerError)
+		return
+	}
+
 	items := make([]CompanyItem, len(companies))
 	for i, co := range companies {
 		items[i] = CompanyItem{
-			ID:   co.ID,
+			ID:   co.ExternalID,
 			Name: co.Name,
 			CNPJ: co.CNPJ,
 		}

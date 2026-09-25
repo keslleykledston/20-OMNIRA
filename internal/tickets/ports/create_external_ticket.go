@@ -54,9 +54,14 @@ type ConversationAuthorizer interface {
 // Company is the provider-neutral shape CreateExternalTicket validates a
 // SelectedCustomerExternalID against — deliberately minimal (PRODUCT.6-K0):
 // only what "does this ID correspond to a real, active tenant company"
-// requires.
+// requires. Name/CNPJ (PRODUCT.7B1A) are display-only additions for
+// GET /api/v1/tenants/{tenant_id}/crm/companies, which reuses this same
+// tenant-scoped directory — CreateExternalTicket's own validation never
+// reads them.
 type Company struct {
 	ExternalID string
+	Name       string
+	CNPJ       string
 	Active     bool
 }
 

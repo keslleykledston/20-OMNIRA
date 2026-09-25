@@ -21,7 +21,7 @@ const COMPANY = { id: 'd38e7970-635d-490b-a119-749ee6f1fe23', name: 'ACME_TESTE'
 // exercise a different read outcome override axios.get themselves.
 function mockCompanies(items: unknown[] = [COMPANY]) {
   vi.mocked(axios.get).mockImplementation(async (url: string) => {
-    if (url.endsWith('/integrations/companies')) return { data: { items } };
+    if (url.endsWith('/crm/companies')) return { data: { items } };
     if (url.endsWith('/ticket')) return { data: { local_ticket_id: 'lt-1', linked: false } };
     return Promise.reject({ response: { status: 404 } });
   });
@@ -29,7 +29,7 @@ function mockCompanies(items: unknown[] = [COMPANY]) {
 
 function mockRead(outcome: { status: number; data?: unknown } | 'network_error') {
   vi.mocked(axios.get).mockImplementation(async (url: string) => {
-    if (url.endsWith('/integrations/companies')) return { data: { items: [COMPANY] } };
+    if (url.endsWith('/crm/companies')) return { data: { items: [COMPANY] } };
     if (url.endsWith('/ticket')) {
       if (outcome === 'network_error') return Promise.reject({ message: 'Network Error' });
       if (outcome.status === 200) return { data: outcome.data };
@@ -359,7 +359,7 @@ describe('TicketPanel — PRODUCT.6-O1F conversation ticket read', () => {
   it('does not render the create form before the read GET resolves', async () => {
     let resolveGet: (v: unknown) => void = () => {};
     vi.mocked(axios.get).mockImplementation((url: string) => {
-      if (url.endsWith('/integrations/companies')) return Promise.resolve({ data: { items: [COMPANY] } });
+      if (url.endsWith('/crm/companies')) return Promise.resolve({ data: { items: [COMPANY] } });
       if (url.endsWith('/ticket')) return new Promise((resolve) => (resolveGet = resolve));
       return Promise.reject({ response: { status: 404 } });
     });
@@ -1287,7 +1287,7 @@ describe('TicketPanel — PRODUCT.6-O2BF status mutation', () => {
     localStorage.setItem(`omnira.ticket-status.${CONV}`, JSON.stringify(stalePersistedStatusIntent({ localTicketId: 'different-ticket' })));
     let resolveGet: (v: unknown) => void = () => {};
     vi.mocked(axios.get).mockImplementation((url: string) => {
-      if (url.endsWith('/integrations/companies')) return Promise.resolve({ data: { items: [COMPANY] } });
+      if (url.endsWith('/crm/companies')) return Promise.resolve({ data: { items: [COMPANY] } });
       if (url.endsWith('/ticket')) return new Promise((resolve) => (resolveGet = resolve));
       return Promise.reject({ response: { status: 404 } });
     });

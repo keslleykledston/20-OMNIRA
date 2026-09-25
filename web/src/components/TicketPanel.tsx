@@ -538,7 +538,10 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
     const loadCompanies = async () => {
       setLoadingCompanies(true);
       try {
-        const res = await axios.get(`${API_BASE}/integrations/companies`, { headers: authHeaders() });
+        // PRODUCT.7B1A: tenant-scoped company directory (was
+        // /integrations/companies, authn-only, a confirmed P0 cross-tenant
+        // leak — every tenant resolved through one global K3G client).
+        const res = await axios.get(`${API_BASE}/tenants/${tenantId}/crm/companies`, { headers: authHeaders() });
         const items: Company[] = res.data.items || [];
         setCompanies(items);
         if (items.length > 0) setActivityCompanyId((prev) => prev || items[0].id);

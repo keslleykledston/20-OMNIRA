@@ -287,6 +287,13 @@ func main() {
 	// tenant-scoped e resolvido a cada chamada (PRODUCT.6-L) — nenhum
 	// conector/credencial global é compartilhado entre tenants aqui.
 	if crmHandler != nil {
+		// PRODUCT.7B1A: ListCompanies (GET /tenants/{tenant_id}/crm/companies)
+		// now resolves companies through the SAME tenant-scoped
+		// K3GTicketingRuntimeResolver as ticket creation below — REUSE, not a
+		// second resolver/credential — replacing the removed global
+		// k3gClientForAPI dependency (the confirmed P0 cross-tenant leak).
+		crmHandler.SetCompanyDirectoryResolver(ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials))
+
 		externalTicketService := ticketsapplication.NewService(
 			channeladapters.NewPostgresPermissionChecker(dbPool),
 			ticketsadapters.NewConversationAuthorizer(dbPool),
