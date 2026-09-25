@@ -51,6 +51,10 @@ type CRMHandlers struct {
 	// provider projection refresh path (PRODUCT.6-O1R). Nil until
 	// server.go wires it.
 	refreshTicketService ticketProjectionRefresher
+	// updateExternalTicketStatusService is the real, conversation-scoped,
+	// EXTERNAL STATUS MUTATION path (PRODUCT.6-O2B3). Nil until server.go
+	// wires it.
+	updateExternalTicketStatusService externalTicketStatusMutator
 }
 
 // NewCRMHandlers — cria novo CRM handler.
@@ -102,6 +106,22 @@ func (h *CRMHandlers) SetReadTicketService(svc conversationTicketReader) {
 // fake satisfying ticketProjectionRefresher.
 func (h *CRMHandlers) SetRefreshTicketService(svc ticketProjectionRefresher) {
 	h.refreshTicketService = svc
+}
+
+// updateExternalTicketStatusService wires the real UpdateExternalTicketStatus application
+// service (PRODUCT.6-O2B3). Canonical runtime composition (server.go/main.go)
+// calls this with a Postgres/K3G-backed *ticketsapplication.UpdateExternalTicketStatusService;
+// tests may inject a fake.
+func (h *CRMHandlers) SetUpdateExternalTicketStatusService(svc externalTicketStatusMutator) {
+	h.updateExternalTicketStatusService = svc
+}
+
+// externalTicketStatusMutator is the seam PRODUCT.6-O2B3's UpdateTicketStatus
+// calls through — narrow on purpose so HTTP tests can inject a fake
+// without a real Postgres-backed application service.
+// *ticketsapplication.UpdateExternalTicketStatusService satisfies this.
+type externalTicketStatusMutator interface {
+	UpdateExternalTicketStatus(ctx context.Context, cmd ticketsapplication.UpdateExternalTicketStatusCommand) (*ticketsapplication.StatusResult, error)
 }
 
 // ticketingUnavailable writes the canonical response for "no real ERP
@@ -310,6 +330,145 @@ func failRefreshTicketProjection(w http.ResponseWriter, err error) {
 		http.Error(w, "ticketing provider unavailable", http.StatusServiceUnavailable)
 	default:
 		log.Printf("tickets refresh projection: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
+}
+
+// updateTicketStatusRequest — PRODUCT.6-O2B3 external status mutation body
+type updateTicketStatusRequest struct {
+	TargetStatus string `json:"target_status"`
+}
+
+// updateTicketStatusResponse — PRODUCT.6-O2B3 external status mutation response
+type updateTicketStatusResponse struct {
+	LocalTicketID       uuid.UUID  `json:"local_ticket_id"`
+	Provider            string     `json:"provider"`
+	ExternalTicketID    string     `json:"external_ticket_id"`
+	ExternalStatus      string     `json:"external_status"`
+	ExternalStatusLabel string     `json:"external_status_label"`
+	SyncStatus          string     `json:"sync_status"`
+	LastSyncedAt        *time.Time `json:"last_synced_at,omitempty"`
+	Replayed            bool       `json:"replayed"`
+	Reconciled          bool       `json:"reconciled"`
+}
+
+// UpdateTicketStatus — PRODUCT.6-O2B3: external ticket status mutation
+// POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/status
+func (h *CRMHandlers) UpdateTicketStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, err := authn.FromContext(ctx); err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if h.updateExternalTicketStatusService == nil {
+		ticketingUnavailable(w)
+		return
+	}
+
+	// Require Idempotency-Key header
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		http.Error(w, "missing or empty Idempotency-Key header", http.StatusBadRequest)
+		return
+	}
+
+	// Parse path parameters
+	tenantID, convID := r.PathValue("tenant_id"), r.PathValue("conversation_id")
+	if tenantID == "" || convID == "" {
+		http.Error(w, "missing tenant or conversation ID", http.StatusBadRequest)
+		return
+	}
+	tid, err := uuid.Parse(tenantID)
+	if err != nil {
+		http.Error(w, "invalid tenant ID", http.StatusBadRequest)
+		return
+	}
+	cid, err := uuid.Parse(convID)
+	if err != nil {
+		http.Error(w, "invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	// Extract authenticated actor
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.ActorID == uuid.Nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var req updateTicketStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.TargetStatus == "" {
+		http.Error(w, "target_status is required", http.StatusBadRequest)
+		return
+	}
+
+	// Call application service
+	result, err := h.updateExternalTicketStatusService.UpdateExternalTicketStatus(ctx, ticketsapplication.UpdateExternalTicketStatusCommand{
+		TenantID:       tid,
+		ConversationID: cid,
+		ActorUserID:    tc.ActorID,
+		TargetStatus:   req.TargetStatus,
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		failUpdateTicketStatus(w, err)
+		return
+	}
+
+	// Map outcome to HTTP status
+	switch result.Outcome {
+	case ticketsapplication.OutcomeStatusUpdated, ticketsapplication.OutcomeStatusReplaySuccess, ticketsapplication.OutcomeStatusReconciledSuccess:
+		w.Header().Set("Content-Type", "application/json")
+		if result.Replayed {
+			w.Header().Set("Idempotent-Replayed", "true")
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(updateTicketStatusResponse{
+			LocalTicketID:       result.LocalTicketID,
+			Provider:            result.Provider,
+			ExternalTicketID:    result.ExternalTicketID,
+			ExternalStatus:      result.ExternalStatus,
+			ExternalStatusLabel: result.ExternalStatusLabel,
+			SyncStatus:          result.SyncStatus,
+			LastSyncedAt:        result.LastSyncedAt,
+			Replayed:            result.Replayed,
+			Reconciled:          result.Reconciled,
+		})
+	case ticketsapplication.OutcomeStatusReconciliationRequired:
+		http.Error(w, "ticket status requires reconciliation", http.StatusConflict)
+	case ticketsapplication.OutcomeStatusDefinitiveFailure:
+		http.Error(w, "ticketing provider rejected the request", http.StatusUnprocessableEntity)
+	default:
+		log.Printf("unknown outcome: %q", result.Outcome)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
+}
+
+// failUpdateTicketStatus maps UpdateExternalTicketStatus application errors to HTTP
+func failUpdateTicketStatus(w http.ResponseWriter, err error) {
+	var resErr *ticketsports.ResolutionError
+	switch {
+	case errors.As(err, &resErr):
+		ticketingUnavailable(w)
+	case errors.Is(err, ticketsapplication.ErrForbidden), errors.Is(err, ticketsapplication.ErrNotAssignedToYou):
+		http.Error(w, "forbidden", http.StatusForbidden)
+	case errors.Is(err, ticketsapplication.ErrNoActiveTicket):
+		http.Error(w, "no active ticket for this conversation", http.StatusNotFound)
+	case errors.Is(err, ticketsapplication.ErrTicketNotLinked):
+		http.Error(w, "active ticket is not linked to an external ticket", http.StatusConflict)
+	case errors.Is(err, ticketsapplication.ErrInconsistentExternalLink), errors.Is(err, ticketsapplication.ErrProviderMismatch):
+		http.Error(w, "ticket requires reconciliation", http.StatusConflict)
+	case errors.Is(err, ticketsapplication.ErrStatusIdempotencyMismatch):
+		http.Error(w, "idempotency key already used with different request", http.StatusUnprocessableEntity)
+	case errors.Is(err, ticketsapplication.ErrProviderUnavailable):
+		http.Error(w, "ticketing provider unavailable", http.StatusServiceUnavailable)
+	default:
+		log.Printf("update ticket status: %v", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
 }

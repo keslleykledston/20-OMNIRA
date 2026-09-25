@@ -320,6 +320,15 @@ func main() {
 			ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials),
 		)
 		crmHandler.SetRefreshTicketService(refreshTicketService)
+
+		updateExternalTicketStatusService := ticketsapplication.NewUpdateExternalTicketStatusService(
+			channeladapters.NewPostgresPermissionChecker(dbPool),
+			ticketsadapters.NewConversationAuthorizer(dbPool),
+			ticketsadapters.NewStatusMutationAttemptStore(dbPool),
+			ticketsadapters.NewLocalTicketStore(dbPool),
+			ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials),
+		)
+		crmHandler.SetUpdateExternalTicketStatusService(updateExternalTicketStatusService)
 	}
 
 	errChan := make(chan error, 1)
