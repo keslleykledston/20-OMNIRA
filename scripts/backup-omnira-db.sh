@@ -87,11 +87,45 @@ find "$BACKUP_DIR" -maxdepth 1 -name "${DB_NAME}_*.meta.json" -mtime "+${RETENTI
 # `mountpoint -q`, not just directory existence: an unplugged/unmounted NTFS
 # mount still shows an empty local directory, which would silently look
 # "available" without this check.
+#
+# BACKUP.EXT.1: copies to a .partial name first, verifies size+checksum
+# against the local source, and only then atomically renames to the final
+# filename. A crash/disconnect mid-copy leaves only a .partial file behind —
+# never a file under the final name that a future restore would trust as
+# complete. Stale .partial files from an interrupted run are cleaned up
+# before each attempt so they never accumulate.
 if mountpoint -q "$EXTERNAL_MOUNT" 2>/dev/null; then
-  if mkdir -p "$EXTERNAL_BACKUP_DIR" 2>/dev/null && cp "$dump_file" "$meta_file" "$EXTERNAL_BACKUP_DIR/" 2>/dev/null; then
-    echo "== external copy OK: $EXTERNAL_BACKUP_DIR/$(basename "$dump_file")"
+  ext_ok=1
+  if ! mkdir -p "$EXTERNAL_BACKUP_DIR" 2>/dev/null; then
+    ext_ok=0
+  fi
+  if [ "$ext_ok" = 1 ]; then
+    for src in "$dump_file" "$meta_file"; do
+      base=$(basename "$src")
+      dest="$EXTERNAL_BACKUP_DIR/$base"
+      partial="$dest.partial"
+      rm -f "$partial"
+      if ! cp "$src" "$partial" 2>/dev/null; then
+        ext_ok=0
+        break
+      fi
+      src_sum=$(sha256sum "$src" | cut -d' ' -f1)
+      partial_sum=$(sha256sum "$partial" | cut -d' ' -f1)
+      if [ "$src_sum" != "$partial_sum" ]; then
+        ext_ok=0
+        rm -f "$partial"
+        break
+      fi
+      if ! mv -f "$partial" "$dest" 2>/dev/null; then
+        ext_ok=0
+        break
+      fi
+    done
+  fi
+  if [ "$ext_ok" = 1 ]; then
+    echo "== external copy OK (checksum-verified): $EXTERNAL_BACKUP_DIR/$(basename "$dump_file")"
   else
-    echo "== external copy SKIPPED: $EXTERNAL_MOUNT is mounted but the copy failed (disk full? permissions?) — local backup is still valid" >&2
+    echo "== external copy SKIPPED: $EXTERNAL_MOUNT is mounted but the copy failed or failed checksum verification (disk full? permissions? disconnected mid-copy?) — local backup is still valid" >&2
   fi
 else
   echo "== external copy SKIPPED: $EXTERNAL_MOUNT is not mounted — local backup is still valid"
