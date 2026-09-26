@@ -1,8 +1,9 @@
-# Pilot Runbook — Auth, Backup, TLS
+# Pilot Runbook — Auth, Backup, TLS, Frontend, Deploy/Rollback
 
-Procedimentos operacionalmente verificados (PILOT.1, 2026-09-26). Cada um foi
-executado de ponta a ponta neste ambiente antes de ser documentado aqui —
-isto não é uma spec aspiracional (para isso, ver `DISASTER-RECOVERY.md`).
+Procedimentos operacionalmente verificados (PILOT.1–PILOT.3, 2026-09-26).
+Cada um foi executado de ponta a ponta neste ambiente antes de ser
+documentado aqui — isto não é uma spec aspiracional (para isso, ver
+`DISASTER-RECOVERY.md`).
 
 ## 1. Autenticação (Keycloak / OIDC)
 
@@ -19,13 +20,19 @@ container está em crash-loop — ver logs (`docker logs omnira-keycloak --tail
 ### Smoke test de login (sem navegador)
 
 ```bash
-curl -s http://<KC_HOSTNAME>/realms/omnira/.well-known/openid-configuration \
+curl -s https://auth.devops.k3gsolutions.com.br/realms/omnira/.well-known/openid-configuration \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['issuer'])"
 ```
 
-O `issuer` retornado deve ser byte-idêntico ao valor de `OMNIRA_AUTH_ISSUER`
-no `.env` — se divergir, todo login real falhará com `iss` mismatch na
-validação do ID token, mesmo com credenciais corretas.
+Esperado: `https://auth.devops.k3gsolutions.com.br/realms/omnira`, byte-idêntico
+ao valor de `OMNIRA_AUTH_ISSUER` no `.env` — se divergir, todo login real
+falhará com `iss` mismatch na validação do ID token, mesmo com credenciais
+corretas. A API deve alcançar esse MESMO endpoint público (não um hostname
+Docker-only) com validação TLS normal:
+
+```bash
+docker exec omnira-api sh -c "wget -qO- https://auth.devops.k3gsolutions.com.br/realms/omnira/.well-known/openid-configuration" | head -c 100
+```
 
 ### O que fazer se o login real falhar
 
@@ -87,7 +94,9 @@ Cron do usuário `suporte` neste host:
 - **Responsável operacional:** quem administra este host (`suporte`); o
   cron roda como esse usuário via `docker exec`, sem senha de banco exposta.
 - Isto é o mecanismo apropriado para escala de LAB/pilot. Não é a estratégia
-  de PITR/off-host multi-AZ descrita como alvo em `DISASTER-RECOVERY.md`
+  de PITR/off-host multi-AZ descrita como alvo em `DISASTER-RECOVERY.md` para
+  produção geral — ver aquele documento para o que falta antes de qualquer
+  promoção de estado além de `LIMITED_INTERNAL_PRODUCTION`.
 
 **Importante — isto é estado do HOST, não do repositório.** O crontab acima
 foi instalado manualmente neste host (`crontab -e` do usuário `suporte`);
@@ -109,8 +118,6 @@ reinstalar com:
 ( crontab -l 2>/dev/null | grep -v "backup-omnira-db.sh" ; \
   echo "5 * * * * cd $(pwd) && ./scripts/backup-omnira-db.sh >> backups/omnira_dev/backup.log 2>&1" ) | crontab -
 ```
-  para produção geral — ver aquele documento para o que falta antes de
-  qualquer promoção de estado além de `LIMITED_INTERNAL_PRODUCTION`.
 
 ### Verificar um backup
 
@@ -168,27 +175,196 @@ operação diferente e não substitui um restore de desastre.
 
 ## 3. TLS / borda pública
 
-- Terminação TLS real acontece no Nginx do **host** (`/etc/nginx/conf.d/00-omnira.conf`),
-  não no Nginx interno do container (`web/nginx.conf`, HTTP puro, uso
-  exclusivo da rede Docker).
-- Redirect HTTP→HTTPS confirmado funcionando; proxy headers e cabeçalhos de
-  segurança presentes; timeout longo (3600s) já configurado para SSE.
-- **Gap conhecido:** o certificado servido é self-signed
-  (`certs/cert.pem`/`key.pem`, válido até 2027-09-19) — navegadores/clientes
-  não confiam nele por padrão. Ver Human Gate do PILOT.1 para a
-  classificação completa e a decisão pendente sobre emitir um certificado
-  confiável (`certbot`) nesta infraestrutura Nginx compartilhada.
+Dois hostnames públicos, dois vhosts, dois certificados Let's Encrypt
+separados (não wildcard) — ambos emitidos e geridos pelo `certbot.timer`
+(systemd) já ativo neste host, sem cron adicional:
+
+| Hostname | vhost | Upstream | Propósito |
+|---|---|---|---|
+| `omnira.devops.k3gsolutions.com.br` | `/etc/nginx/conf.d/00-omnira.conf` | `127.0.0.1:28080` (`/api/`), `127.0.0.1:3000` (`/`) | app + API |
+| `auth.devops.k3gsolutions.com.br` | `/etc/nginx/conf.d/01-omnira-auth.conf` | `127.0.0.1:8888` | Keycloak (browser + API, issuer canônico) |
+
+- Terminação TLS real acontece no Nginx do **host**, não no Nginx interno do
+  container (`web/nginx.conf`, HTTP puro, uso exclusivo da rede Docker).
+- Redirect HTTP→HTTPS confirmado nos dois vhosts; proxy headers e cabeçalhos
+  de segurança presentes; timeout longo (3600s) para SSE no vhost do app.
+- A porta de management do Keycloak (9000) nunca é exposta publicamente — o
+  vhost `auth.*` só faz proxy para a porta browser-facing (8888).
+- `OMNIRA_AUTH_COOKIE_SECURE=true` é obrigatório com esses hostnames
+  públicos (HTTPS real) — nunca volte para `false` fora de teste local puro.
 
 ### Verificação rápida
 
 ```bash
-curl -Ik http://omnira.devops.k3gsolutions.com.br/ | head -3   # espera 301/302 -> https
-curl -Ik https://omnira.devops.k3gsolutions.com.br/ | head -3  # espera 200/301, TLS handshake OK (com -k por causa do self-signed)
+curl -Ik https://omnira.devops.k3gsolutions.com.br/ | head -3   # espera 200, sem aviso de certificado
+curl -Ik https://auth.devops.k3gsolutions.com.br/realms/omnira/.well-known/openid-configuration | head -3
 ```
 
-## 4. Se qualquer P0 falhar
+Nunca aceitar `-k`/`--insecure` como prova válida de TLS — se a validação
+normal falhar, o certificado está com problema, não o comando.
+
+### Renovação
+
+```bash
+systemctl is-active certbot.timer   # espera "active"
+sudo certbot certificates           # confirma os dois hostnames, dias até expirar
+```
+
+## 4. Frontend — topologia de produção
+
+**Antiga:** processo `vite` rodando diretamente no host (`web/node_modules/.bin/vite`),
+na porta 3000, fora do Docker Compose. Nunca mais usar isso para o pilot.
+
+**Atual (PILOT.3):** o serviço `web` do `docker-compose.yml` já implementava a
+topologia correta — só nunca tinha sido ativado (a porta 3000 estava ocupada
+pelo Vite). Build multi-stage (`web/Dockerfile`): `npm run build` (que já
+roda `tsc` — typecheck incluso) gera `web/dist/`, servido por
+`nginx:alpine` (`web/nginx.conf`) com:
+
+- SPA fallback (`try_files $uri $uri/ /index.html`) — rotas diretas
+  (`/inbox`, `/contacts`, `/tickets`, `/ticket-reconciliation`,
+  `/supervisor`, `/channels`, etc.) funcionam em reload direto do navegador.
+- Assets com hash (`index-<hash>.js/css`) servidos com
+  `Cache-Control: public, immutable, max-age=31536000`; `index.html` nunca
+  cacheado indefinidamente (`expires -1`).
+- Source maps: **desabilitados** em produção (não gerados pelo `vite build`
+  por padrão neste projeto) — aceitável para o estágio atual do pilot.
+- `/api/` proxied internamente para `api:8080` (redundante com o host Nginx,
+  que já roteia `/api/` diretamente para `127.0.0.1:28080` — mantido por se
+  alguém acessar o container `web` sem passar pelo host Nginx).
+
+O host Nginx (`00-omnira.conf`) **não precisou de nenhuma mudança**: já
+apontava `/` para `localhost:3000`; a troca foi só o que ocupa essa porta
+(Vite → container `omnira-web` de produção).
+
+### Ativar (se `omnira-web` estiver `Created`/parado)
+
+```bash
+# a porta 3000 do host precisa estar livre — se o Vite manual ainda estiver
+# rodando, encerre-o primeiro (não mate a esmo: confirme o PID antes)
+docker compose up -d web
+docker inspect -f 'health={{.State.Health.Status}}' omnira-web   # espera "healthy"
+```
+
+## 5. Deploy e rollback
+
+### Comando canônico
+
+```bash
+scripts/deploy.sh
+```
+
+Builda e recria **somente** frontend, API, worker e migrations forward —
+**nunca** reinicia infraestrutura compartilhada (Postgres, NATS, Valkey,
+Keycloak, e especialmente **WAHA**, cujo restart arrisca a sessão real do
+WhatsApp). O script:
+
+1. valida pré-requisitos (docker, compose v2, `.env`);
+2. roda testes + typecheck + build de produção do frontend;
+3. builda as imagens `api`, `worker`, `web`;
+4. etiqueta cada imagem com o SHA curto do commit atual (`docker tag
+   20-omnira-<svc>:latest 20-omnira-<svc>:<sha>`) — a imagem anterior
+   permanece no image store local até ser explicitamente removida, servindo
+   de alvo de rollback;
+5. valida `docker compose config`;
+6. aplica migrations **forward only** (`docker compose up migrate`);
+7. recria `api`, `worker`, `web` (nesta ordem), aguardando cada um ficar
+   `healthy` antes de seguir;
+8. roda um smoke público (app + issuer OIDC) com validação TLS normal.
+
+Falha em qualquer etapa aborta com exit não-zero antes de seguir adiante.
+
+### Identificação de versão
+
+```bash
+docker images | grep -E "20-omnira-(api|worker|web)"
+```
+
+Cada imagem relevante fica etiquetada com o SHA curto do commit que a gerou
+(além de `:latest`). Nenhum registry externo é necessário para o pilot — as
+tags vivem no image store local do Docker deste host.
+
+### Rollback de aplicação — nunca `migrate down` como estratégia
+
+**Sempre confirme que a imagem-alvo do rollback existe antes de qualquer
+retag.** Se não existir, o artefato "bom anterior" não está disponível
+localmente — pare e não tente reconstruir aquele SHA a partir da working
+tree atual (que pode já ter mudado): isso geraria uma imagem diferente sob
+o mesmo rótulo, exatamente o problema que a etiquetagem por SHA existe para
+evitar.
+
+```bash
+docker image inspect 20-omnira-web:<sha-anterior-bom> >/dev/null \
+  || { echo "rollback target image not found locally — aborting"; exit 1; }
+docker tag 20-omnira-web:<sha-anterior-bom> 20-omnira-web:latest
+docker compose up -d --force-recreate web
+```
+
+**API:** mesmo padrão (checar `docker image inspect` antes) com
+`20-omnira-api`.
+
+**Worker:** mesmo padrão, com `20-omnira-worker`.
+
+**Banco de dados:** a política é **forward corrective migration**, nunca
+`migrate down` como mecanismo geral de rollback (PILOT.2 provou que 16 das
+52 migrations down fazem `DROP TABLE` e 16 fazem `DROP COLUMN` — destrutivas
+de dados reais). Se uma release exigir mudança de schema incompatível com o
+build anterior, o rollback de aplicação por si só não é suficiente — pare e
+trate como incidente: escreva uma migration corretiva forward, não reverta
+a anterior.
+
+### Prova de rollback (PILOT.3, executada neste ambiente)
+
+Falha simulada: container `web` parado deliberadamente → app público
+retornou `502` → container reiniciado → app público voltou a `200` em ~5s.
+Confirma o mecanismo (detectar → restaurar → recuperar); não substitui um
+teste de uma imagem `N` realmente quebrada quando uma existir.
+
+### Health gate de um deploy
+
+Um deploy só é considerado bem-sucedido quando:
+- `omnira-api`, `omnira-worker`, `omnira-web` todos `healthy`;
+- app público (`https://omnira.devops.k3gsolutions.com.br/`) responde 200
+  com TLS válido;
+- issuer OIDC público responde 200 com TLS válido;
+- banco permanece saudável (nenhuma migration falhou);
+- **WAHA continua `WORKING`** se não fizer parte da release — nunca é
+  reiniciado como parte de um deploy de aplicação.
+
+## 6. Drift de rede Docker (WAHA)
+
+Achado do PILOT.2B/PILOT.3: o `docker-compose.yml` já declara
+`waha: networks: [omnira-network]` corretamente, mas o container real
+(criado antes desta sessão, rodando há vários dias) estava preso apenas na
+rede `default` — drift de execução, não defeito do compose. Um
+`docker compose up -d --force-recreate waha` normal restauraria
+automaticamente a topologia declarada (**não fazer isso na sessão real
+"WORKING" sem necessidade** — reiniciar o container WAHA arrisca exigir
+reautenticação/QR da conta WhatsApp conectada). Se precisar reaplicar sem
+recriar o container:
+
+```bash
+docker network connect --alias waha 20-omnira_omnira-network 20-omnira-waha-1
+```
+
+## 7. Verificar WAHA após qualquer deploy
+
+```bash
+# nunca reiniciar o container só para checar — apenas consultar o estado
+python3 -c "
+import subprocess, requests
+key = subprocess.run(['docker','exec','20-omnira-waha-1','printenv','WAHA_API_KEY'], capture_output=True, text=True).stdout.strip()
+r = requests.get('http://192.168.112.3:3000/api/sessions/omnira_85af82d7-6f01-40cf-8d15-0e04df66736a', headers={'X-Api-Key': key})
+print(r.json().get('status'))
+"
+```
+
+Esperado: `WORKING`, inalterado por qualquer deploy de frontend/API/worker.
+
+## 8. Se qualquer P0 falhar
 
 Não declare o pilot pronto. Volte para a seção correspondente acima,
 reproduza o smoke test e corrija a causa raiz antes de tentar novamente —
-não há atalho de mock/dev auth, restore destrutivo não testado, ou TLS
-degradado para HTTP puro que seja aceitável para um piloto com tenant real.
+não há atalho de mock/dev auth, restore destrutivo não testado, TLS
+degradado, `migrate down` como rollback, ou restart de WAHA que seja
+aceitável para um piloto com tenant real e sessão WhatsApp real.
