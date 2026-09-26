@@ -27,40 +27,68 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer seed.Close()
+	// t.Cleanup (not defer): defers run before t.Cleanup funcs, so a plain
+	// defer here would close the pool before the tenant-delete cleanup below
+	// runs. t.Cleanup is LIFO, so registering this one FIRST makes it run
+	// LAST — after the delete cleanup registered further down (same pattern
+	// as TestReservedProviderMessageIDCommitsBeforeProviderCallIsVisibleIndependently).
+	t.Cleanup(seed.Close)
 	app, err := pgxpool.New(ctx, appURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer app.Close()
+	t.Cleanup(app.Close)
 	tenantA, tenantB := uuid.New(), uuid.New()
-	seedCreateTenant := func(tn uuid.UUID) error {
+	execAsSystemCtx := func(execCtx context.Context, sql string, args ...any) (int64, error) {
 		t.Helper()
-		conn, err := seed.Acquire(ctx)
+		conn, err := seed.Acquire(execCtx)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		defer conn.Release()
-		tx, err := conn.Begin(ctx)
+		tx, err := conn.Begin(execCtx)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		defer tx.Rollback(ctx)
-		if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
-			return err
+		defer tx.Rollback(execCtx)
+		if _, err := tx.Exec(execCtx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+			return 0, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tn, tn.String()); err != nil {
-			return err
+		tag, err := tx.Exec(execCtx, sql, args...)
+		if err != nil {
+			return 0, err
 		}
-		return tx.Commit(ctx)
+		if err := tx.Commit(execCtx); err != nil {
+			return 0, err
+		}
+		return tag.RowsAffected(), nil
+	}
+	seedCreateTenant := func(tn uuid.UUID) error {
+		_, err := execAsSystemCtx(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tn, tn.String())
+		return err
 	}
 	for _, tn := range []uuid.UUID{tenantA, tenantB} {
 		if err := seedCreateTenant(tn); err != nil {
 			t.Fatalf("create tenant %s: %v", tn, err)
 		}
 	}
+	// NOTE (TEST.HYGIENE.1): the previous version of this cleanup ran
+	// app.Exec(context.Background(), "DELETE FROM tenants...") directly on
+	// the pool with no GUC/transaction — under FORCE RLS that DELETE matches
+	// zero rows (fail-closed, not an error), and the error return was
+	// discarded (`_, _ =`), so the leak was silent. Fixed by reusing the
+	// privileged, tenant/RLS-safe helper above (seed pool + is_system_admin
+	// inside an explicit transaction) with a FRESH context — t.Cleanup runs
+	// after this function's own defer cancel(), so the outer ctx is already
+	// canceled by then — and by failing loudly if the delete doesn't affect
+	// exactly the two fixture rows it created.
 	t.Cleanup(func() {
-		_, _ = app.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1,$2)`, tenantA, tenantB)
+		n, err := execAsSystemCtx(context.Background(), `DELETE FROM tenants WHERE id IN ($1,$2)`, tenantA, tenantB)
+		if err != nil {
+			t.Errorf("cleanup: delete fixture tenants: %v", err)
+		} else if n != 2 {
+			t.Errorf("cleanup: delete fixture tenants affected %d rows, want 2 (tenants=%s,%s) — leaked test data", n, tenantA, tenantB)
+		}
 	})
 	connA, connOff := uuid.New(), uuid.New()
 	execInTenant := func(tn uuid.UUID, sql string, args ...any) {
