@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	crmevidenceports "github.com/omnira/omnira/internal/crmevidence/ports"
 	"github.com/omnira/omnira/internal/platform/authn"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
@@ -76,6 +77,16 @@ type CRMHandlers struct {
 	// EXTERNAL STATUS MUTATION path (PRODUCT.6-O2B3). Nil until server.go
 	// wires it.
 	updateExternalTicketStatusService externalTicketStatusMutator
+	// conversationContacts derives contact_id from a conversation, server-
+	// side, for the PRODUCT.7B2B post-success evidence hook. Nil is a
+	// valid runtime state: the hook simply skips (best-effort, never fails
+	// the ticket response) when unwired.
+	conversationContacts conversationContactReader
+	// evidenceStore persists durable Contact<->Company evidence
+	// (PRODUCT.7B2B) after a successful CreateExternalTicket call. Never
+	// consulted for authorization; never able to influence the ticket
+	// Result/HTTP response — see CreateTicket's best-effort hook.
+	evidenceStore crmevidenceports.EvidenceStore
 }
 
 // NewCRMHandlers — cria novo CRM handler.
@@ -126,6 +137,25 @@ func (h *CRMHandlers) SetActivityConversationReader(reader activityConversationR
 // ticketsports.PermissionChecker.
 func (h *CRMHandlers) SetActivityPermissionChecker(checker ticketsports.PermissionChecker) {
 	h.activityPermissions = checker
+}
+
+// SetConversationContactReader wires the server-side contact_id derivation
+// CreateTicket's post-success evidence hook uses (PRODUCT.7B2B). Canonical
+// runtime composition (server.go/main.go) passes a
+// *PostgresConversationContacts; tests may inject a fake satisfying
+// conversationContactReader.
+func (h *CRMHandlers) SetConversationContactReader(reader conversationContactReader) {
+	h.conversationContacts = reader
+}
+
+// SetEvidenceStore wires the durable Contact<->Company evidence writer
+// CreateTicket's post-success hook uses (PRODUCT.7B2B). Canonical runtime
+// composition (server.go/main.go) passes a
+// *crmevidenceadapters.PostgresEvidenceStore; tests may inject a fake
+// satisfying crmevidenceports.EvidenceStore. Nil is a valid runtime state
+// (the hook simply skips, best-effort).
+func (h *CRMHandlers) SetEvidenceStore(store crmevidenceports.EvidenceStore) {
+	h.evidenceStore = store
 }
 
 // SetExternalTicketService wires the real CreateExternalTicket application
@@ -638,7 +668,74 @@ func (h *CRMHandlers) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		failExternalTicketCreate(w, err)
 		return
 	}
+	h.recordTicketSelectionEvidence(ctx, tid, cid, tc.ActorID, req.SelectedCustomerExternalID, result)
 	writeExternalTicketResult(w, result)
+}
+
+// recordTicketSelectionEvidence is the PRODUCT.7B2B post-success hook:
+// best-effort, additive durable evidence that this Contact was associated
+// with this external Company by an authorized operator, through this
+// tenant's specific CRM connection — never a CRM contact binding
+// (PRODUCT.7B2C), never provider directory metadata.
+//
+// This is strictly best-effort/fail-closed enrichment (PRODUCT.7B2B
+// design section 17): it NEVER alters result, NEVER changes the HTTP
+// status/body CreateTicket already decided, and NEVER marks the ticket as
+// needing reconciliation because of an evidence failure. The external
+// ticket is already a fully durable success at this point — evidence
+// absence only means a future CreateActivity/AI consumer stays fail-
+// closed for this Contact/Company pair until a later trusted observation
+// (another successful ticket selection) repairs it.
+func (h *CRMHandlers) recordTicketSelectionEvidence(ctx context.Context, tenantID, conversationID, actorID uuid.UUID, selectedCompanyID string, result *ticketsapplication.Result) {
+	if result == nil {
+		return
+	}
+	if result.Outcome != ticketsapplication.OutcomeCreated && result.Outcome != ticketsapplication.OutcomeReplaySuccess {
+		return
+	}
+	// Every branch below is a distinct, logged failure stage — "silently
+	// missing" is exactly what PRODUCT.7B2B section 5 forbids, even though
+	// none of them may ever change the ticket outcome already decided.
+	if h.evidenceStore == nil || h.conversationContacts == nil {
+		log.Printf("crm evidence: dependency not wired, skipping (tenant=%s conversation=%s local_ticket=%s): evidenceStore=%v conversationContacts=%v",
+			tenantID, conversationID, result.LocalTicketID, h.evidenceStore != nil, h.conversationContacts != nil)
+		return
+	}
+	if result.ConnectionID == uuid.Nil {
+		log.Printf("crm evidence: eligible outcome %q has no ConnectionID, skipping (tenant=%s conversation=%s local_ticket=%s)",
+			result.Outcome, tenantID, conversationID, result.LocalTicketID)
+		return
+	}
+	contactID, found, err := h.conversationContacts.ContactIDFor(ctx, conversationID)
+	if err != nil {
+		log.Printf("crm evidence: derive contact_id failed (tenant=%s conversation=%s local_ticket=%s): %v",
+			tenantID, conversationID, result.LocalTicketID, err)
+		return
+	}
+	if !found {
+		log.Printf("crm evidence: conversation %s not found while recording evidence (tenant=%s local_ticket=%s)",
+			conversationID, tenantID, result.LocalTicketID)
+		return
+	}
+	err = h.evidenceStore.RecordTicketSelection(ctx, crmevidenceports.RecordTicketSelectionInput{
+		TenantID:             tenantID,
+		ContactID:            contactID,
+		ConnectionID:         result.ConnectionID,
+		ExternalCompanyID:    selectedCompanyID,
+		ActorUserID:          actorID,
+		OriginTicketID:       result.LocalTicketID,
+		OriginConversationID: conversationID,
+	})
+	if err != nil {
+		// Best-effort only — never surfaced to the caller, never retried
+		// here. Identifiers only; no credentials, no provider token, no
+		// raw provider payload, no request_hash. external_company_id is
+		// the same value already accepted by PRODUCT.6-K2's server-side
+		// validation for this tenant, not a secret — safe to log for
+		// diagnosis.
+		log.Printf("crm evidence: record ticket_selection failed (tenant=%s conversation=%s contact=%s local_ticket=%s connection=%s company=%s): %v",
+			tenantID, conversationID, contactID, result.LocalTicketID, result.ConnectionID, selectedCompanyID, err)
+	}
 }
 
 // failExternalTicketCreate maps CreateExternalTicket's application errors

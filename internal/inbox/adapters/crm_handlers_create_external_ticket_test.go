@@ -85,16 +85,18 @@ func (f *httpFakeTicketing) UpdateTicketStatus(ctx context.Context, externalID s
 }
 
 type httpFakeRuntimeResolver struct {
-	companies ticketsports.CompanyDirectory
-	ticketing connectors.TicketingConnector
-	err       error
+	companies    ticketsports.CompanyDirectory
+	ticketing    connectors.TicketingConnector
+	err          error
+	connectionID uuid.UUID
 }
 
 func (f *httpFakeRuntimeResolver) Resolve(ctx context.Context, tenantID uuid.UUID) (*ticketsports.TicketingRuntime, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &ticketsports.TicketingRuntime{CompanyDirectory: f.companies, TicketingConnector: f.ticketing}, nil
+	return &ticketsports.TicketingRuntime{CompanyDirectory: f.companies, TicketingConnector: f.ticketing,
+		ConnectionID: f.connectionID}, nil
 }
 
 // httpFakeAttempts mirrors the guarded-transition semantics already proven

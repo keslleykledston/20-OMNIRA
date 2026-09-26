@@ -16,9 +16,25 @@ import (
 // resolvers, because they always succeed or fail together for a given
 // tenant and resolving them separately would just decrypt the same
 // credential twice for no isolation benefit.
+//
+// ConnectionID (PRODUCT.7B2B) is additive integration metadata: the exact
+// channel_connections row this runtime was built from. It exists so a
+// caller (CreateExternalTicket's Result) can durably record WHICH tenant
+// integration/workspace produced a successful operation, without ever
+// re-querying channel_connections afterward and assuming it is still the
+// same row. Value comes directly from the resolved connection (conn.ID) —
+// never hardcoded. There is deliberately no separate Provider field here:
+// channel_connections.provider is immutable after creation (see
+// internal/channels/adapters/postgres.go's Update, which never touches
+// it), so ConnectionID alone already durably and immutably qualifies the
+// provider/workspace — a second Provider column/field would only risk
+// drifting from it with nothing to enforce consistency. A caller that
+// needs the provider string reads it from the referenced
+// channel_connections row, never from a duplicated copy here.
 type TicketingRuntime struct {
 	CompanyDirectory   CompanyDirectory
 	TicketingConnector connectors.TicketingConnector
+	ConnectionID       uuid.UUID
 }
 
 // ResolutionErrorCode classifies why a tenant's ticketing runtime could not

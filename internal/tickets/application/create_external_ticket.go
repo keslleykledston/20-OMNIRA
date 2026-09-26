@@ -121,6 +121,16 @@ type Result struct {
 	// failed. The external ticket exists; OMNIRA's durable record of that
 	// fact may not. Requires human/ops reconciliation, not a retry.
 	Severe bool
+	// ConnectionID (PRODUCT.7B2B): additive integration metadata — the
+	// exact tenant channel_connections row this call's runtime was
+	// resolved from. Populated whenever a runtime was resolved, regardless
+	// of Outcome; callers that persist derived evidence (e.g. Contact-
+	// Company evidence) must only do so for Outcome values that prove a
+	// real success (OutcomeCreated / OutcomeReplaySuccess) — this field
+	// alone does not imply that. There is no separate provider field here:
+	// the provider identity is read from the referenced connection
+	// (channel_connections.provider) when needed, never duplicated.
+	ConnectionID uuid.UUID
 }
 
 // Service implements CreateExternalTicket. It never imports a concrete
@@ -275,11 +285,20 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		return nil, err
 	}
 
+	var result *Result
 	if !acquired {
-		return s.replay(ctx, attempt, localTicket, rt.TicketingConnector)
+		result, err = s.replay(ctx, attempt, localTicket, rt.TicketingConnector)
+	} else {
+		result, err = s.createAndRecord(ctx, attempt, localTicket, validatedCustomerExternalID, cmd, rt.TicketingConnector)
 	}
-
-	return s.createAndRecord(ctx, attempt, localTicket, validatedCustomerExternalID, cmd, rt.TicketingConnector)
+	if result != nil {
+		// PRODUCT.7B2B: additive integration metadata only (the exact
+		// connection this call's runtime was resolved from) — never read
+		// by any customer-validation/idempotency/status/ERP-authority
+		// logic above, never influences Outcome.
+		result.ConnectionID = rt.ConnectionID
+	}
+	return result, err
 }
 
 func validateCommand(cmd CreateExternalTicketCommand) error {

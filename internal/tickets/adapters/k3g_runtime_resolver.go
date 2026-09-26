@@ -131,5 +131,8 @@ func (r *K3GTicketingRuntimeResolver) Resolve(ctx context.Context, tenantID uuid
 	return &ports.TicketingRuntime{
 		CompanyDirectory:   NewK3GCompanyDirectory(crmClient),
 		TicketingConnector: ticketingConnector,
+		// PRODUCT.7B2B: the exact connection this runtime was built from —
+		// never re-derived later, never assumed to still be "the same one".
+		ConnectionID: conn.ID,
 	}, nil
 }

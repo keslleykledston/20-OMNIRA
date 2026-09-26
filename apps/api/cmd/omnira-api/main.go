@@ -20,6 +20,7 @@ import (
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
+	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -236,6 +237,13 @@ func main() {
 		// Contact/Conversation→Company linkage.
 		crmHandler.SetActivityPermissionChecker(permissions)
 		crmHandler.SetActivityConversationReader(inboxadapters.NewPostgresActivityConversations(dbPool))
+		// PRODUCT.7B2B: durable Contact<->Company evidence, captured
+		// best-effort after a successful external ticket create/replay
+		// (see CreateTicket's recordTicketSelectionEvidence). Never a CRM
+		// contact binding, never able to influence the ticket Result/HTTP
+		// response.
+		crmHandler.SetConversationContactReader(inboxadapters.NewPostgresConversationContacts(dbPool))
+		crmHandler.SetEvidenceStore(crmevidenceadapters.NewPostgresEvidenceStore(dbPool))
 
 		externalTicketService := ticketsapplication.NewService(
 			channeladapters.NewPostgresPermissionChecker(dbPool),

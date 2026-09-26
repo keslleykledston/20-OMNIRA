@@ -232,10 +232,11 @@ type fakeTicketing struct {
 // every call — proves the service resolves per-call rather than caching a
 // fixed dependency, and lets tests inject resolution failures.
 type fakeRuntimeResolver struct {
-	companies ports.CompanyDirectory
-	ticketing connectors.TicketingConnector
-	err       error
-	calls     int32
+	companies    ports.CompanyDirectory
+	ticketing    connectors.TicketingConnector
+	err          error
+	calls        int32
+	connectionID uuid.UUID
 }
 
 func (f *fakeRuntimeResolver) Resolve(ctx context.Context, tenantID uuid.UUID) (*ports.TicketingRuntime, error) {
@@ -243,7 +244,8 @@ func (f *fakeRuntimeResolver) Resolve(ctx context.Context, tenantID uuid.UUID) (
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &ports.TicketingRuntime{CompanyDirectory: f.companies, TicketingConnector: f.ticketing}, nil
+	return &ports.TicketingRuntime{CompanyDirectory: f.companies, TicketingConnector: f.ticketing,
+		ConnectionID: f.connectionID}, nil
 }
 
 func (f *fakeTicketing) Name() string {
@@ -287,6 +289,10 @@ const (
 	testKey       = "test-key-0001"
 )
 
+// testConnectionID (PRODUCT.7B2B): the fake channel_connections row this
+// test suite's runtime resolver claims to have been built from.
+var testConnectionID = uuid.MustParse("c0117ec7-0000-4000-8000-000000000001")
+
 func testCommand(overrides func(*CreateExternalTicketCommand)) CreateExternalTicketCommand {
 	cmd := CreateExternalTicketCommand{
 		TenantID: uuid.New(), ConversationID: uuid.New(), ActorUserID: uuid.New(),
@@ -321,7 +327,8 @@ func newHarness(actorAssigned bool, actorID uuid.UUID) *harness {
 	if actorAssigned {
 		h.conversation.assignedTo = &actorID
 	}
-	h.runtime = &fakeRuntimeResolver{companies: h.companies, ticketing: h.ticketing}
+	h.runtime = &fakeRuntimeResolver{companies: h.companies, ticketing: h.ticketing,
+		connectionID: testConnectionID}
 	h.svc = NewService(h.perms, h.conversation, h.attempts, h.localTickets, h.runtime)
 	return h
 }
@@ -468,6 +475,49 @@ func TestCreateExternalTicketAcceptsExactActiveCompanyAndForwardsExactID(t *test
 	}
 	if h.ticketing.gotReq.CustomerExternalID != testCompanyID {
 		t.Fatalf("provider received CustomerExternalID=%q, want %q", h.ticketing.gotReq.CustomerExternalID, testCompanyID)
+	}
+}
+
+// PRODUCT.7B2B: Result.ConnectionID must reflect the EXACT runtime resolved
+// for THIS call, never a stale/hardcoded value — proven by configuring the
+// fake resolver with a specific connection and asserting the result
+// carries exactly that, for both a fresh create...
+func TestCreateExternalTicketResultCarriesResolvedRuntimeConnectionOnCreate(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	cmd := testCommand(nil)
+	h.conversation.assignedTo = &cmd.ActorUserID
+	res, err := h.svc.CreateExternalTicket(withTenantContext(cmd.TenantID, cmd.ActorUserID), cmd)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Outcome != OutcomeCreated {
+		t.Fatalf("outcome = %q, want created", res.Outcome)
+	}
+	if res.ConnectionID != testConnectionID {
+		t.Fatalf("result connection id = %s, want %s", res.ConnectionID, testConnectionID)
+	}
+}
+
+// ...and for a replay of an already-confirmed attempt (a different code
+// path inside CreateExternalTicket — replay, not createAndRecord — must
+// carry the same metadata correctly too).
+func TestCreateExternalTicketResultCarriesResolvedRuntimeConnectionOnReplay(t *testing.T) {
+	h := newHarness(false, uuid.Nil)
+	cmd := testCommand(nil)
+	h.conversation.assignedTo = &cmd.ActorUserID
+	ctx := withTenantContext(cmd.TenantID, cmd.ActorUserID)
+	if _, err := h.svc.CreateExternalTicket(ctx, cmd); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	res, err := h.svc.CreateExternalTicket(ctx, cmd)
+	if err != nil {
+		t.Fatalf("replay call: %v", err)
+	}
+	if res.Outcome != OutcomeReplaySuccess {
+		t.Fatalf("outcome = %q, want replay_success", res.Outcome)
+	}
+	if res.ConnectionID != testConnectionID {
+		t.Fatalf("replay result connection id = %s, want %s", res.ConnectionID, testConnectionID)
 	}
 }
 
