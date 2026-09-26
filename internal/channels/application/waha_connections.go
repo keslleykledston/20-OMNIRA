@@ -37,6 +37,10 @@ type ConnectionView struct {
 	Capabilities       []domain.Capability
 	RiskAcknowledgedAt *time.Time
 	CreatedAt          time.Time
+	// CheckedAt (PILOT.4C) — when the provider was actually asked for its live
+	// session status. Only refresh() sets this: List/Create never call the
+	// provider, so their views carry a zero value (omitted from JSON).
+	CheckedAt time.Time
 }
 
 // WahaConnectionService manages unofficial WhatsApp (WAHA) connections for the
@@ -167,6 +171,7 @@ func (s *WahaConnectionService) Get(ctx context.Context, id uuid.UUID) (Connecti
 }
 
 func (s *WahaConnectionService) refresh(ctx context.Context, conn *domain.ChannelConnection) (ConnectionView, error) {
+	checkedAt := time.Now().UTC()
 	status, err := s.sessions.Status(ctx, *conn)
 	if err != nil {
 		return ConnectionView{}, err
@@ -198,7 +203,9 @@ func (s *WahaConnectionService) refresh(ctx context.Context, conn *domain.Channe
 			return ConnectionView{}, err
 		}
 	}
-	return view(conn, status), nil
+	v := view(conn, status)
+	v.CheckedAt = checkedAt
+	return v, nil
 }
 
 // StartSession is idempotent: it creates the provider session (with this

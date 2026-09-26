@@ -361,7 +361,89 @@ print(r.json().get('status'))
 
 Esperado: `WORKING`, inalterado por qualquer deploy de frontend/API/worker.
 
-## 8. Estabilidade do ID de mensagem WAHA (PILOT.4A0/4A1)
+## 8. Visibilidade operacional da sessão WAHA (PILOT.4C)
+
+Três conceitos permanecem **separados** — nunca junte WAHA ao liveness do
+Docker: um WAHA fora do ar nunca deve tornar a API "unhealthy" nem disparar
+restart loop. Degradação do provedor é visível ao operador, não acoplada a
+restart.
+
+- **Process liveness** — o processo OMNIRA está vivo? (`vibe health`,
+  healthcheck do Docker de `omnira-api`/`omnira-worker`.)
+- **Application readiness** — a API consegue servir suas dependências
+  internas (Postgres, NATS)?
+- **External provider status** — o WAHA/sessão está utilizável? É isto que
+  esta seção cobre.
+
+### Endpoint operador (já existente, reaproveitado)
+
+`GET /api/v1/tenants/{tenant_id}/channels/waha/connections/{connection_id}`
+(mesma rota do painel de conexões — `channel.manage`, hoje só `tenant_admin`;
+nenhuma permissão nova foi criada nesta fase). Resposta relevante:
+
+```json
+{
+  "status": "active",
+  "session_status": "working",
+  "checked_at": "2026-09-26T20:00:00Z"
+}
+```
+
+- `session_status` vem de uma leitura **read-only** ao WAHA (`GET
+  /api/sessions/{name}` — nunca reinicia, nunca gera QR).
+- `checked_at` (PILOT.4C) marca quando essa leitura realmente aconteceu —
+  ausente em respostas que não chamaram o provedor (list/create).
+- Nunca retorna API key, credencial, QR ou payload bruto do provedor.
+- **Modelo de resposta**: quando o provedor está inacessível (timeout,
+  connection reset, 5xx) ou rejeita a chamada (auth), a requisição retorna um
+  **erro HTTP real** (502/503) — nunca um 200 disfarçado. Quando o provedor
+  responde mas a sessão não está `WORKING` (ex.: `stopped`, `failed`), a
+  resposta é **HTTP 200** com `session_status` refletindo o valor real — a
+  degradação faz parte do estado, não é uma falha de requisição.
+
+### Checagem periódica (somente leitura)
+
+`scripts/waha-session-check.sh` — chama o mesmo endpoint read-only do WAHA
+(`GET /api/sessions/{name}`) diretamente, sem depender da API OMNIRA. Nunca
+reinicia, reconecta ou gera QR; sai com código 0 apenas quando a sessão
+esperada está `WORKING`.
+
+```bash
+WAHA_SESSION=omnira_<connection-id> \
+  STATE_FILE=/var/log/omnira/waha-session-check.log \
+  scripts/waha-session-check.sh
+```
+
+Cron sugerido (a cada 5 min, fora do repositório — `crontab -e` do host):
+
+```
+*/5 * * * * WAHA_SESSION=omnira_<connection-id> STATE_FILE=/var/log/omnira/waha-session-check.log /caminho/para/scripts/waha-session-check.sh >/dev/null 2>&1
+```
+
+**ACTIVE NOTIFICATION: NÃO.** Não existe hoje integração com PagerDuty/Slack/
+e-mail neste projeto — este cron produz apenas um **log de estado
+local e timestampado** (`STATE_FILE`, fora do Git). Isso é visibilidade, não
+alerta ativo. Enquanto isso não mudar, o operador do piloto supervisionado
+precisa checar esse arquivo periodicamente (ou o endpoint acima) por conta
+própria; não presuma que uma falha "vai avisar alguém".
+
+### O que fazer quando a sessão não está `WORKING`
+
+**Nunca comece por "reiniciar o WAHA".** Ordem correta:
+
+1. Consultar o status (endpoint acima ou o script) — confirmar se é
+   `session_status` degradado (provedor respondeu) ou erro de requisição
+   (provedor inacessível) — são causas diferentes.
+2. Inspecionar os logs de entrega recentes por `message_id` (PILOT.4B —
+   `channel delivery: ...`) para entender se mensagens já estavam falhando
+   antes da degradação aparecer.
+3. Verificar alcançabilidade do provedor (o container está rodando? a rede
+   Docker está correta — ver seção 6?).
+4. Só então avaliar se uma reautenticação/QR é **realmente** necessária.
+5. Qualquer remediação do provedor/sessão (restart, novo QR) exige aprovação
+   humana explícita — nunca automática.
+
+## 9. Estabilidade do ID de mensagem WAHA (PILOT.4A0/4A1)
 
 O worker reserva um id de mensagem estável (`reserved_provider_message_id`)
 ANTES de qualquer chamada `sendText`, e reusa esse mesmo id em toda
@@ -386,7 +468,7 @@ Não é uma garantia de exactly-once global — apenas fecha a janela
 específica de crash entre `sendText` e `MarkSent`, e a de timeout com
 retry, para esta combinação de provedor/versão.
 
-## 9. Se qualquer P0 falhar
+## 10. Se qualquer P0 falhar
 
 Não declare o pilot pronto. Volte para a seção correspondente acima,
 reproduza o smoke test e corrija a causa raiz antes de tentar novamente —

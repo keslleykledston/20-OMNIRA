@@ -44,6 +44,10 @@ type connectionJSON struct {
 	Capabilities       []string  `json:"capabilities"`
 	RiskAcknowledgedAt *string   `json:"risk_acknowledged_at,omitempty"`
 	CreatedAt          string    `json:"created_at"`
+	// CheckedAt (PILOT.4C) — when the provider was actually asked for this
+	// live session status; omitted for views that never called the provider
+	// (List/Create). Operators use this to tell a fresh read from a stale one.
+	CheckedAt string `json:"checked_at,omitempty"`
 }
 
 func toJSON(v application.ConnectionView) connectionJSON {
@@ -56,6 +60,9 @@ func toJSON(v application.ConnectionView) connectionJSON {
 	if v.RiskAcknowledgedAt != nil {
 		s := v.RiskAcknowledgedAt.UTC().Format(time.RFC3339)
 		out.RiskAcknowledgedAt = &s
+	}
+	if !v.CheckedAt.IsZero() {
+		out.CheckedAt = v.CheckedAt.UTC().Format(time.RFC3339)
 	}
 	return out
 }

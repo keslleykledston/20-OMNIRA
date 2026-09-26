@@ -335,6 +335,12 @@ func TestWahaConnectionLifecycle(t *testing.T) {
 	if r.m["status"] != "active" || r.m["external_account_id"] != "5511988887777" {
 		t.Fatalf("working: %v", r.m)
 	}
+	// PILOT.4C: checked_at proves this was a live read, not a cached value.
+	if checkedAt, _ := r.m["checked_at"].(string); checkedAt == "" {
+		t.Fatalf("working: missing checked_at: %v", r.m)
+	} else if parsed, err := time.Parse(time.RFC3339, checkedAt); err != nil || time.Since(parsed) > 10*time.Second {
+		t.Fatalf("working: checked_at not a fresh RFC3339 timestamp: %q (err=%v)", checkedAt, err)
+	}
 	if n := e.count(`SELECT count(*) FROM channel_connections WHERE id=$1 AND status='active' AND external_account_id='5511988887777'`, id); n != 1 {
 		t.Fatal("status/account not persisted")
 	}
@@ -411,4 +417,31 @@ func TestWahaConnectionProviderErrorsAndConfig(t *testing.T) {
 	code(t, e2.do(e2.adminA, e2.tenantA, "POST", "/"+id2+"/session/start", ""), 502, "transient provider error")
 	e2.fake.set(ports.SessionMissing, ports.ErrAuthentication)
 	code(t, e2.do(e2.adminA, e2.tenantA, "GET", "/"+id2, ""), 502, "provider auth error")
+}
+
+// PILOT.4C: "provider reachable, session not WORKING" must be distinguished
+// from "provider unreachable" — the former is a truthful HTTP 200 with a
+// degraded semantic status (session_status + checked_at), never an error;
+// the latter (proven above) is a real HTTP error (502/503), never silently
+// reported as if the provider had answered.
+func TestWahaConnectionDegradedSessionIsHTTP200NotAnError(t *testing.T) {
+	e := newConnEnv(t, "https://omnira.example.com")
+	id := e.do(e.adminA, e.tenantA, "POST", "", `{"risk_acknowledged":true}`).m["id"].(string)
+
+	e.fake.set(ports.SessionFailed, nil)
+	r := e.do(e.adminA, e.tenantA, "GET", "/"+id, "")
+	code(t, r, 200, "get failed session")
+	if r.m["status"] != "failed" || r.m["session_status"] != "failed" {
+		t.Fatalf("degraded (failed) session not mapped truthfully: %v", r.m)
+	}
+	if checkedAt, _ := r.m["checked_at"].(string); checkedAt == "" {
+		t.Fatalf("degraded session missing checked_at: %v", r.m)
+	}
+
+	e.fake.set(ports.SessionStopped, nil)
+	r = e.do(e.adminA, e.tenantA, "GET", "/"+id, "")
+	code(t, r, 200, "get stopped session")
+	if r.m["status"] != "disconnected" || r.m["session_status"] != "stopped" {
+		t.Fatalf("degraded (stopped) session not mapped truthfully: %v", r.m)
+	}
 }
