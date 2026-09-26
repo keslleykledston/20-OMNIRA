@@ -212,9 +212,12 @@ func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnecti
 	if providerID != msg.IdempotencyKey {
 		// Protocol anomaly, not silently accepted: the reserved id is what
 		// every durability guarantee in PILOT.4A1 depends on being echoed
-		// back unchanged. No PII in this log — only opaque message ids.
+		// back unchanged. Distinct sentinel from ErrUnknown (PILOT.4A2):
+		// the delivery layer must NOT retry this automatically — see
+		// ports.ErrProviderIDMismatch doc. No PII in this log — only
+		// opaque message ids.
 		log.Printf("waha: sendText response id mismatch: reserved=%s provider_returned=%s", msg.IdempotencyKey, providerID)
-		return nil, fmt.Errorf("%w: provider returned a different message id than reserved", ports.ErrUnknown)
+		return nil, ports.ErrProviderIDMismatch
 	}
 	return &domain.SendResult{ProviderMessageID: providerID, State: domain.DeliveryStateSent}, nil
 }
@@ -252,6 +255,8 @@ func statusForError(err error) string {
 		return "permanent"
 	case errors.Is(err, ports.ErrTransient):
 		return "transient"
+	case errors.Is(err, ports.ErrProviderIDMismatch):
+		return "provider_id_mismatch"
 	default:
 		return "unknown"
 	}

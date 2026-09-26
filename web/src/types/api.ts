@@ -27,7 +27,7 @@ export interface MessageItem {
   conversation_id: string;
   body: string;
   direction: 'inbound' | 'outbound';
-  status: 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'pending';
+  status: 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'pending' | 'uncertain';
   created_at: string;
   created_by?: string;
   message_type?: string; // 'text', 'image', 'document', etc.

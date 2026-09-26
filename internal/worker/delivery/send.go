@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -54,6 +56,13 @@ type OutboundStore interface {
 	LockOutbound(ctx context.Context, messageID uuid.UUID) (*OutboundJob, error)
 	MarkSent(ctx context.Context, messageID uuid.UUID, providerMessageID string) error
 	MarkFailed(ctx context.Context, messageID uuid.UUID, reason string) error
+	// MarkUncertain (PILOT.4A2) records that the provider outcome could not
+	// be proven — never a confirmed rejection. provider_message_id is left
+	// untouched (empty, since no confirmed success occurred) and
+	// reserved_provider_message_id is retained, not cleared: a future
+	// reconciliation path (out of scope here) can still match an
+	// after-the-fact provider ack against the retained reservation.
+	MarkUncertain(ctx context.Context, messageID uuid.UUID, reason string) error
 	// EnsureReservedProviderMessageID durably persists a stable provider
 	// message id for messageID in its OWN committed transaction, separate
 	// from any transaction that later calls the provider — this is the
@@ -119,6 +128,26 @@ type envelope struct {
 // down to exactly one visible WhatsApp delivery — so reusing the same id on
 // retry is safe against duplicate customer-visible sends for this exact
 // provider/version, not a general at-least-once-becomes-exactly-once claim.
+//
+// Terminal outcome model (PILOT.4A2): OMNIRA only ever writes a status it can
+// actually prove.
+//
+//   - sent      — CONFIRMED_SUCCESS: the provider returned the exact reserved id.
+//   - failed    — CONFIRMED_FAILURE: a deterministic provider rejection
+//     (authentication, permanent validation, session disconnected,
+//     configuration). Retrying would not help; the provider proved the
+//     request was never dispatched.
+//   - uncertain — OUTCOME_UNKNOWN: every attempt was non-confirming (transport
+//     ambiguity, provider unavailable, rate limited, or a malformed/empty
+//     response) and the retry budget is exhausted, OR the provider returned a
+//     message id that didn't match what was reserved (terminal immediately —
+//     see ports.ErrProviderIDMismatch, not safe to auto-retry). Never
+//     reported as 'failed': OMNIRA cannot prove the message wasn't delivered.
+//
+// A confirmed rejection on any attempt still terminates as 'failed' even if
+// earlier attempts on the same message were non-confirming — each attempt is
+// classified independently, and whichever branch a given attempt reaches
+// decides the outcome; no cross-attempt state is needed.
 func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 	var job envelope
 	if err := json.Unmarshal(raw, &job); err != nil {
@@ -210,13 +239,30 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 		case sendErr == nil:
 			h.count(scoped, "sent")
 			return h.store.MarkSent(scoped, messageID, result.ProviderMessageID)
+		case errors.Is(sendErr, ports.ErrProviderIDMismatch):
+			// OUTCOME_UNKNOWN_TERMINAL (PILOT.4A2): never retried automatically
+			// — the provider may already have dispatched something under the
+			// unexpected id, so resending with the reserved id is not proven
+			// safe the way same-id redelivery is (PILOT.4A0 only covers a
+			// repeated submission of the SAME id). Terminal on the very first
+			// occurrence, not after exhausting the retry budget.
+			h.count(scoped, "uncertain")
+			h.logUncertain(scoped, messageID, "outcome_unknown:provider_id_mismatch")
+			return h.store.MarkUncertain(scoped, messageID, "outcome_unknown:provider_id_mismatch")
 		case Retryable(sendErr) && attempt < h.maxAttempts:
 			h.count(scoped, "retry")
 			return sendErr // rolls the transaction back; the message stays queued, reservation stays committed
 		case Retryable(sendErr):
-			h.count(scoped, "retries_exhausted")
-			return h.store.MarkFailed(scoped, messageID, "retries_exhausted:"+Classify(sendErr))
+			// OUTCOME_UNKNOWN_RETRYABLE_WITH_STABLE_ID, budget exhausted: every
+			// attempt was non-confirming (transport ambiguity, provider
+			// unavailable, rate limited, or a malformed/empty response) — never
+			// a proven rejection, so this is 'uncertain', not 'failed'.
+			h.count(scoped, "uncertain")
+			reason := "outcome_unknown:" + Classify(sendErr)
+			h.logUncertain(scoped, messageID, reason)
+			return h.store.MarkUncertain(scoped, messageID, reason)
 		default:
+			// CONFIRMED_FAILURE: a deterministic provider rejection.
 			h.count(scoped, "failed")
 			return h.store.MarkFailed(scoped, messageID, Classify(sendErr))
 		}
@@ -229,12 +275,34 @@ func (h *Handler) count(ctx context.Context, outcome string) {
 	}
 }
 
+// logUncertain (PILOT.4A2 §20) is the minimal detection hook for an unproven
+// terminal outcome — a full alert/observability pipeline is PILOT.4B's job,
+// not this slice's. Only opaque identifiers and the normalized reason are
+// logged: never message body, phone number, or raw provider payload.
+func (h *Handler) logUncertain(ctx context.Context, messageID uuid.UUID, reason string) {
+	tenantID := "unknown"
+	if tc, err := tenancydomain.FromContext(ctx); err == nil {
+		tenantID = tc.TenantID.String()
+	}
+	log.Printf("channel delivery: uncertain outcome tenant_id=%s message_id=%s reason=%s", tenantID, messageID, reason)
+}
+
 // Retryable is the worker retry policy for provider failures. Authentication,
 // configuration, permanent validation, and logged-out sessions are terminal.
+//
+// ErrUnknown (PILOT.4A2) is included here: a malformed/undecodable response
+// or an empty response id is safe to retry with the SAME reserved provider
+// message id — the request was already sent carrying that stable id, and
+// PILOT.4A0 proved the provider deduplicates a repeated submission of it.
+// ports.ErrProviderIDMismatch is deliberately NOT included — see its doc and
+// the dedicated switch case in Handle: it terminates immediately as
+// 'uncertain' instead, because that anomaly is not covered by the same-id
+// dedup proof.
 func Retryable(err error) bool {
 	return errors.Is(err, ports.ErrTransient) ||
 		errors.Is(err, ports.ErrRateLimited) ||
-		errors.Is(err, ports.ErrProviderUnavailable)
+		errors.Is(err, ports.ErrProviderUnavailable) ||
+		errors.Is(err, ports.ErrUnknown)
 }
 
 // Classify maps a provider error to a low-cardinality reason. Provider error

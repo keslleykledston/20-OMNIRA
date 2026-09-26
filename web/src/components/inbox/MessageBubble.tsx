@@ -16,6 +16,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   // Delivery status visual symbol
   const deliverySymbol =
     message.status === 'failed' ? '⚠' :
+    message.status === 'uncertain' ? '?' :
     message.status === 'pending' || message.status === 'queued' ? '◷' :
     message.status === 'sent' ? '✓' :
     message.status === 'delivered' ? '✓✓' :
@@ -25,7 +26,14 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const statusColor =
     message.status === 'read' ? 'text-accent-primary' :
     message.status === 'failed' ? 'text-status-danger' :
+    message.status === 'uncertain' ? 'text-text-secondary' :
     'text-text-tertiary';
+
+  // PILOT.4A2: 'uncertain' means OMNIRA could not prove the provider outcome
+  // — never say "failed" for it, and never suggest an automatic resend.
+  const statusTitle =
+    message.status === 'uncertain' ? 'A entrega não pôde ser confirmada' :
+    undefined;
 
   return (
     <div className={clsx(
@@ -53,7 +61,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
             hour: '2-digit',
             minute: '2-digit'
           })}</time>
-          {isOutbound && <span className={statusColor}>{deliverySymbol}</span>}
+          {isOutbound && <span className={statusColor} title={statusTitle}>{deliverySymbol}</span>}
         </footer>
       </div>
     </div>

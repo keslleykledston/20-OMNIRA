@@ -61,6 +61,17 @@ var (
 	ErrProviderUnavailable   = errors.New("channel: provider unavailable")
 	ErrSessionDisconnected   = errors.New("channel: provider session disconnected")
 	ErrUnknown               = errors.New("channel: provider error with unknown classification")
+
+	// ErrProviderIDMismatch — the provider responded with a non-empty
+	// message id that differs from the caller's reserved id (PILOT.4A1/
+	// PILOT.4A2). Distinct from ErrUnknown: this is NOT safe to retry
+	// automatically with the reserved id, because the provider may already
+	// have dispatched something under the unexpected id — PILOT.4A0 only
+	// proved deduplication for a repeated submission of the SAME id, not
+	// for this anomaly. Callers must terminate as an unproven outcome
+	// (never a confirmed failure — nothing proves the send didn't happen)
+	// without automatically resending.
+	ErrProviderIDMismatch = errors.New("channel: provider returned a different message id than reserved")
 )
 
 // ProviderMetadata — descrição estática de um provider, usada para exibir

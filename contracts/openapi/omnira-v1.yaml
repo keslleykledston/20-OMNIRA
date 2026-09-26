@@ -968,7 +968,7 @@ components:
         media_ref: { type: string }
         mime_type: { type: string }
         size_bytes: { type: integer, format: int64 }
-        status: { type: string, enum: [received, queued, sent, delivered, read, failed] }
+        status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain] }
         created_at: { type: string, format: date-time }
     MessagePage:
       type: object
@@ -994,7 +994,7 @@ components:
         conversation_id: { type: string, format: uuid }
         direction: { type: string, enum: [outbound] }
         body: { type: string }
-        status: { type: string, enum: [queued, sent, delivered, read, failed] }
+        status: { type: string, enum: [queued, sent, delivered, read, failed, uncertain] }
         created_at: { type: string, format: date-time }
     AssignRequest:
       type: object

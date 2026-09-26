@@ -237,6 +237,25 @@ func TestClientSendTextForwardsSuppliedIDVerbatim(t *testing.T) {
 	}
 }
 
+// PILOT.4A2: an HTTP 2xx response with an empty message id is not silently
+// treated as success — an id is always part of WAHA/GOWS's documented
+// contract (PILOT.4A0), so a missing one is a malformed response, not
+// evidence either way. Classified as ErrUnknown (safe to retry with the
+// same reserved id — the delivery layer decides what to do on exhaustion).
+func TestClientSendTextRejectsEmptyResponseID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":""}`))
+	}))
+	defer srv.Close()
+	c, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SendText(context.Background(), "omnira_conn", "5511999999999@c.us", "hello", "reserved-id-1"); !errors.Is(err, waha.ErrUnknown) {
+		t.Fatalf("empty response id accepted or misclassified: %v", err)
+	}
+}
+
 // PILOT.4A1 test E: neither the API key nor any request/response detail
 // leaks into an error message.
 func TestClientErrorsNeverContainAPIKey(t *testing.T) {

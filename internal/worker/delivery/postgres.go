@@ -172,6 +172,16 @@ func (s *PostgresOutboundStore) MarkFailed(ctx context.Context, messageID uuid.U
 		WHERE tenant_id=$1 AND id=$2 AND status='queued'`, reason)
 }
 
+// MarkUncertain (PILOT.4A2) records an unproven provider outcome.
+// provider_message_id is deliberately left untouched by this statement
+// (stays empty, since no confirmed success occurred) and
+// reserved_provider_message_id is never cleared — see the OutboundStore
+// interface doc.
+func (s *PostgresOutboundStore) MarkUncertain(ctx context.Context, messageID uuid.UUID, reason string) error {
+	return s.finish(ctx, messageID, `UPDATE messages SET status='uncertain', failure_reason=$3, updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND status='queued'`, reason)
+}
+
 func (s *PostgresOutboundStore) finish(ctx context.Context, messageID uuid.UUID, sql, value string) error {
 	tenantID, err := tenantOf(ctx)
 	if err != nil {

@@ -169,8 +169,12 @@ func TestProviderSendTextNormalizesRecipientAndReturnsCanonicalResult(t *testing
 	}
 }
 
-// PILOT.4A1 test H: a non-empty provider response id that differs from the
-// reserved id sent is a protocol anomaly, not silently accepted as success.
+// PILOT.4A1/4A2 test H: a non-empty provider response id that differs from
+// the reserved id sent is a protocol anomaly, not silently accepted as
+// success — and classified with its OWN sentinel (ErrProviderIDMismatch),
+// distinct from ErrUnknown, so the delivery layer can refuse to
+// automatically retry it (PILOT.4A2: the provider may already have
+// dispatched something under the unexpected id).
 func TestSendTextRejectsMismatchedResponseID(t *testing.T) {
 	connection := wahaConnection()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -193,8 +197,11 @@ func TestSendTextRejectsMismatchedResponseID(t *testing.T) {
 	if err == nil {
 		t.Fatalf("mismatched response id was silently accepted: %#v", result)
 	}
-	if !errors.Is(err, waha.ErrUnknown) {
-		t.Fatalf("expected an unknown/anomaly classification, got %v", err)
+	if !errors.Is(err, waha.ErrProviderIDMismatch) {
+		t.Fatalf("expected ErrProviderIDMismatch, got %v", err)
+	}
+	if errors.Is(err, waha.ErrUnknown) {
+		t.Fatal("mismatch must NOT also classify as ErrUnknown — the delivery layer needs to tell them apart to refuse auto-retry")
 	}
 }
 

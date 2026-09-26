@@ -19,6 +19,12 @@ const (
 	StatusDelivered   Status    = "delivered"
 	StatusRead        Status    = "read"
 	StatusFailed      Status    = "failed"
+	// StatusUncertain (PILOT.4A2) — the provider outcome could not be
+	// proven after all safe delivery attempts: neither a confirmed success
+	// (matching provider id) nor a confirmed deterministic rejection.
+	// Distinct from StatusFailed, which is reserved for outcomes OMNIRA can
+	// actually prove.
+	StatusUncertain Status = "uncertain"
 )
 
 type Message struct {

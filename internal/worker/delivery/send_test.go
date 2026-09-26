@@ -48,6 +48,11 @@ func (s *fakeStore) MarkFailed(_ context.Context, _ uuid.UUID, reason string) er
 	s.job.Status = "failed"
 	return nil
 }
+func (s *fakeStore) MarkUncertain(_ context.Context, _ uuid.UUID, reason string) error {
+	s.failure = reason
+	s.job.Status = "uncertain"
+	return nil
+}
 
 // EnsureReservedProviderMessageID mirrors the real Postgres semantics closely
 // enough for unit tests: reuse a reservation already on the job, otherwise
@@ -159,23 +164,136 @@ func TestRedeliveryAfterSuccessDoesNotResend(t *testing.T) {
 	}
 }
 
-func TestTransientFailureRetriesThenFailsAtLimit(t *testing.T) {
+// PILOT.4A2 tests F/G/H: every attempt for a message ends in a non-confirming
+// (but never disproven) outcome — repeated transport timeout, repeated 5xx,
+// and repeated rate-limiting all retry with the same reserved id and, once
+// the budget is exhausted, land on 'uncertain' — never 'failed', since
+// nothing here proves the provider rejected the message.
+func TestUncertainOnRetryableExhaustion(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		reason string
+	}{
+		"transport_timeout": {fmt.Errorf("timeout: %w", ports.ErrTransient), "outcome_unknown:transient"},
+		"provider_5xx":      {fmt.Errorf("boom: %w", ports.ErrProviderUnavailable), "outcome_unknown:provider_unavailable"},
+		"rate_limited":      {fmt.Errorf("slow down: %w", ports.ErrRateLimited), "outcome_unknown:rate_limited"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, store, sender, raw := setup(t)
+			sender.err = tc.err
+			for attempt := 1; attempt <= 2; attempt++ {
+				err := h.Handle(context.Background(), raw, attempt)
+				if err == nil || errors.Is(err, delivery.ErrPermanent) {
+					t.Fatalf("attempt %d: want retryable error, got %v", attempt, err)
+				}
+				if store.job.Status != "queued" || store.commitOK {
+					t.Fatal("a retry must leave the message queued and roll back")
+				}
+			}
+			firstReserved := store.job.ReservedProviderMessageID
+			if err := h.Handle(context.Background(), raw, 3); err != nil {
+				t.Fatalf("final attempt must record the uncertain outcome and ack: %v", err)
+			}
+			if store.job.Status != "uncertain" || store.failure != tc.reason {
+				t.Fatalf("status=%s reason=%q, want uncertain / %q", store.job.Status, store.failure, tc.reason)
+			}
+			if store.job.ReservedProviderMessageID != firstReserved {
+				t.Fatal("the reserved id must be retained, not cleared, on an uncertain outcome")
+			}
+			if sender.newIDCalls != 1 {
+				t.Fatalf("NewMessageID calls = %d, want 1 total across every attempt", sender.newIDCalls)
+			}
+		})
+	}
+}
+
+// PILOT.4A2 tests I/J/K/L: an undecodable response and an empty response id
+// both surface as ErrUnknown from the sender's perspective (the concrete
+// distinction is exercised at the waha client level —
+// TestClientSendTextRejectsEmptyResponseID). Both are safe to retry with the
+// same reserved id and, if never resolved, exhaust to 'uncertain' — but a
+// later confirming attempt still resolves to 'sent'.
+func TestErrUnknownRetriesThenSucceeds(t *testing.T) {
 	h, store, sender, raw := setup(t)
-	sender.err = fmt.Errorf("boom: %w", ports.ErrProviderUnavailable)
+	sender.err = ports.ErrUnknown
+	if err := h.Handle(context.Background(), raw, 1); err == nil {
+		t.Fatal("an ErrUnknown outcome must be retried, not terminated immediately")
+	}
+	if store.job.Status != "queued" {
+		t.Fatalf("status=%s, want queued (retry must roll back)", store.job.Status)
+	}
+	reserved := store.job.ReservedProviderMessageID
+	if reserved == "" {
+		t.Fatal("the reservation must survive the ambiguous attempt")
+	}
+	sender.err = nil
+	if err := h.Handle(context.Background(), raw, 2); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.Status != "sent" {
+		t.Fatalf("status=%s, want sent once a confirming attempt occurs", store.job.Status)
+	}
+	if sender.got.IdempotencyKey != reserved || sender.newIDCalls != 1 {
+		t.Fatalf("retry must reuse the same reserved id %q, got %q (newIDCalls=%d)", reserved, sender.got.IdempotencyKey, sender.newIDCalls)
+	}
+}
+
+func TestErrUnknownExhaustionBecomesUncertain(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	sender.err = ports.ErrUnknown
 	for attempt := 1; attempt <= 2; attempt++ {
-		err := h.Handle(context.Background(), raw, attempt)
-		if err == nil || errors.Is(err, delivery.ErrPermanent) {
-			t.Fatalf("attempt %d: want retryable error, got %v", attempt, err)
-		}
-		if store.job.Status != "queued" || store.commitOK {
-			t.Fatal("a retry must leave the message queued and roll back")
+		if err := h.Handle(context.Background(), raw, attempt); err == nil {
+			t.Fatalf("attempt %d: want a retryable error", attempt)
 		}
 	}
 	if err := h.Handle(context.Background(), raw, 3); err != nil {
-		t.Fatalf("final attempt must record failure and ack: %v", err)
+		t.Fatal(err)
 	}
-	if store.job.Status != "failed" || store.failure != "retries_exhausted:provider_unavailable" {
-		t.Fatalf("status=%s reason=%q", store.job.Status, store.failure)
+	if store.job.Status != "uncertain" || store.failure != "outcome_unknown:unknown" {
+		t.Fatalf("status=%s reason=%q, want uncertain / outcome_unknown:unknown", store.job.Status, store.failure)
+	}
+}
+
+// PILOT.4A2 test M (central safety assertion, §15): a provider-id mismatch
+// terminates as 'uncertain' on the VERY FIRST occurrence — never retried,
+// regardless of remaining attempt budget — because retrying is not proven
+// safe the way same-id redelivery is.
+func TestProviderIDMismatchIsUncertainImmediatelyWithoutRetry(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	sender.err = ports.ErrProviderIDMismatch
+	if err := h.Handle(context.Background(), raw, 1); err != nil {
+		t.Fatalf("a provider id mismatch must be acked as a terminal outcome, not retried: %v", err)
+	}
+	if store.job.Status != "uncertain" || store.failure != "outcome_unknown:provider_id_mismatch" {
+		t.Fatalf("status=%s reason=%q, want uncertain / outcome_unknown:provider_id_mismatch", store.job.Status, store.failure)
+	}
+	if sender.calls != 1 {
+		t.Fatalf("SendText calls = %d, want exactly 1 — no automatic retry after a mismatch", sender.calls)
+	}
+	// A later Handle() call (e.g. a spurious redelivery) must not call the
+	// provider again: the message is already terminal.
+	if err := h.Handle(context.Background(), raw, 2); err != nil {
+		t.Fatal(err)
+	}
+	if sender.calls != 1 {
+		t.Fatalf("SendText calls = %d after a second Handle() on an uncertain message, want still 1", sender.calls)
+	}
+}
+
+// PILOT.4A2 test N/O: once a message is 'uncertain', further Handle() calls
+// never call the provider again, and the reservation stays intact.
+func TestUncertainMessageIsNeverRedelivered(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	store.job.Status = "uncertain"
+	store.job.ReservedProviderMessageID = "already-reserved-id"
+	if err := h.Handle(context.Background(), raw, 1); err != nil {
+		t.Fatal(err)
+	}
+	if sender.calls != 0 || sender.newIDCalls != 0 {
+		t.Fatalf("an uncertain message must never be redelivered: sendCalls=%d newIDCalls=%d", sender.calls, sender.newIDCalls)
+	}
+	if store.job.ReservedProviderMessageID != "already-reserved-id" {
+		t.Fatal("the reservation must remain untouched on an uncertain message")
 	}
 }
 

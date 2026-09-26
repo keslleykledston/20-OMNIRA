@@ -174,7 +174,9 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 		t.Fatalf("redelivery: err=%v calls=%d", err, sender.calls)
 	}
 
-	// Transient failure: rolled back, still queued; then exhausted => failed with a class-only reason.
+	// Transient failure: rolled back, still queued; then exhausted => PILOT.4A2
+	// 'uncertain' with a class-only reason, never 'failed' — nothing here
+	// proves the provider rejected the message.
 	m2 := queue(conv, "segunda")
 	sender.err = fmt.Errorf("upstream detail: %w", ports.ErrProviderUnavailable)
 	if err := h.Handle(ctx, job(m2), 1); err == nil {
@@ -186,7 +188,7 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 	if err := h.Handle(ctx, job(m2), 3); err != nil {
 		t.Fatal(err)
 	}
-	if s, _, r := row(m2); s != "failed" || r != "retries_exhausted:provider_unavailable" {
+	if s, _, r := row(m2); s != "uncertain" || r != "outcome_unknown:provider_unavailable" {
 		t.Fatalf("after exhaustion: %s %q", s, r)
 	}
 

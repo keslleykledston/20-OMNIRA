@@ -23,6 +23,7 @@ var (
 	ErrSessionDisconnected   = ports.ErrSessionDisconnected
 	ErrUnknown               = ports.ErrUnknown
 	ErrMediaSourceNotAllowed = ports.ErrMediaSourceNotAllowed
+	ErrProviderIDMismatch    = ports.ErrProviderIDMismatch
 )
 
 const maxDownloadedMedia = 25 << 20
