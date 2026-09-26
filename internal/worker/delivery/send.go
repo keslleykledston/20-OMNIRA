@@ -160,11 +160,15 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 
 	// Read-only peek (own short transaction) to learn the connection and
 	// whether a reservation or terminal status already exists, before
-	// deciding whether phase 1 is even needed.
+	// deciding whether phase 1 is even needed. Also captures tenant_id
+	// (PILOT.4B) for the log lines below, which run outside any tenant
+	// session — RunForMessage's tenant context does not outlive its closure.
 	var peek *OutboundJob
+	tenantID := "unknown"
 	if err := h.store.RunForMessage(ctx, messageID, func(scoped context.Context) error {
 		var err error
 		peek, err = h.store.LockOutbound(scoped, messageID)
+		tenantID = tenantIDString(scoped)
 		return err
 	}); err != nil {
 		return err
@@ -174,6 +178,7 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 	}
 	if peek.Status != "queued" || peek.ProviderMessageID != "" {
 		h.count(ctx, "already_processed")
+		log.Printf("channel delivery: skipped, already terminal message_id=%s tenant_id=%s status=%s", messageID, tenantID, peek.Status)
 		return nil
 	}
 	if !peek.ConnectionActive || peek.ConnectionID == uuid.Nil {
@@ -182,6 +187,7 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 			return h.store.MarkFailed(scoped, messageID, "channel_not_active")
 		})
 	}
+	log.Printf("channel delivery: attempt started message_id=%s tenant_id=%s attempt=%d", messageID, tenantID, attempt)
 
 	// PHASE 1 — RESERVATION. Skipped entirely (no provider call, no new id)
 	// when a reservation already exists — this is what makes redelivery,
@@ -238,6 +244,7 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 		switch {
 		case sendErr == nil:
 			h.count(scoped, "sent")
+			log.Printf("channel delivery: sent message_id=%s tenant_id=%s outcome=sent", messageID, tenantIDString(scoped))
 			return h.store.MarkSent(scoped, messageID, result.ProviderMessageID)
 		case errors.Is(sendErr, ports.ErrProviderIDMismatch):
 			// OUTCOME_UNKNOWN_TERMINAL (PILOT.4A2): never retried automatically
@@ -251,6 +258,7 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 			return h.store.MarkUncertain(scoped, messageID, "outcome_unknown:provider_id_mismatch")
 		case Retryable(sendErr) && attempt < h.maxAttempts:
 			h.count(scoped, "retry")
+			log.Printf("channel delivery: retry message_id=%s tenant_id=%s attempt=%d outcome=retry error_class=%s", messageID, tenantIDString(scoped), attempt, Classify(sendErr))
 			return sendErr // rolls the transaction back; the message stays queued, reservation stays committed
 		case Retryable(sendErr):
 			// OUTCOME_UNKNOWN_RETRYABLE_WITH_STABLE_ID, budget exhausted: every
@@ -264,6 +272,7 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 		default:
 			// CONFIRMED_FAILURE: a deterministic provider rejection.
 			h.count(scoped, "failed")
+			log.Printf("channel delivery: failed message_id=%s tenant_id=%s outcome=failed error_class=%s", messageID, tenantIDString(scoped), Classify(sendErr))
 			return h.store.MarkFailed(scoped, messageID, Classify(sendErr))
 		}
 	})
@@ -280,11 +289,18 @@ func (h *Handler) count(ctx context.Context, outcome string) {
 // not this slice's. Only opaque identifiers and the normalized reason are
 // logged: never message body, phone number, or raw provider payload.
 func (h *Handler) logUncertain(ctx context.Context, messageID uuid.UUID, reason string) {
-	tenantID := "unknown"
-	if tc, err := tenancydomain.FromContext(ctx); err == nil {
-		tenantID = tc.TenantID.String()
+	log.Printf("channel delivery: uncertain message_id=%s tenant_id=%s outcome=uncertain error_class=%s", messageID, tenantIDString(ctx), reason)
+}
+
+// tenantIDString (PILOT.4B) — best-effort, non-fatal tenant lookup for log
+// lines: logging must never fail or block delivery over a missing tenant
+// context, so this returns "unknown" instead of an error.
+func tenantIDString(ctx context.Context) string {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil {
+		return "unknown"
 	}
-	log.Printf("channel delivery: uncertain outcome tenant_id=%s message_id=%s reason=%s", tenantID, messageID, reason)
+	return tc.TenantID.String()
 }
 
 // Retryable is the worker retry policy for provider failures. Authentication,

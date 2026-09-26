@@ -1,10 +1,13 @@
 package delivery_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"testing"
 
@@ -13,6 +16,18 @@ import (
 	"github.com/omnira/omnira/internal/channels/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
 )
+
+// captureLogs (PILOT.4B) — a small local capture is enough here; no general
+// logging-test framework is warranted for one package's log lines.
+func captureLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+	fn()
+	return buf.String()
+}
 
 type fakeStore struct {
 	mu           sync.Mutex
@@ -127,6 +142,20 @@ func setup(t *testing.T) (*delivery.Handler, *fakeStore, *fakeSender, []byte) {
 	}
 	// The envelope carries a forged tenant and payload text: only aggregate_id may matter.
 	raw, _ := json.Marshal(map[string]any{"aggregate_id": msgID.String(), "tenant_id": uuid.NewString(), "payload": map[string]string{"text": "forged", "to_e164": "+1"}})
+	return h, store, sender, raw
+}
+
+// setupWithMessageID is setup's twin for PILOT.4B's correlation walkthrough
+// test, which needs to feed a message_id produced by a different package
+// (messages/application's Sender.Send) into the delivery worker's fakes.
+func setupWithMessageID(t *testing.T, msgID, connID uuid.UUID) (*delivery.Handler, *fakeStore, *fakeSender, []byte) {
+	store := &fakeStore{job: &delivery.OutboundJob{MessageID: msgID, ConnectionID: connID, ToE164: "+5511999990000", Text: "oi", Status: "queued", ConnectionActive: true}}
+	sender := &fakeSender{}
+	h, err := delivery.NewHandler(store, sender, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"aggregate_id": msgID.String()})
 	return h, store, sender, raw
 }
 
@@ -503,5 +532,118 @@ func TestConfirmedSuccessRetainsReservationForAudit(t *testing.T) {
 	}
 	if sender.got.IdempotencyKey != store.job.ReservedProviderMessageID {
 		t.Fatal("confirmed send must have used the reserved id")
+	}
+}
+
+// --- PILOT.4B: outbound correlation logging ------------------------------
+
+// A: a confirmed success log line carries message_id.
+func TestLogSentContainsMessageID(t *testing.T) {
+	h, store, _, raw := setup(t)
+	logs := captureLogs(t, func() {
+		if err := h.Handle(context.Background(), raw, 1); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(logs, "message_id="+store.job.MessageID.String()) {
+		t.Fatalf("sent log missing message_id: %s", logs)
+	}
+	if !strings.Contains(logs, "outcome=sent") {
+		t.Fatalf("sent log missing outcome=sent: %s", logs)
+	}
+}
+
+// B: a retry log line carries message_id and a normalized error class (never
+// the raw error text, which could carry provider detail).
+func TestLogRetryContainsMessageIDAndErrorClass(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	sender.err = fmt.Errorf("upstream said something with an internal detail: %w", ports.ErrProviderUnavailable)
+	logs := captureLogs(t, func() {
+		if err := h.Handle(context.Background(), raw, 1); err == nil {
+			t.Fatal("expected a retryable error")
+		}
+	})
+	if !strings.Contains(logs, "message_id="+store.job.MessageID.String()) {
+		t.Fatalf("retry log missing message_id: %s", logs)
+	}
+	if !strings.Contains(logs, "outcome=retry") || !strings.Contains(logs, "error_class=provider_unavailable") {
+		t.Fatalf("retry log missing normalized outcome/error_class: %s", logs)
+	}
+	if strings.Contains(logs, "internal detail") {
+		t.Fatalf("retry log leaked raw error text instead of a normalized class: %s", logs)
+	}
+}
+
+// C: a definitive-failure terminal log line carries message_id.
+func TestLogFailedContainsMessageID(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	sender.err = ports.ErrAuthentication
+	logs := captureLogs(t, func() {
+		if err := h.Handle(context.Background(), raw, 1); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(logs, "message_id="+store.job.MessageID.String()) {
+		t.Fatalf("failed log missing message_id: %s", logs)
+	}
+	if !strings.Contains(logs, "outcome=failed") || !strings.Contains(logs, "error_class=authentication") {
+		t.Fatalf("failed log missing normalized outcome/error_class: %s", logs)
+	}
+}
+
+// D: an uncertain terminal log line carries message_id.
+func TestLogUncertainContainsMessageID(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	sender.err = ports.ErrUnknown
+	logs := captureLogs(t, func() {
+		for attempt := 1; attempt <= 3; attempt++ {
+			_ = h.Handle(context.Background(), raw, attempt)
+		}
+	})
+	if !strings.Contains(logs, "message_id="+store.job.MessageID.String()) {
+		t.Fatalf("uncertain log missing message_id: %s", logs)
+	}
+	if !strings.Contains(logs, "outcome=uncertain") || !strings.Contains(logs, "error_class=outcome_unknown:unknown") {
+		t.Fatalf("uncertain log missing normalized outcome/error_class: %s", logs)
+	}
+}
+
+// F/G: no message body or recipient phone ever appears in delivery logs,
+// across every outcome exercised above.
+func TestLogsNeverLeakBodyOrPhone(t *testing.T) {
+	h, _, sender, raw := setup(t)
+	var all strings.Builder
+	all.WriteString(captureLogs(t, func() { sender.err = ports.ErrAuthentication; _ = h.Handle(context.Background(), raw, 1) }))
+	h2, _, _, raw2 := setup(t)
+	all.WriteString(captureLogs(t, func() { _ = h2.Handle(context.Background(), raw2, 1) }))
+	h3, _, sender3, raw3 := setup(t)
+	sender3.err = ports.ErrProviderIDMismatch
+	all.WriteString(captureLogs(t, func() { _ = h3.Handle(context.Background(), raw3, 1) }))
+
+	logs := all.String()
+	if strings.Contains(logs, "oi") {
+		t.Fatalf("delivery logs leaked the message body: %s", logs)
+	}
+	if strings.Contains(logs, "+5511999990000") {
+		t.Fatalf("delivery logs leaked the recipient phone: %s", logs)
+	}
+}
+
+// N (delivery side of I/J/K/L exhaustion): terminalizing to uncertain
+// consumes the message; a further Handle() call never re-invokes the
+// provider and logs the skip, not a new attempt.
+func TestLogSkipWhenAlreadyTerminal(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	store.job.Status = "uncertain"
+	logs := captureLogs(t, func() {
+		if err := h.Handle(context.Background(), raw, 1); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if sender.calls != 0 {
+		t.Fatalf("provider called %d times for an already-terminal message", sender.calls)
+	}
+	if !strings.Contains(logs, "message_id="+store.job.MessageID.String()) || !strings.Contains(logs, "status=uncertain") {
+		t.Fatalf("skip log missing message_id/status: %s", logs)
 	}
 }

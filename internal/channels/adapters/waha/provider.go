@@ -214,9 +214,11 @@ func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnecti
 		// every durability guarantee in PILOT.4A1 depends on being echoed
 		// back unchanged. Distinct sentinel from ErrUnknown (PILOT.4A2):
 		// the delivery layer must NOT retry this automatically — see
-		// ports.ErrProviderIDMismatch doc. No PII in this log — only
-		// opaque message ids.
-		log.Printf("waha: sendText response id mismatch: reserved=%s provider_returned=%s", msg.IdempotencyKey, providerID)
+		// ports.ErrProviderIDMismatch doc. This adapter has no OMNIRA
+		// message_id to correlate with (only connection_id) — the
+		// message-correlated terminal log is the worker's job (PILOT.4B
+		// logUncertain); neither id value is printed here, per policy.
+		log.Printf("waha: sendText response id mismatch connection_id=%s provider_id_mismatch=true", conn.ID)
 		return nil, ports.ErrProviderIDMismatch
 	}
 	return &domain.SendResult{ProviderMessageID: providerID, State: domain.DeliveryStateSent}, nil

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -105,6 +106,13 @@ func (s *Sender) Send(ctx context.Context, conversationID uuid.UUID, text, idemp
 	}
 	if replayed && (msg.RequestHash != hash || msg.ConversationID != conversationID) {
 		return SendResult{}, ErrIdempotencyMismatch
+	}
+	if !replayed {
+		// PILOT.4B: the first observable point in the outbound lifecycle,
+		// logged only after InsertQueued's atomic transaction has committed.
+		// message_id is the durable cross-stage correlation key from here on
+		// (through outbox publish and worker delivery) — no message text.
+		log.Printf("messages: accepted message_id=%s tenant_id=%s conversation_id=%s outcome=queued", msg.ID, tc.TenantID, conversationID)
 	}
 	return SendResult{Message: msg, Replayed: replayed}, nil
 }

@@ -91,6 +91,33 @@ func TestPublisherBatchSize(t *testing.T) {
 	}
 }
 
+// PILOT.4B test E: for the outbound send job, aggregate_id IS message_id
+// (internal/messages/adapters/postgres.go's outbox insert uses the message's
+// own id), so the publish-failure log must include it alongside
+// outbox_event_id. For every other event type, aggregate_id is a different
+// aggregate (tenant, membership, conversation) and must NOT be labeled
+// message_id. Verified as a focused unit test of the pure field-selection
+// logic rather than a full JetStream-failure integration test — the
+// jetstream.JetStream interface is large enough that faking it fully here
+// would be its own small testing framework for one log line.
+func TestMessageIDSuffixOnlyForOutboundSendJob(t *testing.T) {
+	sendEvent, err := domain.NewOutboxEvent(uuid.New(), domain.JobChannelSendText, domain.AggregateMessage, uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDSuffix(sendEvent); got != " message_id="+sendEvent.AggregateID.String() {
+		t.Fatalf("send-text job: got %q", got)
+	}
+
+	other, err := domain.NewOutboxEvent(uuid.New(), domain.EventTenantCreated, domain.AggregateTenant, uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDSuffix(other); got != "" {
+		t.Fatalf("unrelated event type must not be labeled message_id, got %q", got)
+	}
+}
+
 func TestRoutingJobUsesCanonicalSubject(t *testing.T) {
 	event, err := domain.NewOutboxEvent(uuid.New(), domain.JobRoutingAssign, domain.AggregateConversation, uuid.New(), uuid.New())
 	if err != nil {

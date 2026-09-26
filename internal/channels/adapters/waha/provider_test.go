@@ -1,9 +1,11 @@
 package waha_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -202,6 +204,43 @@ func TestSendTextRejectsMismatchedResponseID(t *testing.T) {
 	}
 	if errors.Is(err, waha.ErrUnknown) {
 		t.Fatal("mismatch must NOT also classify as ErrUnknown — the delivery layer needs to tell them apart to refuse auto-retry")
+	}
+}
+
+// PILOT.4B test I: the mismatch log at the adapter layer names the anomaly
+// (provider_id_mismatch=true) and the connection, but prints NEITHER the
+// reserved id nor the provider-returned id — the message-correlated version
+// of this event is the worker's job (send.go's logUncertain).
+func TestProviderIDMismatchLogOmitsBothIDs(t *testing.T) {
+	connection := wahaConnection()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"totally-different-id"}`))
+	}))
+	defer srv.Close()
+	client, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := waha.NewProvider(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	_, err = provider.SendText(context.Background(), connection, domain.OutboundTextMessage{
+		ToE164: "+5511999999999", Text: "hello", IdempotencyKey: "reserved-outbox-1",
+	})
+	log.SetOutput(orig)
+	if err == nil {
+		t.Fatal("expected a mismatch error")
+	}
+	logs := buf.String()
+	if strings.Contains(logs, "reserved-outbox-1") || strings.Contains(logs, "totally-different-id") {
+		t.Fatalf("mismatch log printed an id value, want neither: %s", logs)
+	}
+	if !strings.Contains(logs, "provider_id_mismatch=true") || !strings.Contains(logs, "connection_id="+connection.ID.String()) {
+		t.Fatalf("mismatch log missing expected fields: %s", logs)
 	}
 }
 

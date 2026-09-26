@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -74,14 +75,17 @@ func (p *Publisher) PublishUnpublished(ctx context.Context) (int, error) {
 	published := 0
 	for _, event := range events {
 		if err := p.publishEvent(ctx, event); err != nil {
-			// Log error but continue com próximos eventos
-			fmt.Printf("failed to publish event %s: %v\n", event.ID, err)
+			// PILOT.4B: for the outbound send job, aggregate_id IS message_id
+			// (see internal/messages/adapters/postgres.go's outbox insert) —
+			// include it alongside outbox_event_id so an operator can follow
+			// a message from acceptance through to a publish failure.
+			log.Printf("outbox: publish failed outbox_event_id=%s%s tenant_id=%s: %v", event.ID, messageIDSuffix(event), event.TenantID, err)
 
 			// Record attempt for retry logic
 			if err := p.runSession(ctx, func(scoped context.Context) error {
 				return p.outboxSvc.RecordAttempt(scoped, event.ID)
 			}); err != nil {
-				fmt.Printf("failed to record attempt for event %s: %v\n", event.ID, err)
+				log.Printf("outbox: record attempt failed outbox_event_id=%s%s tenant_id=%s: %v", event.ID, messageIDSuffix(event), event.TenantID, err)
 			}
 			continue
 		}
@@ -144,6 +148,16 @@ func (p *Publisher) publishEvent(ctx context.Context, event *domain.OutboxEvent)
 	}
 
 	return fmt.Errorf("max retries exceeded publishing to %s", subject)
+}
+
+// messageIDSuffix — for the outbound send job, aggregate_id is the message
+// id; for every other event type it is a different aggregate (tenant,
+// membership, conversation), so nothing message-specific is added.
+func messageIDSuffix(event *domain.OutboxEvent) string {
+	if event.EventType != domain.JobChannelSendText {
+		return ""
+	}
+	return " message_id=" + event.AggregateID.String()
 }
 
 func subjectForEvent(event *domain.OutboxEvent) string {
