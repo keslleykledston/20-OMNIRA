@@ -49,6 +49,10 @@ func (f *fakeProvider) SendText(ctx context.Context, conn domain.ChannelConnecti
 	return &domain.SendResult{ProviderMessageID: "fake-sent-1", State: domain.DeliveryStateSent}, nil
 }
 
+func (f *fakeProvider) NewMessageID(ctx context.Context, conn domain.ChannelConnection) (string, error) {
+	return "fake-reserved-1", nil
+}
+
 func (f *fakeProvider) SendMedia(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundMediaMessage) (*domain.SendResult, error) {
 	return nil, ports.ErrCapabilityNotSupported
 }

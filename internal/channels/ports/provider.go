@@ -184,6 +184,17 @@ type ChannelProvider interface {
 	SendMedia(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundMediaMessage) (*domain.SendResult, error)
 	SendTemplate(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundTemplateMessage) (*domain.SendResult, error)
 
+	// NewMessageID reserves a stable, provider-generated message id with no
+	// delivery side effect (PILOT.4A1) — the caller persists it durably
+	// BEFORE calling SendText and reuses the exact same id on every
+	// retry/redelivery, so a crash between a successful send and recording
+	// that success can never cause a second visible delivery on a provider
+	// that deduplicates by this id. A provider without this capability
+	// (e.g. one that only assigns its own message id in the send response)
+	// returns ErrCapabilityNotSupported, same as SendMedia/SendTemplate do
+	// today — callers fall back to not reserving an id ahead of time.
+	NewMessageID(ctx context.Context, conn domain.ChannelConnection) (string, error)
+
 	// DownloadMedia — o adapter é responsável por validar a URL/host
 	// devolvida pelo provider contra uma allowlist antes de baixar
 	// (proteção SSRF); deve retornar ErrMediaSourceNotAllowed quando a

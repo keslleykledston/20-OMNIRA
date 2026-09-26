@@ -361,7 +361,32 @@ print(r.json().get('status'))
 
 Esperado: `WORKING`, inalterado por qualquer deploy de frontend/API/worker.
 
-## 8. Se qualquer P0 falhar
+## 8. Estabilidade do ID de mensagem WAHA (PILOT.4A0/4A1)
+
+O worker reserva um id de mensagem estável (`reserved_provider_message_id`)
+ANTES de qualquer chamada `sendText`, e reusa esse mesmo id em toda
+redelivery/retry — isso fecha a janela de envio duplicado numa
+crash/timeout entre o `sendText` bem-sucedido e o commit de `MarkSent`. A
+garantia depende de uma propriedade RUNTIME-PROVADA (não documentada pelo
+vendor) da versão exata do WAHA/GOWS hoje pinada em produção:
+**gows-2026.8.2** — enviar duas vezes o mesmo id de mensagem resulta em
+exatamente UMA entrega visível no WhatsApp (PILOT.4A0).
+
+**Isso não é garantido para nenhuma outra versão.** Antes de atualizar a
+imagem/engine do WAHA:
+
+1. repetir o smoke test de idempotência do PILOT.4A0 (dois `POST
+   /api/sendText` com o mesmo `id`, contato de teste dedicado, confirmar
+   exatamente uma entrega visível — dois HTTP 200 sozinhos NÃO bastam como
+   evidência);
+2. só depois atualizar a imagem, sob pena de reabrir a janela de envio
+   duplicado sem aviso.
+
+Não é uma garantia de exactly-once global — apenas fecha a janela
+específica de crash entre `sendText` e `MarkSent`, e a de timeout com
+retry, para esta combinação de provedor/versão.
+
+## 9. Se qualquer P0 falhar
 
 Não declare o pilot pronto. Volte para a seção correspondente acima,
 reproduza o smoke test e corrija a causa raiz antes de tentar novamente —

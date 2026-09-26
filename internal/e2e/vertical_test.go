@@ -60,6 +60,12 @@ func newFakeWAHA(t *testing.T) *fakeWAHA {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/new-message-id") && r.Method == http.MethodGet {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": fmt.Sprintf("reserved-e2e-%d", len(f.sends)+1)})
+			return
+		}
 		if r.URL.Path == "/api/sendText" && r.Method == http.MethodPost {
 			body, _ := io.ReadAll(r.Body)
 			var req map[string]string
@@ -71,7 +77,13 @@ func newFakeWAHA(t *testing.T) *fakeWAHA {
 				return
 			}
 			f.sends = append(f.sends, req)
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": fmt.Sprintf("true_%s_ABC%d", req["chatId"], len(f.sends))})
+			// Echo the caller-supplied id verbatim, like real WAHA/GOWS
+			// (PILOT.4A0/4A1) — a real send always carries a reserved id now.
+			id := req["id"]
+			if id == "" {
+				id = fmt.Sprintf("true_%s_ABC%d", req["chatId"], len(f.sends))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
 			return
 		}
 		http.NotFound(w, r)

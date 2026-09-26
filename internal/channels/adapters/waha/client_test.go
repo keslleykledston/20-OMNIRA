@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
@@ -104,10 +105,10 @@ func TestClientSendTextUsesCanonicalWAHABody(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["session"] != "omnira_conn" || body["chatId"] != "5511999999999@c.us" || body["text"] != "hello" {
+		if body["session"] != "omnira_conn" || body["chatId"] != "5511999999999@c.us" || body["text"] != "hello" || body["id"] != "reserved-msg-id-1" {
 			t.Fatalf("unexpected body: %#v", body)
 		}
-		_, _ = w.Write([]byte(`{"id":"false_5511999999999@c.us_abc"}`))
+		_, _ = w.Write([]byte(`{"id":"reserved-msg-id-1"}`))
 	}))
 	defer srv.Close()
 
@@ -115,8 +116,8 @@ func TestClientSendTextUsesCanonicalWAHABody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := c.SendText(context.Background(), "omnira_conn", "5511999999999@c.us", "hello")
-	if err != nil || id != "false_5511999999999@c.us_abc" {
+	id, err := c.SendText(context.Background(), "omnira_conn", "5511999999999@c.us", "hello", "reserved-msg-id-1")
+	if err != nil || id != "reserved-msg-id-1" {
 		t.Fatalf("unexpected result: %q, %v", id, err)
 	}
 }
@@ -161,5 +162,102 @@ func TestClientDownloadMediaRestrictsOriginAndSize(t *testing.T) {
 	}
 	if _, _, err := c.DownloadMedia(context.Background(), "https://attacker.example/secret"); !errors.Is(err, waha.ErrMediaSourceNotAllowed) {
 		t.Fatalf("external media origin accepted: %v", err)
+	}
+}
+
+// PILOT.4A1 test A: NewMessageID calls the exact deployed provider endpoint
+// (read-only — no send side effect) and parses the response correctly.
+func TestClientNewMessageIDCallsExactEndpoint(t *testing.T) {
+	var gotMethod, gotPath, gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotAPIKey = r.Method, r.URL.Path, r.Header.Get("X-Api-Key")
+		_, _ = w.Write([]byte(`{"id":"3EB0D8E5188C881CA54F3A"}`))
+	}))
+	defer srv.Close()
+	c, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := c.NewMessageID(context.Background(), "omnira_conn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/omnira_conn/new-message-id" {
+		t.Fatalf("unexpected request: %s %s", gotMethod, gotPath)
+	}
+	if gotAPIKey != "secret" {
+		t.Fatal("new-message-id request missing API key")
+	}
+	if id != "3EB0D8E5188C881CA54F3A" {
+		t.Fatalf("unexpected id: %q", id)
+	}
+}
+
+// PILOT.4A1 test B: an empty generated id is rejected, never silently
+// treated as a usable reservation.
+func TestClientNewMessageIDRejectsEmptyID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":""}`))
+	}))
+	defer srv.Close()
+	c, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.NewMessageID(context.Background(), "omnira_conn"); !errors.Is(err, waha.ErrUnknown) {
+		t.Fatalf("empty id accepted: %v", err)
+	}
+}
+
+// PILOT.4A1 test C/D: SendText forwards the exact supplied id verbatim as
+// the JSON "id" property — never generating or transforming it itself.
+func TestClientSendTextForwardsSuppliedIDVerbatim(t *testing.T) {
+	const suppliedID = "CALLER-SUPPLIED-STABLE-ID-001"
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"id":"` + gotBody["id"] + `"}`))
+	}))
+	defer srv.Close()
+	c, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := c.SendText(context.Background(), "omnira_conn", "5511999999999@c.us", "hello", suppliedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["id"] != suppliedID {
+		t.Fatalf("request id = %q, want the exact supplied value %q", gotBody["id"], suppliedID)
+	}
+	if id != suppliedID {
+		t.Fatalf("returned id = %q, want %q", id, suppliedID)
+	}
+}
+
+// PILOT.4A1 test E: neither the API key nor any request/response detail
+// leaks into an error message.
+func TestClientErrorsNeverContainAPIKey(t *testing.T) {
+	const secretKey = "super-secret-waha-key-should-never-leak"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	c, err := waha.NewClient(srv.URL, secretKey, srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.NewMessageID(context.Background(), "omnira_conn")
+	if err == nil {
+		t.Fatal("expected an error from a 500 response")
+	}
+	if strings.Contains(err.Error(), secretKey) {
+		t.Fatalf("error message leaked the API key: %v", err)
+	}
+	_, sendErr := c.SendText(context.Background(), "omnira_conn", "5511999999999@c.us", "hello", "some-id")
+	if sendErr == nil || strings.Contains(sendErr.Error(), secretKey) {
+		t.Fatalf("sendText error leaked the API key: %v", sendErr)
 	}
 }

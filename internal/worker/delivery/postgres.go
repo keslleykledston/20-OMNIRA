@@ -56,15 +56,15 @@ func (s *PostgresOutboundStore) LockOutbound(ctx context.Context, messageID uuid
 	var active *bool
 	var phone *string
 	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		SELECT m.channel_connection_id, ct.phone_e164, c.provider_chat_id, m.body, m.status, m.provider_message_id,
-		       (cc.status = 'active')
+		SELECT m.channel_connection_id, ct.phone_e164, c.provider_chat_id, m.body, m.status,
+		       m.reserved_provider_message_id, m.provider_message_id, (cc.status = 'active')
 		FROM messages m
 		JOIN conversations c ON c.tenant_id = m.tenant_id AND c.id = m.conversation_id
 		JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
 		LEFT JOIN channel_connections cc ON cc.tenant_id = m.tenant_id AND cc.id = m.channel_connection_id
 		WHERE m.tenant_id = $1 AND m.id = $2 AND m.direction = 'outbound'
 		FOR UPDATE OF m`, tenantID, messageID).
-		Scan(&connection, &phone, &job.ProviderChatID, &job.Text, &job.Status, &job.ProviderMessageID, &active)
+		Scan(&connection, &phone, &job.ProviderChatID, &job.Text, &job.Status, &job.ReservedProviderMessageID, &job.ProviderMessageID, &active)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -79,6 +79,87 @@ func (s *PostgresOutboundStore) LockOutbound(ctx context.Context, messageID uuid
 	}
 	job.ConnectionActive = active != nil && *active
 	return job, nil
+}
+
+// EnsureReservedProviderMessageID implements the store side of PILOT.4A1's
+// central durability property: the reservation is committed in its own
+// transaction, independent of (and always before) any transaction that calls
+// the provider. See the interface doc in send.go for the race-safety
+// contract.
+func (s *PostgresOutboundStore) EnsureReservedProviderMessageID(ctx context.Context, messageID uuid.UUID, generate func(context.Context) (string, error)) (string, error) {
+	tenantID, existing, err := s.readReservation(ctx, messageID)
+	if err != nil {
+		return "", err
+	}
+	if existing != "" {
+		return existing, nil
+	}
+
+	// Network call to the provider happens OUTSIDE any lock/transaction —
+	// new-message-id has no delivery side effect, so a wasted candidate from
+	// a losing race is harmless (PILOT.4A1 §7).
+	candidate, err := generate(ctx)
+	if err != nil {
+		return "", err
+	}
+	if candidate == "" {
+		return "", fmt.Errorf("%w: provider returned an empty reserved message id", ErrPermanent)
+	}
+
+	won, err := s.tryPersistReservation(ctx, tenantID, messageID, candidate)
+	if err != nil {
+		return "", err
+	}
+	if won {
+		return candidate, nil
+	}
+
+	// Lost the race: another delivery attempt persisted first. Read and
+	// reuse its value rather than proceeding with our own candidate.
+	_, winner, err := s.readReservation(ctx, messageID)
+	if err != nil {
+		return "", err
+	}
+	if winner == "" {
+		return "", errors.New("channel delivery: reservation vanished after a lost race")
+	}
+	return winner, nil
+}
+
+func (s *PostgresOutboundStore) readReservation(ctx context.Context, messageID uuid.UUID) (uuid.UUID, string, error) {
+	var tenantID uuid.UUID
+	var reserved string
+	err := platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(system context.Context) error {
+		return platformdb.QuerierFromContext(system, s.pool).QueryRow(system,
+			`SELECT tenant_id, reserved_provider_message_id FROM messages WHERE id=$1 AND direction='outbound'`,
+			messageID).Scan(&tenantID, &reserved)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, "", fmt.Errorf("%w: unknown message", ErrPermanent)
+	}
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("channel delivery: read reservation: %w", err)
+	}
+	return tenantID, reserved, nil
+}
+
+func (s *PostgresOutboundStore) tryPersistReservation(ctx context.Context, tenantID, messageID uuid.UUID, candidate string) (bool, error) {
+	var won bool
+	err := platformdb.WithSystemTenantSession(ctx, s.pool, tenantID, func(scoped context.Context) error {
+		tag, err := platformdb.QuerierFromContext(scoped, s.pool).Exec(scoped, `
+			UPDATE messages SET reserved_provider_message_id=$3, updated_at=now()
+			WHERE tenant_id=$1 AND id=$2 AND reserved_provider_message_id=''`,
+			tenantID, messageID, candidate)
+		if err != nil {
+			return err
+		}
+		won = tag.RowsAffected() == 1
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("channel delivery: persist reservation: %w", err)
+	}
+	return won, nil
 }
 
 func (s *PostgresOutboundStore) MarkSent(ctx context.Context, messageID uuid.UUID, providerMessageID string) error {

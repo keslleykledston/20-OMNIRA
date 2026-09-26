@@ -172,3 +172,27 @@ func (s *ChannelService) SendText(ctx context.Context, connID uuid.UUID, msg dom
 
 	return provider.SendText(ctx, *conn, msg)
 }
+
+// NewMessageID — resolve o provider da conexão e delega a reserva de um id
+// estável. Mesma resolução de conexão/provider de SendText; ver
+// ports.ChannelProvider.NewMessageID.
+func (s *ChannelService) NewMessageID(ctx context.Context, connID uuid.UUID) (string, error) {
+	conn, err := s.connRepo.FindByID(ctx, connID)
+	if err != nil {
+		return "", fmt.Errorf("channel: falha ao buscar conexão: %w", err)
+	}
+	if conn == nil {
+		return "", fmt.Errorf("channel: conexão %s não encontrada", connID)
+	}
+
+	provider, err := s.registry.Resolve(conn.Provider)
+	if err != nil {
+		return "", err
+	}
+
+	if !provider.IsConfigured(ctx, *conn) {
+		return "", ports.ErrNotConfigured
+	}
+
+	return provider.NewMessageID(ctx, *conn)
+}

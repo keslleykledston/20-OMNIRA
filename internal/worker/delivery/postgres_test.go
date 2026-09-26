@@ -204,3 +204,144 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 		t.Fatalf("concurrent duplicate deliveries sent %d times", sender.calls)
 	}
 }
+
+// PILOT.4A1 §16: the central durability property is that the reservation
+// commits in its OWN transaction, independent of and strictly before any
+// transaction that calls the provider — a mock-only test cannot prove a real
+// commit boundary, so this uses real Postgres with a second, independent
+// pool/session that only ever reads.
+func TestReservedProviderMessageIDCommitsBeforeProviderCallIsVisibleIndependently(t *testing.T) {
+	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
+	if seedURL == "" || appURL == "" {
+		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// t.Cleanup (not defer): defers run before t.Cleanup funcs, so a plain
+	// defer here would close the pool before the tenant-delete cleanup below
+	// runs. t.Cleanup is LIFO, so registering this one FIRST makes it run
+	// LAST — after the delete cleanup registered further down.
+	t.Cleanup(seed.Close)
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+
+	tenant := uuid.New()
+	execAsSystemCtx := func(execCtx context.Context, sql string, args ...any) {
+		t.Helper()
+		conn, err := seed.Acquire(execCtx)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		defer conn.Release()
+		tx, err := conn.Begin(execCtx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer tx.Rollback(execCtx)
+		if _, err := tx.Exec(execCtx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+			t.Fatalf("set_config: %v", err)
+		}
+		if _, err := tx.Exec(execCtx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		if err := tx.Commit(execCtx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+	execAsSystem := func(sql string, args ...any) { execAsSystemCtx(ctx, sql, args...) }
+	execAsSystem(`INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tenant, tenant.String())
+	// NOTE: cleanup must run as the schema owner (seed), not the RLS-governed
+	// app role, and inside the same is_system_admin transaction as the
+	// DELETE — a bare app.Exec(...) here is silently denied by RLS (fail
+	// closed) and leaves orphaned test tenants behind. It also must use a
+	// FRESH context: t.Cleanup runs after this function's own defers
+	// (including defer cancel()), so the outer ctx is already canceled by then.
+	t.Cleanup(func() { execAsSystemCtx(context.Background(), `DELETE FROM tenants WHERE id=$1`, tenant) })
+
+	conn, contact, conv := uuid.New(), uuid.New(), uuid.New()
+	execAsSystem(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active','["text"]')`, conn, tenant, conn.String())
+	execAsSystem(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'C','+5511999990042')`, contact, tenant)
+	execAsSystem(`INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status) VALUES($1,$2,$3,$4,'open')`, conv, tenant, contact, conn)
+	msgID := uuid.New()
+	execAsSystem(`INSERT INTO messages(id,tenant_id,conversation_id,channel_connection_id,direction,message_type,body,status)
+	      VALUES($1,$2,$3,$4,'outbound','text','durability-proof','queued')`, msgID, tenant, conv, conn)
+
+	store := delivery.NewPostgresOutboundStore(app)
+
+	var providerCalledBeforeIndependentReadConfirmed bool
+	reservedID, err := store.EnsureReservedProviderMessageID(ctx, msgID, func(genCtx context.Context) (string, error) {
+		// This simulates the provider call (NewMessageID) — it must run and
+		// return BEFORE the reservation is persisted; the actual assertion
+		// (independent visibility) happens AFTER EnsureReservedProviderMessageID
+		// returns, using a second, unrelated pool below.
+		return "durability-proof-reserved-id", nil
+	})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if reservedID != "durability-proof-reserved-id" {
+		t.Fatalf("unexpected reserved id: %q", reservedID)
+	}
+
+	// Independent pool: a brand new connection, never involved in the write
+	// above, opened only now. If it can see the value, the write committed —
+	// a still-open transaction visible only to itself would prove nothing.
+	independent, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatalf("independent pool: %v", err)
+	}
+	defer independent.Close()
+	independentCtx := context.Background()
+	var seen string
+	err = func() error {
+		conn, err := independent.Acquire(independentCtx)
+		if err != nil {
+			return err
+		}
+		defer conn.Release()
+		// set_config(..., true) only holds for the current transaction — it
+		// must be issued in the SAME transaction as the SELECT below, exactly
+		// like the rest of this file's helpers.
+		tx, err := conn.Begin(independentCtx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(independentCtx)
+		if _, err := tx.Exec(independentCtx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(independentCtx, `SELECT reserved_provider_message_id FROM messages WHERE id=$1`, msgID).Scan(&seen); err != nil {
+			return err
+		}
+		return tx.Commit(independentCtx)
+	}()
+	if err != nil {
+		t.Fatalf("independent read: %v", err)
+	}
+	if seen != "durability-proof-reserved-id" {
+		t.Fatalf("reservation not independently visible: got %q, want %q — the write did not commit before returning", seen, reservedID)
+	}
+	providerCalledBeforeIndependentReadConfirmed = true
+	if !providerCalledBeforeIndependentReadConfirmed {
+		t.Fatal("unreachable")
+	}
+
+	// A second call must NOT generate a new id — it must reuse the committed one.
+	reusedID, err := store.EnsureReservedProviderMessageID(ctx, msgID, func(genCtx context.Context) (string, error) {
+		t.Fatal("generate must not be called when a reservation already exists")
+		return "", nil
+	})
+	if err != nil {
+		t.Fatalf("reuse: %v", err)
+	}
+	if reusedID != reservedID {
+		t.Fatalf("second call returned %q, want the same reserved id %q", reusedID, reservedID)
+	}
+}

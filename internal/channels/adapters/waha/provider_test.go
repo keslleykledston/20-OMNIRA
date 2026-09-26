@@ -146,7 +146,10 @@ func TestProviderSendTextNormalizesRecipientAndReturnsCanonicalResult(t *testing
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		_, _ = w.Write([]byte(`{"id":"provider-message-1"}`))
+		// A real, non-anomalous WAHA/GOWS response echoes back exactly the
+		// id it was given (PILOT.4A0/4A1) — the mismatch case is a separate,
+		// dedicated test below.
+		_, _ = w.Write([]byte(`{"id":"` + got["id"] + `"}`))
 	}))
 	defer srv.Close()
 	client, err := waha.NewClient(srv.URL, "secret", srv.Client())
@@ -157,12 +160,41 @@ func TestProviderSendTextNormalizesRecipientAndReturnsCanonicalResult(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := provider.SendText(context.Background(), connection, domain.OutboundTextMessage{ToE164: "+5511999999999", Text: "hello", IdempotencyKey: "outbox-1"})
-	if err != nil || result == nil || result.ProviderMessageID != "provider-message-1" || result.State != domain.DeliveryStateSent {
+	result, err := provider.SendText(context.Background(), connection, domain.OutboundTextMessage{ToE164: "+5511999999999", Text: "hello", IdempotencyKey: "reserved-outbox-1"})
+	if err != nil || result == nil || result.ProviderMessageID != "reserved-outbox-1" || result.State != domain.DeliveryStateSent {
 		t.Fatalf("unexpected result: %#v, %v", result, err)
 	}
-	if got["session"] != "omnira_"+connection.ID.String() || got["chatId"] != "5511999999999@c.us" || got["text"] != "hello" {
+	if got["session"] != "omnira_"+connection.ID.String() || got["chatId"] != "5511999999999@c.us" || got["text"] != "hello" || got["id"] != "reserved-outbox-1" {
 		t.Fatalf("unexpected WAHA body: %#v", got)
+	}
+}
+
+// PILOT.4A1 test H: a non-empty provider response id that differs from the
+// reserved id sent is a protocol anomaly, not silently accepted as success.
+func TestSendTextRejectsMismatchedResponseID(t *testing.T) {
+	connection := wahaConnection()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate a provider that, for whatever reason, returns a DIFFERENT
+		// id than the one it was asked to use.
+		_, _ = w.Write([]byte(`{"id":"totally-different-id"}`))
+	}))
+	defer srv.Close()
+	client, err := waha.NewClient(srv.URL, "secret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := waha.NewProvider(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := provider.SendText(context.Background(), connection, domain.OutboundTextMessage{
+		ToE164: "+5511999999999", Text: "hello", IdempotencyKey: "reserved-outbox-1",
+	})
+	if err == nil {
+		t.Fatalf("mismatched response id was silently accepted: %#v", result)
+	}
+	if !errors.Is(err, waha.ErrUnknown) {
+		t.Fatalf("expected an unknown/anomaly classification, got %v", err)
 	}
 }
 

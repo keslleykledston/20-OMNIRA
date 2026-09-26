@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -181,12 +182,18 @@ func (p *WahaProvider) CheckHealth(ctx context.Context, conn domain.ChannelConne
 	return ports.HealthStatus{Reachable: true}, nil
 }
 
+// SendText requires msg.IdempotencyKey to already carry the stable,
+// pre-reserved WAHA message id (see NewMessageID) — this adapter forwards it
+// verbatim as the request's "id" field and never mints its own. Callers must
+// persist that id durably BEFORE the first SendText attempt and reuse the
+// exact same value on every retry/redelivery (PILOT.4A1); this adapter has
+// no way to enforce that itself.
 func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundTextMessage) (*domain.SendResult, error) {
 	if err := validateConnection(conn); err != nil {
 		return nil, err
 	}
 	if !e164Pattern.MatchString(msg.ToE164) || strings.TrimSpace(msg.Text) == "" || strings.TrimSpace(msg.IdempotencyKey) == "" {
-		return nil, fmt.Errorf("%w: recipient, text and idempotency key are required", ports.ErrPermanent)
+		return nil, fmt.Errorf("%w: recipient, text and a reserved message id are required", ports.ErrPermanent)
 	}
 	name, err := p.SessionRef(conn)
 	if err != nil {
@@ -196,13 +203,34 @@ func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnecti
 	if err != nil {
 		return nil, err
 	}
-	providerID, err := p.client.SendText(ctx, name, chatID, msg.Text)
+	providerID, err := p.client.SendText(ctx, name, chatID, msg.Text, msg.IdempotencyKey)
 	p.operations.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_text"), attribute.String("status", statusForError(err))))
 	if err != nil {
 		p.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_text"), attribute.String("status", statusForError(err))))
 		return nil, err
 	}
+	if providerID != msg.IdempotencyKey {
+		// Protocol anomaly, not silently accepted: the reserved id is what
+		// every durability guarantee in PILOT.4A1 depends on being echoed
+		// back unchanged. No PII in this log — only opaque message ids.
+		log.Printf("waha: sendText response id mismatch: reserved=%s provider_returned=%s", msg.IdempotencyKey, providerID)
+		return nil, fmt.Errorf("%w: provider returned a different message id than reserved", ports.ErrUnknown)
+	}
 	return &domain.SendResult{ProviderMessageID: providerID, State: domain.DeliveryStateSent}, nil
+}
+
+// NewMessageID reserves a stable message id from WAHA with no delivery side
+// effect. Callers must persist the returned id durably before calling
+// SendText.
+func (p *WahaProvider) NewMessageID(ctx context.Context, conn domain.ChannelConnection) (string, error) {
+	if err := validateConnection(conn); err != nil {
+		return "", err
+	}
+	name, err := p.SessionRef(conn)
+	if err != nil {
+		return "", err
+	}
+	return p.client.NewMessageID(ctx, name)
 }
 
 func statusForError(err error) string {
