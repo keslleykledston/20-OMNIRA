@@ -414,10 +414,31 @@ WAHA_SESSION=omnira_<connection-id> \
   scripts/waha-session-check.sh
 ```
 
-Cron sugerido (a cada 5 min, fora do repositório — `crontab -e` do host):
+Cron ativo neste host (`crontab -l` do usuário `suporte`), a cada 5 min:
 
 ```
-*/5 * * * * WAHA_SESSION=omnira_<connection-id> STATE_FILE=/var/log/omnira/waha-session-check.log /caminho/para/scripts/waha-session-check.sh >/dev/null 2>&1
+*/5 * * * * WAHA_URL=http://192.168.112.3:3000 WAHA_SESSION=omnira_85af82d7-6f01-40cf-8d15-0e04df66736a STATE_FILE=/var/log/omnira/waha-session-check.log /data/home-moved/Projects/_legacy_lowercase_projects/20-OMNIRA/scripts/waha-session-check.sh >/dev/null 2>&1
+```
+
+**Importante — isto é estado do HOST, não do repositório** (mesmo padrão da
+seção 2): clonar este repositório ou reconstruir o host do zero **não
+recria o agendamento**. `scripts/waha-session-check.sh` é versionado; a
+entrada de cron que o invoca não é.
+
+**Verificar que o cron existe** (rodar após qualquer rebuild/troca de host):
+
+```bash
+crontab -l | grep waha-session-check.sh
+```
+
+Se vazio, reinstalar (ajustando `WAHA_URL`/`WAHA_SESSION` para a conexão
+real do piloto — `WAHA_URL` é o IP de bridge do container WAHA, obtido via
+`docker inspect 20-omnira-waha-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'`,
+já que essa porta não é publicada no host):
+
+```bash
+( crontab -l 2>/dev/null | grep -v "waha-session-check.sh" ; \
+  echo "*/5 * * * * WAHA_URL=http://<ip-do-container-waha>:3000 WAHA_SESSION=omnira_<connection-id> STATE_FILE=/var/log/omnira/waha-session-check.log $(pwd)/scripts/waha-session-check.sh >/dev/null 2>&1" ) | crontab -
 ```
 
 **ACTIVE NOTIFICATION: NÃO.** Não existe hoje integração com PagerDuty/Slack/
@@ -443,7 +464,115 @@ própria; não presuma que uma falha "vai avisar alguém".
 5. Qualquer remediação do provedor/sessão (restart, novo QR) exige aprovação
    humana explícita — nunca automática.
 
-## 9. Estabilidade do ID de mensagem WAHA (PILOT.4A0/4A1)
+## 9. Monitoramento NATS JetStream (PILOT.4D)
+
+**Somente localhost.** `8222` está publicado como `127.0.0.1:8222:8222` —
+nunca `0.0.0.0`, nunca exposto pelo Nginx público, nunca com DNS. O modelo de
+segurança é host-local only; não confie apenas em firewall.
+
+```bash
+curl -s http://127.0.0.1:8222/healthz          # liveness básico do processo NATS
+curl -s "http://127.0.0.1:8222/jsz?streams=1&consumers=1"  # detalhe de streams/consumers
+```
+
+### Stream e consumer relevantes
+
+- Stream: `OMNIRA_JOBS` (subjects `job.>`, `retention: limits`, sem
+  `max_msgs`/`max_age`/`max_bytes`).
+- Consumer do envio de WhatsApp: **`worker-channel-send`** (durable,
+  `filter_subject=job.channel.send_text.v1`, `max_deliver=10`,
+  `max_ack_pending=8`, `ack_wait=60s`). Saudável no PILOT.4D:
+  `pending=0 ack_pending=0 redelivered=0`.
+
+### Achados do PILOT.4D — apenas registrados, NÃO investigados/corrigidos
+
+Ambos classificados **P1 antes de operação não supervisionada**; a causa não
+foi inferida nesta fase — só o fato observado:
+
+1. **`OMNIRA_JOBS` sem limite de retenção**: `max_msgs=-1`, `max_age`
+   ilimitado, `max_bytes=-1` — a stream cresce indefinidamente. Observado
+   com ~261 mil mensagens armazenadas desde 2026-09-20 (2026-09-26). Não é
+   um P0 deste piloto.
+2. **Consumer `worker-routing`** (mesma stream, não relacionado ao envio de
+   WhatsApp): `num_redelivered=14504` observado em 2026-09-26. Pode ser
+   comportamento por design (ex.: o "routing liveness sweep" que reprocessa
+   conversas não atribuídas periodicamente) ou um problema real — não
+   diagnosticado. Ver PILOT.4D1 para a investigação.
+
+### Como interpretar `pending` vs `ack_pending` vs `redelivered`
+
+- `num_pending` — mensagens no stream ainda não entregues a este consumer.
+  Backlog puro; não é falha por si só.
+- `num_ack_pending` — mensagens já entregues, aguardando ack/nak do worker.
+  Alto e crescente sem parar pode indicar worker travado; um valor pequeno e
+  estável é normal (deliveries em voo).
+- `num_redelivered` — total histórico de redeliveries (timeout de ack,
+  crash, nak). Um número absoluto alto por si só **não** prova problema atual
+  — pode refletir histórico acumulado ou um padrão de retry por design de
+  outro consumer (ex.: `worker-routing`, que reprocessa conversas não
+  atribuídas periodicamente — não investigado nesta fase, fora do escopo do
+  PILOT.4D).
+
+Nenhum limiar numérico de alerta foi inventado nesta fase — a carga real
+ainda não justifica um threshold confiável. `pending`/`ack_pending`/
+`redelivered` são informativos; o script/gate abaixo falha apenas por
+condições objetivas (endpoint fora do ar, stream ausente, consumer ausente).
+
+### Checagem periódica (somente leitura)
+
+```bash
+NATS_MONITOR_URL=http://127.0.0.1:8222 STREAM=OMNIRA_JOBS \
+  CONSUMER=worker-channel-send STATE_FILE=/var/log/omnira/nats-jetstream-check.log \
+  scripts/nats-jetstream-check.sh
+```
+
+Sai `0` quando o endpoint de monitoramento responde, JetStream está
+habilitado, a stream e o consumer existem — nunca reinicia, nunca purga
+consumer, nunca recria stream, nunca dá ack/nak em mensagens.
+
+Cron ativo neste host, a cada 5 min:
+
+```
+*/5 * * * * NATS_MONITOR_URL=http://127.0.0.1:8222 STREAM=OMNIRA_JOBS CONSUMER=worker-channel-send STATE_FILE=/var/log/omnira/nats-jetstream-check.log /data/home-moved/Projects/_legacy_lowercase_projects/20-OMNIRA/scripts/nats-jetstream-check.sh >/dev/null 2>&1
+```
+
+**Importante — isto é estado do HOST, não do repositório** (mesmo padrão das
+seções 2 e 8): um clone novo do repositório, ou um host reconstruído do
+zero, **não recria o agendamento**. `scripts/nats-jetstream-check.sh` é
+versionado; a entrada de cron não é.
+
+**Verificar que o cron existe** (rodar após qualquer rebuild/troca de host):
+
+```bash
+crontab -l | grep nats-jetstream-check.sh
+```
+
+Se vazio, reinstalar:
+
+```bash
+( crontab -l 2>/dev/null | grep -v "nats-jetstream-check.sh" ; \
+  echo "*/5 * * * * NATS_MONITOR_URL=http://127.0.0.1:8222 STREAM=OMNIRA_JOBS CONSUMER=worker-channel-send STATE_FILE=/var/log/omnira/nats-jetstream-check.log $(pwd)/scripts/nats-jetstream-check.sh >/dev/null 2>&1" ) | crontab -
+```
+
+**ACTIVE NOTIFICATION: NÃO.** Mesmo modelo do WAHA (seção 8): apenas um log
+de estado local timestampado (`STATE_FILE`, fora do Git). O operador precisa
+checar por conta própria.
+
+### Se o monitoramento estiver indisponível ou o consumer sumir
+
+**Nunca reinicie o NATS automaticamente.** Ordem correta:
+
+1. Confirmar que é o monitoramento (porta 8222) que caiu, não o NATS em si —
+   checar `docker ps`/healthcheck do container `omnira-nats` (porta 4222).
+2. Se o NATS real estiver saudável mas `worker-channel-send` sumiu, verificar
+   se o `omnira-worker` está rodando e reconectando (ele recria o consumer
+   automaticamente ao subir — ver `internal/worker/delivery/consumer.go`).
+3. Inspecionar logs de entrega recentes por `message_id` (PILOT.4B) para
+   saber se mensagens já estavam presas antes do consumer sumir.
+4. Qualquer restart/recreate de NATS ou purge de consumer exige aprovação
+   humana explícita — nunca automático.
+
+## 10. Estabilidade do ID de mensagem WAHA (PILOT.4A0/4A1)
 
 O worker reserva um id de mensagem estável (`reserved_provider_message_id`)
 ANTES de qualquer chamada `sendText`, e reusa esse mesmo id em toda
@@ -468,7 +597,7 @@ Não é uma garantia de exactly-once global — apenas fecha a janela
 específica de crash entre `sendText` e `MarkSent`, e a de timeout com
 retry, para esta combinação de provedor/versão.
 
-## 10. Se qualquer P0 falhar
+## 11. Se qualquer P0 falhar
 
 Não declare o pilot pronto. Volte para a seção correspondente acima,
 reproduza o smoke test e corrija a causa raiz antes de tentar novamente —
