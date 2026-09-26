@@ -131,6 +131,39 @@ anteriores) e um `schema_version` igual à última migration em
 `migrations/*.up.sql` é um backup válido. O próprio script já recusa
 (exit 1) qualquer artefato menor que 1KB.
 
+### Cópia secundária em disco externo (OPS.DISK.1 follow-up)
+
+Além da cópia local em `backups/omnira_dev/` (fonte primária e obrigatória),
+o script tenta copiar cada dump+meta para um HD externo USB já existente
+neste host (Seagate 3.6TB, montado em `/mnt/omnira-backup-external`,
+subpasta `Backup/omnira_dev/`, `nofail` em `/etc/fstab` — **entrada de
+fstab também é estado do HOST, não do repositório**, mesmo padrão desta
+seção; ver `/etc/fstab` diretamente para reinstalar após rebuild).
+
+**Esta cópia é estritamente best-effort e nunca pode quebrar o backup
+principal:**
+
+- Se o disco estiver desconectado/desmontado, o script detecta via
+  `mountpoint -q` (não apenas "a pasta existe") e **pula silenciosamente**
+  a cópia externa, terminando com exit 0 normalmente — o backup local já
+  aconteceu e é o que importa.
+- O NTFS do disco não é (e não deve ser) usado para dado "vivo" (data
+  directory do Postgres, volume do NATS) — só para guardar os arquivos de
+  dump já prontos.
+- Testado nos dois cenários: disco montado (cópia confirmada) e disco
+  ausente (skip confirmado, exit 0 em ambos).
+
+Verificar manualmente:
+
+```bash
+mountpoint /mnt/omnira-backup-external      # confirma se está montado agora
+ls -la /mnt/omnira-backup-external/Backup/omnira_dev/*.dump | tail -5
+```
+
+Variáveis de ambiente para customizar (raramente necessário):
+`EXTERNAL_MOUNT` (default `/mnt/omnira-backup-external`),
+`EXTERNAL_BACKUP_DIR` (default `$EXTERNAL_MOUNT/Backup/omnira_dev`).
+
 ### Restore — mecanismo já provado (não destrutivo)
 
 ```bash
