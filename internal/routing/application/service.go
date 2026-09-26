@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/routing/ports"
@@ -49,6 +50,13 @@ func (s *Service) AssignRoundRobin(ctx context.Context, conversationID uuid.UUID
 		return uuid.Nil, err
 	}
 	if !assigned {
+		// PILOT.4D2: the one place tenant_id/conversation_id are both
+		// already in scope for this outcome — the sole emission point, so
+		// the worker consumer (which ACKs this outcome) never needs to log
+		// it too. A successfully-evaluated business result, not an
+		// infrastructure problem: never conflate with status=error above
+		// for monitoring/alerting purposes.
+		log.Printf("routing: no eligible agent conversation_id=%s tenant_id=%s outcome=no_eligible_agent", conversationID, tc.TenantID)
 		return uuid.Nil, ErrNoEligibleAgent
 	}
 	return userID, nil

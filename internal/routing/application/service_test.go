@@ -49,6 +49,36 @@ func TestRoundRobinRequiresSystemContext(t *testing.T) {
 	}
 }
 
+// PILOT.4D2 §10: no candidate found is a successfully-evaluated business
+// outcome (ErrNoEligibleAgent), never a technical/error-shaped failure — the
+// repository returned (Nil, false, nil): no repo error at all.
+func TestAssignRoundRobin_NoEligibleAgent_ReturnsSentinelNotTechnicalError(t *testing.T) {
+	system, _ := tenancydomain.NewTenantContext(uuid.New(), uuid.Nil, tenancydomain.AccessSourceSystem)
+	repo := &claimRepo{} // roundRobinUser left uuid.Nil -> repo returns (Nil, false, nil)
+	_, err := application.NewService(repo).AssignRoundRobin(tenancydomain.WithTenantContext(context.Background(), system), uuid.New())
+	if !errors.Is(err, application.ErrNoEligibleAgent) {
+		t.Fatalf("expected ErrNoEligibleAgent, got %v", err)
+	}
+}
+
+// PILOT.4D2 §11: ACKing the no-agent outcome must never mean "never route
+// this conversation again" — a later attempt with a real candidate available
+// succeeds normally, proving the two outcomes are fully independent.
+func TestAssignRoundRobin_NoEligibleAgent_ThenLaterCandidateSucceeds(t *testing.T) {
+	system, _ := tenancydomain.NewTenantContext(uuid.New(), uuid.Nil, tenancydomain.AccessSourceSystem)
+	ctx := tenancydomain.WithTenantContext(context.Background(), system)
+	conversationID := uuid.New()
+	repo := &claimRepo{}
+	if _, err := application.NewService(repo).AssignRoundRobin(ctx, conversationID); !errors.Is(err, application.ErrNoEligibleAgent) {
+		t.Fatalf("first attempt: expected ErrNoEligibleAgent, got %v", err)
+	}
+	repo.roundRobinUser = uuid.New() // a candidate is now available, e.g. an agent came online
+	got, err := application.NewService(repo).AssignRoundRobin(ctx, conversationID)
+	if err != nil || got != repo.roundRobinUser {
+		t.Fatalf("second attempt: got=%s err=%v, want the new candidate assigned", got, err)
+	}
+}
+
 func TestClaimOwnReturnsConflictAndRejectsSystemActor(t *testing.T) {
 	actor := uuid.New()
 	tc, _ := tenancydomain.NewTenantContext(uuid.New(), actor, tenancydomain.AccessSourceDirect)
