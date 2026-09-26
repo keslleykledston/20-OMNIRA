@@ -3,9 +3,7 @@
   "displayName": "OMNIRA",
   "enabled": true,
   "accessTokenLifespan": 300,
-  "refreshTokenLifespan": 86400,
   "sslRequired": "external",
-  "frontendUrl": "http://localhost:8888",
   "accountTheme": "keycloak",
   "loginTheme": "keycloak",
   "adminTheme": "keycloak",
@@ -17,14 +15,7 @@
       "emailVerified": true,
       "enabled": true,
       "firstName": "Demo",
-      "lastName": "User",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "demo123",
-          "temporary": false
-        }
-      ]
+      "lastName": "User"
     }
   ],
   "clients": [
@@ -33,28 +24,27 @@
       "name": "OMNIRA Web",
       "description": "OMNIRA web application (SPA + backend)",
       "enabled": true,
-      "public": false,
+      "publicClient": false,
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "consentRequired": false,
-      "clientAuthenticatorType": "client-secret-basic",
+      "clientAuthenticatorType": "client-secret",
       "secret": "REPLACE_WITH_CLIENT_SECRET_AT_BOOTSTRAP",
       "redirectUris": [
-        "http://localhost:8080/api/v1/auth/oidc/callback",
+        "http://localhost:28080/api/v1/auth/oidc/callback",
         "http://localhost:3000/login?oidc=complete",
         "https://omnira.devops.k3gsolutions.com.br/api/v1/auth/oidc/callback"
       ],
       "webOrigins": [
-        "http://localhost:8080",
+        "http://localhost:28080",
         "http://localhost:3000",
         "https://omnira.devops.k3gsolutions.com.br"
       ],
-      "postLogoutRedirectUris": [
-        "http://localhost:3000/login",
-        "https://omnira.devops.k3gsolutions.com.br/login"
-      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:3000/login##https://omnira.devops.k3gsolutions.com.br/login"
+      },
       "protocolMappers": [
         {
           "name": "email",
@@ -114,22 +104,5 @@
   "requiredCredentials": [
     "password"
   ],
-  "passwordPolicies": [
-    {
-      "type": "upperCase",
-      "value": 1
-    },
-    {
-      "type": "lowerCase",
-      "value": 1
-    },
-    {
-      "type": "digits",
-      "value": 1
-    },
-    {
-      "type": "length",
-      "value": 8
-    }
-  ]
+  "passwordPolicy": "upperCase(1) and lowerCase(1) and digits(1) and length(8)"
 }

@@ -194,30 +194,61 @@ func (a *OIDCAuthenticator) Verify(ctx context.Context, tokenString string) (*Pr
 	return principal, err
 }
 
-func (a *OIDCAuthenticator) VerifyIDToken(ctx context.Context, tokenString, expectedNonce string) (*Principal, time.Time, error) {
-	principal, claims, expiry, err := a.verify(ctx, tokenString)
+func (a *OIDCAuthenticator) VerifyIDToken(ctx context.Context, tokenString, expectedNonce string) (*oidcClaims, time.Time, error) {
+	return a.verifyIDTokenClaims(ctx, tokenString, expectedNonce)
+}
+
+// VerifyIDTokenWithClaims valida assinatura, issuer, audience, expiração e
+// nonce do ID token, mas NÃO exige que a identidade (issuer, subject) já
+// exista. Ela é usada pelo callback OIDC, cujo próprio propósito inclui o
+// primeiro login de um usuário: resolver a identidade aqui, antes do
+// callback ter a chance de chamar ProvisionIdentity, bloquearia
+// permanentemente qualquer primeiro login (a identidade nunca chegaria a
+// ser criada). O callback chama ProvisionIdentity com claims.Subject e usa
+// o UserID que ela retorna.
+func (a *OIDCAuthenticator) VerifyIDTokenWithClaims(ctx context.Context, tokenString, expectedNonce string) (*oidcClaims, time.Time, error) {
+	return a.verifyIDTokenClaims(ctx, tokenString, expectedNonce)
+}
+
+func (a *OIDCAuthenticator) verifyIDTokenClaims(ctx context.Context, tokenString, expectedNonce string) (*oidcClaims, time.Time, error) {
+	claims, err := a.verifyToken(ctx, tokenString)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	if expectedNonce == "" || subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(expectedNonce)) != 1 {
 		return nil, time.Time{}, errors.New("oidc nonce mismatch")
 	}
-	return principal, expiry, nil
-}
-
-// VerifyIDTokenWithClaims verifies token and returns principal + claims (for JIT provisioning).
-func (a *OIDCAuthenticator) VerifyIDTokenWithClaims(ctx context.Context, tokenString, expectedNonce string) (*Principal, *oidcClaims, time.Time, error) {
-	principal, claims, expiry, err := a.verify(ctx, tokenString)
-	if err != nil {
-		return nil, nil, time.Time{}, err
+	expiry := time.Time{}
+	if claims.ExpiresAt != nil {
+		expiry = claims.ExpiresAt.Time
 	}
-	if expectedNonce == "" || subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(expectedNonce)) != 1 {
-		return nil, nil, time.Time{}, errors.New("oidc nonce mismatch")
-	}
-	return principal, claims, expiry, nil
+	return claims, expiry, nil
 }
 
 func (a *OIDCAuthenticator) verify(ctx context.Context, tokenString string) (*Principal, *oidcClaims, time.Time, error) {
+	claims, err := a.verifyToken(ctx, tokenString)
+	if err != nil {
+		return nil, nil, time.Time{}, err
+	}
+	// a.issuer, not a claim: the token was just validated against it, so the
+	// client cannot steer which identity is resolved.
+	userID, err := a.resolver.ResolveUserID(ctx, a.issuer, claims.Subject)
+	if err != nil || userID == uuid.Nil {
+		return nil, nil, time.Time{}, errors.New("oidc identity is not provisioned")
+	}
+	expiry := time.Time{}
+	if claims.ExpiresAt != nil {
+		expiry = claims.ExpiresAt.Time
+	}
+	return &Principal{UserID: userID, Subject: claims.Subject}, claims, expiry, nil
+}
+
+// verifyToken valida apenas a assinatura, issuer, audience e expiração do
+// JWT — sem resolver identidade. Compartilhada por verify() (que resolve a
+// identidade em seguida, para requisições autenticadas de rotina) e por
+// verifyIDTokenClaims() (que não pode exigir a identidade, ver comentário
+// acima de VerifyIDTokenWithClaims).
+func (a *OIDCAuthenticator) verifyToken(ctx context.Context, tokenString string) (*oidcClaims, error) {
 	claims := &oidcClaims{}
 	keyFunc := func(token *jwt.Token) (any, error) {
 		if token.Method.Alg() != jwt.SigningMethodRS256.Alg() {
@@ -243,22 +274,12 @@ func (a *OIDCAuthenticator) verify(ctx context.Context, tokenString string) (*Pr
 	token, err := jwt.ParseWithClaims(tokenString, claims, keyFunc,
 		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}), jwt.WithIssuer(a.issuer), jwt.WithAudience(a.audience), jwt.WithExpirationRequired())
 	if err != nil {
-		return nil, nil, time.Time{}, fmt.Errorf("invalid oidc token: %w", err)
+		return nil, fmt.Errorf("invalid oidc token: %w", err)
 	}
 	if !token.Valid || claims.Subject == "" {
-		return nil, nil, time.Time{}, errors.New("invalid oidc token")
+		return nil, errors.New("invalid oidc token")
 	}
-	// a.issuer, not a claim: the token was just validated against it, so the
-	// client cannot steer which identity is resolved.
-	userID, err := a.resolver.ResolveUserID(ctx, a.issuer, claims.Subject)
-	if err != nil || userID == uuid.Nil {
-		return nil, nil, time.Time{}, errors.New("oidc identity is not provisioned")
-	}
-	expiry := time.Time{}
-	if claims.ExpiresAt != nil {
-		expiry = claims.ExpiresAt.Time
-	}
-	return &Principal{UserID: userID, Subject: claims.Subject}, claims, expiry, nil
+	return claims, nil
 }
 
 type OIDCHandler struct {
@@ -354,7 +375,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "identity provider rejected the callback", http.StatusBadGateway)
 		return
 	}
-	principal, claims, expiry, err := h.auth.VerifyIDTokenWithClaims(r.Context(), tokens.IDToken, nonceCookie.Value)
+	claims, expiry, err := h.auth.VerifyIDTokenWithClaims(r.Context(), tokens.IDToken, nonceCookie.Value)
 	if err != nil {
 		http.Error(w, "invalid identity token", http.StatusUnauthorized)
 		return
@@ -371,14 +392,14 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			displayName += " " + claims.FamilyName
 		}
 	}
-	_, err = h.resolver.ProvisionIdentity(r.Context(), h.issuer, principal.Subject, claims.Email, displayName, claims.emailVerified())
+	userID, err := h.resolver.ProvisionIdentity(r.Context(), h.issuer, claims.Subject, claims.Email, displayName, claims.emailVerified())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("identity provisioning error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Create server-side session (opaque session ID, not ID Token)
-	sessionID, err := h.sessionStore.CreateSession(r.Context(), principal.UserID, "oidc", h.sessionTTL)
+	sessionID, err := h.sessionStore.CreateSession(r.Context(), userID, "oidc", h.sessionTTL)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("session creation error: %v", err), http.StatusInternalServerError)
 		return

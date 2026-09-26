@@ -120,7 +120,7 @@ services:
     image: quay.io/keycloak/keycloak:25.0
     container_name: omnira-keycloak
     ports:
-      - "127.0.0.1:8888:8080"
+      - "127.0.0.1:8888:8888"
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
@@ -128,21 +128,60 @@ services:
       KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/keycloak
       KC_DB_USERNAME: keycloak
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-localhost:8888}
-      KC_HOSTNAME_STRICT: "false"
+      # PILOT.1: the OIDC `iss` claim must be byte-identical for both the
+      # browser (host) and the API (inside the docker network) — otherwise
+      # JWT issuer validation fails on one side. "localhost:8888" only
+      # resolves on the host; "keycloak:8080" only resolves in-network, and
+      # the two ports differ anyway (8888 is just the host's published-port
+      # translation of the container's internal 8080). Using a dedicated
+      # hostname (network alias below + a host /etc/hosts entry, both
+      # pointing at 127.0.0.1) with the SAME port on both sides (achieved by
+      # also making Keycloak itself listen on 8888 via KC_HTTP_PORT) gives
+      # both sides one identical, resolvable issuer URL.
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://keycloak-pilot:8888}
+      KC_HTTP_PORT: "8888"
+      # PILOT.1: strict=false lets Keycloak auto-detect the hostname from
+      # the inbound request instead of always honoring KC_HOSTNAME, which
+      # produced a wrong/inconsistent issuer. strict=true forces the
+      # configured KC_HOSTNAME on every response.
+      KC_HOSTNAME_STRICT: "true"
       KC_HTTP_ENABLED: "true"
       KC_PROXY: edge
+      # PILOT.1: health endpoints (/health/ready, /health/live) are not
+      # exposed unless explicitly enabled.
+      KC_HEALTH_ENABLED: "true"
     volumes:
       - ./deploy/keycloak/omnira-realm.json:/opt/keycloak/data/import/omnira-realm.json:ro
-    command: start --import-realm --optimized
+    # PILOT.1: `--optimized` assumes the image was already re-augmented at
+    # build time with these exact options (KC_DB=postgres included). This
+    # image never went through that build step, so `--optimized` silently
+    # falls back to its original build-time config (non-postgres driver)
+    # and ignores KC_DB/KC_DB_URL supplied here at runtime — causing
+    # "Driver does not support the provided URL". Dropping `--optimized`
+    # makes Keycloak re-run its build/augmentation on every start using the
+    # runtime env vars actually provided, at the cost of a slightly slower
+    # startup. No change to auth architecture.
+    command: start --import-realm
+    # PILOT.1: this image has neither curl nor wget. Health endpoints live
+    # on the management interface (port 9000, confirmed from container
+    # startup logs: "Management interface listening on http://0.0.0.0:9000"),
+    # not on 8080. Uses bash's /dev/tcp (the approach Keycloak's own docs
+    # recommend for this image) instead of adding a package/base-image change.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready >/dev/null || exit 1"]
+      test:
+        - "CMD-SHELL"
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          echo -e "GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n" >&3 &&
+          timeout 3 cat <&3 | grep -m 1 "HTTP/1.1 200" || exit 1
       interval: 10s
       timeout: 5s
       retries: 15
       start_period: 30s
     networks:
-      - omnira-network
+      omnira-network:
+        aliases:
+          - keycloak-pilot
     depends_on:
       keycloak-postgres:
         condition: service_healthy
