@@ -2,7 +2,6 @@ package routing
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 type notifyingAssigner struct{ called chan uuid.UUID }
@@ -20,11 +20,8 @@ func (a *notifyingAssigner) AssignRoundRobin(_ context.Context, id uuid.UUID) (u
 }
 
 func TestJetStreamConsumerDispatchesRoutingJob(t *testing.T) {
-	natsURL := os.Getenv("OMNIRA_NATS_URL")
-	if natsURL == "" {
-		t.Skip("OMNIRA_NATS_URL required")
-	}
-	nc, err := nats.Connect(natsURL)
+	natsCfg := testhelpers.RequireIntegrationNATS(t)
+	nc, err := nats.Connect(natsCfg.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,9 +39,10 @@ func TestJetStreamConsumerDispatchesRoutingJob(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	testStream := "OMNIRA_ROUTING_TEST_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	testSubject := "contract.routing.test." + strings.ReplaceAll(uuid.NewString(), "-", "")
-	consumer, err := startConsumer(ctx, js, handler, testStream, "routing-test-"+uuid.NewString(), testSubject, testSubject)
+	runShort := strings.ReplaceAll(natsCfg.RunID, ":", "")
+	testStream := "OMNIRA_TEST_" + runShort + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	testSubject := "test.routing." + runShort + "." + strings.ReplaceAll(uuid.NewString(), "-", "")
+	consumer, err := startConsumer(ctx, js, handler, testStream, "test_"+runShort+"_"+uuid.NewString(), testSubject, testSubject)
 	if err != nil {
 		t.Fatal(err)
 	}

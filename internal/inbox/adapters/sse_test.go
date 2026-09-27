@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +17,7 @@ import (
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"github.com/omnira/omnira/internal/platform/authn"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 type fakeAuth struct {
@@ -40,11 +40,8 @@ func (f *fakeAuth) ConversationVisible(_ context.Context, _, _, conversationID u
 }
 
 func natsConn(t *testing.T) *nats.Conn {
-	url := os.Getenv("OMNIRA_NATS_URL")
-	if url == "" {
-		t.Skip("OMNIRA_NATS_URL required")
-	}
-	nc, err := nats.Connect(url)
+	cfg := testhelpers.RequireIntegrationNATS(t)
+	nc, err := nats.Connect(cfg.URL)
 	if err != nil {
 		t.Fatal(err)
 	}

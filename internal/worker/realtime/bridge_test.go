@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -18,10 +17,8 @@ import (
 // Postgres NOTIFY -> bridge -> NATS, including recovery after the LISTEN connection is killed.
 func TestBridgeForwardsNotificationsAndRecovers(t *testing.T) {
 	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
-	natsURL := os.Getenv("OMNIRA_NATS_URL")
-	if natsURL == "" {
-		t.Skip("OMNIRA_NATS_URL required")
-	}
+	natsCfg := testhelpers.RequireIntegrationNATS(t)
+	natsURL := natsCfg.URL
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

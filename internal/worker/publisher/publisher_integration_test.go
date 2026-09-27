@@ -2,7 +2,7 @@ package publisher
 
 import (
 	"context"
-	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,10 +19,7 @@ import (
 
 func TestPublisherRuntimeRoleEndToEnd(t *testing.T) {
 	databaseURL, appURL := testhelpers.RequireIntegrationDatabase(t)
-	natsURL := os.Getenv("OMNIRA_NATS_URL")
-	if natsURL == "" {
-		t.Skip("OMNIRA_NATS_URL required")
-	}
+	natsCfg := testhelpers.RequireIntegrationNATS(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, databaseURL)
@@ -35,7 +32,7 @@ func TestPublisherRuntimeRoleEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer app.Close()
-	nc, err := nats.Connect(natsURL)
+	nc, err := nats.Connect(natsCfg.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,8 +41,19 @@ func TestPublisherRuntimeRoleEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const streamName = "OMNIRA_PUBLISHER_TEST"
-	const subject = "events.test.publisher.test"
+	runShort := strings.ReplaceAll(natsCfg.RunID, ":", "")
+	unique := strings.ReplaceAll(uuid.NewString(), "-", "")
+	streamName := "OMNIRA_TEST_" + runShort + "_" + unique
+	// The Publisher derives the actual publish subject from the event's own
+	// EventType/AggregateType (see subjectForEvent in publisher.go), not from
+	// an independent string here — the stream's subject filter MUST match
+	// that derivation exactly, or every publish silently exhausts retries
+	// against a stream that never matches. Both eventType and the resulting
+	// subject are unique per test run so this never collides with another
+	// invocation.
+	eventType := domain.EventType("test.publisher." + unique)
+	aggregateType := domain.AggregateType("test")
+	subject := subjectForEvent(&domain.OutboxEvent{EventType: eventType, AggregateType: aggregateType})
 	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{Name: streamName, Subjects: []string{subject}, Storage: jetstream.MemoryStorage})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +81,7 @@ func TestPublisherRuntimeRoleEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _, _ = seed.Exec(context.Background(), `DELETE FROM tenants WHERE id=$1`, tenantID) }()
-	event, err := domain.NewOutboxEvent(tenantID, domain.EventType("test.publisher"), domain.AggregateType("test"), uuid.New(), uuid.New())
+	event, err := domain.NewOutboxEvent(tenantID, eventType, aggregateType, uuid.New(), uuid.New())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/omnira/omnira/internal/routing/application"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // --- PILOT.4D2 §9: pure classification tests (no NATS, instant) ----------
@@ -74,12 +74,13 @@ func (a *countingAssigner) AssignRoundRobin(context.Context, uuid.UUID) (uuid.UU
 	return uuid.New(), a.err
 }
 
-func newDisposableConsumer(t *testing.T, js jetstream.JetStream, handler *Handler) (subject string, teardown func()) {
+func newDisposableConsumer(t *testing.T, js jetstream.JetStream, handler *Handler, runID string) (subject string, teardown func()) {
 	t.Helper()
 	ctx := context.Background()
-	testStream := "OMNIRA_ROUTING_TEST_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	testSubject := "contract.routing.test." + strings.ReplaceAll(uuid.NewString(), "-", "")
-	consumer, err := startConsumer(context.Background(), js, handler, testStream, "routing-test-"+uuid.NewString(), testSubject, testSubject)
+	runShort := strings.ReplaceAll(runID, ":", "")
+	testStream := "OMNIRA_TEST_" + runShort + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	testSubject := "test.routing." + runShort + "." + strings.ReplaceAll(uuid.NewString(), "-", "")
+	consumer, err := startConsumer(context.Background(), js, handler, testStream, "test_"+runShort+"_"+uuid.NewString(), testSubject, testSubject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,11 +100,8 @@ func routingEnvelope(conversationID uuid.UUID) []byte {
 // pilot stream. Proves the no-agent outcome is delivered exactly once and
 // never redelivered, for several jobs at once, deterministically.
 func TestNoEligibleAgent_DeliveredOnceNeverRedelivered(t *testing.T) {
-	natsURL := os.Getenv("OMNIRA_NATS_URL")
-	if natsURL == "" {
-		t.Skip("OMNIRA_NATS_URL required")
-	}
-	nc, err := nats.Connect(natsURL)
+	natsCfg := testhelpers.RequireIntegrationNATS(t)
+	nc, err := nats.Connect(natsCfg.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +118,7 @@ func TestNoEligibleAgent_DeliveredOnceNeverRedelivered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, teardown := newDisposableConsumer(t, js, handler)
+	subject, teardown := newDisposableConsumer(t, js, handler, natsCfg.RunID)
 	defer teardown()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -154,11 +152,8 @@ func TestNoEligibleAgent_DeliveredOnceNeverRedelivered(t *testing.T) {
 // PILOT.4D2 §9C: a genuine technical error still NAKs and gets redelivered —
 // unchanged behavior, proven on the same disposable harness.
 func TestTechnicalError_IsRedelivered(t *testing.T) {
-	natsURL := os.Getenv("OMNIRA_NATS_URL")
-	if natsURL == "" {
-		t.Skip("OMNIRA_NATS_URL required")
-	}
-	nc, err := nats.Connect(natsURL)
+	natsCfg := testhelpers.RequireIntegrationNATS(t)
+	nc, err := nats.Connect(natsCfg.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +169,7 @@ func TestTechnicalError_IsRedelivered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject, teardown := newDisposableConsumer(t, js, handler)
+	subject, teardown := newDisposableConsumer(t, js, handler, natsCfg.RunID)
 	defer teardown()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -198,12 +193,12 @@ func TestTechnicalError_IsRedelivered(t *testing.T) {
 // monitoring API (PILOT.4D) against this test's own disposable stream —
 // never the shared OMNIRA_JOBS pilot stream.
 func TestNoEligibleAgent_AckFloorAdvances(t *testing.T) {
-	natsURL := os.Getenv("OMNIRA_NATS_URL")
-	monitorURL := os.Getenv("OMNIRA_NATS_MONITOR_URL")
-	if natsURL == "" || monitorURL == "" {
-		t.Skip("OMNIRA_NATS_URL and OMNIRA_NATS_MONITOR_URL required")
+	natsCfg := testhelpers.RequireIntegrationNATS(t)
+	if natsCfg.MonitorURL == "" {
+		t.Skip("OMNIRA_NATS_MONITOR_URL required")
 	}
-	nc, err := nats.Connect(natsURL)
+	monitorURL := natsCfg.MonitorURL
+	nc, err := nats.Connect(natsCfg.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,9 +215,10 @@ func TestNoEligibleAgent_AckFloorAdvances(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	testStream := "OMNIRA_ROUTING_TEST_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	testDurable := "routing-test-" + uuid.NewString()
-	testSubject := "contract.routing.test." + strings.ReplaceAll(uuid.NewString(), "-", "")
+	runShort := strings.ReplaceAll(natsCfg.RunID, ":", "")
+	testStream := "OMNIRA_TEST_" + runShort + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	testDurable := "test_" + runShort + "_" + uuid.NewString()
+	testSubject := "test.routing." + runShort + "." + strings.ReplaceAll(uuid.NewString(), "-", "")
 	consumer, err := startConsumer(context.Background(), js, handler, testStream, testDurable, testSubject, testSubject)
 	if err != nil {
 		t.Fatal(err)

@@ -25,6 +25,19 @@
 #      direct `go test` run that happens to inherit OMNIRA_DATABASE_URL
 #      pointed at omnira_dev.
 #
+# TEST.HYGIENE.3 extends the same model to NATS/JetStream: ONE disposable
+# `nats:2.10-alpine -js` per invocation (same run, shared by every package —
+# unlike Postgres, no test here mutates cluster-global NATS state, so
+# per-package physical separation buys nothing; unique stream/subject/durable
+# names per test already isolate packages from each other within it), given a
+# server name derived from RUN_ID. Every real-NATS test now goes through
+# internal/testhelpers.RequireIntegrationNATS, which refuses to run against
+# the known dev/pilot addresses (127.0.0.1:4222, localhost:4222, nats:4222),
+# refuses any non-loopback destination, and — since a denylist of known
+# addresses is never complete — attests via a read-only connection that the
+# server on the other end actually identifies itself as this run's disposable
+# server before any test may create a stream/consumer/publish a message.
+#
 # If this script (or the whole host) is killed mid-run, the disposable
 # container is the only thing that can contain leftover fixtures; omnira_dev
 # is never reachable from it. A leftover container carries this run's EXACT
@@ -124,16 +137,23 @@ esac
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 RUNSHORT=$(printf '%s' "$RUN_ID" | md5sum | cut -c1-8)
 CONTAINER="omnira-test-pg-${RUNSHORT}"
+NATS_CONTAINER="omnira-test-nats-${RUNSHORT}"
+NATS_SERVER_NAME="omnira-test-${RUNSHORT}"
 PG_USER=omnira
 PG_PASSWORD=$(head -c32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c24)
 TEMPLATE_DB=omnira_test_template
 
 echo "== RUN_ID=${RUN_ID}"
 
+# Registered before either container is started, so a failure partway through
+# provisioning (e.g. Postgres starts but NATS fails) still tears down
+# whatever exists for this exact RUN_ID — `docker rm -f` on a name that was
+# never created is a harmless no-op.
 cleanup() {
   local status=$?
-  echo "== tearing down ${CONTAINER}"
+  echo "== tearing down ${CONTAINER} / ${NATS_CONTAINER}"
   docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
+  docker rm -f "${NATS_CONTAINER}" >/dev/null 2>&1 || true
   exit $status
 }
 trap cleanup EXIT
@@ -153,6 +173,38 @@ for i in $(seq 1 30); do
   docker exec "${CONTAINER}" pg_isready -U "${PG_USER}" >/dev/null 2>&1 && break
   sleep 0.5
 done
+
+echo "== starting disposable NATS/JetStream (${NATS_CONTAINER}, 127.0.0.1 only, server_name=${NATS_SERVER_NAME})"
+docker run -d --name "${NATS_CONTAINER}" \
+  --label "${LABEL_KEY}=true" \
+  --label "${LABEL_KEY}.run=${RUN_ID}" \
+  -p 127.0.0.1::4222 -p 127.0.0.1::8222 \
+  nats:2.10-alpine -js -m 8222 --server_name "${NATS_SERVER_NAME}" >/dev/null
+
+NATS_PORT=$(docker port "${NATS_CONTAINER}" 4222/tcp | head -1 | cut -d: -f2)
+NATS_MONITOR_PORT=$(docker port "${NATS_CONTAINER}" 8222/tcp | head -1 | cut -d: -f2)
+NATS_URL="nats://127.0.0.1:${NATS_PORT}"
+NATS_MONITOR_URL="http://127.0.0.1:${NATS_MONITOR_PORT}"
+echo "== ${NATS_CONTAINER} -> ${NATS_URL} (monitor ${NATS_MONITOR_URL})"
+
+nats_ready=0
+for i in $(seq 1 30); do
+  if curl -sf "${NATS_MONITOR_URL}/healthz" >/dev/null 2>&1; then
+    nats_ready=1
+    break
+  fi
+  sleep 0.3
+done
+if [ "$nats_ready" != "1" ]; then
+  echo "FATAL: disposable NATS did not become ready in time" >&2
+  exit 1
+fi
+reported_name=$(curl -sf "${NATS_MONITOR_URL}/varz" | python3 -c "import json,sys; print(json.load(sys.stdin).get('server_name',''))" 2>/dev/null || echo "")
+if [ "$reported_name" != "$NATS_SERVER_NAME" ]; then
+  echo "FATAL: disposable NATS reports server_name=${reported_name}, expected ${NATS_SERVER_NAME}" >&2
+  exit 1
+fi
+echo "   server_name confirmed: ${reported_name}"
 
 psql_owner() { PGPASSWORD="${PG_PASSWORD}" psql -h 127.0.0.1 -p "${PORT}" -U "${PG_USER}" -v ON_ERROR_STOP=1 -q "$@"; }
 
@@ -196,9 +248,15 @@ if [ "$#" -gt 0 ]; then
   PACKAGES=("$@")
 else
   # Reliable discovery from source: any package with a test file that goes
-  # through the canonical integration guard IS an integration package. Avoids
-  # maintaining a separate, driftable manual list.
-  mapfile -t PACKAGES < <(grep -rl "testhelpers.RequireIntegrationDatabase" --include="*_test.go" internal | xargs -n1 dirname | sort -u | sed 's#^#./#')
+  # through EITHER canonical integration guard (Postgres or NATS) IS an
+  # integration package. Union, not two separate lists — a package needing
+  # only NATS (internal/worker/routing) must not be silently skipped just
+  # because it never touches Postgres.
+  # internal/testhelpers itself is excluded: its own guard tests call
+  # RequireIntegrationDatabase/RequireIntegrationNATS with literal fake
+  # connection strings (t.Setenv) purely to unit-test the guard's parsing
+  # logic — they never need or want provisioned infrastructure.
+  mapfile -t PACKAGES < <(grep -rl "testhelpers.RequireIntegrationDatabase\|testhelpers.RequireIntegrationNATS" --include="*_test.go" internal | grep -v '^internal/testhelpers/' | xargs -n1 dirname | sort -u | sed 's#^#./#')
 fi
 echo "== ${#PACKAGES[@]} integration package(s) to run"
 
@@ -213,20 +271,22 @@ for pkg in "${PACKAGES[@]}"; do
   OWNER_URL="postgres://${PG_USER}:${PG_PASSWORD}@127.0.0.1:${PORT}/${dbname}?sslmode=disable"
   APP_URL="postgres://omnira_app:omnira_app@127.0.0.1:${PORT}/${dbname}?sslmode=disable"
 
-  echo "== ${pkg} -> ${dbname}"
-  # NATS: some packages (worker/publisher, worker/realtime) also need real
-  # JetStream. This slice does not redesign NATS test isolation (see
-  # TEST.HYGIENE.2 design gate, section 18) — it reuses the existing dev NATS
-  # endpoint, same as before. publisher_integration_test.go uses a fixed
-  # stream name and is not safe to run concurrently with another invocation
-  # of itself; that is a known, separately tracked limitation.
+  echo "== ${pkg} -> ${dbname} / ${NATS_URL}"
+  # Every package gets both isolated dependencies; a package that only needs
+  # one of them simply never calls the other guard, so the unused env is
+  # inert (TEST.HYGIENE.3 §12). All real-NATS test resources this run creates
+  # are uniquely named per test (never OMNIRA_PUBLISHER_TEST-style fixed
+  # names), so packages sharing this one disposable NATS server stay safe to
+  # run concurrently if a future revision parallelizes this loop.
   if docker run --rm --network host \
       -v "$(pwd)":/app -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false \
       -e OMNIRA_INTEGRATION_TEST=1 \
+      -e OMNIRA_INTEGRATION_RUN_ID="${RUN_ID}" \
       -e OMNIRA_DATABASE_URL="${OWNER_URL}" \
       -e OMNIRA_APP_DATABASE_URL="${APP_URL}" \
-      -e OMNIRA_NATS_URL="nats://127.0.0.1:4222" \
-      -e OMNIRA_NATS_MONITOR_URL="http://127.0.0.1:8222" \
+      -e OMNIRA_NATS_URL="${NATS_URL}" \
+      -e OMNIRA_NATS_MONITOR_URL="${NATS_MONITOR_URL}" \
+      -e OMNIRA_NATS_SERVER_NAME="${NATS_SERVER_NAME}" \
       golang:1.25 sh -c "git config --global --add safe.directory /app && go test -count=1 ${pkg}"; then
     :
   else
