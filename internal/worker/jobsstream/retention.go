@@ -1,21 +1,13 @@
-// Package jobsstream is the single source of truth for OMNIRA_JOBS
-// retention. PILOT.4D3-B1/B2: a reconciler must consume the SAME effective
-// MaxAge that configures the stream, or the two drift and either strand work
-// (reconciler thinks it has more time than the stream actually keeps) or
-// spam duplicate intents (reconciler fires before the stream would ever
-// have expired anything). One constant, imported everywhere retention
-// matters, makes drift impossible by construction.
+// Package jobsstream is the single source of truth for OMNIRA_JOBS' stream
+// policy (PILOT.4D3-C1): Name, Subjects, Storage, Retention, MaxAge,
+// MaxBytes, MaxMsgs, Discard and Duplicates all live in config.go, assembled
+// by Config() and applied/verified by Ensure(). Nothing outside this package
+// may build its own jetstream.StreamConfig for OMNIRA_JOBS — routing and
+// delivery consumers receive an already-Ensure'd stream and only manage
+// their own durable consumers on it.
 package jobsstream
 
 import "time"
-
-// MaxAge is OMNIRA_JOBS' configured retention age. PILOT.4D3-B2: still 0
-// (unbounded) — the live stream's actual current config is unchanged by
-// this slice. PILOT.4D3-C is the slice that both raises this to a chosen
-// bounded value AND wires it into the CreateOrUpdateStream calls in
-// internal/worker/routing and internal/worker/delivery, atomically with
-// enabling the reconciler — never one without the other.
-const MaxAge time.Duration = 0
 
 // ReconciliationGrace is the safety margin added on top of MaxAge before a
 // still-queued send job is considered stranded (PILOT.4D3-B1). Measured,

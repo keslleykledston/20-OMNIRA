@@ -80,7 +80,8 @@ func newDisposableConsumer(t *testing.T, js jetstream.JetStream, handler *Handle
 	runShort := strings.ReplaceAll(runID, ":", "")
 	testStream := "OMNIRA_TEST_" + runShort + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	testSubject := "test.routing." + runShort + "." + strings.ReplaceAll(uuid.NewString(), "-", "")
-	consumer, err := startConsumer(context.Background(), js, handler, testStream, "test_"+runShort+"_"+uuid.NewString(), testSubject, testSubject)
+	ensureTestStream(t, ctx, js, testStream, testSubject)
+	consumer, err := startConsumer(context.Background(), js, handler, testStream, "test_"+runShort+"_"+uuid.NewString(), testSubject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,8 @@ func TestNoEligibleAgent_AckFloorAdvances(t *testing.T) {
 	testStream := "OMNIRA_TEST_" + runShort + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	testDurable := "test_" + runShort + "_" + uuid.NewString()
 	testSubject := "test.routing." + runShort + "." + strings.ReplaceAll(uuid.NewString(), "-", "")
-	consumer, err := startConsumer(context.Background(), js, handler, testStream, testDurable, testSubject, testSubject)
+	ensureTestStream(t, context.Background(), js, testStream, testSubject)
+	consumer, err := startConsumer(context.Background(), js, handler, testStream, testDurable, testSubject)
 	if err != nil {
 		t.Fatal(err)
 	}

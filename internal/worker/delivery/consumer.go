@@ -22,15 +22,15 @@ const (
 	MaxAttempts = 8
 )
 
-// StartConsumer consumes outbound-send jobs from the shared jobs stream.
+// StartConsumer consumes outbound-send jobs from the shared jobs stream. It
+// creates/updates ONLY its own durable consumer — OMNIRA_JOBS itself must
+// already exist. Worker startup guarantees this via jobsstream.Ensure before
+// StartConsumer is ever called (PILOT.4D3-C1: routing/delivery no longer own
+// stream policy, to make config drift between them impossible by
+// construction).
 func StartConsumer(ctx context.Context, js jetstream.JetStream, handler *Handler) (jetstream.ConsumeContext, error) {
 	if js == nil || handler == nil {
 		return nil, errors.New("channel delivery: JetStream and handler are required")
-	}
-	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name: streamName, Subjects: []string{"job.>"}, Storage: jetstream.FileStorage,
-	}); err != nil {
-		return nil, err
 	}
 	consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
 		Durable:       consumerName,

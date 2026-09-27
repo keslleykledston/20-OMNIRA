@@ -89,6 +89,20 @@ func main() {
 		log.Fatalf("failed to create JetStream context: %v", err)
 	}
 
+	// PILOT.4D3-C1: OMNIRA_JOBS' stream policy (retention, MaxAge, MaxBytes,
+	// Discard, ...) is ensured exactly once, here, before ANY consumer,
+	// publisher, or reconciler starts. jobsstream.Ensure applies the
+	// canonical policy, reads it back, and verifies the server actually
+	// accepted it — routing/delivery consumers below only ever
+	// CreateOrUpdateConsumer their own durable consumer on the stream this
+	// returns; neither may configure stream policy anymore. Fail closed: if
+	// the stream can't be brought to the canonical policy, nothing that
+	// depends on its retention semantics (the reconciler, in particular) may
+	// start against a stream in an unknown state.
+	if _, err := jobsstream.Ensure(context.Background(), js); err != nil {
+		log.Fatalf("failed to ensure OMNIRA_JOBS stream policy: %v", err)
+	}
+
 	// Valkey (presence, IAM4.2-A/B1): optional at boot like NATS/WAHA — a
 	// misconfigured/unreachable Valkey means presence stays unobserved (and,
 	// for any tenant with routing_require_presence=true, automated routing
@@ -217,14 +231,16 @@ func main() {
 		defer deliveryConsumer.Stop()
 		log.Printf("Outbound delivery consumer started (WAHA)\n")
 
-		// Stranded-send reconciliation (PILOT.4D3-B2): recreates durable send
-		// intent for a queued message whose job.channel.send_text.v1 envelope
-		// is old enough that OMNIRA_JOBS' own MaxAge guarantees it is no
-		// longer retained. Inert while jobsstream.MaxAge<=0 (today's live
-		// config — unbounded retention means nothing is ever legitimately
-		// "expired", so ShouldRun() refuses to start the ticker at all).
-		// PILOT.4D3-C is the slice that raises jobsstream.MaxAge and, in the
-		// same change, makes this loop start doing real work.
+		// Stranded-send reconciliation (PILOT.4D3-B2, activated PILOT.4D3-C1):
+		// recreates durable send intent for a queued message whose
+		// job.channel.send_text.v1 envelope is old enough that OMNIRA_JOBS'
+		// own MaxAge guarantees it is no longer retained. Sourced from the
+		// SAME jobsstream.MaxAge/ReconciliationGrace values jobsstream.Ensure
+		// applied to the stream above — never a separately-tracked value, so
+		// drift between "what the stream actually keeps" and "what the
+		// reconciler thinks it can rely on" is impossible by construction.
+		// PILOT.4D3-C1 only builds/tests this binary; deploying it (and so
+		// actually activating bounded retention live) is PILOT.4D3-C2.
 		reconciler := delivery.NewReconciler(delivery.NewPostgresReconciliationStore(dbPool), jobsstream.MaxAge, jobsstream.ReconciliationGrace)
 		if reconciler.ShouldRun() {
 			go reconciler.Run(workerCtx)

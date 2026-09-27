@@ -63,5 +63,67 @@ Adotar um banco já migrado à mão: `OMNIRA_MIGRATE_BASELINE=<último prefixo a
 - **Migration falhou** → é atômica (nada parcial); corrija e reexecute o `migrate`.
 - **Mensagem `queued` para sempre** → worker parado, `OMNIRA_WAHA_ENABLED` falso no worker, ou NATS fora.
 
+## Retenção do OMNIRA_JOBS (JetStream) — PILOT.4D3-C1
+
+**Fonte única da política**: `internal/worker/jobsstream.Config()`. Nenhum outro
+código pode montar um `jetstream.StreamConfig` para `OMNIRA_JOBS` — os
+consumers de routing e delivery só criam/atualizam seu **próprio** consumer
+durável, nunca a política do stream.
+
+Política canônica (código, ainda **não implantada** — ver "Ativação" abaixo):
+`Retention=limits`, `MaxAge=7d`, `MaxBytes=8GiB`, `Discard=new`,
+`MaxMsgs=-1` (ilimitado), `Duplicates=2min`, `Storage=file`,
+`Subjects=["job.>"]`.
+
+**Ownership no startup** (`apps/worker/cmd/omnira-worker/main.go`): logo
+após abrir o contexto JetStream, o worker chama `jobsstream.Ensure(ctx, js)`
+**antes** de iniciar qualquer consumer, o publisher ou o reconciliador.
+`Ensure` aplica a política, lê de volta e verifica campo a campo — falha
+fecha o processo (`log.Fatalf`), nada mais sobe.
+
+**Reconciliação** (`internal/worker/delivery`): o reconciliador de envios
+presos usa exatamente `jobsstream.MaxAge`/`jobsstream.ReconciliationGrace` —
+nunca um valor solto. Com `MaxAge<=0` ele fica inerte (`ShouldRun()==false`);
+assim que `MaxAge` for positivo (como já está no código desta fase) e o
+binário for **implantado**, ele passa a rodar de verdade.
+
+**Monitoramento**: `scripts/nats-jetstream-check.sh` — leitura via
+`/jsz?streams=1&consumers=1&config=1`, nunca muta o NATS. Verifica:
+existência do stream e de **ambos** os consumers (`worker-channel-send`,
+`worker-routing`), drift de config (`retention`/`max_age`/`max_bytes`/
+`discard` contra os `EXPECTED_*` do próprio script — uma segunda asserção
+independente da política em `jobsstream`, deliberadamente não gerada a
+partir do código Go), e utilização de bytes (`stream_bytes/max_bytes`):
+`<70%` OK, `70–90%` WARN (exit 0), `>=90%` CRITICAL (exit 3). Sem
+auto-remediação em nenhum patamar — isso é PILOT.4E.
+
+**Ativação ao vivo é PILOT.4D3-C2, não esta fase.** Este slice só muda o
+binário; implantar o novo worker (que já chama `Ensure` incondicionalmente
+no boot) É o ato de ativação. Antes de fazer isso em produção, rodar o
+preflight: contar mensagens `queued` cujo último evento
+`job.channel.send_text.v1` publicado tem `published_at` mais antigo que
+`7d+60s` **e** sem intenção não publicada pendente — hoje esperado **zero**;
+se não for zero na hora do C2, **parar antes de ativar**.
+
+**Ativação parcial (correção de segurança)**: `CreateOrUpdateStream`/
+`UpdateStream` pode ter sucesso mesmo que o worker falhe depois, antes de
+subir consumers/reconciliador — a atualização da política do stream e o
+startup do worker **não são atômicos**. Se a política for aplicada mas o
+worker novo não ficar saudável: **não** suba um binário pré-C1/pré-B2 às
+cegas. Ou conserte/reinicie o **mesmo** binário novo até o reconciliador
+ficar disponível, ou reverta explicitamente a política do stream antes de
+voltar a um binário antigo.
+
+**Rollback seguro (correção de segurança)**: `MaxAge → 0` sozinho **desliga
+o reconciliador** (B2) — nunca faça isso e já suba um binário antigo com
+linhas `queued` potencialmente presas. Ordem obrigatória:
+  1. Com o worker/reconciliador **novo** ainda disponível, inspecionar
+     candidatos presos usando o `MaxAge` **atualmente ativo**.
+  2. Garantir que os candidatos foram reconciliados (contagem chega a 0).
+  3. Só então reverter a política do stream para ilimitado, se for o caso.
+  4. Só depois disso é seguro restaurar um binário anterior ao B2.
+Reverter a política sozinha **não recria** mensagens já expiradas no
+JetStream — reconciliar antes é o único jeito de não perder trabalho durável.
+
 ## Bloqueios para produção (não declarar `PRODUCTION_READY`)
 Veja `docs/delivery/ROADMAP-TO-GOAL.md` (pendências) — principalmente: configuração/aceite do **IdP real**, gate formal + piloto supervisionado, TLS/edge configurado, retenção/limpeza do Outbox e observabilidade validada.

@@ -42,7 +42,8 @@ func TestJetStreamConsumerDispatchesRoutingJob(t *testing.T) {
 	runShort := strings.ReplaceAll(natsCfg.RunID, ":", "")
 	testStream := "OMNIRA_TEST_" + runShort + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	testSubject := "test.routing." + runShort + "." + strings.ReplaceAll(uuid.NewString(), "-", "")
-	consumer, err := startConsumer(ctx, js, handler, testStream, "test_"+runShort+"_"+uuid.NewString(), testSubject, testSubject)
+	ensureTestStream(t, ctx, js, testStream, testSubject)
+	consumer, err := startConsumer(ctx, js, handler, testStream, "test_"+runShort+"_"+uuid.NewString(), testSubject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,5 +61,23 @@ func TestJetStreamConsumerDispatchesRoutingJob(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("routing job was not consumed")
+	}
+}
+
+// ensureTestStream provisions a disposable, uniquely-named stream for a
+// test's own use. PILOT.4D3-C1: startConsumer no longer creates OMNIRA_JOBS
+// itself (that is jobsstream.Ensure's sole responsibility, called once at
+// worker startup) — these tests use arbitrary per-run stream names, never
+// the canonical OMNIRA_JOBS name/subjects jobsstream.Config() governs, so
+// they provision their own equivalent-shape stream directly instead of
+// calling jobsstream.Ensure.
+func ensureTestStream(t *testing.T, ctx context.Context, js jetstream.JetStream, name, subject string) {
+	t.Helper()
+	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:     name,
+		Subjects: []string{subject},
+		Storage:  jetstream.FileStorage,
+	}); err != nil {
+		t.Fatalf("provision test stream %s: %v", name, err)
 	}
 }

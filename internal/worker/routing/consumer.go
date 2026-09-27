@@ -16,19 +16,19 @@ const (
 )
 
 func StartConsumer(ctx context.Context, js jetstream.JetStream, handler *Handler) (jetstream.ConsumeContext, error) {
-	return startConsumer(ctx, js, handler, streamName, consumerName, routingJob, "job.>")
+	return startConsumer(ctx, js, handler, streamName, consumerName, routingJob)
 }
 
-func startConsumer(ctx context.Context, js jetstream.JetStream, handler *Handler, stream, durable, subject, streamSubject string) (jetstream.ConsumeContext, error) {
+// startConsumer creates/updates ONLY its own durable consumer — the stream
+// itself (name, subjects, retention policy) must already exist. For the real
+// OMNIRA_JOBS stream, worker startup guarantees this via jobsstream.Ensure
+// before StartConsumer is ever called (PILOT.4D3-C1: routing/delivery no
+// longer own stream policy, to make config drift between them impossible by
+// construction). Tests using a disposable stream name must provision it
+// themselves first.
+func startConsumer(ctx context.Context, js jetstream.JetStream, handler *Handler, stream, durable, subject string) (jetstream.ConsumeContext, error) {
 	if js == nil || handler == nil {
 		return nil, errors.New("routing worker: JetStream and handler are required")
-	}
-	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:     stream,
-		Subjects: []string{streamSubject},
-		Storage:  jetstream.FileStorage,
-	}); err != nil {
-		return nil, err
 	}
 	consumer, err := js.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       durable,
