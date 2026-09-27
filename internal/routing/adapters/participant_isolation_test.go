@@ -3,7 +3,6 @@ package adapters
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +12,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/routing/domain"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // contacts enforces an E.164 check constraint, so fixtures need a numeric phone
@@ -28,10 +28,7 @@ func nextParticipantPhone() string {
 // the application takes.
 func participantSeedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping participant isolation tests")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 	return openParticipantPool(t, dbURL)
 }
 
@@ -39,10 +36,7 @@ func participantSeedPool(t *testing.T) *pgxpool.Pool {
 // RLS actually applies to.
 func participantAppPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_APP_DATABASE_URL not set; skipping RLS-enforced participant tests")
-	}
+	_, dbURL := testhelpers.RequireIntegrationDatabase(t)
 	return openParticipantPool(t, dbURL)
 }
 

@@ -7,23 +7,20 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	"github.com/omnira/omnira/internal/channels/meta"
 	inboxapp "github.com/omnira/omnira/internal/inbox/application"
 )
 
 func TestMetaWebhookEndToEndPersistsDedupesAndIsolates(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

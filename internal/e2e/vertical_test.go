@@ -15,7 +15,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +40,7 @@ import (
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapp "github.com/omnira/omnira/internal/tenancy/application"
+	"github.com/omnira/omnira/internal/testhelpers"
 	"github.com/omnira/omnira/internal/worker/delivery"
 )
 
@@ -120,6 +120,7 @@ func (pairedSessions) Account(context.Context, domain.ChannelConnection) (string
 type stack struct {
 	t                             *testing.T
 	seed, app                     *pgxpool.Pool
+	appURL                        string
 	mux                           *http.ServeMux
 	waha                          *fakeWAHA
 	credStore                     ports.CredentialStore
@@ -145,10 +146,7 @@ func (s *stack) count(sql string, args ...any) (n int) {
 
 func newStack(t *testing.T) *stack {
 	t.Helper()
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)
@@ -159,7 +157,7 @@ func newStack(t *testing.T) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &stack{t: t, seed: seed, app: app, waha: newFakeWAHA(t), tenantA: uuid.New(), tenantB: uuid.New()}
+	s := &stack{t: t, seed: seed, app: app, appURL: appURL, waha: newFakeWAHA(t), tenantA: uuid.New(), tenantB: uuid.New()}
 	users := []*uuid.UUID{&s.admin, &s.agent1, &s.agent2, &s.agentB}
 	for _, u := range users {
 		*u = uuid.New()
@@ -298,7 +296,7 @@ type listener struct {
 }
 
 func (s *stack) listen(tenant uuid.UUID) *listener {
-	conn, err := pgx.Connect(context.Background(), os.Getenv("OMNIRA_APP_DATABASE_URL"))
+	conn, err := pgx.Connect(context.Background(), s.appURL)
 	if err != nil {
 		s.t.Fatal(err)
 	}

@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"github.com/omnira/omnira/internal/platform/authn"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
@@ -23,10 +23,7 @@ import (
 // regression test: media references must only be accessed through authenticated
 // media endpoint, never embedded in message listing/detail.
 func TestMessageItemNeverExposesMediaRef(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)
@@ -131,10 +128,7 @@ func TestMessageItemNeverExposesMediaRef(t *testing.T) {
 // through the real message API verbatim — never silently coerced to
 // 'failed' or dropped — while existing statuses are unaffected.
 func TestMessageItemSerializesUncertainStatusWithoutCoercion(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

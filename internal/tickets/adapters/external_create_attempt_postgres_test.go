@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	"github.com/omnira/omnira/internal/tickets/domain"
@@ -35,10 +35,7 @@ type attemptFixture struct {
 
 func requireAttemptStack(t *testing.T) (*attemptFixture, *AttemptStore) {
 	t.Helper()
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {
@@ -398,10 +395,7 @@ func TestAttemptStoreProjectionSyncedIsIdempotentAndGuarded(t *testing.T) {
 // E: cross-tenant, the same idempotency key is a completely independent
 // attempt — no collision, no leakage.
 func TestAttemptStoreCrossTenantSameKeyIsIndependent(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {
@@ -442,10 +436,7 @@ func TestAttemptStoreCrossTenantSameKeyIsIndependent(t *testing.T) {
 // internal/tenancy/adapters/isolation_test.go's direct-SQL adversarial
 // pattern rather than trusting only the repository's own WHERE clauses.
 func TestAttemptStoreCrossTenantIsolationEnforcedByRLS(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {

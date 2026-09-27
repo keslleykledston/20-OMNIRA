@@ -2,22 +2,20 @@ package adapters
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // setupTestDB — conecta ao PostgreSQL e retorna pool de conexões.
-// Requer OMNIRA_DATABASE_URL definida.
+// Requer OMNIRA_DATABASE_URL/OMNIRA_APP_DATABASE_URL definidas (guarda de
+// integração — ver testhelpers.RequireIntegrationDatabase).
 func setupTestDB(t *testing.T) *pgxpool.Pool {
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping PostgreSQL tests")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -2,12 +2,12 @@ package adapters
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // livenessFixture seeds one tenant with a contact, a round_robin queue and a
@@ -21,10 +21,7 @@ type livenessFixture struct {
 
 func newLivenessFixture(t *testing.T) *livenessFixture {
 	t.Helper()
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

@@ -2,21 +2,18 @@ package db
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // Regression: a pooled connection that ran a tenant/system session keeps the transaction-local
 // GUCs as ” afterwards; the RLS helper functions must treat that as "unset", not raise 22P02.
 func TestRLSHelpersSurviveConnectionReuse(t *testing.T) {
-	appURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if appURL == "" {
-		t.Skip("OMNIRA_APP_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cfg, err := pgxpool.ParseConfig(appURL)

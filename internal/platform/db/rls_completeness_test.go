@@ -28,11 +28,11 @@ package db_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // knownRLSDebt — tabelas tenant-owned que ainda NÃO têm RLS completa, por
@@ -43,10 +43,7 @@ var knownRLSDebt = map[string]string{
 }
 
 func TestRLSCompleteness(t *testing.T) {
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping RLS completeness scan")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -148,10 +145,7 @@ var expectedPolicyCoverage = map[string][]string{
 }
 
 func TestRLSPolicyCoverage(t *testing.T) {
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping RLS policy coverage scan")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

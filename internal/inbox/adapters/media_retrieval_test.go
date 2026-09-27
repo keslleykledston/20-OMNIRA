@@ -5,22 +5,19 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
 func TestMediaRetrieverOriginValidation(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	app, err := pgxpool.New(ctx, appURL)
@@ -88,10 +85,7 @@ func TestMediaRetrieverOriginValidation(t *testing.T) {
 }
 
 func TestMediaRetrieverConfigValidation(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	app, err := pgxpool.New(ctx, appURL)
@@ -134,10 +128,7 @@ func TestMediaRetrieverRedirectBlocking(t *testing.T) {
 	}))
 	defer server.Close()
 
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	app, err := pgxpool.New(ctx, appURL)
@@ -210,10 +201,7 @@ func TestMediaRetrieverFilenamesSanitized(t *testing.T) {
 
 func TestMediaRetrieverContentLengthLimit(t *testing.T) {
 	// Critical: verify Content-Length > 25 MiB is rejected with 413.
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	app, err := pgxpool.New(ctx, appURL)
@@ -234,10 +222,7 @@ func TestMediaRetrieverSecurityMatrix(t *testing.T) {
 	// Security matrix A-G: integration test covering all critical properties.
 	// Uses test HTTP server simulating WAHA responses.
 
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	app, err := pgxpool.New(ctx, appURL)
@@ -369,10 +354,7 @@ func seedRetrievableMessage(t *testing.T, seedURL, appURL, mediaRef string) (app
 // TestMediaRetrieverHTMLMasquerade: gate C.
 // Upstream declares image/jpeg but body is HTML; expect 415, HTML not returned.
 func TestMediaRetrieverHTMLMasquerade(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -411,10 +393,7 @@ func TestMediaRetrieverHTMLMasquerade(t *testing.T) {
 // TestMediaRetrieverSVG: gate D.
 // Real SVG bytes; expect 415, SVG not returned.
 func TestMediaRetrieverSVG(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 
 	svgBody := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -454,10 +433,7 @@ func TestMediaRetrieverSVG(t *testing.T) {
 // TestMediaRetrieverUnknownBenign: gate E.
 // Unrecognized non-active bytes; expect application/octet-stream + attachment.
 func TestMediaRetrieverUnknownBenign(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 
 	unknownBody := []byte{0x89, 0x50, 0x4E, 0x47} // PNG magic but treated as unknown for this test
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -498,10 +474,7 @@ func TestMediaRetrieverUnknownBenign(t *testing.T) {
 // type — the classifier rewrite (INBOX.MEDIA.2) must not turn legitimate
 // images into generic attachments.
 func TestMediaRetrieverSafeRaster(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 
 	// Real PNG signature (8 bytes) — enough for http.DetectContentType to
 	// recognize it as image/png; the classifier must return that exact
@@ -545,10 +518,7 @@ func TestMediaRetrieverSafeRaster(t *testing.T) {
 // carry (UTF-8 BOM, XML declaration, leading whitespace) — not just a bare
 // "<svg" first byte, which real-world SVG exports rarely produce as-is.
 func TestMediaRetrieverSVGWithXMLDeclarationAndBOM(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 
 	svgBody := append([]byte{0xEF, 0xBB, 0xBF}, []byte("\n  <?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>")...)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -583,10 +553,7 @@ func TestMediaRetrieverSVGWithXMLDeclarationAndBOM(t *testing.T) {
 // TestMediaRetrieverSecretLeakage: gate F.
 // Force provider error with sentinel secrets; assert none leak into response.
 func TestMediaRetrieverSecretLeakage(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	app, err := pgxpool.New(ctx, appURL)
@@ -630,10 +597,7 @@ func TestMediaRetrieverSecretLeakage(t *testing.T) {
 // TestMediaRetrieverCancellation: gate G.
 // Cancel request context; assert retrieval terminates and upstream cleanup occurs.
 func TestMediaRetrieverCancellation(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
 
 	bodyClosed := make(chan bool, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

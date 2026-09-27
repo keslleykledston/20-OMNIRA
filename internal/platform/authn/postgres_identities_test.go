@@ -2,20 +2,17 @@ package authn
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
 func TestPostgresProvisionIdentity(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -109,10 +106,7 @@ func TestPostgresProvisionIdentity(t *testing.T) {
 // Identity is (issuer, subject). Two IdPs may legitimately issue the same
 // subject for different people, so resolution must never key on subject alone.
 func TestIdentityIsScopedToIssuer(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -173,10 +167,7 @@ func TestIdentityIsScopedToIssuer(t *testing.T) {
 // email_verified is evidence from the IdP, refreshed on every login: it must be stored as
 // asserted and must not survive a later login where the IdP no longer asserts it.
 func TestProvisionIdentityStoresAndRefreshesEmailVerified(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

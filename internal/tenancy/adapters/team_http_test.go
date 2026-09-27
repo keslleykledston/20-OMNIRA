@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -16,23 +15,18 @@ import (
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 func teamSeedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping team management tests")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 	return openTeamPool(t, dbURL)
 }
 
 func teamAppPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_APP_DATABASE_URL not set; skipping RLS-enforced team tests")
-	}
+	_, dbURL := testhelpers.RequireIntegrationDatabase(t)
 	return openTeamPool(t, dbURL)
 }
 

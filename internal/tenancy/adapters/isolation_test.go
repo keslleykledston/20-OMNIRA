@@ -2,7 +2,6 @@ package adapters
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -11,16 +10,14 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/tenancy/application"
 	"github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // setupIsolationTestDB — pool de SEED, conectada com privilégios elevados
 // (OMNIRA_DATABASE_URL). Usada para preparar estado de teste diretamente,
 // contornando RLS de propósito — não é o caminho que a aplicação real usa.
 func setupIsolationTestDB(t *testing.T) *pgxpool.Pool {
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping isolation tests")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -46,10 +43,7 @@ func setupIsolationTestDB(t *testing.T) *pgxpool.Pool {
 // platformdb.WithTenantSession para exercitar RLS de verdade — sem isso,
 // current_user_id() nunca é setado e a policy nega tudo (fail-closed).
 func setupIsolationAppPool(t *testing.T) *pgxpool.Pool {
-	dbURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_APP_DATABASE_URL not set; skipping RLS-enforced isolation tests")
-	}
+	_, dbURL := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

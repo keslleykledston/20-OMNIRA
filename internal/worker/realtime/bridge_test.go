@@ -11,14 +11,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	"github.com/omnira/omnira/internal/testhelpers"
 	"github.com/omnira/omnira/internal/worker/realtime"
 )
 
 // Postgres NOTIFY -> bridge -> NATS, including recovery after the LISTEN connection is killed.
 func TestBridgeForwardsNotificationsAndRecovers(t *testing.T) {
-	seedURL, appURL, natsURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL"), os.Getenv("OMNIRA_NATS_URL")
-	if seedURL == "" || appURL == "" || natsURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL, OMNIRA_APP_DATABASE_URL and OMNIRA_NATS_URL required")
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
+	natsURL := os.Getenv("OMNIRA_NATS_URL")
+	if natsURL == "" {
+		t.Skip("OMNIRA_NATS_URL required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

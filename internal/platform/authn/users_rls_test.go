@@ -2,13 +2,13 @@ package authn
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // These tests pin the security model of the users table: the row is created by
@@ -16,10 +16,7 @@ import (
 
 func usersSeedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping users RLS tests")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 	return openUsersPool(t, dbURL)
 }
 
@@ -27,10 +24,7 @@ func usersSeedPool(t *testing.T) *pgxpool.Pool {
 // would bypass every policy below.
 func usersAppPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_APP_DATABASE_URL not set; skipping RLS-enforced users tests")
-	}
+	_, dbURL := testhelpers.RequireIntegrationDatabase(t)
 	return openUsersPool(t, dbURL)
 }
 

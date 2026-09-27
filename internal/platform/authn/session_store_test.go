@@ -2,19 +2,16 @@ package authn
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 func TestPostgresSessionStore(t *testing.T) {
-	seedURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if seedURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	seedURL, _ := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -110,10 +107,7 @@ func TestCallbackReplayPrevention(t *testing.T) {
 	// - same session_id cannot exist twice
 	// - two calls to CreateSession with same user produce different session_ids
 
-	seedURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if seedURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL required")
-	}
+	seedURL, _ := testhelpers.RequireIntegrationDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -14,12 +14,14 @@ import (
 	"github.com/omnira/omnira/internal/outbox/application"
 	"github.com/omnira/omnira/internal/outbox/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 func TestPublisherRuntimeRoleEndToEnd(t *testing.T) {
-	databaseURL, appURL, natsURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL"), os.Getenv("OMNIRA_NATS_URL")
-	if databaseURL == "" || appURL == "" || natsURL == "" {
-		t.Skip("database and NATS URLs required")
+	databaseURL, appURL := testhelpers.RequireIntegrationDatabase(t)
+	natsURL := os.Getenv("OMNIRA_NATS_URL")
+	if natsURL == "" {
+		t.Skip("OMNIRA_NATS_URL required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

@@ -2,13 +2,13 @@ package adapters
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/outbox/ports"
+	"github.com/omnira/omnira/internal/testhelpers"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
@@ -47,10 +47,7 @@ type poisonFixture struct {
 
 func newPoisonFixture(t *testing.T) *poisonFixture {
 	t.Helper()
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

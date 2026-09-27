@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
+	"github.com/omnira/omnira/internal/testhelpers"
 	ticketsports "github.com/omnira/omnira/internal/tickets/ports"
 	"github.com/omnira/omnira/internal/tool/connectors"
 )
@@ -92,11 +92,7 @@ type statusHTTPFixture struct {
 
 func requireStatusHTTPFixture(t *testing.T) *statusHTTPFixture {
 	t.Helper()
-	seedURL := os.Getenv("OMNIRA_DATABASE_URL")
-	appURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {

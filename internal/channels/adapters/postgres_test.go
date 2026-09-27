@@ -2,7 +2,6 @@ package adapters
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +22,7 @@ type channelIsolationFixture struct {
 
 func newChannelIsolationFixture(t *testing.T) channelIsolationFixture {
 	t.Helper()
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

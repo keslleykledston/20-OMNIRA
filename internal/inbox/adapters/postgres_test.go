@@ -2,12 +2,12 @@ package adapters
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channeldomain "github.com/omnira/omnira/internal/channels/domain"
 	inboxapp "github.com/omnira/omnira/internal/inbox/application"
@@ -16,10 +16,7 @@ import (
 )
 
 func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)
@@ -176,10 +173,7 @@ func TestPostgresInboundStoreIsTenantSafeAndIdempotent(t *testing.T) {
 // não pode sobrescrever um nome curado pelo operador — caso contrário quem
 // envia escolheria como aparece na inbox alheia (ex.: "Banco Oficial").
 func TestInboundContactNameFillsPlaceholderButNeverOverwritesCuratedName(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

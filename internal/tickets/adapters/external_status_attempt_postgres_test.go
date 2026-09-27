@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	"github.com/omnira/omnira/internal/tickets/domain"
@@ -257,10 +257,7 @@ func TestStatusAttemptStoreDifferentLocalTicketAllowsIndependentAcquire(t *testi
 // I. same idempotency key, different tenants: ALLOWED (tenant-scoped
 // uniqueness, mirrors AttemptStore's equivalent).
 func TestStatusAttemptStoreCrossTenantSameKeyIsIndependent(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {
@@ -434,10 +431,7 @@ func TestStatusAttemptStoreMarkProjectionSyncedOnlyAffectsExpectedAttempt(t *tes
 // L. RLS: a caller with a real (non-admin) membership in a DIFFERENT tenant
 // must not be able to read another tenant's status attempt row.
 func TestStatusAttemptStoreCrossTenantIsolationEnforcedByRLS(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {
@@ -595,10 +589,7 @@ func TestStatusAttemptStoreCrossKeyConcurrentAcquireExactlyOneWinsThenReleases(t
 // store under test.
 func requireStatusAttemptStack(t *testing.T) *attemptFixture {
 	t.Helper()
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {

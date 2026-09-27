@@ -3,12 +3,12 @@ package adapters
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/omnira/omnira/internal/testhelpers"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
 	channelsdomain "github.com/omnira/omnira/internal/channels/domain"
@@ -22,10 +22,7 @@ import (
 // cross-tenant tests below.
 func envDBURLs(t *testing.T) (string, string) {
 	t.Helper()
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	return seedURL, appURL
 }
 

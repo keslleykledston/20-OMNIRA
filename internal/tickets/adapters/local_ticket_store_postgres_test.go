@@ -3,12 +3,12 @@ package adapters
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // PRODUCT.6-K2 proof-completion item 2: prove the real production SQL in
@@ -260,10 +260,7 @@ func TestLocalTicketStoreEnrichExternalProjectionUpdatesOnlyFreshnessFields(t *t
 // the same "not found" reconciliation path a refresh would hit for any
 // other missing-row case, never a cross-tenant write.
 func TestLocalTicketStoreEnrichExternalProjectionEnforcesTenantIsolation(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {
@@ -303,10 +300,7 @@ func TestLocalTicketStoreEnrichExternalProjectionEnforcesTenantIsolation(t *test
 // under a real RLS session for a DIFFERENT, legitimate tenant — mirrors the
 // PRODUCT.6-K1 adversarial RLS pattern.
 func TestLocalTicketStoreFindEnrichmentCandidateEnforcesTenantIsolation(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("database URLs required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()
 	seed, err := pgxpool.New(ctx, seedURL)
 	if err != nil {

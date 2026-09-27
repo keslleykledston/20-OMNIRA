@@ -2,12 +2,12 @@ package iam3_test
 
 import (
 	"context"
-	"os"
 	"reflect"
 	"sort"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // Pins the exact permission set of each system role. Runtime authorization is an exact
@@ -40,10 +40,7 @@ var systemRolePermissions = map[string][]string{
 
 func seedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv("OMNIRA_DATABASE_URL")
-	if url == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping IAM3 role matrix test")
-	}
+	url, _ := testhelpers.RequireIntegrationDatabase(t)
 	pool, err := pgxpool.New(context.Background(), url)
 	if err != nil {
 		t.Fatalf("connect: %v", err)

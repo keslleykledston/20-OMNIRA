@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -12,15 +11,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/channels/ports"
+	"github.com/omnira/omnira/internal/testhelpers"
 	"github.com/omnira/omnira/internal/worker/delivery"
 )
 
 // Real Postgres as omnira_app + the system tenant session the worker uses.
 func TestPostgresDeliveryStateMachine(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)
@@ -241,10 +238,7 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 // commit boundary, so this uses real Postgres with a second, independent
 // pool/session that only ever reads.
 func TestReservedProviderMessageIDCommitsBeforeProviderCallIsVisibleIndependently(t *testing.T) {
-	seedURL, appURL := os.Getenv("OMNIRA_DATABASE_URL"), os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if seedURL == "" || appURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL and OMNIRA_APP_DATABASE_URL required")
-	}
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	seed, err := pgxpool.New(ctx, seedURL)

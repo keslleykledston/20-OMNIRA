@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -13,16 +12,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 // seedPool connects as the owner to prepare state directly, bypassing RLS on
 // purpose. It is never the path the application takes.
 func seedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_DATABASE_URL not set; skipping contacts API tests")
-	}
+	dbURL, _ := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	pool, err := pgxpool.New(ctx, dbURL)
@@ -40,10 +37,7 @@ func seedPool(t *testing.T) *pgxpool.Pool {
 // through it are subject to RLS, which is the whole point of these tests.
 func appPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dbURL := os.Getenv("OMNIRA_APP_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("OMNIRA_APP_DATABASE_URL not set; skipping RLS-enforced contacts tests")
-	}
+	_, dbURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	pool, err := pgxpool.New(ctx, dbURL)
