@@ -95,7 +95,17 @@ existência do stream e de **ambos** os consumers (`worker-channel-send`,
 independente da política em `jobsstream`, deliberadamente não gerada a
 partir do código Go), e utilização de bytes (`stream_bytes/max_bytes`):
 `<70%` OK, `70–90%` WARN (exit 0), `>=90%` CRITICAL (exit 3). Sem
-auto-remediação em nenhum patamar — isso é PILOT.4E.
+auto-remediação em nenhum patamar.
+
+**Notificação externa (PILOT.4E1)**: `scripts/run-check-with-alert.sh` +
+`scripts/lib/notify.sh` — wrapper stateful/deduplicado (canal
+`ntfy`-compatible) que envolve este check (e o do WAHA) sem alterar sua
+semântica de saúde. `CRITICAL`/`FAIL` alertam; `WARN` fica local apenas.
+Implementado e provado via `scripts/test-notify-wrapper.sh` (catcher HTTP
+disposable, nenhum segredo real, nenhum envio externo real); ativação ao
+vivo (tópico real + edição de cron) é PILOT.4E2, gate separado, ainda
+pendente. Ver `docs/operations/PILOT-RUNBOOK.md` seção 8/9 para o design
+completo.
 
 **Ativação ao vivo é PILOT.4D3-C2, não esta fase.** Este slice só muda o
 binário; implantar o novo worker (que já chama `Ensure` incondicionalmente

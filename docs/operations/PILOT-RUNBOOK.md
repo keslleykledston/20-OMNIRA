@@ -474,12 +474,112 @@ já que essa porta não é publicada no host):
   echo "*/5 * * * * WAHA_URL=http://<ip-do-container-waha>:3000 WAHA_SESSION=omnira_<connection-id> STATE_FILE=/var/log/omnira/waha-session-check.log $(pwd)/scripts/waha-session-check.sh >/dev/null 2>&1" ) | crontab -
 ```
 
-**ACTIVE NOTIFICATION: NÃO.** Não existe hoje integração com PagerDuty/Slack/
-e-mail neste projeto — este cron produz apenas um **log de estado
-local e timestampado** (`STATE_FILE`, fora do Git). Isso é visibilidade, não
-alerta ativo. Enquanto isso não mudar, o operador do piloto supervisionado
-precisa checar esse arquivo periodicamente (ou o endpoint acima) por conta
-própria; não presuma que uma falha "vai avisar alguém".
+**ACTIVE NOTIFICATION (PILOT.4E1): implementado, ainda NÃO ativado neste
+host.** Não afirme `ACTIVE NOTIFICATION: SIM` até a ativação real
+(PILOT.4E2) ocorrer.
+
+`scripts/run-check-with-alert.sh` (junto com `scripts/lib/notify.sh`) envolve
+qualquer check existente sem reimplementar sua semântica de saúde: roda o
+check **uma vez**, classifica a severidade a partir do exit code desta
+própria execução (`3`→`CRITICAL`, `1`→`FAIL`, `0`+2º campo da última linha
+`WARN`→`WARN`, `0` caso contrário→`OK` — nunca lendo um log compartilhado
+que uma execução concorrente/antiga possa ter escrito) e decide, via um
+pequeno estado local por check em `/var/lib/omnira/notify-state/<check>.state`
+(escrita atômica: arquivo temporário + `sync -f` best-effort + `mv`,
+protegida por `flock` por check — duas execuções de cron sobrepostas do
+mesmo check nunca disparam dois alertas), se um `ALERT`/`REMINDER`/
+`RECOVERY` externo é devido agora:
+
+- saudável/degradado (`OK`/`WARN`) → falhando (`FAIL`/`CRITICAL`): `ALERT`
+- falhando → mesma severidade: suprimido até passar `NOTIFY_REMINDER_SECONDS`
+  (padrão 3600s/1h) desde o **último envio bem-sucedido**; então `REMINDER`
+- falhando → severidade diferente (ex.: `FAIL`↔`CRITICAL`): `ALERT`
+  imediato (mudança material), reinicia o relógio do lembrete
+- falhando → `OK` **ou** falhando → `WARN`: `RECOVERY` único (no segundo
+  caso, a mensagem indica que a condição de alerta foi resolvida mas o check
+  permanece `WARN` localmente)
+- `OK`↔`WARN` em qualquer direção: silêncio — é isto que impede o `WARN` de
+  70% de virar tempestade de notificação externa
+
+O exit code do wrapper **sempre** reflete o check real: se o check falhou,
+o wrapper sai com o código do check, não importa o resultado do envio. Se o
+check está saudável mas um `ALERT`/`RECOVERY` devido não pôde ser enviado, o
+wrapper sai `10` (código distinto de camada de notificação) em vez de `0`
+silenciosamente. Um envio que falha nunca avança `LAST_NOTIFIED_AT`, então a
+**próxima** execução tenta reenviar imediatamente, mesmo dentro da janela do
+lembrete — nunca fica presa esperando 1h por causa de uma falha de rede.
+
+**Canal**: `ntfy`-compatible (`NTFY_BASE_URL`, padrão `https://ntfy.sh`;
+`NTFY_TOKEN` opcional para instância self-hosted autenticada). O tópico
+(`NTFY_TOPIC`) é tratado como segredo: nunca aparece em argv de nenhum
+processo (o corpo JSON, que legitimamente contém o tópico, é entregue ao
+`curl` inteiramente via heredoc/stdin — nunca como parte da URL nem como
+argumento literal), nunca é logado, nunca vai para o Git. Lido de
+`/etc/omnira/notify.env` (root:root, `0600`), sourced apenas se o arquivo
+existir — sua ausência é um "canal não configurado", nunca um erro.
+
+**Uso do `ntfy.sh` público — aceitável apenas com**: tópico de alta entropia
+(≥128 bits, caracteres aceitos pelo ntfy — nunca `omnira`/nome da
+empresa/hostname/data por si só, ver geração em PILOT.4E2), e payload
+estritamente operacional (ambiente, nome do check, severidade, timestamp,
+categoria do motivo, nome do consumer/stream, `utilization_percent`, estado
+`WORKING`/não-`WORKING` do WAHA). **Nunca**: telefone, corpo de mensagem,
+chat ID, nome de cliente, dado de tenant, chave de provedor, bearer token,
+credencial, payload de webhook cru. O serviço público pode reter o payload —
+por isso o payload nunca pode conter nada além de metadado operacional.
+
+**Log local de notificação** (distinto do `STATE_FILE` de cada check, que os
+crons atuais redirecionam para `/dev/null`): `/var/log/omnira/notification.log`
+— uma linha por decisão (`alert_sent`/`reminder_sent`/`recovery_sent`/
+`suppressed`/`notification_failed`), com motivo saneado e status HTTP quando
+útil. Nunca contém o tópico, o bearer token, a URL completa com segredo, ou
+conteúdo de mensagem/cliente.
+
+Prova disposable completa (catcher HTTP local no lugar do `ntfy.sh` real;
+nenhum WAHA/NATS/produto real tocado; nenhum segredo real criado):
+`scripts/test-notify-wrapper.sh` — cobre entrega sintética, alerta inicial,
+deduplicação, lembrete (tempo injetado via `NOTIFY_TEST_NOW_EPOCH`, sem
+sleep real), mudança de severidade em falha contínua, recuperação, silêncio
+saudável-para-saudável, semântica completa de `WARN` (incluindo
+`FAIL`→`WARN`), duas execuções concorrentes do mesmo check (`flock`), e
+indisponibilidade do backend de notificação (falha registrada localmente,
+exit code do check preservado, reenvio permitido na execução seguinte, sem
+vazamento de segredo).
+
+**PILOT.4E2 (ativação real, gate separado, ainda pendente)** precisa:
+
+1. Gerar o tópico (≥128 bits de entropia criptográfica, apenas caracteres
+   aceitos pelo `ntfy`) e gravar em `/etc/omnira/notify.env` (root:root,
+   `0600`, nunca no Git, nunca impresso no Human Gate final).
+2. Numa **única** edição de crontab, para o check do NATS: remover o
+   `CONSUMER=worker-channel-send` legado (deixando o padrão canônico do
+   script cobrir `worker-channel-send` **e** `worker-routing`) **e** trocar
+   a invocação direta pelo wrapper. Linha-alvo documentada (o teste
+   `scripts/test-notify-wrapper.sh` valida que esta linha nunca reintroduz
+   um `CONSUMER=` singular):
+
+   <!-- PILOT.4E2-FUTURE-CRON-NATS -->
+   ```
+   */5 * * * * NATS_MONITOR_URL=http://127.0.0.1:8222 STREAM=OMNIRA_JOBS STATE_FILE=/var/log/omnira/nats-jetstream-check.log /data/home-moved/Projects/_legacy_lowercase_projects/20-OMNIRA/scripts/run-check-with-alert.sh nats-jetstream /data/home-moved/Projects/_legacy_lowercase_projects/20-OMNIRA/scripts/nats-jetstream-check.sh >/dev/null 2>&1
+   ```
+
+3. Mesma troca para o check do WAHA (variáveis `WAHA_URL`/`WAHA_SESSION`/
+   `STATE_FILE` inalteradas, semântica de saúde do WAHA inalterada):
+
+   <!-- PILOT.4E2-FUTURE-CRON-WAHA -->
+   ```
+   */5 * * * * WAHA_URL=http://<ip-do-container-waha>:3000 WAHA_SESSION=omnira_<connection-id> STATE_FILE=/var/log/omnira/waha-session-check.log /data/home-moved/Projects/_legacy_lowercase_projects/20-OMNIRA/scripts/run-check-with-alert.sh waha-session /data/home-moved/Projects/_legacy_lowercase_projects/20-OMNIRA/scripts/waha-session-check.sh >/dev/null 2>&1
+   ```
+
+4. Provar, contra o `ntfy.sh` real (nunca contra WAHA/NATS reais para
+   *gerar* a falha — usar os mesmos endpoints inválidos/disposable já
+   provados neste gate), que um `ALERT` real chega ao destinatário
+   configurado, seguido de um `RECOVERY` real.
+5. Observar pelo menos um ciclo automático real do cron pós-ativação.
+
+Enquanto PILOT.4E2 não ocorrer, o comportamento observável permanece
+idêntico ao anterior (log local apenas via `STATE_FILE`) — o operador do
+piloto supervisionado ainda precisa checar por conta própria.
 
 ### O que fazer quando a sessão não está `WORKING`
 
@@ -587,9 +687,21 @@ Se vazio, reinstalar:
   echo "*/5 * * * * NATS_MONITOR_URL=http://127.0.0.1:8222 STREAM=OMNIRA_JOBS CONSUMER=worker-channel-send STATE_FILE=/var/log/omnira/nats-jetstream-check.log $(pwd)/scripts/nats-jetstream-check.sh >/dev/null 2>&1" ) | crontab -
 ```
 
-**ACTIVE NOTIFICATION: NÃO.** Mesmo modelo do WAHA (seção 8): apenas um log
-de estado local timestampado (`STATE_FILE`, fora do Git). O operador precisa
-checar por conta própria.
+**ACTIVE NOTIFICATION (PILOT.4E1): implementado, ainda NÃO ativado neste
+host.** Ver a seção 8 (WAHA) acima para a descrição completa do canal, do
+modelo de estado/dedup/lembrete, das regras de payload e do procedimento de
+ativação PILOT.4E2 — o mesmo `scripts/run-check-with-alert.sh` +
+`scripts/lib/notify.sh` envolve este check sem alterar sua semântica; este
+script já expõe `CRITICAL`/`FAIL`/`WARN`/`OK` como o 2º campo da última
+linha (ou via exit code `3`/`1`/`0`), exatamente o contrato que o wrapper
+espera. **Não afirme `ACTIVE NOTIFICATION: SIM`** até PILOT.4E2.
+
+Nota correlata (PILOT.4D3-C2): a linha de cron atual usa
+`CONSUMER=worker-channel-send`, que ativa o modo legado de consumer único do
+script e faz a checagem **não supervisionada** ignorar `worker-routing`; a
+linha-alvo documentada na seção 8 (marcador `PILOT.4E2-FUTURE-CRON-NATS`)
+já remove esse override — a correção e a troca para o wrapper acontecem
+juntas, numa única edição de cron, nunca duas.
 
 ### Se o monitoramento estiver indisponível ou o consumer sumir
 
