@@ -30,6 +30,7 @@ import (
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
+	"github.com/omnira/omnira/internal/worker/jobsstream"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	"github.com/omnira/omnira/internal/worker/realtime"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
@@ -215,6 +216,21 @@ func main() {
 		}
 		defer deliveryConsumer.Stop()
 		log.Printf("Outbound delivery consumer started (WAHA)\n")
+
+		// Stranded-send reconciliation (PILOT.4D3-B2): recreates durable send
+		// intent for a queued message whose job.channel.send_text.v1 envelope
+		// is old enough that OMNIRA_JOBS' own MaxAge guarantees it is no
+		// longer retained. Inert while jobsstream.MaxAge<=0 (today's live
+		// config — unbounded retention means nothing is ever legitimately
+		// "expired", so ShouldRun() refuses to start the ticker at all).
+		// PILOT.4D3-C is the slice that raises jobsstream.MaxAge and, in the
+		// same change, makes this loop start doing real work.
+		reconciler := delivery.NewReconciler(delivery.NewPostgresReconciliationStore(dbPool), jobsstream.MaxAge, jobsstream.ReconciliationGrace)
+		if reconciler.ShouldRun() {
+			go reconciler.Run(workerCtx)
+		} else {
+			log.Printf("channel-send reconciliation: disabled (OMNIRA_JOBS MaxAge<=0, nothing to reconcile against)")
+		}
 	} else {
 		log.Printf("Outbound delivery disabled (OMNIRA_WAHA_ENABLED != true)\n")
 	}
