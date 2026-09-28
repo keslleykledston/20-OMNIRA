@@ -20,7 +20,15 @@ runbook e pendências documentadas. Meta oficial (Meta Cloud) permanece preserva
 | P4 | Compose completo (migrations, web, worker) + runbook de operação | ✅ DONE | P1–P2 |
 | P5 | Contrato OpenAPI das rotas M05/W + validação | ✅ DONE | P1–P2 |
 | P6 | Gates de release (backup/restore, health/metrics, revisão Codex, gate formal) | ✅ DONE (gate `LAB`) | P3–P5 |
-| P7 | W3 — Smoke com telefone real (`scripts/w3-smoke.sh`) | ⛔ BLOQUEADO: requer telefone humano | P4 |
+| P7 | W3 — Smoke com telefone real (`scripts/w3-smoke.sh`) | ⚠️ Procedimento sintético original NÃO EXECUTADO; objetivo operacional SUPERADO (ver nota) | P4 |
+
+**Nota de reconciliação P7 (2026-09-28, `PILOT.EXIT`)**: o procedimento sintético original de `scripts/w3-smoke.sh` (pareamento de telefone físico via script isolado, DB/containers `omnira_w3`/`omnira-w3-*`) nunca foi executado além da parte automática (`--until-qr`, PASS 6/6 em 2026-09-19) — permanece bloqueado por falta de aparelho de teste dedicado, e isto **não é reescrito como se tivesse rodado**. Porém o objetivo operacional que o P7 pretendia comprovar (conectividade WhatsApp real ponta a ponta) foi **superado por um conjunto mais amplo de evidência real**, não por um único sinal isolado:
+- **sessão sustentada**: `omnira_85af82d7-...` (distinta do harness `omnira_w3`) em `WORKING` contínuo há 7+ dias;
+- **inbound real**: mensagens/webhooks recebidos continuamente nessa mesma sessão;
+- **outbound real**: mensagens enviadas com pelo menos uma confirmada em status `read` (leitura real por destinatário humano) — um sinal entre vários, não a prova isolada;
+- **dedup e reload/recuperação**: já comprovados nesta mesma página pelo vertical E2E automatizado do P3 acima (`internal/e2e/vertical_test.go`) — "redelivery do WAHA não duplica", ack idempotente, reconexão da ponte realtime após `pg_terminate_backend` — e estruturalmente garantidos pelo mecanismo de reserva de ID de provedor (`EnsureReservedProviderMessageID`, CAS) auditado no arco `PILOT.4A0`–`PILOT.4D3-B2`, que torna duplicação de envio impossível por construção independentemente de qual sessão WAHA está em uso. Esses dois pontos **não foram re-executados especificamente contra a sessão piloto real de 7 dias** nesta auditoria — a evidência vem do harness/testes automatizados e da garantia estrutural do código, não de uma nova observação ao vivo.
+
+Produção real e sustentada, combinada com as garantias estruturais e de teste já existentes, é evidência mais forte que um script sintético de execução única. As duas linhas de evidência são mantidas distintas de propósito: o P7 formal segue registrado como não executado; o conjunto acima é o que efetivamente autorizou a remoção do qualificador `SUPERVISED` em `PILOT.EXIT`.
 
 ## Como verificar (comandos)
 - Go (host não tem Go): `docker run --rm --network host -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false -e OMNIRA_DATABASE_URL=<owner> -e OMNIRA_APP_DATABASE_URL=postgres://omnira_app:omnira_app@127.0.0.1:55434/<db>?sslmode=disable golang:1.25 go test -count=1 -p 1 ./...`

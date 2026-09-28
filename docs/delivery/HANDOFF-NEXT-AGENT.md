@@ -2,6 +2,44 @@
 
 Atualize este arquivo ao concluir trabalho substancial. Git e testes executáveis vencem este resumo quando divergirem. Não fazer push/tag sem ordem explícita; não declarar produção pronta sem evidência de deploy e gate.
 
+## PILOT STATUS — 2026-09-28 (LEIA PRIMEIRO)
+
+PILOT GO: **YES**
+SUPERVISED: **NO** (qualificador removido em `PILOT.EXIT`, 2026-09-28)
+P0: **0**
+P1: **0**
+GA: **NO**
+
+Este bloco resume um arco de trabalho **operacional** (`PILOT.1A`–`PILOT.4E2`, `TEST.HYGIENE.2/3`, `TEST.DATA.CLEANUP.1E/2E`) concluído em 2026-09-26/27/28 — **posterior** a todo o histórico de produto/UI registrado mais abaixo neste arquivo (`PRODUCT.*`, `DESIGN.*`, `IAM4.2`, etc., datado até 2026-09-23). Este bloco não substitui aquele histórico nem o invalida; apenas o precede no tempo.
+
+### Fatos operacionais canônicos vivos
+- **TLS/OIDC público**: operacional. Issuer `https://auth.devops.k3gsolutions.com.br/realms/omnira`, cookie `Secure`, sessão server-side opaca (nunca JWT no cookie). Commit `0a5108a`.
+- **WAHA real**: sessão `WORKING`, tráfego real contínuo (inbound/outbound) há 7+ dias sem interrupção.
+- **Outbound**: ID de provedor reservado estável (CAS), semânticas `sent`/`failed`/`uncertain` (uncertain nunca reenviado automaticamente), correlação por `message_id` sem PII em log. Commits `c1c395db`, `7249b02a`, `6f3d162c`, `e05ac0c`.
+- **Routing**: "sem agente elegível" é ACKed como condição de negócio normal (nunca preso em ciclo de NAK/redelivery); nova oportunidade de roteamento via liveness sweep/presence wakeup. Commit `68d994e`.
+- **OMNIRA_JOBS (JetStream) com retenção limitada**: `Retention=LimitsPolicy`, `MaxAge=7d`, `MaxBytes=8GiB`, `Discard=New`, `DuplicateWindow=2m`. Reconciliação de jobs `queued` presos ativa (nunca reseta o ID de provedor já reservado). Commits `9b9e117`, `c69c543` (política ativada ao vivo — mutação de host, sem commit associado).
+- **Monitoramento** NATS + WAHA a cada 5 minutos; o check do NATS cobre **ambos** os consumers (`worker-channel-send` e `worker-routing`) de forma não supervisionada.
+- **Alerta externo ativo** (canal ntfy-compatible, tópico capability público no `ntfy.sh`): `CRITICAL`/`FAIL` do NATS e `FAIL` do WAHA disparam alerta; recuperação dispara aviso único; falha persistente é deduplicada com lembrete no máximo a cada 60 min; estado saudável fica em silêncio externo. Commit `d10d4e0` (implementação); ativação real é estado de host — segredo em `/etc/omnira/notify.env` (**nunca documentar o valor do tópico**), cron NATS/WAHA a cada 5 min. Reconstrução de host exige **reprovisionamento manual** desse segredo e das entradas de cron/estado (`/var/lib/omnira/notify-state/`, `/var/log/omnira/notification.log`) — nenhum desses três é versionado no Git.
+- **Backup**: local a cada hora (RPO≤1h, retenção 7 dias) + cópia externa best-effort com verificação de checksum antes do rename atômico. Restore com PASS completo documentado em `docs/audit/GATE-INBOX-WAHA-LAB.md`, incluindo aplicação de `roles.sql` **antes** do restore de schema/dados — a dívida historicamente citada como "BACKUP.EXT.1R" (erro de GRANT por falta da role `omnira_app`) não tem evidência de existir no estado atual do repositório e não deve mais ser carregada como bloqueador em aberto. Retenção do backup **externo** (não o local) permanece sem política explícita — P2 aceito, risco baixo e quantificado.
+- **Deploy**: container de frontend de produção, imagens `api`/`worker`/`web` tagueadas por Git SHA, migrations forward-only, rollback documentado — incluindo a restrição específica de nunca subir um binário pré-B2 às cegas enquanto a retenção do NATS estiver ativa (`docs/ops/RUNBOOK-INBOX-WAHA.md`). Commit `7d2fe2a`.
+- **Testes de integração** isolados de `omnira_dev`/NATS real — Postgres e NATS descartáveis por execução, guards estruturais que rejeitam endereços de dev/pilot conhecidos. Commits `0dbd712`, `3a95345`.
+
+### Estado de supervisão
+`PILOT.EXIT` (2026-09-28) avaliou 15 dimensões de prontidão operacional (auth, TLS, isolamento de tenant, backup, recovery, deploy, canal WhatsApp real, outbound, routing, durabilidade de fila, limites de disco, visibilidade operacional, alerta externo, isolamento de teste, saúde atual) — todas PASS, zero P0/P1 remanescente. O qualificador `SUPERVISED` foi removido: **não é mais exigida supervisão manual contínua excepcional**; a operação normal via runbooks/alertas continua obrigatória. Isto **não** significa GA, zero débito técnico, DR totalmente automatizado, todos os canais implementados, ou HA/multi-região.
+
+### Débitos abertos (P2 — não bloqueiam o piloto)
+- Retenção do backup externo sem política explícita (baixo risco quantificado).
+- Hardening de `NTFY_TOKEN` no argv do `curl` antes de qualquer modo autenticado (hoje não usado — modo anônimo capability-topic).
+- Dead-man monitoring do próprio cron (nenhum backend barato disponível hoje).
+- Asserção frágil (falta `-m1`) na Seção 25 de `scripts/test-notify-wrapper.sh` — o fato verificado é verdadeiro, mas a extração usada no teste é frágil.
+- Ambiguidade de fidelidade no log de notificação quando o canal não está configurado (`notify_send` retorna sucesso tanto para "não configurado" quanto para "enviado de fato").
+- 85 tenants órfãos de fixture não resolvidos em `omnira_dev` (nomes genéricos "Tenant C", criados em rajada em 2026-09-21) — confirmado zero tráfego nos últimos 30 dias, sem impacto em nenhum fluxo do piloto real. A própria operação de limpeza (`TEST.DATA.CLEANUP.1E`/`.2E`) nunca foi persistida como documento no repositório — dívida de documentação, não de dado.
+- `.backup-test/omnira-1789755710.sql` — dump SQL (~44KB) commitado por engano no Git desde `058af5d`; nenhum segredo encontrado no conteúdo; remover/gitignorar numa slice de higiene futura.
+- Fechamento do "TLS P0" citado no commit `0a5108a` nunca foi documentado explicitamente como fechado em nenhum lugar — resolvido funcionalmente pelo commit `7d2fe2a` e verificado ao vivo nesta auditoria, mas sem registro formal anterior.
+
+### Próximo marco de produto
+`PRODUCT.6-C1 — K3G API Read-Only Ticket Contract Discovery` (linha "Immediate next" na seção `## NOW` abaixo, 2026-09-23) segue sendo o próximo item de produto identificado antes deste arco operacional começar. Reavaliar prioridade agora que a supervisão excepcional do piloto foi removida — o endurecimento do piloto não deve mais dominar a fila só por ter existido primeiro.
+
 ## BRANCH
 
 - `main`; consultar Git para SHA e distância de `origin/main` atuais.
