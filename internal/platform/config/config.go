@@ -54,6 +54,34 @@ type Config struct {
 	MetaVerifyToken   string
 	MetaAppSecret     string
 	GracefulShutdown  int // segundos
+
+	// AI* (PRODUCT.7C0/7C1): deliberately NOT validated by Validate() below.
+	// AI is an optional, best-effort subsystem — a misconfigured/incomplete
+	// AI_* set must never fail the whole API's boot (PRODUCT.7C0 §4,
+	// PRODUCT.7C1 §4). AIReady() is the single place that decides whether
+	// the feature may actually run; callers (apps/api/cmd/omnira-api)
+	// consult it and construct no generator at all when false, which is
+	// what makes the AI HTTP endpoint fail closed by construction.
+	AIEnabled       bool
+	AIProvider      string
+	AIModel         string
+	AIAPIKey        string
+	AITimeoutSeconds int
+}
+
+// AIReady reports whether enough configuration exists to actually construct
+// a provider generator. False for any reason (disabled, unsupported
+// provider, missing model/key) means the AI capability must not be wired —
+// never a partially-configured attempt that could fail unpredictably at
+// request time instead of being visibly absent at boot.
+func (c *Config) AIReady() bool {
+	if !c.AIEnabled {
+		return false
+	}
+	if c.AIProvider != "openai" {
+		return false
+	}
+	return strings.TrimSpace(c.AIModel) != "" && strings.TrimSpace(c.AIAPIKey) != ""
 }
 
 func Load() *Config {
@@ -104,6 +132,12 @@ func Load() *Config {
 		MetaVerifyToken:   os.Getenv("OMNIRA_META_VERIFY_TOKEN"),
 		MetaAppSecret:     os.Getenv("OMNIRA_META_APP_SECRET"),
 		GracefulShutdown:  getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
+
+		AIEnabled:        getEnv("OMNIRA_AI_ENABLED", "false") == "true",
+		AIProvider:       getEnv("OMNIRA_AI_PROVIDER", "openai"),
+		AIModel:          os.Getenv("OMNIRA_AI_MODEL"),
+		AIAPIKey:         os.Getenv("OMNIRA_AI_API_KEY"),
+		AITimeoutSeconds: getEnvInt("OMNIRA_AI_TIMEOUT_SECONDS", 15),
 	}
 }
 

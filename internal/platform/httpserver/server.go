@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
+	aiports "github.com/omnira/omnira/internal/ai/ports"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
@@ -461,6 +463,25 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// authorizes the path tenant against the caller's membership before
 	// the handler ever resolves a K3G credential.
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/crm/companies", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.ListCompanies))))
+
+	// PRODUCT.7C1: AI conversation summary. generator is nil whenever AI is
+	// disabled or incompletely configured (config.Config.AIReady()) — the
+	// route is always registered, but NewSummaryHandler with a nil
+	// generator always answers 503 without ever attempting a provider call,
+	// so a misconfigured/disabled AI subsystem can never affect anything
+	// else this function registers.
+	var aiGenerator aiports.TextGenerator
+	if cfg.AIReady() {
+		if gen, err := aiadapters.NewOpenAIGenerator(aiadapters.OpenAIConfig{
+			APIKey:  cfg.AIAPIKey,
+			Model:   cfg.AIModel,
+			Timeout: time.Duration(cfg.AITimeoutSeconds) * time.Second,
+		}); err == nil {
+			aiGenerator = gen
+		}
+	}
+	aiHandler := aiadapters.NewSummaryHandler(dbPool, aiGenerator, auditadapters.NewPostgresAuditEventRepository(dbPool), 300)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ai/summary", authnMiddleware(tenantSession(http.HandlerFunc(aiHandler.Summarize))))
 
 	return crmHandler
 }

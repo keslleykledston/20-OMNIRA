@@ -8,6 +8,7 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '..
 import { Icon } from '../primitives';
 import { TicketPanel } from '../TicketPanel';
 import { TechnicianSelectModal } from '../TechnicianSelectModal';
+import ConversationSummary from './ConversationSummary';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -128,6 +129,9 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
           </div>
         </div>
       </div>
+
+      {/* PRODUCT.7C1: on-demand, non-persisted AI conversation summary */}
+      <ConversationSummary conversationId={conversationId} />
 
       {/* Conversation Stats */}
       <div className="p-4 border-b border-border-subtle">

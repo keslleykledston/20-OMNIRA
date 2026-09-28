@@ -38,6 +38,14 @@ const (
 	ActionChannelConnectionCreated AuditAction = "channel.connection_created"
 	ActionChannelSessionStarted    AuditAction = "channel.session_started"
 	ActionChannelSessionStopped    AuditAction = "channel.session_stopped"
+	// ActionAIConversationSummarize (PRODUCT.7C1): recorded twice per
+	// request — once BEFORE the provider call (metadata phase="requested",
+	// never skippable: internal/ai/adapters.SummaryHandler refuses to call
+	// the provider at all if this write fails) and once AFTER (metadata
+	// phase="completed", with the real outcome/result_category). Metadata
+	// never contains message content, the generated summary, or any PII —
+	// see internal/ai/adapters/http.go's audit helpers.
+	ActionAIConversationSummarize AuditAction = "ai.conversation.summarize"
 )
 
 // AuditOutcome — resultado da operação.
