@@ -1,15 +1,43 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { ConversationItem } from '../../types/api';
 import { Icon } from '../primitives';
+import { InboxSegment, inboxTimeLabel, previewText, waitInfo, WaitTone } from '../../lib/inboxModel';
 
 interface ConversationListPanelProps {
   conversations: ConversationItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  segment: 'all' | 'unread' | 'mine';
-  onSegmentChange: (segment: 'all' | 'unread' | 'mine') => void;
+  segment: InboxSegment;
+  onSegmentChange: (segment: InboxSegment) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
   isLoading: boolean;
+  hasMore?: boolean;
+  isFetchingMore?: boolean;
+  onLoadMore?: () => void;
+}
+
+const SEGMENTS: { id: InboxSegment; label: string }[] = [
+  { id: 'all', label: 'Todas' },
+  { id: 'waiting', label: 'Aguardando' },
+  { id: 'mine', label: 'Minhas' },
+];
+
+const WAIT_STYLE: Record<WaitTone, string> = {
+  muted: 'bg-surface-muted text-text-secondary',
+  warning: 'bg-status-warning-soft text-status-warning',
+  danger: 'bg-status-danger-soft text-status-danger',
+};
+
+// Labels ("14:32", "5 min") move with the clock, so re-render once a minute.
+function useMinuteClock(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return now;
 }
 
 export default function ConversationListPanel({
@@ -18,131 +46,162 @@ export default function ConversationListPanel({
   onSelect,
   segment,
   onSegmentChange,
+  search,
+  onSearchChange,
   isLoading,
+  hasMore = false,
+  isFetchingMore = false,
+  onLoadMore,
 }: ConversationListPanelProps) {
+  const now = useMinuteClock();
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load the next page when the user nears the bottom — and also when the loaded rows do not
+  // even fill the panel (tall screen), so there is never a "stuck" short list with more behind it.
+  const maybeLoadMore = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !hasMore || isFetchingMore || !onLoadMore) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 240) onLoadMore();
+  }, [hasMore, isFetchingMore, onLoadMore]);
+
+  useEffect(() => {
+    maybeLoadMore();
+  }, [conversations.length, maybeLoadMore]);
+
   return (
     <div className="flex flex-col h-full bg-surface">
-      {/* Segmented Control */}
-      <div className="p-4 border-b border-border-subtle">
-        <div className="flex gap-2">
-          {(['all', 'unread', 'mine'] as const).map((s) => (
+      <div className="px-3 pt-3 pb-2 flex flex-col gap-2 border-b border-border-subtle">
+        <div className="flex gap-1.5" role="tablist" aria-label="Filtro de conversas">
+          {SEGMENTS.map((s) => (
             <button
-              key={s}
-              onClick={() => onSegmentChange(s)}
+              key={s.id}
+              type="button"
+              role="tab"
+              aria-selected={segment === s.id}
+              onClick={() => onSegmentChange(s.id)}
               className={clsx(
-                'px-3 py-1.5 text-sm font-medium rounded-control transition-colors',
-                segment === s
+                'px-2.5 py-1 text-xs font-medium rounded-pill transition-colors',
+                segment === s.id
                   ? 'bg-accent-primary text-white'
                   : 'bg-surface-muted text-text-secondary hover:bg-surface-tertiary'
               )}
             >
-              {s === 'all' ? 'Todas' : s === 'unread' ? 'Não lidas' : 'Minhas'}
+              {s.label}
             </button>
           ))}
         </div>
+        <label className="relative block">
+          <span className="sr-only">Buscar contato</span>
+          <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Buscar contato..."
+            className={clsx(
+              'w-full pl-8 pr-3 py-1.5 text-sm rounded-control',
+              'bg-surface-muted text-text-primary placeholder:text-text-tertiary',
+              'focus:outline-none focus:ring-2 focus:ring-accent-primary border border-transparent'
+            )}
+          />
+        </label>
       </div>
 
-      {/* Search */}
-      <div className="p-3 border-b border-border-subtle">
-        <input
-          type="text"
-          placeholder="Buscar contato..."
-          className={clsx(
-            'w-full px-3 py-2 text-sm rounded-control',
-            'bg-surface-muted text-text-primary',
-            'placeholder:text-text-tertiary',
-            'focus:outline-none focus:ring-2 focus:ring-accent-primary',
-            'border border-transparent'
-          )}
-        />
-      </div>
-
-      {/* Conversation List */}
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} onScroll={maybeLoadMore} className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="p-4 text-center text-text-secondary text-sm">Carregando...</div>
         ) : conversations.length === 0 ? (
-          <div className="p-4 text-center text-text-tertiary text-sm">Nenhuma conversa</div>
+          <div className="p-4 text-center text-text-tertiary text-sm">
+            {search.trim() ? 'Nenhuma conversa encontrada' : segment === 'all' ? 'Nenhuma conversa' : 'Nada por aqui'}
+          </div>
         ) : (
-          conversations.map((conv) => (
-            <div
-              key={conv.id}
-              onClick={() => onSelect(conv.id)}
-              className={clsx(
-                'p-3 border-b border-border-subtle cursor-pointer transition-colors',
-                selectedId === conv.id
-                  ? 'bg-accent-primary-soft'
-                  : 'hover:bg-surface-muted'
-              )}
-            >
-              {/* Row: Avatar + Content + Meta */}
-              <div className="flex gap-3 items-start">
-                {/* Avatar */}
-                <div
-                  className={clsx(
-                    'w-10 h-10 rounded-full flex items-center justify-center',
-                    'flex-shrink-0 font-semibold text-sm text-white',
-                    'bg-accent-primary'
-                  )}
-                >
-                  {conv.contact_name?.[0]?.toUpperCase() || '?'}
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline gap-2">
-                    <h4 className="text-sm font-semibold text-text-primary truncate">
-                      {conv.contact_name}
-                    </h4>
-                    {conv.unread_count > 0 && (
-                      <span className="text-xs font-semibold bg-accent-primary text-white px-1.5 py-0.5 rounded-full flex-shrink-0">
-                        {conv.unread_count}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-text-secondary truncate">
-                    {conv.contact_phone}
-                  </p>
-                  <p className="text-xs text-text-tertiary truncate mt-1">
-                    {/* Preview: últimas palavras da última mensagem */}
-                    Sem preview recente
-                  </p>
-                  <div className="flex gap-2 items-center mt-1.5">
-                    <span className={clsx(
-                      'text-xs px-1.5 py-0.5 rounded-full font-medium',
-                      conv.status === 'active' ? 'bg-status-success-soft text-status-success' :
-                      conv.status === 'closed' ? 'bg-status-muted text-text-secondary' :
-                      'bg-status-warning-soft text-status-warning'
-                    )}>
-                      {conv.status === 'active' ? 'Ativo' : conv.status === 'closed' ? 'Fechado' : 'Pendente'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Time */}
-                <div className="text-xs text-text-tertiary flex-shrink-0 text-right">
-                  {formatTime(conv.updated_at)}
-                </div>
-              </div>
-            </div>
-          ))
+          <ul>
+            {conversations.map((conv) => (
+              <ConversationRow
+                key={conv.id}
+                conv={conv}
+                selected={selectedId === conv.id}
+                now={now}
+                onSelect={onSelect}
+              />
+            ))}
+          </ul>
         )}
+        {isFetchingMore && <div className="py-3 text-center text-xs text-text-tertiary">Carregando mais...</div>}
       </div>
     </div>
   );
 }
 
-function formatTime(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (minutes < 1) return 'agora';
-  if (minutes < 60) return `${minutes}m`;
-  if (hours < 24) return `${hours}h`;
-  if (days < 7) return `${days}d`;
-  return date.toLocaleDateString('pt-BR', { month: 'short', day: 'numeric' });
+function ConversationRow({
+  conv,
+  selected,
+  now,
+  onSelect,
+}: {
+  conv: ConversationItem;
+  selected: boolean;
+  now: Date;
+  onSelect: (id: string) => void;
+}) {
+  const name = conv.contact_name || conv.contact_phone;
+  const wait = waitInfo(conv.waiting_since, now);
+  const unassigned = !conv.assigned_to_user_id && conv.status !== 'closed';
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onSelect(conv.id)}
+        aria-current={selected ? 'true' : undefined}
+        className={clsx(
+          'flex w-full items-center gap-2.5 px-3 py-2 text-left border-b border-border-subtle transition-colors',
+          selected ? 'bg-accent-primary-soft' : 'hover:bg-surface-muted'
+        )}
+      >
+        <span className="relative flex-shrink-0">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-white">
+            {name?.[0]?.toUpperCase() || '?'}
+          </span>
+          {unassigned && (
+            <span
+              title="Sem atendente"
+              aria-label="Sem atendente"
+              className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-status-warning ring-2 ring-surface"
+            />
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline justify-between gap-2">
+            <span className="truncate text-sm font-semibold text-text-primary">{name}</span>
+            <time
+              dateTime={conv.last_message_at ?? conv.updated_at}
+              className={clsx('flex-shrink-0 text-[11px] tabular-nums', wait ? 'text-accent-primary' : 'text-text-tertiary')}
+            >
+              {inboxTimeLabel(conv.last_message_at ?? conv.updated_at, now)}
+            </time>
+          </span>
+          <span className="flex items-center justify-between gap-2">
+            <span className="truncate text-xs text-text-secondary">{previewText(conv)}</span>
+            {wait && (
+              <span
+                title="Cliente aguardando resposta"
+                className={clsx(
+                  'inline-flex flex-shrink-0 items-center gap-0.5 rounded-pill px-1.5 text-[10px] font-medium leading-4 tabular-nums',
+                  WAIT_STYLE[wait.tone]
+                )}
+              >
+                <Icon name="clock" size={10} />
+                {wait.label}
+              </span>
+            )}
+            {conv.status === 'closed' && (
+              <span className="flex-shrink-0 rounded-pill bg-status-muted px-1.5 text-[10px] font-medium leading-4 text-text-secondary">
+                Fechada
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
 }

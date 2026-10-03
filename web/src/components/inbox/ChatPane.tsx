@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import clsx from 'clsx';
 import { MessageItem, ConversationItem } from '../../types/api';
@@ -9,6 +9,7 @@ import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
 import MessageBubble from './MessageBubble';
 import MessageComposer from './MessageComposer';
 import { Icon } from '../primitives';
+import { dayLabel, sortChronological } from '../../lib/inboxModel';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -19,8 +20,6 @@ interface ChatPaneProps {
 export default function ChatPane({ conversationId, onBack, onToggleContext }: ChatPaneProps) {
   const tenantId = getTenantId();
   const queryClient = useQueryClient();
-  const timelineEndRef = useRef<HTMLDivElement>(null);
-  const [messages, setMessages] = useState<MessageItem[]>([]);
   const [conversation, setConversation] = useState<ConversationItem | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -48,33 +47,41 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     enabled: !!tenantId && !!conversationId,
   });
 
-  // Fetch messages
-  const { data: messagesData } = useQuery({
+  // Fetch messages: the API pages newest-first; older pages load when the user scrolls to the top.
+  const {
+    data: messagesData,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteQuery({
     queryKey: ['inbox-messages', tenantId, conversationId],
-    queryFn: async () => {
+    initialPageParam: '' as string,
+    queryFn: async ({ pageParam }) => {
       try {
         const res = await axios.get(
           `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
-          { params: { limit: 50 }, headers: authHeaders() }
+          { params: { limit: 100, cursor: pageParam || undefined }, headers: authHeaders() }
         );
-        return res.data;
+        return res.data as { items?: MessageItem[]; has_more?: boolean; next_cursor?: string };
       } catch (err) {
         if (isUnauthorized(err)) handleUnauthorized();
         throw err;
       }
     },
+    getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
     enabled: !!tenantId && !!conversationId,
   });
+
+  // Oldest first, newest at the bottom next to the composer. Pages can overlap after a refetch
+  // (a new message shifts the boundary), so de-duplicate by id.
+  const messages = useMemo(
+    () => sortChronological(messagesData?.pages.flatMap((page) => page.items ?? []) ?? []),
+    [messagesData]
+  );
 
   useEffect(() => {
     if (conversationData) setConversation(conversationData);
   }, [conversationData]);
-
-  useEffect(() => {
-    if (messagesData?.items) {
-      setMessages(messagesData.items);
-    }
-  }, [messagesData]);
 
   // Realtime events
   useRealtimeEvents({
@@ -86,10 +93,73 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     },
   });
 
-  // Auto-scroll to bottom
+  // Scrolling. The thread opens on the newest message and follows new ones (received or sent)
+  // while the user is at the bottom; if they scrolled up to read, it stays put and offers a button
+  // back. Loading an older page keeps the view where it was instead of jumping.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+  const prependRef = useRef<{ height: number; top: number } | null>(null);
+  const lastIdRef = useRef<string | null>(null);
+  const openedRef = useRef<string | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || messages.length === 0) return;
+    const lastMsg = messages[messages.length - 1];
+    if (openedRef.current !== conversationId) {
+      openedRef.current = conversationId;
+      lastIdRef.current = lastMsg.id;
+      stickRef.current = true;
+      scrollToBottom();
+      return;
+    }
+    if (prependRef.current) {
+      el.scrollTop = el.scrollHeight - prependRef.current.height + prependRef.current.top;
+      prependRef.current = null;
+      return;
+    }
+    if (lastMsg.id !== lastIdRef.current) {
+      lastIdRef.current = lastMsg.id;
+      if (stickRef.current || lastMsg.direction === 'outbound') {
+        stickRef.current = true;
+        scrollToBottom();
+      }
+    }
+  }, [messages, conversationId]);
+
+  // Images/audio finish loading after the first paint and grow the thread: keep following the end.
   useEffect(() => {
-    timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const content = contentRef.current;
+    if (!content || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (stickRef.current) scrollToBottom();
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [conversationId]);
+
+  const requestOlder = () => {
+    const el = scrollRef.current;
+    if (!el || !hasNextPage || isFetchingNextPage) return;
+    prependRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    void fetchNextPage();
+  };
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    stickRef.current = nearBottom;
+    setAtBottom(nearBottom);
+    if (el.scrollTop < 80) requestOlder();
+  };
 
   const handleSendMessage = async (text: string): Promise<boolean> => {
     if (!text.trim()) return false;
@@ -126,7 +196,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   return (
     <div className="flex flex-col h-full bg-surface">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border-subtle">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-subtle">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           {onBack && (
             <button
@@ -167,44 +237,61 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         </div>
       </div>
 
-      {/* Timeline */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
-            Nenhuma mensagem
-          </div>
-        ) : (
-          messages.map((msg, idx) => {
-            const currentDate = new Date(msg.created_at).toLocaleDateString('pt-BR');
-            const prevDate = idx > 0 ? new Date(messages[idx - 1].created_at).toLocaleDateString('pt-BR') : null;
-            const showDateSeparator = !prevDate || currentDate !== prevDate;
-
-            return (
-              <div key={msg.id}>
-                {showDateSeparator && (
-                  <div className="flex items-center gap-3 my-4">
-                    <span className="flex-1 h-px bg-border-subtle" />
-                    <span className="text-xs text-text-tertiary">
-                      {new Date(msg.created_at).toLocaleDateString('pt-BR', {
-                        weekday: 'long',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric'
-                      })}
-                    </span>
-                    <span className="flex-1 h-px bg-border-subtle" />
+      {/* Timeline: oldest at the top, newest at the bottom next to the composer. A short thread
+          sits at the bottom too (justify-end), like WhatsApp. */}
+      <div className="relative flex-1 min-h-0">
+        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto">
+          <div ref={contentRef} className="flex min-h-full flex-col justify-end gap-0.5 px-3 py-2">
+            {hasNextPage && (
+              <button
+                type="button"
+                onClick={requestOlder}
+                disabled={isFetchingNextPage}
+                className="mx-auto mb-1 rounded-pill bg-surface-muted px-3 py-1 text-xs text-text-secondary hover:bg-surface-tertiary disabled:opacity-60"
+              >
+                {isFetchingNextPage ? 'Carregando mensagens anteriores...' : 'Carregar mensagens anteriores'}
+              </button>
+            )}
+            {messages.length === 0 ? (
+              <div className="flex items-center justify-center py-10 text-text-tertiary text-sm">Nenhuma mensagem</div>
+            ) : (
+              messages.map((msg, idx) => {
+                const prev = idx > 0 ? messages[idx - 1] : null;
+                const label = dayLabel(msg.created_at);
+                const showDay = !prev || dayLabel(prev.created_at) !== label;
+                const turn = prev && prev.direction !== msg.direction && !showDay;
+                return (
+                  <div key={msg.id} className={turn ? 'mt-1.5' : undefined}>
+                    {showDay && (
+                      <div className="my-2 flex justify-center">
+                        <span className="rounded-pill bg-surface-muted px-3 py-0.5 text-[11px] text-text-secondary">{label}</span>
+                      </div>
+                    )}
+                    <MessageBubble message={msg} />
                   </div>
-                )}
-                <MessageBubble message={msg} />
-              </div>
-            );
-          })
+                );
+              })
+            )}
+          </div>
+        </div>
+        {!atBottom && (
+          <button
+            type="button"
+            onClick={() => {
+              stickRef.current = true;
+              scrollToBottom();
+              setAtBottom(true);
+            }}
+            aria-label="Ir para a última mensagem"
+            className="absolute bottom-3 right-4 flex h-9 w-9 items-center justify-center rounded-full border border-border-subtle bg-surface text-text-secondary shadow-sm hover:bg-surface-muted"
+          >
+            <Icon name="arrow-left" size={16} className="-rotate-90" />
+          </button>
         )}
-        <div ref={timelineEndRef} />
       </div>
 
       {/* Composer */}
-      <div className="p-4 border-t border-border-subtle">
+      <div className="px-3 py-2 border-t border-border-subtle">
         {sendError && (
           <div role="alert" className="mb-3 p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
             {sendError}

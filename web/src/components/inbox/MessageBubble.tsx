@@ -42,7 +42,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     )}>
       {/* Message Bubble */}
       <div className={clsx(
-        'max-w-xs rounded-lg p-3 text-sm leading-relaxed',
+        'max-w-[75%] rounded-lg px-3 py-1.5 text-sm leading-snug',
         isOutbound
           ? 'bg-accent-primary text-white rounded-br-none'
           : 'bg-surface-muted text-text-primary rounded-bl-none'
@@ -54,7 +54,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
 
         {/* Timestamp inside bubble */}
         <footer className={clsx(
-          'mt-1 text-xs flex items-center justify-end gap-1',
+          'mt-0.5 text-[11px] flex items-center justify-end gap-1',
           isOutbound ? 'text-white/75' : 'text-text-secondary'
         )}>
           <time>{new Date(message.created_at).toLocaleTimeString('pt-BR', {

@@ -72,6 +72,15 @@ Backend somente leitura, com dados reais, para a futura tela Contact 360 (FR3). 
 - **"Sem permissão para ver o chamado":** o chamado só aparece para quem assumiu a conversa (ou gerencia); em conversa sem dono a API responde 403 e a tela dizia "sem permissão". Agora diz "Assuma esta conversa para ver e criar o chamado." quando a conversa não tem dono; com dono e 403 mantém a mensagem de permissão.
 - **Lembrete operacional:** o Inbox mostra clientes reais; testes de resposta só na conversa "K3G Solutions" (...0090).
 
+### Inbox compacto, ordem por atividade e conversa com as mais novas embaixo (2026-10-03, gate visual aprovado pelo dono)
+- **Lista:** ordenada pela última mensagem real (cursor `(last_activity, id)`), paginada **sem teto** (100 por página, carrega ao rolar), busca por nome/telefone e filtros `assigned=me` e `waiting=true` no servidor. Cada item traz prévia da última mensagem e `waiting_since` (início da espera do cliente: primeira mensagem recebida depois da última saída não falha). Abas: Todas / Aguardando / Minhas ("Não lidas" removida: não há controle de leitura). Linhas compactas estilo WhatsApp; ficha de espera amarela após 30 min e vermelha após 2 h (limites só visuais, sem SLA por tenant; tornar ajustável nas configurações é a próxima fatia).
+- **Conversa:** mensagens em ordem cronológica, abre na última, segue mensagens novas enviadas/recebidas quando você está no fim, botão para voltar ao fim, carrega mensagens antigas ao subir sem pular a posição, conversa curta ancorada embaixo.
+- **Defeito antigo corrigido:** `has_more` nunca era `true` nas listas de conversas e de mensagens (o laço consumia a linha de olhada à frente), o que tornava a paginação impossível.
+- **WAHA/GOWS:** `sendText` responde com o id serializado `true_<chat>_<id>`; o adaptador exigia o id puro e marcava toda resposta como `uncertain` embora entregue. Corrigido (aceita o id serializado cujo segmento de id é o reservado e guarda o que o WAHA devolveu). Verificado ao vivo: envio das 22:45Z ficou `sent`. As 3 respostas de hoje antes da correção seguem `uncertain` (entregues; não corrigidas).
+- **CRM:** `GET /crm/companies` lista só empresas ativas.
+- **Grupos:** ADR-0015 (Proposed) — leitura de grupos em aba própria, modelo próprio, opt-in por grupo; aguarda aceite e respostas às questões em aberto.
+- Evidência visual: `docs/design/review/INBOX-COMPACT/`.
+
 ### Próximo marco de produto
 **Correção (2026-09-28, `PRODUCT.DOCSYNC`)**: a entrada anterior deste bloco apontava `PRODUCT.6-C1` como próximo marco — isso estava desatualizado. `PRODUCT.6-C1` e todo o arco de integração de ticketing K3G que ela deveria descobrir (`GetTicket`/`CreateTicket`/`UpdateTicketStatus`/resolução de runtime/ativação no Inbox/reconciliação) **já estão implementados e ativos**, 17 commits (`54f5cd0`…`5abfbd5`, 2026-09-24/25) nunca antes registrados neste handoff — ver a entrada `PRODUCT.6-A/B/C` na seção `## NOW` abaixo para o detalhe completo, verificado commit-a-commit em 2026-09-28.
 

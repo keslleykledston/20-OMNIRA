@@ -16,8 +16,15 @@ export interface ConversationItem {
   created_at?: string;
   updated_at: string;
   assigned_to_user_id?: string;
-  message_count: number;
-  unread_count: number;
+  // Single-conversation read only (absent in list items).
+  message_count?: number;
+  // List only: last real message, for ordering/preview, and when the customer started waiting.
+  last_message_at?: string;
+  last_message_direction?: 'inbound' | 'outbound';
+  last_message_type?: string;
+  last_message_preview?: string;
+  waiting_since?: string;
+  queue_id?: string;
   crm_contact_id?: string;
   participants?: ConversationParticipant[];
 }
@@ -27,7 +34,7 @@ export interface MessageItem {
   conversation_id: string;
   body: string;
   direction: 'inbound' | 'outbound';
-  status: 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'pending' | 'uncertain';
+  status: 'received' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'pending' | 'uncertain';
   created_at: string;
   created_by?: string;
   message_type?: string; // 'text', 'image', 'document', etc.

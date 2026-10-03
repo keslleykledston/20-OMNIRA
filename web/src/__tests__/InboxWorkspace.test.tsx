@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import userEvent from '@testing-library/user-event';
 import InboxWorkspace from '../pages/InboxWorkspace';
 import { renderAt, mockGets, setSession } from './testUtils';
 
@@ -223,8 +224,65 @@ describe('InboxWorkspace — PRODUCT.6-O2D2 conversation deep link', () => {
   it('without conversation_id, filters/segment behavior is unaffected', async () => {
     mockGets(mockDefaultList());
     renderAt(<InboxWorkspace />, '/inbox');
-    expect(await screen.findByRole('button', { name: 'Todas' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Não lidas' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Minhas' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Todas' })).toBeInTheDocument();
+    // "Não lidas" never filtered anything (there is no read tracking); "Aguardando" is the real one:
+    // the customer wrote last and nobody answered.
+    expect(screen.getByRole('tab', { name: 'Aguardando' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Minhas' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Não lidas' })).not.toBeInTheDocument();
+  });
+});
+
+describe('InboxWorkspace — list paging, search and filters', () => {
+  type Params = Record<string, unknown>;
+  // Query params of every list request, in call order.
+  const listCalls = (): Params[] =>
+    vi
+      .mocked(axios.get)
+      .mock.calls.filter(([url]) => (url as string).endsWith('/inbox/conversations'))
+      .map(([, config]) => ((config as { params?: Params } | undefined)?.params ?? {}));
+
+  it('asks for the newest page first with no search/filter, and follows next_cursor while there is more', async () => {
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      if ((url as string).endsWith('/inbox/conversations')) {
+        return config?.params?.cursor
+          ? { data: { items: [conversation('page-2', { contact_name: 'Antiga' })], has_more: false } }
+          : { data: { items: [conversation('page-1', { contact_name: 'Recente' })], has_more: true, next_cursor: 'CUR1' } };
+      }
+      if ((url as string).includes('/messages')) return { data: { items: [], has_more: false } };
+      return { data: conversation('page-1') };
+    });
+    renderAt(<InboxWorkspace />, '/inbox');
+    // the short first page does not fill the panel, so the next page is requested on its own
+    await waitFor(() => expect(screen.getByText('Antiga')).toBeInTheDocument());
+    const [first, second] = listCalls();
+    expect(first).toMatchObject({ limit: 100 });
+    expect(first.cursor).toBeUndefined();
+    expect(first.q).toBeUndefined();
+    expect(first.assigned).toBeUndefined();
+    expect(first.waiting).toBeUndefined();
+    expect(second.cursor).toBe('CUR1');
+    // newest first, exactly as the API returned it
+    const names = screen.getAllByRole('listitem').map((li) => li.textContent);
+    expect(names[0]).toContain('Recente');
+    expect(names[1]).toContain('Antiga');
+  });
+
+  it('runs search and the Minhas / Aguardando filters on the server', async () => {
+    const user = userEvent.setup();
+    mockGets(mockDefaultList());
+    renderAt(<InboxWorkspace />, '/inbox');
+    await screen.findByRole('tab', { name: 'Todas' });
+
+    await user.click(screen.getByRole('tab', { name: 'Minhas' }));
+    await waitFor(() => expect(listCalls().some((p) => p.assigned === 'me')).toBe(true));
+    await user.click(screen.getByRole('tab', { name: 'Aguardando' }));
+    await waitFor(() => expect(listCalls().some((p) => p.waiting === true && p.assigned === undefined)).toBe(true));
+    await user.click(screen.getByRole('tab', { name: 'Todas' }));
+
+    await user.type(screen.getByRole('searchbox'), 'k3g');
+    await waitFor(() => expect(listCalls().some((p) => p.q === 'k3g')).toBe(true));
+    // the keystrokes are debounced: no request per letter
+    expect(listCalls().filter((p) => p.q === 'k').length).toBe(0);
   });
 });

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import clsx from 'clsx';
 import { API_BASE } from '../lib/config';
@@ -9,6 +9,8 @@ import { useRealtimeEvents } from '../hooks/useRealtimeEvents';
 import ConversationListPanel from '../components/inbox/ConversationListPanel';
 import ChatPane from '../components/inbox/ChatPane';
 import ContextPane from '../components/inbox/ContextPane';
+import { InboxSegment } from '../lib/inboxModel';
+import type { ConversationItem } from '../types/api';
 
 // PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
 // <uuid> — never /inbox/:id (that path pattern is dead, see InboxPage.tsx/
@@ -29,7 +31,9 @@ export default function InboxWorkspace() {
   const tenantId = getTenantId();
   const queryClient = useQueryClient();
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
-  const [segment, setSegment] = useState<'all' | 'unread' | 'mine'>('all');
+  const [segment, setSegment] = useState<InboxSegment>('all');
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounced(search.trim(), 300);
   const [showContext, setShowContext] = useState(true);
 
   // PRODUCT.6-O2D2 deep link: conversation_id is UNTRUSTED navigation
@@ -44,25 +48,41 @@ export default function InboxWorkspace() {
   const [deepLinkState, setDeepLinkState] = useState<DeepLinkState>('idle');
   const deepLinkRequestIdRef = useRef(0);
 
-  // Fetch conversation list
-  const { data: conversationsData, isLoading: listLoading } = useQuery({
-    queryKey: ['inbox-conversations', tenantId, segment],
-    queryFn: async () => {
+  // Conversation list: most recent activity first, paged WITHOUT a cap — the panel asks for the
+  // next page as the user scrolls, so nothing is ever unreachable. Search and the "Aguardando" /
+  // "Minhas" filters run on the server so they cover every conversation, not just the loaded ones.
+  const {
+    data: conversationsData,
+    isLoading: listLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['inbox-conversations', tenantId, segment, debouncedSearch],
+    initialPageParam: '' as string,
+    queryFn: async ({ pageParam }) => {
       try {
-        const res = await axios.get(
-          `${API_BASE}/tenants/${tenantId}/inbox/conversations`,
-          { params: { limit: 50, status: segment === 'all' ? undefined : segment }, headers: authHeaders() }
-        );
-        return res.data;
+        const res = await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations`, {
+          params: {
+            limit: 100,
+            cursor: pageParam || undefined,
+            q: debouncedSearch || undefined,
+            assigned: segment === 'mine' ? 'me' : undefined,
+            waiting: segment === 'waiting' ? true : undefined,
+          },
+          headers: authHeaders(),
+        });
+        return res.data as { items?: ConversationItem[]; has_more?: boolean; next_cursor?: string };
       } catch (err) {
         if (isUnauthorized(err)) handleUnauthorized();
         throw err;
       }
     },
+    getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
     enabled: !!tenantId,
   });
 
-  const conversations = conversationsData?.items || [];
+  const conversations: ConversationItem[] = conversationsData?.pages.flatMap((page) => page.items ?? []) ?? [];
 
   // New conversations / assignment / status changes anywhere in the tenant:
   // refetch the list. Without this the list only ever updates on manual
@@ -156,7 +176,12 @@ export default function InboxWorkspace() {
             onSelect={setSelectedConversationId}
             segment={segment}
             onSegmentChange={setSegment}
+            search={search}
+            onSearchChange={setSearch}
             isLoading={listLoading}
+            hasMore={!!hasNextPage}
+            isFetchingMore={isFetchingNextPage}
+            onLoadMore={() => void fetchNextPage()}
           />
         </div>
 
@@ -202,4 +227,13 @@ export default function InboxWorkspace() {
       `}</style>
     </div>
   );
+}
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(value), ms);
+    return () => window.clearTimeout(id);
+  }, [value, ms]);
+  return debounced;
 }
