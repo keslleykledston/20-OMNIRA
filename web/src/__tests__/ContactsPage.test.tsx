@@ -304,6 +304,14 @@ describe('ContactDetailPage (Contact 360)', () => {
     expect(within(card).getByText('2')).toBeInTheDocument();
   });
 
+  // Real tickets can be created without a subject; a blank cell reads as a bug.
+  it('labels a ticket that has no subject instead of leaving the cell blank', async () => {
+    serve({ tickets: subpage([ticket({ subject: '' })]) });
+    detail();
+
+    expect((await screen.findAllByText('Sem assunto')).length).toBeGreaterThan(0);
+  });
+
   // ticket.read comes from the role matrix: a role without it is a normal state,
   // not an error, and the screen must not pretend there are zero tickets.
   it('explains a missing ticket.read permission instead of showing an empty list', async () => {

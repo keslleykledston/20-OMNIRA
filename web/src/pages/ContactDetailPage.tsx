@@ -345,7 +345,7 @@ function TicketList({ tickets, onOpen }: { tickets: ContactTicket[]; onOpen: (co
       {t.external_ticket_id && (
         <span className="mr-1.5 font-mono text-xs text-text-tertiary">#{t.external_ticket_id}</span>
       )}
-      {t.subject}
+      {t.subject.trim() ? t.subject : <span className="text-text-tertiary">Sem assunto</span>}
     </>
   )
   return (
