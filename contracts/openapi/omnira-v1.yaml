@@ -109,6 +109,25 @@ paths:
       security: []
       responses:
         '204': { description: Session cookie cleared }
+  /tenants:
+    get:
+      operationId: listMyTenants
+      tags: [Tenancy]
+      summary: Tenants the signed-in user can switch to
+      description: |
+        The tenants in which the caller has an ACTIVE membership and which are themselves active, ordered by the name
+        shown in the interface (trade name when present, otherwise legal name). It needs only the session, not a
+        tenant: it is what the tenant selector reads. Revoked memberships, inactive or suspended tenants and tenants of
+        other users never appear. Always an array (empty when the user has none).
+      responses:
+        '200':
+          description: The usable tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MyTenant' }
+        '401': { $ref: '#/components/responses/Text401' }
   /tenants/{tenant_id}/roles:
     get:
       operationId: listAssignableRoles
@@ -1125,6 +1144,18 @@ components:
         name: { type: string, minLength: 1, maxLength: 60 }
         mode: { type: string, enum: [manual, round_robin] }
         is_default: { type: boolean }
+    MyTenant:
+      type: object
+      required: [id, legal_name, isolation_profile, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        legal_name: { type: string }
+        trade_name: { type: string }
+        tax_id: { type: string }
+        isolation_profile: { type: string, enum: [shared_strong_isolation, dedicated_database] }
+        status: { type: string, enum: [active] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     ContactLastMessage:
       type: object
       required: [direction, message_type, body_preview, created_at]

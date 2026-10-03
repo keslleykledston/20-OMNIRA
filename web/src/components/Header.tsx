@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../lib/store'
 import { authAPI } from '../lib/api'
 import { Button, Avatar } from './primitives'
+import TenantSwitcher from './TenantSwitcher'
 import clsx from 'clsx'
 
 export default function Header() {
@@ -37,7 +38,7 @@ export default function Header() {
         // On mobile this bar is the only chrome (sidebar hidden), so keep it a surface.
         'bg-surface lg:bg-transparent',
         'border-b border-border-subtle lg:border-b-0',
-        'px-6',
+        'px-4 sm:px-6',
         'flex',
         'items-center',
         'justify-between',
@@ -51,10 +52,11 @@ export default function Header() {
         <span className="text-lg font-bold text-text-primary">OMNIRA</span>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+        <TenantSwitcher />
         {user && (
-          <div className="flex items-center gap-3">
-            <div>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="hidden sm:block">
               <p className="text-sm font-medium text-text-primary">
                 {user.name}
               </p>

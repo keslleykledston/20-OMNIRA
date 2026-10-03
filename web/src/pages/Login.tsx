@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../lib/store'
 import { authAPI, type AuthMode } from '../lib/api'
 import { saveSession } from '../lib/session'
+import { resolveSessionTenant } from '../lib/tenants'
 import { Button, Icon, Input } from '../components/primitives'
 
 type Status =
@@ -47,8 +48,11 @@ export default function Login() {
             const session = await authAPI.session()
             const { user, tenant } = session.data
             setUser({ ...user, roles: user.roles ?? [] })
-            saveSession('', tenant?.id, user)
-            navigate(tenant?.id ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
+            // The server proposes the oldest membership; someone in several tenants
+            // gets the one they last chose, if it is still theirs.
+            const tenantId = await resolveSessionTenant(tenant?.id)
+            saveSession('', tenantId, user)
+            navigate(tenantId ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
             return
           } catch (err: any) {
             if (!active) return

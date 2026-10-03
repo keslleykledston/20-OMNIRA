@@ -1,5 +1,7 @@
+import { useMyTenants } from '../hooks/useMyTenants'
 import { getTenantId } from './session'
 import { useAuthStore } from './store'
+import { tenantDisplayName } from './tenants'
 
 export interface TenantDisplay {
   tenantId: string
@@ -18,20 +20,21 @@ const ROLE_LABELS: Record<string, string> = {
   tenant_agent: 'Agente',
 }
 
-// FR0 temporary fixture: the login response carries a tenant object but only
-// tenant.id is persisted (lib/session.ts saveSession), so no name reaches the client.
-// Replace with the real value once the session payload stores it.
+// Shown only until GET /tenants (hooks/useMyTenants) has answered.
 const PLACEHOLDER_TENANT_NAME = 'Tenant ativo'
 
 export function useTenantDisplay(): TenantDisplay {
   const user = useAuthStore((s) => s.user)
   const tenantId = getTenantId()
   const role = user?.roles?.[0] ?? ''
+  const mine = useMyTenants().data
+  const current = mine?.find((t) => t.id === tenantId)
 
   return {
     tenantId,
-    tenantName: PLACEHOLDER_TENANT_NAME,
+    // The real name once GET /tenants answers; the placeholder only until then.
+    tenantName: current ? tenantDisplayName(current) : PLACEHOLDER_TENANT_NAME,
     roleLabel: ROLE_LABELS[role] ?? role ?? '',
-    isPlaceholderName: true,
+    isPlaceholderName: !current,
   }
 }

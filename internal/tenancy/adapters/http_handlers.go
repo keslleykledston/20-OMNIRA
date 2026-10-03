@@ -3,6 +3,8 @@ package adapters
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -12,7 +14,7 @@ import (
 
 // TenantAPIHandler — handlers HTTP para Tenant API.
 type TenantAPIHandler struct {
-	tenantSvc    *application.TenantService
+	tenantSvc     *application.TenantService
 	membershipSvc *application.MembershipService
 }
 
@@ -107,12 +109,33 @@ func (h *TenantAPIHandler) ListMyTenants(w http.ResponseWriter, r *http.Request)
 			// entre as duas queries; não é um erro fatal para a listagem.
 			continue
 		}
+		// Só tenants ativos: um tenant inativo ou suspenso não é uma opção que a
+		// pessoa possa usar (o login também só escolhe tenants ativos).
+		if tenant.Status != domain.TenantStatusActive {
+			continue
+		}
 		responses = append(responses, toTenantResponse(tenant))
 	}
+	// Ordem estável e previsível para o seletor: pelo nome exibido.
+	sort.SliceStable(responses, func(i, j int) bool {
+		a, b := strings.ToLower(tenantDisplayName(responses[i])), strings.ToLower(tenantDisplayName(responses[j]))
+		if a != b {
+			return a < b
+		}
+		return responses[i].ID.String() < responses[j].ID.String()
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(responses)
+}
+
+// tenantDisplayName é o nome que a interface mostra: o nome fantasia quando existe.
+func tenantDisplayName(t TenantResponse) string {
+	if t.TradeName != nil && strings.TrimSpace(*t.TradeName) != "" {
+		return strings.TrimSpace(*t.TradeName)
+	}
+	return t.LegalName
 }
 
 // ListMemberships — GET /api/v1/tenants/{tenant_id}/memberships (listar memberships do tenant).
