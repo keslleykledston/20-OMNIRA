@@ -24,9 +24,9 @@ O destino recomendado é o **healthchecks.io**: fica fora do servidor, então av
    sudo install -m 600 -o suporte -g suporte /dev/null /etc/omnira/healthchecks.env
    printf 'HC_API_KEY=%s\n' '<cole-a-chave>' > /etc/omnira/healthchecks.env
    ```
-4. Rode `scripts/setup-deadman-healthchecks.sh`. Ele cria (ou reaproveita, pelo nome) o check "OMNIRA cron chain" com período de 5 min e tolerância de 10 min, anexa seus canais de alerta, grava `DEADMAN_URL` e `DEADMAN_FAIL_URL` em `/etc/omnira/notify.env` (0600, preservando o resto) e dispara o primeiro heartbeat. A chave e as URLs nunca são impressas. Testes: `scripts/test-setup-deadman-healthchecks.sh` (28 verificações, contra uma API simulada).
+4. Rode `scripts/setup-deadman-healthchecks.sh`. Ele cria (ou reaproveita, pelo nome) o check "OMNIRA cron chain" com período de 5 min e tolerância de 10 min, anexa seus canais de alerta, grava `DEADMAN_URL` e `DEADMAN_FAIL_URL` em `/etc/omnira/notify.env` (0600, preservando o resto) e dispara o primeiro heartbeat. A chave e as URLs nunca são impressas. Testes: `scripts/test-setup-deadman-healthchecks.sh` (33 verificações, contra uma API simulada).
 
-O cron `*/5` do `deadman-ping.sh` já está instalado e passa a pingar assim que `DEADMAN_URL` existir.
+O cron `*/5` do `deadman-ping.sh` já está instalado e passa a pingar assim que `DEADMAN_URL` existir. O script reescreve o `notify.env` no próprio arquivo (o diretório `/etc/omnira` é de root e não aceita arquivos novos), preservando dono e permissão.
 
 ### Manual (sem a chave de API)
 

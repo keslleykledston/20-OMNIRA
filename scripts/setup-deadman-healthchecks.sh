@@ -76,16 +76,21 @@ case "$ping_url" in
 esac
 [ "$code" = 201 ] && echo "check created: $NAME" || echo "check already existed, reusing: $NAME"
 
+# Rewrite the file IN PLACE: /etc/omnira is usually root-owned (not writable by us),
+# while notify.env itself belongs to the service user, so a temp file next to it
+# cannot be created. Building the new content in /tmp first means a failure never
+# leaves a half-written file; `cat >` keeps the owner and mode of the original.
 umask 077
-touch "$ENV_FILE"
-tmp=$(mktemp "$ENV_FILE.XXXXXX")
+[ -e "$ENV_FILE" ] || touch "$ENV_FILE"
+tmp=$(mktemp)
+trap 'rm -f "$resp" "$hdr" "$tmp"' EXIT
 grep -vE '^(DEADMAN_URL|DEADMAN_FAIL_URL)=' "$ENV_FILE" > "$tmp" || true
 {
   printf 'DEADMAN_URL="%s"\n' "$ping_url"
   printf 'DEADMAN_FAIL_URL="%s/fail"\n' "$ping_url"
 } >> "$tmp"
-chmod 600 "$tmp"
-mv -f "$tmp" "$ENV_FILE"
+cat "$tmp" > "$ENV_FILE"
+chmod 600 "$ENV_FILE"
 echo "DEADMAN_URL / DEADMAN_FAIL_URL written to $ENV_FILE (0600)"
 
 if [ "$DO_PING" = 1 ]; then

@@ -87,6 +87,16 @@ check "still exactly one DEADMAN_FAIL_URL" "$(grep -c '^DEADMAN_FAIL_URL=' "$ENV
 check "same ping URL as before" "$(grep -c '^DEADMAN_URL=.*000000000001"$' "$ENVFILE")" "1"
 check "fail URL points at the same check" "$(grep -c '^DEADMAN_FAIL_URL=.*000000000001/fail"$' "$ENVFILE")" "1"
 
+echo "=== Section 3b: works when the directory is read-only (root-owned /etc/omnira) ==="
+RODIR="$WORKDIR/rodir"; mkdir -p "$RODIR"; printf 'NTFY_TOPIC=keep-me\n' > "$RODIR/notify.env"; chmod 600 "$RODIR/notify.env"; chmod 555 "$RODIR"
+set +e; out=$(scripts/setup-deadman-healthchecks.sh --key-file "$KEYFILE" --env-file "$RODIR/notify.env" --api-url "http://127.0.0.1:$PORT" --no-ping 2>&1); code=$?; set -e
+chmod 755 "$RODIR"
+check "read-only directory: exit 0" "$code" "0"
+check "read-only directory: URL written" "$(grep -c '^DEADMAN_URL=' "$RODIR/notify.env")" "1"
+check "read-only directory: other line kept" "$(grep -c '^NTFY_TOPIC=keep-me$' "$RODIR/notify.env")" "1"
+check "read-only directory: mode stays 0600" "$(stat -c %a "$RODIR/notify.env")" "600"
+check "no temp files left next to the env file" "$(ls "$RODIR" | grep -vc '^notify.env$' || true)" "0"
+
 echo "=== Section 4: failures are explicit and change nothing ==="
 before=$(cksum < "$ENVFILE")
 printf 'HC_API_KEY=wrong-key\n' > "$WORKDIR/bad.env"
