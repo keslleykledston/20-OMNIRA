@@ -240,7 +240,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       {/* Timeline: oldest at the top, newest at the bottom next to the composer. A short thread
           sits at the bottom too (justify-end), like WhatsApp. */}
       <div className="relative flex-1 min-h-0">
-        <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto">
+        <div ref={scrollRef} onScroll={handleScroll} className="absolute inset-0 overflow-y-auto">
           <div ref={contentRef} className="flex min-h-full flex-col justify-end gap-0.5 px-3 py-2">
             {hasNextPage && (
               <button
