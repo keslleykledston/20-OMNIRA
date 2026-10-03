@@ -46,6 +46,15 @@ type ConversationItem struct {
 	// MessageCount is filled only by GET /conversations/{id} (one extra count, not
 	// worth paying on every row of the list); omitted elsewhere rather than sent as a false 0.
 	MessageCount *int `json:"message_count,omitempty"`
+	// List-only (GET /inbox/conversations): the last real message, so the Inbox can sort by
+	// activity and show a WhatsApp-like preview without a request per row. WaitingSince is
+	// when the customer started waiting for an answer (earliest inbound after the last
+	// non-failed outbound); omitted when the last message is ours.
+	LastMessageAt        *string `json:"last_message_at,omitempty"`
+	LastMessageDirection string  `json:"last_message_direction,omitempty"`
+	LastMessageType      string  `json:"last_message_type,omitempty"`
+	LastMessagePreview   string  `json:"last_message_preview,omitempty"`
+	WaitingSince         *string `json:"waiting_since,omitempty"`
 }
 
 type MessageItem struct {
@@ -61,31 +70,74 @@ type MessageItem struct {
 	CreatedAt           string     `json:"created_at"`
 }
 
+// ListConversations pages the tenant's conversations by LAST ACTIVITY (last message, else
+// creation), newest first, with no cap on how far a client can page (cursor on
+// (last_activity, id)). Optional filters: q (contact name or phone), assigned=me, waiting=true
+// (the last message is from the customer).
 func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Request) {
-	tenantID, err := requestTenant(r)
-	if err != nil {
+	tc, err := tenancydomain.FromContext(r.Context())
+	if err != nil || tc.TenantID == uuid.Nil {
 		http.Error(w, "tenant context not found", http.StatusInternalServerError)
 		return
 	}
-	opts, cursor, err := pageOptions(r)
+	opts, cursor, err := pageOptionsFor(r, "last_activity:desc")
 	if err != nil {
 		http.Error(w, "invalid pagination", http.StatusBadRequest)
 		return
 	}
-	args := []any{tenantID, opts.Limit + 1}
-	where := "c.tenant_id=$1"
-	limitPos := 2
-	if cursor != nil {
-		where += " AND (c.created_at,c.id) < ($2,$3)"
-		args = []any{tenantID, cursor.Timestamp, cursor.ID, opts.Limit + 1}
-		limitPos = 4
+	args := []any{tc.TenantID}
+	arg := func(v any) string {
+		args = append(args, v)
+		return "$" + strconv.Itoa(len(args))
 	}
+	where := "c.tenant_id=$1"
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		if len(q) > 100 {
+			http.Error(w, "invalid search", http.StatusBadRequest)
+			return
+		}
+		clause := "co.display_name ILIKE " + arg("%"+escapeLike(q)+"%")
+		if digits := onlyDigits(q); len(digits) >= 3 {
+			clause += " OR co.phone_e164 LIKE " + arg("%"+digits+"%")
+		}
+		where += " AND (" + clause + ")"
+	}
+	switch r.URL.Query().Get("assigned") {
+	case "":
+	case "me":
+		if tc.ActorID == uuid.Nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		where += " AND c.assigned_to_user_id=" + arg(tc.ActorID)
+	default:
+		http.Error(w, "invalid assigned filter", http.StatusBadRequest)
+		return
+	}
+	if r.URL.Query().Get("waiting") == "true" {
+		where += " AND lm.direction='inbound'"
+	}
+	const activity = "COALESCE(lm.created_at,c.created_at)"
+	if cursor != nil {
+		where += " AND (" + activity + ",c.id) < (" + arg(cursor.Timestamp) + "," + arg(cursor.ID) + ")"
+	}
+	limit := arg(opts.Limit + 1)
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
-		       co.display_name,co.phone_e164,t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at
+		       co.display_name,co.phone_e164,t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at,
+		       `+activity+`,lm.created_at,coalesce(lm.direction,''),coalesce(lm.message_type,''),left(coalesce(lm.body,''),160),w.since
 		FROM conversations c JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
-		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
-		WHERE `+where+` ORDER BY c.created_at DESC,c.id DESC LIMIT $`+strconv.Itoa(limitPos), args...)
+		LEFT JOIN LATERAL (SELECT tk.status,tk.priority FROM tickets tk
+			WHERE tk.conversation_id=c.id AND tk.tenant_id=c.tenant_id AND tk.status IN ('open','in_progress','waiting')
+			ORDER BY tk.created_at DESC LIMIT 1) t ON true
+		LEFT JOIN LATERAL (SELECT m.direction,m.message_type,m.body,m.created_at FROM messages m
+			WHERE m.tenant_id=c.tenant_id AND m.conversation_id=c.id
+			ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lm ON true
+		LEFT JOIN LATERAL (SELECT min(m.created_at) AS since FROM messages m
+			WHERE lm.direction='inbound' AND m.tenant_id=c.tenant_id AND m.conversation_id=c.id AND m.direction='inbound'
+			  AND m.created_at > COALESCE((SELECT max(o.created_at) FROM messages o
+			        WHERE o.tenant_id=c.tenant_id AND o.conversation_id=c.id AND o.direction='outbound' AND o.status<>'failed'),'-infinity'::timestamptz)) w ON true
+		WHERE `+where+` ORDER BY `+activity+` DESC,c.id DESC LIMIT `+limit, args...)
 	if err != nil {
 		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
 		return
@@ -93,8 +145,11 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	defer rows.Close()
 	items := make([]interface{}, 0, opts.Limit)
 	var last ConversationItem
-	for rows.Next() && len(items) < opts.Limit {
-		last, err = scanConversationItem(rows)
+	var lastActivity time.Time
+	// Check the limit BEFORE rows.Next(): calling Next first consumed the lookahead row (LIMIT n+1),
+	// so the hasMore probe below always saw nothing and has_more was never true.
+	for len(items) < opts.Limit && rows.Next() {
+		last, lastActivity, err = scanConversationListItem(rows)
 		if err != nil {
 			http.Error(w, "failed to read conversations", http.StatusInternalServerError)
 			return
@@ -104,10 +159,25 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	hasMore := rows.Next()
 	result := pagination.NewPageResult(items, opts.Limit, "", hasMore)
 	if hasMore {
-		result.NextCursor = (&pagination.Cursor{ID: last.ID.String(), Timestamp: parseTime(last.CreatedAt)}).Encode()
+		result.NextCursor = (&pagination.Cursor{ID: last.ID.String(), Timestamp: lastActivity}).Encode()
 	}
 	pagination.WritePaginationHeaders(w, result)
 	writeJSON(w, result)
+}
+
+// escapeLike makes user text literal inside a LIKE/ILIKE pattern.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+func onlyDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // GetConversation returns one conversation of the TenantContext tenant. A
@@ -182,7 +252,9 @@ func (h *InboxAPIHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]interface{}, 0, opts.Limit)
 	var last MessageItem
-	for rows.Next() && len(items) < opts.Limit {
+	// Check the limit BEFORE rows.Next(): calling Next first consumed the lookahead row (LIMIT n+1),
+	// so the hasMore probe below always saw nothing and has_more was never true.
+	for len(items) < opts.Limit && rows.Next() {
 		last, err = scanMessageItem(rows)
 		if err != nil {
 			http.Error(w, "failed to read messages", http.StatusInternalServerError)
@@ -212,6 +284,27 @@ func scanConversationItem(row rowScanner) (ConversationItem, error) {
 	return item, err
 }
 
+func scanConversationListItem(row rowScanner) (ConversationItem, time.Time, error) {
+	var item ConversationItem
+	var status string
+	var ticketStatus, ticketPriority *string
+	var created, updated, activity time.Time
+	var lastAt, waitingSince *time.Time
+	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated,
+		&activity, &lastAt, &item.LastMessageDirection, &item.LastMessageType, &item.LastMessagePreview, &waitingSince)
+	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
+	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
+	if lastAt != nil {
+		v := lastAt.UTC().Format(time.RFC3339Nano)
+		item.LastMessageAt = &v
+	}
+	if waitingSince != nil {
+		v := waitingSince.UTC().Format(time.RFC3339Nano)
+		item.WaitingSince = &v
+	}
+	return item, activity, err
+}
+
 func scanMessageItem(row rowScanner) (MessageItem, error) {
 	var item MessageItem
 	var direction, status string
@@ -231,8 +324,14 @@ func requestTenant(r *http.Request) (uuid.UUID, error) {
 }
 
 func pageOptions(r *http.Request) (*pagination.PageOptions, *pagination.Cursor, error) {
+	return pageOptionsFor(r, "created_at:desc")
+}
+
+// pageOptionsFor accepts only the endpoint's own sort (or none): the cursor's timestamp
+// means a different column per endpoint, so a foreign sort must be rejected, not guessed.
+func pageOptionsFor(r *http.Request, sort string) (*pagination.PageOptions, *pagination.Cursor, error) {
 	opts := pagination.ParsePageOptionsFromQuery(r)
-	if opts.Sort != "" && opts.Sort != "created_at:desc" {
+	if opts.Sort != "" && opts.Sort != sort {
 		return nil, nil, errors.New("unsupported sort")
 	}
 	cursor, err := pagination.DecodeCursor(opts.Cursor)
