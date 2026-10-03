@@ -450,3 +450,35 @@ func TestTenantASessionCannotWriteTenantBRows(t *testing.T) {
 		t.Fatalf("tenant B contact changed: %q %v", name, scanErr)
 	}
 }
+
+// Placeholder tickets (the implicit empty one every conversation gets) are not
+// shown in Contact 360; a ticket linked to the ERP is, even with no local subject.
+func TestContactTicketsHidePlaceholders(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantA := seedTenant(t, seed, "A")
+	admin := seedMemberWithRole(t, seed, tenantA, "active", "tenant_admin")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	contact := seedContact(t, seed, tenantA, "Cliente", "+5511900008001", now)
+
+	convPlaceholder := seedConversation(t, seed, tenantA, contact, nil, "closed", now.Add(-3*time.Hour))
+	convReal := seedConversation(t, seed, tenantA, contact, nil, "closed", now.Add(-2*time.Hour))
+	convLinked := seedConversation(t, seed, tenantA, contact, nil, "closed", now.Add(-1*time.Hour))
+	seedTicket(t, seed, tenantA, convPlaceholder, "open", "", now.Add(-3*time.Hour))
+	real := seedTicket(t, seed, tenantA, convReal, "open", "Problema com pagamento", now.Add(-2*time.Hour))
+	linked := uuid.New()
+	if _, err := seed.Exec(context.Background(),
+		`INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, provider, external_ticket_id, created_at, updated_at)
+		 VALUES ($1,$2,$3,'open','medium','','k3g','EXT-7',$4,$4)`, linked, tenantA, convLinked, now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("seed linked ticket: %v", err)
+	}
+
+	h := NewContactsAPIHandler(app)
+	rec := callContact(t, app, tenantA, admin, "/t", contact.String(), h.ListContactTickets)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	items := decodePage(t, rec)
+	if len(items) != 2 || items[0]["id"] != linked.String() || items[1]["id"] != real.String() {
+		t.Fatalf("want [ERP-linked, real] and no placeholder, got %v", items)
+	}
+}

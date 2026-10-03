@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
 
 // Snapshot is the real V1 Dashboard contract (PRODUCT.3-B): only durable
@@ -81,7 +82,7 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := q.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM tickets WHERE tenant_id=$1 AND status='open'`, tc.TenantID,
+		`SELECT COUNT(*) FROM tickets WHERE tenant_id=$1 AND status='open' AND `+ticketdomain.RealTicketSQL(""), tc.TenantID,
 	).Scan(&snap.OpenTickets); err != nil {
 		http.Error(w, "failed to count open tickets", http.StatusInternalServerError)
 		return

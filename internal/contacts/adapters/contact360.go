@@ -11,6 +11,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
 
 // CONTACT.360-A: read-only read model behind the Contact 360 screen. Only
@@ -273,7 +274,7 @@ func (h *ContactsAPIHandler) ListContactTickets(w http.ResponseWriter, r *http.R
 		       t.provider, t.external_ticket_id, t.external_status_label, t.created_at, t.updated_at
 		FROM tickets t
 		JOIN conversations cv ON cv.id = t.conversation_id AND cv.tenant_id = t.tenant_id
-		WHERE t.tenant_id = $1 AND cv.contact_id = $2`
+		WHERE t.tenant_id = $1 AND cv.contact_id = $2 AND ` + ticketdomain.RealTicketSQL("t")
 	args := []any{tenantID, contactID}
 	if page.cursorTS != nil {
 		query += ` AND (t.updated_at, t.id) < ($3, $4)`

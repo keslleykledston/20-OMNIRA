@@ -129,11 +129,36 @@ func seedTicket(t *testing.T, pool *pgxpool.Pool, tenantID, conversationID uuid.
 	now := time.Now().UTC()
 	if _, err := pool.Exec(context.Background(),
 		`INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,'medium','',$5,$5)`,
+		 VALUES ($1,$2,$3,$4,'medium','Chamado de teste',$5,$5)`,
 		id, tenantID, conversationID, status, now); err != nil {
 		t.Fatalf("seed ticket: %v", err)
 	}
 	return id
+}
+
+// seedPlaceholderTicket is what the inbound flow creates for every conversation:
+// no subject, no ERP link.
+func seedPlaceholderTicket(t *testing.T, pool *pgxpool.Pool, tenantID, conversationID uuid.UUID) {
+	t.Helper()
+	now := time.Now().UTC()
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, created_at, updated_at)
+		 VALUES ($1,$2,$3,'open','medium','',$4,$4)`,
+		uuid.New(), tenantID, conversationID, now); err != nil {
+		t.Fatalf("seed placeholder ticket: %v", err)
+	}
+}
+
+// seedLinkedTicket is a ticket tied to the ERP whose local subject is still empty.
+func seedLinkedTicket(t *testing.T, pool *pgxpool.Pool, tenantID, conversationID uuid.UUID) {
+	t.Helper()
+	now := time.Now().UTC()
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, provider, external_ticket_id, created_at, updated_at)
+		 VALUES ($1,$2,$3,'open','medium','','k3g','EXT-1',$4,$4)`,
+		uuid.New(), tenantID, conversationID, now); err != nil {
+		t.Fatalf("seed linked ticket: %v", err)
+	}
 }
 
 func callAsTenant(t *testing.T, pool *pgxpool.Pool, tenantID, userID uuid.UUID, target string, fn func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
@@ -236,5 +261,33 @@ func TestGetSnapshotIsScopedToTheSessionTenant(t *testing.T) {
 	snapB := decodeSnapshot(t, recB)
 	if snapB.TotalContacts != 2 {
 		t.Fatalf("tenant B should see exactly its own contact count, got %d", snapB.TotalContacts)
+	}
+}
+
+// Every conversation gets an empty implicit ticket that nothing resolves; the
+// KPI must count real tickets only, or it just repeats the conversation count.
+func TestGetSnapshotOpenTicketsIgnoresPlaceholders(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "placeholders")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+
+	conv := func() uuid.UUID { return seedConversation(t, seed, tenantID, seedContact(t, seed, tenantID), "open") }
+	seedPlaceholderTicket(t, seed, tenantID, conv())
+	seedPlaceholderTicket(t, seed, tenantID, conv())
+	seedTicket(t, seed, tenantID, conv(), "open")     // has a subject: real
+	seedLinkedTicket(t, seed, tenantID, conv())       // linked to the ERP: real
+	seedTicket(t, seed, tenantID, conv(), "resolved") // real but not open
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/dashboard/snapshot", h.GetSnapshot)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("snapshot = %d %q", rec.Code, rec.Body.String())
+	}
+	snap := decodeSnapshot(t, rec)
+	if snap.OpenConversations != 5 {
+		t.Fatalf("open_conversations = %d, want 5", snap.OpenConversations)
+	}
+	if snap.OpenTickets != 2 {
+		t.Fatalf("open_tickets = %d, want 2 (subject + ERP-linked; 2 placeholders and 1 resolved excluded)", snap.OpenTickets)
 	}
 }

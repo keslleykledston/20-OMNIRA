@@ -716,3 +716,31 @@ func TestListTicketsLimitIsBounded(t *testing.T) {
 		t.Fatalf("limit should clamp to the platform max of 100, got %d", p.Limit)
 	}
 }
+
+// The inbound flow creates an empty implicit ticket for every conversation. They
+// are plumbing for the ERP flow, not tickets an operator works, so the list must
+// not show them; an ERP-linked ticket stays even when its local subject is empty.
+func TestListTicketsHidesPlaceholdersButKeepsRealOnes(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "placeholders")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	seedTicket(t, seed, tenantID, "", "open", "medium", now)
+	seedTicket(t, seed, tenantID, "   ", "open", "medium", now)
+	real := seedTicket(t, seed, tenantID, "Problema com pagamento", "open", "high", now.Add(-time.Minute))
+	linked := seedTicketWithProjection(t, seed, tenantID, "", "open", "medium", now.Add(-2*time.Minute),
+		ticketProjection{Provider: "k3g", ExternalTicketID: "EXT-9", ExternalStatus: "open", ExternalStatusLabel: "Aberto", SyncStatus: "synced", LastSyncedAt: now})
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets", h.List)
+	p := decodePage(t, rec)
+	if len(p.Items) != 2 || p.Items[0]["id"] != real.String() || p.Items[1]["id"] != linked.String() {
+		t.Fatalf("want [real, ERP-linked] only, got %v", p.Items)
+	}
+
+	// The status filter composes with the rule, it does not bypass it.
+	rec = callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets?status=open", h.List)
+	if p := decodePage(t, rec); len(p.Items) != 2 {
+		t.Fatalf("status=open must still hide placeholders, got %d items", len(p.Items))
+	}
+}

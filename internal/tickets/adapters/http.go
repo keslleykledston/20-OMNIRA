@@ -14,6 +14,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
 
 // TicketItem is the read model served to the browser: only fields already
@@ -104,7 +105,8 @@ func parseTicketFilters(r *http.Request) (status, priority, externalTicketID str
 // it never matches a NULL external_ticket_id row (legacy/local-only
 // tickets), by plain SQL NULL-comparison semantics, with no extra code.
 func ticketFilterWhere(tenantID uuid.UUID, status, priority, externalTicketID string) (string, []any) {
-	where := `WHERE tenant_id = $1`
+	// Placeholder tickets (see domain.RealTicketSQL) are not shown to operators.
+	where := `WHERE tenant_id = $1 AND ` + ticketdomain.RealTicketSQL("")
 	args := []any{tenantID}
 	if status != "" {
 		args = append(args, status)

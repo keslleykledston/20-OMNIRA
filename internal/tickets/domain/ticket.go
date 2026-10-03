@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,4 +66,27 @@ func (t *Ticket) Resolve() {
 func (t *Ticket) Close() {
 	now := time.Now().UTC()
 	t.Status, t.ClosedAt, t.UpdatedAt = StatusClosed, &now, now
+}
+
+// The inbound flow creates an empty-subject local ticket for every conversation
+// (internal/inbox/application/inbound.go) so the ERP flow has something to
+// enrich. That placeholder is plumbing, not workload: nothing ever resolves it.
+// A ticket is "real" once it is linked to the ERP or someone gave it a subject.
+// Read models that present tickets to operators (Dashboard, Tickets, Contact
+// 360) count only real tickets; the ERP and reconciliation flows keep seeing
+// every row.
+
+// IsPlaceholder reports whether the ticket is still the implicit one.
+func (t *Ticket) IsPlaceholder() bool {
+	return t.ExternalTicketID == nil && strings.TrimSpace(t.Subject) == ""
+}
+
+// RealTicketSQL is the SQL form of !IsPlaceholder for read models. Pass the
+// table alias ("t") or "" when the query has no alias.
+func RealTicketSQL(alias string) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	return "(" + prefix + "external_ticket_id IS NOT NULL OR btrim(" + prefix + "subject) <> '')"
 }

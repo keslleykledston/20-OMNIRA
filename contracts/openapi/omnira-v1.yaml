@@ -223,7 +223,9 @@ paths:
       description: |
         Tickets of the contact's conversations, `(updated_at DESC, id DESC)`. Gated on `ticket.read` (from the
         role→permission matrix of an active membership); the permission is checked before the contact is resolved,
-        so a caller without it gets the same `403` for any id.
+        so a caller without it gets the same `403` for any id. Only real tickets are returned: the implicit
+        empty-subject ticket the inbound flow creates for every conversation is excluded, while a ticket linked to
+        the ERP (`external_ticket_id`) is kept even if its local subject is empty.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/ContactId' }

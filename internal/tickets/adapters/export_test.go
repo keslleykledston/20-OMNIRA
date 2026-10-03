@@ -423,3 +423,26 @@ func TestExportCSVOverCeilingIsRejectedWithoutPartialData(t *testing.T) {
 		t.Fatalf("rejected export must not leak partial data")
 	}
 }
+
+// The export uses the same rule as the list: placeholders are not tickets.
+func TestExportCSVHidesPlaceholders(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "exportplaceholders")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	now := time.Now().UTC()
+	seedTicket(t, seed, tenantID, "", "open", "medium", now)
+	seedTicket(t, seed, tenantID, "Chamado real", "open", "medium", now)
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/tickets/export.csv", h.ExportCSV)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export = %d %q", rec.Code, rec.Body.String())
+	}
+	rows := parseCSV(t, rec)
+	if len(rows) != 2 { // header + the one real ticket
+		t.Fatalf("want header + 1 real ticket, got %d rows: %v", len(rows), rows)
+	}
+	if !strings.Contains(rec.Body.String(), "Chamado real") {
+		t.Fatalf("real ticket missing from export: %s", rec.Body.String())
+	}
+}
