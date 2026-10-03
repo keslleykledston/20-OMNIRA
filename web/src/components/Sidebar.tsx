@@ -30,6 +30,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
   { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings', alsoActiveOn: '/settings/roles' },
+  { label: 'Pessoas e grupos', path: '/settings/people', icon: 'contacts' },
   { label: 'Agentes', path: '/settings/agents', icon: 'supervisor' },
 ]
 

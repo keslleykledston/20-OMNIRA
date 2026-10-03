@@ -12,6 +12,7 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 }
 export const agentsAPI = {
   list: () => call<{ items: OperationalAgent[] }>(() => axios.get(base(), { headers: authHeaders() })).then((r) => r.items),
+  create: (membershipID: string) => call<{ id: string; status: AgentStatus }>(() => axios.post(base(), { membership_id: membershipID }, { headers: authHeaders() })),
   setStatus: (id: string, status: AgentStatus) => call<void>(() => axios.patch(`${base()}/${id}`, { status }, { headers: authHeaders() })),
   addQueue: (id: string, queueID: string, available: boolean, capacity: number) => call<{ id: string }>(() => axios.post(`${base()}/${id}/queues`, { queue_id: queueID, available, capacity }, { headers: authHeaders() })),
   updateQueue: (id: string, memberID: string, available: boolean, capacity: number) => call<void>(() => axios.patch(`${base()}/${id}/queues/${memberID}`, { available, capacity }, { headers: authHeaders() })),

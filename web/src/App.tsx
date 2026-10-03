@@ -13,6 +13,7 @@ import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TeamPage from './pages/TeamPage'
 import AgentsPage from './pages/AgentsPage'
+import PeopleAndGroupsPage from './pages/PeopleAndGroupsPage'
 import { RolesPermissionsPage } from './pages/RolesPermissionsPage'
 import AcceptInvitePage from './pages/AcceptInvitePage'
 import ChannelsPage from './pages/ChannelsPage'
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
             <Route path="/settings/team" element={<TeamPage />} />
             <Route path="/settings/agents" element={<AgentsPage />} />
+            <Route path="/settings/people" element={<PeopleAndGroupsPage />} />
             <Route path="/settings/roles" element={<RolesPermissionsPage />} />
             {/* Legacy duplicate retired (DESIGN.5-A) — /channels is the sole Channels UI. */}
             <Route path="/integrations" element={<Navigate to="/channels" replace />} />
