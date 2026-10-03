@@ -397,7 +397,7 @@ Escopo implementado, todo o resto da ADR-0010 preservado:
 ## BLOCKERS
 
 - Nenhum bloqueador de código para iniciar o planejamento IAM4.
-- Piloto/produção IAM2C: SMTP real, URL pública/web correta, TLS e IdP real provando `email` e `email_verified=true`. Isto é `DEPLOYMENT/PILOT CONFIGURATION GATE`, não bloqueia o commit.
+- Piloto/produção IAM2C: **SMTP real configurado em 2026-10-03** (`mail.k3gsolutions.com.br:587` STARTTLS, conta `autenticacao@k3gsolutions.com.br`, remetente "OMNIRA <autenticacao@k3gsolutions.com.br>", `OMNIRA_WEB_BASE_URL=https://omnira.devops.k3gsolutions.com.br`; senha só no `.env` não versionado). Autenticação verificada nas portas 587 e 465 com certificado válido; e-mail de teste aceito; a API reporta `invitation_delivery_available=true`. O envio pela própria aplicação (convite real) ainda não foi exercitado com um destinatário. Resta: IdP real provando `email_verified=true`. Isto é `DEPLOYMENT/PILOT CONFIGURATION GATE`, não bloqueia o commit.
 - Lovable/MCP permanece sem créditos/conexão confirmada.
 
 ## PENDING DECISIONS
