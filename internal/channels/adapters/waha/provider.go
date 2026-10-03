@@ -209,7 +209,7 @@ func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnecti
 		p.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_text"), attribute.String("status", statusForError(err))))
 		return nil, err
 	}
-	if providerID != msg.IdempotencyKey {
+	if !providerIDMatchesReserved(providerID, msg.IdempotencyKey) {
 		// Protocol anomaly, not silently accepted: the reserved id is what
 		// every durability guarantee in PILOT.4A1 depends on being echoed
 		// back unchanged. Distinct sentinel from ErrUnknown (PILOT.4A2):
@@ -222,6 +222,19 @@ func (p *WahaProvider) SendText(ctx context.Context, conn domain.ChannelConnecti
 		return nil, ports.ErrProviderIDMismatch
 	}
 	return &domain.SendResult{ProviderMessageID: providerID, State: domain.DeliveryStateSent}, nil
+}
+
+// providerIDMatchesReserved reports whether the id WAHA answered with is the id we reserved.
+// Some engines echo it verbatim; GOWS answers with the serialized form
+// "<fromMe>_<chatId>_<id>[_<participant>]" (the same form its message.ack webhooks use), so the
+// reserved id must be exactly the id segment — a substring elsewhere does not count. Whatever
+// WAHA returned is what gets stored, because that is the form later acks correlate against.
+func providerIDMatchesReserved(got, reserved string) bool {
+	if got == reserved {
+		return true
+	}
+	parts := strings.Split(got, "_")
+	return len(parts) >= 3 && (parts[0] == "true" || parts[0] == "false") && parts[2] == reserved
 }
 
 // NewMessageID reserves a stable message id from WAHA with no delivery side

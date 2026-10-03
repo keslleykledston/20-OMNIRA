@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	"github.com/omnira/omnira/internal/channels/domain"
+	"github.com/omnira/omnira/internal/channels/ports"
 )
 
 func TestProviderSessionLifecycleAndPairing(t *testing.T) {
@@ -301,5 +302,52 @@ func wahaConnection() domain.ChannelConnection {
 		Provider:     domain.ProviderWAHA,
 		ProviderKind: domain.ProviderKindUnofficial,
 		Status:       domain.ConnectionStatusPending,
+	}
+}
+
+// Real GOWS answers sendText with the SERIALIZED id ("<fromMe>_<chatId>_<id>"), not the bare id
+// it was given — observed live on 2026-10-03: every reply came back "uncertain" although
+// WhatsApp had delivered it. The serialized form whose id segment is the reserved id is the
+// same message and must be accepted (and stored, since acks use that form); any other id,
+// including one that merely contains the reserved id elsewhere, stays a mismatch.
+func TestSendTextAcceptsSerializedResponseIDForTheReservedID(t *testing.T) {
+	const reserved = "3EB08CD38CAEFE26215946"
+	for _, tc := range []struct {
+		name, response string
+		ok             bool
+	}{
+		{"bare echo", reserved, true},
+		{"direct chat", "true_559291740090@c.us_" + reserved, true},
+		{"lid chat", "true_175222334484588@lid_" + reserved, true},
+		{"group with participant", "true_120363000000000000@g.us_" + reserved + "_5511999999999@c.us", true},
+		{"another message id", "true_559291740090@c.us_3EB0OTHER", false},
+		{"reserved id only as the chat segment", "true_" + reserved + "_3EB0OTHER", false},
+		{"unknown prefix", "maybe_559291740090@c.us_" + reserved, false},
+		{"too few segments", "true_" + reserved, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"id":"` + tc.response + `"}`))
+			}))
+			defer srv.Close()
+			client, err := waha.NewClient(srv.URL, "secret", srv.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider, err := waha.NewProvider(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := provider.SendText(context.Background(), wahaConnection(), domain.OutboundTextMessage{ToE164: "+5511999999999", Text: "hello", IdempotencyKey: reserved})
+			if tc.ok {
+				if err != nil || result == nil || result.ProviderMessageID != tc.response || result.State != domain.DeliveryStateSent {
+					t.Fatalf("must be accepted and stored as returned: %#v, %v", result, err)
+				}
+				return
+			}
+			if !errors.Is(err, ports.ErrProviderIDMismatch) {
+				t.Fatalf("must stay a mismatch, got %#v, %v", result, err)
+			}
+		})
 	}
 }
