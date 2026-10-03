@@ -139,7 +139,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
         <div className="space-y-2 text-sm">
           <div className="flex justify-between items-center">
             <span className="text-text-secondary">Mensagens</span>
-            <span className="font-semibold text-text-primary">{conversation?.message_count || 0}</span>
+            <span className="font-semibold text-text-primary">{conversation?.message_count ?? '—'}</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-text-secondary">Status</span>
@@ -176,7 +176,11 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
           External/group participant modeling is future scope. */}
 
       {/* Chamado + atividade CRM */}
-      <TicketPanel conversationId={conversationId} crmContactId={conversation?.crm_contact_id} />
+      <TicketPanel
+        conversationId={conversationId}
+        crmContactId={conversation?.crm_contact_id}
+        conversationUnassigned={Boolean(conversation) && !conversation?.assigned_to_user_id}
+      />
 
       {/* Error */}
       {assignError && (

@@ -43,6 +43,9 @@ type ConversationItem struct {
 	CRMContactID        *uuid.UUID `json:"crm_contact_id,omitempty"`
 	CreatedAt           string     `json:"created_at"`
 	UpdatedAt           string     `json:"updated_at"`
+	// MessageCount is filled only by GET /conversations/{id} (one extra count, not
+	// worth paying on every row of the list); omitted elsewhere rather than sent as a false 0.
+	MessageCount *int `json:"message_count,omitempty"`
 }
 
 type MessageItem struct {
@@ -135,6 +138,13 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to read conversation", http.StatusInternalServerError)
 		return
 	}
+	var messageCount int
+	if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
+		`SELECT count(*) FROM messages WHERE tenant_id=$1 AND conversation_id=$2`, tenantID, conversationID).Scan(&messageCount); err != nil {
+		http.Error(w, "failed to read conversation", http.StatusInternalServerError)
+		return
+	}
+	item.MessageCount = &messageCount
 	writeJSON(w, item)
 }
 

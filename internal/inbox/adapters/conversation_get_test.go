@@ -81,6 +81,21 @@ func TestGetConversationIsTenantScoped(t *testing.T) {
 	if code != 200 || json.Unmarshal([]byte(body), &got) != nil || got["id"] != convA.String() || got["contact_name"] != "Alice" || got["assigned_to_user_id"] != assignee.String() {
 		t.Fatalf("own conversation: %d %s", code, body)
 	}
+	// The detail carries the real message count of THIS conversation only: the
+	// context pane used to show a permanent false 0 because the field was never sent.
+	if count, present := got["message_count"].(float64); !present || count != 0 {
+		t.Fatalf("a conversation with no messages must report message_count 0, got %v", got["message_count"])
+	}
+	for i := 0; i < 3; i++ {
+		exec(`INSERT INTO messages(id,tenant_id,conversation_id,direction,message_type,body,status) VALUES($1,$2,$3,'inbound','text','m','received')`, uuid.New(), tenantA, convA)
+	}
+	exec(`INSERT INTO messages(id,tenant_id,conversation_id,direction,message_type,body,status) VALUES($1,$2,$3,'inbound','text','de outra conversa','received')`, uuid.New(), tenantB, convB)
+	_, body = get(userA, tenantA, convA.String())
+	got = map[string]any{}
+	_ = json.Unmarshal([]byte(body), &got)
+	if got["message_count"] != float64(3) {
+		t.Fatalf("message_count = %v, want 3 (and never another conversation's messages)", got["message_count"])
+	}
 	// Another tenant's conversation id, and an unknown id, are indistinguishable.
 	c1, b1 := get(userA, tenantA, convB.String())
 	c2, b2 := get(userA, tenantA, uuid.NewString())

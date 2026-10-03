@@ -1244,6 +1244,7 @@ components:
         contact_phone: { type: string, description: E.164 }
         ticket_status: { type: string }
         ticket_priority: { type: string }
+        message_count: { type: integer, minimum: 0, description: 'Only on the single-conversation read (GET /inbox/conversations/{id}); omitted from list items' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     ConversationPage:

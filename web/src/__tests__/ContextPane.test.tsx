@@ -110,3 +110,45 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
     expect(axios.post).not.toHaveBeenCalled();
   });
 });
+
+describe('ContextPane — honest counters and unassigned hint', () => {
+  // The API never used to send message_count, so the pane showed a permanent false "0".
+  it('shows the message count from the API and a dash (never a false 0) when it is absent', async () => {
+    mockConversation({ message_count: 11 });
+    const { unmount } = renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Maria Silva');
+    expect(screen.getByText('11')).toBeInTheDocument();
+    unmount();
+
+    mockConversation({ message_count: undefined });
+    renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Maria Silva');
+    expect(screen.queryByText('0')).not.toBeInTheDocument();
+    expect(screen.getByText('Mensagens').nextElementSibling).toHaveTextContent('—');
+  });
+
+  // The chamado is shown to whoever holds the conversation; "no permission" for a
+  // conversation nobody holds yet sends people hunting for a permission they have.
+  it('tells you to take an unassigned conversation instead of claiming a missing permission', async () => {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith(`/inbox/conversations/${CONV}`)) return { data: { ...BASE_CONVERSATION, assigned_to_user_id: undefined } };
+      if (url.endsWith('/crm/companies')) return { data: { items: [] } };
+      if (url.endsWith('/ticket')) return Promise.reject({ response: { status: 403, data: 'forbidden' } });
+      return Promise.reject({ response: { status: 404 } });
+    });
+    renderAt(<ContextPane conversationId={CONV} />);
+    expect(await screen.findByText('Assuma esta conversa para ver e criar o chamado.')).toBeInTheDocument();
+    expect(screen.queryByText('Sem permissão para ver o chamado desta conversa.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the permission message when the conversation IS assigned and the ticket is still refused', async () => {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith(`/inbox/conversations/${CONV}`)) return { data: BASE_CONVERSATION };
+      if (url.endsWith('/crm/companies')) return { data: { items: [] } };
+      if (url.endsWith('/ticket')) return Promise.reject({ response: { status: 403, data: 'forbidden' } });
+      return Promise.reject({ response: { status: 404 } });
+    });
+    renderAt(<ContextPane conversationId={CONV} />);
+    expect(await screen.findByText('Sem permissão para ver o chamado desta conversa.')).toBeInTheDocument();
+  });
+});

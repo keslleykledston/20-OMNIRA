@@ -23,6 +23,8 @@ interface Company {
 interface TicketPanelProps {
   conversationId: string;
   crmContactId?: string;
+  /** The API only shows the ticket to whoever holds the conversation (or can manage it). */
+  conversationUnassigned?: boolean;
 }
 
 const FIELD =
@@ -159,7 +161,7 @@ function saveStatusIntent(conversationId: string, intent: PendingStatusIntent | 
   }
 }
 
-export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) {
+export function TicketPanel({ conversationId, crmContactId, conversationUnassigned }: TicketPanelProps) {
   const tenantId = getTenantId();
 
   const [state, setState] = useState<PersistedState>(() => loadState(conversationId));
@@ -918,6 +920,12 @@ export function TicketPanel({ conversationId, crmContactId }: TicketPanelProps) 
               O vínculo deste chamado com o ERP está inconsistente. Verificação necessária antes de qualquer nova
               ação.
             </p>
+          </div>
+        ) : readPhase === 'forbidden' && conversationUnassigned ? (
+          // Not a permission problem: nobody holds the conversation yet, and the
+          // chamado is shown to its assignee (or someone who can manage it).
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
+            Assuma esta conversa para ver e criar o chamado.
           </div>
         ) : readPhase === 'forbidden' ? (
           <div className="rounded-control border border-status-danger-border bg-status-danger-soft p-3 text-xs text-status-danger">
