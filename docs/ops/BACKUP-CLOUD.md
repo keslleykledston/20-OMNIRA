@@ -49,5 +49,5 @@ Depois siga o restore já provado em `scripts/backup-restore-check.sh` (aplicar 
 
 ## Limites conhecidos
 
-- Não há alerta externo para falha do envio ainda; o sinal é a linha `cloud copy FAILED` no `backup.log` e a idade de `.cloud-last-ok`. Cobrir isso com o wrapper ntfy existente é o próximo passo natural.
+- Alerta externo: `scripts/backup-cloud-check.sh` roda a cada 15 min sob o wrapper ntfy (`run-check-with-alert.sh backup-cloud`, cron do usuário `suporte`). Lê só a idade de `.cloud-last-ok`: OK até 3 h, WARN entre 3 h e 6 h (silencioso), FAIL acima de 6 h, se nunca houve sucesso depois do setup, ou se o config sumiu depois de ter funcionado (ALERT uma vez, lembrete a cada 60 min, RECOVERY ao voltar). Sem config ele fica em WARN `cloud_not_configured`, que não notifica. Testes: `scripts/test-backup-cloud-check.sh` (29 verificações).
 - O refresh token do Google pode ser revogado ou expirar (por exemplo, app em modo de teste no Google Cloud). Se o envio começar a falhar com erro de autenticação, rode `rclone authorize "drive" --drive-scope drive.file` de novo e troque **apenas** a linha `token =` da seção `[omnira-gdrive]` do config. Não use `--force` para isso: ele gera senhas novas de `crypt` e torna ilegível tudo que já foi enviado.
