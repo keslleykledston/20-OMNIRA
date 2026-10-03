@@ -31,6 +31,10 @@ const (
 	ActionAgentQueueRemoved        AuditAction = "agent.queue_removed"
 	ActionAgentQueueAvailability   AuditAction = "agent.queue_availability_changed"
 	ActionAgentQueueCapacity       AuditAction = "agent.queue_capacity_changed"
+	ActionQueueCreated             AuditAction = "queue.created"
+	ActionQueueUpdated             AuditAction = "queue.updated"
+	ActionQueueDefaultChanged      AuditAction = "queue.default_changed"
+	ActionQueueDeleted             AuditAction = "queue.deleted"
 	ActionParticipantInvited       AuditAction = "participant.invited"
 	ActionParticipantAccepted      AuditAction = "participant.accepted"
 	ActionParticipantRejected      AuditAction = "participant.rejected"
@@ -66,6 +70,7 @@ const (
 	ResourceConversation      ResourceType = "conversation"
 	ResourceChannelConnection ResourceType = "channel_connection"
 	ResourceAgentProfile      ResourceType = "agent_profile"
+	ResourceQueue             ResourceType = "queue"
 )
 
 // AuditEvent — evento de auditoria.

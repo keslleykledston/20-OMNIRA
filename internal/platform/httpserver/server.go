@@ -320,6 +320,13 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 	// Agentes (para co-atendimento)
 	agentsHandler := tenancyadapters.NewAgentsHandler(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/users/agents", authnMiddleware(tenantSession(http.HandlerFunc(agentsHandler.ListAgents))))
+	// Queues ("groups" in the UI): list/create/rename/mode/default/delete, gated on
+	// agent.read / agent.manage inside the handler.
+	queuesHandler := tenancyadapters.NewQueuesHandler(dbPool, auditRepo)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/queues", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.List))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/queues", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Create))))
+	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/queues/{queue_id}", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Update))))
+	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/queues/{queue_id}", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Delete))))
 	// IAM4 operational agents; legacy /users/agents keeps its co-attendance semantics.
 	agentProfiles := tenancyadapters.NewAgentProfilesHandler(dbPool, auditRepo)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/agents", authnMiddleware(tenantSession(http.HandlerFunc(agentProfiles.List))))

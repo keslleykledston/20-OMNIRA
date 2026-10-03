@@ -31,6 +31,7 @@ tags:
   - { name: Channels, description: "WhatsApp (WAHA) connections, sessions and pairing (admin)" }
   - { name: Webhooks, description: Provider callbacks (server-to-server) }
   - { name: Tenancy, description: "Tenant access: fixed platform roles (read-only) and the caller's effective permissions" }
+  - { name: Agents, description: "Operational agents and queues (groups)" }
 security:
   - bearerAuth: []
   - cookieAuth: []
@@ -249,6 +250,94 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues:
+    get:
+      operationId: listQueues
+      tags: [Agents]
+      summary: List the tenant's queues ("groups")
+      description: |
+        Every queue of the tenant, the default first, then by name. Requires `agent.read`. The counts describe queue
+        eligibility (members, members that are active and available) and open conversations; they are not presence.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: The queues
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueList' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+    post:
+      operationId: createQueue
+      tags: [Agents]
+      summary: Create a queue
+      description: |
+        Requires `agent.manage`. `mode` defaults to `manual`. With `is_default: true` the new queue becomes the one that
+        routes new conversations and the previous default is cleared in the same transaction. Names are trimmed,
+        1 to 60 characters, unique per tenant.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateQueueRequest' }
+      responses:
+        '201':
+          description: The created queue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueItem' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '409': { description: "A queue with this name already exists", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/queues/{queue_id}:
+    patch:
+      operationId: updateQueue
+      tags: [Agents]
+      summary: Rename a queue, change its mode, or make it the default
+      description: |
+        Requires `agent.manage`. At least one field. `is_default: true` switches the default atomically. The default
+        cannot be unset (`409`): without a default queue new conversations are not routed, so choose another default
+        instead. A queue of another tenant and an unknown id are indistinguishable (`404`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateQueueRequest' }
+      responses:
+        '200':
+          description: The updated queue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueItem' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Name already in use, or an attempt to unset the default queue", content: { text/plain: { schema: { type: string } } } }
+    delete:
+      operationId: deleteQueue
+      tags: [Agents]
+      summary: Delete a queue
+      description: |
+        Requires `agent.manage`. Removes the queue and its member assignments. Refused with `409` for the default queue
+        and for any queue that still holds conversations.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      responses:
+        '204': { description: Deleted }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Default queue, or the queue still has conversations", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -882,6 +971,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    QueueId:
+      name: queue_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     ContactId:
       name: contact_id
       in: path
@@ -995,6 +1089,42 @@ components:
         next_cursor: { type: string }
         count: { type: integer }
         limit: { type: integer }
+    QueueItem:
+      type: object
+      description: tenant_id is never exposed; the session establishes the tenant.
+      required: [id, name, mode, is_default, member_count, available_count, open_conversation_count, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 60 }
+        mode: { type: string, enum: [manual, round_robin] }
+        is_default: { type: boolean, description: 'The queue that routes new conversations; exactly one when routing is on' }
+        member_count: { type: integer, minimum: 0 }
+        available_count: { type: integer, minimum: 0, description: 'Members that are active and available in this queue (eligibility, not presence)' }
+        open_conversation_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    QueueList:
+      type: object
+      required: [items, count]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/QueueItem' }
+        count: { type: integer }
+    CreateQueueRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        mode: { type: string, enum: [manual, round_robin], default: manual }
+        is_default: { type: boolean, default: false }
+    UpdateQueueRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        mode: { type: string, enum: [manual, round_robin] }
+        is_default: { type: boolean }
     ContactLastMessage:
       type: object
       required: [direction, message_type, body_preview, created_at]
