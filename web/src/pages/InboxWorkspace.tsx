@@ -10,6 +10,7 @@ import ConversationListPanel from '../components/inbox/ConversationListPanel';
 import ChatPane from '../components/inbox/ChatPane';
 import ContextPane from '../components/inbox/ContextPane';
 import { InboxSegment } from '../lib/inboxModel';
+import { useInboxSettings } from '../hooks/useInboxSettings';
 import type { ConversationItem } from '../types/api';
 
 // PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
@@ -34,6 +35,7 @@ export default function InboxWorkspace() {
   const [segment, setSegment] = useState<InboxSegment>('all');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), 300);
+  const { thresholds: waitThresholds } = useInboxSettings();
   const [showContext, setShowContext] = useState(true);
 
   // PRODUCT.6-O2D2 deep link: conversation_id is UNTRUSTED navigation
@@ -182,6 +184,7 @@ export default function InboxWorkspace() {
             hasMore={!!hasNextPage}
             isFetchingMore={isFetchingNextPage}
             onLoadMore={() => void fetchNextPage()}
+            waitThresholds={waitThresholds}
           />
         </div>
 

@@ -27,20 +27,29 @@ export interface WaitInfo {
   tone: WaitTone;
 }
 
-// Display thresholds for the list only — there is no configured SLA per tenant yet, so these
-// are not a contractual target, just "how long has this customer been waiting".
-const WARN_AFTER_MIN = 30;
-const DANGER_AFTER_MIN = 120;
+export interface WaitThresholds {
+  warnMinutes: number;
+  dangerMinutes: number;
+}
+
+// Display thresholds for the list only — not a contractual SLA, just "how long has this customer
+// been waiting". Each tenant can change them in Configurações; these are the standard values.
+export const DEFAULT_WAIT_THRESHOLDS: WaitThresholds = { warnMinutes: 30, dangerMinutes: 120 };
 
 /** How long the customer has been waiting for an answer; null when nobody is waiting. */
-export function waitInfo(waitingSince: string | undefined, now: Date = new Date()): WaitInfo | null {
+export function waitInfo(
+  waitingSince: string | undefined,
+  now: Date = new Date(),
+  thresholds: WaitThresholds = DEFAULT_WAIT_THRESHOLDS,
+): WaitInfo | null {
   if (!waitingSince) return null;
   const since = new Date(waitingSince).getTime();
   if (Number.isNaN(since)) return null;
   const minutes = Math.max(1, Math.floor((now.getTime() - since) / 60_000));
   const label =
     minutes < 60 ? `${minutes} min` : minutes < 1440 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 1440)} d`;
-  const tone: WaitTone = minutes >= DANGER_AFTER_MIN ? 'danger' : minutes >= WARN_AFTER_MIN ? 'warning' : 'muted';
+  const tone: WaitTone =
+    minutes >= thresholds.dangerMinutes ? 'danger' : minutes >= thresholds.warnMinutes ? 'warning' : 'muted';
   return { label, tone };
 }
 

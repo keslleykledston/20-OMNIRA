@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { ConversationItem } from '../../types/api';
 import { Icon } from '../primitives';
-import { InboxSegment, inboxTimeLabel, previewText, waitInfo, WaitTone } from '../../lib/inboxModel';
+import { DEFAULT_WAIT_THRESHOLDS, InboxSegment, inboxTimeLabel, previewText, waitInfo, WaitThresholds, WaitTone } from '../../lib/inboxModel';
 
 interface ConversationListPanelProps {
   conversations: ConversationItem[];
@@ -16,6 +16,7 @@ interface ConversationListPanelProps {
   hasMore?: boolean;
   isFetchingMore?: boolean;
   onLoadMore?: () => void;
+  waitThresholds?: WaitThresholds;
 }
 
 const SEGMENTS: { id: InboxSegment; label: string }[] = [
@@ -52,6 +53,7 @@ export default function ConversationListPanel({
   hasMore = false,
   isFetchingMore = false,
   onLoadMore,
+  waitThresholds = DEFAULT_WAIT_THRESHOLDS,
 }: ConversationListPanelProps) {
   const now = useMinuteClock();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -122,6 +124,7 @@ export default function ConversationListPanel({
                 conv={conv}
                 selected={selectedId === conv.id}
                 now={now}
+                thresholds={waitThresholds}
                 onSelect={onSelect}
               />
             ))}
@@ -137,15 +140,17 @@ function ConversationRow({
   conv,
   selected,
   now,
+  thresholds,
   onSelect,
 }: {
   conv: ConversationItem;
   selected: boolean;
   now: Date;
+  thresholds: WaitThresholds;
   onSelect: (id: string) => void;
 }) {
   const name = conv.contact_name || conv.contact_phone;
-  const wait = waitInfo(conv.waiting_since, now);
+  const wait = waitInfo(conv.waiting_since, now, thresholds);
   const unassigned = !conv.assigned_to_user_id && conv.status !== 'closed';
   return (
     <li>

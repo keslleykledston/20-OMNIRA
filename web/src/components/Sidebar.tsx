@@ -32,6 +32,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings', alsoActiveOn: '/settings/roles' },
   { label: 'Pessoas e grupos', path: '/settings/people', icon: 'contacts' },
   { label: 'Agentes', path: '/settings/agents', icon: 'supervisor' },
+  { label: 'Configurações', path: '/settings/general', icon: 'settings' },
 ]
 
 export default function Sidebar() {

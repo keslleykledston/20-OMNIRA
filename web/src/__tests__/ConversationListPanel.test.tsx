@@ -63,6 +63,19 @@ describe('ConversationListPanel — compact rows', () => {
     expect(screen.queryByText('Pendente')).not.toBeInTheDocument();
   });
 
+  it('colours the wait with the tenant thresholds: the same 50 minutes is critical for a strict tenant', () => {
+    const row = conv('x', { last_message_at: minutesAgo(50), last_message_direction: 'inbound', waiting_since: minutesAgo(50) });
+    const { unmount } = render(
+      <ConversationListPanel conversations={[row]} selectedId={null} onSelect={vi.fn()} segment="all" onSegmentChange={vi.fn()} search="" onSearchChange={vi.fn()} isLoading={false} />
+    );
+    expect(screen.getByTitle('Cliente aguardando resposta').className).toContain('status-warning'); // standard 30 min / 2 h
+    unmount();
+    render(
+      <ConversationListPanel conversations={[row]} selectedId={null} onSelect={vi.fn()} segment="all" onSegmentChange={vi.fn()} search="" onSearchChange={vi.fn()} isLoading={false} waitThresholds={{ warnMinutes: 10, dangerMinutes: 40 }} />
+    );
+    expect(screen.getByTitle('Cliente aguardando resposta').className).toContain('status-danger');
+  });
+
   it('flags a conversation with no attendant and leaves assigned ones clean', () => {
     renderPanel([conv('livre', { assigned_to_user_id: undefined }), conv('minha')]);
     expect(screen.getAllByLabelText('Sem atendente')).toHaveLength(1);

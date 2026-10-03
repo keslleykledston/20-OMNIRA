@@ -81,6 +81,11 @@ Backend somente leitura, com dados reais, para a futura tela Contact 360 (FR3). 
 - **Grupos:** ADR-0015 (Proposed) — leitura de grupos em aba própria, modelo próprio, opt-in por grupo; aguarda aceite e respostas às questões em aberto.
 - Evidência visual: `docs/design/review/INBOX-COMPACT/`.
 
+### Limites de espera ajustáveis nas Configurações (2026-10-03, gate visual aprovado)
+- Nova página `/settings/general` (menu "Configurações"): "Atenção (amarelo) após" e "Crítico (vermelho) após", em minutos. Padrão 30 e 120 (o que a lista já usava). Todos os papéis leem (`tenant.read`); só administrador grava (`tenant.manage` + política UPDATE de `tenants`, duas camadas). `GET/PUT /tenants/{id}/settings/inbox`; migration `000055` adiciona `wait_warn_minutes`/`wait_danger_minutes` em `tenants` (CHECK `1 <= warn < danger <= 10080`). Auditoria `tenant.inbox_settings_updated` com antes/depois. São só indicadores visuais: não há SLA nem escalonamento.
+- Verificação pendente: o ciclo `up/down/up` da migration `000055` não foi executado (a subida foi provada na cadeia nova do teste de integração; a descida está escrita simétrica). Fazer no próximo ciclo com o caminho sancionado do projeto.
+- Evidência visual: `docs/design/review/SETTINGS-WAIT/`.
+
 ### Próximo marco de produto
 **Correção (2026-09-28, `PRODUCT.DOCSYNC`)**: a entrada anterior deste bloco apontava `PRODUCT.6-C1` como próximo marco — isso estava desatualizado. `PRODUCT.6-C1` e todo o arco de integração de ticketing K3G que ela deveria descobrir (`GetTicket`/`CreateTicket`/`UpdateTicketStatus`/resolução de runtime/ativação no Inbox/reconciliação) **já estão implementados e ativos**, 17 commits (`54f5cd0`…`5abfbd5`, 2026-09-24/25) nunca antes registrados neste handoff — ver a entrada `PRODUCT.6-A/B/C` na seção `## NOW` abaixo para o detalhe completo, verificado commit-a-commit em 2026-09-28.
 
