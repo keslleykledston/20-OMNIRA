@@ -17,6 +17,8 @@ import {
   TableHeaderCell,
   TableRow,
 } from '../components/primitives'
+import { ChannelChips } from '../components/contacts/ChannelChips'
+import { formatInteraction } from '../lib/contactFormat'
 import { contactErrorMessage, contactsAPI, type Contact } from '../lib/contacts'
 import { getTenantId } from '../lib/session'
 
@@ -69,7 +71,7 @@ export default function ContactsPage() {
   const items = page?.items ?? []
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 px-6 py-6 lg:px-8 lg:py-8">
       <PageHeader
         title="Contatos"
         description="Pessoas que já conversaram com a sua operação."
@@ -108,11 +110,12 @@ export default function ContactsPage() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Nome</TableHeaderCell>
+                  <TableHeaderCell>Contato</TableHeaderCell>
                   <TableHeaderCell>Telefone</TableHeaderCell>
-                  <TableHeaderCell>E-mail</TableHeaderCell>
-                  <TableHeaderCell>Situação</TableHeaderCell>
-                  <TableHeaderCell>Atualizado</TableHeaderCell>
+                  <TableHeaderCell>Canais</TableHeaderCell>
+                  <TableHeaderCell>Última interação</TableHeaderCell>
+                  <TableHeaderCell>Conversas abertas</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -121,17 +124,23 @@ export default function ContactsPage() {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar alt={c.display_name} initials={initials(c.display_name)} size="sm" />
-                        <span className="font-medium text-text-primary">{c.display_name}</span>
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-text-primary">{c.display_name}</p>
+                          {c.email && <p className="truncate text-xs text-text-secondary">{c.email}</p>}
+                        </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-text-secondary tabular-nums">{formatPhone(c.phone_e164)}</TableCell>
-                    <TableCell className="text-text-secondary">{c.email || '—'}</TableCell>
+                    <TableCell className="text-text-secondary tabular-nums whitespace-nowrap">{formatPhone(c.phone_e164)}</TableCell>
+                    <TableCell>
+                      <ChannelChips channels={c.channels} />
+                    </TableCell>
+                    <TableCell className="text-text-secondary whitespace-nowrap">{formatInteraction(c.last_interaction_at)}</TableCell>
+                    <TableCell className="font-medium tabular-nums text-text-primary">{c.open_conversation_count}</TableCell>
                     <TableCell>
                       <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
                         {STATUS_LABELS[c.status].label}
                       </StatusBadge>
                     </TableCell>
-                    <TableCell className="text-text-secondary">{formatDate(c.updated_at)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -154,6 +163,13 @@ export default function ContactsPage() {
                   <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
                     {STATUS_LABELS[c.status].label}
                   </StatusBadge>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary">
+                  <ChannelChips channels={c.channels} />
+                  <span>
+                    {formatInteraction(c.last_interaction_at)} · {c.open_conversation_count}{' '}
+                    {c.open_conversation_count === 1 ? 'conversa aberta' : 'conversas abertas'}
+                  </span>
                 </div>
               </button>
             ))}
