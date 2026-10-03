@@ -441,5 +441,41 @@ func (h *OIDCHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		_ = h.sessionStore.RevokeSession(r.Context(), cookie.Value)
 	}
 	http.SetCookie(w, h.cookie(SessionCookieName, "", -1))
+	// Clearing OUR cookie is not enough: the identity provider keeps its own SSO
+	// session, so the next login would silently reuse the previous account and the
+	// user could never switch accounts. When the provider advertises an
+	// end-session endpoint, hand the browser its address so it can end that
+	// session too.
+	if endSession := h.endSessionURL(); endSession != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"end_session_url": endSession})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// endSessionURL builds the RP-initiated logout address from server-side
+// configuration only (discovery, client id and the public origin taken from the
+// registered callback URL); no request value goes into it, so it cannot be used
+// as an open redirect. Without an id_token_hint the provider asks the user to
+// confirm, then returns to /login. Empty when the provider has no end-session
+// endpoint or the callback URL has no usable origin.
+func (h *OIDCHandler) endSessionURL() string {
+	if h.discovery.EndSessionEndpoint == "" || h.clientID == "" {
+		return ""
+	}
+	callback, err := url.Parse(h.redirectURL)
+	if err != nil || callback.Scheme == "" || callback.Host == "" {
+		return ""
+	}
+	endpoint, err := url.Parse(h.discovery.EndSessionEndpoint)
+	if err != nil {
+		return ""
+	}
+	q := endpoint.Query()
+	q.Set("client_id", h.clientID)
+	q.Set("post_logout_redirect_uri", callback.Scheme+"://"+callback.Host+"/login")
+	endpoint.RawQuery = q.Encode()
+	return endpoint.String()
 }

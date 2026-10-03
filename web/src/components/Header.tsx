@@ -25,9 +25,11 @@ export default function Header() {
   }, [user, setUser])
 
   const handleLogout = async () => {
-    await authAPI.logout()
+    const { data } = await authAPI.logout()
     logout()
-    navigate('/login')
+    // Ending the identity provider's session too is what lets someone switch accounts.
+    if (data.endSessionUrl) window.location.assign(data.endSessionUrl)
+    else navigate('/login')
   }
 
   return (

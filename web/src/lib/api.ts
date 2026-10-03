@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { endSessionUrlFrom } from './logout'
 
 const api = axios.create({
   baseURL: '/api',
@@ -57,10 +58,12 @@ export const authAPI = {
     return { data: { token, user: { ...user, roles: user?.roles ?? [] }, tenant } }
   },
   logout: async () => {
-    await api.post('/v1/auth/logout').catch(() => undefined)
+    const res = await api.post('/v1/auth/logout').catch(() => undefined)
     localStorage.removeItem('token')
     localStorage.removeItem('user')
-    return { data: { status: 'ok' } }
+    // When set, the caller must send the browser there so the identity provider's
+    // own session ends too (otherwise the next login reuses the previous account).
+    return { data: { status: 'ok', endSessionUrl: endSessionUrlFrom(res?.data) } }
   },
   refresh: () => api.post('/v1/auth/refresh')
 }

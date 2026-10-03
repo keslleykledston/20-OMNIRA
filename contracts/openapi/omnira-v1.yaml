@@ -105,10 +105,24 @@ paths:
     post:
       operationId: logout
       tags: [Auth]
-      summary: Clear the browser session cookie
+      summary: End the app session and, when the identity provider has one, point to its logout
+      description: |
+        Revokes the server-side session and expires the cookie. When the identity provider advertises an end-session
+        endpoint the answer is `200` with `end_session_url`, an address built only from server configuration (never from
+        the request) that the browser must follow so the provider's own SSO session ends too; without that, the next
+        login silently reuses the previous account. Otherwise `204`.
       security: []
       responses:
-        '204': { description: Session cookie cleared }
+        '200':
+          description: Session ended; follow end_session_url to end the identity provider session
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [end_session_url]
+                properties:
+                  end_session_url: { type: string, format: uri }
+        '204': { description: Session cookie cleared (nothing to end at the provider) }
   /tenants:
     get:
       operationId: listMyTenants
