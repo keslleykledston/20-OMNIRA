@@ -13,6 +13,7 @@ const (
 	ActionTenantCreated            AuditAction = "tenant.created"
 	ActionTenantDeactivated        AuditAction = "tenant.deactivated"
 	ActionTenantSuspended          AuditAction = "tenant.suspended"
+	ActionTenantInboxSettings      AuditAction = "tenant.inbox_settings_updated"
 	ActionMembershipGranted        AuditAction = "membership.granted"
 	ActionMembershipRevoked        AuditAction = "membership.revoked"
 	ActionMembershipDeactivated    AuditAction = "membership.deactivated"

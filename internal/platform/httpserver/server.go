@@ -323,6 +323,9 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 	// Queues ("groups" in the UI): list/create/rename/mode/default/delete, gated on
 	// agent.read / agent.manage inside the handler.
 	queuesHandler := tenancyadapters.NewQueuesHandler(dbPool, auditRepo)
+	inboxSettings := tenancyadapters.NewInboxSettingsHandler(dbPool, auditRepo)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/settings/inbox", authnMiddleware(tenantSession(http.HandlerFunc(inboxSettings.Get))))
+	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/settings/inbox", authnMiddleware(tenantSession(http.HandlerFunc(inboxSettings.Put))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/queues", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.List))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/queues", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Create))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/queues/{queue_id}", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Update))))

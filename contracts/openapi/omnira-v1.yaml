@@ -326,6 +326,51 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '409': { description: "A queue with this name already exists", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/settings/inbox:
+    get:
+      operationId: getInboxSettings
+      tags: [Inbox]
+      summary: Inbox display settings of the tenant
+      description: |
+        Requires `tenant.read` (every role has it): the Inbox needs the thresholds to colour the "customer is waiting"
+        chip. They are display-only, not a contractual SLA.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: The thresholds, in minutes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboxSettings' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: updateInboxSettings
+      tags: [Inbox]
+      summary: Change the Inbox display settings
+      description: |
+        Requires `tenant.manage` (tenant admin); the tenants row policy also allows only an admin to update. Both fields
+        are required. `wait_warn_minutes >= 1`, `wait_danger_minutes > wait_warn_minutes` and `<= 10080` (`422` otherwise).
+        Audited as `tenant.inbox_settings_updated` with the previous and new values.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InboxSettings' }
+      responses:
+        '200':
+          description: The saved thresholds
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboxSettings' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: "Thresholds out of range or not increasing", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/queues/{queue_id}:
     patch:
       operationId: updateQueue
@@ -1135,6 +1180,13 @@ components:
         next_cursor: { type: string }
         count: { type: integer }
         limit: { type: integer }
+    InboxSettings:
+      type: object
+      required: [wait_warn_minutes, wait_danger_minutes]
+      additionalProperties: false
+      properties:
+        wait_warn_minutes: { type: integer, minimum: 1, description: 'Attention (yellow) after this many minutes waiting' }
+        wait_danger_minutes: { type: integer, minimum: 2, maximum: 10080, description: 'Critical (red) after this many minutes waiting; greater than wait_warn_minutes' }
     QueueItem:
       type: object
       description: tenant_id is never exposed; the session establishes the tenant.
