@@ -184,6 +184,69 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/contacts/{contact_id}/conversations:
+    get:
+      operationId: listContactConversations
+      tags: [Contacts]
+      summary: List a contact's conversations (CONTACT.360-A)
+      description: |
+        Conversations of one contact, `(updated_at DESC, id DESC)`, each with its channel, message count and a
+        truncated preview of the newest message. Any active member of the tenant may read it, the same visibility
+        the Inbox gives. A contact of another tenant and an unknown id are indistinguishable (`404`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ContactId' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - name: sort
+          in: query
+          schema: { type: string, enum: ['updated_at:desc'] }
+      responses:
+        '200':
+          description: A page of the contact's conversations
+          headers:
+            X-Pagination-Count: { $ref: '#/components/headers/XPaginationCount' }
+            X-Pagination-Limit: { $ref: '#/components/headers/XPaginationLimit' }
+            X-Pagination-HasMore: { $ref: '#/components/headers/XPaginationHasMore' }
+            X-Pagination-NextCursor: { $ref: '#/components/headers/XPaginationNextCursor' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactConversationPage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/contacts/{contact_id}/tickets:
+    get:
+      operationId: listContactTickets
+      tags: [Contacts]
+      summary: List a contact's tickets (CONTACT.360-A)
+      description: |
+        Tickets of the contact's conversations, `(updated_at DESC, id DESC)`. Gated on `ticket.read` (from the
+        role→permission matrix of an active membership); the permission is checked before the contact is resolved,
+        so a caller without it gets the same `403` for any id.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ContactId' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - name: sort
+          in: query
+          schema: { type: string, enum: ['updated_at:desc'] }
+      responses:
+        '200':
+          description: A page of the contact's tickets
+          headers:
+            X-Pagination-Count: { $ref: '#/components/headers/XPaginationCount' }
+            X-Pagination-Limit: { $ref: '#/components/headers/XPaginationLimit' }
+            X-Pagination-HasMore: { $ref: '#/components/headers/XPaginationHasMore' }
+            X-Pagination-NextCursor: { $ref: '#/components/headers/XPaginationNextCursor' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactTicketPage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -907,7 +970,7 @@ components:
             name: { type: string }
     ContactItem:
       type: object
-      required: [id, display_name, phone_e164, email, status, created_at, updated_at]
+      required: [id, display_name, phone_e164, email, status, created_at, updated_at, last_interaction_at, channels, open_conversation_count]
       properties:
         id: { type: string, format: uuid }
         display_name: { type: string }
@@ -916,6 +979,9 @@ components:
         status: { type: string, enum: [active, blocked, archived] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        last_interaction_at: { type: string, format: date-time, nullable: true, description: 'Newest message across the contact''s conversations; null when it has none (CONTACT.360-A)' }
+        channels: { type: array, items: { type: string }, description: 'Distinct channel kinds (e.g. whatsapp) of the contact''s conversations; empty, never null' }
+        open_conversation_count: { type: integer, minimum: 0 }
     ContactPage:
       type: object
       required: [items, has_more, count, limit]
@@ -923,6 +989,65 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/ContactItem' }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
+    ContactLastMessage:
+      type: object
+      required: [direction, message_type, body_preview, created_at]
+      properties:
+        direction: { type: string, enum: [inbound, outbound] }
+        message_type: { type: string, enum: [text, image, video, audio, document, sticker] }
+        body_preview: { type: string, description: 'Body truncated to 140 characters plus an ellipsis; empty for media without caption' }
+        created_at: { type: string, format: date-time }
+    ContactConversationItem:
+      type: object
+      required: [id, status, title, channel, provider, assigned_to_user_id, message_count, last_message, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, example: open }
+        title: { type: string }
+        channel: { type: string, nullable: true, description: 'null when the conversation has no channel connection' }
+        provider: { type: string, nullable: true }
+        assigned_to_user_id: { type: string, format: uuid, nullable: true }
+        message_count: { type: integer, minimum: 0 }
+        last_message: { type: object, nullable: true, allOf: [ { $ref: '#/components/schemas/ContactLastMessage' } ] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ContactConversationPage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ContactConversationItem' }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
+    ContactTicketItem:
+      type: object
+      required: [id, conversation_id, subject, status, priority, assigned_to, provider, external_ticket_id, external_status_label, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        subject: { type: string }
+        status: { type: string, enum: [open, in_progress, waiting, resolved, closed] }
+        priority: { type: string, enum: [critical, high, medium, low] }
+        assigned_to: { type: string, format: uuid, nullable: true }
+        provider: { type: string, nullable: true }
+        external_ticket_id: { type: string, nullable: true }
+        external_status_label: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ContactTicketPage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ContactTicketItem' }
         has_more: { type: boolean }
         next_cursor: { type: string }
         count: { type: integer }

@@ -25,6 +25,14 @@ type ContactItem struct {
 	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+
+	// Derived, read-only facts (CONTACT.360-A). Computed from the contact's own
+	// conversations/messages inside the same tenant-scoped RLS session; nothing
+	// here is stored or editable, and nothing is guessed. last_interaction_at is
+	// null when the contact has no message yet; channels is never null.
+	LastInteractionAt     *time.Time `json:"last_interaction_at"`
+	Channels              []string   `json:"channels"`
+	OpenConversationCount int        `json:"open_conversation_count"`
 }
 
 type ContactsAPIHandler struct {
@@ -35,7 +43,19 @@ func NewContactsAPIHandler(pool *pgxpool.Pool) *ContactsAPIHandler {
 	return &ContactsAPIHandler{pool: pool}
 }
 
-const contactColumns = `id, display_name, phone_e164, email, status, created_at, updated_at`
+// contactSelect adds the three derived facts to the stored columns. Every
+// subquery is scoped by tenant_id AND contact_id (on top of RLS), and every
+// join carries tenant_id, so a row of another tenant can never contribute.
+const contactSelect = `SELECT c.id, c.display_name, c.phone_e164, c.email, c.status, c.created_at, c.updated_at,
+	(SELECT max(m.created_at) FROM messages m
+	   JOIN conversations cv ON cv.id = m.conversation_id AND cv.tenant_id = m.tenant_id
+	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id) AS last_interaction_at,
+	COALESCE((SELECT array_agg(DISTINCT cc.channel ORDER BY cc.channel) FROM conversations cv
+	   JOIN channel_connections cc ON cc.id = cv.channel_connection_id AND cc.tenant_id = cv.tenant_id
+	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id), '{}') AS channels,
+	(SELECT count(*) FROM conversations cv
+	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id AND cv.status = 'open') AS open_conversation_count
+	FROM contacts c`
 
 // ListContacts returns one page of the TenantContext tenant's contacts, newest
 // activity first. Ordering matches idx_contacts_tenant_updated so the cursor
@@ -58,8 +78,8 @@ func (h *ContactsAPIHandler) ListContacts(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	query := `SELECT ` + contactColumns + ` FROM contacts WHERE tenant_id = $1
-		ORDER BY updated_at DESC, id DESC LIMIT $2`
+	query := contactSelect + ` WHERE c.tenant_id = $1
+		ORDER BY c.updated_at DESC, c.id DESC LIMIT $2`
 	args := []any{tenantID, opts.Limit + 1}
 	if cursor != nil {
 		cursorID, parseErr := uuid.Parse(cursor.ID)
@@ -67,9 +87,9 @@ func (h *ContactsAPIHandler) ListContacts(w http.ResponseWriter, r *http.Request
 			http.Error(w, "invalid pagination", http.StatusBadRequest)
 			return
 		}
-		query = `SELECT ` + contactColumns + ` FROM contacts WHERE tenant_id = $1
-			AND (updated_at, id) < ($2, $3)
-			ORDER BY updated_at DESC, id DESC LIMIT $4`
+		query = contactSelect + ` WHERE c.tenant_id = $1
+			AND (c.updated_at, c.id) < ($2, $3)
+			ORDER BY c.updated_at DESC, c.id DESC LIMIT $4`
 		args = []any{tenantID, cursor.Timestamp, cursorID, opts.Limit + 1}
 	}
 
@@ -133,7 +153,7 @@ func (h *ContactsAPIHandler) GetContact(w http.ResponseWriter, r *http.Request) 
 	}
 
 	item, err := scanContactItem(platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
-		`SELECT `+contactColumns+` FROM contacts WHERE tenant_id = $1 AND id = $2`, tenantID, contactID))
+		contactSelect+` WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, contactID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "contact not found", http.StatusNotFound)
 		return
@@ -151,7 +171,11 @@ type contactRowScanner interface {
 
 func scanContactItem(row contactRowScanner) (ContactItem, error) {
 	var item ContactItem
-	err := row.Scan(&item.ID, &item.DisplayName, &item.PhoneE164, &item.Email, &item.Status, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.DisplayName, &item.PhoneE164, &item.Email, &item.Status, &item.CreatedAt, &item.UpdatedAt,
+		&item.LastInteractionAt, &item.Channels, &item.OpenConversationCount)
+	if item.Channels == nil {
+		item.Channels = []string{}
+	}
 	return item, err
 }
 

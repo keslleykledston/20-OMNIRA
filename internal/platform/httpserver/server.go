@@ -402,6 +402,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	contactsHandler := contactsadapters.NewContactsAPIHandler(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContacts))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.GetContact))))
+	// CONTACT.360-A: read-only Contact 360 read model. Tickets are gated on
+	// ticket.read inside the handler, exactly like GET /tickets.
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/conversations", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContactConversations))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/tickets", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContactTickets))))
 
 	ticketsHandler := ticketsadapters.NewHandler(dbPool)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/tickets", authnMiddleware(tenantSession(http.HandlerFunc(ticketsHandler.List))))
