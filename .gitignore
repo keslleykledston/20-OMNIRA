@@ -27,3 +27,4 @@ backups/
 
 # AI task router — decision log local, nao versionar
 .agents/router/logs/
+.backup-test/

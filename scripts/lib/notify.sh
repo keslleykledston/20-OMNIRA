@@ -71,11 +71,16 @@ _json_escape() {
 # with a JSON body that names the topic, delivered to curl purely via a
 # heredoc on stdin. Returns 0 on a 2xx response, non-zero otherwise; a
 # non-zero return is always accompanied by a notification_failed log line.
+# On return 0, NOTIFY_LAST_RESULT is "sent" (delivered, 2xx) or "skipped"
+# (channel not configured, nothing was attempted); callers must log the
+# latter as notification_skipped, never as a send.
 notify_send() {
   local check="$1" kind="$2" priority="$3" title="$4" message="$5"
   if ! notify_configured; then
+    NOTIFY_LAST_RESULT=skipped
     return 0
   fi
+  NOTIFY_LAST_RESULT=sent
 
   local tag
   case "$kind" in
@@ -90,9 +95,13 @@ notify_send() {
   esc_title=$(_json_escape "$title")
   esc_message=$(_json_escape "$message")
 
-  local auth_args=()
+  # The token travels in a 0600 header file (curl -H @file), never in curl's
+  # argv where `ps` would show it. printf is a builtin: no process sees it.
+  local auth_args=() hdr_file=""
   if [ -n "${NTFY_TOKEN:-}" ]; then
-    auth_args=(-H "Authorization: Bearer ${NTFY_TOKEN}")
+    hdr_file=$(mktemp) || { notify_log "$check" "notification_failed" "token_header_unavailable"; return 1; }
+    printf 'Authorization: Bearer %s\n' "$NTFY_TOKEN" > "$hdr_file"
+    auth_args=(-H "@${hdr_file}")
   fi
 
   local http_status curl_rc=0
@@ -107,6 +116,7 @@ notify_send() {
 {"topic":"${NTFY_TOPIC}","title":"${esc_title}","message":"${esc_message}","priority":${priority},"tags":["${tag}"]}
 JSONEOF
   ) || curl_rc=$?
+  if [ -n "$hdr_file" ]; then rm -f "$hdr_file"; fi
 
   if [ "$curl_rc" -ne 0 ]; then
     notify_log "$check" "notification_failed" "curl_exit_${curl_rc}"

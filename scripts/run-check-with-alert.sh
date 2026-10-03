@@ -101,8 +101,13 @@ if [ "${1:-}" = "--synthetic-send" ]; then
   esac
   title="OMNIRA $kind — ${check}"
   if notify_send "$check" "$kind" "$priority" "$title" "$message"; then
-    notify_log "$check" "${kind,,}_sent" "synthetic_test"
-    echo "synthetic $kind sent for check=$check"
+    if [ "${NOTIFY_LAST_RESULT:-sent}" = "skipped" ]; then
+      notify_log "$check" "notification_skipped" "not_configured"
+      echo "synthetic $kind NOT sent for check=$check (channel not configured)"
+    else
+      notify_log "$check" "${kind,,}_sent" "synthetic_test"
+      echo "synthetic $kind sent for check=$check"
+    fi
     exit 0
   else
     echo "synthetic $kind send FAILED for check=$check (see NOTIFY_LOG)" >&2
@@ -187,7 +192,11 @@ send_and_record() {
   local title="OMNIRA $kind — ${check_name}"
   if notify_send "$check_name" "$kind" "$priority" "$title" "$last_line"; then
     new_notified_at="$now_epoch"
-    notify_log "$check_name" "$action_on_success" "$reason"
+    if [ "${NOTIFY_LAST_RESULT:-sent}" = "skipped" ]; then
+      notify_log "$check_name" "notification_skipped" "not_configured"
+    else
+      notify_log "$check_name" "$action_on_success" "$reason"
+    fi
   else
     notify_layer_failed=1
     # notify_send already logged the notification_failed line itself.

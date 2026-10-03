@@ -28,13 +28,10 @@ Este bloco resume um arco de trabalho **operacional** (`PILOT.1A`–`PILOT.4E2`,
 `PILOT.EXIT` (2026-09-28) avaliou 15 dimensões de prontidão operacional (auth, TLS, isolamento de tenant, backup, recovery, deploy, canal WhatsApp real, outbound, routing, durabilidade de fila, limites de disco, visibilidade operacional, alerta externo, isolamento de teste, saúde atual) — todas PASS, zero P0/P1 remanescente. O qualificador `SUPERVISED` foi removido: **não é mais exigida supervisão manual contínua excepcional**; a operação normal via runbooks/alertas continua obrigatória. Isto **não** significa GA, zero débito técnico, DR totalmente automatizado, todos os canais implementados, ou HA/multi-região.
 
 ### Débitos abertos (P2 — não bloqueiam o piloto)
+- _Resolvidos em 2026-10-03 (suíte `test-notify-wrapper.sh` 42/42):_ `NTFY_TOKEN` fora do argv do `curl` (header via arquivo 0600); Seção 25 do teste agora lê a linha de cron real (`grep -m1`); log distingue `notification_skipped` de `*_sent` quando o canal não está configurado; dump `.backup-test/*.sql` removido do índice do Git e ignorado.
 - Retenção do backup externo sem política explícita (baixo risco quantificado).
-- Hardening de `NTFY_TOKEN` no argv do `curl` antes de qualquer modo autenticado (hoje não usado — modo anônimo capability-topic).
 - Dead-man monitoring do próprio cron (nenhum backend barato disponível hoje).
-- Asserção frágil (falta `-m1`) na Seção 25 de `scripts/test-notify-wrapper.sh` — o fato verificado é verdadeiro, mas a extração usada no teste é frágil.
-- Ambiguidade de fidelidade no log de notificação quando o canal não está configurado (`notify_send` retorna sucesso tanto para "não configurado" quanto para "enviado de fato").
 - 85 tenants órfãos de fixture não resolvidos em `omnira_dev` (nomes genéricos "Tenant C", criados em rajada em 2026-09-21) — confirmado zero tráfego nos últimos 30 dias, sem impacto em nenhum fluxo do piloto real. A própria operação de limpeza (`TEST.DATA.CLEANUP.1E`/`.2E`) nunca foi persistida como documento no repositório — dívida de documentação, não de dado.
-- `.backup-test/omnira-1789755710.sql` — dump SQL (~44KB) commitado por engano no Git desde `058af5d`; nenhum segredo encontrado no conteúdo; remover/gitignorar numa slice de higiene futura.
 - Fechamento do "TLS P0" citado no commit `0a5108a` nunca foi documentado explicitamente como fechado em nenhum lugar — resolvido funcionalmente pelo commit `7d2fe2a` e verificado ao vivo nesta auditoria, mas sem registro formal anterior.
 
 ### Próximo marco de produto

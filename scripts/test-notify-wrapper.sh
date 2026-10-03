@@ -69,6 +69,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ",".join(payload.get("tags", [])),
                 body.replace("\n", " "),
             ))
+        with open(log_path + ".auth", "a") as f:
+            f.write("%s\n" % self.headers.get("Authorization", ""))
         try:
             with open(mode_path) as m:
                 code = int(m.read().strip() or "200")
@@ -262,10 +264,42 @@ start_catcher
 for _ in $(seq 1 20); do curl -sf -o /dev/null "http://127.0.0.1:$CATCHER_PORT/" 2>/dev/null && break; sleep 0.2; done
 
 echo "=== Section 25: the documented FUTURE NATS cron line does not narrow to a single consumer ==="
-future_line=$(command grep -A2 'PILOT.4E2-FUTURE-CRON-NATS' docs/operations/PILOT-RUNBOOK.md | tail -1)
+future_line=$(command grep -m1 -A2 'PILOT.4E2-FUTURE-CRON-NATS' docs/operations/PILOT-RUNBOOK.md | tail -1)
 check "future documented cron line has no bare CONSUMER= override" \
   "$(printf '%s' "$future_line" | command grep -cE '(^|[[:space:]])CONSUMER=')" "0"
 check "future documented cron line exists and is non-empty" "$( [ -n "$future_line" ] && echo yes || echo no )" "yes"
+
+echo "=== Section 26: NTFY_TOKEN never appears in curl's argv, yet the header is delivered ==="
+SHIM_DIR="$WORKDIR/shim"; mkdir -p "$SHIM_DIR"
+REAL_CURL=$(command -v curl)
+cat > "$SHIM_DIR/curl" <<SHIMEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$WORKDIR/curl_argv.log"
+exec "$REAL_CURL" "\$@"
+SHIMEOF
+chmod +x "$SHIM_DIR/curl"
+TOKEN_SENTINEL="tok-$$-sentinel"
+: > "$WORKDIR/curl_argv.log"
+: > "$CATCHER_LOG.auth"
+set +e
+PATH="$SHIM_DIR:$PATH" NTFY_TOKEN="$TOKEN_SENTINEL" bash -c 'source scripts/lib/notify.sh; notify_send argv-test TEST 3 "t" "m"'
+token_send_exit=$?
+set -e
+check "authenticated send succeeds" "$token_send_exit" "0"
+check "curl was invoked through the shim" "$( [ -s "$WORKDIR/curl_argv.log" ] && echo yes || echo no )" "yes"
+check "token is absent from curl argv" "$(command grep -c "$TOKEN_SENTINEL" "$WORKDIR/curl_argv.log" || true)" "0"
+check "token still reaches the server as a Bearer header" "$(command grep -c "^Bearer $TOKEN_SENTINEL\$" "$CATCHER_LOG.auth" || true)" "1"
+
+echo "=== Section 27: an unconfigured channel is logged as skipped, never as sent ==="
+: > "$NOTIFY_LOG"
+set +e
+skip_out=$(env -u NTFY_TOPIC bash scripts/run-check-with-alert.sh --synthetic-send skip-test ALERT "x" 2>&1)
+skip_exit=$?
+set -e
+check "unconfigured synthetic send exits 0" "$skip_exit" "0"
+check "log records notification_skipped" "$(command grep -c 'action=notification_skipped' "$NOTIFY_LOG" || true)" "1"
+check "log has no alert_sent" "$(command grep -c 'action=alert_sent' "$NOTIFY_LOG" || true)" "0"
+check "output says the message was NOT sent" "$(printf '%s' "$skip_out" | command grep -c 'NOT sent' || true)" "1"
 
 echo ""
 echo "== $pass passed, $fail failed =="
