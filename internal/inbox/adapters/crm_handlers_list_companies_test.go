@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -106,7 +107,7 @@ func TestListCompaniesHTTPNoConfigurationFailsClosed(t *testing.T) {
 	tenantA := uuid.New()
 	tenantWithoutConfig := uuid.New()
 	resolver := &perTenantResolver{byTenant: map[uuid.UUID]ticketsports.CompanyDirectory{
-		tenantA: &staticCompanies{items: []ticketsports.Company{{ExternalID: "a-1", Name: "Empresa A"}}},
+		tenantA: &staticCompanies{items: []ticketsports.Company{{ExternalID: "a-1", Name: "Empresa A", Active: true}}},
 	}}
 	handler := NewCRMHandlers(nil)
 	handler.SetCompanyDirectoryResolver(resolver)
@@ -128,7 +129,7 @@ func TestListCompaniesHTTPNoConfigurationFailsClosed(t *testing.T) {
 func TestListCompaniesHTTPNeverUsesGlobalK3GClient(t *testing.T) {
 	tenantA := uuid.New()
 	resolver := &perTenantResolver{byTenant: map[uuid.UUID]ticketsports.CompanyDirectory{
-		tenantA: &staticCompanies{items: []ticketsports.Company{{ExternalID: "a-1", Name: "Empresa A"}}},
+		tenantA: &staticCompanies{items: []ticketsports.Company{{ExternalID: "a-1", Name: "Empresa A", Active: true}}},
 	}}
 	handler := NewCRMHandlers(nil) // h.k3gClient is nil — never set
 	handler.SetCompanyDirectoryResolver(resolver)
@@ -168,8 +169,8 @@ func TestListCompaniesHTTPUnauthenticatedDenied(t *testing.T) {
 func TestListCompaniesHTTPIgnoresClientSuppliedProviderOverride(t *testing.T) {
 	tenantA, tenantB := uuid.New(), uuid.New()
 	resolver := &perTenantResolver{byTenant: map[uuid.UUID]ticketsports.CompanyDirectory{
-		tenantA: &staticCompanies{items: []ticketsports.Company{{ExternalID: "a-1", Name: "Empresa A"}}},
-		tenantB: &staticCompanies{items: []ticketsports.Company{{ExternalID: "b-1", Name: "Empresa B"}}},
+		tenantA: &staticCompanies{items: []ticketsports.Company{{ExternalID: "a-1", Name: "Empresa A", Active: true}}},
+		tenantB: &staticCompanies{items: []ticketsports.Company{{ExternalID: "b-1", Name: "Empresa B", Active: true}}},
 	}}
 	handler := NewCRMHandlers(nil)
 	handler.SetCompanyDirectoryResolver(resolver)
@@ -219,5 +220,38 @@ func TestListCompaniesHTTPResolverNotWiredFailsClosed(t *testing.T) {
 	mux.ServeHTTP(rec, listCompaniesRequest(uuid.New(), uuid.New()))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Only companies the CRM reports as active are listed; inactive ones are neither
+// shown nor counted, and a tenant whose companies are all inactive gets [] (not null).
+func TestListCompaniesHTTPOnlyActive(t *testing.T) {
+	tenantA, tenantAllInactive := uuid.New(), uuid.New()
+	resolver := &perTenantResolver{byTenant: map[uuid.UUID]ticketsports.CompanyDirectory{
+		tenantA: &staticCompanies{items: []ticketsports.Company{
+			{ExternalID: "a-1", Name: "Ativa Um", Active: true},
+			{ExternalID: "a-2", Name: "Inativa Dois", Active: false},
+			{ExternalID: "a-3", Name: "Ativa Tres", Active: true},
+		}},
+		tenantAllInactive: &staticCompanies{items: []ticketsports.Company{{ExternalID: "z-1", Name: "Toda Inativa", Active: false}}},
+	}}
+	handler := NewCRMHandlers(nil)
+	handler.SetCompanyDirectoryResolver(resolver)
+	mux := listCompaniesMux(handler)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, listCompaniesRequest(tenantA, uuid.New()))
+	var got CompanyListResponse
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(got.Items) != 2 || got.Items[0].ID != "a-1" || got.Items[1].ID != "a-3" || strings.Contains(rec.Body.String(), "Inativa Dois") {
+		t.Fatalf("only active companies, in CRM order: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, listCompaniesRequest(tenantAllInactive, uuid.New()))
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"items":[]}` {
+		t.Fatalf("all-inactive tenant must get an empty list, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -1155,13 +1155,19 @@ func (h *CRMHandlers) ListCompanies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := make([]CompanyItem, len(companies))
-	for i, co := range companies {
-		items[i] = CompanyItem{
+	// Only companies the CRM reports as active are offered: an inactive company
+	// is not a valid target (CreateExternalTicket already rejects it), so listing
+	// it only lets the operator pick something that will be refused.
+	items := make([]CompanyItem, 0, len(companies))
+	for _, co := range companies {
+		if !co.Active {
+			continue
+		}
+		items = append(items, CompanyItem{
 			ID:   co.ExternalID,
 			Name: co.Name,
 			CNPJ: co.CNPJ,
-		}
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
