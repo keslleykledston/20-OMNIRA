@@ -13,31 +13,30 @@ Os alertas do ntfy só funcionam enquanto o cron e os wrappers rodam. Se o cron 
 
 Log do próprio dead-man: `/var/log/omnira/deadman.log` (estados `ok`, `stale`, `ping_failed`, `not_configured`). A URL contém um token e nunca é impressa nem logada. Testes: `scripts/test-deadman-ping.sh` (23 verificações).
 
-## Ativar
+## Ativar (recomendado: healthchecks.io, automatizado)
 
-Coloque a URL em `/etc/omnira/notify.env` (mesmo arquivo do ntfy, fora do Git):
+O destino recomendado é o **healthchecks.io**: fica fora do servidor, então avisa também se o servidor inteiro cair, e a criação do check e das URLs é automática.
+
+1. Crie uma conta gratuita em healthchecks.io e conecte onde quer ser avisado (e-mail e/ou celular) em *Integrations*.
+2. Em *Settings → API Access*, crie uma chave **read-write** (a read-only não serve).
+3. Grave a chave num arquivo, **fora do chat e do Git**:
+   ```bash
+   sudo install -m 600 -o suporte -g suporte /dev/null /etc/omnira/healthchecks.env
+   printf 'HC_API_KEY=%s\n' '<cole-a-chave>' > /etc/omnira/healthchecks.env
+   ```
+4. Rode `scripts/setup-deadman-healthchecks.sh`. Ele cria (ou reaproveita, pelo nome) o check "OMNIRA cron chain" com período de 5 min e tolerância de 10 min, anexa seus canais de alerta, grava `DEADMAN_URL` e `DEADMAN_FAIL_URL` em `/etc/omnira/notify.env` (0600, preservando o resto) e dispara o primeiro heartbeat. A chave e as URLs nunca são impressas. Testes: `scripts/test-setup-deadman-healthchecks.sh` (28 verificações, contra uma API simulada).
+
+O cron `*/5` do `deadman-ping.sh` já está instalado e passa a pingar assim que `DEADMAN_URL` existir.
+
+### Manual (sem a chave de API)
+
+Crie o check você mesmo (period 5 min, grace 10 min), copie a ping URL e coloque em `/etc/omnira/notify.env`:
 
 ```
-DEADMAN_URL=<URL de ping do vigia>
-# várias URLs separadas por espaço recebem todas o heartbeat (ex.: Kuma + healthchecks.io):
-# DEADMAN_URL="<url-kuma> <url-healthchecks>"
-# opcional: DEADMAN_FAIL_URL=<URL(s) chamada(s) na hora em que um job para>
+DEADMAN_URL="<ping-url>"
+DEADMAN_FAIL_URL="<ping-url>/fail"
 ```
 
-O cron já está instalado; sem `DEADMAN_URL` ele só registra `not_configured`.
+### Por que não o Uptime Kuma
 
-### Opção A: Uptime Kuma (já roda neste host, porta 3001)
-
-1. Add New Monitor, tipo **Push**.
-2. Heartbeat interval **600 s** (o cron pinga a cada 300 s) e um retry; anexe a notificação (por exemplo ntfy).
-3. Copie a **Push URL** e use como `DEADMAN_URL`. Para alerta imediato, use a mesma URL com `status=down` em `DEADMAN_FAIL_URL`.
-
-Limite: se o host inteiro cair, o Kuma cai junto e ninguém avisa.
-
-### Opção B: healthchecks.io (fora do host)
-
-Crie um check com period **5 min** e grace **10 min**, e use a ping URL como `DEADMAN_URL` (`/fail` como `DEADMAN_FAIL_URL`). Cobre queda do host inteiro. Sai do host apenas a requisição de ping, sem dados do OMNIRA.
-
-### Recomendação
-
-A e B juntas: o Kuma pega falha de cron/script com alerta rápido, e o healthchecks.io pega a queda do host. `DEADMAN_URL` aceita as duas URLs separadas por espaço: ambas recebem o heartbeat e uma URL fora do ar não impede a outra de ser chamada (exit 2 e `state=ping_failed target=N` no log).
+Há um Uptime Kuma neste host, mas ele **não serve bem como vigia**: `kuma.devops.k3gsolutions.com.br` cai no nginx do OMNIRA (existe uma rota do Traefik em arquivo, mas não há Traefik rodando), então o Kuma só responde dentro da rede Docker, num IP que muda a cada recriação. Além de ficar no mesmo servidor que se quer vigiar, não há URL estável para o ping. Se a rota pública do Kuma for consertada, ele pode ser somado: `DEADMAN_URL` aceita várias URLs separadas por espaço.
