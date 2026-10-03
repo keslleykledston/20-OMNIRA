@@ -15,14 +15,17 @@
 #   backup (hourly dump)   every 60 min  -> max 90 min
 #
 # Config (from the environment, or /etc/omnira/notify.env, same file as ntfy):
-#   DEADMAN_URL       URL to GET while healthy (contains a secret token: never
-#                     logged or printed). Unset => "not configured", exit 0.
-#   DEADMAN_FAIL_URL  optional URL to GET immediately when a job is stale
+#   DEADMAN_URL       one or more URLs (space-separated) to GET while healthy;
+#                     they contain secret tokens: never logged or printed.
+#                     Unset => "not configured", exit 0. Several URLs let an
+#                     on-host watcher (Kuma) and an off-host one (healthchecks.io)
+#                     both receive the heartbeat.
+#   DEADMAN_FAIL_URL  optional URL(s) to GET immediately when a job is stale
 #                     (e.g. healthchecks.io /fail, Kuma ?status=down).
 #   DEADMAN_LOG       default /var/log/omnira/deadman.log
 #
-# Exit: 0 healthy-and-pinged, or not configured; 1 a job is stale; 2 the ping
-# itself failed. Never mutates anything but DEADMAN_LOG.
+# Exit: 0 healthy-and-pinged, or not configured; 1 a job is stale; 2 any ping
+# failed (the others are still sent). Never mutates anything but DEADMAN_LOG.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -51,6 +54,15 @@ log() { echo "$(date -u -d "@$NOW" +%Y-%m-%dT%H:%M:%SZ) $*" >> "$DEADMAN_LOG" 2>
 hit() { # hit <url>: GET with short timeouts; never echoes the URL
   curl -fsS -o /dev/null --connect-timeout 5 --max-time 15 --retry 2 --retry-delay 2 "$1" 2>/dev/null
 }
+hit_all() { # hit_all "<url> <url> ..."; every target is tried; returns 1 if any failed
+  local urls u i=0 rc=0
+  read -ra urls <<<"$1"
+  for u in "${urls[@]}"; do
+    i=$((i + 1))
+    hit "$u" || { rc=1; log "state=ping_failed target=$i"; }
+  done
+  return $rc
+}
 
 if [ -z "${DEADMAN_URL:-}" ]; then
   log "state=not_configured"
@@ -73,16 +85,16 @@ if [ "${#stale[@]}" -gt 0 ]; then
   log "state=stale jobs=${stale[*]} ping=withheld"
   echo "deadman: stale: ${stale[*]} — ping withheld"
   if [ -n "${DEADMAN_FAIL_URL:-}" ]; then
-    hit "$DEADMAN_FAIL_URL" || log "state=fail_ping_failed"
+    hit_all "$DEADMAN_FAIL_URL" || log "state=fail_ping_failed"
   fi
   exit 1
 fi
 
-if hit "$DEADMAN_URL"; then
-  log "state=ok ping=sent jobs=${#JOBS[@]}"
-  echo "deadman: all ${#JOBS[@]} jobs alive — ping sent"
+read -ra _targets <<<"$DEADMAN_URL"
+if hit_all "$DEADMAN_URL"; then
+  log "state=ok ping=sent targets=${#_targets[@]} jobs=${#JOBS[@]}"
+  echo "deadman: all ${#JOBS[@]} jobs alive — ping sent to ${#_targets[@]} target(s)"
   exit 0
 fi
-log "state=ping_failed"
-echo "deadman: all jobs alive but the ping FAILED" >&2
+echo "deadman: all jobs alive but at least one ping FAILED" >&2
 exit 2

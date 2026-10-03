@@ -66,7 +66,7 @@ run
 check "healthy => exit 0" "$code" "0"
 check "healthy => one request" "$(reqs)" "1"
 check "request hit the ping path" "$(grep -c "^/ping/$TOKEN\$" "$CATCHER_LOG")" "1"
-check "healthy => logged state=ok" "$(grep -c 'state=ok ping=sent jobs=4' "$DEADMAN_LOG")" "1"
+check "healthy => logged state=ok" "$(grep -c 'state=ok ping=sent targets=1 jobs=4' "$DEADMAN_LOG")" "1"
 
 echo "=== Section 3: one stale job => ping withheld ==="
 fresh; age "${FILES[0]}" 20
@@ -107,6 +107,21 @@ fresh
 DEADMAN_URL="http://127.0.0.1:1/ping/$TOKEN" run
 check "unreachable watcher => exit 2" "$code" "2"
 check "logged as ping_failed" "$(grep -c 'state=ping_failed' "$DEADMAN_LOG")" "1"
+
+echo "=== Section 7b: several targets all receive the heartbeat; one dead target does not block the others ==="
+fresh; : > "$CATCHER_LOG"
+DEADMAN_URL="http://127.0.0.1:$CATCHER_PORT/a/$TOKEN http://127.0.0.1:$CATCHER_PORT/b/$TOKEN" run
+check "two targets => exit 0" "$code" "0"
+check "target A hit" "$(grep -c "^/a/$TOKEN\$" "$CATCHER_LOG")" "1"
+check "target B hit" "$(grep -c "^/b/$TOKEN\$" "$CATCHER_LOG")" "1"
+check "logged targets=2" "$(grep -c 'targets=2' "$DEADMAN_LOG")" "1"
+: > "$CATCHER_LOG"
+before_failed=$(grep -c 'state=ping_failed target=1' "$DEADMAN_LOG" || true)
+DEADMAN_URL="http://127.0.0.1:1/dead/$TOKEN http://127.0.0.1:$CATCHER_PORT/b/$TOKEN" run
+check "one dead target => exit 2" "$code" "2"
+check "the live target is still pinged" "$(grep -c "^/b/$TOKEN\$" "$CATCHER_LOG")" "1"
+check "the dead target is identified by index" "$(( $(grep -c 'state=ping_failed target=1' "$DEADMAN_LOG") - before_failed ))" "1"
+export DEADMAN_URL="$URL"
 
 echo "=== Section 8: the secret URL/token never reaches stdout or the log ==="
 check "token absent from the log" "$(grep -c "$TOKEN" "$DEADMAN_LOG" || true)" "0"

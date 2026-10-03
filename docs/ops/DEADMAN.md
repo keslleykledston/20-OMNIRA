@@ -19,7 +19,9 @@ Coloque a URL em `/etc/omnira/notify.env` (mesmo arquivo do ntfy, fora do Git):
 
 ```
 DEADMAN_URL=<URL de ping do vigia>
-# opcional: DEADMAN_FAIL_URL=<URL chamada na hora em que um job para>
+# várias URLs separadas por espaço recebem todas o heartbeat (ex.: Kuma + healthchecks.io):
+# DEADMAN_URL="<url-kuma> <url-healthchecks>"
+# opcional: DEADMAN_FAIL_URL=<URL(s) chamada(s) na hora em que um job para>
 ```
 
 O cron já está instalado; sem `DEADMAN_URL` ele só registra `not_configured`.
@@ -38,4 +40,4 @@ Crie um check com period **5 min** e grace **10 min**, e use a ping URL como `DE
 
 ### Recomendação
 
-A e B juntas: o Kuma pega falha de cron/script com alerta rápido, e o healthchecks.io pega a queda do host. Hoje o script suporta uma URL; para as duas, aponte `DEADMAN_URL` para uma e peça para o Kuma monitorar a outra, ou me peça para aceitar uma lista de URLs.
+A e B juntas: o Kuma pega falha de cron/script com alerta rápido, e o healthchecks.io pega a queda do host. `DEADMAN_URL` aceita as duas URLs separadas por espaço: ambas recebem o heartbeat e uma URL fora do ar não impede a outra de ser chamada (exit 2 e `state=ping_failed target=N` no log).
