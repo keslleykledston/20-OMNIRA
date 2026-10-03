@@ -21,6 +21,9 @@
 # primary, required artifact — the external copy is a secondary, optional
 # off-host-ish insurance copy only.
 #
+# Off-host: after the USB step, an opt-in encrypted copy goes to Google Drive
+# through rclone (scripts/lib/backup-cloud.sh). Same rule: never fails the backup.
+#
 # Usage:
 #   scripts/backup-omnira-db.sh
 #   PG_CONTAINER=omnira-postgres PG_OWNER=omnira DB_NAME=omnira_dev \
@@ -130,5 +133,10 @@ if mountpoint -q "$EXTERNAL_MOUNT" 2>/dev/null; then
 else
   echo "== external copy SKIPPED: $EXTERNAL_MOUNT is not mounted — local backup is still valid"
 fi
+
+# Best-effort encrypted copy to Google Drive (opt-in; see scripts/setup-backup-cloud.sh).
+# shellcheck source=lib/backup-cloud.sh
+. scripts/lib/backup-cloud.sh
+backup_cloud_sync "$BACKUP_DIR" "$DB_NAME" || true
 
 echo "== done"
