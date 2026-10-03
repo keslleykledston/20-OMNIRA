@@ -98,10 +98,10 @@ docker-compose restart api worker
 
 Admin console → Realms → omnira → Users → Create user
 
-Ou use o usuário demo já provisionado:
+Ou use o usuário demo já provisionado (`demo@omnira.local`). A senha foi redefinida em 2026-10-03 e não é registrada neste repositório;
+para trocá-la, use o console admin do Keycloak ou (depois de `kcadm.sh config credentials` com o admin do realm master):
 ```
-Username: demo@omnira.local
-Password: demo123
+docker exec omnira-keycloak /opt/keycloak/bin/kcadm.sh set-password -r omnira --username demo@omnira.local --new-password '<nova-senha>'
 ```
 
 **Mas:** Usuário no Keycloak NÃO aparecerá automaticamente em OMNIRA. Você precisa:
@@ -121,7 +121,7 @@ http://localhost:3000
 
 # Clicar "Login"
 # Ser redirecionado para Keycloak
-# Authenticate com demo@omnira.local / demo123
+# Authenticate com demo@omnira.local (senha fora do repositório)
 # Retornar para OMNIRA
 ```
 
@@ -164,7 +164,7 @@ Cross-database queries não são permitidas.
 - Realm name: omnira
 - Token lifespan: 300s (5 min)
 - Refresh token lifespan: 86400s (24h)
-- Demo user: demo@omnira.local / demo123
+- Demo user: demo@omnira.local (senha fora do repositório; ver acima)
 
 **Client omnira-web:**
 - Confidential flow
