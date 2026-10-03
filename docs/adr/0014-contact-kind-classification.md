@@ -50,7 +50,8 @@ Proposta, em fatias pequenas, nesta ordem:
 4. **Grupos ficam fora desta ADR.** O webhook continua descartando `@g.us`.
    Suportar grupos exige decisão própria: entidade de grupo separada de
    Contact, remetente individual por mensagem e política de roteamento
-   específica. Será outra ADR, depois do Slice 1 provar a triagem.
+   específica. Tratado no ADR-0015 (leitura de grupos em área própria,
+   sem reutilizar `contacts`).
 5. **Sem classificação automática no início.** Regras automáticas (por CRM,
    por padrão de conteúdo, por reputação do número) só depois de: resposta do
    K3G sobre unicidade, e medição de falso positivo sobre dados reais. Quando
@@ -96,3 +97,4 @@ Proposta, em fatias pequenas, nesta ordem:
 - Spam deve ser purgado após N dias ou mantido indefinidamente (LGPD)?
 - Resposta do K3G sobre unicidade de `GET /api/crm/contacts?phone=&companyId=`.
 - Grupos de clientes: um grupo é um Contact especial ou uma entidade nova?
+  Respondida no ADR-0015 (proposta): entidade nova, fora de `contacts`.
