@@ -206,7 +206,7 @@ func renderInvitationEmail(from, replyTo, to *mail.Address, msg InvitationMessag
 	}
 	data := map[string]string{
 		"Inviter": inviter, "Tenant": tenant, "URL": msg.AcceptURL,
-		"Expires": msg.ExpiresAt.UTC().Format("02/01/2006 15:04 (UTC)"),
+		"Expires": msg.ExpiresAt.In(operationsLocation()).Format("02/01/2006 15:04") + " (horário de Manaus)",
 	}
 	var text, html bytes.Buffer
 	if err := invitationTextTemplate.Execute(&text, data); err != nil {
@@ -258,4 +258,14 @@ func renderInvitationEmail(from, replyTo, to *mail.Address, msg InvitationMessag
 		return nil, err
 	}
 	return append([]byte(head.String()+"\r\n"), buf.Bytes()...), nil
+}
+
+// operationsLocation is the time zone people read times in: Manaus (UTC-4, no daylight saving since
+// 2019). Instants are always stored and transported in UTC; only text written for a person uses this.
+// A fixed zone is the fallback so the answer is right even where the tz database is missing.
+func operationsLocation() *time.Location {
+	if loc, err := time.LoadLocation("America/Manaus"); err == nil {
+		return loc
+	}
+	return time.FixedZone("-04", -4*60*60)
 }

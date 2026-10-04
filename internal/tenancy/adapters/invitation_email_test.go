@@ -139,7 +139,7 @@ func TestSMTPSenderDeliversAWellFormedMultipartMessage(t *testing.T) {
 		text := string(body)
 		kinds = append(kinds, part.Header.Get("Content-Type"))
 		if !strings.Contains(text, "https://app.test/invite/TOKEN_abc-123") || !strings.Contains(text, "Acme Telecom") ||
-			!strings.Contains(text, "admin@acme.com") || !strings.Contains(text, "25/09/2026 12:00 (UTC)") {
+			!strings.Contains(text, "admin@acme.com") || !strings.Contains(text, "25/09/2026 08:00 (horário de Manaus)") {
 			t.Errorf("part %s is missing invitation data:\n%s", part.Header.Get("Content-Type"), text)
 		}
 	}
@@ -211,5 +211,18 @@ func TestSMTPSendErrorNeverContainsTheLink(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "TOKEN_abc") {
 		t.Fatal("errors must not carry the invitation link/token")
+	}
+}
+
+// Times written for people are Manaus time (UTC-4, no DST). Across midnight the DATE changes too, which a
+// plain "UTC" label would have hidden.
+func TestOperationsLocationIsManausAndShiftsTheDateAcrossMidnight(t *testing.T) {
+	instant := time.Date(2026, 9, 26, 2, 0, 0, 0, time.UTC) // 02:00Z on the 26th
+	got := instant.In(operationsLocation()).Format("02/01/2006 15:04")
+	if got != "25/09/2026 22:00" {
+		t.Fatalf("Manaus rendering = %q, want 25/09/2026 22:00", got)
+	}
+	if _, off := instant.In(operationsLocation()).Zone(); off != -4*60*60 {
+		t.Fatalf("offset = %d, want -4h", off)
 	}
 }
