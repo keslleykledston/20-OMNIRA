@@ -18,8 +18,15 @@ import (
 
 // TopicService is the single entry point for creating and organising topics.
 type TopicService struct {
-	repo ports.TopicRepository
-	now  func() time.Time
+	repo    ports.TopicRepository
+	routing ports.RoutingRepository // optional: marks an automated decision overridden when a person changes the link
+	now     func() time.Time
+}
+
+// WithRouting lets human edits of message links supersede the automated decision that placed the message.
+func (s *TopicService) WithRouting(r ports.RoutingRepository) *TopicService {
+	s.routing = r
+	return s
 }
 
 func NewTopicService(repo ports.TopicRepository) *TopicService {
@@ -188,7 +195,23 @@ func (s *TopicService) LinkMessage(ctx context.Context, topicID, messageID uuid.
 	if err != nil {
 		return err
 	}
-	return s.repo.LinkMessage(ctx, link)
+	if err := s.repo.LinkMessage(ctx, link); err != nil {
+		return err
+	}
+	s.markOverridden(ctx, tc, messageID)
+	return nil
+}
+
+func (s *TopicService) markOverridden(ctx context.Context, tc *tenancydomain.TenantContext, messageID uuid.UUID) {
+	if s.routing == nil {
+		return
+	}
+	var by *uuid.UUID
+	if tc.ActorID != uuid.Nil {
+		a := tc.ActorID
+		by = &a
+	}
+	_ = s.routing.MarkDecisionOverridden(ctx, tc.TenantID, ports.MessageRef{Kind: ports.KindConversation, ID: messageID}, by)
 }
 
 func (s *TopicService) UnlinkMessage(ctx context.Context, topicID, messageID uuid.UUID) error {
@@ -206,6 +229,7 @@ func (s *TopicService) UnlinkMessage(ctx context.Context, topicID, messageID uui
 	if !removed {
 		return domain.ErrReferenceNotFound
 	}
+	s.markOverridden(ctx, tc, messageID)
 	return nil
 }
 

@@ -175,3 +175,38 @@ func (e *env) attempt(tenant, user uuid.UUID, fn func(ctx context.Context)) {
 		return nil
 	})
 }
+
+// --- group fixtures (ADR-0015 keeps group messages apart from conversations) ---
+
+type groupFixture struct{ conn, group uuid.UUID }
+
+func (e *env) group(tenant uuid.UUID) groupFixture {
+	g := groupFixture{conn: uuid.New(), group: uuid.New()}
+	e.exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities)
+	        VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active','{}')`, g.conn, tenant, "wa-"+g.conn.String())
+	e.t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = e.seed.Exec(bg, `DELETE FROM conversation_topic_focus WHERE tenant_id=$1`, tenant)
+		_, _ = e.seed.Exec(bg, `DELETE FROM wa_groups WHERE tenant_id=$1`, tenant)
+		_, _ = e.seed.Exec(bg, `DELETE FROM channel_participants WHERE tenant_id=$1`, tenant)
+		_, _ = e.seed.Exec(bg, `DELETE FROM channel_connections WHERE tenant_id=$1`, tenant)
+	})
+	e.exec(`INSERT INTO wa_groups(id,tenant_id,channel_connection_id,provider_group_id,name,enabled) VALUES($1,$2,$3,'120363000000000001@g.us','Grupo',true)`, g.group, tenant, g.conn)
+	return g
+}
+
+func (e *env) participant(tenant uuid.UUID, g groupFixture, external, name string) uuid.UUID {
+	id := uuid.New()
+	e.exec(`INSERT INTO channel_participants(id,tenant_id,channel_connection_id,provider,external_participant_id,display_name) VALUES($1,$2,$3,'waha',$4,$5)`, id, tenant, g.conn, external, name)
+	return id
+}
+
+var groupSeq int
+
+func (e *env) groupMessage(tenant uuid.UUID, g groupFixture, author uuid.UUID, body string, replyTo *uuid.UUID) uuid.UUID {
+	groupSeq++
+	id := uuid.New()
+	e.exec(`INSERT INTO wa_group_messages(id,tenant_id,group_id,provider_message_id,author_jid,author_name,message_type,body,sent_at,sender_channel_participant_id,reply_to_group_message_id)
+	        VALUES($1,$2,$3,$4,'a@lid','x','text',$5,now(),$6,$7)`, id, tenant, g.group, fmt.Sprintf("gm-%d-%s", groupSeq, id), body, author, replyTo)
+	return id
+}

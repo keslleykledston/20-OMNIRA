@@ -583,6 +583,8 @@ func (s *Server) RegisterIntelligenceHandlers(dbPool *pgxpool.Pool, h *intellige
 	s.mux.Handle("GET "+t+"/topics/{topic_id}/tickets", wrap(h.ListTopicTickets))
 	s.mux.Handle("POST "+t+"/topics/{topic_id}/tickets/link", wrap(h.LinkTicket))
 	s.mux.Handle("GET "+t+"/contacts/{contact_id}/topics", wrap(h.ListContactTopics))
+	s.mux.Handle("GET "+t+"/inbox/conversations/{conversation_id}/ambiguities", wrap(h.ListConversationAmbiguities))
+	s.mux.Handle("POST "+t+"/ambiguities/{ambiguity_id}/resolve", wrap(h.ResolveAmbiguity))
 }
 
 // RegisterAIIntegrationHandlers exposes the per-tenant external-AI opt-in and key (ADR-0016). Everything is

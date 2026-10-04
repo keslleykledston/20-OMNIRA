@@ -31,6 +31,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/httpserver"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
+	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
@@ -208,7 +209,9 @@ func main() {
 	intelligenceFlags := intelligenceapp.FlagsFromEnv(nil)
 	if intelligenceFlags.TopicThreadsEnabled {
 		topicRepo := intelligenceadapters.NewPostgresTopicRepository(dbPool)
-		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo), topicRepo))
+		routingRepo := intelligenceadapters.NewPostgresRoutingRepository(dbPool)
+		routingSvc := intelligenceapp.NewRoutingService(routingRepo, topicRepo, intelligenceFlags, intelligencedomain.DefaultRoutingConfig(), nil)
+		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo), topicRepo).WithRouting(routingSvc, routingRepo))
 	}
 	if erpCipherErr == nil && erpCipher != nil {
 		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher))

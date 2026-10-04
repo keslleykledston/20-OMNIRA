@@ -952,6 +952,66 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
+    get:
+      operationId: listConversationAmbiguities
+      tags: [Topics]
+      summary: Messages of a conversation the router could not place with enough confidence
+      description: Requires `topic.read`. Each item lists the candidate topics with their score and evidence; a person resolves it.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200':
+          description: Open ambiguities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AmbiguityList' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/ambiguities/{ambiguity_id}/resolve:
+    post:
+      operationId: resolveAmbiguity
+      tags: [Topics]
+      summary: Decide which topic an ambiguous message belongs to
+      description: |
+        Give an existing `topic_id` OR a `new_topic_title` (not both). The message joins the topic as an agent decision, which
+        no later automated decision can overwrite. Requires `topic.manage` and being the conversation's attendant (or
+        `conversation.manage`); for a group message, `group.manage`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - name: ambiguity_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                topic_id: { type: string, format: uuid }
+                new_topic_title: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200':
+          description: The topic the message now belongs to
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [topic_id]
+                properties:
+                  topic_id: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: The ambiguity was already resolved }
+        '422': { description: 'Neither or both of topic_id and new_topic_title, or an invalid title' }
   /tenants/{tenant_id}/messages/{message_id}/media:
     get:
       operationId: getMessageMedia
@@ -1956,6 +2016,30 @@ components:
         ok: { type: boolean }
         message: { type: string }
         model_available: { type: boolean }
+    AmbiguityList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Ambiguity' }
+    Ambiguity:
+      type: object
+      required: [id, message_id, kind, candidates, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        message_id: { type: string, format: uuid }
+        kind: { type: string, enum: [conversation, group] }
+        candidates:
+          type: array
+          items:
+            type: object
+            properties:
+              topic_id: { type: string, format: uuid }
+              title: { type: string }
+              score: { type: number }
+              signals: { type: array, items: { type: object } }
+        created_at: { type: string, format: date-time }
     Topic:
       type: object
       required: [id, title, status, privacy_policy, source, legacy_unsegmented, last_activity_at, created_at]

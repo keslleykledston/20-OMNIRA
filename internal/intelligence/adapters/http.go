@@ -30,9 +30,17 @@ const (
 // the conversation (or conversation.manage), the same rule that governs sending messages. The tenant is always the
 // session's; an id from another tenant answers 404.
 type TopicHandler struct {
-	pool *pgxpool.Pool
-	svc  *application.TopicService
-	repo ports.TopicRepository
+	pool        *pgxpool.Pool
+	svc         *application.TopicService
+	repo        ports.TopicRepository
+	routing     *application.RoutingService
+	routingRepo ports.RoutingRepository
+}
+
+// WithRouting enables the ambiguity endpoints (a person resolves what the router could not place).
+func (h *TopicHandler) WithRouting(svc *application.RoutingService, repo ports.RoutingRepository) *TopicHandler {
+	h.routing, h.routingRepo = svc, repo
+	return h
 }
 
 func NewTopicHandler(pool *pgxpool.Pool, svc *application.TopicService, repo ports.TopicRepository) *TopicHandler {
@@ -560,4 +568,97 @@ func (h *TopicHandler) ListContactTopics(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": toListDTO(items)})
+}
+
+type ambiguityDTO struct {
+	ID         uuid.UUID       `json:"id"`
+	MessageID  uuid.UUID       `json:"message_id"`
+	Kind       string          `json:"kind"`
+	Candidates json.RawMessage `json:"candidates"`
+	CreatedAt  string          `json:"created_at"`
+}
+
+func toAmbiguityDTOs(items []ports.Ambiguity) []ambiguityDTO {
+	out := make([]ambiguityDTO, 0, len(items))
+	for _, a := range items {
+		out = append(out, ambiguityDTO{ID: a.ID, MessageID: a.Ref.ID, Kind: string(a.Ref.Kind), Candidates: a.Candidates, CreatedAt: ts(a.CreatedAt)})
+	}
+	return out
+}
+
+// ListConversationAmbiguities: GET /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities
+func (h *TopicHandler) ListConversationAmbiguities(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicRead)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	convID, ok := pathUUID(w, r, "conversation_id")
+	if !ok {
+		return
+	}
+	info, err := h.repo.ConversationInfo(r.Context(), tc.TenantID, convID)
+	if err != nil || !info.Exists {
+		fail(w, firstErr(err, domain.ErrReferenceNotFound))
+		return
+	}
+	items, err := h.routingRepo.ListOpenAmbiguities(r.Context(), tc.TenantID, ports.KindConversation, convID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": toAmbiguityDTOs(items)})
+}
+
+type resolveAmbiguityRequest struct {
+	TopicID       *string `json:"topic_id"`
+	NewTopicTitle string  `json:"new_topic_title"`
+}
+
+// ResolveAmbiguity: POST /tenants/{tenant_id}/ambiguities/{ambiguity_id}/resolve. The attendant of the conversation (or
+// conversation.manage) decides; for a group message the decision needs group.manage.
+func (h *TopicHandler) ResolveAmbiguity(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	id, ok := pathUUID(w, r, "ambiguity_id")
+	if !ok {
+		return
+	}
+	var req resolveAmbiguityRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	var topicID *uuid.UUID
+	if req.TopicID != nil {
+		t, err := uuid.Parse(*req.TopicID)
+		if err != nil || t == uuid.Nil {
+			http.Error(w, "invalid topic_id", http.StatusBadRequest)
+			return
+		}
+		topicID = &t
+	}
+	a, err := h.routingRepo.GetAmbiguity(r.Context(), tc.TenantID, id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if a.Ref.Kind == ports.KindGroup {
+		ok, err := h.has(r.Context(), tc, "group.manage")
+		if err != nil || !ok {
+			fail(w, firstErr(err, errForbidden))
+			return
+		}
+	} else if ok, err := h.canOperateConversation(r.Context(), tc, a.AssignedTo); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return
+	}
+	chosen, err := h.routing.ResolveAmbiguity(r.Context(), id, topicID, req.NewTopicTitle, domain.DecisionAgent)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"topic_id": chosen})
 }

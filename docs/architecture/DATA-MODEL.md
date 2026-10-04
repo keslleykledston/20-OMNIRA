@@ -74,3 +74,17 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
   **dentro da mesma conversa**); o mesmo em `wa_group_messages` (resolve dentro do mesmo grupo). "Citada" e "resposta" são a mesma relação (WAHA `replyTo`, Meta
   `context`), então há um só conjunto de colunas. WAHA informa o id curto (3º segmento do id serializado); a Meta, o `wamid` completo: ambos casam.
 - Não observado nos payloads reais, portanto **não** modelado: menções.
+
+### Entidades, roteamento e ambiguidade (ADR-0017, migration 000065)
+- `topic_entities`: assuntos nomeados (pedido, nota, contrato, chamado, equipamento...) com chave canônica; só tipos **genéricos**.
+- Grupos do WhatsApp ficam em `wa_group_messages` (ADR-0015), então o lado de grupo tem `group_message_topic_links` e `topic_group_links`; uma mensagem roteável
+  é de conversa **ou** de grupo (`CHECK` de um dos dois).
+- `routing_decisions`: toda decisão com a evidência (`signals`), aplicada (`applied = true`) ou só proposta (flag desligada / modo sombra). Índices únicos
+  garantem **uma** decisão ativa por mensagem (reentrega nunca duplica) e uma proposta por mensagem e fonte.
+- `ambiguity_cases`: mensagem que o roteador não pôde colocar com confiança; uma pessoa (ou o cliente) resolve. `conversation_topic_focus`: **dica**, nunca autoridade.
+- Roteador (`internal/intelligence/domain/routing.go`), sem LLM, evidência por ordem de autoridade: token de handoff, escolha explícita, resposta direta/citação, entidade
+  exata (chamado, pedido, nota...), mesmo autor continuando (15 min), foco, tópico mais recente, palavras. Limiares e pesos em `RoutingConfig` (auto >= 0,85;
+  ambíguo 0,60-0,85; abaixo disso, tópico novo se a mensagem nomeia um assunto, senão sem tópico). Uma entidade nova **enfraquece** as dicas de contexto
+  (`NewSubjectPenalty`). Duas entidades de tópicos diferentes na mesma mensagem = multi-tópico (dois vínculos, mensagem não duplicada).
+- Com `topic_auto_routing_enabled` desligada o roteador só **registra** a proposta; ligada, aplica. Uma mensagem já colocada (por pessoa, handoff ou decisão anterior)
+  nunca é decidida de novo; uma edição humana marca a decisão automática como substituída (`overridden_at`).
