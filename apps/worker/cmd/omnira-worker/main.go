@@ -342,7 +342,14 @@ func main() {
 		session := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
 			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
 		}
-		runner := intelligenceapp.NewJobRunner(jobStore, intelligenceapp.RoutingPipeline{Routing: routingSvc}, session, intelligenceapp.DefaultJobRunnerConfig(), intelligenceCounters)
+		var pipeline intelligenceapp.Pipeline = intelligenceapp.RoutingPipeline{Routing: routingSvc}
+		if intelligenceFlags.TopicSummariesEnabled {
+			// best-effort extra step: a summary problem never fails or delays message processing
+			summarySvc := intelligenceapp.NewSummaryService(topicRepo, intelligenceadapters.NewPostgresSummaryRepository(dbPool), intelligenceadapters.NewPostgresContextRepository(dbPool),
+				intelligenceadapters.NewPostgresRoutingRepository(dbPool), intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags)
+			pipeline = intelligenceapp.SummaryPipeline{Next: pipeline, Summaries: summarySvc}
+		}
+		runner := intelligenceapp.NewJobRunner(jobStore, pipeline, session, intelligenceapp.DefaultJobRunnerConfig(), intelligenceCounters)
 		go runner.Run(workerCtx, 2*time.Second)
 		handler, err := intelligenceworker.NewHandler(jobStore)
 		if err != nil {

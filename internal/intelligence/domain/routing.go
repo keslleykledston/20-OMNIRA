@@ -434,3 +434,23 @@ func lexicalScore(cfg RoutingConfig, words map[string]bool, topicText string) fl
 	}
 	return minf(cfg.MaxLexical, 0.30+0.30*float64(shared)/float64(len(tw)))
 }
+
+// Keywords returns up to n distinctive words of a text (accent-folded, lower case), longest first. Used to look for
+// older messages of the same topic that mention the same things.
+func Keywords(text string, n int) []string {
+	set := tokens(text)
+	words := make([]string, 0, len(set))
+	for w := range set {
+		words = append(words, w)
+	}
+	sort.Slice(words, func(i, j int) bool {
+		if len(words[i]) != len(words[j]) {
+			return len(words[i]) > len(words[j])
+		}
+		return words[i] < words[j]
+	})
+	if n > 0 && len(words) > n {
+		words = words[:n]
+	}
+	return words
+}

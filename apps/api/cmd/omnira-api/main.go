@@ -211,7 +211,11 @@ func main() {
 		topicRepo := intelligenceadapters.NewPostgresTopicRepository(dbPool)
 		routingRepo := intelligenceadapters.NewPostgresRoutingRepository(dbPool)
 		routingSvc := intelligenceapp.NewRoutingService(routingRepo, topicRepo, intelligenceFlags, intelligencedomain.DefaultRoutingConfig(), nil)
-		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo), topicRepo).WithRouting(routingSvc, routingRepo))
+		summaryRepo := intelligenceadapters.NewPostgresSummaryRepository(dbPool)
+		summarySvc := intelligenceapp.NewSummaryService(topicRepo, summaryRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), routingRepo,
+			intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags)
+		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo), topicRepo).
+			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc))
 	}
 	if erpCipherErr == nil && erpCipher != nil {
 		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher))

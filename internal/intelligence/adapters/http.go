@@ -35,6 +35,13 @@ type TopicHandler struct {
 	repo        ports.TopicRepository
 	routing     *application.RoutingService
 	routingRepo ports.RoutingRepository
+	summaries   *application.SummaryService
+}
+
+// WithSummaries enables the topic summary endpoints.
+func (h *TopicHandler) WithSummaries(s *application.SummaryService) *TopicHandler {
+	h.summaries = s
+	return h
 }
 
 // WithRouting enables the ambiguity endpoints (a person resolves what the router could not place).
@@ -100,6 +107,10 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	case errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrPrimaryTicketTaken):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, ports.ErrSummarizerUnavailable):
+		http.Error(w, "summaries are unavailable right now", http.StatusServiceUnavailable)
+	case errors.Is(err, application.ErrNothingToSummarize):
+		http.Error(w, "this topic has no messages to summarize yet", http.StatusUnprocessableEntity)
 	default:
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
@@ -661,4 +672,139 @@ func (h *TopicHandler) ResolveAmbiguity(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"topic_id": chosen})
+}
+
+type summaryDTO struct {
+	ID            uuid.UUID  `json:"id"`
+	Version       int        `json:"version"`
+	Text          string     `json:"summary_text"`
+	Status        string     `json:"status"`
+	Model         *string    `json:"model_name,omitempty"`
+	Provider      *string    `json:"model_provider,omitempty"`
+	PromptVersion *string    `json:"prompt_version,omitempty"`
+	AuthoredBy    string     `json:"authored_by"`
+	CreatedAt     string     `json:"created_at"`
+	ConfirmedAt   *string    `json:"confirmed_at,omitempty"`
+	SourceSummary *uuid.UUID `json:"source_summary_id,omitempty"`
+}
+
+func toSummaryDTO(s domain.TopicSummary) summaryDTO {
+	author := "machine"
+	if s.Status == domain.SummaryCorrected {
+		author = "agent"
+	}
+	return summaryDTO{ID: s.ID, Version: s.Version, Text: s.SummaryText, Status: string(s.Status), Model: s.ModelName, Provider: s.ModelProvider,
+		PromptVersion: s.PromptVersion, AuthoredBy: author, CreatedAt: ts(s.CreatedAt), ConfirmedAt: tsp(s.ConfirmedAt), SourceSummary: s.SourceSummaryID}
+}
+
+func (h *TopicHandler) summariesOrFail(w http.ResponseWriter) bool {
+	if h.summaries == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return false
+	}
+	return true
+}
+
+// ListSummaries: GET /tenants/{tenant_id}/topics/{topic_id}/summaries (newest version first; history is never rewritten)
+func (h *TopicHandler) ListSummaries(w http.ResponseWriter, r *http.Request) {
+	if _, err := h.authorize(r, permTopicRead); err != nil {
+		fail(w, err)
+		return
+	}
+	if !h.summariesOrFail(w) {
+		return
+	}
+	id, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return
+	}
+	list, err := h.summaries.List(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := make([]summaryDTO, 0, len(list))
+	for _, s := range list {
+		out = append(out, toSummaryDTO(s))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+func (h *TopicHandler) summaryGate(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return uuid.Nil, false
+	}
+	if !h.summariesOrFail(w) {
+		return uuid.Nil, false
+	}
+	id, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return uuid.Nil, false
+	}
+	if _, err := h.svc.GetTopic(r.Context(), id); err != nil {
+		fail(w, err)
+		return uuid.Nil, false
+	}
+	if ok, err := h.canOperateTopic(r.Context(), tc, id); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// ConfirmSummary: POST /tenants/{tenant_id}/topics/{topic_id}/summary/confirm
+func (h *TopicHandler) ConfirmSummary(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.summaryGate(w, r)
+	if !ok {
+		return
+	}
+	s, err := h.summaries.Confirm(r.Context(), id, domain.DecisionAgent)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toSummaryDTO(*s))
+}
+
+type correctSummaryRequest struct {
+	SummaryText string `json:"summary_text"`
+}
+
+// CorrectSummary: POST /tenants/{tenant_id}/topics/{topic_id}/summary/correct (creates a NEW version)
+func (h *TopicHandler) CorrectSummary(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.summaryGate(w, r)
+	if !ok {
+		return
+	}
+	var req correctSummaryRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	s, err := h.summaries.Correct(r.Context(), id, req.SummaryText)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toSummaryDTO(*s))
+}
+
+// GenerateSummary: POST /tenants/{tenant_id}/topics/{topic_id}/summary/generate (machine summary of the current state;
+// 200 with the existing one when nothing new happened)
+func (h *TopicHandler) GenerateSummary(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.summaryGate(w, r)
+	if !ok {
+		return
+	}
+	s, created, err := h.summaries.Generate(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, toSummaryDTO(*s))
 }

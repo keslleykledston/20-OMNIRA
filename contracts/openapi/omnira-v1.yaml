@@ -952,6 +952,89 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
+  /tenants/{tenant_id}/topics/{topic_id}/summaries:
+    get:
+      operationId: listTopicSummaries
+      tags: [Topics]
+      summary: Versioned summaries of a topic
+      description: 'Newest version first. History is never rewritten; superseded versions stay readable.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Summary
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/TopicSummary' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/summary/generate:
+    post:
+      operationId: generateTopicSummary
+      tags: [Topics]
+      summary: Generate a machine summary of the topic now
+      description: 'Returns 201 with a new version, or 200 with the existing one when nothing new happened. 503 when no summarizer is configured or the provider failed; 422 when the topic has no messages.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicSummary' }
+        '201':
+          description: Summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicSummary' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/summary/confirm:
+    post:
+      operationId: confirmTopicSummary
+      tags: [Topics]
+      summary: Confirm the current summary as an agent
+      description: 'Never lowers authority; a corrected or superseded version cannot be confirmed (409).'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicSummary' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/summary/correct:
+    post:
+      operationId: correctTopicSummary
+      tags: [Topics]
+      summary: Replace the summary with the agent text (new version)
+      description: 'Creates a NEW corrected version; the previous one is superseded but kept. Later machine summaries never replace it.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [summary_text], additionalProperties: false, properties: { summary_text: { type: string, maxLength: 4000 } } }
+      responses:
+        '201':
+          description: Summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicSummary' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
     get:
       operationId: listConversationAmbiguities
@@ -1693,6 +1776,21 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    TopicSummary:
+      type: object
+      required: [id, version, summary_text, status, authored_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer }
+        summary_text: { type: string }
+        status: { type: string, enum: [ai_inferred, agent_confirmed, customer_confirmed, corrected, superseded] }
+        authored_by: { type: string, enum: [machine, agent] }
+        model_provider: { type: string }
+        model_name: { type: string }
+        prompt_version: { type: string }
+        source_summary_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        confirmed_at: { type: string, format: date-time }
     RoleList:
       type: object
       required: [items]

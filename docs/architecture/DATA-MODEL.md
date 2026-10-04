@@ -89,6 +89,12 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - Com `topic_auto_routing_enabled` desligada o roteador só **registra** a proposta; ligada, aplica. Uma mensagem já colocada (por pessoa, handoff ou decisão anterior)
   nunca é decidida de novo; uma edição humana marca a decisão automática como substituída (`overridden_at`).
 
+### Contexto e resumos de tópico (ADR-0017, onda 5; sem migration nova)
+- `topic_summaries` é **append-only por versão**: gerar, corrigir ou confirmar nunca reescreve texto. Estados: `ai_inferred` → `agent_confirmed`/`customer_confirmed`; `corrected` (texto do atendente, nova versão); `superseded` (substituído, continua legível). Um resumo da IA nunca toca um `corrected` nem rebaixa uma confirmação do cliente.
+- O contexto de IA (`TopicContext`) só lê o que está **ligado ao tópico** (`message_topic_links`, `group_message_topic_links`). Participantes viram aliases (`Participante N`, `CLIENTE`, `ATENDENTE`); nome real, telefone e id do provedor nunca vão ao modelo. Zonas: política fixa (Instructions) / dados confiáveis do sistema / conteúdo não confiável (cada linha JSON-quoted, cercada por nonce aleatório por requisição).
+- Geração é idempotente e serializada por tópico (advisory lock); passo opcional do worker (`OMNIRA_TOPIC_SUMMARIES_ENABLED`, desligado) — falha do provedor nunca falha o job.
+- API: `GET /topics/{id}/summaries`, `POST /topics/{id}/summary/{generate,confirm,correct}` (leitura `topic.read`; escrita `topic.manage` + atendente/`conversation.manage`).
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.
