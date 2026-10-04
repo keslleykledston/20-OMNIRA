@@ -45,6 +45,8 @@ type whisperVerbose struct {
 	Language string  `json:"language"`
 	Duration float64 `json:"duration"`
 	Text     string  `json:"text"`
+	// LanguageProbabilities is keyed by ISO code ({"pt": 0.99}); "language" itself comes as a full name.
+	LanguageProbabilities map[string]float64 `json:"language_probabilities"`
 }
 
 // truncatedAfterSeconds: the server's ffmpeg wrapper stops reading at 10 minutes (ADR-0016 limit).
@@ -90,11 +92,31 @@ func (w *Whisper) Transcribe(ctx context.Context, audio []byte, _ string) (ports
 	if text == "" || domain.IsStockHallucination(text) {
 		return ports.Analysis{}, ports.ErrNoSpeech
 	}
-	a := ports.Analysis{Text: text, Language: cleanLang(v.Language), Model: w.model, Suspicious: domain.LooksLikeInstruction(text)}
+	a := ports.Analysis{Text: text, Language: isoLanguage(v), Model: w.model, Suspicious: domain.LooksLikeInstruction(text)}
 	if v.Duration >= truncatedAfterSeconds {
 		a.Reason = "truncated_at_10min"
 	}
 	return a, nil
+}
+
+// isoLanguage prefers the ISO code with the highest probability and falls back to the reported value when it
+// already looks like a code. Anything else is dropped rather than stored.
+func isoLanguage(v whisperVerbose) string {
+	best, bestP := "", -1.0
+	for code, p := range v.LanguageProbabilities {
+		if p > bestP && len(code) >= 2 && len(code) <= 3 {
+			if c := cleanLang(code); c != "" {
+				best, bestP = c, p
+			}
+		}
+	}
+	if best != "" {
+		return best
+	}
+	if len(v.Language) <= 3 {
+		return cleanLang(v.Language)
+	}
+	return ""
 }
 
 func cleanLang(l string) string {

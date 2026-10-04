@@ -109,3 +109,18 @@ func TestWhisperRejectsUnsafeBaseURLsAndLanguageJunk(t *testing.T) {
 		t.Fatalf("language junk must be dropped: %+v %v", a, err)
 	}
 }
+
+func TestWhisperUsesTheIsoCodeWhenTheServerReportsTheFullLanguageName(t *testing.T) {
+	srv := whisperServer(t, 200, `{"language":"portuguese","duration":20,"text":"oi tudo bem","language_probabilities":{"pt":0.998,"es":0.001}}`, nil)
+	w, _ := NewWhisper(srv.URL, "m")
+	a, err := w.Transcribe(context.Background(), []byte("x"), "")
+	if err != nil || a.Language != "pt" {
+		t.Fatalf("language = %q (%v), want pt", a.Language, err)
+	}
+	// A full name with no probabilities is dropped, not stored.
+	srv2 := whisperServer(t, 200, `{"language":"portuguese","duration":20,"text":"oi"}`, nil)
+	w2, _ := NewWhisper(srv2.URL, "m")
+	if a, _ := w2.Transcribe(context.Background(), []byte("x"), ""); a.Language != "" {
+		t.Fatalf("language = %q, want empty", a.Language)
+	}
+}
