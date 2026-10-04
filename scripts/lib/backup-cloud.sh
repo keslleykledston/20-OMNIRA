@@ -26,12 +26,35 @@
 : "${BACKUP_CLOUD_TIMEOUT_SECONDS:=900}"
 : "${BACKUP_CLOUD_VERIFY_MAX_AGE:=3h}"
 
+# Google Drive answers 403 "Quota exceeded ... Queries per minute" when the OAuth client is the one rclone ships
+# (shared with every rclone user) and sometimes even with a private one. That failure is transient by nature, so a
+# step that fails ONLY because of rate limiting is retried with a growing pause before it is reported as failed.
+# Any other failure is reported immediately. Output of the last attempt goes to the caller as before.
+: "${BACKUP_CLOUD_QUOTA_RETRIES:=4}"
+: "${BACKUP_CLOUD_RETRY_DELAY:=15}"
+
 _cloud_rc() {
   local sub="$1"
   shift
-  RCLONE_CONFIG="$BACKUP_CLOUD_CONF" timeout "$BACKUP_CLOUD_TIMEOUT_SECONDS" \
-    rclone "$sub" "$@" \
-    --contimeout 20s --timeout 60s --retries 2 --low-level-retries 3
+  local try=1 delay="$BACKUP_CLOUD_RETRY_DELAY" rc out
+  out=$(mktemp)
+  while :; do
+    RCLONE_CONFIG="$BACKUP_CLOUD_CONF" timeout "$BACKUP_CLOUD_TIMEOUT_SECONDS" \
+      rclone "$sub" "$@" \
+      --contimeout 20s --timeout 60s --retries 2 --low-level-retries 3 >"$out" 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ] && [ "$try" -lt "$BACKUP_CLOUD_QUOTA_RETRIES" ] &&
+      grep -qiE 'quota exceeded|rateLimitExceeded|userRateLimitExceeded|too many requests' "$out"; then
+      sleep "$delay"
+      delay=$((delay * 2))
+      try=$((try + 1))
+      continue
+    fi
+    break
+  done
+  cat "$out"
+  rm -f "$out"
+  return "$rc"
 }
 
 # backup_cloud_sync <backup_dir> <db_name>

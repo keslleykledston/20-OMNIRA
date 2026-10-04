@@ -146,6 +146,38 @@ set -e
 check "malformed token is rejected" "$bad_rc" "1"
 check "rejected token creates no config" "$( [ -e "$WORKDIR/setup/other.conf" ] && echo yes || echo no )" "no"
 
+echo "=== Section 5b: Drive rate limiting is retried, other failures are not ==="
+STUB="$WORKDIR/stub"; mkdir -p "$STUB"
+cat > "$STUB/rclone" <<'STUBEOF'
+#!/usr/bin/env bash
+# Fake rclone: fails MODE times then succeeds. MODE=quota -> Drive 403 quota text; MODE=other -> a different error.
+n=$(cat "$COUNTER" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$COUNTER"
+if [ "$n" -le "${FAILS:-0}" ]; then
+  if [ "$MODE" = quota ]; then
+    echo "Failed to create file system: googleapi: Error 403: Quota exceeded for quota metric 'Queries' and limit 'Queries per minute'" >&2
+  else
+    echo "Failed: permission denied" >&2
+  fi
+  exit 1
+fi
+echo "ok-from-stub"
+exit 0
+STUBEOF
+chmod +x "$STUB/rclone"
+export COUNTER="$WORKDIR/counter"
+try_rc() { # try_rc <mode> <fails> -> prints "rc attempts"
+  echo 0 > "$COUNTER"
+  local rc
+  ( PATH="$STUB:$PATH" MODE="$1" FAILS="$2" BACKUP_CLOUD_CONF="$CONF" BACKUP_CLOUD_RETRY_DELAY=0 BACKUP_CLOUD_QUOTA_RETRIES=4 \
+    bash -c '. scripts/lib/backup-cloud.sh; _cloud_rc copy a b >/dev/null 2>&1' )
+  rc=$?
+  echo "$rc $(cat "$COUNTER")"
+}
+check "a quota error twice, then success: succeeds after 3 attempts" "$(try_rc quota 2)" "0 3"
+check "a quota error forever: gives up after the retry budget (4)" "$(try_rc quota 99)" "1 4"
+check "any other error is NOT retried" "$(try_rc other 99)" "1 1"
+check "no error: one attempt" "$(try_rc quota 0)" "0 1"
+
 echo "=== Section 6: wiring ==="
 check "backup script calls the cloud step" "$(grep -c 'backup_cloud_sync "\$BACKUP_DIR" "\$DB_NAME" || true' scripts/backup-omnira-db.sh)" "1"
 for f in scripts/backup-omnira-db.sh scripts/lib/backup-cloud.sh scripts/setup-backup-cloud.sh scripts/test-backup-cloud.sh; do
