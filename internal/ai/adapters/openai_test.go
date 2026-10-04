@@ -204,3 +204,19 @@ func TestNewOpenAIGenerator_RejectsIncompleteConfig(t *testing.T) {
 		t.Fatalf("missing model: err = %v, want ErrOpenAINotConfigured", err)
 	}
 }
+
+func TestOpenAIGenerator_ReportsUsageForAccountingOnly(t *testing.T) {
+	body := `{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":812,"output_tokens":37,"total_tokens":849}}`
+	srv, _ := captureServer(t, http.StatusOK, body)
+	gen, _ := NewOpenAIGenerator(OpenAIConfig{BaseURL: srv.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second})
+	resp, err := gen.Generate(context.Background(), ports.GenerateRequest{Instructions: "x", Input: "y", MaxOutputTokens: 300})
+	if err != nil || resp.InputTokens != 812 || resp.OutputTokens != 37 {
+		t.Fatalf("usage: %+v %v", resp, err)
+	}
+	// a response without usage is fine: zero, not an error
+	srv2, _ := captureServer(t, http.StatusOK, successBody)
+	gen2, _ := NewOpenAIGenerator(OpenAIConfig{BaseURL: srv2.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second})
+	if resp, err := gen2.Generate(context.Background(), ports.GenerateRequest{Instructions: "x", Input: "y", MaxOutputTokens: 300}); err != nil || resp.InputTokens != 0 || resp.OutputTokens != 0 {
+		t.Fatalf("no usage: %+v %v", resp, err)
+	}
+}

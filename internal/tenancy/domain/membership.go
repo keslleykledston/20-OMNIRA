@@ -11,9 +11,9 @@ import (
 type MembershipStatus string
 
 const (
-	MembershipStatusActive  MembershipStatus = "active"
+	MembershipStatusActive   MembershipStatus = "active"
 	MembershipStatusInactive MembershipStatus = "inactive"
-	MembershipStatusRevoked MembershipStatus = "revoked"
+	MembershipStatusRevoked  MembershipStatus = "revoked"
 )
 
 // Role — papel de um usuário dentro de um tenant.

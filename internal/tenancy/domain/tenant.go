@@ -20,20 +20,20 @@ const (
 type IsolationProfile string
 
 const (
-	IsolationSharedStrong  IsolationProfile = "shared_strong_isolation"
-	IsolationDedicated     IsolationProfile = "dedicated_database"
+	IsolationSharedStrong IsolationProfile = "shared_strong_isolation"
+	IsolationDedicated    IsolationProfile = "dedicated_database"
 )
 
 // Tenant — entidade de domínio representando uma organização.
 type Tenant struct {
-	ID                uuid.UUID
-	LegalName         string
-	TradeName         *string
-	TaxID             *string
-	IsolationProfile  IsolationProfile
-	Status            TenantStatus
-	CreatedAt         time.Time
-	UpdatedAt      time.Time
+	ID               uuid.UUID
+	LegalName        string
+	TradeName        *string
+	TaxID            *string
+	IsolationProfile IsolationProfile
+	Status           TenantStatus
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // NewTenant — factory com validação básica.
@@ -48,7 +48,7 @@ func NewTenant(legalName string, profile IsolationProfile) (*Tenant, error) {
 		IsolationProfile: profile,
 		Status:           TenantStatusActive,
 		CreatedAt:        time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
+		UpdatedAt:        time.Now().UTC(),
 	}, nil
 }
 

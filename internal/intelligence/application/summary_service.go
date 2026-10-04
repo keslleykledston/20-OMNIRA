@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/omnira/omnira/internal/aiusage"
 	"log"
 	"time"
 
@@ -24,6 +25,7 @@ type SummaryService struct {
 	routing    ports.RoutingRepository
 	builder    *ContextBuilder
 	summarizer ports.TopicSummarizer // nil = no summarizer configured
+	ledger     aiusage.Ledger        // nil = calls are not accounted
 	flags      Flags
 	// FirstSummaryAt and RegenerateEvery debounce the automatic step: a model is not called for every single message.
 	FirstSummaryAt  int
@@ -35,6 +37,26 @@ func NewSummaryService(topics ports.TopicRepository, summaries ports.SummaryRepo
 	summarizer ports.TopicSummarizer, flags Flags) *SummaryService {
 	return &SummaryService{topics: topics, summaries: summaries, data: data, routing: routing, builder: NewContextBuilder(topics, data, summaries),
 		summarizer: summarizer, flags: flags, FirstSummaryAt: 3, RegenerateEvery: 5, now: time.Now}
+}
+
+// WithLedger makes every model call of the service (successful or not) leave a row in the AI usage ledger.
+func (s *SummaryService) WithLedger(l aiusage.Ledger) *SummaryService {
+	s.ledger = l
+	return s
+}
+
+func (s *SummaryService) account(ctx context.Context, tenantID uuid.UUID, res ports.SummaryResult, ref uuid.UUID, ok bool, reason string) {
+	if s.ledger == nil {
+		return
+	}
+	rec := aiusage.Record{TenantID: tenantID, Provider: res.Provider, Model: res.Model, Task: string(TaskTopicSummary), InputTokens: res.InputTokens,
+		OutputTokens: res.OutputTokens, NoCost: true, Success: ok, Reason: reason, Ref: ref}
+	if rec.Provider == "" {
+		rec.Provider = "unknown"
+	}
+	if err := s.ledger.Record(ctx, rec); err != nil {
+		log.Printf("intelligence: cannot record summary usage: %v", err)
+	}
 }
 
 func (s *SummaryService) tenant(ctx context.Context) (*tenancydomain.TenantContext, error) {
@@ -95,10 +117,12 @@ func (s *SummaryService) Generate(ctx context.Context, topicID uuid.UUID) (summa
 	}
 	res, err := s.summarizer.SummarizeTopic(ctx, in)
 	if err != nil {
+		s.account(ctx, tc.TenantID, res, topicID, false, "provider_error")
 		return nil, false, err
 	}
 	text := domain.SanitizeDerivedText(res.Text)
 	if text == "" {
+		s.account(ctx, tc.TenantID, res, topicID, false, "empty_output")
 		return nil, false, fmt.Errorf("%w: empty summary", ports.ErrSummarizerUnavailable)
 	}
 	meta := map[string]any{"source_message_count": stats.Messages, "truncated": in.Truncated}
@@ -124,6 +148,7 @@ func (s *SummaryService) Generate(ctx context.Context, topicID uuid.UUID) (summa
 	if err != nil {
 		return nil, false, err
 	}
+	s.account(ctx, tc.TenantID, res, created2.ID, true, "")
 	if err := s.summaries.SupersedeInferredBefore(ctx, tc.TenantID, topicID, created2.Version); err != nil {
 		return nil, false, err
 	}

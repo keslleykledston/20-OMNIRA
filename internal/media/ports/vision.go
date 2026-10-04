@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/omnira/omnira/internal/aiusage"
 )
 
 // VisionInput is one attachment for the external vision model. Data is the CLEARED file (antivirus passed, mime
@@ -49,25 +51,11 @@ type TenantAIResolver interface {
 	Resolve(ctx context.Context, tenantID uuid.UUID) (*TenantAI, error)
 }
 
-// UsageRecord is one external AI call, for accounting and the budget.
-type UsageRecord struct {
-	TenantID     uuid.UUID
-	Provider     string
-	Model        string
-	Task         string
-	InputTokens  int
-	OutputTokens int
-	CostUSD      float64
-	Success      bool
-	Reason       string
-	Ref          uuid.UUID // the analysis row
-}
-
-// UsageLedger records calls and reports the month's spend (Wave 10).
-type UsageLedger interface {
-	Record(ctx context.Context, u UsageRecord) error
-	SpentThisMonth(ctx context.Context, tenantID uuid.UUID, now time.Time) (float64, error)
-}
+// The usage ledger is shared by every feature that calls a model (ADR-0017 Wave 10): one definition, in internal/aiusage.
+type (
+	UsageRecord = aiusage.Record
+	UsageLedger = aiusage.Ledger
+)
 
 // VisionRepository is the part of the analysis storage the vision step adds.
 type VisionRepository interface {

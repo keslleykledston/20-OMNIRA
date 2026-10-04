@@ -170,7 +170,7 @@ func TestBuildTranscript_EmptyEligibleSet(t *testing.T) {
 // --- SummarizeService --------------------------------------------------
 
 type fakeGenerator struct {
-	calls int
+	calls   int
 	lastReq ports.GenerateRequest
 	resp    ports.GenerateResponse
 	err     error

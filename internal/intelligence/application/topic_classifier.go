@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/omnira/omnira/internal/aiusage"
 	"log"
 	"time"
 
@@ -42,7 +43,28 @@ type TopicClassifier struct {
 	models    *ModelRouter
 	flags     Flags
 	metrics   ClassifierMetrics
+	ledger    aiusage.Ledger // nil = calls are not accounted
 	now       func() time.Time
+}
+
+// WithLedger makes every model call of the classifier (successful or not) leave a row in the AI usage ledger.
+func (c *TopicClassifier) WithLedger(l aiusage.Ledger) *TopicClassifier {
+	c.ledger = l
+	return c
+}
+
+func (c *TopicClassifier) account(ctx context.Context, tenantID uuid.UUID, route ModelRoute, resp aiports.GenerateResponse, ref uuid.UUID, ok bool, reason string) {
+	if c.ledger == nil {
+		return
+	}
+	rec := aiusage.Record{TenantID: tenantID, Provider: route.Provider, Model: route.Model, Task: string(TaskTopicClassify), InputTokens: resp.InputTokens,
+		OutputTokens: resp.OutputTokens, NoCost: true, Success: ok, Reason: reason, Ref: ref}
+	if rec.Provider == "" {
+		rec.Provider = "unknown"
+	}
+	if err := c.ledger.Record(ctx, rec); err != nil {
+		log.Printf("intelligence: cannot record classification usage: %v", err)
+	}
 }
 
 func NewTopicClassifier(routing ports.RoutingRepository, data ports.ContextRepository, summaries ports.SummaryRepository, models *ModelRouter, flags Flags, m ClassifierMetrics) *TopicClassifier {
@@ -118,19 +140,21 @@ func (c *TopicClassifier) ClassifyShadow(ctx context.Context, ref ports.MessageR
 	resp, err := route.Generator.Generate(callCtx, aiports.GenerateRequest{Instructions: domain.ClassificationInstructions, Input: input, MaxOutputTokens: route.MaxOutputTokens})
 	latency := int(c.now().Sub(started) / time.Millisecond)
 	if err != nil {
+		c.account(ctx, tc.TenantID, route, resp, ref.ID, false, "provider_error")
 		c.metrics.Shadow("provider_error")
 		log.Printf("intelligence: topic classification skipped (%v)", err)
 		return uuid.Nil, nil
 	}
 	cl, err := domain.ParseClassification(resp.OutputText, aliases)
 	if err != nil {
+		c.account(ctx, tc.TenantID, route, resp, ref.ID, false, "invalid_output")
 		c.metrics.Shadow("invalid_output")
 		log.Printf("intelligence: topic classification discarded (%v)", err)
 		return uuid.Nil, nil
 	}
 
 	rec := ports.DecisionRecord{Ref: ref, Source: domain.DecisionAI, Applied: false, Confidence: &cl.Confidence,
-		ModelProvider: strPtr(route.Provider), ModelName: strPtr(route.Model), PromptVersion: strPtr(ClassifierPromptVersion), LatencyMS: &latency}
+		ModelProvider: strPtr(route.Provider), ModelName: strPtr(route.Model), PromptVersion: strPtr(ClassifierPromptVersion), LatencyMS: &latency, InputTokens: intPtr(resp.InputTokens), OutputTokens: intPtr(resp.OutputTokens)}
 	switch cl.Verdict {
 	case domain.VerdictExisting:
 		id := byAlias[cl.TopicAlias]
@@ -145,8 +169,16 @@ func (c *TopicClassifier) ClassifyShadow(ctx context.Context, ref ports.MessageR
 	if err != nil {
 		return uuid.Nil, err
 	}
+	c.account(ctx, tc.TenantID, route, resp, id, true, "")
 	c.metrics.Shadow(string(cl.Verdict))
 	return id, nil
+}
+
+func intPtr(n int) *int {
+	if n <= 0 {
+		return nil
+	}
+	return &n
 }
 
 func strPtr(s string) *string {

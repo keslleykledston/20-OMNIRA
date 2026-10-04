@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/omnira/omnira/internal/aiusage"
 	"io"
 	"math"
 	"net/http"
@@ -44,6 +45,77 @@ type AIIntegrationHandler struct {
 	// geminiBase is the provider endpoint; a field so tests can point it at a local server.
 	geminiBase string
 	now        func() time.Time
+	usage      UsageSummarizer
+}
+
+// UsageSummarizer reads the month's AI usage of a tenant (ADR-0017 Wave 10) inside the caller's session.
+type UsageSummarizer interface {
+	Summarize(ctx context.Context, tenantID uuid.UUID, month time.Time) (aiusage.Summary, error)
+}
+
+// WithUsage enables GET .../integrations/ai/usage.
+func (h *AIIntegrationHandler) WithUsage(u UsageSummarizer) *AIIntegrationHandler {
+	h.usage = u
+	return h
+}
+
+type aiUsageLine struct {
+	Provider     string  `json:"provider"`
+	Model        string  `json:"model"`
+	Task         string  `json:"task"`
+	Calls        int     `json:"calls"`
+	Failures     int     `json:"failures"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	CostUSD      float64 `json:"estimated_cost_usd"`
+}
+
+// Usage: GET /tenants/{tenant_id}/integrations/ai/usage?month=YYYY-MM. Costs are ESTIMATES (the provider's invoice is the
+// source of truth); tokens are what the providers reported.
+func (h *AIIntegrationHandler) Usage(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+	if h.usage == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	month := h.now().UTC()
+	if raw := r.URL.Query().Get("month"); raw != "" {
+		m, err := time.Parse("2006-01", raw)
+		if err != nil {
+			http.Error(w, "invalid month (use YYYY-MM)", http.StatusBadRequest)
+			return
+		}
+		month = m
+	}
+	sum, err := h.usage.Summarize(r.Context(), tc.TenantID, month)
+	if err != nil {
+		http.Error(w, "failed to read the usage", http.StatusInternalServerError)
+		return
+	}
+	state, _, err := h.load(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc.TenantID, false)
+	if err != nil {
+		http.Error(w, "failed to read the integration", http.StatusInternalServerError)
+		return
+	}
+	lines := make([]aiUsageLine, 0, len(sum.Lines))
+	var spent float64
+	for _, l := range sum.Lines {
+		lines = append(lines, aiUsageLine{Provider: l.Provider, Model: l.Model, Task: l.Task, Calls: l.Calls, Failures: l.Failures, InputTokens: l.InputTokens, OutputTokens: l.OutputTokens, CostUSD: l.CostUSD})
+		if l.Provider == aiusage.BudgetProvider {
+			spent += l.CostUSD
+		}
+	}
+	remaining := state.BudgetUSD - spent
+	if remaining < 0 {
+		remaining = 0
+	}
+	writeAIJSON(w, http.StatusOK, map[string]any{
+		"month": sum.From.Format("2006-01"), "from": sum.From.Format(time.RFC3339), "to": sum.To.Format(time.RFC3339),
+		"budget_usd": state.BudgetUSD, "spent_usd": spent, "remaining_usd": remaining, "items": lines,
+	})
 }
 
 const (

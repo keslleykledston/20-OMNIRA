@@ -34,12 +34,12 @@ const (
 // media bytes, no provider IDs, no contact/customer fields (PRODUCT.7C0 §5/7:
 // V1 sends transcript text only).
 type Message struct {
-	ID          string
-	Direction   string // inbound | outbound
-	Status      string
-	Body        string
-	HasMedia    bool // true when message_type != "text" (image/video/audio/document/sticker)
-	CreatedAt   time.Time
+	ID        string
+	Direction string // inbound | outbound
+	Status    string
+	Body      string
+	HasMedia  bool // true when message_type != "text" (image/video/audio/document/sticker)
+	CreatedAt time.Time
 }
 
 // TranscriptStats reports what actually went into the prompt, for audit

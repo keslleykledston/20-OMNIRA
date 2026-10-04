@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	ports "github.com/omnira/omnira/internal/channels/ports"
 	toolconnectors "github.com/omnira/omnira/internal/tool/connectors"
@@ -25,13 +26,13 @@ import (
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
+	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
+	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
+	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
 	"github.com/omnira/omnira/internal/platform/authn"
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
-	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
-	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
-	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
@@ -213,7 +214,7 @@ func main() {
 		routingSvc := intelligenceapp.NewRoutingService(routingRepo, topicRepo, intelligenceFlags, intelligencedomain.DefaultRoutingConfig(), nil)
 		summaryRepo := intelligenceadapters.NewPostgresSummaryRepository(dbPool)
 		summarySvc := intelligenceapp.NewSummaryService(topicRepo, summaryRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), routingRepo,
-			intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags)
+			intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 		ticketPolicySvc := intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool), routingRepo,
 			inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)
 		handoffSvc := intelligenceapp.NewHandoffService(intelligenceadapters.NewPostgresHandoffRepository(dbPool), routingRepo, intelligenceFlags, nil)
@@ -221,7 +222,7 @@ func main() {
 			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc).WithHandoffs(handoffSvc))
 	}
 	if erpCipherErr == nil && erpCipher != nil {
-		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher))
+		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher).WithUsage(aiusageadapters.NewPostgresLedger(dbPool)))
 	} else {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}

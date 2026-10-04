@@ -615,6 +615,7 @@ func (s *Server) RegisterAIIntegrationHandlers(dbPool *pgxpool.Pool, h *tenancya
 	s.mux.Handle("PUT "+base, wrap(h.Put))
 	s.mux.Handle("DELETE "+base+"/key", wrap(h.DeleteKey))
 	s.mux.Handle("POST "+base+"/test", wrap(h.Test))
+	s.mux.Handle("GET "+base+"/usage", wrap(h.Usage))
 }
 
 // RegisterGroupHandlers exposes the read-only WhatsApp group APIs (ADR-0015) behind authn + tenant

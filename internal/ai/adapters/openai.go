@@ -32,12 +32,12 @@ import (
 // into truthful application-level responses (PRODUCT.7C1 §14) — never a raw
 // provider status code or body surfaced to the browser.
 var (
-	ErrOpenAINotConfigured       = errors.New("openai: generator is not configured")
-	ErrOpenAIUnauthorized        = errors.New("openai: credential rejected")
-	ErrOpenAIRateLimited         = errors.New("openai: rate limited")
-	ErrOpenAIUnavailable         = errors.New("openai: provider unavailable")
-	ErrOpenAITimeout             = errors.New("openai: request timed out")
-	ErrOpenAIMalformedResponse   = errors.New("openai: unexpected response shape")
+	ErrOpenAINotConfigured     = errors.New("openai: generator is not configured")
+	ErrOpenAIUnauthorized      = errors.New("openai: credential rejected")
+	ErrOpenAIRateLimited       = errors.New("openai: rate limited")
+	ErrOpenAIUnavailable       = errors.New("openai: provider unavailable")
+	ErrOpenAITimeout           = errors.New("openai: request timed out")
+	ErrOpenAIMalformedResponse = errors.New("openai: unexpected response shape")
 )
 
 // OpenAIConfig mirrors the shape already used by this repository's other
@@ -90,13 +90,13 @@ func NewOpenAIGenerator(cfg OpenAIConfig) (*OpenAIGenerator, error) {
 // design gate requires is explicit here, never a struct-literal omission
 // that could silently rely on a provider default.
 type openAIRequest struct {
-	Model           string          `json:"model"`
-	Input           string          `json:"input"`
-	Instructions    string          `json:"instructions"`
-	Store           bool            `json:"store"`
-	Background      bool            `json:"background"`
-	MaxOutputTokens int             `json:"max_output_tokens"`
-	Reasoning       *reasoningWire  `json:"reasoning,omitempty"`
+	Model           string           `json:"model"`
+	Input           string           `json:"input"`
+	Instructions    string           `json:"instructions"`
+	Store           bool             `json:"store"`
+	Background      bool             `json:"background"`
+	MaxOutputTokens int              `json:"max_output_tokens"`
+	Reasoning       *reasoningWire   `json:"reasoning,omitempty"`
 	Tools           []map[string]any `json:"tools"`
 }
 
@@ -117,6 +117,10 @@ type openAIResponse struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	} `json:"output"`
+	Usage *struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 		Code    string `json:"code"`
@@ -181,13 +185,17 @@ func (g *OpenAIGenerator) Generate(ctx context.Context, req ports.GenerateReques
 	if parsed.Error != nil {
 		return ports.GenerateResponse{}, fmt.Errorf("%w: %s", ErrOpenAIUnavailable, parsed.Error.Code)
 	}
+	var inTok, outTok int
+	if parsed.Usage != nil {
+		inTok, outTok = parsed.Usage.InputTokens, parsed.Usage.OutputTokens
+	}
 	for _, item := range parsed.Output {
 		if item.Type != "message" {
 			continue
 		}
 		for _, c := range item.Content {
 			if c.Type == "output_text" && strings.TrimSpace(c.Text) != "" {
-				return ports.GenerateResponse{OutputText: strings.TrimSpace(c.Text)}, nil
+				return ports.GenerateResponse{OutputText: strings.TrimSpace(c.Text), InputTokens: inTok, OutputTokens: outTok}, nil
 			}
 		}
 	}

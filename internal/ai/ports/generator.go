@@ -21,6 +21,10 @@ type GenerateRequest struct {
 // provider metadata, ever crosses this boundary.
 type GenerateResponse struct {
 	OutputText string
+	// InputTokens / OutputTokens are the provider's own usage counters (0 when it reported none). They exist only for
+	// accounting (ADR-0017 Wave 10); no other provider metadata crosses this boundary.
+	InputTokens  int
+	OutputTokens int
 }
 
 // TextGenerator is the single port every AI capability's application layer

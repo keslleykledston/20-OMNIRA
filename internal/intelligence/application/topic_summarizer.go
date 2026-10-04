@@ -68,10 +68,11 @@ func (s *AITopicSummarizer) SummarizeTopic(ctx context.Context, in domain.TopicC
 	input := "DADOS CONFIÁVEIS DO SISTEMA\n" + r.Trusted + "\n" + r.Untrusted
 	resp, err := s.generator.Generate(ctx, aiports.GenerateRequest{Instructions: topicSummaryInstructions, Input: input, MaxOutputTokens: s.maxOutputTokens})
 	if err != nil {
-		return ports.SummaryResult{}, fmt.Errorf("%w: %v", ports.ErrSummarizerUnavailable, err)
+		// Provider and model are returned with the error so the failed call can still be accounted
+		return ports.SummaryResult{Provider: s.provider, Model: s.model}, fmt.Errorf("%w: %v", ports.ErrSummarizerUnavailable, err)
 	}
 	structured, _ := json.Marshal(map[string]any{"truncated": r.Truncated, "included_messages": len(in.RecentMessages) + len(in.RelevantMessages)})
-	return ports.SummaryResult{Text: resp.OutputText, StructuredContext: structured, Provider: s.provider, Model: s.model, PromptVersion: TopicSummaryPromptVersion}, nil
+	return ports.SummaryResult{Text: resp.OutputText, StructuredContext: structured, Provider: s.provider, Model: s.model, PromptVersion: TopicSummaryPromptVersion, InputTokens: resp.InputTokens, OutputTokens: resp.OutputTokens}, nil
 }
 
 // ErrNothingToSummarize: the topic has no message yet; no model is called.

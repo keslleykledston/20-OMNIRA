@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"log"
 	"net/http"
@@ -297,6 +298,25 @@ func main() {
 		} else {
 			log.Printf("Audio transcription disabled (OMNIRA_WHISPER_URL empty)\n")
 		}
+		// Image / PDF reading with the TENANT'S OWN Gemini key (ADR-0017 Wave 9/10): off unless the flag is on, and even
+		// then only tenants that opted in are ever touched. It cannot start without the usage ledger and the budget.
+		if intelligenceapp.FlagsFromEnv(nil).MultimodalAnalysisEnabled {
+			credCipher, cerr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+			gemini, gerr := mediaadapters.NewGemini("")
+			if cerr != nil || gerr != nil {
+				log.Printf("Image/PDF analysis disabled (credential cipher: %v, gemini adapter: %v)\n", cerr, gerr)
+			} else {
+				repo := mediaadapters.NewPostgresRepository(dbPool)
+				vision, verr := mediaapp.NewVisionProcessor(repo, repo, store, mediaadapters.NewTenantAIResolver(dbPool, credCipher), gemini, aiusageadapters.NewPostgresLedger(dbPool), mediaCounters)
+				if verr != nil {
+					log.Fatalf("vision processor error: %v", verr)
+				}
+				go vision.Run(workerCtx, 5*time.Second)
+				log.Printf("Image/PDF analysis started (per-tenant Gemini opt-in, monthly budget enforced)\n")
+			}
+		} else {
+			log.Printf("Image/PDF analysis disabled (OMNIRA_MULTIMODAL_ANALYSIS_ENABLED is not true)\n")
+		}
 		go func() {
 			probe := func() {
 				pctx, cancel := context.WithTimeout(workerCtx, 8*time.Second)
@@ -347,13 +367,13 @@ func main() {
 		if intelligenceFlags.TopicSummariesEnabled {
 			// best-effort extra step: a summary problem never fails or delays message processing
 			summarySvc := intelligenceapp.NewSummaryService(topicRepo, intelligenceadapters.NewPostgresSummaryRepository(dbPool), intelligenceadapters.NewPostgresContextRepository(dbPool),
-				intelligenceadapters.NewPostgresRoutingRepository(dbPool), intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags)
+				intelligenceadapters.NewPostgresRoutingRepository(dbPool), intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 			pipeline = intelligenceapp.SummaryPipeline{Next: pipeline, Summaries: summarySvc}
 		}
 		if intelligenceFlags.TopicAIRoutingEnabled {
 			// shadow only: the proposal is recorded, never applied; a failure never touches the routing
 			pipeline = intelligenceapp.ShadowPipeline{Next: pipeline, Classifier: intelligenceapp.NewTopicClassifier(intelligenceadapters.NewPostgresRoutingRepository(dbPool),
-				intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewPostgresSummaryRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags, intelligenceCounters)}
+				intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewPostgresSummaryRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags, intelligenceCounters).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))}
 		}
 		if intelligenceFlags.AutoTicketPolicyEnabled {
 			// only the unambiguous policy actions, and a problem here never fails the job

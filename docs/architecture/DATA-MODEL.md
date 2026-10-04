@@ -114,6 +114,11 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 ### Multimodal (ADR-0017, onda 9; sem migration nova)
 - Reaproveita `message_media`/`message_media_analysis` (ADR-0016). `EnqueueVision` cria `description`/`document_text` (engine `gemini`) só para tenants com integração **habilitada** (a tabela exige chave + consentimento) e arquivos limpos, recentes e de mime permitido. `VisionProcessor` exige `UsageLedger` (sem ledger não há chamada externa); fiação no worker na onda 10.
 
+### Contabilização de uso de IA (ADR-0017, onda 10, migration 000068)
+- `ai_usage`: **uma linha por chamada** a modelo externo (sucesso ou não), append-only (sem UPDATE/DELETE; só o sistema grava; leitura só do administrador do tenant). Guarda provider/modelo/tarefa, tokens reportados e custo estimado (`NULL` quando o provedor é pago pela plataforma e não há preço: tokens ficam, nunca vira "grátis").
+- Orçamento mensal (UTC) conta **só o provedor da chave do próprio tenant (Gemini)**, incluindo chamadas que falharam (podem ter sido cobradas); é checado **antes** de cada chamada de visão contra o pior caso dela. Classificação e resumo de tópico (OpenAI da plataforma) são registrados mas nunca bloqueiam o tenant.
+- `GET /integrations/ai/usage?month=YYYY-MM` (tenant.manage). `GenerateResponse` ganhou contadores de tokens (só para contabilidade). O `VisionProcessor` agora sobe no worker com `OMNIRA_MULTIMODAL_ANALYSIS_ENABLED=true` (desligada por padrão).
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.

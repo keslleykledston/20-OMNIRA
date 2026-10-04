@@ -14,10 +14,10 @@ import (
 // mapear cada falha para o status code correto. errors.New(...) solto não
 // funciona com errors.Is porque cada chamada cria uma instância distinta.
 var (
-	ErrInvalidTenantID  = errors.New("invalid tenant_id")
-	ErrInvalidActorID   = errors.New("invalid actor_id")
-	ErrTenantNotFound   = errors.New("tenant not found")
-	ErrTenantNotActive  = errors.New("tenant is not active")
+	ErrInvalidTenantID    = errors.New("invalid tenant_id")
+	ErrInvalidActorID     = errors.New("invalid actor_id")
+	ErrTenantNotFound     = errors.New("tenant not found")
+	ErrTenantNotActive    = errors.New("tenant is not active")
 	ErrNoActiveMembership = errors.New("access denied: no active membership")
 )
 

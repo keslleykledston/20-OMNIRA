@@ -69,6 +69,8 @@ type SummaryResult struct {
 	Provider          string
 	Model             string
 	PromptVersion     string
+	InputTokens       int
+	OutputTokens      int
 }
 
 // TopicSummarizer turns a topic context into a summary. The engine behind it is replaceable (ADR-0017).
