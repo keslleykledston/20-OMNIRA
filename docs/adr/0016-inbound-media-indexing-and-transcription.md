@@ -1,7 +1,7 @@
 # ADR-0016: Mídia recebida nas conversas - captura, indexação e transcrição/descrição, com anexos tratados como hostis
 
 ## Status
-Proposed (2026-10-04). Escrito a pedido do dono do produto; nenhuma implementação autorizada ainda. A fatia M1
+Proposed (2026-10-04); decisões do dono registradas em 2026-10-04 (seção "Decisões do dono"); implementação por fatias autorizada, M1 primeiro. Escrito a pedido do dono do produto; nenhuma implementação autorizada ainda. A fatia M1
 (captura, quarentena e antivírus) não depende de nenhuma escolha de IA e é a primeira candidata.
 
 ## Contexto
@@ -115,6 +115,18 @@ Balões mostram miniatura (imagem), *player* (áudio/vídeo) ou cartão (documen
 marcada "IA". Estados claros: "analisando...", "bloqueado por segurança", "não foi possível ler", "IA desativada". O Inbox mostra
 quando um trecho da busca veio de mídia. Escopo inicial: **conversas 1:1**; o mesmo pipeline serve a **grupos** depois.
 
+## Implementação: M1 (2026-10-04)
+Entregue e implantado: captura, quarentena, tipos permitidos, ClamAV, entrega segura pela API, retenção de 60 dias, métricas e
+auditoria (`docs/ops/MEDIA.md`). Desvios do desenho, por motivo medido:
+- **Fila**: em vez de um job NATS (`media.ingest.v1`), a linha `message_media` nasce por *trigger* na mesma transação da mensagem e o
+  worker a reivindica por consulta (`FOR UPDATE SKIP LOCKED`, a cada 2 s). Motivo: o WAHA apaga o arquivo em poucos minutos e o caminho
+  outbox→NATS adicionaria latência e mais um ponto de falha; a garantia (durabilidade, sem perda, sem dupla execução) é a mesma.
+- **Achado**: o `media_ref` guardado aponta para `http://localhost:3000/...` (visão do WAHA) e a busca ao vivo nunca funcionou a partir de
+  outro contêiner; além disso o arquivo some do WAHA em minutos. As 348 mídias recebidas antes da M1 (183 áudios, 142 imagens, 18
+  documentos, 5 vídeos) **não podem ser recuperadas** e ficaram `source_gone`.
+- Provado ao vivo com WAHA e ClamAV reais: imagem e áudio limpos, EICAR `infected` (`Eicar-Test-Signature`), ZIP disfarçado de JPG, HTML e
+  PDF com JavaScript `rejected`, arquivo ausente `source_gone`; só os limpos chegam ao navegador.
+
 ## Plano em fatias
 - **M1 - captura, quarentena e antivírus** (sem IA): tabela, fila `media.ingest.v1`, download pelo `MediaRetriever`, hash, tipo real,
   lista de permissão, ClamAV, armazenamento por hash, entrega segura pela API. Testes de tenancy, de arquivos hostis (EICAR,
@@ -147,7 +159,18 @@ quando um trecho da busca veio de mídia. Escopo inicial: **conversas 1:1**; o m
 - **Aceitar ZIP/Office com macro e "analisar depois"**: abre exatamente a porta que se quer fechar. Rejeitada na v1.
 - **Não guardar o arquivo, só o texto**: reduz risco e disco, mas perde a evidência original e impede reprocessar com modelo melhor. Rejeitada; o arquivo é guardado em quarentena/varrido e segue política de retenção.
 
-## Questões em aberto (decisões do dono)
+## Decisões do dono (2026-10-04)
+1. **Áudio: transcrição local** (Whisper na GPU do servidor). Nada de áudio sai da máquina.
+2. **Gemini: conta de faturamento criada pelo dono; orçamento inicial US$ 10,00/mês** para medir. O teto vira cota por tenant e trava global: ao atingir, a análise por Gemini fecha (`skipped_ai`) até o mês virar.
+3. **Opt-in por tenant**: o dono pediu explicação antes de decidir (ver resposta no chat). Até decidir, a IA externa fica desligada; áudio local e M1 não dependem disso.
+4. **Retenção: arquivo 60 dias; a transcrição/descrição permanece na conversa** mesmo depois que o arquivo for removido. Texto extraído é parte da mensagem, não do arquivo.
+5. **ClamAV autorizado** (software livre, sem custo de licença; ~1 GB de RAM, há ~10 GB livres).
+6. **Vídeo fica para a segunda entrega. Office (docx/xlsx): rejeitado na v1, conversão em contêiner no futuro.**
+7. **Limites propostos aprovados**: imagem 12 MP, PDF 20 páginas, áudio 10 min, vídeo 2 min, 25 MiB.
+
+## Questões em aberto
+- Item 3 (opt-in por tenant e texto de aviso ao cliente).
+
 1. **Áudio local** com Whisper na GPU (recomendado) ou Gemini pago?
 2. **Gemini conta paga**: quem cria a conta de faturamento e a chave, e qual o **orçamento mensal** máximo?
 3. **Opt-in por tenant** com a IA de mídia desligada por padrão (recomendado) e qual o texto de aviso ao cliente (LGPD)?

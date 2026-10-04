@@ -80,7 +80,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterAuthHandlers(false, nil) // generates the RSA keys the other registrations need
 	s.RegisterOIDCAuthHandlers(s.authenticator, nil, contractOIDCHandler{})
 	s.RegisterTenancyHandlers(nil, false)
-	s.RegisterInboxHandlers(nil, &config.Config{})
+	s.RegisterInboxHandlers(nil, &config.Config{MediaDir: t.TempDir()})
 	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
 	s.RegisterWahaWebhook(http.NotFoundHandler())

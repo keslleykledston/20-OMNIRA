@@ -35,6 +35,10 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_WAHA_BASE_URL: ${OMNIRA_WAHA_BASE_URL-http://waha:3000}
   OMNIRA_WAHA_API_KEY: ${OMNIRA_WAHA_API_KEY-}
   OMNIRA_WAHA_ENGINE: ${OMNIRA_WAHA_ENGINE-GOWS}
+  # ADR-0016: inbound media. Files live in OMNIRA_MEDIA_DIR (the worker writes, the API reads only cleared
+  # files); clamd is the clamav service. Both fail closed: no antivirus, nothing is published.
+  OMNIRA_MEDIA_DIR: ${OMNIRA_MEDIA_DIR-/var/lib/omnira/media}
+  OMNIRA_CLAMAV_ADDR: ${OMNIRA_CLAMAV_ADDR-clamav:3310}
 
 services:
   postgres:
@@ -311,6 +315,9 @@ services:
     environment:
       <<: *omnira-runtime
       OMNIRA_HTTP_ADDR: ":8080"
+    volumes:
+      # read-only: the API only ever opens files the antivirus cleared
+      - ${OMNIRA_MEDIA_HOST_PATH:-media_data}:/var/lib/omnira/media:ro
     healthcheck:
       # Runtime image is alpine: wget (busybox) exists, curl does not.
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
@@ -340,6 +347,8 @@ services:
     container_name: omnira-worker
     environment:
       <<: *omnira-runtime
+    volumes:
+      - ${OMNIRA_MEDIA_HOST_PATH:-media_data}:/var/lib/omnira/media
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/healthz || exit 1"]
       interval: 10s
@@ -357,6 +366,18 @@ services:
         condition: service_healthy
       valkey:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Antivirus for inbound attachments (ADR-0016). Internal network only, no published port. Signatures are
+  # refreshed by the image's freshclam daemon; the image ships its own healthcheck (clamdcheck.sh).
+  clamav:
+    image: clamav/clamav:1.4
+    container_name: omnira-clamav
+    mem_limit: 2g
+    volumes:
+      - clamav_db:/var/lib/clamav
+    networks:
+      - omnira-network
     restart: unless-stopped
 
   web:
@@ -410,6 +431,12 @@ volumes:
   waha_sessions:
     driver: local
   waha_media:
+    driver: local
+  # Inbound media files (worker writes, API reads cleared ones). Override OMNIRA_MEDIA_HOST_PATH with an
+  # absolute path to keep them on a roomier partition.
+  media_data:
+    driver: local
+  clamav_db:
     driver: local
 
 networks:

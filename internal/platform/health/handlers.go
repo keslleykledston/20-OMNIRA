@@ -93,6 +93,10 @@ func (h *HealthCheck) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("\n")
 	}
 
+	if h.ExtraMetrics != nil {
+		sb.WriteString(h.ExtraMetrics())
+	}
+
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(sb.String()))

@@ -44,6 +44,9 @@ COPY --from=builder /build/omnira-api /app/omnira-api
 # Permissões
 RUN chown -R omnira:omnira /app
 
+# ADR-0016: media directory owned by the runtime user, so a fresh named volume inherits it
+RUN mkdir -p /var/lib/omnira/media && chown omnira:omnira /var/lib/omnira/media
+
 # Switch para usuário não-root
 USER omnira
 

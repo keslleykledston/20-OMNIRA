@@ -3,6 +3,7 @@ package adapters
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	mediaports "github.com/omnira/omnira/internal/media/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -19,12 +21,20 @@ import (
 type InboxAPIHandler struct {
 	pool    *pgxpool.Pool
 	media   *MediaRetriever
+	mediaReader mediaports.MediaReader
 }
 
 func NewInboxAPIHandler(pool *pgxpool.Pool) *InboxAPIHandler { return &InboxAPIHandler{pool: pool} }
 
 func (h *InboxAPIHandler) WithMediaRetriever(m *MediaRetriever) *InboxAPIHandler {
 	h.media = m
+	return h
+}
+
+// WithMediaReader serves media from the quarantine-and-scan pipeline (ADR-0016). When set it replaces the
+// live fetch from WAHA, which only worked for the few minutes WAHA kept the file.
+func (h *InboxAPIHandler) WithMediaReader(r mediaports.MediaReader) *InboxAPIHandler {
+	h.mediaReader = r
 	return h
 }
 
@@ -70,6 +80,9 @@ type MessageItem struct {
 	SizeBytes           int64      `json:"size_bytes,omitempty"`
 	Status              string     `json:"status"`
 	CreatedAt           string     `json:"created_at"`
+	// MediaStatus is the state of the attachment pipeline (pending|quarantined|clean|infected|rejected|
+	// source_gone|failed); empty for messages without media.
+	MediaStatus string `json:"media_status,omitempty"`
 }
 
 // ListConversations pages the tenant's conversations by LAST ACTIVITY (last message, else
@@ -262,8 +275,11 @@ func (h *InboxAPIHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		limitPos = 5
 	}
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
-		SELECT m.id,m.conversation_id,m.channel_connection_id,m.direction,m.message_type,m.body,m.media_ref,m.mime_type,m.size_bytes,m.status,m.created_at
-		FROM messages m WHERE `+where+` ORDER BY m.created_at DESC,m.id DESC LIMIT $`+strconv.Itoa(limitPos), args...)
+		SELECT m.id,m.conversation_id,m.channel_connection_id,m.direction,m.message_type,m.body,m.media_ref,m.mime_type,m.size_bytes,m.status,m.created_at,
+		       COALESCE(mm.status,'')
+		FROM messages m
+		LEFT JOIN message_media mm ON mm.tenant_id=m.tenant_id AND mm.message_id=m.id
+		WHERE `+where+` ORDER BY m.created_at DESC,m.id DESC LIMIT $`+strconv.Itoa(limitPos), args...)
 	if err != nil {
 		http.Error(w, "failed to list messages", http.StatusInternalServerError)
 		return
@@ -329,7 +345,7 @@ func scanMessageItem(row rowScanner) (MessageItem, error) {
 	var direction, status string
 	var created time.Time
 	var mediaRef interface{} // discard media_ref from DB row; never expose to public DTO
-	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &mediaRef, &item.MimeType, &item.SizeBytes, &status, &created)
+	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &mediaRef, &item.MimeType, &item.SizeBytes, &status, &created, &item.MediaStatus)
 	item.Direction, item.Status, item.CreatedAt = direction, status, created.UTC().Format(time.RFC3339Nano)
 	return item, err
 }
@@ -374,6 +390,10 @@ func writeJSON(w http.ResponseWriter, value any) {
 // - Safe inline: raster images only (jpeg, png, webp, gif)
 // - Everything else: attachment with safe filename
 func (h *InboxAPIHandler) GetMedia(w http.ResponseWriter, r *http.Request) {
+	if h.mediaReader != nil {
+		h.serveStoredMedia(w, r)
+		return
+	}
 	if h.media == nil {
 		http.Error(w, "media retrieval not configured", http.StatusInternalServerError)
 		return
@@ -445,6 +465,22 @@ func extensionForMime(mimeType string) string {
 		return ".webp"
 	case "image/gif":
 		return ".gif"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/mp4":
+		return ".m4a"
+	case "audio/wav":
+		return ".wav"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "application/pdf":
+		return ".pdf"
+	case "text/plain":
+		return ".txt"
 	default:
 		return ".bin"
 	}
@@ -462,4 +498,82 @@ func sanitizeFilename(name string) string {
 		}
 		return r
 	}, name)
+}
+
+// serveStoredMedia answers with a file the antivirus cleared, and with an explicit status otherwise, so the UI
+// can say what is going on instead of showing a broken image. Nothing but the clean area is ever opened.
+func (h *InboxAPIHandler) serveStoredMedia(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := requestTenant(r)
+	if err != nil {
+		http.Error(w, "tenant context not found", http.StatusInternalServerError)
+		return
+	}
+	messageID, err := uuid.Parse(r.PathValue("message_id"))
+	if err != nil {
+		http.Error(w, "invalid message_id", http.StatusBadRequest)
+		return
+	}
+	media, err := h.mediaReader.Open(r.Context(), tenantID, messageID)
+	if errors.Is(err, mediaports.ErrMediaNotFound) {
+		http.Error(w, "media not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to retrieve media", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Media-Status", media.Status)
+	if media.File == nil {
+		switch media.Status {
+		case "pending", "quarantined":
+			http.Error(w, "media is being checked", http.StatusConflict)
+		case "infected", "rejected", "failed":
+			http.Error(w, "media blocked for security reasons", http.StatusForbidden)
+		default: // source_gone, purged
+			http.Error(w, "media no longer available", http.StatusGone)
+		}
+		return
+	}
+	defer media.File.Close()
+
+	// Even cleared files are treated as hostile in the browser: no scripts, no framing, no sniffing.
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	if isInlineSafeMime(media.Mime) {
+		w.Header().Set("Content-Type", media.Mime)
+		w.Header().Set("Content-Disposition", "inline")
+		// A cleared file is immutable, so images and audio may sit in the operator's own browser cache for a
+		// day (no re-download on every reopen) and are revalidated by ETag after that. `private` keeps shared
+		// caches out. Video and documents stay no-store.
+		if isCacheableMime(media.Mime) && media.SHA256 != "" {
+			w.Header().Set("Cache-Control", "private, max-age=86400")
+			w.Header().Set("ETag", `"`+media.SHA256+`"`)
+		}
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		name := sanitizeFilename("media_" + messageID.String() + extensionForMime(media.Mime))
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	}
+	// ServeContent adds Range support, which the audio player needs to seek.
+	http.ServeContent(w, r, "", time.Time{}, io.ReadSeeker(media.File))
+}
+
+// isCacheableMime: images and audio only.
+func isCacheableMime(mime string) bool {
+	m := strings.ToLower(strings.Split(mime, ";")[0])
+	return strings.HasPrefix(m, "image/") || strings.HasPrefix(m, "audio/")
+}
+
+// isInlineSafeMime lists what the browser may render itself: raster images and audio/video that passed the
+// allow-list. Documents (PDF, text) are always downloads.
+func isInlineSafeMime(mime string) bool {
+	switch strings.ToLower(strings.Split(mime, ";")[0]) {
+	case "image/jpeg", "image/png", "image/webp", "image/gif",
+		"audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/flac", "audio/amr",
+		"video/mp4", "video/webm", "video/quicktime":
+		return true
+	}
+	return false
 }

@@ -43,6 +43,8 @@ type HealthCheck struct {
 	dbPool     *pgxpool.Pool
 	natsConn   *nats.Conn
 	components map[string]*ComponentHealth
+	// ExtraMetrics, when set before the metrics server starts, appends more Prometheus text to /metrics.
+	ExtraMetrics func() string
 }
 
 // NewHealthCheck — cria um novo HealthCheck.

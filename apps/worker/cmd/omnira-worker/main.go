@@ -19,6 +19,8 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapp "github.com/omnira/omnira/internal/channels/application"
 	"github.com/omnira/omnira/internal/channels/domain"
+	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
+	mediaapp "github.com/omnira/omnira/internal/media/application"
 	"github.com/omnira/omnira/internal/outbox/adapters"
 	"github.com/omnira/omnira/internal/outbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
@@ -249,6 +251,57 @@ func main() {
 		}
 	} else {
 		log.Printf("Outbound delivery disabled (OMNIRA_WAHA_ENABLED != true)\n")
+	}
+
+	// Inbound media (ADR-0016 M1): fetch from WAHA right away (it deletes its copy within minutes), check the real
+	// type, quarantine, scan with ClamAV, and only then publish. Fails closed: without the antivirus nothing is
+	// ever published, it just waits in quarantine.
+	if cfg.WahaEnabled && cfg.MediaDir != "" {
+		store, err := mediaadapters.NewFileStore(cfg.MediaDir)
+		if err != nil {
+			log.Fatalf("media store error: %v", err)
+		}
+		wahaClient, err := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
+		if err != nil {
+			log.Fatalf("media: WAHA client config error: %v", err)
+		}
+		fetcher, err := mediaadapters.NewWahaFetcher(wahaClient, cfg.WahaBaseURL)
+		if err != nil {
+			log.Fatalf("media fetcher error: %v", err)
+		}
+		av := mediaadapters.NewClamAV(cfg.ClamAVAddr)
+		mediaCounters := mediaapp.NewCounters()
+		hc.ExtraMetrics = mediaCounters.Render
+		mediaProc, err := mediaapp.NewProcessor(mediaadapters.NewPostgresRepository(dbPool), store, fetcher, av, mediaapp.DefaultConfig(), mediaCounters)
+		if err != nil {
+			log.Fatalf("media processor error: %v", err)
+		}
+		go mediaProc.Run(workerCtx, 2*time.Second)
+		go func() {
+			probe := func() {
+				pctx, cancel := context.WithTimeout(workerCtx, 8*time.Second)
+				defer cancel()
+				err := av.Ping(pctx)
+				mediaCounters.SetAntivirusUp(err == nil)
+				if err != nil {
+					log.Printf("media: antivirus not answering (%v); files wait in quarantine and are NOT published", err)
+				}
+			}
+			probe()
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-workerCtx.Done():
+					return
+				case <-t.C:
+					probe()
+				}
+			}
+		}()
+		log.Printf("Inbound media pipeline started (dir=%s, clamd=%s)\n", cfg.MediaDir, cfg.ClamAVAddr)
+	} else {
+		log.Printf("Inbound media pipeline disabled (needs OMNIRA_WAHA_ENABLED=true and OMNIRA_MEDIA_DIR)\n")
 	}
 
 	log.Printf("Worker starting (env: %s)\n", cfg.Env)

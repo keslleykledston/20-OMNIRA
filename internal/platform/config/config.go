@@ -38,6 +38,10 @@ type Config struct {
 	WahaBaseURL       string
 	WahaAPIKey        string
 	WahaEngine        string
+	// MediaDir: where the media pipeline keeps files (ADR-0016). Empty disables the pipeline reader.
+	MediaDir string
+	// ClamAVAddr: clamd host:port used by the worker's antivirus stage.
+	ClamAVAddr string
 	MetaEnabled       bool
 	PublicBaseURL     string
 	// WebBaseURL: host do frontend como o navegador enxerga (links de e-mail). Diferente
@@ -118,6 +122,8 @@ func Load() *Config {
 		WahaBaseURL:       getEnv("OMNIRA_WAHA_BASE_URL", "http://waha:3000"),
 		WahaAPIKey:        os.Getenv("OMNIRA_WAHA_API_KEY"),
 		WahaEngine:        getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
+		MediaDir:          os.Getenv("OMNIRA_MEDIA_DIR"),
+		ClamAVAddr:        os.Getenv("OMNIRA_CLAMAV_ADDR"),
 		MetaEnabled:       getEnv("OMNIRA_META_ENABLED", "false") == "true",
 		PublicBaseURL:     os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
 		WebBaseURL:        os.Getenv("OMNIRA_WEB_BASE_URL"),

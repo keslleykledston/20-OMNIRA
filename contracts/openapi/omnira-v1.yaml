@@ -652,6 +652,32 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/messages/{message_id}/media:
+    get:
+      operationId: getMessageMedia
+      tags: [Messages]
+      summary: Download a message's attachment
+      description: |
+        Serves the file only after the antivirus cleared it (ADR-0016). Raster images, audio and video are
+        returned inline with `Range` support; everything else (PDF, text) is always an attachment. Every
+        response carries `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`. Images and
+        audio are cacheable by the caller's browser only (`Cache-Control: private, max-age=86400`, revalidated by
+        `ETag`); video and documents are `private, no-store`. `X-Media-Status` tells why a file is not available.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: The cleared file }
+        '206': { description: A byte range of the cleared file }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { description: 'Blocked for security reasons: infected, rejected type or failed check' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: The file is still being checked }
+        '410': { description: 'The file is no longer available: the provider deleted it before capture, or retention removed it' }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages:
     get:
       operationId: listMessages
@@ -1606,6 +1632,12 @@ components:
         size_bytes: { type: integer, format: int64 }
         status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain] }
         created_at: { type: string, format: date-time }
+        media_status:
+          type: string
+          enum: [pending, quarantined, clean, infected, rejected, source_gone, failed]
+          description: |
+            State of the attachment pipeline (ADR-0016); absent for messages without media. Only `clean` can be
+            downloaded; `pending`/`quarantined` mean the file is still being checked.
     MessagePage:
       type: object
       required: [items, has_more, count, limit]

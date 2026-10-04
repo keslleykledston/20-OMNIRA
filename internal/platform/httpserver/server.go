@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -403,7 +405,16 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
 	// Media retrieval: GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media
 	// Only wired if WAHA is enabled; otherwise media endpoint is not registered.
-	if cfg.WahaEnabled && cfg.WahaBaseURL != "" {
+	// ADR-0016: when a media directory is configured the file comes from the quarantine-and-scan pipeline
+	// (only cleared files are ever opened). Without it, the legacy live fetch from WAHA is the fallback.
+	if cfg.MediaDir != "" {
+		if store, err := mediaadapters.OpenFileStore(cfg.MediaDir); err == nil {
+			handler = handler.WithMediaReader(mediaadapters.NewReader(dbPool, store))
+			s.mux.Handle("GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetMedia))))
+		} else {
+			log.Printf("media store unavailable, media downloads disabled: %v", err)
+		}
+	} else if cfg.WahaEnabled && cfg.WahaBaseURL != "" {
 		if mediaRetriever, err := inboxadapters.NewMediaRetriever(dbPool, cfg.WahaBaseURL); err == nil {
 			handler = handler.WithMediaRetriever(mediaRetriever)
 			s.mux.Handle("GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetMedia))))
