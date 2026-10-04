@@ -47,7 +47,7 @@ case "$HOT_DAYS$COLD_MONTHS" in
   *[!0-9]*) echo "HOT_DAYS and COLD_MONTHS must be whole numbers" >&2; exit 2 ;;
 esac
 
-log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
+log() { echo "$(date +%Y-%m-%dT%H:%M:%S%z) $*"; }
 q() { $PSQL -X -q -v ON_ERROR_STOP=1 -At "$@"; }
 
 mkdir -p "$STAGING_DIR"

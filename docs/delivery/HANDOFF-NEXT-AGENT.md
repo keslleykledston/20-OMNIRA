@@ -104,6 +104,9 @@ Backend somente leitura, com dados reais, para a futura tela Contact 360 (FR3). 
 - Migration `000059` (lotes de arquivo; `down` escrito, não executado). Testes: `scripts/test-archive-wa-groups.sh` (56), `scripts/test-archive-ops.sh` (13).
 - **Pendente:** recuperar um arquivo frio é manual (`gzip -dc`); não há tela de consulta ao arquivo.
 
+### Fuso horário de Manaus (2026-10-04)
+- Servidor, contêineres `api`/`worker`/`web` (via `docker-compose.override.yml`), sessões novas do banco e o e-mail de convite passaram para Manaus (UTC-4). Infraestrutura (Postgres, Keycloak, WAHA, NATS, Valkey) segue em UTC de propósito (não reiniciar o WAHA por isso). Nomes de backup e saída dos monitores continuam em UTC. Ver `docs/ops/TIMEZONE.md` (inclui como reverter). Cron do arquivamento de grupos: 03:30 de Manaus.
+
 ### Próximo marco de produto
 **Correção (2026-09-28, `PRODUCT.DOCSYNC`)**: a entrada anterior deste bloco apontava `PRODUCT.6-C1` como próximo marco — isso estava desatualizado. `PRODUCT.6-C1` e todo o arco de integração de ticketing K3G que ela deveria descobrir (`GetTicket`/`CreateTicket`/`UpdateTicketStatus`/resolução de runtime/ativação no Inbox/reconciliação) **já estão implementados e ativos**, 17 commits (`54f5cd0`…`5abfbd5`, 2026-09-24/25) nunca antes registrados neste handoff — ver a entrada `PRODUCT.6-A/B/C` na seção `## NOW` abaixo para o detalhe completo, verificado commit-a-commit em 2026-09-28.
 
