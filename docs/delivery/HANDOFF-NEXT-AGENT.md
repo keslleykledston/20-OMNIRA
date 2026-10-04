@@ -94,6 +94,11 @@ Backend somente leitura, com dados reais, para a futura tela Contact 360 (FR3). 
 - Migrations `down` de `000055`-`000058` escritas e **não executadas** (ciclo up/down/up pendente).
 - Evidência visual: `docs/design/review/SPAM-GROUPS-CONTACTS/`.
 
+### Recibos de entrega/lida, senha do demo e nuvem do backup (2026-10-04)
+- **Recibos:** a resposta ficava em `sent` para sempre embora o WhatsApp a mostrasse lida. O recibo chegava e era gravado, mas `ApplyDeliveryStatus` só casava pelo id completo, e a mesma mensagem pode citar o chat como telefone (`@c.us`) na resposta de envio e como `@lid` nos recibos. Agora também casa pelo **trecho final do id** contra o id reservado antes do envio (único por conexão), só para a frente e nunca entre tenants ou conexões. Recibos que ainda não casam são contados (`delivery_status_receipt_total`) e registrados só pelo formato. Provado ao vivo: uma mensagem de teste foi de `queued` a `delivered` em segundos. As 4 respostas anteriores (3 `uncertain`, 1 `sent`) não foram reconciliadas.
+- **Senha do `demo@omnira.local`:** trocada (a anterior tinha sido exposta); a antiga é recusada e a nova entra. O `kcadm` do contêiner fala na porta **8888**.
+- **Cópia do backup na nuvem:** ficou 10 h sem sucesso nos cron das :05 ("upload did not complete"), embora o envio e a verificação manuais passem; no Drive há objetos duplicados de envios interrompidos. Causa raiz não provada (carga alta da máquina é a suspeita); conferir o cron das 16:05 e o marcador `.cloud-last-ok`. Renovado à mão às 15:13Z.
+
 ### Próximo marco de produto
 **Correção (2026-09-28, `PRODUCT.DOCSYNC`)**: a entrada anterior deste bloco apontava `PRODUCT.6-C1` como próximo marco — isso estava desatualizado. `PRODUCT.6-C1` e todo o arco de integração de ticketing K3G que ela deveria descobrir (`GetTicket`/`CreateTicket`/`UpdateTicketStatus`/resolução de runtime/ativação no Inbox/reconciliação) **já estão implementados e ativos**, 17 commits (`54f5cd0`…`5abfbd5`, 2026-09-24/25) nunca antes registrados neste handoff — ver a entrada `PRODUCT.6-A/B/C` na seção `## NOW` abaixo para o detalhe completo, verificado commit-a-commit em 2026-09-28.
 

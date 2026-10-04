@@ -98,9 +98,11 @@ docker-compose restart api worker
 
 Admin console → Realms → omnira → Users → Create user
 
-Ou use o usuário demo já provisionado (`demo@omnira.local`). A senha foi redefinida em 2026-10-03 e não é registrada neste repositório;
+Ou use o usuário demo já provisionado (`demo@omnira.local`). A senha foi redefinida em 2026-10-04 (a anterior havia sido exposta numa conversa) e não é registrada neste repositório;
 para trocá-la, use o console admin do Keycloak ou (depois de `kcadm.sh config credentials` com o admin do realm master):
 ```
+# o Keycloak escuta em 8888 dentro do contêiner (KC_HTTP_PORT), não em 8080
+docker exec omnira-keycloak /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8888 --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD"
 docker exec omnira-keycloak /opt/keycloak/bin/kcadm.sh set-password -r omnira --username demo@omnira.local --new-password '<nova-senha>'
 ```
 
