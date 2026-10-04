@@ -22,6 +22,7 @@ import (
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
@@ -556,6 +557,32 @@ func (s *Server) RegisterPresenceHandlers(dbPool *pgxpool.Pool) {
 		}()
 		lastSeenWriter.RunFlushLoop(ctx, 2*time.Minute)
 	}()
+}
+
+// RegisterIntelligenceHandlers exposes the topic API (ADR-0017) behind authn + tenant session. Permissions
+// (topic.read / topic.manage) and the "attendant or conversation.manage" rule are checked inside the handler.
+func (s *Server) RegisterIntelligenceHandlers(dbPool *pgxpool.Pool, h *intelligenceadapters.TopicHandler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	const t = "/api/v1/tenants/{tenant_id}"
+	s.mux.Handle("GET "+t+"/inbox/conversations/{conversation_id}/topics", wrap(h.ListConversationTopics))
+	s.mux.Handle("POST "+t+"/inbox/conversations/{conversation_id}/topics", wrap(h.CreateConversationTopic))
+	s.mux.Handle("GET "+t+"/topics/{topic_id}", wrap(h.GetTopic))
+	s.mux.Handle("PATCH "+t+"/topics/{topic_id}", wrap(h.PatchTopic))
+	s.mux.Handle("GET "+t+"/topics/{topic_id}/messages", wrap(h.ListTopicMessages))
+	s.mux.Handle("POST "+t+"/topics/{topic_id}/messages", wrap(h.LinkMessage))
+	s.mux.Handle("DELETE "+t+"/topics/{topic_id}/messages/{message_id}", wrap(h.UnlinkMessage))
+	s.mux.Handle("GET "+t+"/topics/{topic_id}/tickets", wrap(h.ListTopicTickets))
+	s.mux.Handle("POST "+t+"/topics/{topic_id}/tickets/link", wrap(h.LinkTicket))
+	s.mux.Handle("GET "+t+"/contacts/{contact_id}/topics", wrap(h.ListContactTopics))
 }
 
 // RegisterAIIntegrationHandlers exposes the per-tenant external-AI opt-in and key (ADR-0016). Everything is

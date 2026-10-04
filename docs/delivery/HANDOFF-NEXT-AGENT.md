@@ -120,6 +120,10 @@ Backend somente leitura, com dados reais, para a futura tela Contact 360 (FR3). 
 - **Backup de mídia**: `scripts/backup-omnira-media.sh` + verificador + cron (`:35` e `*/15`); disco externo e nuvem cifrada, retenção 90 dias.
 - Pendente: aprovação visual da UI nova (cartão Gemini e transcrição) antes de commit/deploy do front; M3, M4 (PDF), M5 (busca no Inbox usando `tsv`), M7 (vídeo), restauração testada do backup de mídia.
 
+### Conversation Intelligence (ADR-0017) - em ondas, commits locais, nada implantado
+- **Onda 1 (fundação de tópicos, sem IA)**: migration 000063 (`topic_threads`, `message_topic_links`, `topic_conversation_links`, `topic_ticket_links`, `topic_summaries`, permissões `topic.*`), módulo `internal/intelligence/` (domain/ports/application/adapters), API `/topics` e `/inbox/conversations/{id}/topics` (OpenAPI atualizado), flags em `application/flags.go`. Provas: Postgres real Tenant A/B, mutação de RLS, `scripts/test-migration-roundtrip.sh 000063_topic_threads` (up/down/up).
+- Próximas ondas conforme o plano do dono (participantes externos, roteador determinístico, pipeline de eventos, contexto/resumo, IA em modo sombra, política de ticket, handoff privado, multimodal, contabilidade de IA, copiloto e UI, gateway de ferramentas). Estado e relatório final ao término.
+
 ### Próximo marco de produto
 **Correção (2026-09-28, `PRODUCT.DOCSYNC`)**: a entrada anterior deste bloco apontava `PRODUCT.6-C1` como próximo marco — isso estava desatualizado. `PRODUCT.6-C1` e todo o arco de integração de ticketing K3G que ela deveria descobrir (`GetTicket`/`CreateTicket`/`UpdateTicketStatus`/resolução de runtime/ativação no Inbox/reconciliação) **já estão implementados e ativos**, 17 commits (`54f5cd0`…`5abfbd5`, 2026-09-24/25) nunca antes registrados neste handoff — ver a entrada `PRODUCT.6-A/B/C` na seção `## NOW` abaixo para o detalhe completo, verificado commit-a-commit em 2026-09-28.
 

@@ -29,6 +29,8 @@ import (
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
+	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
+	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
@@ -202,6 +204,11 @@ func main() {
 		log.Fatalf("WAHA provider descriptor error: %v", err)
 	}
 	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management))
+	intelligenceFlags := intelligenceapp.FlagsFromEnv(nil)
+	if intelligenceFlags.TopicThreadsEnabled {
+		topicRepo := intelligenceadapters.NewPostgresTopicRepository(dbPool)
+		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo), topicRepo))
+	}
 	if erpCipherErr == nil && erpCipher != nil {
 		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher))
 	} else {

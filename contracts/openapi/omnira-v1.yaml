@@ -730,6 +730,228 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '409': { description: No key configured }
         '429': { description: Tested again too soon }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/topics:
+    get:
+      operationId: listConversationTopics
+      tags: [Topics]
+      summary: Topics (logical subjects) of a conversation
+      description: Requires `topic.read`. A topic may span several conversations; open topics first, archived hidden.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200':
+          description: The conversation's topics with message and ticket counts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicList' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createConversationTopic
+      tags: [Topics]
+      summary: Create a topic in a conversation
+      description: |
+        Requires `topic.manage` and being the conversation's attendant (or `conversation.manage`). The listed messages
+        are linked to the new topic as primary, as an agent decision. Every id must belong to the tenant.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTopicRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Topic' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Invalid title, privacy policy or too many message ids' }
+  /tenants/{tenant_id}/topics/{topic_id}:
+    get:
+      operationId: getTopic
+      tags: [Topics]
+      summary: A topic
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: The topic
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Topic' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    patch:
+      operationId: updateTopic
+      tags: [Topics]
+      summary: Edit, resolve or reopen a topic
+      description: '`status` accepts `resolved` or `open` only (archiving is not exposed). Resolving a resolved topic is a conflict.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTopicRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Topic' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Invalid status transition }
+        '422': { description: Invalid field }
+  /tenants/{tenant_id}/topics/{topic_id}/messages:
+    get:
+      operationId: listTopicMessages
+      tags: [Topics]
+      summary: The logical timeline of a topic (newest first)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: A page of the topic's messages
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicMessagePage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: linkTopicMessage
+      tags: [Topics]
+      summary: Add a message to a topic (agent decision)
+      description: Idempotent. A decision by an agent or the customer is never overwritten by a lower-authority one.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message_id]
+              properties:
+                message_id: { type: string, format: uuid }
+                relation: { type: string, enum: [primary, secondary, supporting, ambiguous] }
+      responses:
+        '204': { description: Linked }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Invalid relation }
+  /tenants/{tenant_id}/topics/{topic_id}/messages/{message_id}:
+    delete:
+      operationId: unlinkTopicMessage
+      tags: [Topics]
+      summary: Remove a message from a topic (the message itself stays in its conversation)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Removed }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/tickets:
+    get:
+      operationId: listTopicTickets
+      tags: [Topics]
+      summary: Tickets linked to a topic (primary first)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Linked tickets
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicTicketList' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/tickets/link:
+    post:
+      operationId: linkTopicTicket
+      tags: [Topics]
+      summary: Link an existing ticket to a topic
+      description: Never creates a ticket. A topic has at most one `primary` ticket (409 otherwise).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ticket_id]
+              properties:
+                ticket_id: { type: string, format: uuid }
+                relation: { type: string, enum: [primary, related, child, merged] }
+      responses:
+        '204': { description: Linked }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: The topic already has a primary ticket }
+        '422': { description: Invalid relation }
+  /tenants/{tenant_id}/contacts/{contact_id}/topics:
+    get:
+      operationId: listContactTopics
+      tags: [Topics]
+      summary: Topics of a contact (active subjects across conversations)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - name: contact_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [open, resolved, archived] }
+      responses:
+        '200':
+          description: The contact's topics
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicList' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
   /tenants/{tenant_id}/messages/{message_id}/media:
     get:
       operationId: getMessageMedia
@@ -1336,6 +1558,11 @@ components:
       in: cookie
       name: omnira_session
   parameters:
+    TopicId:
+      name: topic_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     TenantId:
       name: tenant_id
       in: path
@@ -1729,6 +1956,101 @@ components:
         ok: { type: boolean }
         message: { type: string }
         model_available: { type: boolean }
+    Topic:
+      type: object
+      required: [id, title, status, privacy_policy, source, legacy_unsegmented, last_activity_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, maxLength: 200 }
+        intent: { type: string }
+        category: { type: string }
+        status: { type: string, enum: [open, resolved, archived] }
+        privacy_policy: { type: string, enum: [public, private_recommended, private_required] }
+        source: { type: string, enum: [manual, rule, ai, handoff, legacy_backfill] }
+        routing_confidence: { type: number, minimum: 0, maximum: 1 }
+        legacy_unsegmented: { type: boolean }
+        primary_contact_id: { type: string, format: uuid }
+        origin_conversation_id: { type: string, format: uuid }
+        last_activity_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time }
+        message_count: { type: integer }
+        ticket_count: { type: integer }
+        last_message_at: { type: string, format: date-time }
+    TopicList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Topic' }
+    CreateTopicRequest:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        intent: { type: string }
+        category: { type: string }
+        privacy_policy: { type: string, enum: [public, private_recommended, private_required] }
+        message_ids:
+          type: array
+          maxItems: 100
+          items: { type: string, format: uuid }
+    UpdateTopicRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        intent: { type: string }
+        category: { type: string }
+        privacy_policy: { type: string, enum: [public, private_recommended, private_required] }
+        status: { type: string, enum: [open, resolved] }
+    TopicMessage:
+      type: object
+      required: [id, conversation_id, direction, message_type, status, created_at, relation, decision_source]
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        direction: { type: string, enum: [inbound, outbound] }
+        message_type: { type: string }
+        body: { type: string }
+        mime_type: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        relation: { type: string, enum: [primary, secondary, supporting, ambiguous] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        decision_source: { type: string, enum: [explicit, handoff, reply, entity, rule, ai, agent, customer, legacy] }
+    TopicMessagePage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TopicMessage' }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
+    TopicTicket:
+      type: object
+      required: [id, status, priority, subject, relation, linked_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string }
+        priority: { type: string }
+        subject: { type: string }
+        provider: { type: string }
+        external_ticket_id: { type: string }
+        relation: { type: string, enum: [primary, related, child, merged] }
+        linked_at: { type: string, format: date-time }
+    TopicTicketList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/TopicTicket' }
     MessageItem:
       type: object
       required: [id, conversation_id, direction, message_type, status, created_at]
