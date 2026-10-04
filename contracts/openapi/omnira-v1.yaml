@@ -1195,6 +1195,103 @@ paths:
         '422': { description: "No customer message to answer", content: { text/plain: { schema: { type: string } } } }
         '429': { description: "Asked again too soon for this topic", content: { text/plain: { schema: { type: string } } } }
         '503': { description: "The copilot is unavailable right now", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/topics/{topic_id}/ai/tools:
+    get:
+      operationId: listTopicAITools
+      tags: [Topics]
+      summary: The closed catalog of real tools the AI may request
+      description: 'Only tools that exist and are wired here are listed. There is no tool to send messages, close tickets, run scripts or SQL, or call arbitrary URLs. 404 when the gateway flag is off.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Catalog
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AIToolView' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/ai/tools/invoke:
+    post:
+      operationId: invokeTopicAITool
+      tags: [Topics]
+      summary: Ask for a tool to run (policy-gated, audited, idempotent)
+      description: |
+        Every tool runs with the REQUESTING USER's permissions. A read runs at once (200). A write asked for by the AI
+        (proposed_by ai, the default) is queued for a person (202 pending_approval); the same write from a person
+        (proposed_by agent) is that person acting. A denied request is recorded (403). Results are untrusted data. The
+        idempotency key makes a retry return the first outcome; reusing it for a different request is a 409.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AIToolInvoke' }
+      responses:
+        '200': { description: Executed (or failed with a fixed reason), content: { application/json: { schema: { $ref: '#/components/schemas/AIToolCall' } } } }
+        '202': { description: Waiting for a person to approve, content: { application/json: { schema: { $ref: '#/components/schemas/AIToolCall' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Idempotency key already used for a different request", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Unknown tool, invalid arguments or key", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/topics/{topic_id}/ai/tool-calls:
+    get:
+      operationId: listTopicAIToolCalls
+      tags: [Topics]
+      summary: Audit trail and approval queue of the topic's tool calls
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Latest 50 calls
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AIToolCall' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/ai/tool-calls/{call_id}/approve:
+    post:
+      operationId: approveTopicAIToolCall
+      tags: [Topics]
+      summary: Approve and run a pending call with the approver's own authority
+      description: 'The approver must be allowed to use the tool and to operate the topic. Only one approver can win (409 otherwise).'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+        - { name: call_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Executed, content: { application/json: { schema: { $ref: '#/components/schemas/AIToolCall' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "No longer pending", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/topics/{topic_id}/ai/tool-calls/{call_id}/reject:
+    post:
+      operationId: rejectTopicAIToolCall
+      tags: [Topics]
+      summary: Reject a pending call (nothing runs)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+        - { name: call_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Rejected }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "No longer pending", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
     get:
       operationId: listConversationAmbiguities
@@ -1936,6 +2033,37 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    AIToolView:
+      type: object
+      required: [name, description, risk, permission, ai_requires_approval]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        risk: { type: string, enum: [read, low_write] }
+        permission: { type: string }
+        ai_requires_approval: { type: boolean }
+    AIToolInvoke:
+      type: object
+      required: [tool, idempotency_key]
+      additionalProperties: false
+      properties:
+        tool: { type: string }
+        args: { type: object, description: 'Strictly validated per tool; unknown fields are refused' }
+        idempotency_key: { type: string, minLength: 8, maxLength: 64 }
+        proposed_by: { type: string, enum: [ai, agent], default: ai }
+    AIToolCall:
+      type: object
+      required: [id, tool, risk, source, status, args, result_is_untrusted_data]
+      properties:
+        id: { type: string, format: uuid }
+        tool: { type: string }
+        risk: { type: string, enum: [read, low_write] }
+        source: { type: string, enum: [ai, agent] }
+        status: { type: string, enum: [executed, pending_approval, rejected, denied, failed] }
+        args: { type: object }
+        result: { type: object }
+        result_is_untrusted_data: { type: boolean, enum: [true] }
+        error: { type: string }
     CopilotSuggestion:
       type: object
       required: [reply, missing_info, needs_human, warnings, sent]

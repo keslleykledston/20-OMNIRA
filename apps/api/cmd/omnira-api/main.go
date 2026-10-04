@@ -220,8 +220,13 @@ func main() {
 		copilotSvc := intelligenceapp.NewCopilotService(intelligenceapp.NewContextBuilder(topicRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), summaryRepo),
 			intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 		handoffSvc := intelligenceapp.NewHandoffService(intelligenceadapters.NewPostgresHandoffRepository(dbPool), routingRepo, intelligenceFlags, nil)
-		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo), topicRepo).
-			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc).WithHandoffs(handoffSvc).WithCopilot(copilotSvc))
+		topicSvc := intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo)
+		topicHandler := intelligenceadapters.NewTopicHandler(dbPool, topicSvc, topicRepo).
+			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc).WithHandoffs(handoffSvc).WithCopilot(copilotSvc)
+		// the AI tool gateway: a closed registry of real tools, run with the requesting user's own permissions
+		topicHandler.WithTools(intelligenceapp.NewToolGateway(intelligenceadapters.NewPostgresToolCallRepository(dbPool), topicRepo, topicHandler.ToolAuthorizer(),
+			intelligenceapp.NewToolExecutors(topicSvc, summarySvc, ticketPolicySvc), intelligenceFlags))
+		srv.RegisterIntelligenceHandlers(dbPool, topicHandler)
 	}
 	if erpCipherErr == nil && erpCipher != nil {
 		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher).WithUsage(aiusageadapters.NewPostgresLedger(dbPool)))

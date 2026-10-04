@@ -594,6 +594,11 @@ func (s *Server) RegisterIntelligenceHandlers(dbPool *pgxpool.Pool, h *intellige
 	s.mux.Handle("GET "+t+"/topics/{topic_id}/handoffs", wrap(h.ListHandoffs))
 	s.mux.Handle("POST "+t+"/topics/{topic_id}/handoffs/{handoff_id}/revoke", wrap(h.RevokeHandoff))
 	s.mux.Handle("POST "+t+"/topics/{topic_id}/copilot/suggest-reply", wrap(h.SuggestReply))
+	s.mux.Handle("GET "+t+"/topics/{topic_id}/ai/tools", wrap(h.ListAITools))
+	s.mux.Handle("POST "+t+"/topics/{topic_id}/ai/tools/invoke", wrap(h.InvokeAITool))
+	s.mux.Handle("GET "+t+"/topics/{topic_id}/ai/tool-calls", wrap(h.ListAIToolCalls))
+	s.mux.Handle("POST "+t+"/topics/{topic_id}/ai/tool-calls/{call_id}/approve", wrap(h.ApproveAIToolCall))
+	s.mux.Handle("POST "+t+"/topics/{topic_id}/ai/tool-calls/{call_id}/reject", wrap(h.RejectAIToolCall))
 	s.mux.Handle("GET "+t+"/inbox/conversations/{conversation_id}/ambiguities", wrap(h.ListConversationAmbiguities))
 	s.mux.Handle("POST "+t+"/ambiguities/{ambiguity_id}/resolve", wrap(h.ResolveAmbiguity))
 }

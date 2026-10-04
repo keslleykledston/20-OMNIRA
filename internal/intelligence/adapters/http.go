@@ -40,6 +40,34 @@ type TopicHandler struct {
 	tickets     *application.TopicTicketService
 	handoffs    *application.HandoffService
 	copilot     *application.CopilotService
+	tools       *application.ToolGateway
+}
+
+// WithTools enables the policy-gated AI tool gateway endpoints.
+func (h *TopicHandler) WithTools(t *application.ToolGateway) *TopicHandler {
+	h.tools = t
+	return h
+}
+
+// ToolAuthorizer lets the tool gateway ask, for the current session's user, the same permission questions the handlers ask.
+func (h *TopicHandler) ToolAuthorizer() application.ToolAuthorizer { return toolAuthorizer{h} }
+
+type toolAuthorizer struct{ h *TopicHandler }
+
+func (a toolAuthorizer) Has(ctx context.Context, permission string) (bool, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil {
+		return false, errors.New("tenant context not found")
+	}
+	return a.h.has(ctx, tc, permission)
+}
+
+func (a toolAuthorizer) OperatesTopic(ctx context.Context, topicID uuid.UUID) (bool, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil {
+		return false, errors.New("tenant context not found")
+	}
+	return a.h.canOperateTopic(ctx, tc, topicID)
 }
 
 // WithCopilot enables the suggest-only reply copilot endpoint.
@@ -127,10 +155,16 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, domain.ErrInvalidTopic):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-	case errors.Is(err, application.ErrHandoffDisabled), errors.Is(err, application.ErrCopilotDisabled):
+	case errors.Is(err, application.ErrHandoffDisabled), errors.Is(err, application.ErrCopilotDisabled), errors.Is(err, application.ErrToolGatewayDisabled):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrPrimaryTicketTaken), errors.Is(err, domain.ErrTooManyHandoffs):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, domain.ErrToolForbidden):
+		http.Error(w, "forbidden", http.StatusForbidden)
+	case errors.Is(err, domain.ErrUnknownTool), errors.Is(err, domain.ErrInvalidArgs), errors.Is(err, application.ErrBadIdempotencyKey):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, ports.ErrIdempotencyMismatch):
+		http.Error(w, "idempotency key already used for a different request", http.StatusConflict)
 	case errors.Is(err, application.ErrCopilotUnavailable):
 		http.Error(w, "the copilot is unavailable right now", http.StatusServiceUnavailable)
 	case errors.Is(err, application.ErrCopilotThrottled):
@@ -1123,4 +1157,158 @@ func (h *TopicHandler) SuggestReply(w http.ResponseWriter, r *http.Request) {
 		"answered_message_id": res.AnsweredMessageID, "based_on_messages": res.BasedOnMessages, "confirmed_summary_version": res.ConfirmedSummary,
 		"model": res.Model, "prompt_version": res.PromptVersion, "sent": false,
 	})
+}
+
+type toolCallDTO struct {
+	ID        uuid.UUID       `json:"id"`
+	Tool      string          `json:"tool"`
+	Risk      string          `json:"risk"`
+	Source    string          `json:"source"`
+	Status    string          `json:"status"`
+	Args      json.RawMessage `json:"args"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	Untrusted bool            `json:"result_is_untrusted_data"`
+	Error     string          `json:"error,omitempty"`
+}
+
+func toToolCallDTO(c domain.ToolCall) toolCallDTO {
+	return toolCallDTO{ID: c.ID, Tool: c.Tool, Risk: string(c.Risk), Source: string(c.Source), Status: string(c.Status), Args: c.Args, Result: c.Result, Untrusted: true, Error: c.Error}
+}
+
+func (h *TopicHandler) toolsGate(w http.ResponseWriter, r *http.Request, permission string) (uuid.UUID, bool) {
+	if _, err := h.authorize(r, permission); err != nil {
+		fail(w, err)
+		return uuid.Nil, false
+	}
+	if h.tools == nil || !h.tools.Enabled() {
+		http.Error(w, "not found", http.StatusNotFound)
+		return uuid.Nil, false
+	}
+	id, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return uuid.Nil, false
+	}
+	if _, err := h.svc.GetTopic(r.Context(), id); err != nil {
+		fail(w, err)
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// ListAITools: GET /tenants/{tenant_id}/topics/{topic_id}/ai/tools (the closed catalog of real tools)
+func (h *TopicHandler) ListAITools(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.toolsGate(w, r, permTopicRead); !ok {
+		return
+	}
+	type view struct {
+		Name               string `json:"name"`
+		Description        string `json:"description"`
+		Risk               string `json:"risk"`
+		Permission         string `json:"permission"`
+		AIRequiresApproval bool   `json:"ai_requires_approval"`
+	}
+	out := []view{}
+	for _, t := range h.tools.Catalog() {
+		out = append(out, view{t.Name, t.Description, string(t.Risk), t.Permission, t.AIRequiresApproval})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+type invokeToolRequest struct {
+	Tool           string          `json:"tool"`
+	Args           json.RawMessage `json:"args"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	ProposedBy     string          `json:"proposed_by"`
+}
+
+// InvokeAITool: POST /tenants/{tenant_id}/topics/{topic_id}/ai/tools/invoke
+// proposed_by=ai is the conservative default; claiming "agent" gives nothing beyond what the user can already do through the
+// corresponding endpoint, because every tool runs with the requesting user's own permissions.
+func (h *TopicHandler) InvokeAITool(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.toolsGate(w, r, permTopicRead)
+	if !ok {
+		return
+	}
+	var req invokeToolRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	source := domain.SourceAIToolCall
+	switch req.ProposedBy {
+	case "", "ai":
+	case "agent":
+		source = domain.SourceAgentTool
+	default:
+		http.Error(w, "invalid proposed_by", http.StatusUnprocessableEntity)
+		return
+	}
+	call, err := h.tools.Invoke(r.Context(), id, req.Tool, req.Args, req.IdempotencyKey, source)
+	if err != nil {
+		if call != nil && errors.Is(err, domain.ErrToolForbidden) {
+			writeJSON(w, http.StatusForbidden, toToolCallDTO(*call))
+			return
+		}
+		fail(w, err)
+		return
+	}
+	status := http.StatusOK
+	if call.Status == domain.ToolPendingApproval {
+		status = http.StatusAccepted
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, status, toToolCallDTO(*call))
+}
+
+// ListAIToolCalls: GET /tenants/{tenant_id}/topics/{topic_id}/ai/tool-calls (the audit trail and the approval queue)
+func (h *TopicHandler) ListAIToolCalls(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.toolsGate(w, r, permTopicRead)
+	if !ok {
+		return
+	}
+	list, err := h.tools.List(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := make([]toolCallDTO, 0, len(list))
+	for _, c := range list {
+		out = append(out, toToolCallDTO(c))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+// ApproveAIToolCall: POST /tenants/{tenant_id}/topics/{topic_id}/ai/tool-calls/{call_id}/approve
+func (h *TopicHandler) ApproveAIToolCall(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.toolsGate(w, r, permTopicManage)
+	if !ok {
+		return
+	}
+	callID, ok := pathUUID(w, r, "call_id")
+	if !ok {
+		return
+	}
+	call, err := h.tools.Approve(r.Context(), id, callID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, toToolCallDTO(*call))
+}
+
+// RejectAIToolCall: POST /tenants/{tenant_id}/topics/{topic_id}/ai/tool-calls/{call_id}/reject
+func (h *TopicHandler) RejectAIToolCall(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.toolsGate(w, r, permTopicManage)
+	if !ok {
+		return
+	}
+	callID, ok := pathUUID(w, r, "call_id")
+	if !ok {
+		return
+	}
+	if err := h.tools.Reject(r.Context(), id, callID); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
