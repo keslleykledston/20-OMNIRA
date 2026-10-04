@@ -46,6 +46,9 @@ export interface MessageItem {
   mime_type?: string; // 'image/jpeg', 'application/pdf', etc.
   size_bytes?: number; // Media file size in bytes
   media_status?: MediaStatus; // attachment pipeline state (ADR-0016); absent without media
+  media_text?: string; // text derived from the attachment (audio transcript); untrusted, plain text only
+  media_text_status?: 'pending' | 'done' | 'empty' | 'failed';
+  media_text_suspicious?: boolean; // the text looks addressed to an AI model
   media_urls?: string[]; // DEPRECATED: use /api/v1/tenants/{id}/messages/{id}/media instead
 }
 

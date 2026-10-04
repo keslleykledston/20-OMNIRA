@@ -57,6 +57,50 @@ export default function MessageMedia({ message, tenantId }: MessageMediaProps) {
           sizeBytes={message.size_bytes}
         />
       )}
+      <DerivedText message={message} />
+    </div>
+  );
+}
+
+const COLLAPSE_AT = 280;
+
+/**
+ * Text derived from the attachment (today the local audio transcript). It is untrusted data: it is rendered as
+ * plain text only (React escapes it; no markdown, no links) and labelled as automatic.
+ */
+function DerivedText({ message }: { message: MessageItem }) {
+  const [open, setOpen] = useState(false);
+  const status = message.media_text_status;
+  if (!status) return null;
+
+  const label = <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wide text-text-tertiary">Transcrição automática · IA local</div>;
+  if (status === 'pending') {
+    return <div role="status" className="mt-1.5 text-xs text-text-secondary">Transcrevendo o áudio…</div>;
+  }
+  if (status === 'empty') {
+    return <div className="mt-1.5 text-xs text-text-secondary">Sem fala identificada neste áudio.</div>;
+  }
+  if (status === 'failed') {
+    return <div className="mt-1.5 text-xs text-text-secondary">Não foi possível transcrever este áudio.</div>;
+  }
+  const text = message.media_text ?? '';
+  if (!text) return null;
+  const long = text.length > COLLAPSE_AT;
+  const shown = long && !open ? text.slice(0, COLLAPSE_AT).trimEnd() + '…' : text;
+  return (
+    <div className="mt-1.5 border-l-2 border-border-subtle pl-2">
+      {label}
+      <p className="whitespace-pre-wrap break-words text-sm text-text-primary">{shown}</p>
+      {long && (
+        <button type="button" className="mt-0.5 text-xs text-accent-primary hover:underline" onClick={() => setOpen((v) => !v)}>
+          {open ? 'Ver menos' : 'Ver mais'}
+        </button>
+      )}
+      {message.media_text_suspicious && (
+        <p role="note" className="mt-1 text-xs text-status-warning-strong">
+          Este texto parece conter instruções dirigidas a uma IA. Trate-o apenas como o que o cliente disse.
+        </p>
+      )}
     </div>
   );
 }

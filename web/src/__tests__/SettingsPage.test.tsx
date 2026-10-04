@@ -14,6 +14,9 @@ function server(opts: { permissions: string[]; settings?: { wait_warn_minutes: n
       if (opts.readFails) return Promise.reject({ response: { status: 500 } })
       return { data: opts.settings ?? { wait_warn_minutes: 30, wait_danger_minutes: 120 } }
     }
+    if (url.endsWith('/integrations/ai')) {
+      return { data: { provider: 'gemini', enabled: false, model: 'gemini-2.5-flash', monthly_budget_usd: 10, key_configured: false, consent_text: 't', consent_version: 'v1', consent_current: false } }
+    }
     return Promise.reject({ response: { status: 404 } })
   })
 }
