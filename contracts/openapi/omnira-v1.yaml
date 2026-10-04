@@ -1093,6 +1093,65 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/handoffs:
+    post:
+      operationId: createTopicHandoff
+      tags: [Topics]
+      summary: Create a private-handoff invitation for a topic
+      description: 'Returns an opaque single-use token ONCE (Cache-Control no-store); only its SHA-256 is stored. Default validity 24 h, maximum 72 h, at most 3 pending per topic (409). 404 when the feature flag is off.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { expires_in_minutes: { type: integer, minimum: 0, maximum: 4320 } } }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { type: object, required: [handoff, token, instructions], properties: { handoff: { $ref: '#/components/schemas/TopicHandoff' }, token: { type: string }, instructions: { type: string } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Too many pending invitations, or the topic is not open", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Invalid expiry", content: { text/plain: { schema: { type: string } } } }
+    get:
+      operationId: listTopicHandoffs
+      tags: [Topics]
+      summary: Invitations of a topic (never includes tokens)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Invitations, newest first
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/TopicHandoff' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/handoffs/{handoff_id}/revoke:
+    post:
+      operationId: revokeTopicHandoff
+      tags: [Topics]
+      summary: Revoke a pending invitation
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+        - { name: handoff_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Revoked }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "The invitation is not pending", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
     get:
       operationId: listConversationAmbiguities
@@ -1834,6 +1893,17 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    TopicHandoff:
+      type: object
+      required: [id, status, expires_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, redeemed, revoked, expired] }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        source_group_id: { type: string, format: uuid }
+        redeemed_at: { type: string, format: date-time }
+        redeemed_conversation_id: { type: string, format: uuid }
     TicketPolicyAdvice:
       type: object
       required: [action, reason, allowed_actions]

@@ -590,6 +590,9 @@ func (s *Server) RegisterIntelligenceHandlers(dbPool *pgxpool.Pool, h *intellige
 	s.mux.Handle("GET "+t+"/topics/{topic_id}/ticket-policy", wrap(h.GetTicketPolicy))
 	s.mux.Handle("POST "+t+"/topics/{topic_id}/ticket-policy/apply", wrap(h.ApplyTicketPolicy))
 	s.mux.Handle("POST "+t+"/inbox/conversations/{conversation_id}/legacy-topic", wrap(h.BackfillLegacyTopic))
+	s.mux.Handle("POST "+t+"/topics/{topic_id}/handoffs", wrap(h.CreateHandoff))
+	s.mux.Handle("GET "+t+"/topics/{topic_id}/handoffs", wrap(h.ListHandoffs))
+	s.mux.Handle("POST "+t+"/topics/{topic_id}/handoffs/{handoff_id}/revoke", wrap(h.RevokeHandoff))
 	s.mux.Handle("GET "+t+"/inbox/conversations/{conversation_id}/ambiguities", wrap(h.ListConversationAmbiguities))
 	s.mux.Handle("POST "+t+"/ambiguities/{ambiguity_id}/resolve", wrap(h.ResolveAmbiguity))
 }

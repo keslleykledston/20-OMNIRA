@@ -15,12 +15,13 @@ type Counters struct {
 	decisions map[[3]string]uint64
 	jobs      map[string]uint64
 	shadow    map[string]uint64
+	handoff   map[string]uint64
 	latencyN  uint64
 	latencyS  float64
 }
 
 func NewCounters() *Counters {
-	return &Counters{decisions: map[[3]string]uint64{}, jobs: map[string]uint64{}, shadow: map[string]uint64{}}
+	return &Counters{decisions: map[[3]string]uint64{}, jobs: map[string]uint64{}, shadow: map[string]uint64{}, handoff: map[string]uint64{}}
 }
 
 func (c *Counters) Decision(status string, applied bool, source string) {
@@ -39,6 +40,12 @@ func (c *Counters) Latency(d time.Duration) {
 func (c *Counters) Shadow(outcome string) {
 	c.mu.Lock()
 	c.shadow[outcome]++
+	c.mu.Unlock()
+}
+
+func (c *Counters) Handoff(outcome string) {
+	c.mu.Lock()
+	c.handoff[outcome]++
 	c.mu.Unlock()
 }
 
@@ -80,6 +87,15 @@ func (c *Counters) Render() string {
 	sort.Strings(outs)
 	for _, o := range outs {
 		fmt.Fprintf(&sb, "topic_ai_shadow_total{outcome=%q} %d\n", o, c.shadow[o])
+	}
+	sb.WriteString("# HELP topic_handoff_redemptions_total Private handoff token redemptions by outcome\n# TYPE topic_handoff_redemptions_total counter\n")
+	hs := make([]string, 0, len(c.handoff))
+	for k := range c.handoff {
+		hs = append(hs, k)
+	}
+	sort.Strings(hs)
+	for _, o := range hs {
+		fmt.Fprintf(&sb, "topic_handoff_redemptions_total{outcome=%q} %d\n", o, c.handoff[o])
 	}
 	return sb.String()
 }

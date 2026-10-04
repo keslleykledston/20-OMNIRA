@@ -106,6 +106,11 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - Automação (`OMNIRA_AUTO_TICKET_POLICY_ENABLED`, desligada): só `adopt_active` e `create`, origem `rule`, falha nunca derruba o job.
 - Backfill legado sob demanda: `POST /inbox/conversations/{id}/legacy-topic` cria um tópico `legacy_backfill` para o ticket ativo sem vínculo; não classifica histórico; idempotente.
 
+### Handoff privado (ADR-0017, onda 8, migration 000067)
+- `topic_handoffs`: convite curto e de uso único para continuar um assunto (tipicamente nascido num grupo) no chat privado. O token (`omn-` + 256 bits) é mostrado **uma vez** na criação; só o SHA-256 é gravado; nunca é logado nem listado. Validade padrão 24 h (máx. 72 h), até 3 pendentes por tópico, sem DELETE (revoga ou expira; `expired` é derivado).
+- Resgate: passo do pipeline **antes do roteamento** (flag `OMNIRA_PRIVATE_HANDOFF_ENABLED`, desligada) em mensagem privada de entrada. Um único `UPDATE ... WHERE status='pending' AND expires_at>now() AND tópico aberto ... RETURNING` garante uso único sob concorrência; liga mensagem (decisão `handoff`, a evidência mais forte) e a conversa ao tópico. Token inválido/expirado/revogado/de outro tenant/em grupo: nada acontece e nada é revelado. Não há fusão automática de identidade do contato (pendência K3G, PRODUCT.7B).
+- Métrica: `topic_handoff_redemptions_total{outcome}`. API: `POST|GET /topics/{id}/handoffs`, `POST .../handoffs/{id}/revoke`.
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.

@@ -360,6 +360,11 @@ func main() {
 			pipeline = intelligenceapp.TicketPolicyPipeline{Next: pipeline, Tickets: intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool),
 				intelligenceadapters.NewPostgresRoutingRepository(dbPool), inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)}
 		}
+		if intelligenceFlags.PrivateHandoffEnabled {
+			// before routing: a valid token places the message with the strongest evidence
+			pipeline = intelligenceapp.HandoffPipeline{Next: pipeline, Handoffs: intelligenceapp.NewHandoffService(intelligenceadapters.NewPostgresHandoffRepository(dbPool),
+				intelligenceadapters.NewPostgresRoutingRepository(dbPool), intelligenceFlags, intelligenceCounters)}
+		}
 		runner := intelligenceapp.NewJobRunner(jobStore, pipeline, session, intelligenceapp.DefaultJobRunnerConfig(), intelligenceCounters)
 		go runner.Run(workerCtx, 2*time.Second)
 		handler, err := intelligenceworker.NewHandler(jobStore)

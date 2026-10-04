@@ -38,6 +38,13 @@ type TopicHandler struct {
 	routingRepo ports.RoutingRepository
 	summaries   *application.SummaryService
 	tickets     *application.TopicTicketService
+	handoffs    *application.HandoffService
+}
+
+// WithHandoffs enables the private handoff endpoints.
+func (h *TopicHandler) WithHandoffs(s *application.HandoffService) *TopicHandler {
+	h.handoffs = s
+	return h
 }
 
 // WithTickets enables the ticket policy endpoints.
@@ -113,7 +120,9 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, domain.ErrInvalidTopic):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-	case errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrPrimaryTicketTaken):
+	case errors.Is(err, application.ErrHandoffDisabled):
+		http.Error(w, "not found", http.StatusNotFound)
+	case errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrPrimaryTicketTaken), errors.Is(err, domain.ErrTooManyHandoffs):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, ports.ErrSummarizerUnavailable):
 		http.Error(w, "summaries are unavailable right now", http.StatusServiceUnavailable)
@@ -946,4 +955,113 @@ func (h *TopicHandler) BackfillLegacyTopic(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"created": true, "topic": toTopicDTO(topic)})
+}
+
+type handoffDTO struct {
+	ID             uuid.UUID  `json:"id"`
+	Status         string     `json:"status"`
+	ExpiresAt      string     `json:"expires_at"`
+	CreatedAt      string     `json:"created_at"`
+	SourceGroupID  *uuid.UUID `json:"source_group_id,omitempty"`
+	RedeemedAt     *string    `json:"redeemed_at,omitempty"`
+	RedeemedConvID *uuid.UUID `json:"redeemed_conversation_id,omitempty"`
+}
+
+func toHandoffDTO(h domain.TopicHandoff) handoffDTO {
+	return handoffDTO{ID: h.ID, Status: h.EffectiveStatus(time.Now()), ExpiresAt: ts(h.ExpiresAt), CreatedAt: ts(h.CreatedAt), SourceGroupID: h.SourceGroupID,
+		RedeemedAt: tsp(h.RedeemedAt), RedeemedConvID: h.RedeemedConversationID}
+}
+
+func (h *TopicHandler) handoffGate(w http.ResponseWriter, r *http.Request, permission string) (*tenancydomain.TenantContext, uuid.UUID, bool) {
+	tc, err := h.authorize(r, permission)
+	if err != nil {
+		fail(w, err)
+		return nil, uuid.Nil, false
+	}
+	if h.handoffs == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil, uuid.Nil, false
+	}
+	id, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return nil, uuid.Nil, false
+	}
+	if _, err := h.svc.GetTopic(r.Context(), id); err != nil {
+		fail(w, err)
+		return nil, uuid.Nil, false
+	}
+	return tc, id, true
+}
+
+type createHandoffRequest struct {
+	ExpiresInMinutes int `json:"expires_in_minutes"`
+}
+
+// CreateHandoff: POST /tenants/{tenant_id}/topics/{topic_id}/handoffs
+// The token is in this response ONLY; it is never stored in clear and cannot be read again.
+func (h *TopicHandler) CreateHandoff(w http.ResponseWriter, r *http.Request) {
+	tc, id, ok := h.handoffGate(w, r, permTopicManage)
+	if !ok {
+		return
+	}
+	var req createHandoffRequest
+	if r.ContentLength != 0 && !decode(w, r, &req) {
+		return
+	}
+	if req.ExpiresInMinutes < 0 {
+		http.Error(w, "invalid expires_in_minutes", http.StatusUnprocessableEntity)
+		return
+	}
+	if ok, err := h.canOperateTopic(r.Context(), tc, id); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return
+	}
+	hand, token, err := h.handoffs.Create(r.Context(), id, time.Duration(req.ExpiresInMinutes)*time.Minute)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	dto := toHandoffDTO(*hand)
+	writeJSON(w, http.StatusCreated, map[string]any{"handoff": dto, "token": token,
+		"instructions": "Peça ao cliente para enviar esta mensagem, exatamente como está, no chat privado com o número da empresa. O código vale uma única vez e expira."})
+}
+
+// ListHandoffs: GET /tenants/{tenant_id}/topics/{topic_id}/handoffs (no tokens)
+func (h *TopicHandler) ListHandoffs(w http.ResponseWriter, r *http.Request) {
+	_, id, ok := h.handoffGate(w, r, permTopicRead)
+	if !ok {
+		return
+	}
+	list, err := h.handoffs.List(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := make([]handoffDTO, 0, len(list))
+	for _, x := range list {
+		out = append(out, toHandoffDTO(x))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+// RevokeHandoff: POST /tenants/{tenant_id}/topics/{topic_id}/handoffs/{handoff_id}/revoke
+func (h *TopicHandler) RevokeHandoff(w http.ResponseWriter, r *http.Request) {
+	tc, id, ok := h.handoffGate(w, r, permTopicManage)
+	if !ok {
+		return
+	}
+	hid, ok := pathUUID(w, r, "handoff_id")
+	if !ok {
+		return
+	}
+	if ok, err := h.canOperateTopic(r.Context(), tc, id); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return
+	}
+	if err := h.handoffs.Revoke(r.Context(), id, hid); err != nil {
+		fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
