@@ -18,10 +18,10 @@ import (
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
 		"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-		"dashboard.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.manage", "tenant.read",
+		"dashboard.read", "group.manage", "group.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.manage", "tenant.read",
 	},
 	"tenant_supervisor": {
-		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read",
+		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "group.manage", "group.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read",
 	},
 	// PRODUCT.6-F: ticket.create does NOT imply ticket.read — an agent may
 	// create a ticket from a conversation they are already authorized to
