@@ -89,6 +89,9 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - Com `topic_auto_routing_enabled` desligada o roteador só **registra** a proposta; ligada, aplica. Uma mensagem já colocada (por pessoa, handoff ou decisão anterior)
   nunca é decidida de novo; uma edição humana marca a decisão automática como substituída (`overridden_at`).
 
+- **Escopo da evidência por entidade** (correção posterior à onda 3): um tópico só é candidato por entidade/ticket quando já vive no **mesmo contêiner** da mensagem (conversa ou grupo) ou pertence ao **mesmo contato**. Um número de pedido que coincide na conversa de OUTRO cliente nunca cola a mensagem no tópico dele (nem mistura contexto, resumo ou rascunho do copiloto). Entre canais do mesmo cliente (WhatsApp ↔ e-mail) o vínculo por entidade continua valendo.
+- **Entidade-atributo não abre assunto**: só entidades que definem assunto (pedido, nota, contrato, assinatura, chamado, pagamento, serviço) ativam a penalidade de "assunto novo"; número de série/produto/documento complementam o assunto em curso ("o número de série é ABC123").
+
 ### Contexto e resumos de tópico (ADR-0017, onda 5; sem migration nova)
 - `topic_summaries` é **append-only por versão**: gerar, corrigir ou confirmar nunca reescreve texto. Estados: `ai_inferred` → `agent_confirmed`/`customer_confirmed`; `corrected` (texto do atendente, nova versão); `superseded` (substituído, continua legível). Um resumo da IA nunca toca um `corrected` nem rebaixa uma confirmação do cliente.
 - O contexto de IA (`TopicContext`) só lê o que está **ligado ao tópico** (`message_topic_links`, `group_message_topic_links`). Participantes viram aliases (`Participante N`, `CLIENTE`, `ATENDENTE`); nome real, telefone e id do provedor nunca vão ao modelo. Zonas: política fixa (Instructions) / dados confiáveis do sistema / conteúdo não confiável (cada linha JSON-quoted, cercada por nonce aleatório por requisição).

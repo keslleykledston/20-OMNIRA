@@ -130,7 +130,7 @@ func (s *RoutingService) buildInput(ctx context.Context, tenantID uuid.UUID, msg
 			return in, err
 		}
 	}
-	if in.EntityTopics, err = s.routing.EntityTopics(ctx, tenantID, domain.ExtractEntities(msg.Text)); err != nil {
+	if in.EntityTopics, err = s.routing.EntityTopics(ctx, tenantID, msg.Ref, msg.ContainerID, msg.ContactID, domain.ExtractEntities(msg.Text)); err != nil {
 		return in, err
 	}
 	if msg.ParticipantID != nil {

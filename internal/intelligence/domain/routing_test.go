@@ -277,3 +277,30 @@ func TestANewlyNamedSubjectWeakensContextualHints(t *testing.T) {
 		t.Fatalf("a held subject matches: %+v", r)
 	}
 }
+
+func TestAnAttributeEntityNeverOpensANewSubject(t *testing.T) {
+	cfg := DefaultRoutingConfig()
+	topic := uuid.New()
+	in := input("o número de série é ABC123")
+	in.OpenTopics = []TopicBrief{{ID: topic, Title: "Produto danificado", LastActivityAt: t0.Add(-time.Minute)}}
+	got := Route(cfg, in)
+	if got.Status == RoutingNewTopic {
+		t.Fatalf("a serial number supplements the subject being discussed; it must not open a new topic: %+v", got)
+	}
+	// while an order number nobody holds still does
+	in2 := input("meu pedido 837 chegou quebrado")
+	in2.OpenTopics = in.OpenTopics
+	if got := Route(cfg, in2); got.Status != RoutingNewTopic {
+		t.Fatalf("an unseen order number opens a new subject: %+v", got)
+	}
+	for _, typ := range []EntityType{EntityOrder, EntityInvoice, EntityContract, EntitySubscription, EntityTicket, EntityPayment, EntityService} {
+		if !typ.DefinesSubject() {
+			t.Errorf("%s defines a subject", typ)
+		}
+	}
+	for _, typ := range []EntityType{EntityDevice, EntityProduct, EntityDocument, EntityCustom} {
+		if typ.DefinesSubject() {
+			t.Errorf("%s is an attribute", typ)
+		}
+	}
+}

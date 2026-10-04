@@ -31,6 +31,17 @@ func (t EntityType) Valid() bool {
 	return false
 }
 
+// DefinesSubject: the entity IS a subject of its own (an order, an invoice, a ticket...). A serial number, a product
+// code or a document is an ATTRIBUTE that supplements whatever is being discussed ("o número de série é ABC123"): naming
+// one that no topic holds yet is not evidence of a new subject.
+func (t EntityType) DefinesSubject() bool {
+	switch t {
+	case EntityOrder, EntityInvoice, EntityContract, EntitySubscription, EntityTicket, EntityPayment, EntityService:
+		return true
+	}
+	return false
+}
+
 // Label is how a topic about this entity is titled for a person.
 func (t EntityType) Label() string {
 	switch t {

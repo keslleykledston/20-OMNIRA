@@ -109,20 +109,27 @@ func scanUUIDs(rows pgx.Rows) ([]uuid.UUID, error) {
 	return out, rows.Err()
 }
 
-func (r *PostgresRoutingRepository) EntityTopics(ctx context.Context, tenantID uuid.UUID, entities []domain.Entity) (map[string][]uuid.UUID, error) {
+func (r *PostgresRoutingRepository) EntityTopics(ctx context.Context, tenantID uuid.UUID, ref ports.MessageRef, container uuid.UUID, contact *uuid.UUID, entities []domain.Entity) (map[string][]uuid.UUID, error) {
 	out := map[string][]uuid.UUID{}
+	// the scope: the topic already lives in this container, or belongs to the same contact
+	link, c := "topic_conversation_links", "conversation_id"
+	if ref.Kind == ports.KindGroup {
+		link, c = "topic_group_links", "group_id"
+	}
+	scope := fmt.Sprintf(`(EXISTS (SELECT 1 FROM %s sl WHERE sl.tenant_id=t.tenant_id AND sl.topic_thread_id=t.id AND sl.%s=$4)
+		        OR ($5::uuid IS NOT NULL AND t.primary_contact_id = $5::uuid))`, link, c)
 	for _, e := range entities {
-		rows, err := r.q(ctx).Query(ctx, `
+		rows, err := r.q(ctx).Query(ctx, fmt.Sprintf(`
 			SELECT topic_thread_id FROM (
 			  SELECT e.topic_thread_id, t.last_activity_at FROM topic_entities e
 			  JOIN topic_threads t ON t.tenant_id=e.tenant_id AND t.id=e.topic_thread_id
-			  WHERE e.tenant_id=$1 AND e.entity_type=$2 AND e.canonical_key=$3 AND t.status='open'
+			  WHERE e.tenant_id=$1 AND e.entity_type=$2 AND e.canonical_key=$3 AND t.status='open' AND %[1]s
 			  UNION
 			  SELECT k.topic_thread_id, t.last_activity_at FROM topic_ticket_links k
 			  JOIN tickets tk ON tk.tenant_id=k.tenant_id AND tk.id=k.ticket_id
 			  JOIN topic_threads t ON t.tenant_id=k.tenant_id AND t.id=k.topic_thread_id
-			  WHERE k.tenant_id=$1 AND $2='ticket' AND tk.external_ticket_id=$3 AND t.status='open'
-			) x ORDER BY last_activity_at DESC LIMIT 5`, tenantID, string(e.Type), e.Key)
+			  WHERE k.tenant_id=$1 AND $2='ticket' AND tk.external_ticket_id=$3 AND t.status='open' AND %[1]s
+			) x ORDER BY last_activity_at DESC LIMIT 5`, scope), tenantID, string(e.Type), e.Key, container, contact)
 		if err != nil {
 			return nil, err
 		}

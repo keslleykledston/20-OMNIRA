@@ -219,7 +219,7 @@ func Route(cfg RoutingConfig, in RoutingInput) RoutingResult {
 	}
 	// Contextual hints lose weight when the message introduces a subject nobody holds yet.
 	ctxFactor := 1.0
-	if len(entities) > 0 && len(entityOrder) == 0 && cfg.NewSubjectPenalty > 0 {
+	if cfg.NewSubjectPenalty > 0 && introducesNewSubject(entities, in.EntityTopics) {
 		ctxFactor = cfg.NewSubjectPenalty
 	}
 	addCtx := func(k SignalKind, topic uuid.UUID, score float64, detail string) {
@@ -453,4 +453,20 @@ func Keywords(text string, n int) []string {
 		words = words[:n]
 	}
 	return words
+}
+
+// introducesNewSubject: the message names at least one entity that defines a subject (order, invoice, ticket...) and NO
+// open topic in scope holds any of the subject-defining entities it names. Attribute entities (serial numbers) never do.
+func introducesNewSubject(entities []Entity, held map[string][]uuid.UUID) bool {
+	named := false
+	for _, e := range entities {
+		if !e.Type.DefinesSubject() {
+			continue
+		}
+		named = true
+		if len(held[e.String()]) > 0 {
+			return false
+		}
+	}
+	return named
 }

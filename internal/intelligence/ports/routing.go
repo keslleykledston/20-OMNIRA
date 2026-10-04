@@ -67,9 +67,11 @@ type RoutingRepository interface {
 	ActiveDecision(ctx context.Context, tenantID uuid.UUID, ref MessageRef) (*StoredDecision, error)
 	// TopicsOfMessage: the topics a message already belongs to (used to inherit them through a reply).
 	TopicsOfMessage(ctx context.Context, tenantID uuid.UUID, ref MessageRef) ([]uuid.UUID, error)
-	// EntityTopics maps Entity.String() to the OPEN topics that already hold it (ticket entities also match the
-	// external id of tickets linked to a topic).
-	EntityTopics(ctx context.Context, tenantID uuid.UUID, entities []domain.Entity) (map[string][]uuid.UUID, error)
+	// EntityTopics maps Entity.String() to the OPEN topics that already hold it (ticket entities also match the external
+	// id of tickets linked to a topic). SCOPED: a topic is a candidate only when it already lives in the message's own
+	// container (conversation or group) or belongs to the same CONTACT. An order number that merely coincides in another
+	// customer's conversation must never attach a message to that customer's topic (and mix their context).
+	EntityTopics(ctx context.Context, tenantID uuid.UUID, ref MessageRef, container uuid.UUID, contact *uuid.UUID, entities []domain.Entity) (map[string][]uuid.UUID, error)
 	ParticipantTopics(ctx context.Context, tenantID uuid.UUID, ref MessageRef, container, participant uuid.UUID, limit int) ([]domain.ParticipantTopic, error)
 	Focus(ctx context.Context, tenantID uuid.UUID, ref MessageRef, container uuid.UUID, participant *uuid.UUID) ([]domain.FocusHint, error)
 	OpenTopics(ctx context.Context, tenantID uuid.UUID, ref MessageRef, container uuid.UUID, limit int) ([]domain.TopicBrief, error)
