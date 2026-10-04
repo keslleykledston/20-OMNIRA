@@ -48,6 +48,28 @@ type InboundMessage struct {
 	RawProviderEvent  string // referência opcional ao payload bruto (auditoria), nunca segredo
 }
 
+// InboundGroupMessage é uma mensagem de um grupo do WhatsApp (ADR-0015). Fica separada de
+// InboundMessage de propósito: o remetente não é um contato 1:1, não há conversa para atender
+// e nenhum telefone é guardado. AuthorJID é um endereço opaco do WhatsApp (muitas vezes @lid).
+type InboundGroupMessage struct {
+	ProviderMessageID string
+	ConnectionID      string
+	GroupJID          string // "<digitos>@g.us"
+	AuthorJID         string
+	AuthorName        string // rótulo livre escolhido por quem envia; nunca identidade
+	FromMe            bool
+	Type              string // text|image|video|audio|document|sticker|location|other
+	Text              string
+	SentAt            time.Time
+}
+
+// ProviderGroup é um grupo como o provedor o lista (usado só para o administrador escolher).
+type ProviderGroup struct {
+	JID              string
+	Name             string
+	ParticipantCount int
+}
+
 // InboundMedia — referência a mídia recebida, ainda não baixada. O download
 // em si (com allowlist/SSRF protection) é responsabilidade do adapter via
 // ChannelProvider.DownloadMedia — nunca do domínio.

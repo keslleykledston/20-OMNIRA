@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/omnira/omnira/internal/channels/ports"
+
+	"github.com/omnira/omnira/internal/channels/domain"
 )
 
 var (
@@ -288,4 +290,24 @@ func (c *Client) doWithHeaders(ctx context.Context, method, path string, body io
 		}
 	}
 	return res.StatusCode, nil
+}
+
+type groupListItem struct {
+	JID              string `json:"JID"`
+	Name             string `json:"Name"`
+	ParticipantCount int    `json:"ParticipantCount"`
+}
+
+// ListGroups returns the groups of a session (GOWS engine shape: JID, Name, ParticipantCount).
+// The raw answer also carries every participant, so only the three fields needed are kept.
+func (c *Client) ListGroups(ctx context.Context, name string) ([]domain.ProviderGroup, error) {
+	var raw []groupListItem
+	if _, err := c.do(ctx, http.MethodGet, "/api/"+url.PathEscape(name)+"/groups", nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]domain.ProviderGroup, 0, len(raw))
+	for _, g := range raw {
+		out = append(out, domain.ProviderGroup{JID: g.JID, Name: g.Name, ParticipantCount: g.ParticipantCount})
+	}
+	return out, nil
 }

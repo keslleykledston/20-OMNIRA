@@ -15,6 +15,9 @@ const (
 	ActionTenantSuspended          AuditAction = "tenant.suspended"
 	ActionTenantInboxSettings      AuditAction = "tenant.inbox_settings_updated"
 	ActionContactKindChanged       AuditAction = "contact.kind_changed"
+	ActionGroupEnabled             AuditAction = "group.enabled"
+	ActionGroupDisabled            AuditAction = "group.disabled"
+	ActionGroupHistoryDeleted      AuditAction = "group.history_deleted"
 	ActionMembershipGranted        AuditAction = "membership.granted"
 	ActionMembershipRevoked        AuditAction = "membership.revoked"
 	ActionMembershipDeactivated    AuditAction = "membership.deactivated"
@@ -74,6 +77,7 @@ const (
 	ResourceAgentProfile      ResourceType = "agent_profile"
 	ResourceQueue             ResourceType = "queue"
 	ResourceContact           ResourceType = "contact"
+	ResourceGroup             ResourceType = "wa_group"
 )
 
 // AuditEvent — evento de auditoria.

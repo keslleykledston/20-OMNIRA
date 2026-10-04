@@ -419,3 +419,16 @@ func outboundChatID(providerChatID, toE164 string) (string, error) {
 	}
 	return strings.TrimPrefix(toE164, "+") + "@c.us", nil
 }
+
+// ListGroups lists the groups of the connection's WhatsApp account (for the administrator to choose
+// which ones to read, ADR-0015).
+func (p *WahaProvider) ListGroups(ctx context.Context, conn domain.ChannelConnection) ([]domain.ProviderGroup, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	name, err := p.SessionRef(conn)
+	if err != nil {
+		return nil, err
+	}
+	return p.client.ListGroups(ctx, name)
+}

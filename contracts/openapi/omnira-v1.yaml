@@ -25,6 +25,7 @@ servers:
 tags:
   - { name: Auth, description: Mock login (development only) }
   - { name: Inbox, description: Conversations of the tenant }
+  - { name: Groups, description: "Read-only WhatsApp groups an administrator enabled (ADR-0015)" }
   - { name: Assignment, description: "Claim, assign, release with atomic claim and audit" }
   - { name: Messages, description: Message history and idempotent outbound text }
   - { name: Realtime, description: SSE stream of reference-only events }
@@ -366,6 +367,139 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '409': { description: "A queue with this name already exists", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/groups:
+    get:
+      operationId: listGroups
+      tags: [Groups]
+      summary: Groups an administrator enabled, most recently active first
+      description: |
+        Requires `group.read` (tenant admin and supervisor by default). Only enabled groups are listed (at most 500).
+        Each carries a preview of its last message. Groups are a separate area from conversations: no assignee, queue,
+        waiting time or ticket (ADR-0015).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: The enabled groups
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupList' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+    post:
+      operationId: enableGroup
+      tags: [Groups]
+      summary: Start reading a WhatsApp group
+      description: |
+        Requires `group.manage`. The group must exist in the tenant's own WhatsApp account (its name comes from there).
+        `201` when first enabled, `200` when it was already known (its history is kept). Audited as `group.enabled`.
+        `409` when the tenant has no active WhatsApp connection or more than one; `502` when WhatsApp is unreachable.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnableGroupRequest' }
+      responses:
+        '200': { description: 'Already known, now enabled', content: { application/json: { schema: { $ref: '#/components/schemas/GroupItem' } } } }
+        '201': { description: Newly enabled, content: { application/json: { schema: { $ref: '#/components/schemas/GroupItem' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "No active WhatsApp connection, or more than one", content: { text/plain: { schema: { type: string } } } }
+        '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/groups/available:
+    get:
+      operationId: listAvailableGroups
+      tags: [Groups]
+      summary: Groups of the tenant's WhatsApp account, to choose which ones to read
+      description: |
+        Requires `group.manage`. The provider's list is cached for a minute. `q` filters by name (case-insensitive),
+        `limit` defaults to 50 (max 200); `total` is the number of matches before the cap. Enabled groups come first.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: q, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        '200':
+          description: Matching groups
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailableGroupList' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '409': { description: "No active WhatsApp connection, or more than one", content: { text/plain: { schema: { type: string } } } }
+        '502': { $ref: '#/components/responses/Text502' }
+  /tenants/{tenant_id}/groups/{group_id}:
+    patch:
+      operationId: setGroupEnabled
+      tags: [Groups]
+      summary: Turn reading on or off for a known group
+      description: |
+        Requires `group.manage`. Off stops storing new messages; the history stays until it is deleted explicitly.
+        Idempotent; audited as `group.enabled` / `group.disabled` only when the state changes. A group of another
+        tenant and an unknown id are indistinguishable (`404`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetGroupEnabledRequest' }
+      responses:
+        '200': { description: The group, content: { application/json: { schema: { $ref: '#/components/schemas/GroupItem' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/groups/{group_id}/messages:
+    get:
+      operationId: listGroupMessages
+      tags: [Groups]
+      summary: A group's stored messages (cursor pagination, newest first)
+      description: |
+        Requires `group.read`. Read-only: there is no way to send to a group in this phase. A disabled group's history
+        stays readable until deleted. `sort` accepts only `sent_at:desc`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - { name: sort, in: query, schema: { type: string, enum: ['sent_at:desc'] } }
+      responses:
+        '200':
+          description: A page of messages
+          headers:
+            X-Pagination-Count: { $ref: '#/components/headers/XPaginationCount' }
+            X-Pagination-Limit: { $ref: '#/components/headers/XPaginationLimit' }
+            X-Pagination-HasMore: { $ref: '#/components/headers/XPaginationHasMore' }
+            X-Pagination-NextCursor: { $ref: '#/components/headers/XPaginationNextCursor' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupMessagePage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    delete:
+      operationId: deleteGroupHistory
+      tags: [Groups]
+      summary: Delete every stored message of a group
+      description: |
+        Requires `group.manage`. Explicit and audited as `group.history_deleted` with the count. The group keeps its
+        enabled state.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/GroupId' }
+      responses:
+        '200': { description: How many messages were deleted, content: { application/json: { schema: { type: object, required: [deleted], properties: { deleted: { type: integer, minimum: 0 } } } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/settings/inbox:
     get:
       operationId: getInboxSettings
@@ -1116,6 +1250,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    GroupId:
+      name: group_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     ConnectionId:
       name: connection_id
       in: path
@@ -1229,6 +1368,76 @@ components:
           items: { $ref: '#/components/schemas/ContactItem' }
         has_more: { type: boolean }
         next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
+    GroupLastMessage:
+      type: object
+      required: [author_name, from_me, message_type, preview]
+      properties:
+        author_name: { type: string }
+        from_me: { type: boolean }
+        message_type: { type: string, enum: [text, image, video, audio, document, sticker, location, other] }
+        preview: { type: string, description: First 160 characters of the body }
+    GroupItem:
+      type: object
+      required: [id, name, enabled, last_message_at, last_message]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        enabled: { type: boolean }
+        last_message_at: { type: string, format: date-time, nullable: true }
+        last_message: { type: object, nullable: true, allOf: [{ $ref: '#/components/schemas/GroupLastMessage' }] }
+    GroupList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/GroupItem' } }
+        count: { type: integer, minimum: 0 }
+    AvailableGroup:
+      type: object
+      required: [provider_group_id, name, participant_count, enabled, group_id]
+      properties:
+        provider_group_id: { type: string, description: 'WhatsApp group id (<digits>@g.us)' }
+        name: { type: string }
+        participant_count: { type: integer, minimum: 0 }
+        enabled: { type: boolean }
+        group_id: { type: string, format: uuid, nullable: true, description: 'Set once the group is known to OMNIRA' }
+    AvailableGroupList:
+      type: object
+      required: [items, count, total]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AvailableGroup' } }
+        count: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0 }
+    EnableGroupRequest:
+      type: object
+      required: [provider_group_id]
+      additionalProperties: false
+      properties:
+        provider_group_id: { type: string }
+    SetGroupEnabledRequest:
+      type: object
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+    GroupMessage:
+      type: object
+      required: [id, author_name, from_me, message_type, body, sent_at]
+      properties:
+        id: { type: string, format: uuid }
+        author_name: { type: string, description: 'Free label chosen by the sender; never an identity. No phone number is stored or served.' }
+        from_me: { type: boolean }
+        message_type: { type: string, enum: [text, image, video, audio, document, sticker, location, other] }
+        body: { type: string }
+        sent_at: { type: string, format: date-time }
+    GroupMessagePage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/GroupMessage' } }
+        next_cursor: { type: string }
+        has_more: { type: boolean }
         count: { type: integer }
         limit: { type: integer }
     InboxSettings:

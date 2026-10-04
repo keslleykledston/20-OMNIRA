@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -88,9 +89,11 @@ type webhookMessage struct {
 	Timestamp float64 `json:"timestamp"`
 	From      string  `json:"from"`
 	FromMe    bool    `json:"fromMe"`
-	Body      string  `json:"body"`
-	HasMedia  bool    `json:"hasMedia"`
-	Media     *struct {
+	// Participant é, numa mensagem de grupo, o autor (From é o JID do grupo).
+	Participant string `json:"participant"`
+	Body        string `json:"body"`
+	HasMedia    bool   `json:"hasMedia"`
+	Media       *struct {
 		URL      string `json:"url"`
 		MIMEType string `json:"mimetype"`
 		Filename string `json:"filename"`
@@ -144,6 +147,9 @@ type ParsedWebhook struct {
 	Event            string
 	Message          *domain.InboundMessage
 	DeliveryStatus   *domain.DeliveryStatusUpdate
+	// Group é preenchido para mensagens de grupo (@g.us). Sem ingestor de grupos configurado o
+	// handler as ignora com 202, exatamente como antes do ADR-0015.
+	Group *domain.InboundGroupMessage
 }
 
 // ParseWebhook normalizes message/message.any and safely acknowledges
@@ -182,22 +188,17 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 		return ParsedWebhook{}, ErrMalformedWebhook
 	}
 	result.DeduplicationKey = payload.ID
+	// Group chats (@g.us) are NOT 1:1 conversations: `from` is the GROUP's JID, never a person's.
+	// They used to fail normalizeSender, become a 400, and WAHA retried each event up to 15x
+	// (measured 2026-09-21: 176/196 distinct events in 40 minutes). They are therefore parsed on
+	// their own branch that can only succeed or be "unsupported" (202, no retry) - never a 400.
+	if strings.HasSuffix(payload.From, "@g.us") {
+		return parseGroupMessage(conn, payload, result)
+	}
 	if payload.FromMe {
 		return result, ErrIgnoredWebhookMessage
 	}
-	// Group chats (@g.us) and status broadcasts are out of scope: the Inbox
-	// models one Contact/Conversation per 1:1 sender, never per group. `from`
-	// on a group message is the GROUP's JID, not any individual's address —
-	// treating it as a sender JID always fails normalizeSender ("unsupported
-	// sender address"), which the caller mapped to a generic 400 "malformed
-	// webhook" and WAHA retried up to 15x per event. On a real, busy account
-	// this was ~90% of all message.any webhook deliveries (measured on
-	// 2026-09-21: 176/196 distinct events in 40 minutes), starving WAHA's
-	// retry budget and risking real 1:1 messages timing out behind it.
-	// Explicitly classifying these as ignored (202, no retry) instead of
-	// malformed (400, retried) is the fix — no group-message support is
-	// added; every non-group path below is unchanged.
-	if strings.HasSuffix(payload.From, "@g.us") || payload.From == "status@broadcast" {
+	if payload.From == "status@broadcast" {
 		return result, ErrUnsupportedWebhookEvent
 	}
 	from, err := normalizeSender(senderJID(payload))
@@ -232,6 +233,71 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 	}
 	result.Message = message
 	return result, nil
+}
+
+var (
+	groupJIDPattern  = regexp.MustCompile(`^[0-9]{5,20}(-[0-9]{1,20})?@g\.us$`)
+	authorJIDPattern = regexp.MustCompile(`^[0-9A-Za-z._:-]{1,64}@(lid|s\.whatsapp\.net|c\.us)$`)
+)
+
+const maxGroupBodyRunes = 8000
+
+// parseGroupMessage turns a WAHA group message into the ADR-0015 shape. Anything it cannot use
+// (bad group id, no text and no media, bad timestamp) is "unsupported" so WAHA does not retry.
+func parseGroupMessage(conn domain.ChannelConnection, payload webhookMessage, result ParsedWebhook) (ParsedWebhook, error) {
+	if !groupJIDPattern.MatchString(payload.From) || payload.Timestamp <= 0 {
+		return result, ErrUnsupportedWebhookEvent
+	}
+	kind := "text"
+	if payload.HasMedia {
+		kind = "other"
+		if payload.Media != nil {
+			kind = string(mediaKind(payload.Media.MIMEType))
+		}
+	}
+	if payload.Body == "" && !payload.HasMedia {
+		return result, ErrUnsupportedWebhookEvent
+	}
+	body := payload.Body
+	if r := []rune(body); len(r) > maxGroupBodyRunes {
+		body = string(r[:maxGroupBodyRunes])
+	}
+	author := ""
+	if authorJIDPattern.MatchString(payload.Participant) {
+		author = payload.Participant
+	}
+	name := ""
+	if payload.Data != nil && payload.Data.Info != nil {
+		name = sanitizeSenderName(payload.Data.Info.PushName)
+	}
+	if name == "" && payload.FromMe {
+		name = "Você"
+	}
+	result.Group = &domain.InboundGroupMessage{
+		ProviderMessageID: payload.ID,
+		ConnectionID:      conn.ID.String(),
+		GroupJID:          payload.From,
+		AuthorJID:         author,
+		AuthorName:        name,
+		FromMe:            payload.FromMe,
+		Type:              kind,
+		Text:              body,
+		SentAt:            time.Unix(int64(payload.Timestamp), int64((payload.Timestamp-float64(int64(payload.Timestamp)))*1e9)).UTC(),
+	}
+	return result, nil
+}
+
+// GroupIntake stores the message of a group an administrator enabled (ADR-0015). It reports
+// whether it stored the message, and whether it was a duplicate. A group that is not enabled is
+// dropped before anything is persisted.
+type GroupIntake interface {
+	ProcessGroupMessage(ctx context.Context, connection domain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message domain.InboundGroupMessage) (ingested, duplicate bool, err error)
+}
+
+// UseGroups enables group-message intake. Without it group messages are ignored (202).
+func (h *WebhookHandler) UseGroups(g GroupIntake) *WebhookHandler {
+	h.Groups = g
+	return h
 }
 
 func (p *WahaProvider) ParseInbound(ctx context.Context, conn domain.ChannelConnection, payload []byte) (*domain.InboundMessage, error) {
@@ -272,6 +338,7 @@ type WebhookHandler struct {
 	Resolver WahaConnectionResolver
 	Events   ports.WebhookEventStore
 	Intake   WebhookIntake
+	Groups   GroupIntake
 	MaxBody  int64
 	webhook  metric.Int64Counter
 	invalid  metric.Int64Counter
@@ -370,6 +437,29 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	digest := sha256.Sum256(body)
 	digestHex := hex.EncodeToString(digest[:])
+	if parsed.Group != nil {
+		if h.Groups == nil {
+			h.reject(r.Context(), w, http.StatusAccepted, "event ignored")
+			return
+		}
+		ingested, duplicate, err := h.Groups.ProcessGroupMessage(r.Context(), *conn, parsed.DeduplicationKey, parsed.Event, digestHex, *parsed.Group)
+		if err != nil {
+			h.reject(r.Context(), w, http.StatusServiceUnavailable, "webhook intake unavailable")
+			return
+		}
+		switch {
+		case duplicate:
+			h.addMetric(r.Context(), h.webhook, "duplicate")
+			w.WriteHeader(http.StatusOK)
+		case ingested:
+			h.addMetric(r.Context(), h.webhook, "accepted")
+			w.WriteHeader(http.StatusOK)
+		default: // a group nobody enabled: dropped before persistence, not an error
+			h.addMetric(r.Context(), h.webhook, "group_not_enabled")
+			w.WriteHeader(http.StatusAccepted)
+		}
+		return
+	}
 	if h.Intake != nil {
 		duplicate, err := h.Intake.ProcessWebhook(r.Context(), *conn, parsed.DeduplicationKey, parsed.Event, digestHex, parsed.Message, parsed.DeliveryStatus)
 		if err != nil {

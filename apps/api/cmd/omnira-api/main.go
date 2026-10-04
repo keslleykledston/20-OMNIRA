@@ -21,6 +21,7 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
+	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -154,6 +155,9 @@ func main() {
 		wahaReason = "WAHA está desabilitado na configuração do servidor."
 	}
 
+	// ADR-0015: the directory only exists when WAHA is enabled; without it the group APIs still serve
+	// what is stored and report "no WhatsApp connection" for the picker.
+	var groupDirectory groupsadapters.Directory
 	if cfg.WahaEnabled {
 		cipher, cipherErr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
 		if cipherErr != nil {
@@ -182,7 +186,9 @@ func main() {
 			UseSession(func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
 				return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
 			}).
-			UseIntake(intake))
+			UseIntake(intake).
+			UseGroups(groupsadapters.NewIntake(dbPool, eventStore)))
+		groupDirectory = groupsadapters.NewWahaDirectory(connectionRepo, provider)
 		wahaConnections := channelapplication.NewWahaConnectionService(
 			connectionRepo, credentialStore, waha.NewSessionController(provider),
 			permissions,
@@ -195,6 +201,7 @@ func main() {
 		log.Fatalf("WAHA provider descriptor error: %v", err)
 	}
 	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management))
+	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
 	if cfg.MetaEnabled {
 		if cfg.MetaVerifyToken == "" || cfg.MetaAppSecret == "" {
 			log.Fatal("OMNIRA_META_VERIFY_TOKEN and OMNIRA_META_APP_SECRET are required when OMNIRA_META_ENABLED=true")

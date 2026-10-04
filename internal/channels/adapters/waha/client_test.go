@@ -280,3 +280,31 @@ func TestClientErrorsNeverContainAPIKey(t *testing.T) {
 		t.Fatalf("sendText error leaked the API key: %v", sendErr)
 	}
 }
+
+// GOWS lists a session's groups with capitalised keys and every participant. Only the id, the name
+// and the participant count are kept (ADR-0015), and a failing provider is reported, not swallowed.
+func TestClientListGroupsKeepsOnlyWhatTheAdminNeeds(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		_, _ = w.Write([]byte(`[
+		  {"JID":"120363000000000001@g.us","Name":"Oficial","ParticipantCount":14,"OwnerJID":"x@lid","Participants":[{"JID":"1@lid","PhoneNumber":"5511999999999@s.whatsapp.net"}]},
+		  {"JID":"120363000000000002@g.us","Name":"","ParticipantCount":0,"Participants":[]}
+		]`))
+	}))
+	defer srv.Close()
+	client := mustClient(t, srv.URL)
+	groups, err := client.ListGroups(context.Background(), "omnira_conn")
+	if err != nil || path != "/api/omnira_conn/groups" {
+		t.Fatalf("path=%q err=%v", path, err)
+	}
+	if len(groups) != 2 || groups[0].JID != "120363000000000001@g.us" || groups[0].Name != "Oficial" || groups[0].ParticipantCount != 14 || groups[1].Name != "" {
+		t.Fatalf("groups = %+v", groups)
+	}
+
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusBadGateway) }))
+	defer down.Close()
+	if _, err := mustClient(t, down.URL).ListGroups(context.Background(), "omnira_conn"); err == nil {
+		t.Fatal("a failing provider must be an error")
+	}
+}

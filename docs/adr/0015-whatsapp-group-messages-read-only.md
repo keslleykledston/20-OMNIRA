@@ -1,7 +1,7 @@
 # ADR-0015: Mensagens de grupo do WhatsApp (somente leitura, em área própria)
 
 ## Status
-Proposed (aguardando aceite do dono do produto; nenhuma implementação autorizada)
+Accepted em 2026-10-04 por instrução do dono do produto ("construa a ADR-0015"). Fatias G1 a G4 (backend) implementadas; G5 (aba Grupos) em construção; G6 (retenção automática) aguarda o prazo padrão do dono. Ver "Implementação" ao final.
 
 Cumpre o item 4 do ADR-0014 ("Grupos ficam fora desta ADR"). Data: 2026-10-03.
 
@@ -176,3 +176,37 @@ Proposta, em fatias pequenas, nesta ordem.
 - Haverá notificação (por exemplo, menção ao operador ou alerta de palavra) ou
   só consulta? Isso define o escopo do ADR de automações de grupo.
 - Quando o envio ao grupo for pedido, quem pode escrever em nome da empresa?
+
+## Implementação (2026-10-04)
+
+- **G1 - modelo e permissões:** migrations `000057` (`wa_groups`, `wa_group_messages`, RLS forçada com as quatro
+  políticas, `GRANT` explícito, índice de paginação) e `000058` (`group.read`, `group.manage` para admin e supervisor).
+- **G2 - habilitação:** `GET /groups/available` (grupos da conta WhatsApp do tenant, com busca por nome e teto;
+  o WAHA/GOWS devolve ~600 grupos com todos os participantes, então a lista é filtrada e guardada em cache por 1 min),
+  `POST /groups` (o grupo precisa existir na conta do próprio tenant), `PATCH /groups/{id}` (liga/desliga) e
+  `DELETE /groups/{id}/messages` (apaga o histórico). Tudo auditado (`group.enabled`, `group.disabled`,
+  `group.history_deleted`).
+- **G3 - ingestão:** o webhook ganhou ramo próprio para `@g.us` (autor = `participant`, nome = `PushName`). Grupo
+  não habilitado é descartado **antes de qualquer gravação**, inclusive do registro de deduplicação, e responde 202;
+  um grupo nunca vira 400 (evita a tempestade de retentativas que originou o descarte). Idempotente por evento e por
+  `provider_message_id`; `last_message_at` nunca retrocede com entrega fora de ordem. Sem ingestor configurado o
+  comportamento anterior (202) se mantém.
+- **G4 - leitura:** `GET /groups` (habilitados, com prévia da última mensagem) e `GET /groups/{id}/messages` (cursor,
+  mais nova primeiro). O histórico de um grupo desligado continua legível até ser apagado.
+- **Decisões desta implementação:** mensagens da própria linha (do celular conectado) no grupo também são lidas,
+  rotuladas "Você"; o autor é um endereço opaco do WhatsApp (muitas vezes `@lid`), **nenhum telefone é guardado nem
+  servido**; o corpo é limitado a 8000 caracteres; mídia entra apenas como marcador tipado (sem baixar o arquivo);
+  não há envio; a interface atualiza por consulta periódica (um evento em tempo real por mensagem de grupo faria o
+  Inbox inteiro recarregar a cada mensagem de um grupo ruidoso).
+- **Testes** (Postgres real, Tenants A e B): ingestão só de grupo habilitado (com mutação), duplicata, ordem,
+  isolamento, permissões por papel, membership revogada, sem oráculo de enumeração entre tenants, cursor sem lacunas,
+  desligar/apagar; parser e handler do webhook; cliente WAHA; varredura de RLS das tabelas novas.
+
+### Questões em aberto - situação
+- Quais grupos entram primeiro: **nenhum por padrão**; o administrador escolhe na aba (a sugestão continua sendo só
+  os de trabalho).
+- Retenção padrão e expurgo automático (G6): **pendente do dono**; hoje só há "apagar histórico" manual.
+- Quem lê: administrador e supervisor (`group.read`); atendente não.
+- Mídia: marcador tipado agora; baixar o arquivo fica para depois.
+- Notificações e envio ao grupo: fora desta fase.
+

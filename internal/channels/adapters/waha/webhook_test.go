@@ -160,22 +160,58 @@ func TestParseInboundResolvesLinkedIDSenderFromSenderAlt(t *testing.T) {
 	}
 }
 
-// Mensagem de grupo: `from` é o JID do GRUPO (@g.us), nunca o de um indivíduo —
-// tratá-lo como remetente sempre falha normalizeSender. Medido em produção
-// (2026-09-21, conta real e ativa): 176 de 196 eventos message.any distintos
-// em 40 minutos falhavam assim, cada um retentado até 15x pelo WAHA como 400
-// "malformed webhook" — ~90% do tráfego de webhook, mascarando falhas reais e
-// arriscando estourar o orçamento de retry para mensagens 1:1 legítimas. O
-// Inbox modela um Contact/Conversation por remetente 1:1, nunca por grupo, de
-// modo que a classificação correta é "evento ignorado" (202, sem retry), não
-// "malformado" (400, retentado) — nenhum suporte a grupo é adicionado aqui.
-func TestParseInboundIgnoresGroupMessagesInsteadOfRejectingAsMalformed(t *testing.T) {
+// Mensagem de grupo: `from` é o JID do GRUPO (@g.us), nunca o de um indivíduo — tratá-lo como
+// remetente sempre falhou em normalizeSender e virava um 400 retentado até 15x pelo WAHA (medido em
+// 2026-09-21: 176 de 196 eventos distintos em 40 minutos). Desde o ADR-0015 o grupo tem ramo próprio:
+// a mensagem sai como InboundGroupMessage (autor = participante), nunca como contato 1:1, e qualquer
+// coisa que não dê para aproveitar é "não suportado" (202, sem retry), jamais "malformado" (400).
+func TestParseWebhookReadsGroupMessagesOnTheirOwnBranch(t *testing.T) {
 	conn := webhookConnection()
 	provider := newProvider(t, "secret")
-	group := `{"id":"evt-grp","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"grp-1","timestamp":1710000000,"from":"120363428576999954@g.us","fromMe":false,"body":"certo","participant":"138122474053653@lid","_data":{"Info":{"SenderAlt":"559293477602@s.whatsapp.net"}}}}`
-	_, err := provider.ParseWebhook(conn, []byte(group))
-	if !errors.Is(err, waha.ErrUnsupportedWebhookEvent) {
-		t.Fatalf("group message not classified as unsupported/ignored: %v", err)
+	env := func(payload string) []byte {
+		return []byte(`{"id":"evt-grp","event":"message.any","session":"` + sessionName(conn) + `","payload":` + payload + `}`)
+	}
+
+	parsed, err := provider.ParseWebhook(conn, env(`{"id":"grp-1","timestamp":1710000000,"from":"120363428576999954@g.us","fromMe":false,"body":"certo","participant":"138122474053653@lid","_data":{"Info":{"PushName":"  Rafael\n K3G "}}}`))
+	g := parsed.Group
+	if err != nil || g == nil || parsed.Message != nil {
+		t.Fatalf("group message must parse as a group message and never as a 1:1 one: %+v err=%v", parsed, err)
+	}
+	if g.GroupJID != "120363428576999954@g.us" || g.AuthorJID != "138122474053653@lid" || g.AuthorName != "Rafael K3G" ||
+		g.Text != "certo" || g.Type != "text" || g.FromMe || g.ProviderMessageID != "grp-1" || g.SentAt.Unix() != 1710000000 {
+		t.Fatalf("unexpected group message: %+v", g)
+	}
+	if parsed.DeduplicationKey != "grp-1" {
+		t.Fatalf("dedup key = %q", parsed.DeduplicationKey)
+	}
+
+	// Our own message in the group is read too (the linked phone writes there), labelled "Você".
+	mine, err := provider.ParseWebhook(conn, env(`{"id":"grp-2","timestamp":1710000001,"from":"120363428576999954@g.us","fromMe":true,"body":"ok"}`))
+	if err != nil || mine.Group == nil || !mine.Group.FromMe || mine.Group.AuthorName != "Você" {
+		t.Fatalf("own group message: %+v err=%v", mine.Group, err)
+	}
+
+	// Media without text is kept as a typed placeholder (no media is downloaded in this phase).
+	media, err := provider.ParseWebhook(conn, env(`{"id":"grp-3","timestamp":1710000002,"from":"120363428576999954@g.us","fromMe":false,"hasMedia":true,"participant":"138122474053653@lid","media":{"mimetype":"image/jpeg","url":"http://waha/x"}}`))
+	if err != nil || media.Group == nil || media.Group.Type != "image" || media.Group.Text != "" {
+		t.Fatalf("group media: %+v err=%v", media.Group, err)
+	}
+
+	// An author id that is not an opaque WhatsApp address is dropped, not stored; huge bodies are capped.
+	odd, err := provider.ParseWebhook(conn, env(`{"id":"grp-4","timestamp":1710000003,"from":"120363428576999954@g.us","fromMe":false,"body":"`+strings.Repeat("x", 9000)+`","participant":"<script>@evil"}`))
+	if err != nil || odd.Group == nil || odd.Group.AuthorJID != "" || len([]rune(odd.Group.Text)) != 8000 {
+		t.Fatalf("odd author / long body: %+v err=%v", odd.Group, err)
+	}
+
+	// Never a 400: unusable group events are "unsupported".
+	for name, payload := range map[string]string{
+		"id too short":     `{"id":"g","timestamp":1710000000,"from":"123@g.us","body":"x"}`,
+		"no text no media": `{"id":"g","timestamp":1710000000,"from":"120363428576999954@g.us","body":""}`,
+		"bad timestamp":    `{"id":"g","timestamp":0,"from":"120363428576999954@g.us","body":"x"}`,
+	} {
+		if _, err := provider.ParseWebhook(conn, env(payload)); !errors.Is(err, waha.ErrUnsupportedWebhookEvent) {
+			t.Errorf("%s: want unsupported, got %v", name, err)
+		}
 	}
 
 	status := `{"id":"evt-status","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"st-1","timestamp":1710000000,"from":"status@broadcast","fromMe":false,"hasMedia":true,"_data":{"Info":{"SenderAlt":""}}}}`
@@ -465,5 +501,58 @@ func TestOutboundUsesProviderChatIDWhenKnown(t *testing.T) {
 	}
 	if parsed.Message.ProviderChatID != "175222334484588@lid" {
 		t.Fatalf("endereço da conversa não preservado: %q", parsed.Message.ProviderChatID)
+	}
+}
+
+type groupIntakeStub struct {
+	ingested, duplicate bool
+	err                 error
+	got                 *domain.InboundGroupMessage
+	calls               int
+}
+
+func (g *groupIntakeStub) ProcessGroupMessage(_ context.Context, _ domain.ChannelConnection, _, _, _ string, msg domain.InboundGroupMessage) (bool, bool, error) {
+	g.calls++
+	g.got = &msg
+	return g.ingested, g.duplicate, g.err
+}
+
+// ADR-0015: without a group intake wired, a group event is ignored exactly as before (202). With one,
+// the answer reflects what happened: stored/duplicate = 200, a group nobody enabled = 202 (no retry),
+// a storage failure = 503 (WAHA retries).
+func TestWebhookHandlerRoutesGroupMessagesToTheGroupIntake(t *testing.T) {
+	conn := webhookConnection()
+	conn.SecretRef = "credential-a"
+	body := []byte(`{"id":"evt-grp","event":"message.any","session":"` + sessionName(conn) + `","payload":{"id":"grp-1","timestamp":1710000000,"from":"120363428576999954@g.us","fromMe":false,"body":"certo","participant":"138122474053653@lid"}}`)
+	send := func(h *waha.WebhookHandler) int {
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, signedRequest("/webhooks/v1/whatsapp/waha/"+conn.ID.String(), body, "hmac-secret"))
+		return res.Code
+	}
+	oneToOne := &webhookIntake{}
+
+	if code := send(waha.NewWebhookHandler(newProvider(t, "hmac-secret"), wahaResolver{conn: &conn}).UseIntake(oneToOne)); code != http.StatusAccepted {
+		t.Fatalf("no group intake: %d, want 202 (unchanged behaviour)", code)
+	}
+	if oneToOne.message != nil {
+		t.Fatal("a group message must never reach the 1:1 intake")
+	}
+	for name, tc := range map[string]struct {
+		stub *groupIntakeStub
+		want int
+	}{
+		"stored":            {&groupIntakeStub{ingested: true}, http.StatusOK},
+		"duplicate":         {&groupIntakeStub{duplicate: true}, http.StatusOK},
+		"group not enabled": {&groupIntakeStub{}, http.StatusAccepted},
+		"storage failure":   {&groupIntakeStub{err: errors.New("db down")}, http.StatusServiceUnavailable},
+	} {
+		oneToOne := &webhookIntake{}
+		h := waha.NewWebhookHandler(newProvider(t, "hmac-secret"), wahaResolver{conn: &conn}).UseIntake(oneToOne).UseGroups(tc.stub)
+		if code := send(h); code != tc.want {
+			t.Errorf("%s: %d, want %d", name, code, tc.want)
+		}
+		if tc.stub.calls != 1 || tc.stub.got == nil || tc.stub.got.GroupJID != "120363428576999954@g.us" || oneToOne.message != nil {
+			t.Errorf("%s: group intake calls=%d got=%+v 1:1 message=%v", name, tc.stub.calls, tc.stub.got, oneToOne.message)
+		}
 	}
 }

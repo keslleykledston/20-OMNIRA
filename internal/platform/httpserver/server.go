@@ -19,6 +19,7 @@ import (
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
+	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
@@ -544,6 +545,28 @@ func (s *Server) RegisterPresenceHandlers(dbPool *pgxpool.Pool) {
 		}()
 		lastSeenWriter.RunFlushLoop(ctx, 2*time.Minute)
 	}()
+}
+
+// RegisterGroupHandlers exposes the read-only WhatsApp group APIs (ADR-0015) behind authn + tenant
+// session. Permissions (group.read / group.manage) are checked by the handler.
+func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.Handler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	const base = "/api/v1/tenants/{tenant_id}/groups"
+	s.mux.Handle("GET "+base, wrap(h.List))
+	s.mux.Handle("GET "+base+"/available", wrap(h.Available))
+	s.mux.Handle("POST "+base, wrap(h.Enable))
+	s.mux.Handle("PATCH "+base+"/{group_id}", wrap(h.SetEnabled))
+	s.mux.Handle("GET "+base+"/{group_id}/messages", wrap(h.ListMessages))
+	s.mux.Handle("DELETE "+base+"/{group_id}/messages", wrap(h.DeleteHistory))
 }
 
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session
