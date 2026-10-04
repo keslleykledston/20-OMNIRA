@@ -95,6 +95,11 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - Geração é idempotente e serializada por tópico (advisory lock); passo opcional do worker (`OMNIRA_TOPIC_SUMMARIES_ENABLED`, desligado) — falha do provedor nunca falha o job.
 - API: `GET /topics/{id}/summaries`, `POST /topics/{id}/summary/{generate,confirm,correct}` (leitura `topic.read`; escrita `topic.manage` + atendente/`conversation.manage`).
 
+### Roteador de modelos e IA em sombra (ADR-0017, onda 6; sem migration nova)
+- `ModelRouter` escolhe provedor/modelo/limites por tarefa (`topic_classify`, `topic_summary`); sem rota = tarefa indisponível (degrada para o roteador determinístico e para o trabalho manual). Modelo por tarefa: `OMNIRA_AI_MODEL_TOPIC_CLASSIFY` / `OMNIRA_AI_MODEL_TOPIC_SUMMARY` (padrão `OMNIRA_AI_MODEL`).
+- `TopicClassifier` (flag `OMNIRA_TOPIC_AI_ROUTING_ENABLED`, desligada) **só propõe**: grava em `routing_decisions` com `decision_source='ai'`, `applied=false`, modelo, versão do prompt, latência e confiança. Nunca liga mensagem, cria tópico ou ambiguidade. O modelo vê aliases `T1..Tn` dos tópicos ABERTOS do mesmo tenant/conversa (nunca ids); a resposta é validada estritamente (objeto JSON único, campos conhecidos, alias dentro da whitelist, confiança 0..1) e qualquer desvio é descartado. Uma vez por mensagem (replay não chama o provedor). Falha/timeout do provedor = sem proposta, job segue.
+- Métrica: `topic_ai_shadow_total{outcome}`.
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.

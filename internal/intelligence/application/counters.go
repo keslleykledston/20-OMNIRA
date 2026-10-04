@@ -14,12 +14,13 @@ type Counters struct {
 	mu        sync.Mutex
 	decisions map[[3]string]uint64
 	jobs      map[string]uint64
+	shadow    map[string]uint64
 	latencyN  uint64
 	latencyS  float64
 }
 
 func NewCounters() *Counters {
-	return &Counters{decisions: map[[3]string]uint64{}, jobs: map[string]uint64{}}
+	return &Counters{decisions: map[[3]string]uint64{}, jobs: map[string]uint64{}, shadow: map[string]uint64{}}
 }
 
 func (c *Counters) Decision(status string, applied bool, source string) {
@@ -32,6 +33,12 @@ func (c *Counters) Latency(d time.Duration) {
 	c.mu.Lock()
 	c.latencyN++
 	c.latencyS += d.Seconds()
+	c.mu.Unlock()
+}
+
+func (c *Counters) Shadow(outcome string) {
+	c.mu.Lock()
+	c.shadow[outcome]++
 	c.mu.Unlock()
 }
 
@@ -64,6 +71,15 @@ func (c *Counters) Render() string {
 	sort.Strings(states)
 	for _, s := range states {
 		fmt.Fprintf(&sb, "intelligence_jobs_total{state=%q} %d\n", s, c.jobs[s])
+	}
+	sb.WriteString("# HELP topic_ai_shadow_total AI shadow classifications by outcome (existing/new/none or why none was recorded)\n# TYPE topic_ai_shadow_total counter\n")
+	outs := make([]string, 0, len(c.shadow))
+	for k := range c.shadow {
+		outs = append(outs, k)
+	}
+	sort.Strings(outs)
+	for _, o := range outs {
+		fmt.Fprintf(&sb, "topic_ai_shadow_total{outcome=%q} %d\n", o, c.shadow[o])
 	}
 	return sb.String()
 }

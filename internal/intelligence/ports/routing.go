@@ -74,6 +74,8 @@ type RoutingRepository interface {
 	Focus(ctx context.Context, tenantID uuid.UUID, ref MessageRef, container uuid.UUID, participant *uuid.UUID) ([]domain.FocusHint, error)
 	OpenTopics(ctx context.Context, tenantID uuid.UUID, ref MessageRef, container uuid.UUID, limit int) ([]domain.TopicBrief, error)
 
+	// ProposalExists: a not-applied proposal of this source (an AI shadow decision, a dry run) already exists for the message.
+	ProposalExists(ctx context.Context, tenantID uuid.UUID, ref MessageRef, source domain.DecisionSource) (bool, error)
 	// SaveDecision persists a decision. An applied decision for a message that already has an active one returns the
 	// existing id with inserted=false (a replay never creates a second). A proposal (not applied) refreshes the
 	// previous proposal of the same source.

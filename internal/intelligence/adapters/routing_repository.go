@@ -253,6 +253,12 @@ func (r *PostgresRoutingRepository) SaveDecision(ctx context.Context, tenantID u
 	return id, err == nil, mapError(err)
 }
 
+func (r *PostgresRoutingRepository) ProposalExists(ctx context.Context, tenantID uuid.UUID, ref ports.MessageRef, source domain.DecisionSource) (bool, error) {
+	var ok bool
+	err := r.q(ctx).QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM routing_decisions WHERE tenant_id=$1 AND %s=$2 AND decision_source=$3 AND NOT applied)`, col(ref.Kind)), tenantID, ref.ID, string(source)).Scan(&ok)
+	return ok, err
+}
+
 func firstError(a, b error) error {
 	if a != nil {
 		return a

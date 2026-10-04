@@ -349,6 +349,11 @@ func main() {
 				intelligenceadapters.NewPostgresRoutingRepository(dbPool), intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags)
 			pipeline = intelligenceapp.SummaryPipeline{Next: pipeline, Summaries: summarySvc}
 		}
+		if intelligenceFlags.TopicAIRoutingEnabled {
+			// shadow only: the proposal is recorded, never applied; a failure never touches the routing
+			pipeline = intelligenceapp.ShadowPipeline{Next: pipeline, Classifier: intelligenceapp.NewTopicClassifier(intelligenceadapters.NewPostgresRoutingRepository(dbPool),
+				intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewPostgresSummaryRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags, intelligenceCounters)}
+		}
 		runner := intelligenceapp.NewJobRunner(jobStore, pipeline, session, intelligenceapp.DefaultJobRunnerConfig(), intelligenceCounters)
 		go runner.Run(workerCtx, 2*time.Second)
 		handler, err := intelligenceworker.NewHandler(jobStore)
