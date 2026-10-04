@@ -1335,6 +1335,25 @@ paths:
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "The source would be left empty, or is not open", content: { text/plain: { schema: { type: string } } } }
         '422': { description: "Empty list, duplicated message or missing title", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/intelligence/evaluation:
+    get:
+      operationId: getIntelligenceEvaluation
+      tags: [Topics]
+      summary: Aggregate, content-free evaluation of the conversation-intelligence automations
+      description: 'Numbers only (never message text): override rate of the deterministic router, AI shadow agreement with what finally happened (by confidence band), ambiguity handling, summary corrections, tool requests and handoffs. Base the decision to turn an automation on on this report.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+      responses:
+        '200':
+          description: Report
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
     get:
       operationId: listConversationAmbiguities

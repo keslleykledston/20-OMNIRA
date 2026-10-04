@@ -210,3 +210,13 @@ func (e *env) groupMessage(tenant uuid.UUID, g groupFixture, author uuid.UUID, b
 	        VALUES($1,$2,$3,$4,'a@lid','x','text',$5,now(),$6,$7)`, id, tenant, g.group, fmt.Sprintf("gm-%d-%s", groupSeq, id), body, author, replyTo)
 	return id
 }
+
+// callQuery is call() with a query string.
+func (e *env) callQuery(tenant, user uuid.UUID, query string, fn http.HandlerFunc) *httptest.ResponseRecorder {
+	e.t.Helper()
+	rec := httptest.NewRecorder()
+	e.attempt(tenant, user, func(ctx context.Context) {
+		fn(rec, httptest.NewRequest(http.MethodGet, "/?"+query, nil).WithContext(ctx))
+	})
+	return rec
+}

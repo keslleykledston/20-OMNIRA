@@ -43,6 +43,13 @@ type TopicHandler struct {
 	copilot     *application.CopilotService
 	tools       *application.ToolGateway
 	restructure *application.RestructureService
+	evaluation  ports.EvaluationRepository
+}
+
+// WithEvaluation enables the aggregate evaluation report.
+func (h *TopicHandler) WithEvaluation(e ports.EvaluationRepository) *TopicHandler {
+	h.evaluation = e
+	return h
 }
 
 // WithRestructure enables topic merge and split.
@@ -1446,4 +1453,35 @@ func (h *TopicHandler) SplitTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, toRestructureDTO(res))
+}
+
+// GetEvaluation: GET /tenants/{tenant_id}/intelligence/evaluation?days=30
+// Aggregate, content-free numbers (no message text): override rate of the router, AI shadow agreement by confidence,
+// ambiguity handling, summary corrections, tool requests and handoffs. This is what a rollout decision should be based on.
+func (h *TopicHandler) GetEvaluation(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if h.evaluation == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	days := 30
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 365 {
+			http.Error(w, "days must be between 1 and 365", http.StatusBadRequest)
+			return
+		}
+		days = n
+	}
+	ev, err := h.evaluation.Report(r.Context(), tc.TenantID, days)
+	if err != nil {
+		http.Error(w, "failed to build the report", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, ev)
 }
