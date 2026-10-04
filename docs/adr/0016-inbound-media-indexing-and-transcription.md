@@ -168,8 +168,20 @@ auditoria (`docs/ops/MEDIA.md`). Desvios do desenho, por motivo medido:
 6. **Vídeo fica para a segunda entrega. Office (docx/xlsx): rejeitado na v1, conversão em contêiner no futuro.**
 7. **Limites propostos aprovados**: imagem 12 MP, PDF 20 páginas, áudio 10 min, vídeo 2 min, 25 MiB.
 
+3. **Opt-in por tenant: desligado por padrão, ligado pelo administrador do tenant** (decidido em 2026-10-04). A chave do Gemini é
+   informada na administração do tenant (Configurações), cifrada em repouso, com aceite versionado do termo de envio de dados.
+
+## Implementação: M2, M8 e a integração por tenant (2026-10-04)
+- **M2 (áudio local)**: `docs/ops/WHISPER.md`. Serviço systemd isolado (usuário próprio, sem internet, `ffmpeg` encapsulado, 10 min),
+  `message_media_analysis` com o texto ligado à **mensagem** (sobrevive à remoção do arquivo), saída tratada como dado: limpeza de controles
+  e bidi, filtro de frases-fantasma de silêncio, sinalização de texto que parece instrução a uma IA, exibição só como texto simples.
+- **Integração Gemini**: `tenant_ai_integrations` + `/integrations/ai`. A chave é só de escrita (nunca devolvida, nunca em auditoria nem
+  log), `enabled` exige chave e aceite do termo corrente (também por CHECK no banco), remover a chave desativa. Termo versionado
+  (`2026-10-gemini-v1`): mudar o texto exige novo aceite. A M3 só poderá chamar o Gemini com `enabled` e dentro do orçamento.
+- **M8 (backup)**: `docs/ops/MEDIA.md`.
+
 ## Questões em aberto
-- Item 3 (opt-in por tenant e texto de aviso ao cliente).
+- Texto exibido ao **cliente final** sobre o tratamento (LGPD) fica a cargo de cada organização; o termo aceito no sistema cobre a relação com o provedor.
 
 1. **Áudio local** com Whisper na GPU (recomendado) ou Gemini pago?
 2. **Gemini conta paga**: quem cria a conta de faturamento e a chave, e qual o **orçamento mensal** máximo?

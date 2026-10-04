@@ -652,6 +652,84 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/integrations/ai:
+    get:
+      operationId: getAIIntegration
+      tags: [Tenants]
+      summary: External AI integration of the organization (Gemini)
+      description: |
+        Requires `tenant.manage`. Off by default. The API key is write-only: it is never returned, only
+        `key_configured` and when/who set it. Includes the exact consent text and its version.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: Current state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AIIntegration' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+    put:
+      operationId: updateAIIntegration
+      tags: [Tenants]
+      summary: Update the external AI integration
+      description: |
+        Partial update. Switching `enabled` on requires a stored key and the current consent
+        (`accept_external_ai: true` the first time or after the text version changes). Sending `api_key`
+        replaces the stored key (encrypted at rest, AES-256-GCM). Audited without the key.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AIIntegrationUpdate' }
+      responses:
+        '200':
+          description: New state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AIIntegration' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '422': { description: 'Invalid key format, model or budget, or enabling without key or consent' }
+  /tenants/{tenant_id}/integrations/ai/key:
+    delete:
+      operationId: deleteAIIntegrationKey
+      tags: [Tenants]
+      summary: Remove the stored API key (also switches the integration off)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: New state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AIIntegration' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+  /tenants/{tenant_id}/integrations/ai/test:
+    post:
+      operationId: testAIIntegration
+      tags: [Tenants]
+      summary: Check the stored key against the provider
+      description: |
+        Calls the provider's model list server-side with the stored key (sent in a header) and reports a fixed,
+        safe message. Never returns provider text. Throttled to one test per 3 seconds.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AIIntegrationTest' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '409': { description: No key configured }
+        '429': { description: Tested again too soon }
   /tenants/{tenant_id}/messages/{message_id}/media:
     get:
       operationId: getMessageMedia
@@ -1617,6 +1695,40 @@ components:
         next_cursor: { type: string }
         count: { type: integer }
         limit: { type: integer }
+    AIIntegration:
+      type: object
+      required: [provider, enabled, model, monthly_budget_usd, key_configured, consent_text, consent_version, consent_current]
+      properties:
+        provider: { type: string, enum: [gemini] }
+        enabled: { type: boolean }
+        model: { type: string }
+        monthly_budget_usd: { type: number }
+        key_configured: { type: boolean }
+        key_set_at: { type: string, format: date-time }
+        key_set_by: { type: string }
+        consent_text: { type: string }
+        consent_version: { type: string }
+        consent_current: { type: boolean, description: The tenant accepted the current text version }
+        consent_at: { type: string, format: date-time }
+        consent_by: { type: string }
+        last_test: { $ref: '#/components/schemas/AIIntegrationTest' }
+    AIIntegrationUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        model: { type: string, pattern: '^[A-Za-z0-9._-]{1,100}$' }
+        monthly_budget_usd: { type: number, minimum: 0, maximum: 10000 }
+        api_key: { type: string, writeOnly: true, minLength: 20, maxLength: 200 }
+        accept_external_ai: { type: boolean }
+    AIIntegrationTest:
+      type: object
+      required: [at, ok, message]
+      properties:
+        at: { type: string, format: date-time }
+        ok: { type: boolean }
+        message: { type: string }
+        model_available: { type: boolean }
     MessageItem:
       type: object
       required: [id, conversation_id, direction, message_type, status, created_at]
@@ -1638,6 +1750,15 @@ components:
           description: |
             State of the attachment pipeline (ADR-0016); absent for messages without media. Only `clean` can be
             downloaded; `pending`/`quarantined` mean the file is still being checked.
+        media_text:
+          type: string
+          description: |
+            Text derived from the attachment, today the audio transcript made locally (ADR-0016). Untrusted data:
+            show it as plain text, never as markup or links. It stays on the message after the file is removed.
+        media_text_status: { type: string, enum: [pending, done, empty, failed] }
+        media_text_suspicious:
+          type: boolean
+          description: The text looks like it is giving instructions to an AI model.
     MessagePage:
       type: object
       required: [items, has_more, count, limit]

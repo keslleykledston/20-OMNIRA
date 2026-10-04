@@ -83,6 +83,12 @@ type MessageItem struct {
 	// MediaStatus is the state of the attachment pipeline (pending|quarantined|clean|infected|rejected|
 	// source_gone|failed); empty for messages without media.
 	MediaStatus string `json:"media_status,omitempty"`
+	// MediaText is text derived from the attachment (today: the audio transcript), pending|done|empty|failed in
+	// MediaTextStatus. It is untrusted data: clients show it as plain text only. MediaTextSuspicious marks text
+	// that appears to be addressed to an AI.
+	MediaText           string `json:"media_text,omitempty"`
+	MediaTextStatus     string `json:"media_text_status,omitempty"`
+	MediaTextSuspicious bool   `json:"media_text_suspicious,omitempty"`
 }
 
 // ListConversations pages the tenant's conversations by LAST ACTIVITY (last message, else
@@ -276,9 +282,11 @@ func (h *InboxAPIHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
 		SELECT m.id,m.conversation_id,m.channel_connection_id,m.direction,m.message_type,m.body,m.media_ref,m.mime_type,m.size_bytes,m.status,m.created_at,
-		       COALESCE(mm.status,'')
+		       COALESCE(mm.status,''),
+		       CASE WHEN ma.status='done' THEN ma.body ELSE '' END, COALESCE(ma.status,''), COALESCE(ma.suspicious,false)
 		FROM messages m
 		LEFT JOIN message_media mm ON mm.tenant_id=m.tenant_id AND mm.message_id=m.id
+		LEFT JOIN message_media_analysis ma ON ma.tenant_id=m.tenant_id AND ma.message_id=m.id AND ma.kind='transcript'
 		WHERE `+where+` ORDER BY m.created_at DESC,m.id DESC LIMIT $`+strconv.Itoa(limitPos), args...)
 	if err != nil {
 		http.Error(w, "failed to list messages", http.StatusInternalServerError)
@@ -345,7 +353,7 @@ func scanMessageItem(row rowScanner) (MessageItem, error) {
 	var direction, status string
 	var created time.Time
 	var mediaRef interface{} // discard media_ref from DB row; never expose to public DTO
-	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &mediaRef, &item.MimeType, &item.SizeBytes, &status, &created, &item.MediaStatus)
+	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &mediaRef, &item.MimeType, &item.SizeBytes, &status, &created, &item.MediaStatus, &item.MediaText, &item.MediaTextStatus, &item.MediaTextSuspicious)
 	item.Direction, item.Status, item.CreatedAt = direction, status, created.UTC().Format(time.RFC3339Nano)
 	return item, err
 }

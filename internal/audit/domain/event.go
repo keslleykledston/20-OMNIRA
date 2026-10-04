@@ -15,6 +15,7 @@ const (
 	ActionTenantSuspended          AuditAction = "tenant.suspended"
 	ActionTenantInboxSettings      AuditAction = "tenant.inbox_settings_updated"
 	ActionContactKindChanged       AuditAction = "contact.kind_changed"
+	ActionTenantAIIntegration      AuditAction = "tenant.ai_integration_updated"
 	ActionGroupEnabled             AuditAction = "group.enabled"
 	ActionGroupDisabled            AuditAction = "group.disabled"
 	ActionGroupHistoryDeleted      AuditAction = "group.history_deleted"

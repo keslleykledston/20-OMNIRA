@@ -277,6 +277,21 @@ func main() {
 			log.Fatalf("media processor error: %v", err)
 		}
 		go mediaProc.Run(workerCtx, 2*time.Second)
+		// Audio transcription (ADR-0016 M2): local engine only, the audio never leaves this machine.
+		if cfg.WhisperURL != "" {
+			engine, err := mediaadapters.NewWhisper(cfg.WhisperURL, "whisper-large-v3-turbo-q5_0")
+			if err != nil {
+				log.Fatalf("whisper config error: %v", err)
+			}
+			transcriber, err := mediaapp.NewTranscriptionProcessor(mediaadapters.NewPostgresRepository(dbPool), store, engine, mediaCounters)
+			if err != nil {
+				log.Fatalf("transcription processor error: %v", err)
+			}
+			go transcriber.Run(workerCtx, 3*time.Second)
+			log.Printf("Audio transcription started (local engine at %s)\n", cfg.WhisperURL)
+		} else {
+			log.Printf("Audio transcription disabled (OMNIRA_WHISPER_URL empty)\n")
+		}
 		go func() {
 			probe := func() {
 				pctx, cancel := context.WithTimeout(workerCtx, 8*time.Second)

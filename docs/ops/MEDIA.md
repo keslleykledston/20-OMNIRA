@@ -30,6 +30,20 @@ com marcação de script embutida, bomba de pixels (> 12 MP), > 25 MiB, tipo dec
 - Retenção: arquivo 60 dias (`Retention`); depois o arquivo some e a linha fica (`file_purged_at`). O texto extraído
   (M2+) permanece na conversa.
 
+## Transcrição de áudio (M2) e texto derivado
+O áudio liberado gera um job em `message_media_analysis` e é transcrito localmente (`docs/ops/WHISPER.md`). O texto pertence à
+**mensagem**, não ao arquivo: continua na conversa depois que o arquivo é removido pela retenção de 60 dias. Só o worker escreve; os
+operadores só leem (RLS). A interface mostra "Transcrição automática · IA local" como texto simples (sem markup nem links).
+
+## Backup dos arquivos (M8)
+`scripts/backup-omnira-media.sh` (cron `:35` de cada hora) copia **só `clean/`** (nunca a quarentena) de forma incremental e conferida por
+checksum para o disco externo (`/mnt/omnira-backup-external/Backup/omnira_media`) e para a nuvem cifrada (`omnira-backup:omnira_media`,
+rclone crypt, mesma configuração dos dumps). Retenção nas duas: 90 dias (60 de arquivo + 30 de margem). Marcadores em
+`backups/omnira_media/` (`.external-last-ok`, `.cloud-last-ok`) alimentam `scripts/backup-media-check.sh` (`*/15`, via
+`run-check-with-alert.sh`: AVISO após 3 h, FALHA após 6 h sem backup na nuvem). Prova descartável: `scripts/test-backup-media.sh`.
+**Restaurar**: copie `Backup/omnira_media/<tenant>/<id>` de volta para `/opt/omnira-media/clean/<tenant>/<id>` (modo 0600, dono uid 1000);
+o banco guarda estado e hash (`message_media.sha256`) para conferir.
+
 ## Cache no navegador
 Imagem e áudio liberados saem com `Cache-Control: private, max-age=86400` e `ETag` (SHA-256 do conteúdo): o navegador do
 operador não baixa de novo ao reabrir a conversa e revalida (304) depois de 24 h. Vídeo e documentos: `no-store`. Limite

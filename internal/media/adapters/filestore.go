@@ -3,9 +3,12 @@ package adapters
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/google/uuid"
 
 	"github.com/omnira/omnira/internal/media/ports"
 )
@@ -85,3 +88,22 @@ func (s *FileStore) Remove(w ports.Work) error {
 func (s *FileStore) OpenClean(tenantID, id string) (*os.File, error) {
 	return os.Open(filepath.Join(s.root, "clean", tenantID, id))
 }
+
+// ReadClean returns the bytes of a cleared file, refusing anything larger than maxBytes. It never reads quarantine.
+func (s *FileStore) ReadClean(tenantID, mediaID uuid.UUID, maxBytes int64) ([]byte, error) {
+	f, err := s.OpenClean(tenantID.String(), mediaID.String())
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, errors.New("media store: file larger than allowed")
+	}
+	return data, nil
+}
+
+var _ ports.CleanFiles = (*FileStore)(nil)

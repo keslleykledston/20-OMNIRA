@@ -333,3 +333,159 @@ func (f fetcherFunc) Fetch(ctx context.Context, ref string) ([]byte, string, err
 type scannerFunc func(context.Context, []byte) (ports.Verdict, error)
 
 func (f scannerFunc) Scan(ctx context.Context, b []byte) (ports.Verdict, error) { return f(ctx, b) }
+
+// ---- derived text (ADR-0016 M2) ----
+
+// audioCleared walks one inbound media row through the real repository to "clean" with the given kind.
+func (e *menv) cleared(tenant, conv uuid.UUID, kind, mime string) (msg uuid.UUID, w ports.Work) {
+	e.t.Helper()
+	msg = e.message(tenant, conv, "inbound", "http://localhost:3000/api/files/s/"+uuid.NewString())
+	repo := NewPostgresRepository(e.app)
+	items, err := repo.Claim(e.ctx, 50, time.Minute)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.MessageID == msg {
+			w = it
+		}
+	}
+	if w.ID == uuid.Nil {
+		e.t.Fatal("row not claimed")
+	}
+	if err := repo.MarkQuarantined(e.ctx, w, ports.Quarantined{Kind: kind, Mime: mime, SizeBytes: 10, SHA256: "ab"}); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := repo.MarkClean(e.ctx, w); err != nil {
+		e.t.Fatal(err)
+	}
+	return msg, w
+}
+
+func (e *menv) analysisCount(msg uuid.UUID) int {
+	return e.count(`SELECT count(*) FROM message_media_analysis WHERE message_id=$1`, msg)
+}
+
+func TestOnlyClearedAudioGetsATranscriptJobAndNeverTwice(t *testing.T) {
+	e := newMEnv(t)
+	tenant, conv := e.tenant()
+	audioMsg, audio := e.cleared(tenant, conv, "audio", "audio/ogg")
+	imageMsg, _ := e.cleared(tenant, conv, "image", "image/png")
+	if e.analysisCount(audioMsg) != 1 {
+		t.Fatalf("cleared audio must get exactly one transcript job, got %d", e.analysisCount(audioMsg))
+	}
+	if e.analysisCount(imageMsg) != 0 {
+		t.Fatal("images are not transcribed")
+	}
+	// An infected audio never reaches the engine.
+	infMsg := e.message(tenant, conv, "inbound", "http://localhost:3000/api/files/s/inf")
+	repo := NewPostgresRepository(e.app)
+	items, _ := repo.Claim(e.ctx, 50, time.Minute)
+	for _, it := range items {
+		if it.MessageID == infMsg {
+			_ = repo.MarkQuarantined(e.ctx, it, ports.Quarantined{Kind: "audio", Mime: "audio/ogg", SizeBytes: 1, SHA256: "x"})
+			_ = repo.MarkTerminal(e.ctx, it, ports.StatusInfected, "Eicar")
+		}
+	}
+	if e.analysisCount(infMsg) != 0 {
+		t.Fatal("an infected audio must never be queued for transcription")
+	}
+	_ = audio
+}
+
+func TestTranscriptLifecycleAndTheTextOutlivesTheFile(t *testing.T) {
+	e := newMEnv(t)
+	tenant, conv := e.tenant()
+	msg, media := e.cleared(tenant, conv, "audio", "audio/ogg")
+	repo := NewPostgresRepository(e.app)
+
+	jobs, err := repo.ClaimAnalysis(e.ctx, "transcript", 5, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job ports.AnalysisWork
+	for _, j := range jobs {
+		if j.MessageID == msg {
+			job = j
+		}
+	}
+	if job.ID == uuid.Nil || job.MediaID != media.ID || job.Mime != "audio/ogg" || job.Attempts != 1 {
+		t.Fatalf("claimed = %+v", job)
+	}
+	// Leased: not handed out again.
+	again, _ := repo.ClaimAnalysis(e.ctx, "transcript", 5, time.Minute)
+	for _, j := range again {
+		if j.ID == job.ID {
+			t.Fatal("a leased job was handed out again")
+		}
+	}
+	if err := repo.SaveAnalysis(e.ctx, job, ports.Analysis{Text: "Preciso trocar o roteador amanhã", Language: "pt", Model: "turbo", Suspicious: true, Reason: "truncated_at_10min"}); err != nil {
+		t.Fatal(err)
+	}
+	var status, body, lang string
+	var susp bool
+	if err := e.seed.QueryRow(e.ctx, `SELECT status, body, language, suspicious FROM message_media_analysis WHERE message_id=$1`, msg).Scan(&status, &body, &lang, &susp); err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" || body != "Preciso trocar o roteador amanhã" || lang != "pt" || !susp {
+		t.Fatalf("stored = %s %q %s %v", status, body, lang, susp)
+	}
+	// A result cannot be written twice (no silent overwrite of an existing transcript).
+	if err := repo.SaveAnalysis(e.ctx, job, ports.Analysis{Text: "outra coisa"}); err == nil {
+		t.Fatal("saving over a finished transcript must be refused")
+	}
+	// Retention removes the FILE; the text stays on the conversation.
+	if err := repo.MarkPurged(e.ctx, media); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.count(`SELECT count(*) FROM message_media_analysis WHERE message_id=$1 AND status='done' AND body<>''`, msg); got != 1 {
+		t.Fatal("the transcript must survive the purge of the file")
+	}
+	// Portuguese full-text search finds it by a stem ("roteadores" -> roteador), the base of M5.
+	if got := e.count(`SELECT count(*) FROM message_media_analysis WHERE tenant_id=$1 AND status='done' AND tsv @@ plainto_tsquery('portuguese','roteadores')`, tenant); got != 1 {
+		t.Fatalf("full-text search found %d, want 1", got)
+	}
+	// Deleting the message removes its derived text.
+	e.exec(`DELETE FROM messages WHERE id=$1`, msg)
+	if e.analysisCount(msg) != 0 {
+		t.Fatal("derived text must go with the message")
+	}
+}
+
+func TestDerivedTextIsReadableByMembersOnlyOfTheirTenantAndWritableByNoOperator(t *testing.T) {
+	e := newMEnv(t)
+	a, convA := e.tenant()
+	b, convB := e.tenant()
+	msgA, _ := e.cleared(a, convA, "audio", "audio/ogg")
+	_, _ = e.cleared(b, convB, "audio", "audio/ogg")
+	userA := e.member(a)
+	e.exec(`UPDATE message_media_analysis SET status='done', body='texto do tenant A' WHERE message_id=$1`, msgA)
+
+	var seen, forged, deleted int64
+	var mine int
+	_ = platformdb.WithTenantSession(e.ctx, e.app, userA, false, func(ctx context.Context) error {
+		q := platformdb.QuerierFromContext(ctx, e.app)
+		_ = q.QueryRow(ctx, `SELECT count(*) FROM message_media_analysis`).Scan(&mine)
+		seen = int64(mine)
+		tag, _ := q.Exec(ctx, `UPDATE message_media_analysis SET body='planted by an operator' WHERE message_id=$1`, msgA)
+		forged = tag.RowsAffected()
+		tag, _ = q.Exec(ctx, `DELETE FROM message_media_analysis WHERE message_id=$1`, msgA)
+		deleted = tag.RowsAffected()
+		return nil
+	})
+	if seen != 1 {
+		t.Fatalf("member sees %d analysis rows, want exactly the 1 of their own tenant", seen)
+	}
+	if forged != 0 || deleted != 0 {
+		t.Fatalf("an operator session changed %d / deleted %d rows; derived text is written by the worker only", forged, deleted)
+	}
+	// And cannot insert one for a message of theirs either.
+	var insertErr error
+	_ = platformdb.WithTenantSession(e.ctx, e.app, userA, false, func(ctx context.Context) error {
+		_, insertErr = platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, `INSERT INTO message_media_analysis(tenant_id,message_id,kind,status,body) VALUES($1,$2,'description','done','fake')`, a, msgA)
+		return nil
+	})
+	if insertErr == nil {
+		t.Fatal("an operator session must not be able to insert derived text")
+	}
+}

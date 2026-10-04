@@ -202,6 +202,11 @@ func main() {
 		log.Fatalf("WAHA provider descriptor error: %v", err)
 	}
 	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management))
+	if erpCipherErr == nil && erpCipher != nil {
+		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher))
+	} else {
+		log.Printf("AI integration settings disabled: credential cipher unavailable")
+	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
 	if cfg.MetaEnabled {
 		if cfg.MetaVerifyToken == "" || cfg.MetaAppSecret == "" {

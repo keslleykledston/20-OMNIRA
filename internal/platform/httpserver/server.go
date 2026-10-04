@@ -558,6 +558,26 @@ func (s *Server) RegisterPresenceHandlers(dbPool *pgxpool.Pool) {
 	}()
 }
 
+// RegisterAIIntegrationHandlers exposes the per-tenant external-AI opt-in and key (ADR-0016). Everything is
+// gated on tenant.manage inside the handler, and the key is write-only.
+func (s *Server) RegisterAIIntegrationHandlers(dbPool *pgxpool.Pool, h *tenancyadapters.AIIntegrationHandler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
+	const base = "/api/v1/tenants/{tenant_id}/integrations/ai"
+	s.mux.Handle("GET "+base, wrap(h.Get))
+	s.mux.Handle("PUT "+base, wrap(h.Put))
+	s.mux.Handle("DELETE "+base+"/key", wrap(h.DeleteKey))
+	s.mux.Handle("POST "+base+"/test", wrap(h.Test))
+}
+
 // RegisterGroupHandlers exposes the read-only WhatsApp group APIs (ADR-0015) behind authn + tenant
 // session. Permissions (group.read / group.manage) are checked by the handler.
 func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.Handler) {

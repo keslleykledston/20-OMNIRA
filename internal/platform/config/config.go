@@ -42,6 +42,8 @@ type Config struct {
 	MediaDir string
 	// ClamAVAddr: clamd host:port used by the worker's antivirus stage.
 	ClamAVAddr string
+	// WhisperURL: the local speech-to-text server (omnira-whisper systemd unit). Empty disables transcription.
+	WhisperURL string
 	MetaEnabled       bool
 	PublicBaseURL     string
 	// WebBaseURL: host do frontend como o navegador enxerga (links de e-mail). Diferente
@@ -124,6 +126,7 @@ func Load() *Config {
 		WahaEngine:        getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
 		MediaDir:          os.Getenv("OMNIRA_MEDIA_DIR"),
 		ClamAVAddr:        os.Getenv("OMNIRA_CLAMAV_ADDR"),
+		WhisperURL:        os.Getenv("OMNIRA_WHISPER_URL"),
 		MetaEnabled:       getEnv("OMNIRA_META_ENABLED", "false") == "true",
 		PublicBaseURL:     os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
 		WebBaseURL:        os.Getenv("OMNIRA_WEB_BASE_URL"),

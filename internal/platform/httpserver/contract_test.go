@@ -11,6 +11,7 @@ import (
 
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	"github.com/omnira/omnira/internal/platform/config"
 )
 
@@ -85,6 +86,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
 	s.RegisterWahaWebhook(http.NotFoundHandler())
 	s.RegisterGroupHandlers(nil, groupsadapters.NewHandler(nil, nil, nil))
+	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
 	return s
 }
 
