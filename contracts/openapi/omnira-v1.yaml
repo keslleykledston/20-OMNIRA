@@ -1173,6 +1173,28 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "The invitation is not pending", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/topics/{topic_id}/copilot/suggest-reply:
+    post:
+      operationId: suggestTopicReply
+      tags: [Topics]
+      summary: Draft a reply to the topic's latest customer message (suggest-only)
+      description: 'Returns a DRAFT for the attendant to edit and send through the normal message endpoint; it never sends anything (sent is always false). Warnings are computed by OMNIRA, not by the model. 404 when the copilot flag is off, 422 without a customer message, 429 when asked again within seconds, 503 when the model is unavailable.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Draft
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CopilotSuggestion' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: "No customer message to answer", content: { text/plain: { schema: { type: string } } } }
+        '429': { description: "Asked again too soon for this topic", content: { text/plain: { schema: { type: string } } } }
+        '503': { description: "The copilot is unavailable right now", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
     get:
       operationId: listConversationAmbiguities
@@ -1914,6 +1936,22 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    CopilotSuggestion:
+      type: object
+      required: [reply, missing_info, needs_human, warnings, sent]
+      properties:
+        reply: { type: string }
+        missing_info: { type: array, items: { type: string } }
+        needs_human: { type: boolean }
+        warnings:
+          type: array
+          items: { type: string, enum: [link_not_in_context, email_not_in_context, phone_not_in_context, number_not_in_context, amount_mentioned, claims_action_done, contains_promise] }
+        answered_message_id: { type: string, format: uuid }
+        based_on_messages: { type: integer }
+        confirmed_summary_version: { type: integer, nullable: true }
+        model: { type: string }
+        prompt_version: { type: string }
+        sent: { type: boolean, enum: [false] }
     AIUsage:
       type: object
       required: [month, budget_usd, spent_usd, remaining_usd, items]

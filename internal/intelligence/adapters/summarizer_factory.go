@@ -12,7 +12,7 @@ import (
 )
 
 // NewModelRouterFromConfig reuses the provider the conversation summary already uses (same provider, key, timeout and
-// global AI switch). Each task may use its own model: OMNIRA_AI_MODEL_TOPIC_CLASSIFY and OMNIRA_AI_MODEL_TOPIC_SUMMARY
+// global AI switch). Each task may use its own model: OMNIRA_AI_MODEL_TOPIC_CLASSIFY, OMNIRA_AI_MODEL_TOPIC_SUMMARY and OMNIRA_AI_MODEL_COPILOT
 // override OMNIRA_AI_MODEL (a small model to classify, a better one to summarize). When AI is not ready the router is
 // empty: every task is simply unavailable, never a half-configured attempt that fails at request time.
 func NewModelRouterFromConfig(cfg *config.Config) *application.ModelRouter {
@@ -34,6 +34,7 @@ func NewModelRouterFromConfig(cfg *config.Config) *application.ModelRouter {
 	}
 	add(application.TaskTopicClassify, "OMNIRA_AI_MODEL_TOPIC_CLASSIFY", 200)
 	add(application.TaskTopicSummary, "OMNIRA_AI_MODEL_TOPIC_SUMMARY", 600)
+	add(application.TaskCopilotReply, "OMNIRA_AI_MODEL_COPILOT", 700)
 	return router
 }
 

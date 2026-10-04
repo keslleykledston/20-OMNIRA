@@ -39,6 +39,13 @@ type TopicHandler struct {
 	summaries   *application.SummaryService
 	tickets     *application.TopicTicketService
 	handoffs    *application.HandoffService
+	copilot     *application.CopilotService
+}
+
+// WithCopilot enables the suggest-only reply copilot endpoint.
+func (h *TopicHandler) WithCopilot(c *application.CopilotService) *TopicHandler {
+	h.copilot = c
+	return h
 }
 
 // WithHandoffs enables the private handoff endpoints.
@@ -120,10 +127,17 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, domain.ErrInvalidTopic):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-	case errors.Is(err, application.ErrHandoffDisabled):
+	case errors.Is(err, application.ErrHandoffDisabled), errors.Is(err, application.ErrCopilotDisabled):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrPrimaryTicketTaken), errors.Is(err, domain.ErrTooManyHandoffs):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, application.ErrCopilotUnavailable):
+		http.Error(w, "the copilot is unavailable right now", http.StatusServiceUnavailable)
+	case errors.Is(err, application.ErrCopilotThrottled):
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "too many requests for this topic", http.StatusTooManyRequests)
+	case errors.Is(err, application.ErrNoCustomerMessage):
+		http.Error(w, "this topic has no customer message to answer", http.StatusUnprocessableEntity)
 	case errors.Is(err, ports.ErrSummarizerUnavailable):
 		http.Error(w, "summaries are unavailable right now", http.StatusServiceUnavailable)
 	case errors.Is(err, application.ErrNothingToSummarize):
@@ -1064,4 +1078,49 @@ func (h *TopicHandler) RevokeHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// SuggestReply: POST /tenants/{tenant_id}/topics/{topic_id}/copilot/suggest-reply
+// Returns a DRAFT with deterministic warnings. It never sends anything: the attendant edits it and sends it through the
+// normal message endpoint.
+func (h *TopicHandler) SuggestReply(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if h.copilot == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	id, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return
+	}
+	if _, err := h.svc.GetTopic(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	if ok, err := h.canOperateTopic(r.Context(), tc, id); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return
+	}
+	res, err := h.copilot.Suggest(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	missing, warnings := res.Suggestion.MissingInfo, res.Suggestion.Warnings
+	if missing == nil {
+		missing = []string{}
+	}
+	if warnings == nil {
+		warnings = []string{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reply": res.Suggestion.Reply, "missing_info": missing, "needs_human": res.Suggestion.NeedsHuman, "warnings": warnings,
+		"answered_message_id": res.AnsweredMessageID, "based_on_messages": res.BasedOnMessages, "confirmed_summary_version": res.ConfirmedSummary,
+		"model": res.Model, "prompt_version": res.PromptVersion, "sent": false,
+	})
 }

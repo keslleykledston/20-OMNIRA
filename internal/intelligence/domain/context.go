@@ -202,3 +202,36 @@ func quote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// PlainText is every piece of text of the context in one string. It is only used to check, deterministically, whether
+// something a model wrote (a link, a number) actually appears in what the model was given.
+func (c TopicContext) PlainText() string {
+	var b strings.Builder
+	add := func(s string) {
+		b.WriteString(s)
+		b.WriteByte('\n')
+	}
+	add(c.Topic.Title)
+	if c.ConfirmedSummary != nil {
+		add(c.ConfirmedSummary.Text)
+	}
+	if c.InferredSummary != nil {
+		add(c.InferredSummary.Text)
+	}
+	for _, e := range c.Entities {
+		add(e.Key)
+	}
+	for _, m := range c.RelevantMessages {
+		add(m.Text)
+	}
+	for _, m := range c.RecentMessages {
+		add(m.Text)
+	}
+	for _, m := range c.Media {
+		add(m.Text)
+	}
+	if c.CurrentMessage != nil {
+		add(c.CurrentMessage.Text)
+	}
+	return b.String()
+}

@@ -217,9 +217,11 @@ func main() {
 			intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 		ticketPolicySvc := intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool), routingRepo,
 			inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)
+		copilotSvc := intelligenceapp.NewCopilotService(intelligenceapp.NewContextBuilder(topicRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), summaryRepo),
+			intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 		handoffSvc := intelligenceapp.NewHandoffService(intelligenceadapters.NewPostgresHandoffRepository(dbPool), routingRepo, intelligenceFlags, nil)
 		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo), topicRepo).
-			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc).WithHandoffs(handoffSvc))
+			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc).WithHandoffs(handoffSvc).WithCopilot(copilotSvc))
 	}
 	if erpCipherErr == nil && erpCipher != nil {
 		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher).WithUsage(aiusageadapters.NewPostgresLedger(dbPool)))

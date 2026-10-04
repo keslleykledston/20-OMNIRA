@@ -119,6 +119,10 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - Orçamento mensal (UTC) conta **só o provedor da chave do próprio tenant (Gemini)**, incluindo chamadas que falharam (podem ter sido cobradas); é checado **antes** de cada chamada de visão contra o pior caso dela. Classificação e resumo de tópico (OpenAI da plataforma) são registrados mas nunca bloqueiam o tenant.
 - `GET /integrations/ai/usage?month=YYYY-MM` (tenant.manage). `GenerateResponse` ganhou contadores de tokens (só para contabilidade). O `VisionProcessor` agora sobe no worker com `OMNIRA_MULTIMODAL_ANALYSIS_ENABLED=true` (desligada por padrão).
 
+### Copiloto de resposta (ADR-0017, onda 11 backend; sem migration nova)
+- `POST /topics/{id}/copilot/suggest-reply` (flag `OMNIRA_COPILOT_ENABLED`, desligada; `topic.manage` + atendente): rascunho para a **última mensagem do cliente** do tópico, a partir do contexto do tópico (só dele, aliases, zonas confiável/não confiável). **Só sugere**: não há caminho do copiloto ao envio de mensagens (`sent` é sempre `false`; o atendente edita e envia pelo endpoint normal).
+- Saída do modelo validada estritamente (JSON único `reply`/`missing_info`/`needs_human`); avisos **determinísticos** calculados pelo OMNIRA (link/e-mail/telefone/número fora do contexto, valor em R$, "já fiz", promessa). Falha do provedor/saída inválida → 503; limite de 1 chamada a cada ~4 s por tópico (429); cada chamada vai ao ledger. Modelo próprio via `OMNIRA_AI_MODEL_COPILOT`.
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.
