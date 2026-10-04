@@ -556,3 +556,50 @@ func TestWebhookHandlerRoutesGroupMessagesToTheGroupIntake(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0017 Wave 2. Real GOWS payloads carry the quoted message in payload.replyTo with the BARE id (the middle segment
+// of the serialized id), and the author of a group message in payload.participant. Everything is validated; anything
+// unusable is dropped without failing the message.
+func TestParseWebhookKeepsReplyAndParticipantMetadata(t *testing.T) {
+	conn := webhookConnection()
+	provider := newProvider(t, "secret")
+	env := func(payload string) []byte {
+		return []byte(`{"id":"evt-r","event":"message.any","session":"` + sessionName(conn) + `","payload":` + payload + `}`)
+	}
+
+	// 1:1 reply: the sender id is the chat the message came from; the quoted id is kept as the provider gave it
+	one, err := provider.ParseWebhook(conn, env(`{"id":"false_175222334484588@lid_3EB0AAAA11","timestamp":1710000000,"from":"175222334484588@lid","fromMe":false,"body":"sim","replyTo":{"id":"3EB0BBBB22","participant":"175222334484588@lid","body":"quer confirmar?"},"_data":{"Info":{"SenderAlt":"5592991110000@s.whatsapp.net"}}}`))
+	if err != nil || one.Message == nil {
+		t.Fatalf("1:1 reply: %+v %v", one, err)
+	}
+	if one.Message.ParticipantID != "175222334484588@lid" || one.Message.ReplyToExternalID != "3EB0BBBB22" {
+		t.Fatalf("metadata = participant %q reply %q", one.Message.ParticipantID, one.Message.ReplyToExternalID)
+	}
+
+	// group reply keeps the quoted id on the group message
+	grp, err := provider.ParseWebhook(conn, env(`{"id":"false_120363428576999954@g.us_3EB0CCCC33_138122474053653@lid","timestamp":1710000000,"from":"120363428576999954@g.us","fromMe":false,"body":"concordo","participant":"138122474053653@lid","replyTo":{"id":"3EB0DDDD44","participant":"99887766554433@lid","body":"x"}}`))
+	if err != nil || grp.Group == nil || grp.Group.ReplyToExternalID != "3EB0DDDD44" || grp.Group.AuthorJID != "138122474053653@lid" {
+		t.Fatalf("group reply: %+v %v", grp.Group, err)
+	}
+
+	// degrade gracefully: no replyTo, hostile or oversized ids, unknown sender format
+	for name, payload := range map[string]string{
+		"no reply":          `{"id":"m1","timestamp":1710000000,"from":"175222334484588@lid","body":"oi","_data":{"Info":{"SenderAlt":"5592991110000@s.whatsapp.net"}}}`,
+		"empty reply id":    `{"id":"m2","timestamp":1710000000,"from":"175222334484588@lid","body":"oi","replyTo":{"id":""},"_data":{"Info":{"SenderAlt":"5592991110000@s.whatsapp.net"}}}`,
+		"control chars":     `{"id":"m3","timestamp":1710000000,"from":"175222334484588@lid","body":"oi","replyTo":{"id":"abc\u0000def"},"_data":{"Info":{"SenderAlt":"5592991110000@s.whatsapp.net"}}}`,
+		"spaces and markup": `{"id":"m4","timestamp":1710000000,"from":"175222334484588@lid","body":"oi","replyTo":{"id":"<script> x"},"_data":{"Info":{"SenderAlt":"5592991110000@s.whatsapp.net"}}}`,
+		"oversized":         `{"id":"m5","timestamp":1710000000,"from":"175222334484588@lid","body":"oi","replyTo":{"id":"` + strings.Repeat("A", 400) + `"},"_data":{"Info":{"SenderAlt":"5592991110000@s.whatsapp.net"}}}`,
+	} {
+		got, err := provider.ParseWebhook(conn, env(payload))
+		if err != nil || got.Message == nil {
+			t.Fatalf("%s: the message itself must still parse: %+v %v", name, got, err)
+		}
+		if got.Message.ReplyToExternalID != "" {
+			t.Errorf("%s: reply id %q must be dropped", name, got.Message.ReplyToExternalID)
+		}
+	}
+	odd, err := provider.ParseWebhook(conn, env(`{"id":"m6","timestamp":1710000000,"from":"not a jid","body":"oi","_data":{"Info":{"SenderAlt":"5592991110000@s.whatsapp.net"}}}`))
+	if err == nil && odd.Message != nil && odd.Message.ParticipantID != "" {
+		t.Errorf("an unrecognised sender format must not become a participant id: %q", odd.Message.ParticipantID)
+	}
+}

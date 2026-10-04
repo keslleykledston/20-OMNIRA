@@ -98,6 +98,11 @@ type webhookMessage struct {
 		MIMEType string `json:"mimetype"`
 		Filename string `json:"filename"`
 	} `json:"media"`
+	// ReplyTo é a mensagem respondida/citada. O id vem no formato curto (só o segmento do meio do id serializado).
+	ReplyTo *struct {
+		ID          string `json:"id"`
+		Participant string `json:"participant"`
+	} `json:"replyTo"`
 	Data *struct {
 		Info *struct {
 			SenderAlt string `json:"SenderAlt"`
@@ -231,8 +236,33 @@ func (p *WahaProvider) ParseWebhook(conn domain.ChannelConnection, body []byte) 
 			MimeType: payload.Media.MIMEType,
 		}
 	}
+	// Metadados de participante e resposta: só o que o WAHA realmente informa, validado; qualquer coisa fora do formato
+	// é descartada (a mensagem segue normalmente sem esse metadado).
+	if participantChatPattern.MatchString(payload.From) {
+		message.ParticipantID = payload.From
+	}
+	if payload.ReplyTo != nil {
+		message.ReplyToExternalID = cleanReplyID(payload.ReplyTo.ID)
+	}
 	result.Message = message
 	return result, nil
+}
+
+var participantChatPattern = regexp.MustCompile(`^[0-9A-Za-z._:-]{1,64}@(lid|s\.whatsapp\.net|c\.us)$`)
+
+// cleanReplyID keeps a provider message id only if it is short and printable; the value is later compared with ids
+// stored from other webhooks, never executed or rendered.
+func cleanReplyID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || len(id) > 300 {
+		return ""
+	}
+	for _, r := range id {
+		if r < 0x21 || r > 0x7e {
+			return ""
+		}
+	}
+	return id
 }
 
 var (
@@ -273,6 +303,10 @@ func parseGroupMessage(conn domain.ChannelConnection, payload webhookMessage, re
 	if name == "" && payload.FromMe {
 		name = "Você"
 	}
+	replyID := ""
+	if payload.ReplyTo != nil {
+		replyID = cleanReplyID(payload.ReplyTo.ID)
+	}
 	result.Group = &domain.InboundGroupMessage{
 		ProviderMessageID: payload.ID,
 		ConnectionID:      conn.ID.String(),
@@ -282,6 +316,7 @@ func parseGroupMessage(conn domain.ChannelConnection, payload webhookMessage, re
 		FromMe:            payload.FromMe,
 		Type:              kind,
 		Text:              body,
+		ReplyToExternalID: replyID,
 		SentAt:            time.Unix(int64(payload.Timestamp), int64((payload.Timestamp-float64(int64(payload.Timestamp)))*1e9)).UTC(),
 	}
 	return result, nil

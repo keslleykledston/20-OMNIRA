@@ -113,3 +113,24 @@ func TestHandlerRejectsUnsignedBeforeIntake(t *testing.T) {
 		t.Fatalf("code=%d seen=%v", rec.Code, intake.seen)
 	}
 }
+
+func TestParseEventsKeepsTheRepliedMessageAndTheSenderID(t *testing.T) {
+	body := `{"entry":[{"changes":[{"value":{"messages":[
+	  {"from":"5511999990000","id":"wamid.r1","timestamp":"1700000000","type":"text","text":{"body":"sim"},"context":{"from":"5511888880000","id":"wamid.ORIGINAL"}},
+	  {"from":"5511999990000","id":"wamid.r2","timestamp":"1700000001","type":"text","text":{"body":"não"}},
+	  {"from":"5511999990000","id":"wamid.r3","timestamp":"1700000002","type":"text","text":{"body":"x"},"context":{"id":"<b>bad id</b>"}}
+	]}}]}]}`
+	evs, err := meta.ParseEvents(domain.ChannelConnection{ID: uuid.New()}, []byte(body))
+	if err != nil || len(evs) != 3 {
+		t.Fatalf("events = %d %v", len(evs), err)
+	}
+	if m := evs[0].Message; m.ReplyToExternalID != "wamid.ORIGINAL" || m.ParticipantID != "5511999990000" {
+		t.Fatalf("reply message = %+v", m)
+	}
+	if m := evs[1].Message; m.ReplyToExternalID != "" || m.ParticipantID != "5511999990000" {
+		t.Fatalf("plain message = %+v", m)
+	}
+	if m := evs[2].Message; m.ReplyToExternalID != "" {
+		t.Fatalf("a malformed context id must be dropped, got %q", m.ReplyToExternalID)
+	}
+}

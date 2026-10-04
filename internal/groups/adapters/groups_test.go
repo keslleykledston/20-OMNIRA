@@ -468,3 +468,75 @@ func TestIntakePausesAtTheSizeCapAndResumes(t *testing.T) {
 		t.Fatalf("a disabled cap must never pause: ingested=%v err=%v", ing, err)
 	}
 }
+
+// ADR-0017 Wave 2: the author of a group message becomes a provider- and connection-qualified channel participant, a
+// replay never duplicates it, and a reply resolves to a message of the SAME group only.
+func TestIntakeRecordsExternalParticipantsAndResolvesRepliesInsideTheGroup(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	tenantB, connB := e.tenant()
+	e.group(tenantA, connA, jid1, "Oficial", true)
+	e.group(tenantA, connA, jid2, "Outro grupo", true)
+	e.group(tenantB, connB, jid1, "Do B", true)
+	intake := NewIntake(e.app, channeladapters.NewPostgresWebhookEventStore(e.app))
+	now := time.Now().UTC().Truncate(time.Second)
+	as := func(conn channeldomain.ChannelConnection, jid, id, author, name, reply string, at time.Time) channeldomain.InboundGroupMessage {
+		m := groupMsg(conn, jid, id, "texto "+id, at)
+		m.AuthorJID, m.AuthorName, m.ReplyToExternalID = author, name, reply
+		return m
+	}
+	ingest := func(conn channeldomain.ChannelConnection, key string, m channeldomain.InboundGroupMessage) {
+		t.Helper()
+		if _, _, err := intake.ProcessGroupMessage(e.ctx, conn, key, "message.any", "d-"+key, m); err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+	}
+	// three participants in one group; the WAHA serialized id keeps the bare id in its third segment
+	ingest(connA, "e1", as(connA, jid1, "false_"+jid1+"_3EB0AAA1_111@lid", "111@lid", "João", "", now))
+	ingest(connA, "e2", as(connA, jid1, "false_"+jid1+"_3EB0AAA2_222@lid", "222@lid", "Maria", "3EB0AAA1", now.Add(time.Minute)))
+	ingest(connA, "e3", as(connA, jid1, "false_"+jid1+"_3EB0AAA3_333@lid", "333@lid", "Pedro", "3EB0UNKNOWN", now.Add(2*time.Minute)))
+	if n := e.count(`SELECT count(*) FROM channel_participants WHERE tenant_id=$1`, tenantA); n != 3 {
+		t.Fatalf("participants = %d, want 3", n)
+	}
+	// replaying the same events and re-sending a known author creates nothing new
+	ingest(connA, "e1", as(connA, jid1, "false_"+jid1+"_3EB0AAA1_111@lid", "111@lid", "João", "", now))
+	ingest(connA, "e4", as(connA, jid1, "false_"+jid1+"_3EB0AAA4_111@lid", "111@lid", "João S.", "", now.Add(3*time.Minute)))
+	if n := e.count(`SELECT count(*) FROM channel_participants WHERE tenant_id=$1`, tenantA); n != 3 {
+		t.Fatalf("a replay or a known author created participants: %d", n)
+	}
+	var name string
+	_ = e.seed.QueryRow(e.ctx, `SELECT display_name FROM channel_participants WHERE tenant_id=$1 AND external_participant_id='111@lid'`, tenantA).Scan(&name)
+	if name != "João S." {
+		t.Fatalf("display name = %q, the latest non-empty label wins", name)
+	}
+	// messages carry their sender; the reply resolves (bare id vs serialized id) to the quoted message
+	if n := e.count(`SELECT count(*) FROM wa_group_messages WHERE tenant_id=$1 AND sender_channel_participant_id IS NOT NULL`, tenantA); n != 4 {
+		t.Fatalf("messages with a sender = %d, want 4", n)
+	}
+	if n := e.count(`SELECT count(*) FROM wa_group_messages r JOIN wa_group_messages q ON q.id = r.reply_to_group_message_id AND q.tenant_id = r.tenant_id
+	                 WHERE r.tenant_id=$1 AND r.provider_message_id LIKE '%3EB0AAA2%' AND q.provider_message_id LIKE '%3EB0AAA1%'`, tenantA); n != 1 {
+		t.Fatalf("the reply must resolve to the quoted message, got %d", n)
+	}
+	// a reply to something we never stored keeps the provider id and links nothing
+	if n := e.count(`SELECT count(*) FROM wa_group_messages WHERE tenant_id=$1 AND reply_to_external_message_id='3EB0UNKNOWN' AND reply_to_group_message_id IS NULL`, tenantA); n != 1 {
+		t.Fatalf("an unresolved reply must keep its external id, got %d", n)
+	}
+	// the same quoted id in ANOTHER group must not resolve across groups
+	ingest(connA, "e5", as(connA, jid2, "false_"+jid2+"_3EB0BBB1_111@lid", "111@lid", "João", "3EB0AAA1", now.Add(4*time.Minute)))
+	if n := e.count(`SELECT count(*) FROM wa_group_messages WHERE tenant_id=$1 AND provider_message_id LIKE '%3EB0BBB1%' AND reply_to_group_message_id IS NOT NULL`, tenantA); n != 0 {
+		t.Fatal("a reply must never resolve to a message of another group")
+	}
+	// the same author id in another tenant (and another connection) is a different participant
+	ingest(connB, "b1", as(connB, jid1, "false_"+jid1+"_3EB0AAA1_111@lid", "111@lid", "João do B", "", now))
+	var idA, idB uuid.UUID
+	_ = e.seed.QueryRow(e.ctx, `SELECT id FROM channel_participants WHERE tenant_id=$1 AND external_participant_id='111@lid'`, tenantA).Scan(&idA)
+	_ = e.seed.QueryRow(e.ctx, `SELECT id FROM channel_participants WHERE tenant_id=$1 AND external_participant_id='111@lid'`, tenantB).Scan(&idB)
+	if idA == uuid.Nil || idB == uuid.Nil || idA == idB {
+		t.Fatalf("participants of different tenants must be distinct rows: %v %v", idA, idB)
+	}
+	// a message without a usable author is still stored, just without a participant
+	ingest(connA, "e6", as(connA, jid1, "false_"+jid1+"_3EB0AAA6", "", "", "", now.Add(5*time.Minute)))
+	if n := e.count(`SELECT count(*) FROM wa_group_messages WHERE tenant_id=$1 AND provider_message_id LIKE '%3EB0AAA6' AND sender_channel_participant_id IS NULL`, tenantA); n != 1 {
+		t.Fatalf("a message with no author must be stored without a participant, got %d", n)
+	}
+}

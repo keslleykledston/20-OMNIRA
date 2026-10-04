@@ -41,11 +41,17 @@ type InboundMessage struct {
 	// (ex.: "1752…@lid"). É por ele que a resposta deve ser endereçada:
 	// reconstruir o destino a partir do telefone produz um endereço que o
 	// WhatsApp aceita mas não entrega quando o contato é endereçado por LID.
-	ProviderChatID string
-	Text           string
-	Media             *InboundMedia
-	Timestamp         time.Time
-	RawProviderEvent  string // referência opcional ao payload bruto (auditoria), nunca segredo
+	ProviderChatID   string
+	Text             string
+	Media            *InboundMedia
+	Timestamp        time.Time
+	RawProviderEvent string // referência opcional ao payload bruto (auditoria), nunca segredo
+	// ParticipantID é o identificador do remetente no provedor ("…@lid", "…@c.us", wa_id da Meta). Vazio quando o
+	// provedor não informa um formato confiável: a ingestão segue sem participante, nunca inventa um.
+	ParticipantID string
+	// ReplyToExternalID é o id (no provedor) da mensagem respondida/citada, se houver. Pode ser o id completo
+	// (Meta) ou só o segmento curto (WAHA); a resolução para uma mensagem do OMNIRA é feita no armazenamento.
+	ReplyToExternalID string
 }
 
 // InboundGroupMessage é uma mensagem de um grupo do WhatsApp (ADR-0015). Fica separada de
@@ -61,6 +67,8 @@ type InboundGroupMessage struct {
 	Type              string // text|image|video|audio|document|sticker|location|other
 	Text              string
 	SentAt            time.Time
+	// ReplyToExternalID: id (no provedor) da mensagem do grupo que esta respondeu/citou, se houver.
+	ReplyToExternalID string
 }
 
 // ProviderGroup é um grupo como o provedor o lista (usado só para o administrador escolher).

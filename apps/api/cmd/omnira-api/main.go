@@ -182,7 +182,8 @@ func main() {
 		}
 		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
-		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
+		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
+			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool))
 
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).
@@ -222,7 +223,8 @@ func main() {
 		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
-		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore)
+		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
+			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool))
 
 		srv.RegisterMetaWebhook(metachannel.Handler{
 			VerifyToken: cfg.MetaVerifyToken,

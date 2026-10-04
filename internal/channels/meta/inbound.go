@@ -30,10 +30,14 @@ type payload struct {
 		Changes []struct {
 			Value struct {
 				Messages []struct {
-					From        string                `json:"from"`
-					ID          string                `json:"id"`
-					Timestamp   string                `json:"timestamp"`
-					Type        string                `json:"type"`
+					From      string `json:"from"`
+					ID        string `json:"id"`
+					Timestamp string `json:"timestamp"`
+					Type      string `json:"type"`
+					// Context is present when the customer replied to a specific message (context.id is its wamid).
+					Context struct {
+						ID string `json:"id"`
+					} `json:"context"`
 					Text        struct{ Body string } `json:"text"`
 					Image       *mediaRef             `json:"image"`
 					Video       *mediaRef             `json:"video"`
@@ -81,6 +85,9 @@ func ParseEvents(conn domain.ChannelConnection, body []byte) ([]Event, error) {
 					ConnectionID:      conn.ID.String(),
 					FromE164:          "+" + strings.TrimPrefix(m.From, "+"),
 					Timestamp:         parseUnix(m.Timestamp),
+					// For the Cloud API the sender id is the customer's wa_id (digits), the same value as "from".
+					ParticipantID:     metaParticipantID(m.From),
+					ReplyToExternalID: metaReplyID(m.Context.ID),
 				}
 				switch m.Type {
 				case "text":
@@ -153,4 +160,30 @@ func parseUnix(s string) time.Time {
 		return time.Now().UTC()
 	}
 	return time.Unix(sec, 0).UTC()
+}
+
+func metaParticipantID(from string) string {
+	from = strings.TrimPrefix(strings.TrimSpace(from), "+")
+	if from == "" || len(from) > 32 {
+		return ""
+	}
+	for _, r := range from {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return from
+}
+
+func metaReplyID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || len(id) > 300 {
+		return ""
+	}
+	for _, r := range id {
+		if r < 0x21 || r > 0x7e {
+			return ""
+		}
+	}
+	return id
 }

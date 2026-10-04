@@ -134,3 +134,58 @@ func TestIngestMediaOnlyMessage(t *testing.T) {
 		t.Fatalf("media not canonicalized: %+v", result.Message)
 	}
 }
+
+type recorderStub struct {
+	calls []ParticipantInput
+	err   error
+}
+
+func (r *recorderStub) RecordInbound(_ context.Context, in ParticipantInput) error {
+	r.calls = append(r.calls, in)
+	return r.err
+}
+
+// ADR-0017 Wave 2: participant and reply metadata flow to the recorder once per NEW message, never for a redelivery,
+// and a service without a recorder behaves exactly as before.
+func TestIngestRecordsParticipantAndReplyOncePerNewMessage(t *testing.T) {
+	tenantID, connectionID := uuid.New(), uuid.New()
+	stores, rec := &memoryStores{}, &recorderStub{}
+	svc := NewInboundService(stores, stores, stores, ticketAdapter{stores}, stores).WithParticipants(rec)
+	ctx := inboundContext(t, tenantID)
+	connection := channeldomain.ChannelConnection{ID: connectionID, TenantID: tenantID, Provider: channeldomain.ProviderWAHA}
+	inbound := channeldomain.InboundMessage{ConnectionID: connectionID.String(), ProviderMessageID: "m-1", FromE164: "+5511999999999", Text: "sim",
+		SenderName: "Ana", ParticipantID: "111@lid", ReplyToExternalID: "3EB0ORIG"}
+	first, err := svc.Ingest(ctx, connection, inbound)
+	if err != nil || len(rec.calls) != 1 {
+		t.Fatalf("calls=%d err=%v", len(rec.calls), err)
+	}
+	c := rec.calls[0]
+	if c.ExternalID != "111@lid" || c.ReplyToExternalID != "3EB0ORIG" || c.Provider != "waha" || c.DisplayName != "Ana" ||
+		c.ContactID != first.Contact.ID || c.ConversationID != first.Conversation.ID || c.MessageID != first.Message.ID || c.ConnectionID != connectionID {
+		t.Fatalf("recorder input = %+v", c)
+	}
+	if _, err := svc.Ingest(ctx, connection, inbound); err != nil || len(rec.calls) != 1 {
+		t.Fatalf("a redelivery must not record again: calls=%d err=%v", len(rec.calls), err)
+	}
+	// nothing to record: no call (ingestion stays as cheap as before)
+	plain := channeldomain.InboundMessage{ConnectionID: connectionID.String(), ProviderMessageID: "m-2", FromE164: "+5511999999999", Text: "oi"}
+	if _, err := svc.Ingest(ctx, connection, plain); err != nil || len(rec.calls) != 1 {
+		t.Fatalf("no metadata, no call: calls=%d err=%v", len(rec.calls), err)
+	}
+}
+
+func TestIngestWithoutARecorderIsUnchangedAndARecorderFailureIsNotSwallowed(t *testing.T) {
+	tenantID, connectionID := uuid.New(), uuid.New()
+	ctx := inboundContext(t, tenantID)
+	connection := channeldomain.ChannelConnection{ID: connectionID, TenantID: tenantID}
+	inbound := channeldomain.InboundMessage{ConnectionID: connectionID.String(), ProviderMessageID: "m-1", FromE164: "+5511999999999", Text: "oi", ParticipantID: "1@lid"}
+	stores := &memoryStores{}
+	if _, err := NewInboundService(stores, stores, stores, ticketAdapter{stores}, stores).Ingest(ctx, connection, inbound); err != nil {
+		t.Fatalf("no recorder configured must be fine: %v", err)
+	}
+	stores2 := &memoryStores{}
+	failing := NewInboundService(stores2, stores2, stores2, ticketAdapter{stores2}, stores2).WithParticipants(&recorderStub{err: context.DeadlineExceeded})
+	if _, err := failing.Ingest(ctx, connection, inbound); err == nil {
+		t.Fatal("a failing recorder must surface (the webhook retries) instead of silently dropping the metadata")
+	}
+}

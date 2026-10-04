@@ -64,3 +64,13 @@ rule > ai > legacy), então uma decisão posterior ou repetida da IA nunca desfa
 (`tickets_active_conversation_uq` intocado). Permissões novas: `topic.read` e `topic.manage` (admin, supervisor, agente); alterar tópicos exige também ser o
 atendente da conversa ou ter `conversation.manage`.
 Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só `topic_threads_enabled` nasce ligada.
+
+### Participantes externos e respostas (ADR-0017, migration 000064)
+- `channel_participants`: quem escreveu, **nos termos do provedor** (WhatsApp `@lid`/`@c.us`, `wa_id` da Meta), qualificado por tenant, conexão e provedor
+  (o mesmo id em outra conexão ou outro tenant é outro participante). Opcionalmente ligado a um `contact`; a primeira ligação vence e o nome de exibição
+  é só rótulo. **Não** é `conversation_participants` (que são agentes do OMNIRA em co-atendimento).
+- `conversation_channel_participants`: o participante numa conversa (`customer` em 1:1).
+- Metadados de mensagem: `messages.sender_channel_participant_id`, `reply_to_external_message_id` (o que o provedor disse) e `reply_to_message_id` (só quando resolve
+  **dentro da mesma conversa**); o mesmo em `wa_group_messages` (resolve dentro do mesmo grupo). "Citada" e "resposta" são a mesma relação (WAHA `replyTo`, Meta
+  `context`), então há um só conjunto de colunas. WAHA informa o id curto (3º segmento do id serializado); a Meta, o `wamid` completo: ambos casam.
+- Não observado nos payloads reais, portanto **não** modelado: menções.

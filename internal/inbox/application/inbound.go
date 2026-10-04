@@ -53,6 +53,7 @@ type InboundService struct {
 	router        InitialRouter
 	crm           CRMConnector
 	crmCompanyID  string
+	participants  ParticipantRecorder
 }
 
 type InboundResult struct {
@@ -69,6 +70,30 @@ func NewInboundService(contacts ContactStore, conversations ConversationStore, m
 		service.router = router[0]
 	}
 	return service
+}
+
+// ParticipantInput is the metadata the provider gave about who wrote an inbound message and what it replied to.
+type ParticipantInput struct {
+	ConnectionID      uuid.UUID
+	Provider          string
+	ExternalID        string // empty when the provider gave no reliable sender id
+	DisplayName       string
+	ContactID         uuid.UUID
+	ConversationID    uuid.UUID
+	MessageID         uuid.UUID
+	ReplyToExternalID string
+}
+
+// ParticipantRecorder stores the external participant, binds it to the conversation and resolves the reply relation.
+// It must be idempotent: a replayed webhook never creates a second participant.
+type ParticipantRecorder interface {
+	RecordInbound(ctx context.Context, in ParticipantInput) error
+}
+
+// WithParticipants enables participant and reply tracking (ADR-0017). Without it ingestion is exactly as before.
+func (s *InboundService) WithParticipants(r ParticipantRecorder) *InboundService {
+	s.participants = r
+	return s
 }
 
 func (s *InboundService) WithCRM(crm CRMConnector, companyID string) *InboundService {
@@ -162,6 +187,15 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 	}
 	if duplicate {
 		return &InboundResult{Contact: contact, Conversation: conversation, Message: stored, Duplicate: true}, nil
+	}
+	if s.participants != nil && (inbound.ParticipantID != "" || inbound.ReplyToExternalID != "") {
+		if err := s.participants.RecordInbound(ctx, ParticipantInput{
+			ConnectionID: connection.ID, Provider: string(connection.Provider), ExternalID: inbound.ParticipantID,
+			DisplayName: inbound.SenderName, ContactID: contact.ID, ConversationID: conversation.ID, MessageID: stored.ID,
+			ReplyToExternalID: inbound.ReplyToExternalID,
+		}); err != nil {
+			return nil, fmt.Errorf("inbox: record participant: %w", err)
+		}
 	}
 	ticket, err := s.tickets.FindOpenByConversation(ctx, conversation.ID)
 	if err != nil {
