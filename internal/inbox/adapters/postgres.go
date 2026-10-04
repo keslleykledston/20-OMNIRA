@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -133,6 +134,23 @@ func (s *PostgresInboundStore) StoreInbound(ctx context.Context, message *messag
 	return duplicate, true, lookupErr
 }
 
+// WahaMessageIDTail returns the bare message id from WAHA's serialized form
+// "<fromMe>_<chatId>_<id>[_<participant>]". The same sent message can carry a different chat part in
+// the send answer (the phone, "@c.us") and in later receipts (the opaque "@lid" the contact is
+// addressed by), but the id segment is the same, and it is exactly the id OMNIRA reserved before
+// sending. Ids that do not have that shape return "" and are matched only by their full value.
+func WahaMessageIDTail(providerMessageID string) string {
+	parts := strings.Split(providerMessageID, "_")
+	if len(parts) >= 3 && (parts[0] == "true" || parts[0] == "false") && parts[2] != "" {
+		return parts[2]
+	}
+	return ""
+}
+
+// ApplyDeliveryStatus moves an outbound message forward (never backward) to the status a receipt
+// reports. The message is found by its full provider id OR, for messages sent with a reserved id,
+// by that id's bare tail (unique per connection), so a receipt that names the chat differently
+// still lands on the right message.
 func (s *PostgresInboundStore) ApplyDeliveryStatus(ctx context.Context, connectionID uuid.UUID, providerMessageID string, status messagedomain.Status) (bool, error) {
 	tenantID, err := tenantID(ctx)
 	if err != nil {
@@ -140,12 +158,13 @@ func (s *PostgresInboundStore) ApplyDeliveryStatus(ctx context.Context, connecti
 	}
 	result, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
 		UPDATE messages SET status=$4, updated_at=now()
-		WHERE tenant_id=$1 AND channel_connection_id=$2 AND provider_message_id=$3
+		WHERE tenant_id=$1 AND channel_connection_id=$2
 		  AND direction='outbound'
+		  AND (provider_message_id=$3 OR ($5 <> '' AND reserved_provider_message_id=$5))
 		  AND CASE status
 		    WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE 4 END
 		      <= CASE $4 WHEN 'queued' THEN 0 WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 ELSE 4 END
-		  AND NOT (status IN ('delivered','read') AND $4='failed')`, tenantID, connectionID, providerMessageID, status)
+		  AND NOT (status IN ('delivered','read') AND $4='failed')`, tenantID, connectionID, providerMessageID, status, WahaMessageIDTail(providerMessageID))
 	if err != nil {
 		return false, err
 	}
