@@ -357,3 +357,18 @@ View metrics on worker at `http://localhost:9090/metrics`
 - **REST API:** See [`docs/API.md`](./API.md)
 - **Architecture:** See [`docs/architecture/`](./architecture/)
 - **Worker:** See [`docs/architecture/WORKER.md`](./architecture/WORKER.md)
+
+## `job.inbox.message_persisted.v1` (Conversation Intelligence, ADR-0017 Wave 4)
+Emitted by a database trigger, **in the same transaction** as every inbound conversation message (`messages`, `direction = 'inbound'`) and every
+WhatsApp group message (`wa_group_messages`). It is a `job.*` type because `OMNIRA_JOBS` (subject `job.>`) is the only JetStream stream the outbox
+publishes to. Delivery is **at-least-once**; the consumer is idempotent.
+
+- Subject: `job.inbox.message_persisted.v1`; durable consumer `worker-intelligence` (`AckExplicit`, `MaxDeliver 10`).
+- Envelope: the standard outbox envelope (`aggregate_type = message`, `aggregate_id` = the message id). `payload`:
+  `{event_id, tenant_id, message_id, kind: "conversation"|"group", container_id, occurred_at}`. **Only references**: never the message body.
+- The consumer ignores `tenant_id` from the envelope (the tenant is read from the stored message), turns the event into a row of `intelligence_jobs`
+  (unique per tenant, message and `pipeline_version`) and acks. A malformed event, or one whose message was deleted, is terminated; a transient failure is nak'd.
+- Processing is the job runner's (claim with `FOR UPDATE SKIP LOCKED` and a 2-minute lease; crash recovery by lease expiry; only the holder of the current
+  claim can move a job; retries with backoff up to 8 attempts, then `dead`). With the worker stopped, ingestion, reading, replying and manual topics keep
+  working and jobs wait.
+- Metrics (worker `/metrics`): `intelligence_jobs_total{state}`, `topic_router_decisions_total{status,applied,source}`, `topic_router_latency_seconds`.

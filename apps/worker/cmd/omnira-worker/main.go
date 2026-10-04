@@ -19,6 +19,9 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapp "github.com/omnira/omnira/internal/channels/application"
 	"github.com/omnira/omnira/internal/channels/domain"
+	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
+	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
+	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	mediaapp "github.com/omnira/omnira/internal/media/application"
 	"github.com/omnira/omnira/internal/outbox/adapters"
@@ -33,6 +36,7 @@ import (
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	"github.com/omnira/omnira/internal/worker/jobsstream"
+	intelligenceworker "github.com/omnira/omnira/internal/worker/intelligence"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	"github.com/omnira/omnira/internal/worker/realtime"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
@@ -317,6 +321,39 @@ func main() {
 		log.Printf("Inbound media pipeline started (dir=%s, clamd=%s)\n", cfg.MediaDir, cfg.ClamAVAddr)
 	} else {
 		log.Printf("Inbound media pipeline disabled (needs OMNIRA_WAHA_ENABLED=true and OMNIRA_MEDIA_DIR)\n")
+	}
+
+	// Conversation Intelligence (ADR-0017): event -> durable job -> runner. Off with topic_threads_enabled=false. It is never
+	// a single point of failure: with this worker stopped, messages are still ingested, read and answered; jobs wait.
+	intelligenceFlags := intelligenceapp.FlagsFromEnv(nil)
+	if intelligenceFlags.TopicThreadsEnabled {
+		intelligenceCounters := intelligenceapp.NewCounters()
+		prev := hc.ExtraMetrics
+		hc.ExtraMetrics = func() string {
+			out := intelligenceCounters.Render()
+			if prev != nil {
+				out = prev() + out
+			}
+			return out
+		}
+		jobStore := intelligenceadapters.NewPostgresJobStore(dbPool)
+		topicRepo := intelligenceadapters.NewPostgresTopicRepository(dbPool)
+		routingSvc := intelligenceapp.NewRoutingService(intelligenceadapters.NewPostgresRoutingRepository(dbPool), topicRepo, intelligenceFlags, intelligencedomain.DefaultRoutingConfig(), intelligenceCounters)
+		session := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
+			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
+		}
+		runner := intelligenceapp.NewJobRunner(jobStore, intelligenceapp.RoutingPipeline{Routing: routingSvc}, session, intelligenceapp.DefaultJobRunnerConfig(), intelligenceCounters)
+		go runner.Run(workerCtx, 2*time.Second)
+		handler, err := intelligenceworker.NewHandler(jobStore)
+		if err != nil {
+			log.Fatalf("intelligence handler error: %v", err)
+		}
+		intelligenceConsumer, err := intelligenceworker.StartConsumer(workerCtx, js, handler)
+		if err != nil {
+			log.Fatalf("failed to start intelligence consumer: %v", err)
+		}
+		defer intelligenceConsumer.Stop()
+		log.Printf("Conversation Intelligence pipeline started (auto routing=%v)\n", intelligenceFlags.TopicAutoRoutingEnabled)
 	}
 
 	log.Printf("Worker starting (env: %s)\n", cfg.Env)

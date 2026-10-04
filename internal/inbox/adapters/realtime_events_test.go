@@ -146,7 +146,13 @@ func TestRealtimeTriggersEnqueueReferenceOnlyEvents(t *testing.T) {
 		}
 	}
 	var outbox int
-	if err := seed.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE tenant_id=$1`, tenant).Scan(&outbox); err != nil || outbox != 0 {
+	if err := seed.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE tenant_id=$1 AND event_type <> 'job.inbox.message_persisted.v1'`, tenant).Scan(&outbox); err != nil || outbox != 0 {
 		t.Fatalf("realtime must not touch the durable outbox: %d %v", outbox, err)
+	}
+	// The one legitimate emitter is the persisted-message event (ADR-0017 Wave 4): exactly one for the committed inbound
+	// message, and none for the rolled-back one, because it is written in the same transaction as the message.
+	var persisted int
+	if err := seed.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE tenant_id=$1 AND event_type = 'job.inbox.message_persisted.v1'`, tenant).Scan(&persisted); err != nil || persisted != 1 {
+		t.Fatalf("persisted-message events = %d (%v), want exactly 1: the rolled-back message must not emit", persisted, err)
 	}
 }

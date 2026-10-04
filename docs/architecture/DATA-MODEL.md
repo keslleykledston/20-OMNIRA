@@ -88,3 +88,7 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
   (`NewSubjectPenalty`). Duas entidades de tópicos diferentes na mesma mensagem = multi-tópico (dois vínculos, mensagem não duplicada).
 - Com `topic_auto_routing_enabled` desligada o roteador só **registra** a proposta; ligada, aplica. Uma mensagem já colocada (por pessoa, handoff ou decisão anterior)
   nunca é decidida de novo; uma edição humana marca a decisão automática como substituída (`overridden_at`).
+
+### Pipeline durável (ADR-0017, migration 000066)
+`intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
+gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.
