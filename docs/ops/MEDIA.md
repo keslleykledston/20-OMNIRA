@@ -68,3 +68,12 @@ docker exec omnira-worker wget -q -O - http://localhost:9090/metrics | grep medi
 `docker tag 20-omnira-api:rollback-pre-media-m1-20261004 20-omnira-api:latest` (idem `worker`), `docker compose up -d
 --no-deps api worker`; a migration 000060 tem `down` (remove tabela e triggers). A API sem `OMNIRA_MEDIA_DIR` volta ao
 modo antigo (busca ao vivo no WAHA, que só funcionava nos primeiros minutos).
+
+## Imagens e PDFs (Gemini, por tenant) — ADR-0017 onda 9
+
+- **Desligado por padrão.** Só roda para tenant cujo administrador informou a chave Gemini, registrou o consentimento e ligou a integração em *Configurações → Inteligência artificial externa*. Sem isso **nenhuma linha de análise é criada** e nada sai do servidor. Áudio continua 100% local (Whisper).
+- Só arquivos **liberados pelo antivírus** e com mime verificado nos bytes: `image/jpeg`, `image/png`, `image/webp` → `description`; `application/pdf` → `document_text`. GIF, vídeo e áudio nunca vão. Janela de 7 dias (retenção do arquivo); ao ligar a integração, mídia recente ainda no disco é analisada.
+- A chave do tenant é lida (decifrada) só no momento da chamada, vai apenas no header `x-goog-api-key`, nunca em URL/log. Sem redirects, resposta limitada, sem ferramentas, `temperature 0`, instrução fixa que trata o anexo como **dado**. O texto devolvido é sanitizado e marcado `suspicious` se parecer instrução; nunca é obedecido.
+- **Orçamento** (US$ 10/mês por padrão, por tenant) checado **antes** de cada chamada contra o pior caso dela (modelo desconhecido é precificado como o mais caro); estourou → `skipped` (`budget_exceeded`). Cada chamada, com ou sem sucesso, vai ao ledger (onda 10). Preços em `internal/media/domain/pricing.go` são **estimativas**; a fatura do Google é a verdade.
+- Provedor fora do ar/limite → retry com backoff (até 8 tentativas); chave recusada → `failed` (`provider_rejected`); nada legível → `empty`.
+- Lacuna conhecida: depois que a leitura termina, a mensagem só-mídia **não é reroteada** automaticamente (o contexto do tópico já usa o texto lido).

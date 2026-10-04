@@ -111,6 +111,9 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - Resgate: passo do pipeline **antes do roteamento** (flag `OMNIRA_PRIVATE_HANDOFF_ENABLED`, desligada) em mensagem privada de entrada. Um único `UPDATE ... WHERE status='pending' AND expires_at>now() AND tópico aberto ... RETURNING` garante uso único sob concorrência; liga mensagem (decisão `handoff`, a evidência mais forte) e a conversa ao tópico. Token inválido/expirado/revogado/de outro tenant/em grupo: nada acontece e nada é revelado. Não há fusão automática de identidade do contato (pendência K3G, PRODUCT.7B).
 - Métrica: `topic_handoff_redemptions_total{outcome}`. API: `POST|GET /topics/{id}/handoffs`, `POST .../handoffs/{id}/revoke`.
 
+### Multimodal (ADR-0017, onda 9; sem migration nova)
+- Reaproveita `message_media`/`message_media_analysis` (ADR-0016). `EnqueueVision` cria `description`/`document_text` (engine `gemini`) só para tenants com integração **habilitada** (a tabela exige chave + consentimento) e arquivos limpos, recentes e de mime permitido. `VisionProcessor` exige `UsageLedger` (sem ledger não há chamada externa); fiação no worker na onda 10.
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.

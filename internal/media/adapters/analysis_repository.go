@@ -84,3 +84,42 @@ func (r *PostgresRepository) RetryAnalysis(ctx context.Context, w ports.Analysis
 		return err
 	})
 }
+
+var _ ports.VisionRepository = (*PostgresRepository)(nil)
+
+// EnqueueVision creates pending description / document_text jobs, but ONLY for tenants that switched the external AI on
+// (which requires a key and a recorded consent, enforced by the table's CHECK) and only for cleared files still on
+// disk and recent enough to matter. A tenant that has not opted in never gets a row, so nothing about its media
+// shows up anywhere and nothing is ever sent.
+func (r *PostgresRepository) EnqueueVision(ctx context.Context, newerThan time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	var n int
+	err := r.system(ctx, func(ctx context.Context, db platformdb.Querier) error {
+		tag, err := db.Exec(ctx, `
+			INSERT INTO message_media_analysis (tenant_id, message_id, kind, engine)
+			SELECT mm.tenant_id, mm.message_id,
+			       CASE WHEN mm.mime = 'application/pdf' THEN 'document_text' ELSE 'description' END, 'gemini'
+			FROM message_media mm
+			JOIN tenant_ai_integrations ti ON ti.tenant_id = mm.tenant_id AND ti.provider = 'gemini' AND ti.enabled
+			WHERE mm.status = 'clean' AND mm.file_purged_at IS NULL AND mm.created_at >= $1
+			  AND mm.mime IN ('image/jpeg','image/png','image/webp','application/pdf')
+			  AND NOT EXISTS (SELECT 1 FROM message_media_analysis a WHERE a.tenant_id = mm.tenant_id AND a.message_id = mm.message_id
+			                  AND a.kind IN ('description','document_text'))
+			ORDER BY mm.created_at
+			LIMIT $2
+			ON CONFLICT (tenant_id, message_id, kind) DO NOTHING`, newerThan, limit)
+		n = int(tag.RowsAffected())
+		return err
+	})
+	return n, err
+}
+
+func (r *PostgresRepository) SkipAnalysis(ctx context.Context, w ports.AnalysisWork, reason string) error {
+	return r.system(ctx, func(ctx context.Context, db platformdb.Querier) error {
+		tag, err := db.Exec(ctx, `UPDATE message_media_analysis SET status='skipped', reason=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='pending'`,
+			w.TenantID, w.ID, reason)
+		return requireOne(tag.RowsAffected(), err)
+	})
+}
