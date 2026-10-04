@@ -222,7 +222,8 @@ func main() {
 		handoffSvc := intelligenceapp.NewHandoffService(intelligenceadapters.NewPostgresHandoffRepository(dbPool), routingRepo, intelligenceFlags, nil)
 		topicSvc := intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo)
 		topicHandler := intelligenceadapters.NewTopicHandler(dbPool, topicSvc, topicRepo).
-			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc).WithHandoffs(handoffSvc).WithCopilot(copilotSvc)
+			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc).WithHandoffs(handoffSvc).WithCopilot(copilotSvc).
+			WithRestructure(intelligenceapp.NewRestructureService(topicRepo, intelligenceadapters.NewPostgresRestructureRepository(dbPool), routingRepo))
 		// the AI tool gateway: a closed registry of real tools, run with the requesting user's own permissions
 		topicHandler.WithTools(intelligenceapp.NewToolGateway(intelligenceadapters.NewPostgresToolCallRepository(dbPool), topicRepo, topicHandler.ToolAuthorizer(),
 			intelligenceapp.NewToolExecutors(topicSvc, summarySvc, ticketPolicySvc), intelligenceFlags))

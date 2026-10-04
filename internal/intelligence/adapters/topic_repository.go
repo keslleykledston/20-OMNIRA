@@ -32,14 +32,14 @@ func (r *PostgresTopicRepository) q(ctx context.Context) platformdb.Querier {
 
 const topicColumns = `t.id, t.tenant_id, t.primary_contact_id, t.origin_conversation_id, t.title, t.intent, t.category, t.status,
 	t.privacy_policy, t.source, t.routing_confidence::float8, t.legacy_unsegmented, t.last_activity_at, t.created_by_user_id,
-	t.created_at, t.updated_at, t.resolved_at`
+	t.created_at, t.updated_at, t.resolved_at, t.merged_into_topic_id, t.split_from_topic_id`
 
 func scanTopic(row pgx.Row, extra ...any) (*domain.TopicThread, error) {
 	var t domain.TopicThread
 	var status, privacy, source string
 	dest := append([]any{&t.ID, &t.TenantID, &t.PrimaryContactID, &t.OriginConversationID, &t.Title, &t.Intent, &t.Category, &status,
 		&privacy, &source, &t.RoutingConfidence, &t.LegacyUnsegmented, &t.LastActivityAt, &t.CreatedByUserID,
-		&t.CreatedAt, &t.UpdatedAt, &t.ResolvedAt}, extra...)
+		&t.CreatedAt, &t.UpdatedAt, &t.ResolvedAt, &t.MergedIntoTopicID, &t.SplitFromTopicID}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return nil, err
 	}
@@ -309,4 +309,16 @@ func (r *PostgresTopicRepository) ActorOperatesTopic(ctx context.Context, tenant
 		  JOIN conversations cv ON cv.tenant_id=c.tenant_id AND cv.id=c.conversation_id
 		  WHERE c.tenant_id=$1 AND c.topic_thread_id=$2 AND cv.assigned_to_user_id=$3)`, tenantID, topicID, userID).Scan(&ok)
 	return ok, err
+}
+
+func (r *PostgresTopicRepository) MessageKindInTopic(ctx context.Context, tenantID, topicID, messageID uuid.UUID) (ports.MessageKind, error) {
+	var kind string
+	err := r.q(ctx).QueryRow(ctx, `
+		SELECT 'conversation' FROM message_topic_links WHERE tenant_id=$1 AND topic_thread_id=$2 AND message_id=$3
+		UNION ALL
+		SELECT 'group' FROM group_message_topic_links WHERE tenant_id=$1 AND topic_thread_id=$2 AND group_message_id=$3 LIMIT 1`, tenantID, topicID, messageID).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", domain.ErrReferenceNotFound
+	}
+	return ports.MessageKind(kind), err
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +42,13 @@ type TopicHandler struct {
 	handoffs    *application.HandoffService
 	copilot     *application.CopilotService
 	tools       *application.ToolGateway
+	restructure *application.RestructureService
+}
+
+// WithRestructure enables topic merge and split.
+func (h *TopicHandler) WithRestructure(r *application.RestructureService) *TopicHandler {
+	h.restructure = r
+	return h
 }
 
 // WithTools enables the policy-gated AI tool gateway endpoints.
@@ -227,6 +235,8 @@ type topicDTO struct {
 	MessageCount         *int       `json:"message_count,omitempty"`
 	TicketCount          *int       `json:"ticket_count,omitempty"`
 	LastMessageAt        *string    `json:"last_message_at,omitempty"`
+	MergedIntoTopicID    *uuid.UUID `json:"merged_into_topic_id,omitempty"`
+	SplitFromTopicID     *uuid.UUID `json:"split_from_topic_id,omitempty"`
 }
 
 func ts(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
@@ -244,6 +254,7 @@ func toTopicDTO(t *domain.TopicThread) topicDTO {
 		PrivacyPolicy: string(t.PrivacyPolicy), Source: string(t.Source), RoutingConfidence: t.RoutingConfidence,
 		LegacyUnsegmented: t.LegacyUnsegmented, PrimaryContactID: t.PrimaryContactID, OriginConversationID: t.OriginConversationID,
 		LastActivityAt: ts(t.LastActivityAt), CreatedAt: ts(t.CreatedAt), ResolvedAt: tsp(t.ResolvedAt),
+		MergedIntoTopicID: t.MergedIntoTopicID, SplitFromTopicID: t.SplitFromTopicID,
 	}
 }
 
@@ -1311,4 +1322,128 @@ func (h *TopicHandler) RejectAIToolCall(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type mergeTopicRequest struct {
+	IntoTopicID string `json:"into_topic_id"`
+}
+
+type restructureDTO struct {
+	Messages      int       `json:"messages_linked"`
+	GroupMessages int       `json:"group_messages_linked"`
+	Entities      int       `json:"entities_copied"`
+	Tickets       int       `json:"tickets_linked"`
+	SourceStatus  string    `json:"source_status"`
+	NewTopic      *topicDTO `json:"new_topic,omitempty"`
+}
+
+func toRestructureDTO(r ports.RestructureResult) restructureDTO {
+	d := restructureDTO{Messages: r.Messages, GroupMessages: r.GroupMsgs, Entities: r.Entities, Tickets: r.Tickets, SourceStatus: string(r.SourceStatus)}
+	if r.NewTopic != nil {
+		t := toTopicDTO(r.NewTopic)
+		d.NewTopic = &t
+	}
+	return d
+}
+
+// MergeTopic: POST /tenants/{tenant_id}/topics/{topic_id}/merge   {"into_topic_id": "..."}
+// A person's action: the source is archived and points at the target, nothing is deleted. The person must operate BOTH topics.
+func (h *TopicHandler) MergeTopic(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if h.restructure == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	src, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return
+	}
+	var req mergeTopicRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	dst, err := uuid.Parse(req.IntoTopicID)
+	if err != nil || dst == uuid.Nil {
+		http.Error(w, "invalid into_topic_id", http.StatusBadRequest)
+		return
+	}
+	for _, id := range []uuid.UUID{src, dst} {
+		if _, err := h.svc.GetTopic(r.Context(), id); err != nil {
+			fail(w, err)
+			return
+		}
+		if ok, err := h.canOperateTopic(r.Context(), tc, id); err != nil || !ok {
+			fail(w, firstErr(err, errForbidden))
+			return
+		}
+	}
+	res, err := h.restructure.Merge(r.Context(), src, dst)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toRestructureDTO(res))
+}
+
+type splitTopicRequest struct {
+	Title      string   `json:"title"`
+	MessageIDs []string `json:"message_ids"`
+}
+
+// SplitTopic: POST /tenants/{tenant_id}/topics/{topic_id}/split   {"title": "...", "message_ids": ["..."]}
+func (h *TopicHandler) SplitTopic(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if h.restructure == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	src, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return
+	}
+	var req splitTopicRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.MessageIDs) == 0 || len(req.MessageIDs) > maxMessageIDsOnCreate {
+		http.Error(w, "message_ids must hold between 1 and "+strconv.Itoa(maxMessageIDsOnCreate)+" ids", http.StatusUnprocessableEntity)
+		return
+	}
+	if _, err := h.svc.GetTopic(r.Context(), src); err != nil {
+		fail(w, err)
+		return
+	}
+	if ok, err := h.canOperateTopic(r.Context(), tc, src); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return
+	}
+	// a message id may be a conversation message or a group message; the id must exist in the source topic as one of them
+	refs := make([]ports.MessageRef, 0, len(req.MessageIDs))
+	for _, raw := range req.MessageIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil || id == uuid.Nil {
+			http.Error(w, "invalid message_ids", http.StatusBadRequest)
+			return
+		}
+		kind, err := h.repo.MessageKindInTopic(r.Context(), tc.TenantID, src, id)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		refs = append(refs, ports.MessageRef{Kind: kind, ID: id})
+	}
+	res, err := h.restructure.Split(r.Context(), src, req.Title, refs)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toRestructureDTO(res))
 }

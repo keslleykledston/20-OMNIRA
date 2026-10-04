@@ -70,6 +70,10 @@ type TopicThread struct {
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	ResolvedAt           *time.Time
+	// MergedIntoTopicID is set on a topic that was merged into another (it is archived, its history stays).
+	MergedIntoTopicID *uuid.UUID
+	// SplitFromTopicID is set on a topic created by splitting messages out of another.
+	SplitFromTopicID *uuid.UUID
 }
 
 func (s TopicStatus) Valid() bool {

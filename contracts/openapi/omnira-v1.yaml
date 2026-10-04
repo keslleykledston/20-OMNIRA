@@ -1292,6 +1292,49 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "No longer pending", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/topics/{topic_id}/merge:
+    post:
+      operationId: mergeTopic
+      tags: [Topics]
+      summary: Merge this topic into another (a person's action; nothing is deleted)
+      description: 'The source is archived and keeps pointing at the target (merged_into_topic_id); its messages, links and summaries stay readable. Messages, containers, entities and tickets are COPIED to the target; the source primary ticket becomes merged there (the target keeps one primary). Pending handoffs of the source are revoked. The person must operate BOTH topics. Both must be open (409). There is no automatic merge.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [into_topic_id], additionalProperties: false, properties: { into_topic_id: { type: string, format: uuid } } }
+      responses:
+        '200': { description: Merged, content: { application/json: { schema: { $ref: '#/components/schemas/TopicRestructure' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "A topic is not open, or source equals target", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/topics/{topic_id}/split:
+    post:
+      operationId: splitTopic
+      tags: [Topics]
+      summary: Move chosen messages into a new topic (a person's action)
+      description: 'Creates a new open topic (split_from_topic_id remembers the origin) and MOVES the chosen message links out of the source; the router decisions for them are marked overridden. The source must keep at least one message and every message must belong to it. The new topic gets the entities its messages name.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [title, message_ids], additionalProperties: false, properties: { title: { type: string, maxLength: 200 }, message_ids: { type: array, minItems: 1, items: { type: string, format: uuid } } } }
+      responses:
+        '201': { description: Split, content: { application/json: { schema: { $ref: '#/components/schemas/TopicRestructure' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "The source would be left empty, or is not open", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Empty list, duplicated message or missing title", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
     get:
       operationId: listConversationAmbiguities
@@ -2033,6 +2076,16 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    TopicRestructure:
+      type: object
+      required: [messages_linked, group_messages_linked, entities_copied, tickets_linked, source_status]
+      properties:
+        messages_linked: { type: integer }
+        group_messages_linked: { type: integer }
+        entities_copied: { type: integer }
+        tickets_linked: { type: integer }
+        source_status: { type: string, enum: [open, archived] }
+        new_topic: { $ref: '#/components/schemas/Topic' }
     AIToolView:
       type: object
       required: [name, description, risk, permission, ai_requires_approval]
@@ -2511,6 +2564,8 @@ components:
         last_activity_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         resolved_at: { type: string, format: date-time }
+        merged_into_topic_id: { type: string, format: uuid, description: 'Set on a topic that was merged into another (it is archived)' }
+        split_from_topic_id: { type: string, format: uuid, description: 'Set on a topic created by splitting another' }
         message_count: { type: integer }
         ticket_count: { type: integer }
         last_message_at: { type: string, format: date-time }

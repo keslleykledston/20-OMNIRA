@@ -129,6 +129,11 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - `ai_tool_calls` (append-only, sem DELETE): uma linha por pedido, inclusive negados; chave de idempotência por tenant (retry devolve o primeiro resultado e age uma vez; mesma chave com pedido diferente = 409). Resultado é dado **não confiável**; erros viram motivo fixo. Vínculo de chamado criado via IA registra origem `ai`.
 - Flag `OMNIRA_AI_TOOL_GATEWAY_ENABLED` (desligada). Hoje nenhum fluxo de IA chama o gateway sozinho: ele é a única porta preparada para isso e já é usável com aprovação humana pela API.
 
+### Merge e split de tópicos (ADR-0017, migration 000070)
+- Ações **humanas** que nunca apagam histórico (merge automático por similaridade foi rejeitado no ADR). `topic_threads` ganhou `merged_into_topic_id`/`merged_at`/`merged_by_user_id` e `split_from_topic_id`.
+- **Merge** (`POST /topics/{id}/merge`): a pessoa precisa operar os DOIS tópicos; ambos abertos. Mensagens, containers, entidades e chamados são **copiados** para o destino (o chamado primário da origem vira `merged` no destino, que mantém um único primário); a origem fica `archived` apontando para o destino, com os próprios vínculos intactos; dicas de foco e handoffs pendentes da origem somem/são revogados. Locks em ordem de id: merges opostos simultâneos não travam (um vence, outro 409).
+- **Split** (`POST /topics/{id}/split`): cria tópico novo (`split_from_topic_id`) e **move** só as mensagens escolhidas (conversa ou grupo); decisões do roteador para elas ficam `overridden`; a origem precisa manter ao menos uma mensagem; entidades do novo tópico vêm do texto das mensagens movidas. Não há "desfazer": o histórico preservado permite reparo manual (lacuna P2).
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.

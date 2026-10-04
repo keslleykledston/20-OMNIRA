@@ -75,6 +75,8 @@ type TopicRepository interface {
 
 	// ConversationInfo reports whether the conversation exists in the tenant, its contact and who handles it.
 	ConversationInfo(ctx context.Context, tenantID, conversationID uuid.UUID) (ConversationInfo, error)
+	// MessageKindInTopic tells whether id is a conversation message or a group message LINKED TO this topic (ErrReferenceNotFound otherwise).
+	MessageKindInTopic(ctx context.Context, tenantID, topicID, messageID uuid.UUID) (MessageKind, error)
 	// ActorOperatesTopic: the actor is the assignee of a conversation linked to the topic.
 	ActorOperatesTopic(ctx context.Context, tenantID, topicID, userID uuid.UUID) (bool, error)
 }
