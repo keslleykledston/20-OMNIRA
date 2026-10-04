@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import clsx from 'clsx';
 import { MessageItem } from '../../types/api';
+import { Icon } from '../primitives';
 
 interface MessageMediaProps {
   message: MessageItem;
@@ -8,47 +9,50 @@ interface MessageMediaProps {
 }
 
 /**
- * MessageMedia renders media for a message safely:
- * - Raster images (jpeg, png, webp, gif) inline via authenticated OMNIRA endpoint
- * - Other media as downloadable attachments
- * - Fallback for missing or blocked media
+ * Renders a message's attachment according to where it is in the security pipeline (ADR-0016):
+ * - only a file the antivirus cleared is ever requested from the server;
+ * - raster images show inline, audio and video get a native player, documents are downloads;
+ * - anything else says plainly why there is nothing to open (checking, blocked, no longer available).
  *
- * Security notes:
- * - Media is retrieved only through authenticated /api/v1/tenants/{id}/messages/{id}/media
- * - MediaRef (provider URL) is never exposed
- * - Server handles MIME sniffing and content safety validation
+ * The provider URL never reaches the browser; the file comes only through the authenticated endpoint.
  */
 export default function MessageMedia({ message, tenantId }: MessageMediaProps) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
 
-  // Only render if message has media.
-  if (!message.mime_type) {
-    return null;
-  }
+  if (!message.mime_type) return null;
 
-  const mediaUrl = `/api/v1/tenants/${tenantId}/messages/${message.id}/media`;
-  const isInlineImage = isImageType(message.mime_type);
+  const url = `/api/v1/tenants/${tenantId}/messages/${message.id}/media`;
+  const status = message.media_status;
 
+  // Older servers send no media_status: keep the previous behaviour of trying to load it.
+  const gap = message.body ? 'mt-2' : '';
+  if (status && status !== 'clean') return <MediaNotice status={status} gap={gap} />;
+  if (error) return <MediaNotice status="source_gone" gap={gap} />;
+
+  const kind = kindOf(message.mime_type);
   return (
-    <div className="mt-2 max-w-xs">
-      {error && (
-        <div className="rounded bg-status-danger/10 p-2 text-xs text-status-danger">
-          {error}
-        </div>
-      )}
-
-      {isInlineImage ? (
-        <MediaImage
-          src={mediaUrl}
-          alt={`Media from message ${message.id}`}
-          onLoading={(isLoading) => setLoading(isLoading)}
-          onError={(err) => setError(err)}
+    <div className={clsx('max-w-xs', gap)}>
+      {kind === 'image' && (
+        <img
+          src={url}
+          alt="Imagem recebida"
+          className="h-auto max-w-full rounded"
+          loading="lazy"
+          onError={() => setError(true)}
         />
-      ) : (
+      )}
+      {kind === 'audio' && (
+        <audio controls preload="metadata" src={url} className="w-full min-w-[14rem]" onError={() => setError(true)}>
+          Seu navegador não reproduz este áudio.
+        </audio>
+      )}
+      {kind === 'video' && (
+        <video controls preload="metadata" src={url} className="max-w-full rounded" onError={() => setError(true)} />
+      )}
+      {kind === 'file' && (
         <MediaDownload
-          href={mediaUrl}
-          filename={sanitizeFilename(`media_${message.id}${getExtensionForMime(message.mime_type)}`)}
+          href={url}
+          filename={safeName(`arquivo_${message.id.slice(0, 8)}${extensionFor(message.mime_type)}`)}
           mimeType={message.mime_type}
           sizeBytes={message.size_bytes}
         />
@@ -57,115 +61,91 @@ export default function MessageMedia({ message, tenantId }: MessageMediaProps) {
   );
 }
 
-interface MediaImageProps {
-  src: string;
-  alt: string;
-  onLoading?: (isLoading: boolean) => void;
-  onError?: (error: string) => void;
-}
+const NOTICE: Record<string, { text: string; danger: boolean }> = {
+  pending: { text: 'Verificando o arquivo…', danger: false },
+  quarantined: { text: 'Verificando o arquivo…', danger: false },
+  infected: { text: 'Arquivo bloqueado: o antivírus detectou uma ameaça.', danger: true },
+  rejected: { text: 'Arquivo bloqueado: tipo de arquivo não permitido.', danger: true },
+  failed: { text: 'Não foi possível verificar este arquivo, por segurança ele não foi liberado.', danger: true },
+  source_gone: { text: 'Arquivo indisponível: não foi guardado a tempo ou já foi removido.', danger: false },
+};
 
-function MediaImage({ src, alt, onLoading, onError }: MediaImageProps) {
-  const [imageLoading, setImageLoading] = useState(true);
-
+function MediaNotice({ status, gap }: { status: string; gap: string }) {
+  const notice = NOTICE[status] ?? NOTICE.source_gone;
   return (
-    <img
-      src={src}
-      alt={alt}
+    <div
+      role={notice.danger ? 'alert' : 'status'}
       className={clsx(
-        'rounded max-w-full h-auto',
-        imageLoading && 'opacity-50'
+        'flex max-w-xs items-start gap-1.5 rounded px-2 py-1.5 text-xs',
+        gap,
+        notice.danger ? 'bg-status-danger/10 text-status-danger' : 'bg-surface-subtle text-text-secondary',
       )}
-      onLoad={() => {
-        setImageLoading(false);
-        onLoading?.(false);
-      }}
-      onError={() => {
-        setImageLoading(false);
-        onError?.('Failed to load image');
-      }}
-    />
+    >
+      <Icon name={status === 'pending' || status === 'quarantined' ? 'clock' : 'info'} size={14} className="mt-px" />
+      <span>{notice.text}</span>
+    </div>
   );
 }
 
-interface MediaDownloadProps {
-  href: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes?: number;
-}
-
-function MediaDownload({ href, filename, mimeType, sizeBytes }: MediaDownloadProps) {
-  const filesize = sizeBytes ? formatFilesize(sizeBytes) : 'unknown size';
-  const typeName = getTypeNameForMime(mimeType);
-
+function MediaDownload({ href, filename, mimeType, sizeBytes }: { href: string; filename: string; mimeType: string; sizeBytes?: number }) {
   return (
     <a
       href={href}
       download={filename}
-      className={clsx(
-        'block rounded border border-surface-muted bg-surface-subtle p-2 text-xs',
-        'hover:bg-surface-hover no-underline'
-      )}
+      className="block rounded border border-surface-muted bg-surface-subtle p-2 text-xs no-underline hover:bg-surface-hover"
     >
       <div className="flex items-center gap-2">
-        <span className="text-lg">📎</span>
-        <div className="flex-1 min-w-0">
+        <span className="text-lg" aria-hidden="true">📎</span>
+        <div className="min-w-0 flex-1">
           <div className="truncate font-medium text-text-primary">{filename}</div>
-          <div className="text-text-secondary">{typeName} · {filesize}</div>
+          <div className="text-text-secondary">{typeName(mimeType)} · {sizeBytes ? formatSize(sizeBytes) : 'tamanho desconhecido'}</div>
         </div>
-        <span className="text-lg">↓</span>
+        <span className="text-lg" aria-hidden="true">↓</span>
       </div>
     </a>
   );
 }
 
-function isImageType(mimeType: string): boolean {
-  const normalized = mimeType.split(';')[0].toLowerCase();
-  return ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(normalized);
+function base(mime: string): string {
+  return mime.split(';')[0].trim().toLowerCase();
 }
 
-function getExtensionForMime(mimeType: string): string {
-  const normalized = mimeType.split(';')[0].toLowerCase();
-  const extensions: Record<string, string> = {
-    'image/jpeg': '.jpg',
-    'image/png': '.png',
-    'image/webp': '.webp',
-    'image/gif': '.gif',
+function kindOf(mime: string): 'image' | 'audio' | 'video' | 'file' {
+  const m = base(mime);
+  if (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(m)) return 'image';
+  if (m.startsWith('audio/')) return 'audio';
+  if (m.startsWith('video/')) return 'video';
+  return 'file';
+}
+
+function extensionFor(mime: string): string {
+  const map: Record<string, string> = {
     'application/pdf': '.pdf',
     'text/plain': '.txt',
-    'application/json': '.json',
     'text/csv': '.csv',
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
   };
-  return extensions[normalized] || '.bin';
+  return map[base(mime)] ?? '.bin';
 }
 
-function getTypeNameForMime(mimeType: string): string {
-  const normalized = mimeType.split(';')[0].toLowerCase();
-  const names: Record<string, string> = {
-    'application/pdf': 'PDF',
-    'text/plain': 'Text',
-    'application/json': 'JSON',
-    'text/csv': 'CSV',
-    'image/jpeg': 'JPEG',
-    'image/png': 'PNG',
-    'image/webp': 'WebP',
-    'image/gif': 'GIF',
-  };
-  return names[normalized] || 'File';
+function typeName(mime: string): string {
+  const map: Record<string, string> = { 'application/pdf': 'PDF', 'text/plain': 'Texto', 'text/csv': 'CSV' };
+  return map[base(mime)] ?? 'Arquivo';
 }
 
-function formatFilesize(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 10) / 10 + ' ' + sizes[i];
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  return `${Math.round(value * 10) / 10} ${units[i]}`;
 }
 
-function sanitizeFilename(filename: string): string {
-  // Remove path separators and control characters.
-  return filename
-    .replace(/[/\\]/g, '_')
-    .replace(/\x00/g, '')
-    .replace(/[\x00-\x1f\x7f]/g, '_');
+function safeName(name: string): string {
+  return name.replace(/[/\\]/g, '_').replace(/[\x00-\x1f\x7f]/g, '_');
 }

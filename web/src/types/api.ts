@@ -32,6 +32,8 @@ export interface ConversationItem {
   participants?: ConversationParticipant[];
 }
 
+export type MediaStatus = 'pending' | 'quarantined' | 'clean' | 'infected' | 'rejected' | 'source_gone' | 'failed';
+
 export interface MessageItem {
   id: string;
   conversation_id: string;
@@ -43,6 +45,7 @@ export interface MessageItem {
   message_type?: string; // 'text', 'image', 'document', etc.
   mime_type?: string; // 'image/jpeg', 'application/pdf', etc.
   size_bytes?: number; // Media file size in bytes
+  media_status?: MediaStatus; // attachment pipeline state (ADR-0016); absent without media
   media_urls?: string[]; // DEPRECATED: use /api/v1/tenants/{id}/messages/{id}/media instead
 }
 
