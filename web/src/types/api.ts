@@ -26,6 +26,9 @@ export interface ConversationItem {
   waiting_since?: string;
   queue_id?: string;
   crm_contact_id?: string;
+  contact_id?: string;
+  // Classification of the conversation's contact (ADR-0014).
+  contact_kind?: 'customer' | 'other' | 'spam';
   participants?: ConversationParticipant[];
 }
 

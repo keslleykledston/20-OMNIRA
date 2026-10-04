@@ -200,3 +200,31 @@ describe('ChatPane — day separators', () => {
     expect(screen.getAllByText('Ontem')).toHaveLength(1);
   });
 });
+
+describe('ChatPane — spam contact (ADR-0014)', () => {
+  function serveKind(kind: string) {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if ((url as string).endsWith(`/inbox/conversations/${CONV}`)) {
+        return { data: { id: CONV, contact_name: 'Golpe', contact_phone: '+5511999990000', status: 'active', contact_kind: kind } };
+      }
+      if ((url as string).endsWith('/messages')) return { data: { items: [msg('a', 10)], has_more: false } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+  }
+
+  it('switches replying off for a spam contact and says how to restore', async () => {
+    serveKind('spam');
+    renderAt(<ChatPane conversationId={CONV} />);
+    await screen.findByText('texto a');
+    expect(await screen.findByText(/respostas ficam desativadas/)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Escreva uma resposta...')).not.toBeInTheDocument();
+  });
+
+  it('keeps the composer for any other contact', async () => {
+    serveKind('customer');
+    renderAt(<ChatPane conversationId={CONV} />);
+    await screen.findByText('texto a');
+    expect(await screen.findByPlaceholderText('Escreva uma resposta...')).toBeInTheDocument();
+    expect(screen.queryByText(/respostas ficam desativadas/)).not.toBeInTheDocument();
+  });
+});

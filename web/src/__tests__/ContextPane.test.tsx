@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import axios from 'axios';
+import userEvent from '@testing-library/user-event';
 import ContextPane from '../components/inbox/ContextPane';
 import { renderAt, setSession } from './testUtils';
 
@@ -150,5 +151,48 @@ describe('ContextPane — honest counters and unassigned hint', () => {
     });
     renderAt(<ContextPane conversationId={CONV} />);
     expect(await screen.findByText('Sem permissão para ver o chamado desta conversa.')).toBeInTheDocument();
+  });
+});
+
+describe('ContextPane — contact classification (ADR-0014)', () => {
+  it('shows the control for the conversation\'s contact and saves through the contacts API', async () => {
+    mockConversation({ contact_id: 'contact-9', contact_kind: 'other' });
+    vi.mocked(axios.patch).mockResolvedValue({ data: {} });
+    renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Maria Silva');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Cliente' }));
+    await waitFor(() => expect(axios.patch).toHaveBeenCalled());
+    expect(vi.mocked(axios.patch).mock.calls[0][0]).toMatch(/\/contacts\/contact-9$/);
+    expect((vi.mocked(axios.patch).mock.calls[0][1] as { kind: string }).kind).toBe('customer');
+  });
+
+  it('shows the spam state for a spam contact', async () => {
+    mockConversation({ contact_id: 'contact-9', contact_kind: 'spam' });
+    renderAt(<ContextPane conversationId={CONV} />);
+    expect(await screen.findByText('Marcado como spam')).toBeInTheDocument();
+  });
+
+  it('shows no control when the conversation carries no contact id (nothing to classify)', async () => {
+    mockConversation({});
+    renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Maria Silva');
+    expect(screen.queryByText('Tipo de contato')).not.toBeInTheDocument();
+  });
+});
+
+describe('ContextPane — spam contact has nothing to attend (ADR-0014)', () => {
+  it('hides Assumir / Transferir for a spam contact, and shows them for a normal one', async () => {
+    mockConversation({ contact_id: 'contact-9', contact_kind: 'spam', assigned_to_user_id: undefined });
+    const { unmount } = renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Marcado como spam');
+    expect(screen.queryByRole('button', { name: /Assumir/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Transferir/ })).not.toBeInTheDocument();
+    unmount();
+
+    mockConversation({ contact_id: 'contact-9', contact_kind: 'other', assigned_to_user_id: undefined });
+    renderAt(<ContextPane conversationId={CONV} />);
+    expect(await screen.findByRole('button', { name: /Assumir/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Transferir/ })).toBeInTheDocument();
   });
 });

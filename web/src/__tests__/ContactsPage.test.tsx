@@ -18,6 +18,7 @@ const contact = (over: object = {}) => ({
   phone_e164: '+5511998887766',
   email: 'ana@example.com',
   status: 'active',
+  kind: 'other',
   created_at: '2026-01-10T12:00:00Z',
   updated_at: '2026-02-20T15:30:00Z',
   last_interaction_at: '2026-02-20T15:30:00Z',
@@ -349,5 +350,82 @@ describe('ContactDetailPage (Contact 360)', () => {
     for (const invented of ['Tags', 'Observações', 'CPF', 'Responsável', 'Iniciar conversa', 'Criar ticket']) {
       expect(screen.queryByText(invented)).not.toBeInTheDocument();
     }
+  });
+});
+
+describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
+  const listCalls = () =>
+    vi.mocked(axios.get).mock.calls
+      .filter(([url]) => (url as string).endsWith('/contacts'))
+      .map(([, config]) => ((config as { params?: Record<string, unknown> } | undefined)?.params ?? {}));
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    localStorage.clear();
+    setSession();
+  });
+
+  it('shows each contact\'s kind next to its status', async () => {
+    mockGets({
+      [CONTACTS]: page([
+        contact({ id: 'a', display_name: 'Cliente Ouro', kind: 'customer' }),
+        contact({ id: 'b', display_name: 'Promo Chata', kind: 'spam' }),
+        contact({ id: 'c', display_name: 'Colega', kind: 'other' }),
+      ]),
+    });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Cliente Ouro');
+    const rows = screen.getAllByRole('row');
+    expect(within(rows.find((r) => r.textContent?.includes('Cliente Ouro'))!).getByText('Cliente')).toBeInTheDocument();
+    expect(within(rows.find((r) => r.textContent?.includes('Promo Chata'))!).getByText('Spam')).toBeInTheDocument();
+    expect(within(rows.find((r) => r.textContent?.includes('Colega'))!).getByText('Outros')).toBeInTheDocument();
+  });
+
+  it('searches on the server after the typing pauses (not once per key) and combines the filters', async () => {
+    const user = userEvent.setup();
+    mockGets({ [CONTACTS]: page([contact()]) });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    expect(listCalls()[0]).toEqual({ limit: 20 }); // no filter sent by default
+
+    await user.type(screen.getByLabelText('Buscar contato'), 'maria');
+    await waitFor(() => expect(listCalls().some((p) => p.q === 'maria')).toBe(true));
+    expect(listCalls().filter((p) => typeof p.q === 'string' && p.q !== 'maria').length).toBe(0);
+
+    await user.selectOptions(screen.getByLabelText('Tipo'), 'spam');
+    await user.selectOptions(screen.getByLabelText('Status'), 'blocked');
+    await waitFor(() => expect(listCalls().some((p) => p.q === 'maria' && p.kind === 'spam' && p.status === 'blocked')).toBe(true));
+  });
+
+  it('goes back to the first page when a filter changes (a cursor only fits the filters that made it)', async () => {
+    const user = userEvent.setup();
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      if (!(url as string).endsWith('/contacts')) return Promise.reject({ response: { status: 404 } });
+      return { data: config?.params?.cursor ? page([contact({ id: 'p2', display_name: 'Segunda Pagina' })]) : page([contact()], { has_more: true, next_cursor: 'CUR1' }) };
+    });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    await user.click(screen.getByRole('button', { name: /próxima|next/i }));
+    await screen.findAllByText('Segunda Pagina');
+    expect(listCalls().at(-1)?.cursor).toBe('CUR1');
+    await user.selectOptions(screen.getByLabelText('Tipo'), 'customer');
+    await screen.findAllByText('Ana Souza');
+    expect(listCalls().at(-1)).toMatchObject({ kind: 'customer' });
+    expect(listCalls().at(-1)?.cursor).toBeUndefined();
+  });
+
+  it('says nothing matched, and "Limpar filtros" brings everything back', async () => {
+    const user = userEvent.setup();
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+      if (!(url as string).endsWith('/contacts')) return Promise.reject({ response: { status: 404 } });
+      return { data: config?.params?.kind ? page([]) : page([contact()]) };
+    });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    await user.selectOptions(screen.getByLabelText('Tipo'), 'spam');
+    expect(await screen.findByText('Nenhum contato encontrado')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Limpar filtros' }));
+    expect((await screen.findAllByText('Ana Souza')).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Tipo')).toHaveValue('');
   });
 });

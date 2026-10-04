@@ -15,6 +15,7 @@ import TeamPage from './pages/TeamPage'
 import AgentsPage from './pages/AgentsPage'
 import PeopleAndGroupsPage from './pages/PeopleAndGroupsPage'
 import SettingsPage from './pages/SettingsPage'
+import GroupsPage from './pages/GroupsPage'
 import { RolesPermissionsPage } from './pages/RolesPermissionsPage'
 import AcceptInvitePage from './pages/AcceptInvitePage'
 import ChannelsPage from './pages/ChannelsPage'
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="/reports" element={<Reports />} />
             <Route path="/supervisor" element={<SupervisorDashboard />} />
             <Route path="/inbox" element={<InboxWorkspace />} />
+            <Route path="/groups" element={<GroupsPage />} />
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
             <Route path="/settings/team" element={<TeamPage />} />

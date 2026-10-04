@@ -8,6 +8,7 @@ import {
   Icon,
   PageHeader,
   Pagination,
+  SearchField,
   Skeleton,
   StatusBadge,
   Table,
@@ -19,7 +20,8 @@ import {
 } from '../components/primitives'
 import { ChannelChips } from '../components/contacts/ChannelChips'
 import { formatInteraction } from '../lib/contactFormat'
-import { contactErrorMessage, contactsAPI, type Contact } from '../lib/contacts'
+import { CONTACT_KIND_LABEL, contactErrorMessage, contactsAPI, type Contact, type ContactFilters, type ContactKind } from '../lib/contacts'
+import { useDebounced } from '../hooks/useDebounced'
 import { getTenantId } from '../lib/session'
 
 const PAGE_SIZE = 20
@@ -29,6 +31,16 @@ const STATUS_LABELS: Record<Contact['status'], { label: string; tone: 'success' 
   blocked: { label: 'Bloqueado', tone: 'danger' },
   archived: { label: 'Arquivado', tone: 'default' },
 }
+
+const KIND_TONE: Record<ContactKind, 'success' | 'danger' | 'default'> = {
+  customer: 'success',
+  other: 'default',
+  spam: 'danger',
+}
+
+const SELECT =
+  'rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary ' +
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary'
 
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -61,9 +73,19 @@ export default function ContactsPage() {
   const [cursorStack, setCursorStack] = useState<string[]>([])
   const cursor = cursorStack[cursorStack.length - 1]
 
+  // Search and filters run on the server (every contact, not just the loaded page). Any change starts
+  // again from the first page, because a cursor only makes sense for the filters that produced it.
+  const [search, setSearch] = useState('')
+  const [kind, setKind] = useState<ContactKind | ''>('')
+  const [status, setStatus] = useState<Contact['status'] | ''>('')
+  const q = useDebounced(search.trim(), 300)
+  const filters: ContactFilters = { q: q || undefined, kind: kind || undefined, status: status || undefined }
+  const filtering = Boolean(q || kind || status)
+  const resetPaging = () => setCursorStack([])
+
   const contacts = useQuery({
-    queryKey: ['contacts', tenantId, cursor ?? 'first'],
-    queryFn: () => contactsAPI.list(cursor, PAGE_SIZE),
+    queryKey: ['contacts', tenantId, cursor ?? 'first', q, kind, status],
+    queryFn: () => contactsAPI.list(cursor, PAGE_SIZE, filters),
     retry: false,
   })
 
@@ -77,6 +99,58 @@ export default function ContactsPage() {
         description="Pessoas que já conversaram com a sua operação."
       />
 
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="sm:max-w-sm sm:flex-1">
+          <SearchField
+            aria-label="Buscar contato"
+            placeholder="Buscar por nome, e-mail ou telefone..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value)
+              resetPaging()
+            }}
+            onClear={() => {
+              setSearch('')
+              resetPaging()
+            }}
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-text-secondary">
+          Tipo
+          <select
+            aria-label="Tipo"
+            className={SELECT}
+            value={kind}
+            onChange={(e) => {
+              setKind(e.target.value as ContactKind | '')
+              resetPaging()
+            }}
+          >
+            <option value="">Todos</option>
+            <option value="customer">{CONTACT_KIND_LABEL.customer}s</option>
+            <option value="other">{CONTACT_KIND_LABEL.other}</option>
+            <option value="spam">{CONTACT_KIND_LABEL.spam}</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm text-text-secondary">
+          Status
+          <select
+            aria-label="Status"
+            className={SELECT}
+            value={status}
+            onChange={(e) => {
+              setStatus(e.target.value as Contact['status'] | '')
+              resetPaging()
+            }}
+          >
+            <option value="">Todos</option>
+            <option value="active">Ativos</option>
+            <option value="blocked">Bloqueados</option>
+            <option value="archived">Arquivados</option>
+          </select>
+        </label>
+      </div>
+
       {contacts.isError && (
         <ErrorState
           message={contactErrorMessage(contacts.error)}
@@ -89,16 +163,28 @@ export default function ContactsPage() {
       {!contacts.isLoading && !contacts.isError && items.length === 0 && (
         <EmptyState
           icon={<Icon name="contacts" />}
-          title={cursorStack.length > 0 ? 'Nada nesta página' : 'Nenhum contato ainda'}
+          title={cursorStack.length > 0 ? 'Nada nesta página' : filtering ? 'Nenhum contato encontrado' : 'Nenhum contato ainda'}
           description={
             cursorStack.length > 0
               ? 'Volte para a página anterior.'
-              : 'Assim que uma pessoa enviar a primeira mensagem, ela aparece aqui.'
+              : filtering
+                ? 'Nenhum contato combina com a busca e os filtros escolhidos.'
+                : 'Assim que uma pessoa enviar a primeira mensagem, ela aparece aqui.'
           }
           action={
             cursorStack.length > 0
               ? { label: 'Voltar', onClick: () => setCursorStack((s) => s.slice(0, -1)) }
-              : undefined
+              : filtering
+                ? {
+                    label: 'Limpar filtros',
+                    onClick: () => {
+                      setSearch('')
+                      setKind('')
+                      setStatus('')
+                      resetPaging()
+                    },
+                  }
+                : undefined
           }
         />
       )}
@@ -115,6 +201,7 @@ export default function ContactsPage() {
                   <TableHeaderCell>Canais</TableHeaderCell>
                   <TableHeaderCell>Última interação</TableHeaderCell>
                   <TableHeaderCell>Conversas abertas</TableHeaderCell>
+                  <TableHeaderCell>Tipo</TableHeaderCell>
                   <TableHeaderCell>Status</TableHeaderCell>
                 </TableRow>
               </TableHead>
@@ -136,6 +223,11 @@ export default function ContactsPage() {
                     </TableCell>
                     <TableCell className="text-text-secondary whitespace-nowrap">{formatInteraction(c.last_interaction_at)}</TableCell>
                     <TableCell className="font-medium tabular-nums text-text-primary">{c.open_conversation_count}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={KIND_TONE[c.kind]} size="sm">
+                        {CONTACT_KIND_LABEL[c.kind]}
+                      </StatusBadge>
+                    </TableCell>
                     <TableCell>
                       <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
                         {STATUS_LABELS[c.status].label}
@@ -160,9 +252,14 @@ export default function ContactsPage() {
                     <p className="font-medium text-text-primary truncate">{c.display_name}</p>
                     <p className="text-sm text-text-secondary tabular-nums">{formatPhone(c.phone_e164)}</p>
                   </div>
-                  <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
-                    {STATUS_LABELS[c.status].label}
-                  </StatusBadge>
+                  <div className="flex flex-col items-end gap-1">
+                    <StatusBadge status={KIND_TONE[c.kind]} size="sm">
+                      {CONTACT_KIND_LABEL[c.kind]}
+                    </StatusBadge>
+                    <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
+                      {STATUS_LABELS[c.status].label}
+                    </StatusBadge>
+                  </div>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary">
                   <ChannelChips channels={c.channels} />

@@ -141,3 +141,32 @@ describe('ConversationListPanel — no cap on the list', () => {
     expect(onLoadMore).toHaveBeenCalled();
   });
 });
+
+describe('ConversationListPanel — Spam inbox', () => {
+  it('offers the four filters, Spam last', () => {
+    renderPanel([conv('a')]);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Todas', 'Aguardando', 'Minhas', 'Spam']);
+  });
+
+  it('in Spam nobody is "waiting" and nothing is "unassigned": those signals are for conversations to attend', () => {
+    renderPanel(
+      [conv('golpe', { assigned_to_user_id: undefined, last_message_at: minutesAgo(90), last_message_direction: 'inbound', waiting_since: minutesAgo(90) })],
+      { segment: 'spam' }
+    );
+    const row = screen.getByRole('listitem');
+    expect(row).not.toHaveTextContent('min');
+    expect(screen.queryByLabelText('Sem atendente')).not.toBeInTheDocument();
+  });
+
+  it('outside Spam the same conversation still shows its wait', () => {
+    renderPanel([conv('x', { assigned_to_user_id: undefined, last_message_at: minutesAgo(90), last_message_direction: 'inbound', waiting_since: minutesAgo(90) })]);
+    expect(screen.getByRole('listitem')).toHaveTextContent('1 h');
+    expect(screen.getByLabelText('Sem atendente')).toBeInTheDocument();
+  });
+
+  it('explains how to restore when the Spam inbox is empty', () => {
+    renderPanel([], { segment: 'spam' });
+    expect(screen.getByText(/Nenhum spam/)).toBeInTheDocument();
+    expect(screen.getByText(/Não é spam/)).toBeInTheDocument();
+  });
+});

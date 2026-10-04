@@ -268,6 +268,20 @@ describe('InboxWorkspace — list paging, search and filters', () => {
     expect(names[1]).toContain('Antiga');
   });
 
+  it('the Spam tab asks the API for kind=spam, and no other tab sends a kind', async () => {
+    const user = userEvent.setup();
+    mockGets(mockDefaultList());
+    renderAt(<InboxWorkspace />, '/inbox');
+    await screen.findByRole('tab', { name: 'Todas' });
+    await user.click(screen.getByRole('tab', { name: 'Spam' }));
+    await waitFor(() => expect(listCalls().some((p) => p.kind === 'spam')).toBe(true));
+    const others = listCalls().filter((p) => p.kind !== 'spam');
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((p) => p.kind === undefined)).toBe(true);
+    await user.click(screen.getByRole('tab', { name: 'Todas' }));
+    await waitFor(() => expect(listCalls().filter((p) => p.kind === undefined).length).toBeGreaterThan(1));
+  });
+
   it('runs search and the Minhas / Aguardando filters on the server', async () => {
     const user = userEvent.setup();
     mockGets(mockDefaultList());

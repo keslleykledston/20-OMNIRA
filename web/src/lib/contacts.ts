@@ -4,12 +4,28 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 
 // Mirrors ContactItem in internal/contacts/adapters/http.go. The API
 // deliberately omits tenant_id: the session already establishes the tenant.
+// Who the contact is for the business (ADR-0014); distinct from `status`, the record lifecycle.
+export type ContactKind = 'customer' | 'other' | 'spam';
+
+export const CONTACT_KIND_LABEL: Record<ContactKind, string> = {
+  customer: 'Cliente',
+  other: 'Outros',
+  spam: 'Spam',
+};
+
+export interface ContactFilters {
+  q?: string;
+  status?: 'active' | 'blocked' | 'archived';
+  kind?: ContactKind;
+}
+
 export interface Contact {
   id: string;
   display_name: string;
   phone_e164: string;
   email: string;
   status: 'active' | 'blocked' | 'archived';
+  kind: ContactKind;
   created_at: string;
   updated_at: string;
   // Derived read-only facts (CONTACT.360-A), always present in API responses.
@@ -82,13 +98,22 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 }
 
 export const contactsAPI = {
-  list: (cursor?: string, limit?: number) =>
+  list: (cursor?: string, limit?: number, filters: ContactFilters = {}) =>
     call<ContactPage>(() =>
       axios.get(contactsBase(), {
         headers: authHeaders(),
-        params: { ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}) },
+        params: {
+          ...(cursor ? { cursor } : {}),
+          ...(limit ? { limit } : {}),
+          ...(filters.q ? { q: filters.q } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.kind ? { kind: filters.kind } : {}),
+        },
       }),
     ),
+  // Any attending role may classify (conversation.claim); spam is never deleted, it has its own Inbox.
+  setKind: (id: string, kind: ContactKind) =>
+    call<Contact>(() => axios.patch(`${contactsBase()}/${id}`, { kind }, { headers: authHeaders() })),
   get: (id: string) =>
     call<Contact>(() => axios.get(`${contactsBase()}/${id}`, { headers: authHeaders() })),
   conversations: (id: string, cursor?: string, limit?: number) =>
@@ -117,5 +142,16 @@ export function contactErrorMessage(err: any, fallback = 'Não foi possível car
       return 'Contato não encontrado.';
     default:
       return fallback;
+  }
+}
+
+export function contactKindErrorMessage(err: any): string {
+  switch (err?.response?.status) {
+    case 403:
+      return 'Você não tem permissão para classificar contatos.';
+    case 404:
+      return 'Contato não encontrado.';
+    default:
+      return 'Não foi possível salvar. Tente novamente.';
   }
 }

@@ -22,6 +22,13 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
   },
   { title: 'Canais', items: [{ key: 'channel.manage', label: 'Gerenciar canais' }] },
   {
+    title: 'Grupos',
+    items: [
+      { key: 'group.read', label: 'Ler os grupos do WhatsApp habilitados' },
+      { key: 'group.manage', label: 'Habilitar grupos e apagar o histórico' },
+    ],
+  },
+  {
     title: 'Equipe',
     items: [
       { key: 'membership.read', label: 'Visualizar equipe' },

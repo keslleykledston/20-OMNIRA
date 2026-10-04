@@ -11,6 +11,7 @@ import ChatPane from '../components/inbox/ChatPane';
 import ContextPane from '../components/inbox/ContextPane';
 import { InboxSegment } from '../lib/inboxModel';
 import { useInboxSettings } from '../hooks/useInboxSettings';
+import { useDebounced } from '../hooks/useDebounced';
 import type { ConversationItem } from '../types/api';
 
 // PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
@@ -71,6 +72,7 @@ export default function InboxWorkspace() {
             q: debouncedSearch || undefined,
             assigned: segment === 'mine' ? 'me' : undefined,
             waiting: segment === 'waiting' ? true : undefined,
+            kind: segment === 'spam' ? 'spam' : undefined,
           },
           headers: authHeaders(),
         });
@@ -230,13 +232,4 @@ export default function InboxWorkspace() {
       `}</style>
     </div>
   );
-}
-
-function useDebounced<T>(value: T, ms: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(value), ms);
-    return () => window.clearTimeout(id);
-  }, [value, ms]);
-  return debounced;
 }

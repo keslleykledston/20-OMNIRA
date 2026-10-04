@@ -23,6 +23,7 @@ const SEGMENTS: { id: InboxSegment; label: string }[] = [
   { id: 'all', label: 'Todas' },
   { id: 'waiting', label: 'Aguardando' },
   { id: 'mine', label: 'Minhas' },
+  { id: 'spam', label: 'Spam' },
 ];
 
 const WAIT_STYLE: Record<WaitTone, string> = {
@@ -114,7 +115,13 @@ export default function ConversationListPanel({
           <div className="p-4 text-center text-text-secondary text-sm">Carregando...</div>
         ) : conversations.length === 0 ? (
           <div className="p-4 text-center text-text-tertiary text-sm">
-            {search.trim() ? 'Nenhuma conversa encontrada' : segment === 'all' ? 'Nenhuma conversa' : 'Nada por aqui'}
+            {search.trim()
+              ? 'Nenhuma conversa encontrada'
+              : segment === 'all'
+                ? 'Nenhuma conversa'
+                : segment === 'spam'
+                  ? 'Nenhum spam. Aqui ficam os contatos marcados como spam: abra um e use "Não é spam" para restaurar.'
+                  : 'Nada por aqui'}
           </div>
         ) : (
           <ul>
@@ -125,6 +132,7 @@ export default function ConversationListPanel({
                 selected={selectedId === conv.id}
                 now={now}
                 thresholds={waitThresholds}
+                inSpam={segment === 'spam'}
                 onSelect={onSelect}
               />
             ))}
@@ -141,17 +149,20 @@ function ConversationRow({
   selected,
   now,
   thresholds,
+  inSpam,
   onSelect,
 }: {
   conv: ConversationItem;
   selected: boolean;
   now: Date;
   thresholds: WaitThresholds;
+  inSpam: boolean;
   onSelect: (id: string) => void;
 }) {
   const name = conv.contact_name || conv.contact_phone;
-  const wait = waitInfo(conv.waiting_since, now, thresholds);
-  const unassigned = !conv.assigned_to_user_id && conv.status !== 'closed';
+  // In the Spam inbox nobody is "waiting" for an answer and there is nothing to assign.
+  const wait = inSpam ? null : waitInfo(conv.waiting_since, now, thresholds);
+  const unassigned = !inSpam && !conv.assigned_to_user_id && conv.status !== 'closed';
   return (
     <li>
       <button

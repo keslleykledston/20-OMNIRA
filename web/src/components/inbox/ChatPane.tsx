@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import clsx from 'clsx';
@@ -6,6 +6,7 @@ import { MessageItem, ConversationItem } from '../../types/api';
 import { API_BASE } from '../../lib/config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
+import { useThreadScroll } from '../../hooks/useThreadScroll';
 import MessageBubble from './MessageBubble';
 import MessageComposer from './MessageComposer';
 import { Icon } from '../primitives';
@@ -93,73 +94,17 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     },
   });
 
-  // Scrolling. The thread opens on the newest message and follows new ones (received or sent)
-  // while the user is at the bottom; if they scrolled up to read, it stays put and offers a button
-  // back. Loading an older page keeps the view where it was instead of jumping.
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const stickRef = useRef(true);
-  const prependRef = useRef<{ height: number; top: number } | null>(null);
-  const lastIdRef = useRef<string | null>(null);
-  const openedRef = useRef<string | null>(null);
-  const [atBottom, setAtBottom] = useState(true);
-
-  const scrollToBottom = () => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  };
-
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (!el || messages.length === 0) return;
-    const lastMsg = messages[messages.length - 1];
-    if (openedRef.current !== conversationId) {
-      openedRef.current = conversationId;
-      lastIdRef.current = lastMsg.id;
-      stickRef.current = true;
-      scrollToBottom();
-      return;
-    }
-    if (prependRef.current) {
-      el.scrollTop = el.scrollHeight - prependRef.current.height + prependRef.current.top;
-      prependRef.current = null;
-      return;
-    }
-    if (lastMsg.id !== lastIdRef.current) {
-      lastIdRef.current = lastMsg.id;
-      if (stickRef.current || lastMsg.direction === 'outbound') {
-        stickRef.current = true;
-        scrollToBottom();
-      }
-    }
-  }, [messages, conversationId]);
-
-  // Images/audio finish loading after the first paint and grow the thread: keep following the end.
-  useEffect(() => {
-    const content = contentRef.current;
-    if (!content || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      if (stickRef.current) scrollToBottom();
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [conversationId]);
-
-  const requestOlder = () => {
-    const el = scrollRef.current;
-    if (!el || !hasNextPage || isFetchingNextPage) return;
-    prependRef.current = { height: el.scrollHeight, top: el.scrollTop };
-    void fetchNextPage();
-  };
-
-  const handleScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
-    stickRef.current = nearBottom;
-    setAtBottom(nearBottom);
-    if (el.scrollTop < 80) requestOlder();
-  };
+  // Scrolling (open on the newest, follow what arrives, keep position when older pages load): see
+  // useThreadScroll. A message we sent always scrolls into view.
+  const followSent = useCallback((m: MessageItem) => m.direction === 'outbound', []);
+  const { scrollRef, contentRef, atBottom, onScroll, requestOlder, jumpToBottom } = useThreadScroll({
+    threadKey: conversationId,
+    messages,
+    alwaysFollow: followSent,
+    hasMore: !!hasNextPage,
+    isFetchingMore: isFetchingNextPage,
+    fetchMore: fetchNextPage,
+  });
 
   const handleSendMessage = async (text: string): Promise<boolean> => {
     if (!text.trim()) return false;
@@ -240,7 +185,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       {/* Timeline: oldest at the top, newest at the bottom next to the composer. A short thread
           sits at the bottom too (justify-end), like WhatsApp. */}
       <div className="relative flex-1 min-h-0">
-        <div ref={scrollRef} onScroll={handleScroll} className="absolute inset-0 overflow-y-auto">
+        <div ref={scrollRef} onScroll={onScroll} className="absolute inset-0 overflow-y-auto">
           <div ref={contentRef} className="flex min-h-full flex-col justify-end gap-0.5 px-3 py-2">
             {hasNextPage && (
               <button
@@ -277,11 +222,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         {!atBottom && (
           <button
             type="button"
-            onClick={() => {
-              stickRef.current = true;
-              scrollToBottom();
-              setAtBottom(true);
-            }}
+            onClick={jumpToBottom}
             aria-label="Ir para a última mensagem"
             className="absolute bottom-3 right-4 flex h-9 w-9 items-center justify-center rounded-full border border-border-subtle bg-surface text-text-secondary shadow-sm hover:bg-surface-muted"
           >
@@ -290,7 +231,12 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         )}
       </div>
 
-      {/* Composer */}
+      {/* Composer. Replying to a spam contact is switched off (ADR-0014): restore it first. */}
+      {conversation?.contact_kind === 'spam' ? (
+        <div className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
+          Contato marcado como spam: as respostas ficam desativadas. Use <strong>Não é spam</strong> no painel ao lado para restaurar.
+        </div>
+      ) : (
       <div className="px-3 py-2 border-t border-border-subtle">
         {sendError && (
           <div role="alert" className="mb-3 p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
@@ -303,6 +249,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           placeholder="Escreva uma resposta..."
         />
       </div>
+      )}
     </div>
   );
 }

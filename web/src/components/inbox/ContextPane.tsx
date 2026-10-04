@@ -9,6 +9,7 @@ import { Icon } from '../primitives';
 import { TicketPanel } from '../TicketPanel';
 import { TechnicianSelectModal } from '../TechnicianSelectModal';
 import ConversationSummary from './ConversationSummary';
+import { ContactKindControl } from '../contacts/ContactKindControl';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -130,6 +131,21 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
         </div>
       </div>
 
+      {/* ADR-0014: who this contact is (customer / other / spam). Reclassifying changes which Inbox
+          list the contact's conversations belong to, so the lists and this pane are refreshed. */}
+      {conversation?.contact_id && (
+        <ContactKindControl
+          contactId={conversation.contact_id}
+          kind={conversation.contact_kind ?? 'other'}
+          contactName={conversation.contact_name}
+          onChanged={() => {
+            void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+            void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+            void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+          }}
+        />
+      )}
+
       {/* PRODUCT.7C1: on-demand, non-persisted AI conversation summary */}
       <ConversationSummary conversationId={conversationId} />
 
@@ -191,7 +207,8 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
         </div>
       )}
 
-      {/* Actions */}
+      {/* Actions. A spam contact's conversation is not for attending: restore it first (ADR-0014). */}
+      {conversation?.contact_kind !== 'spam' && (
       <div className="p-4 space-y-2">
         {conversation?.assigned_to_user_id ? (
           <button
@@ -238,6 +255,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
           Transferir
         </button>
       </div>
+      )}
 
       {/* Transfer Modal */}
       <TechnicianSelectModal

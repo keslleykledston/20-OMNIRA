@@ -1,6 +1,6 @@
 import type { ConversationItem, MessageItem } from '../types/api';
 
-export type InboxSegment = 'all' | 'waiting' | 'mine';
+export type InboxSegment = 'all' | 'waiting' | 'mine' | 'spam';
 
 const DAY_MS = 86_400_000;
 
