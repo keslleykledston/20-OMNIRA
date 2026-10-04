@@ -1035,6 +1035,64 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/ticket-policy:
+    get:
+      operationId: getTopicTicketPolicy
+      tags: [Topics]
+      summary: What the ticket policy advises for a topic (read-only)
+      description: 'Never creates anything. OMNIRA allows ONE active ticket per conversation, so a second subject is advised needs_agent with share_active as the only option.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      responses:
+        '200':
+          description: Advice
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketPolicyAdvice' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/ticket-policy/apply:
+    post:
+      operationId: applyTopicTicketPolicy
+      tags: [Topics]
+      summary: Apply an allowed ticket policy action
+      description: 'The server re-evaluates the policy under a per-conversation lock; an action the policy does not currently allow is a 409. create also needs ticket.create. Responds 201 when a ticket was opened.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/TopicId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [action], additionalProperties: false, properties: { action: { type: string, enum: [adopt_active, share_active, create] } } }
+      responses:
+        '200': { description: Applied, content: { application/json: { schema: { $ref: '#/components/schemas/TicketPolicyResult' } } } }
+        '201': { description: A ticket was opened, content: { application/json: { schema: { $ref: '#/components/schemas/TicketPolicyResult' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "The policy does not allow this action now", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Unknown action", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/legacy-topic:
+    post:
+      operationId: backfillConversationLegacyTopic
+      tags: [Topics]
+      summary: Give the conversation's existing unlinked active ticket a topic (on demand)
+      description: 'Creates a legacy_backfill topic linked to that ticket as primary. Never classifies history. Idempotent: 200 with created=false when there is nothing to do.'
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200': { description: Nothing to do, content: { application/json: { schema: { type: object, properties: { created: { type: boolean } } } } } }
+        '201': { description: Topic created, content: { application/json: { schema: { type: object, properties: { created: { type: boolean }, topic: { $ref: '#/components/schemas/Topic' } } } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/ambiguities:
     get:
       operationId: listConversationAmbiguities
@@ -1776,6 +1834,22 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    TicketPolicyAdvice:
+      type: object
+      required: [action, reason, allowed_actions]
+      properties:
+        action: { type: string, enum: [none, adopt_active, share_active, create, needs_agent] }
+        ticket_id: { type: string, format: uuid }
+        reason: { type: string }
+        allowed_actions: { type: array, items: { type: string, enum: [adopt_active, share_active, create] } }
+    TicketPolicyResult:
+      type: object
+      required: [action, ticket_id, relation, created]
+      properties:
+        action: { type: string }
+        ticket_id: { type: string, format: uuid }
+        relation: { type: string, enum: [primary, related] }
+        created: { type: boolean }
     TopicSummary:
       type: object
       required: [id, version, summary_text, status, authored_by, created_at]

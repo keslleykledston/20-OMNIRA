@@ -100,6 +100,12 @@ Flags (`internal/intelligence/application/flags.go`, variáveis `OMNIRA_*`): só
 - `TopicClassifier` (flag `OMNIRA_TOPIC_AI_ROUTING_ENABLED`, desligada) **só propõe**: grava em `routing_decisions` com `decision_source='ai'`, `applied=false`, modelo, versão do prompt, latência e confiança. Nunca liga mensagem, cria tópico ou ambiguidade. O modelo vê aliases `T1..Tn` dos tópicos ABERTOS do mesmo tenant/conversa (nunca ids); a resposta é validada estritamente (objeto JSON único, campos conhecidos, alias dentro da whitelist, confiança 0..1) e qualquer desvio é descartado. Uma vez por mensagem (replay não chama o provedor). Falha/timeout do provedor = sem proposta, job segue.
 - Métrica: `topic_ai_shadow_total{outcome}`.
 
+### Política de ticket por tópico (ADR-0017, onda 7; sem migration nova)
+- Invariante preservada: **um ticket ativo por conversa** (`tickets_active_conversation_uq`). A política (`DecideTicket`, determinística) nunca abre um segundo ticket simultâneo na mesma conversa nem tira o ticket de outro tópico: `adopt_active` (o ticket ativo sem dono vira primário do tópico), `create` (só quando a conversa não tem ticket ativo; usa o mesmo `TicketStore` do inbox), `share_active` (relação `related`, escolha explícita da pessoa) e `needs_agent` (grupo sem conversa, tópico em várias conversas, ticket ativo já pertence a outro tópico).
+- `GET /topics/{id}/ticket-policy` é só conselho; `POST .../ticket-policy/apply` reavalia sob lock por conversa e recusa (409) o que a política não permite agora; `create` exige também `ticket.create`.
+- Automação (`OMNIRA_AUTO_TICKET_POLICY_ENABLED`, desligada): só `adopt_active` e `create`, origem `rule`, falha nunca derruba o job.
+- Backfill legado sob demanda: `POST /inbox/conversations/{id}/legacy-topic` cria um tópico `legacy_backfill` para o ticket ativo sem vínculo; não classifica histórico; idempotente.
+
 ### Pipeline durável (ADR-0017, migration 000066)
 `intelligence_jobs` (uma linha por mensagem e `pipeline_version`; estados pending/running/completed/failed/dead; lease em `locked_until`; só o sistema escreve) e os
 gatilhos que emitem `job.inbox.message_persisted.v1` na mesma transação da mensagem. Ver `docs/EVENTS.md`.

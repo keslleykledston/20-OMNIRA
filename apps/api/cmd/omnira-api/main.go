@@ -214,8 +214,10 @@ func main() {
 		summaryRepo := intelligenceadapters.NewPostgresSummaryRepository(dbPool)
 		summarySvc := intelligenceapp.NewSummaryService(topicRepo, summaryRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), routingRepo,
 			intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags)
+		ticketPolicySvc := intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool), routingRepo,
+			inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)
 		srv.RegisterIntelligenceHandlers(dbPool, intelligenceadapters.NewTopicHandler(dbPool, intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo), topicRepo).
-			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc))
+			WithRouting(routingSvc, routingRepo).WithSummaries(summarySvc).WithTickets(ticketPolicySvc))
 	}
 	if erpCipherErr == nil && erpCipher != nil {
 		srv.RegisterAIIntegrationHandlers(dbPool, tenancyadapters.NewAIIntegrationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), erpCipher))

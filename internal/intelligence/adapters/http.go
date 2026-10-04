@@ -22,6 +22,7 @@ const (
 	permTopicRead          = "topic.read"
 	permTopicManage        = "topic.manage"
 	permConversationManage = "conversation.manage"
+	permTicketCreate       = "ticket.create"
 	maxBody                = 16 << 10
 	maxMessageIDsOnCreate  = 100
 )
@@ -36,6 +37,13 @@ type TopicHandler struct {
 	routing     *application.RoutingService
 	routingRepo ports.RoutingRepository
 	summaries   *application.SummaryService
+	tickets     *application.TopicTicketService
+}
+
+// WithTickets enables the ticket policy endpoints.
+func (h *TopicHandler) WithTickets(t *application.TopicTicketService) *TopicHandler {
+	h.tickets = t
+	return h
 }
 
 // WithSummaries enables the topic summary endpoints.
@@ -807,4 +815,135 @@ func (h *TopicHandler) GenerateSummary(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, toSummaryDTO(*s))
+}
+
+type ticketAdviceDTO struct {
+	Action   string     `json:"action"`
+	TicketID *uuid.UUID `json:"ticket_id,omitempty"`
+	Reason   string     `json:"reason"`
+	Allowed  []string   `json:"allowed_actions"`
+}
+
+func toAdviceDTO(a domain.TicketAdvice) ticketAdviceDTO {
+	allowed := []string{}
+	for _, x := range a.Allowed {
+		allowed = append(allowed, string(x))
+	}
+	return ticketAdviceDTO{Action: string(a.Action), TicketID: a.TicketID, Reason: a.Reason, Allowed: allowed}
+}
+
+// GetTicketPolicy: GET /tenants/{tenant_id}/topics/{topic_id}/ticket-policy (read-only advice)
+func (h *TopicHandler) GetTicketPolicy(w http.ResponseWriter, r *http.Request) {
+	if _, err := h.authorize(r, permTopicRead); err != nil {
+		fail(w, err)
+		return
+	}
+	if h.tickets == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	id, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return
+	}
+	adv, err := h.tickets.Advise(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toAdviceDTO(adv))
+}
+
+type applyTicketPolicyRequest struct {
+	Action string `json:"action"`
+}
+
+// ApplyTicketPolicy: POST /tenants/{tenant_id}/topics/{topic_id}/ticket-policy/apply
+// The server re-checks the policy; opening a ticket also needs ticket.create.
+func (h *TopicHandler) ApplyTicketPolicy(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if h.tickets == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	id, ok := pathUUID(w, r, "topic_id")
+	if !ok {
+		return
+	}
+	var req applyTicketPolicyRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	action := domain.TicketAction(req.Action)
+	switch action {
+	case domain.TicketActionAdoptActive, domain.TicketActionShareActive, domain.TicketActionCreate:
+	default:
+		http.Error(w, "unknown action", http.StatusUnprocessableEntity)
+		return
+	}
+	if _, err := h.svc.GetTopic(r.Context(), id); err != nil {
+		fail(w, err)
+		return
+	}
+	if ok, err := h.canOperateTopic(r.Context(), tc, id); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return
+	}
+	if action == domain.TicketActionCreate {
+		if ok, err := h.has(r.Context(), tc, permTicketCreate); err != nil || !ok {
+			fail(w, firstErr(err, errForbidden))
+			return
+		}
+	}
+	res, err := h.tickets.Apply(r.Context(), id, action, domain.TicketLinkAgent)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	status := http.StatusOK
+	if res.Created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, map[string]any{"action": string(res.Action), "ticket_id": res.TicketID, "relation": string(res.Relation), "created": res.Created})
+}
+
+// BackfillLegacyTopic: POST /tenants/{tenant_id}/inbox/conversations/{conversation_id}/legacy-topic
+// Gives the conversation's existing unlinked active ticket a topic (200 with created=false when there is nothing to do).
+func (h *TopicHandler) BackfillLegacyTopic(w http.ResponseWriter, r *http.Request) {
+	tc, err := h.authorize(r, permTopicManage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if h.tickets == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	convID, ok := pathUUID(w, r, "conversation_id")
+	if !ok {
+		return
+	}
+	info, err := h.repo.ConversationInfo(r.Context(), tc.TenantID, convID)
+	if err != nil || !info.Exists {
+		fail(w, firstErr(err, domain.ErrReferenceNotFound))
+		return
+	}
+	if ok, err := h.canOperateConversation(r.Context(), tc, info.AssignedTo); err != nil || !ok {
+		fail(w, firstErr(err, errForbidden))
+		return
+	}
+	topic, created, err := h.tickets.BackfillLegacy(r.Context(), convID, &info.ContactID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if !created {
+		writeJSON(w, http.StatusOK, map[string]any{"created": false})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"created": true, "topic": toTopicDTO(topic)})
 }

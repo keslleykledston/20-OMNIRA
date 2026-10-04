@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"log"
 	"net/http"
 	"os"
@@ -35,8 +36,8 @@ import (
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
-	"github.com/omnira/omnira/internal/worker/jobsstream"
 	intelligenceworker "github.com/omnira/omnira/internal/worker/intelligence"
+	"github.com/omnira/omnira/internal/worker/jobsstream"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	"github.com/omnira/omnira/internal/worker/realtime"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
@@ -353,6 +354,11 @@ func main() {
 			// shadow only: the proposal is recorded, never applied; a failure never touches the routing
 			pipeline = intelligenceapp.ShadowPipeline{Next: pipeline, Classifier: intelligenceapp.NewTopicClassifier(intelligenceadapters.NewPostgresRoutingRepository(dbPool),
 				intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewPostgresSummaryRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags, intelligenceCounters)}
+		}
+		if intelligenceFlags.AutoTicketPolicyEnabled {
+			// only the unambiguous policy actions, and a problem here never fails the job
+			pipeline = intelligenceapp.TicketPolicyPipeline{Next: pipeline, Tickets: intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool),
+				intelligenceadapters.NewPostgresRoutingRepository(dbPool), inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)}
 		}
 		runner := intelligenceapp.NewJobRunner(jobStore, pipeline, session, intelligenceapp.DefaultJobRunnerConfig(), intelligenceCounters)
 		go runner.Run(workerCtx, 2*time.Second)
