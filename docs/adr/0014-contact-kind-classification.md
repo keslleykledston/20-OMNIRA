@@ -1,7 +1,7 @@
 # ADR-0014: Classificação de contatos (`customer` / `other` / `spam`)
 
 ## Status
-Proposed (guardado para o futuro; nenhuma implementação autorizada)
+Accepted em 2026-10-04 por instrução do dono do produto ("avance na ADR-0014"). Slices 1 a 3 implementados; ver "Implementação" ao final.
 
 ## Contexto
 
@@ -37,16 +37,29 @@ Proposta, em fatias pequenas, nesta ordem:
    reproduzível: contatos existentes ficam `other`, exceto os que já tenham
    evidência em `crm_contact_company_evidence` (migration 000052), que viram
    `customer`. Nada é inferido por heurística de texto ou de número.
-2. **Triagem no Inbox.** Ação "Marcar como Cliente / Outros / Spam" sobre o
-   contato da conversa. Autorização inicial reaproveita `conversation.manage`;
-   uma permissão própria (`contact.manage`) só entra se o produto pedir papéis
-   distintos. Cada mudança grava `audit_events` (quem, de, para) e emite o
-   evento de realtime já existente para a conversa.
+2. **Triagem no Inbox.** Ação de classificar o contato da conversa (Cliente /
+   Outros / Spam), com **botão "Marcar como spam"** para o operador que detectar
+   spam ou golpe e "Não é spam" na caixa de spam para desfazer um falso positivo.
+   **Autorização (decisão do dono em 2026-10-04): `conversation.claim`**, que todo
+   papel que atende possui, e não `conversation.manage`: o spam chega sem dono, e
+   quem o percebe precisa poder marcá-lo e também desfazer o próprio engano. A rede
+   de segurança é a visibilidade (caixa de spam) e a auditoria, não um papel mais
+   restrito. Cada mudança grava `audit_events` (`contact.kind_changed`: de, para,
+   quantas conversas saíram da fila) e emite o evento de realtime já existente
+   (`conversation_updated`, por gatilho) para as conversas abertas do contato.
 3. **Efeito de `spam`.** A mensagem continua sendo persistida (dado nunca é
-   descartado em silêncio e o webhook segue em exactly-once), mas a conversa
-   não entra em roteamento, e "sem agente elegível" continua sendo ACK de
-   condição normal, nunca NAK/redelivery. `other` aparece em aba própria e não
-   conta nas métricas de atendimento.
+   descartado em silêncio e o webhook segue em exactly-once). A conversa nova
+   não entra em roteamento (`RouteNew` ignora contato spam, sem criar tarefa de
+   atribuição), e ao marcar spam as conversas **abertas e sem atendente** do
+   contato saem da fila e perdem a nova tentativa de roteamento pendente; as já
+   assumidas não são tocadas. "Sem agente elegível" continua sendo ACK de
+   condição normal, nunca NAK/redelivery. **Caixa de spam própria**: a visão
+   padrão do Inbox mostra clientes e outros (nada some em silêncio), e `Spam` é
+   uma aba/filtro (`kind=spam`) sempre visível, de onde se restaura. Restaurar
+   **não** recoloca na fila: a conversa reaparece na lista e é assumida ou
+   transferida à mão. `other` tem filtro na API (`kind=other`); a aba própria de
+   "Outros" e a exclusão de `other` das métricas de atendimento ficam para uma
+   fatia seguinte.
 4. **Grupos ficam fora desta ADR.** O webhook continua descartando `@g.us`.
    Suportar grupos exige decisão própria: entidade de grupo separada de
    Contact, remetente individual por mensagem e política de roteamento
@@ -93,8 +106,20 @@ Proposta, em fatias pequenas, nesta ordem:
 
 ## Questões em aberto
 
-- O produto quer papéis distintos para triagem (supervisor vs agente)?
+- ~~O produto quer papéis distintos para triagem?~~ Resolvido (2026-10-04): não; todo operador (`conversation.claim`) classifica.
 - Spam deve ser purgado após N dias ou mantido indefinidamente (LGPD)?
 - Resposta do K3G sobre unicidade de `GET /api/crm/contacts?phone=&companyId=`.
 - Grupos de clientes: um grupo é um Contact especial ou uma entidade nova?
   Respondida no ADR-0015 (proposta): entidade nova, fora de `contacts`.
+
+## Implementação (2026-10-04)
+
+- Migration `000056`: `contacts.kind` (`customer|other|spam`, default `other`, CHECK), backfill
+  `customer` apenas para contato com evidência ativa de CRM (hoje 0), índice por tenant e gatilho de
+  realtime. `down` escrito; o ciclo up/down/up ainda não foi executado.
+- API: `PATCH /tenants/{id}/contacts/{contact_id}` (`{"kind": ...}`); `GET /contacts` com `q`, `status`
+  e `kind`; `GET /inbox/conversations` com `kind` (padrão: sem spam) e `contact_kind` em cada item.
+- Testes em Postgres real com Tenants A e B: permissão, membership revogada, quem é de outro tenant,
+  404 sem oráculo de enumeração, auditoria, idempotência, saída da fila, restauração sem re-fila e
+  roteamento (fila manual e rodízio) ignorando spam. Verificação por mutação do roteamento.
+

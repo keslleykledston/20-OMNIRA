@@ -184,6 +184,17 @@ paths:
         - name: sort
           in: query
           schema: { type: string, enum: ['updated_at:desc'] }
+        - name: q
+          in: query
+          description: 'Name or e-mail (case-insensitive, `%` and `_` are literal); also the phone when the text looks like a phone number (digits, spaces, `+ - . ( )`). Max 100 chars.'
+          schema: { type: string, maxLength: 100 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, blocked, archived] }
+        - name: kind
+          in: query
+          description: 'Classification (ADR-0014)'
+          schema: { type: string, enum: [customer, other, spam] }
       responses:
         '200':
           description: A page of contacts
@@ -217,6 +228,35 @@ paths:
               schema: { $ref: '#/components/schemas/ContactItem' }
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    patch:
+      operationId: setContactKind
+      tags: [Contacts]
+      summary: Classify a contact as customer, other or spam
+      description: |
+        Requires `conversation.claim` (every attending role): spam arrives unassigned and whoever spots it must be able
+        to flag it and to undo a false positive. Idempotent: the same kind answers `200` without a new audit event.
+        Audited as `contact.kind_changed` with the previous kind, the new kind and `conversations_dequeued`. Marking
+        `spam` also takes the contact's open, unassigned conversations out of their queue (conversations someone holds
+        are untouched); restoring does not re-queue. Spam is never deleted: it has its own Inbox view (`kind=spam`).
+        A contact of another tenant and an unknown id are indistinguishable (`404`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ContactId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetContactKindRequest' }
+      responses:
+        '200':
+          description: The contact with its new kind
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactItem' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/contacts/{contact_id}/conversations:
     get:
@@ -441,6 +481,10 @@ paths:
           in: query
           description: Only conversations whose last message is from the customer
           schema: { type: boolean }
+        - name: kind
+          in: query
+          description: 'Contact classification (ADR-0014). Omitted = customers and others (spam is kept but out of the default view); `spam` lists the spam conversations.'
+          schema: { type: string, enum: [customer, other, spam] }
       responses:
         '200':
           description: A page of conversations
@@ -1157,18 +1201,25 @@ components:
             name: { type: string }
     ContactItem:
       type: object
-      required: [id, display_name, phone_e164, email, status, created_at, updated_at, last_interaction_at, channels, open_conversation_count]
+      required: [id, display_name, phone_e164, email, status, kind, created_at, updated_at, last_interaction_at, channels, open_conversation_count]
       properties:
         id: { type: string, format: uuid }
         display_name: { type: string }
         phone_e164: { type: string, description: E.164 }
         email: { type: string }
         status: { type: string, enum: [active, blocked, archived] }
+        kind: { type: string, enum: [customer, other, spam], description: 'Who the contact is for the business (ADR-0014); distinct from status' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         last_interaction_at: { type: string, format: date-time, nullable: true, description: 'Newest message across the contact''s conversations; null when it has none (CONTACT.360-A)' }
         channels: { type: array, items: { type: string }, description: 'Distinct channel kinds (e.g. whatsapp) of the contact''s conversations; empty, never null' }
         open_conversation_count: { type: integer, minimum: 0 }
+    SetContactKindRequest:
+      type: object
+      required: [kind]
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [customer, other, spam] }
     ContactPage:
       type: object
       required: [items, has_more, count, limit]
@@ -1309,6 +1360,7 @@ components:
         contact_phone: { type: string, description: E.164 }
         ticket_status: { type: string }
         ticket_priority: { type: string }
+        contact_kind: { type: string, enum: [customer, other, spam], description: 'Classification of the conversation''s contact (ADR-0014)' }
         last_message_at: { type: string, format: date-time, description: 'List only' }
         last_message_direction: { type: string, enum: [inbound, outbound], description: 'List only' }
         last_message_type: { type: string, description: 'List only' }

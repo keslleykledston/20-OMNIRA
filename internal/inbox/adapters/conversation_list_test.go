@@ -205,6 +205,19 @@ func TestListConversationsByActivityWithFiltersAndPaging(t *testing.T) {
 	if _, p := get(userA, tenantA, "q="+url.QueryEscape("100%")); !equal(ids(p), lit) {
 		t.Fatalf("a literal %% must not act as a wildcard: %v", ids(p))
 	}
+	// Text that is not phone-shaped searches names only: "100%" must not also match a phone that
+	// merely contains the digits 100. Plain digits do search phones.
+	var emptyContact uuid.UUID
+	if err := seed.QueryRow(ctx, `SELECT contact_id FROM conversations WHERE id=$1`, empty).Scan(&emptyContact); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE contacts SET phone_e164='+5592910000100' WHERE id=$1`, emptyContact)
+	if _, p := get(userA, tenantA, "q="+url.QueryEscape("100%")); !equal(ids(p), lit) {
+		t.Fatalf("a name-like query with digits must not search phones: %v", ids(p))
+	}
+	if _, p := get(userA, tenantA, "q=100"); !equal(ids(p), lit, empty) {
+		t.Fatalf("plain digits search names and phones: %v", ids(p))
+	}
 	// "%" is a literal: only the contact whose name really contains one matches, not everything.
 	if _, p := get(userA, tenantA, "q=%25"); !equal(ids(p), lit) {
 		t.Fatalf("a lone %% must match only the literal %%, got %v", ids(p))

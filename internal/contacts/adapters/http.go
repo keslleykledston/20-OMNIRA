@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	auditports "github.com/omnira/omnira/internal/audit/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -23,8 +26,11 @@ type ContactItem struct {
 	PhoneE164   string    `json:"phone_e164"`
 	Email       string    `json:"email"`
 	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// Kind is who the contact is for the business (ADR-0014): customer | other | spam.
+	// Distinct from Status, which is the record's lifecycle.
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 
 	// Derived, read-only facts (CONTACT.360-A). Computed from the contact's own
 	// conversations/messages inside the same tenant-scoped RLS session; nothing
@@ -36,17 +42,24 @@ type ContactItem struct {
 }
 
 type ContactsAPIHandler struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	audit auditports.AuditEventRepository
 }
 
 func NewContactsAPIHandler(pool *pgxpool.Pool) *ContactsAPIHandler {
 	return &ContactsAPIHandler{pool: pool}
 }
 
+// WithAudit enables the audit trail for contact changes (reclassification).
+func (h *ContactsAPIHandler) WithAudit(a auditports.AuditEventRepository) *ContactsAPIHandler {
+	h.audit = a
+	return h
+}
+
 // contactSelect adds the three derived facts to the stored columns. Every
 // subquery is scoped by tenant_id AND contact_id (on top of RLS), and every
 // join carries tenant_id, so a row of another tenant can never contribute.
-const contactSelect = `SELECT c.id, c.display_name, c.phone_e164, c.email, c.status, c.created_at, c.updated_at,
+const contactSelect = `SELECT c.id, c.display_name, c.phone_e164, c.email, c.status, c.kind, c.created_at, c.updated_at,
 	(SELECT max(m.created_at) FROM messages m
 	   JOIN conversations cv ON cv.id = m.conversation_id AND cv.tenant_id = m.tenant_id
 	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id) AS last_interaction_at,
@@ -78,20 +91,47 @@ func (h *ContactsAPIHandler) ListContacts(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	query := contactSelect + ` WHERE c.tenant_id = $1
-		ORDER BY c.updated_at DESC, c.id DESC LIMIT $2`
-	args := []any{tenantID, opts.Limit + 1}
+	args := []any{tenantID}
+	arg := func(v any) string {
+		args = append(args, v)
+		return "$" + strconv.Itoa(len(args))
+	}
+	where := "c.tenant_id = $1"
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		if len(q) > 100 {
+			http.Error(w, "invalid search", http.StatusBadRequest)
+			return
+		}
+		like := arg("%" + escapeLike(q) + "%")
+		clause := "c.display_name ILIKE " + like + " OR c.email ILIKE " + like
+		if digits, ok := phoneDigits(q); ok {
+			clause += " OR c.phone_e164 LIKE " + arg("%"+digits+"%")
+		}
+		where += " AND (" + clause + ")"
+	}
+	if v := r.URL.Query().Get("status"); v != "" {
+		if v != "active" && v != "blocked" && v != "archived" {
+			http.Error(w, "invalid status filter", http.StatusBadRequest)
+			return
+		}
+		where += " AND c.status = " + arg(v)
+	}
+	if v := r.URL.Query().Get("kind"); v != "" {
+		if !validContactKind(v) {
+			http.Error(w, "invalid kind filter", http.StatusBadRequest)
+			return
+		}
+		where += " AND c.kind = " + arg(v)
+	}
 	if cursor != nil {
 		cursorID, parseErr := uuid.Parse(cursor.ID)
 		if parseErr != nil {
 			http.Error(w, "invalid pagination", http.StatusBadRequest)
 			return
 		}
-		query = contactSelect + ` WHERE c.tenant_id = $1
-			AND (c.updated_at, c.id) < ($2, $3)
-			ORDER BY c.updated_at DESC, c.id DESC LIMIT $4`
-		args = []any{tenantID, cursor.Timestamp, cursorID, opts.Limit + 1}
+		where += " AND (c.updated_at, c.id) < (" + arg(cursor.Timestamp) + ", " + arg(cursorID) + ")"
 	}
+	query := contactSelect + " WHERE " + where + " ORDER BY c.updated_at DESC, c.id DESC LIMIT " + arg(opts.Limit+1)
 
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), query, args...)
 	if err != nil {
@@ -171,7 +211,7 @@ type contactRowScanner interface {
 
 func scanContactItem(row contactRowScanner) (ContactItem, error) {
 	var item ContactItem
-	err := row.Scan(&item.ID, &item.DisplayName, &item.PhoneE164, &item.Email, &item.Status, &item.CreatedAt, &item.UpdatedAt,
+	err := row.Scan(&item.ID, &item.DisplayName, &item.PhoneE164, &item.Email, &item.Status, &item.Kind, &item.CreatedAt, &item.UpdatedAt,
 		&item.LastInteractionAt, &item.Channels, &item.OpenConversationCount)
 	if item.Channels == nil {
 		item.Channels = []string{}
