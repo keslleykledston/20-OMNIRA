@@ -6,6 +6,9 @@ package adapters
 import (
 	"context"
 	"errors"
+	"log"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -19,17 +22,61 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
+// DefaultMaxBytes caps the size of the group tables on the local disk (1 GiB). The archive job normally
+// keeps them far below it; the cap only matters when the external disk stays unreachable for a long time.
+const DefaultMaxBytes int64 = 1 << 30
+
+const sizeCheckEvery = time.Minute
+
 // Intake is the webhook-side half: it decides, inside a tenant system session derived from the
 // resolved connection (never from the payload), whether a group message is stored.
 type Intake struct {
 	pool    *pgxpool.Pool
 	events  channelports.WebhookEventStore
 	counter metric.Int64Counter
+
+	maxBytes int64 // <= 0 disables the cap
+	now      func() time.Time
+	mu       sync.Mutex
+	checked  time.Time
+	over     bool
 }
 
 func NewIntake(pool *pgxpool.Pool, events channelports.WebhookEventStore) *Intake {
 	counter, _ := otel.Meter("omnira/groups").Int64Counter("group_message_total")
-	return &Intake{pool: pool, events: events, counter: counter}
+	return &Intake{pool: pool, events: events, counter: counter, maxBytes: DefaultMaxBytes, now: time.Now}
+}
+
+// WithMaxBytes sets the size cap for the group tables; zero or negative disables it.
+func (i *Intake) WithMaxBytes(n int64) *Intake {
+	i.maxBytes = n
+	return i
+}
+
+// overLimit reports whether the group tables exceed the cap. The size is read at most once a minute,
+// so a burst of group traffic does not turn into a burst of catalog queries. When the cap is hit only
+// group storage pauses (messages are dropped and counted); nothing already stored is deleted, and 1:1
+// conversations are unaffected.
+func (i *Intake) overLimit(ctx context.Context) bool {
+	if i.maxBytes <= 0 {
+		return false
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if !i.checked.IsZero() && i.now().Sub(i.checked) < sizeCheckEvery {
+		return i.over
+	}
+	var size int64
+	err := platformdb.QuerierFromContext(ctx, i.pool).QueryRow(ctx,
+		`SELECT pg_total_relation_size('wa_group_messages') + pg_total_relation_size('wa_groups') + pg_total_relation_size('wa_group_archive_batches')`).Scan(&size)
+	if err != nil {
+		return i.over // keep the last known answer; a failed size read must not stop ingestion
+	}
+	i.checked, i.over = i.now(), size > i.maxBytes
+	if i.over {
+		log.Printf("groups: storage paused, group tables use %d bytes (cap %d); archive to the external disk is not catching up", size, i.maxBytes)
+	}
+	return i.over
 }
 
 // ProcessGroupMessage returns ingested=true when the message was stored, duplicate=true when the
@@ -38,6 +85,12 @@ func NewIntake(pool *pgxpool.Pool, events channelports.WebhookEventStore) *Intak
 func (i *Intake) ProcessGroupMessage(ctx context.Context, conn channeldomain.ChannelConnection, dedupKey, eventType, digest string, msg channeldomain.InboundGroupMessage) (ingested, duplicate bool, err error) {
 	if i == nil || i.pool == nil || i.events == nil {
 		return false, false, errors.New("groups: intake is not configured")
+	}
+	if i.overLimit(ctx) {
+		if i.counter != nil {
+			i.counter.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "paused_size_limit")))
+		}
+		return false, false, nil
 	}
 	err = platformdb.WithSystemTenantSession(ctx, i.pool, conn.TenantID, func(scoped context.Context) error {
 		q := platformdb.QuerierFromContext(scoped, i.pool)

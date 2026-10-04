@@ -491,7 +491,9 @@ paths:
       summary: Delete every stored message of a group
       description: |
         Requires `group.manage`. Explicit and audited as `group.history_deleted` with the count. The group keeps its
-        enabled state.
+        enabled state. Also asks the archive job to remove the group's archived files from the external disk (the API
+        cannot reach it); backups already taken still contain the messages until they expire (7 days on the server,
+        30 in the cloud, 35 on the external disk).
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/GroupId' }

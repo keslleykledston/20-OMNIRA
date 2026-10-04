@@ -163,6 +163,9 @@ describe('GroupsPage', () => {
     await screen.findByText('texto m1')
     await user.click(screen.getByRole('button', { name: 'Apagar histórico' }))
     await screen.findByText('Apagar o histórico deste grupo?')
+    // honest about backups: the messages can still be inside backups already taken
+    expect(screen.getByText(/Cópias de segurança já feitas ainda podem conter essas mensagens/)).toBeInTheDocument()
+    expect(screen.getByText(/35 no disco externo/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
     expect(axios.delete).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Apagar histórico' }))

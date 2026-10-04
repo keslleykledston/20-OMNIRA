@@ -504,7 +504,8 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteHistory removes every stored message of a group (an explicit, audited action, separate from
-// disabling). The group keeps its enabled state.
+// disabling) and requests the removal of its archived files. The group keeps its enabled state. Backups
+// already taken still contain the messages until they expire.
 func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request) {
 	tc, ok := h.session(w, r, permManage)
 	if !ok {
@@ -529,7 +530,8 @@ func (h *Handler) DeleteHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to delete history", http.StatusInternalServerError)
 		return
 	}
-	if _, err := q.Exec(r.Context(), `UPDATE wa_groups SET last_message_at = NULL, updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id); err != nil {
+	// Also ask the archive job (it alone can reach the external disk) to remove this group's cold files.
+	if _, err := q.Exec(r.Context(), `UPDATE wa_groups SET last_message_at = NULL, archive_purge_requested_at = now(), updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id); err != nil {
 		http.Error(w, "failed to delete history", http.StatusInternalServerError)
 		return
 	}

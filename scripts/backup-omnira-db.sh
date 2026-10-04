@@ -134,6 +134,14 @@ else
   echo "== external copy SKIPPED: $EXTERNAL_MOUNT is not mounted — local backup is still valid"
 fi
 
+# Retention on the external disk: it used to keep every dump forever. 35 days is a little more than
+# the cloud copy (30), so a group history deleted in the app really leaves the backups.
+# shellcheck source=lib/prune-external.sh
+. scripts/lib/prune-external.sh
+if mountpoint -q "$EXTERNAL_MOUNT" 2>/dev/null; then
+  prune_external_dumps "$EXTERNAL_BACKUP_DIR" "$EXTERNAL_MOUNT" "$DB_NAME" "${EXTERNAL_RETENTION_DAYS:-35}" || true
+fi
+
 # Best-effort encrypted copy to Google Drive (opt-in; see scripts/setup-backup-cloud.sh).
 # shellcheck source=lib/backup-cloud.sh
 . scripts/lib/backup-cloud.sh

@@ -99,6 +99,11 @@ Backend somente leitura, com dados reais, para a futura tela Contact 360 (FR3). 
 - **Senha do `demo@omnira.local`:** trocada (a anterior tinha sido exposta); a antiga é recusada e a nova entra. O `kcadm` do contêiner fala na porta **8888**.
 - **Cópia do backup na nuvem:** ficou 10 h sem sucesso nos cron das :05 ("upload did not complete"), embora o envio e a verificação manuais passem; no Drive há objetos duplicados de envios interrompidos. Causa raiz não provada (carga alta da máquina é a suspeita); conferir o cron das 16:05 e o marcador `.cloud-last-ok`. Renovado à mão às 15:13Z.
 
+### Grupos: retenção quente/fria (ADR-0015 G6, 2026-10-04)
+- 30 dias no Postgres; o que passa disso é arquivado em `.ndjson.gz` no disco externo (12 meses) por `scripts/archive-wa-groups.sh` (cron diário 07:30 UTC), e só é apagado do banco **depois** da cópia conferida (tamanho + sha256), em transação com contagem conferida. Falha do USB não perde nem duplica nada; a rodada seguinte retoma. Teto de 1 GiB nas tabelas de grupos (pausa só a gravação de grupos). Alerta: `scripts/archive-wa-groups-check.sh` (WARN 26 h, FAIL 48 h). Dumps no disco externo agora têm retenção de 35 dias (`EXTERNAL_RETENTION_DAYS`). "Apagar histórico" também pede a remoção dos arquivos frios; a tela avisa que backups já feitos podem conter as mensagens até expirar.
+- Migration `000059` (lotes de arquivo; `down` escrito, não executado). Testes: `scripts/test-archive-wa-groups.sh` (56), `scripts/test-archive-ops.sh` (13).
+- **Pendente:** recuperar um arquivo frio é manual (`gzip -dc`); não há tela de consulta ao arquivo.
+
 ### Próximo marco de produto
 **Correção (2026-09-28, `PRODUCT.DOCSYNC`)**: a entrada anterior deste bloco apontava `PRODUCT.6-C1` como próximo marco — isso estava desatualizado. `PRODUCT.6-C1` e todo o arco de integração de ticketing K3G que ela deveria descobrir (`GetTicket`/`CreateTicket`/`UpdateTicketStatus`/resolução de runtime/ativação no Inbox/reconciliação) **já estão implementados e ativos**, 17 commits (`54f5cd0`…`5abfbd5`, 2026-09-24/25) nunca antes registrados neste handoff — ver a entrada `PRODUCT.6-A/B/C` na seção `## NOW` abaixo para o detalhe completo, verificado commit-a-commit em 2026-09-28.
 

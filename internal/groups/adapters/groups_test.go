@@ -413,4 +413,58 @@ func TestGroupAPIPermissionsEnableDisableCursorAndDeleteAreTenantScoped(t *testi
 	if err := e.seed.QueryRow(e.ctx, `SELECT (metadata->>'deleted')::int FROM audit_events WHERE tenant_id=$1 AND action='group.history_deleted'`, tenantA).Scan(&deleted); err != nil || deleted != 5 {
 		t.Fatalf("audit deleted = %d (%v)", deleted, err)
 	}
+	// Deleting the history also asks the archive job to remove the group's cold files (the API container
+	// cannot reach the external disk, so it leaves the request on the group).
+	if e.count(`SELECT count(*) FROM wa_groups WHERE id=$1 AND archive_purge_requested_at IS NOT NULL`, gid) != 1 {
+		t.Fatal("delete history must request the purge of the group's archived files")
+	}
+	if e.count(`SELECT count(*) FROM wa_groups WHERE tenant_id=$1 AND id<>$2 AND archive_purge_requested_at IS NOT NULL`, tenantB, gid) != 0 {
+		t.Fatal("tenant B's groups must not be touched")
+	}
+}
+
+// If the external disk stays unreachable for a long time, the group tables could grow without end.
+// Past the cap only group storage pauses (counted, logged); stored data is never deleted to make room,
+// the size is read at most once a minute, and the cap can be switched off.
+func TestIntakePausesAtTheSizeCapAndResumes(t *testing.T) {
+	e := newEnv(t)
+	tenantA, connA := e.tenant()
+	e.group(tenantA, connA, jid1, "Oficial", true)
+	events := channeladapters.NewPostgresWebhookEventStore(e.app)
+	clock := time.Now()
+	intake := NewIntake(e.app, events).WithMaxBytes(1) // everything is over a 1-byte cap
+	intake.now = func() time.Time { return clock }
+	send := func(key, id string) (bool, bool) {
+		t.Helper()
+		ing, dup, err := intake.ProcessGroupMessage(e.ctx, connA, key, "message.any", "d-"+key, groupMsg(connA, jid1, id, "oi", time.Now()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ing, dup
+	}
+
+	if ing, dup := send("k1", "m1"); ing || dup {
+		t.Fatalf("over the cap the message must be dropped, got ingested=%v duplicate=%v", ing, dup)
+	}
+	if e.count(`SELECT count(*) FROM wa_group_messages WHERE tenant_id=$1`, tenantA) != 0 || e.count(`SELECT count(*) FROM channel_webhook_events WHERE provider_event_id='k1'`) != 0 {
+		t.Fatal("a paused message must leave no trace (not even a dedup record), so WAHA's redelivery can still be stored later")
+	}
+
+	// The cap is lifted, but the last answer is reused for a minute (one size query per minute at most).
+	intake.maxBytes = 1 << 40
+	if ing, _ := send("k2", "m2"); ing {
+		t.Fatal("within the minute the cached 'over' answer must still apply")
+	}
+	clock = clock.Add(2 * time.Minute)
+	if ing, _ := send("k3", "m3"); !ing {
+		t.Fatal("after the cap is no longer exceeded, storage must resume")
+	}
+	if e.count(`SELECT count(*) FROM wa_group_messages WHERE tenant_id=$1`, tenantA) != 1 {
+		t.Fatal("exactly the resumed message must be stored")
+	}
+	// Disabled cap.
+	off := NewIntake(e.app, events).WithMaxBytes(0)
+	if ing, _, err := off.ProcessGroupMessage(e.ctx, connA, "k4", "message.any", "d-k4", groupMsg(connA, jid1, "m4", "oi", time.Now())); err != nil || !ing {
+		t.Fatalf("a disabled cap must never pause: ingested=%v err=%v", ing, err)
+	}
 }

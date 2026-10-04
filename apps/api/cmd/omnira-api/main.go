@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -187,7 +188,7 @@ func main() {
 				return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
 			}).
 			UseIntake(intake).
-			UseGroups(groupsadapters.NewIntake(dbPool, eventStore)))
+			UseGroups(groupsadapters.NewIntake(dbPool, eventStore).WithMaxBytes(groupsMaxBytes())))
 		groupDirectory = groupsadapters.NewWahaDirectory(connectionRepo, provider)
 		wahaConnections := channelapplication.NewWahaConnectionService(
 			connectionRepo, credentialStore, waha.NewSessionController(provider),
@@ -332,4 +333,16 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// groupsMaxBytes is the cap for the WhatsApp group tables on the local disk (ADR-0015 G6):
+// OMNIRA_GROUPS_MAX_BYTES, default 1 GiB; 0 disables it.
+func groupsMaxBytes() int64 {
+	if v := os.Getenv("OMNIRA_GROUPS_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+		log.Printf("OMNIRA_GROUPS_MAX_BYTES=%q is not a number; using the default", v)
+	}
+	return groupsadapters.DefaultMaxBytes
 }

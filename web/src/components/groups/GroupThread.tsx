@@ -157,7 +157,7 @@ export function GroupThread({ group, canManage, onBack }: Props) {
       <ConfirmDialog
         open={confirmDelete}
         title="Apagar o histórico deste grupo?"
-        message="Todas as mensagens guardadas deste grupo são apagadas e não podem ser recuperadas. O grupo continua habilitado e as novas mensagens voltam a ser guardadas."
+        message="Todas as mensagens guardadas deste grupo são apagadas do OMNIRA, inclusive do arquivo no disco externo, e não podem ser recuperadas por aqui. Cópias de segurança já feitas ainda podem conter essas mensagens até expirarem (7 dias no servidor, 30 na nuvem e 35 no disco externo). O grupo continua habilitado e as novas mensagens voltam a ser guardadas."
         confirmLabel="Apagar histórico"
         destructive
         isPending={deleting}

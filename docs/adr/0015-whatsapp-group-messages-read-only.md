@@ -1,7 +1,7 @@
 # ADR-0015: Mensagens de grupo do WhatsApp (somente leitura, em área própria)
 
 ## Status
-Accepted em 2026-10-04 por instrução do dono do produto ("construa a ADR-0015"). Fatias G1 a G4 (backend) implementadas; G5 (aba Grupos) em construção; G6 (retenção automática) aguarda o prazo padrão do dono. Ver "Implementação" ao final.
+Accepted em 2026-10-04 por instrução do dono do produto ("construa a ADR-0015"). Fatias G1 a G4 (backend) implementadas; G5 (aba Grupos) e G6 (retenção quente/fria) implementados. Ver "Implementação" ao final.
 
 Cumpre o item 4 do ADR-0014 ("Grupos ficam fora desta ADR"). Data: 2026-10-03.
 
@@ -209,4 +209,25 @@ Proposta, em fatias pequenas, nesta ordem.
 - Quem lê: administrador e supervisor (`group.read`); atendente não.
 - Mídia: marcador tipado agora; baixar o arquivo fica para depois.
 - Notificações e envio ao grupo: fora desta fase.
+
+### G6 - retenção quente/fria (2026-10-04, padrões aprovados pelo dono)
+- **Quente:** 30 dias no Postgres (o que a aba Grupos lê). **Frio:** o que passa disso vai, por `scripts/archive-wa-groups.sh`
+  (cron diário, 07:30 UTC = 03:30 de Manaus), para arquivos `.ndjson.gz` no disco externo
+  (`<disco>/Backup/omnira_groups/<tenant>/<grupo>/<AAAA-MM>/<lote>.ndjson.gz`), por **12 meses**; depois os arquivos são
+  removidos (o registro do lote fica, como `expired`).
+- **Segurança contra falha do USB:** o banco só apaga **depois** que a cópia foi conferida (tamanho e sha256). Cada exportação é um
+  *lote* marcado no banco antes (`wa_group_archive_batches`, `wa_group_messages.archive_batch_id`); cópia com nome temporário e
+  renomeação atômica; apagamento e marcação "concluído" na mesma transação, com a contagem conferida (se divergir, desfaz e
+  reexporta). Disco ausente, cópia que falha, truncada ou corrompida, ou linhas que mudam durante a cópia: nada é apagado, o lote
+  fica pendente e a próxima rodada retoma sem duplicar. Duas rodadas simultâneas: a segunda cede (`flock`).
+- **Disco local protegido:** teto de 1 GiB nas tabelas de grupos (`OMNIRA_GROUPS_MAX_BYTES`, 0 desliga). Acima dele só a gravação
+  de grupos pausa (contador `group_message_total{outcome="paused_size_limit"}` e log); nada já guardado é apagado e as conversas
+  1:1 não são afetadas. O tamanho é lido no máximo uma vez por minuto.
+- **Alerta:** `scripts/archive-wa-groups-check.sh` (mesmo contrato dos outros checks, via `run-check-with-alert.sh`): WARN após 26 h
+  sem sucesso, FAIL após 48 h; o marcador só avança quando a rodada termina sem pendência.
+- **"Apagar histórico"** também pede (`wa_groups.archive_purge_requested_at`) a remoção dos arquivos frios do grupo, feita pelo job
+  (só ele alcança o disco externo). Os dumps de backup já feitos continuam contendo as mensagens até expirar; por isso os dumps no
+  disco externo passaram a ter retenção de **35 dias** (antes: sem prazo), um pouco mais que a nuvem (30). A tela diz isso.
+- Testes: `scripts/test-archive-wa-groups.sh` (56 verificações em Postgres descartável, com falhas do USB injetadas e mutação da
+  conferência da cópia), `scripts/test-archive-ops.sh` (verificador e poda dos dumps) e os testes em Go do teto e do pedido de limpeza.
 
