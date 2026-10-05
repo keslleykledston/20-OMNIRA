@@ -223,6 +223,7 @@ func main() {
 		log.Fatalf("WAHA provider descriptor error: %v", err)
 	}
 	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management))
+	srv.RegisterChannelDirectory(dbPool, channeladapters.NewDirectoryHandler(erpConnections, erpCredentials))
 	intelligenceFlags := intelligenceapp.FlagsFromEnv(nil)
 	if intelligenceFlags.TopicThreadsEnabled {
 		topicRepo := intelligenceadapters.NewPostgresTopicRepository(dbPool)

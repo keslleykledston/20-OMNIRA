@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	auditports "github.com/omnira/omnira/internal/audit/ports"
+	"github.com/omnira/omnira/internal/password"
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/tenancy/domain"
@@ -159,6 +160,13 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Gerar senha temporária para primeira autenticação
+	tempPassword, err := password.Generate()
+	if err != nil {
+		http.Error(w, "failed to generate temporary password", http.StatusInternalServerError)
+		return
+	}
+
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 
 	// Quem já é membro ativo não precisa de convite; mudar o papel é PATCH /team
@@ -213,7 +221,7 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 		// gate de config.DevAuthActive do login). Nunca aparece em list.
 		inv.InviteURL = acceptPath
 	}
-	if err := h.deliver(r.Context(), q, tc, &inv, raw); err != nil {
+	if err := h.deliver(r.Context(), q, tc, &inv, raw, tempPassword); err != nil {
 		http.Error(w, "invitation created but the e-mail could not be delivered; use resend", http.StatusBadGateway)
 		return
 	}
@@ -305,8 +313,8 @@ func (h *InvitationsHandler) RevokeInvitation(w http.ResponseWriter, r *http.Req
 // deliver entrega o e-mail do convite e registra sent_at. Sem sender real (dev/lab com dev
 // auth) não há e-mail: o admin copia o invite_url. Falha do provedor vira erro para o
 // chamador responder 502; o convite continua pending com sent_at nulo e pode ser reenviado.
-// O log traz só o id do convite — nunca o token, o link nem o corpo do erro do provedor.
-func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, tc *domain.TenantContext, inv *Invitation, raw string) error {
+// O log traz só o id do convite — nunca o token, o link, senha nem o corpo do erro do provedor.
+func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, tc *domain.TenantContext, inv *Invitation, raw, tempPassword string) error {
 	if isNoopSender(h.sender) {
 		return nil
 	}
@@ -316,6 +324,8 @@ func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, 
 	msg := InvitationMessage{
 		To: inv.Email, TenantName: tenantName, InviterEmail: inviter,
 		AcceptURL: strings.TrimRight(h.webBaseURL, "/") + "/invite/" + raw,
+		TemporaryPassword: tempPassword,
+		PasswordExpiresAt: password.ExpiresAt(),
 		ExpiresAt: inv.ExpiresAt,
 	}
 	if err := h.sender.Send(ctx, msg); err != nil {
@@ -390,6 +400,11 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, "failed to generate invitation", http.StatusInternalServerError)
 		return
 	}
+	tempPassword, err := password.Generate()
+	if err != nil {
+		http.Error(w, "failed to generate temporary password", http.StatusInternalServerError)
+		return
+	}
 	inv.ExpiresAt = time.Now().UTC().Add(invitationTTL)
 	if _, err := q.Exec(r.Context(), `
 		UPDATE membership_invitations
@@ -404,7 +419,7 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 	if h.devExposeInviteURL {
 		inv.InviteURL = "/invite/" + raw
 	}
-	if err := h.deliver(r.Context(), q, tc, &inv, raw); err != nil {
+	if err := h.deliver(r.Context(), q, tc, &inv, raw, tempPassword); err != nil {
 		http.Error(w, "invitation reissued but the e-mail could not be delivered; try again", http.StatusBadGateway)
 		return
 	}

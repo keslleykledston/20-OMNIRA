@@ -19,6 +19,10 @@ type SendContext struct {
 	ConnectionID    *uuid.UUID
 	ConnectionReady bool // connection exists, is active and supports text
 	ToE164          string
+	// Provider is the connection's provider (e.g. meta_cloud); LastInboundAt is when the contact last wrote in this
+	// conversation. Together they decide whether the provider's 24 h customer-service window allows free text.
+	Provider      string
+	LastInboundAt *time.Time
 }
 
 // QueuedMessage is the persisted outbound message returned to the caller.

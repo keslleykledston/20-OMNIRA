@@ -2315,6 +2315,109 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '503': { description: "Realtime unavailable (no NATS)", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/channels/lines:
+    get:
+      operationId: listChannelLines
+      tags: [Channels]
+      summary: List the tenant's WhatsApp lines (Inbox channel selector)
+      description: Any tenant member. A directory only - no secret and no management data. Inactive lines are listed with `can_send_text=false`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: Lines
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        provider: { type: string }
+                        provider_kind: { type: string, enum: [official, unofficial] }
+                        label: { type: string }
+                        number: { type: string }
+                        status: { type: string }
+                        can_send_text: { type: boolean }
+                        window_required: { type: boolean }
+        '401': { $ref: '#/components/responses/Text401' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/channel:
+    get:
+      operationId: getConversationChannel
+      tags: [Messages]
+      summary: The line a conversation is on and whether it accepts free text now
+      description: |
+        `window_required` is true for providers that only accept free text within 24 h of the customer's last message
+        (WhatsApp Cloud API); `window_open` says whether that is currently the case (always true when not required).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200':
+          description: Channel state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  channel_connection_id: { type: string, format: uuid }
+                  provider: { type: string }
+                  can_send_text: { type: boolean }
+                  window_required: { type: boolean }
+                  window_open: { type: boolean }
+                  last_inbound_at: { type: string, format: date-time }
+                  window_expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/conversations/open:
+    post:
+      operationId: openConversationOnChannel
+      tags: [Messages]
+      summary: Open (or find) a contact's conversation on a chosen line
+      description: |
+        Returns the contact's open conversation on that line, creating it empty and unassigned when there is none
+        (`201`, else `200`). Sends nothing. Needs `conversation.claim`. The contact needs a usable phone number and the
+        line must be active.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contact_id, channel_connection_id]
+              properties:
+                contact_id: { type: string, format: uuid }
+                channel_connection_id: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Existing open conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversation_id: { type: string, format: uuid }
+                  created: { type: boolean }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversation_id: { type: string, format: uuid }
+                  created: { type: boolean }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Contact without a usable phone number, or a channel that is not an active line }
   /tenants/{tenant_id}/channels/providers:
     get:
       operationId: listChannelProviders

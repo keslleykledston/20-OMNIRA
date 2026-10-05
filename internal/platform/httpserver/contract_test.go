@@ -84,6 +84,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterTenancyHandlers(nil, false)
 	s.RegisterInboxHandlers(nil, &config.Config{MediaDir: t.TempDir()})
 	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
+	s.RegisterChannelDirectory(nil, channeladapters.NewDirectoryHandler(nil, nil))
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
 	s.RegisterWahaWebhook(http.NotFoundHandler())
 	s.RegisterGroupHandlers(nil, groupsadapters.NewHandler(nil, nil, nil))

@@ -26,12 +26,15 @@ import (
 // InvitationMessage é tudo que o remetente precisa para entregar um convite.
 // AcceptURL é absoluta (host do frontend) e contém o token bruto: nunca deve ser
 // logada nem persistida por quem implementa InvitationSender.
+// TemporaryPassword é a senha gerada para primeira autenticação (nunca logada).
 type InvitationMessage struct {
-	To           string
-	TenantName   string
-	InviterEmail string
-	AcceptURL    string
-	ExpiresAt    time.Time
+	To                 string
+	TenantName         string
+	InviterEmail       string
+	AcceptURL          string
+	TemporaryPassword  string
+	PasswordExpiresAt   time.Time
+	ExpiresAt          time.Time
 }
 
 // SMTP TLS modes.
@@ -170,9 +173,14 @@ var invitationTextTemplate = texttemplate.Must(texttemplate.New("text").Parse(`O
 
 {{.Inviter}} convidou você para acessar {{.Tenant}} no OMNIRA.
 
-Para aceitar o convite, abra o link abaixo e entre com o mesmo e-mail em que recebeu esta mensagem:
+Para aceitar o convite, acesse o link abaixo e entre com o mesmo e-mail em que recebeu esta mensagem:
 
 {{.URL}}
+
+Sua senha temporária (válida por 72h):
+{{.Password}}
+
+Ao fazer login, você será obrigado a criar uma nova senha permanente.
 
 O link é pessoal, pode ser usado uma única vez e expira em {{.Expires}}.
 Se você não esperava este convite, ignore esta mensagem.
@@ -185,6 +193,9 @@ var invitationHTMLTemplate = htmltemplate.Must(htmltemplate.New("html").Parse(`<
 <p>Para aceitar o convite, use o botão abaixo e entre com o mesmo e-mail em que recebeu esta mensagem:</p>
 <p><a href="{{.URL}}" style="display:inline-block;padding:10px 18px;background:#0a84ff;color:#fff;border-radius:8px;text-decoration:none">Aceitar convite</a></p>
 <p style="font-size:13px;color:#636366">Se o botão não funcionar, copie este endereço: {{.URL}}</p>
+<p><strong>Sua senha temporária (válida por 72h):</strong><br>
+<code style="background:#f2f2f2;padding:8px;border-radius:4px;font-family:monospace;font-size:12px">{{.Password}}</code></p>
+<p>Ao fazer login, você será obrigado a criar uma nova senha permanente.</p>
 <p style="font-size:13px;color:#636366">O link é pessoal, pode ser usado uma única vez e expira em {{.Expires}}.<br>Se você não esperava este convite, ignore esta mensagem.</p>
 </body></html>
 `))
@@ -206,6 +217,7 @@ func renderInvitationEmail(from, replyTo, to *mail.Address, msg InvitationMessag
 	}
 	data := map[string]string{
 		"Inviter": inviter, "Tenant": tenant, "URL": msg.AcceptURL,
+		"Password": msg.TemporaryPassword,
 		"Expires": msg.ExpiresAt.In(operationsLocation()).Format("02/01/2006 15:04") + " (horário de Manaus)",
 	}
 	var text, html bytes.Buffer

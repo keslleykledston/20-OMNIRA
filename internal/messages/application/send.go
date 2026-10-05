@@ -8,6 +8,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -27,6 +28,7 @@ var (
 	ErrNotAssignedToYou    = errors.New("messages: conversation is assigned to another agent")
 	ErrUnassigned          = errors.New("messages: conversation must be assigned before replying")
 	ErrChannelUnavailable  = errors.New("messages: conversation has no active text channel")
+	ErrWindowClosed        = errors.New("messages: the 24 h customer-service window is closed, a template is required")
 	ErrInvalidText         = errors.New("messages: text is required (max 4096 characters)")
 	ErrInvalidKey          = errors.New("messages: Idempotency-Key must be 8-128 chars of [A-Za-z0-9._:-]")
 	ErrConversationChanged = ports.ErrConversationChanged
@@ -96,6 +98,9 @@ func (s *Sender) Send(ctx context.Context, conversationID uuid.UUID, text, idemp
 	}
 	if sc.ConnectionID == nil || !sc.ConnectionReady || sc.ToE164 == "" {
 		return SendResult{}, ErrChannelUnavailable
+	}
+	if _, open := SessionWindow(sc.Provider, sc.LastInboundAt, time.Now()); !open {
+		return SendResult{}, ErrWindowClosed
 	}
 	sum := sha256.Sum256([]byte(conversationID.String() + "\n" + text))
 	hash := hex.EncodeToString(sum[:])

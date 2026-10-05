@@ -71,6 +71,8 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "conversation must be assigned before replying", http.StatusConflict)
 	case errors.Is(err, application.ErrConversationChanged):
 		http.Error(w, "conversation changed, retry", http.StatusConflict)
+	case errors.Is(err, application.ErrWindowClosed):
+		http.Error(w, "customer service window closed: free text is only accepted within 24 h of the customer's last message", http.StatusConflict)
 	case errors.Is(err, application.ErrChannelUnavailable):
 		http.Error(w, "conversation has no active text channel", http.StatusConflict)
 	case errors.Is(err, application.ErrInvalidKey):

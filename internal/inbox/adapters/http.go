@@ -170,6 +170,14 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid conversation_kind filter", http.StatusBadRequest)
 		return
 	}
+	if ch := r.URL.Query().Get("channel_connection_id"); ch != "" {
+		chID, perr := uuid.Parse(ch)
+		if perr != nil {
+			http.Error(w, "invalid channel_connection_id filter", http.StatusBadRequest)
+			return
+		}
+		where += " AND c.channel_connection_id=" + arg(chID)
+	}
 	if r.URL.Query().Get("waiting") == "true" {
 		where += " AND lm.direction='inbound'"
 	}

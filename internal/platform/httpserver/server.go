@@ -506,6 +506,9 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		channeladapters.NewPostgresPermissionChecker(dbPool),
 	))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.Send))))
+	linesHandler := inboxadapters.NewChannelLinesHandler(dbPool, channeladapters.NewPostgresPermissionChecker(dbPool))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/channel", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Channel))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/open", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Open))))
 
 	// CRM ticket handlers
 	crmHandler := inboxadapters.NewCRMHandlers(dbPool)
@@ -712,6 +715,21 @@ func (s *Server) RegisterWahaConnectionHandlers(dbPool *pgxpool.Pool, h *channel
 	s.mux.Handle("POST "+base+"/{connection_id}/session/start", wrap(h.StartSession))
 	s.mux.Handle("POST "+base+"/{connection_id}/session/stop", wrap(h.StopSession))
 	s.mux.Handle("GET "+base+"/{connection_id}/qr", wrap(h.QR))
+}
+
+// RegisterChannelDirectory exposes the read-only list of the tenant's WhatsApp lines (the Inbox channel selector) to
+// any member of the tenant; it carries no secret and no management data.
+func (s *Server) RegisterChannelDirectory(dbPool *pgxpool.Pool, h *channeladapters.DirectoryHandler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/channels/lines", authnMiddleware(tenantSession(http.HandlerFunc(h.List))))
 }
 
 // RegisterChannelManagementHandlers exposes the provider-neutral catalog and

@@ -43,12 +43,13 @@ func (s *PostgresOutboundStore) LoadSendContext(ctx context.Context, conversatio
 	)
 	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
 		SELECT c.id, c.assigned_to_user_id, c.channel_connection_id,
-		       (cc.status = 'active' AND cc.capabilities ? 'text'), ct.phone_e164
+		       (cc.status = 'active' AND cc.capabilities ? 'text'), ct.phone_e164, COALESCE(cc.provider,''),
+		       (SELECT max(m.created_at) FROM messages m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id AND m.direction = 'inbound')
 		FROM conversations c
 		JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
 		LEFT JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.channel_connection_id
 		WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, conversationID).
-		Scan(&out.ConversationID, &out.AssignedTo, &out.ConnectionID, &ready, &phone)
+		Scan(&out.ConversationID, &out.AssignedTo, &out.ConnectionID, &ready, &phone, &out.Provider, &out.LastInboundAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
