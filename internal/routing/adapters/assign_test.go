@@ -358,3 +358,25 @@ func TestOperationalProfileAndMembershipRevocationImmediatelyBlockRouting(t *tes
 	e.exec(`UPDATE memberships SET status='revoked' WHERE tenant_id=$1 AND user_id=$2`, e.tenantA, e.agent1)
 	want(t, e.call(e.admin, e.tenantA, conversation, "assign", `{"assignee_user_id":"`+e.agent1.String()+`"}`), 422, "revoked membership is immediately ineligible")
 }
+
+// Taking a chat yourself is not limited by queue capacity or availability (those govern automatic distribution and
+// assigning someone else); it still needs an active member with an active agent profile.
+func TestSelfClaimIgnoresQueueCapacityAndAvailabilityButNeedsAnActiveProfile(t *testing.T) {
+	e := newAssignEnv(t)
+	queue := uuid.New()
+	e.exec(`INSERT INTO queues(id,tenant_id,name,mode) VALUES($1,$2,'cap','manual')`, queue, e.tenantA)
+	e.exec(`INSERT INTO queue_members(tenant_id,queue_id,user_id,available,capacity) VALUES($1,$2,$3,false,1)`, e.tenantA, queue, e.agent1)
+	busy, free := e.conversation(e.tenantA), e.conversation(e.tenantA)
+	e.exec(`UPDATE conversations SET queue_id=$1 WHERE id IN ($2,$3)`, queue, busy, free)
+	want(t, e.call(e.agent1, e.tenantA, busy, "assign", `{}`), 200, "first claim")
+	// the agent is now at capacity (1) AND unavailable in that queue: claiming again still works
+	want(t, e.call(e.agent1, e.tenantA, free, "assign", `{}`), 200, "claim beyond capacity/availability")
+	// assigning SOMEONE ELSE still honours the queue rules
+	other := e.conversation(e.tenantA)
+	e.exec(`UPDATE conversations SET queue_id=$1 WHERE id=$2`, queue, other)
+	want(t, e.call(e.admin, e.tenantA, other, "assign", `{"assignee_user_id":"`+e.agent1.String()+`"}`), 422, "assigning a busy/unavailable agent")
+	// no active profile: still refused
+	e.exec(`UPDATE agent_profiles SET status='disabled' WHERE tenant_id=$1 AND membership_id=(SELECT id FROM memberships WHERE tenant_id=$1 AND user_id=$2)`, e.tenantA, e.agent1)
+	third := e.conversation(e.tenantA)
+	want(t, e.call(e.agent1, e.tenantA, third, "assign", `{}`), 422, "self-claim needs an active profile")
+}

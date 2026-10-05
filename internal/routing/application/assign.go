@@ -98,7 +98,15 @@ func (a *Assigner) Assign(ctx context.Context, conversationID, target uuid.UUID)
 	if !found {
 		return AssignResult{}, ErrNotFound
 	}
-	if eligibility, ok := a.repo.(ports.OperationalEligibility); ok {
+	if own, ok := a.repo.(ports.SelfClaimEligibility); ok && self {
+		eligible, err := own.IsActiveAgent(ctx, target)
+		if err != nil {
+			return AssignResult{}, err
+		}
+		if !eligible {
+			return AssignResult{}, ErrInvalidAssignee
+		}
+	} else if eligibility, ok := a.repo.(ports.OperationalEligibility); ok {
 		eligible, err := eligibility.IsEligibleForConversation(ctx, conversationID, target)
 		if err != nil {
 			return AssignResult{}, err

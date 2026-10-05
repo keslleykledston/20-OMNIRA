@@ -96,6 +96,23 @@ func (r *PostgresConversationAssigner) HasPermission(ctx context.Context, userID
 	return ok, nil
 }
 
+// IsActiveAgent: active membership plus active agent profile (self-claim; no queue availability/capacity rule).
+func (r *PostgresConversationAssigner) IsActiveAgent(ctx context.Context, userID uuid.UUID) (bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return false, err
+	}
+	var ok bool
+	err = platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM memberships m
+		 JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
+		 WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active')`, tenantID, userID).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("routing: check active agent: %w", err)
+	}
+	return ok, nil
+}
+
 // IsEligibleForConversation aligns manual routing with round-robin: active
 // membership/profile plus queue-local availability and existing capacity.
 func (r *PostgresConversationAssigner) IsEligibleForConversation(ctx context.Context, conversationID, userID uuid.UUID) (bool, error) {

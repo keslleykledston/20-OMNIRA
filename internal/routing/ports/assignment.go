@@ -35,6 +35,13 @@ type OperationalEligibility interface {
 	IsEligibleForConversation(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 }
 
+// SelfClaimEligibility is the eligibility of someone TAKING a chat themself: an active member with an active agent profile.
+// Queue availability and capacity are rules of automatic distribution and of assigning someone else, not of a person who
+// decides to take a conversation (it may be a future customer or just a chat; nothing about it ties it to a company).
+type SelfClaimEligibility interface {
+	IsActiveAgent(context.Context, uuid.UUID) (bool, error)
+}
+
 // AuditRecorder appends an audit event in the caller's transaction.
 type AuditRecorder interface {
 	ConversationAssignmentChanged(ctx context.Context, change AssignmentChange) error
