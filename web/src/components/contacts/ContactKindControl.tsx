@@ -8,6 +8,7 @@ import {
   classificationAPI,
   contactKindErrorMessage,
   type AccountRef,
+  type CompanySuggestion,
   type ContactAccountLink,
   type ContactKind,
   type CustomerAccount,
@@ -159,6 +160,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
 
       {picking && (
         <CompanyPicker
+          contactId={contactId}
           title={kind === 'customer' ? 'Adicionar empresa' : 'Empresa do cliente'}
           hasCompanies={links.length > 0}
           pending={pending}
@@ -267,12 +269,14 @@ function CompanyList({
 
 // Picks ONE company. Directory companies are sent by id only: the server re-reads name, CNPJ and status itself.
 function CompanyPicker({
+  contactId,
   title,
   hasCompanies,
   pending,
   onCancel,
   onConfirm,
 }: {
+  contactId: string
   title: string
   hasCompanies: boolean
   pending: boolean
@@ -283,6 +287,7 @@ function CompanyPicker({
   const [accounts, setAccounts] = useState<CustomerAccount[]>([])
   const [loading, setLoading] = useState(true)
   const [directoryDown, setDirectoryDown] = useState(false)
+  const [suggestions, setSuggestions] = useState<CompanySuggestion[]>([])
   const [q, setQ] = useState('')
   const [chosen, setChosen] = useState<string>('')
   const [relationship, setRelationship] = useState<RelationshipType>('employee')
@@ -291,8 +296,13 @@ function CompanyPicker({
   useEffect(() => {
     let alive = true
     void (async () => {
-      const [d, a] = await Promise.allSettled([accountDirectoryAPI.directory(), accountDirectoryAPI.localAccounts()])
+      const [d, a, s] = await Promise.allSettled([
+        accountDirectoryAPI.directory(),
+        accountDirectoryAPI.localAccounts(),
+        classificationAPI.suggestions(contactId),
+      ])
       if (!alive) return
+      if (s.status === 'fulfilled') setSuggestions((s.value.items ?? []).filter((x) => !x.already_linked))
       if (d.status === 'fulfilled') setDirectory(d.value.items ?? [])
       else setDirectoryDown(true)
       if (a.status === 'fulfilled') setAccounts(a.value.items ?? [])
@@ -301,17 +311,31 @@ function CompanyPicker({
     return () => {
       alive = false
     }
-  }, [])
+  }, [contactId])
 
   const options = useMemo<Option[]>(() => {
     const seen = new Set(directory.map((c) => c.name.trim().toLowerCase()))
-    const dir = directory.map((c) => ({ key: `d:${c.id}`, label: c.name, detail: c.cnpj, ref: { directory_company_id: c.id } }))
+    // Suggestions first: companies a validated ticket selection already tied to this contact. The id is sent with the
+    // evidence id; the name shown comes from the directory/account, never invented.
+    const sug = suggestions.map((x) => {
+      const name = directory.find((c) => c.id === x.external_company_id)?.name ?? x.account_name ?? `Empresa ${x.external_company_id}`
+      return {
+        key: `s:${x.evidence_id}`,
+        label: name,
+        detail: 'Sugerida por chamado anterior',
+        ref: { directory_company_id: x.external_company_id, evidence_id: x.evidence_id } as AccountRef,
+      }
+    })
+    const suggested = new Set(suggestions.map((x) => x.external_company_id))
+    const dir = directory
+      .filter((c) => !suggested.has(c.id))
+      .map((c) => ({ key: `d:${c.id}`, label: c.name, detail: c.cnpj, ref: { directory_company_id: c.id } }))
     const local = accounts
       .filter((a) => !seen.has(a.name.trim().toLowerCase()))
       .map((a) => ({ key: `a:${a.id}`, label: a.name, detail: 'Conta local', ref: { account_id: a.id } }))
     const needle = q.trim().toLowerCase()
-    return [...dir, ...local].filter((o) => !needle || o.label.toLowerCase().includes(needle) || (o.detail ?? '').includes(needle))
-  }, [directory, accounts, q])
+    return [...sug, ...dir, ...local].filter((o) => !needle || o.label.toLowerCase().includes(needle) || (o.detail ?? '').includes(needle))
+  }, [directory, accounts, suggestions, q])
 
   const picked = options.find((o) => o.key === chosen)
 

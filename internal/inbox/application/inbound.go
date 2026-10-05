@@ -74,6 +74,9 @@ type InboundService struct {
 	router        InitialRouter
 	crm           CRMConnector
 	crmCompanyID  string
+	// crmAutoCreate lets ingestion CREATE a contact in the CRM when none is found. Default OFF (ADR-0018): a provider
+	// write needs a proven idempotency key, which a phone lookup is not.
+	crmAutoCreate bool
 	participants  ParticipantRecorder
 	identity      IdentityResolver
 	internal      InternalConversationFinder
@@ -133,6 +136,18 @@ func (s *InboundService) WithCRM(crm CRMConnector, companyID string) *InboundSer
 	return s
 }
 
+// WithCRMAutoCreate opts in to creating a CRM contact when the lookup finds none (OMNIRA_CRM_AUTO_CONTACT_CREATION_ENABLED).
+func (s *InboundService) WithCRMAutoCreate(enabled bool) *InboundService {
+	s.crmAutoCreate = enabled
+	return s
+}
+
+// isAmbiguous recognises "more than one match" from any connector without importing it.
+func isAmbiguous(err error) bool {
+	var a interface{ Ambiguous() bool }
+	return errors.As(err, &a) && a.Ambiguous()
+}
+
 // Ingest persists an inbound canonical message. Callers must execute this in
 // one tenant session/transaction. Connection ownership is checked against the
 // TenantContext before any write, so a provider payload cannot switch tenant.
@@ -187,10 +202,12 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		// existe, cria automaticamente no primeiro atendimento.
 		if s.crm != nil && s.crmCompanyID != "" {
 			crmContactID, err := s.crm.FindCustomerByPhone(ctx, inbound.FromE164, s.crmCompanyID)
-			if err != nil {
+			if isAmbiguous(err) {
+				// Several CRM contacts match: bind none and create none (never the first one).
+				crmContactID, err = "", nil
+			} else if err != nil {
 				return nil, fmt.Errorf("inbox: find customer in crm: %w", err)
-			}
-			if crmContactID == "" {
+			} else if crmContactID == "" && s.crmAutoCreate {
 				crmContactID, err = s.crm.CreateContact(ctx, contact.DisplayName, inbound.FromE164, s.crmCompanyID)
 				if err != nil {
 					return nil, fmt.Errorf("inbox: create contact in crm: %w", err)

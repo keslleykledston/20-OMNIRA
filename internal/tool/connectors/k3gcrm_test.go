@@ -315,3 +315,45 @@ func TestK3GCRMCreateActivityMapsErrors(t *testing.T) {
 		})
 	}
 }
+
+func crmContacts(contacts ...map[string]string) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"contacts": contacts})
+	}
+}
+
+// ADR-0018: the CRM answer is never read by position. Two DISTINCT contacts for the same phone and company are
+// ambiguous: the lookup refuses to pick one.
+func TestK3GCRMFindCustomerByPhoneRefusesAnAmbiguousMatch(t *testing.T) {
+	c := crmServer(t, crmContacts(
+		map[string]string{"id": "c-1", "name": "Alice", "phone": "+5592991740090", "companyId": "co-1"},
+		map[string]string{"id": "c-2", "name": "Alice (duplicada)", "phone": "+5592991740090", "companyId": "co-1"},
+	))
+	contact, err := c.FindCustomerByPhone(context.Background(), "+5592991740090", "co-1")
+	if !errors.Is(err, ErrCRMAmbiguous) || contact != nil {
+		t.Fatalf("ambiguous = %+v, %v", contact, err)
+	}
+	var marker interface{ Ambiguous() bool }
+	if !errors.As(err, &marker) || !marker.Ambiguous() {
+		t.Fatal("the marker lets layers that must not import this package recognise it")
+	}
+}
+
+func TestK3GCRMFindCustomerByPhoneIgnoresOtherCompaniesPhonesAndRepeats(t *testing.T) {
+	c := crmServer(t, crmContacts(
+		map[string]string{"id": "c-other-company", "phone": "+5592991740090", "companyId": "co-2"},
+		map[string]string{"id": "c-other-phone", "phone": "+5592000000000", "companyId": "co-1"},
+		map[string]string{"id": "", "phone": "+5592991740090", "companyId": "co-1"},
+		map[string]string{"id": "c-1", "name": "Alice", "phone": "55 (92) 99174-0090", "companyId": "co-1"},
+		map[string]string{"id": "c-1", "name": "Alice", "phone": "+5592991740090", "companyId": "co-1"}, // the same contact twice
+	))
+	contact, err := c.FindCustomerByPhone(context.Background(), "+5592991740090", "co-1")
+	if err != nil || contact == nil || contact.ID != "c-1" {
+		t.Fatalf("only the real match counts, once: %+v %v", contact, err)
+	}
+	// nothing real matches -> not found, even though the CRM returned rows
+	none := crmServer(t, crmContacts(map[string]string{"id": "x", "phone": "+5592000000000", "companyId": "co-1"}))
+	if got, err := none.FindCustomerByPhone(context.Background(), "+5592991740090", "co-1"); err != nil || got != nil {
+		t.Fatalf("a non-match must not be returned: %+v %v", got, err)
+	}
+}

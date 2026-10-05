@@ -61,8 +61,24 @@ export interface ContactClassification {
 export interface AccountRef {
   account_id?: string;
   directory_company_id?: string;
+  // Set when the company came from a suggestion: the server re-checks it belongs to THIS contact and company.
+  evidence_id?: string;
   relationship_type?: RelationshipType;
   primary?: boolean;
+}
+
+// A company that integration evidence (a validated ticket selection) associated with the contact. Only a SUGGESTION:
+// it never classifies or links anything until a person accepts it.
+export interface CompanySuggestion {
+  evidence_id: string;
+  external_company_id: string;
+  connection_id: string;
+  source: string;
+  first_verified_at: string;
+  last_verified_at: string;
+  account_id?: string;
+  account_name?: string;
+  already_linked: boolean;
 }
 
 export interface DirectoryCompany {
@@ -198,6 +214,8 @@ export const contactsAPI = {
 };
 
 export const classificationAPI = {
+  suggestions: (id: string) =>
+    call<{ items: CompanySuggestion[] }>(() => axios.get(`${contactsBase()}/${id}/company-suggestions`, { headers: authHeaders() })),
   get: (id: string) =>
     call<ContactClassification>(() => axios.get(`${contactsBase()}/${id}/classification`, { headers: authHeaders() })),
   // Kind and companies change in ONE transaction on the server. `customer` needs at least one company.

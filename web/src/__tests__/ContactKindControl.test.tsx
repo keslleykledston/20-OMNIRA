@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import axios from 'axios'
 import { ContactKindControl } from '../components/contacts/ContactKindControl'
 import { setSession } from './testUtils'
-import type { ContactAccountLink, ContactKind } from '../lib/contacts'
+import type { CompanySuggestion, ContactAccountLink, ContactKind } from '../lib/contacts'
 
 vi.mock('axios')
 
@@ -23,6 +23,7 @@ const link = (over: Partial<ContactAccountLink> = {}): ContactAccountLink => ({
 })
 
 let links: ContactAccountLink[] = []
+let suggestions: CompanySuggestion[] = []
 
 function setup(kind: ContactKind, over: { name?: string } = {}) {
   const onChanged = vi.fn()
@@ -37,7 +38,9 @@ beforeEach(() => {
   localStorage.clear()
   setSession()
   links = []
+  suggestions = []
   vi.mocked(axios.get).mockImplementation(async (url: string) => {
+    if (url.endsWith('/company-suggestions')) return { data: { items: suggestions } }
     if (url.endsWith('/classification')) return { data: { kind: 'customer', classification_source: 'manual', classified_at: null, accounts: links } }
     if (url.endsWith('/crm/companies')) return { data: { items: [{ id: '42', name: 'ACME Telecom', cnpj: '11.111.111/0001-11' }, { id: '77', name: 'XPTO Redes' }] } }
     if (url.endsWith('/accounts')) return { data: { items: [{ id: 'loc-1', name: 'Empresa Local', account_type: 'customer', status: 'active' }] } }
@@ -143,6 +146,66 @@ describe('ContactKindControl — becoming a customer needs a company', () => {
     await user.click(screen.getByRole('button', { name: 'Confirmar' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('precisa de pelo menos uma empresa')
     expect(onChanged).not.toHaveBeenCalled()
+  })
+})
+
+describe('ContactKindControl — suggestions from integration evidence', () => {
+  const suggestion = (over: Partial<CompanySuggestion> = {}): CompanySuggestion => ({
+    evidence_id: 'ev-1',
+    external_company_id: '77',
+    connection_id: 'conn-1',
+    source: 'ticket_selection',
+    first_verified_at: '2026-10-01T10:00:00Z',
+    last_verified_at: '2026-10-02T10:00:00Z',
+    already_linked: false,
+    ...over,
+  })
+
+  it('lists a suggestion first, named by the directory, and sends the evidence id with the directory id only', async () => {
+    suggestions = [suggestion()]
+    const user = userEvent.setup()
+    const { onChanged } = setup('unclassified')
+    await user.click(screen.getByRole('button', { name: 'Cliente' }))
+    const options = await screen.findAllByRole('option')
+    expect(options[0]).toHaveTextContent('XPTO Redes')
+    expect(options[0]).toHaveTextContent('Sugerida por chamado anterior')
+    // the directory company is not listed twice
+    expect(screen.getAllByRole('button', { name: /XPTO Redes/ })).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: /XPTO Redes/ }))
+    await user.click(screen.getByRole('button', { name: 'Confirmar' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith('customer'))
+    expect(putBody()?.accounts?.[0]).toMatchObject({ directory_company_id: '77', evidence_id: 'ev-1' })
+    expect(JSON.stringify(putBody())).not.toMatch(/XPTO/)
+  })
+
+  it('a suggestion alone changes nothing: nothing is sent until the person confirms', async () => {
+    suggestions = [suggestion()]
+    const user = userEvent.setup()
+    setup('unclassified')
+    await user.click(screen.getByRole('button', { name: 'Cliente' }))
+    await screen.findAllByRole('option')
+    expect(axios.put).not.toHaveBeenCalled()
+    expect(axios.post).not.toHaveBeenCalled()
+  })
+
+  it('hides a suggestion that is already linked and survives a failing suggestions request', async () => {
+    suggestions = [suggestion({ already_linked: true })]
+    const user = userEvent.setup()
+    setup('unclassified')
+    await user.click(screen.getByRole('button', { name: 'Cliente' }))
+    await screen.findAllByRole('option')
+    expect(screen.queryByText('Sugerida por chamado anterior')).not.toBeInTheDocument()
+
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/company-suggestions')) throw { response: { status: 500 } }
+      if (url.endsWith('/crm/companies')) return { data: { items: [{ id: '42', name: 'ACME Telecom' }] } }
+      if (url.endsWith('/accounts')) return { data: { items: [] } }
+      return { data: {} }
+    })
+    const second = userEvent.setup()
+    setup('other')
+    await second.click(screen.getAllByRole('button', { name: 'Cliente' })[1])
+    expect((await screen.findAllByRole('button', { name: /ACME Telecom/ })).length).toBeGreaterThan(0)
   })
 })
 

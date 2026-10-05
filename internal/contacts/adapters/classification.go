@@ -150,6 +150,12 @@ func (r *ClassificationRepository) LinkAccount(ctx context.Context, tenantID, ac
 }
 
 func (r *ClassificationRepository) upsertLink(ctx context.Context, tenantID, actorID, contactID uuid.UUID, in domain.AccountLinkInput, source domain.ClassificationSource) (*Link, error) {
+	if in.Source != "" {
+		source = in.Source
+	}
+	if !source.Valid() {
+		return nil, domain.ErrInvalidInput
+	}
 	rel := in.Relationship
 	if rel == "" {
 		rel = domain.RelOther

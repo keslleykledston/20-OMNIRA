@@ -40,6 +40,9 @@ var (
 	ErrCRMUnauthorized  = errors.New("k3gcrm: token rejected by the CRM")
 	ErrCRMUnavailable   = errors.New("k3gcrm: CRM unavailable")
 	ErrCRMRejected      = errors.New("k3gcrm: CRM rejected the request")
+	// ErrCRMAmbiguous: more than one distinct CRM contact matches the lookup. The first one is NEVER picked: a wrong
+	// binding would send one customer's data to another (ADR-0018). Callers leave the contact unbound.
+	ErrCRMAmbiguous error = ambiguousError{}
 )
 
 type K3GCRMConfig struct {
@@ -221,8 +224,15 @@ func (c *K3GCRMClient) ListCompanies(ctx context.Context) ([]CRMCompany, error) 
 	return out, nil
 }
 
+// ambiguousError carries the Ambiguous marker so layers that must not import this package can still recognise it.
+type ambiguousError struct{}
+
+func (ambiguousError) Error() string   { return "k3gcrm: more than one CRM contact matches; refusing to pick one" }
+func (ambiguousError) Ambiguous() bool { return true }
+
 // FindCustomerByPhone procura contato no CRM por telefone e empresa.
-// Retorna nil se não encontrar.
+// Retorna nil se não encontrar. A resposta nunca é lida por posição: só contam os contatos que realmente são deste
+// telefone e desta empresa; se sobrar mais de um contato DISTINTO, é ErrCRMAmbiguous.
 func (c *K3GCRMClient) FindCustomerByPhone(ctx context.Context, phone, companyID string) (*CRMContact, error) {
 	if c == nil || c.client == nil {
 		return nil, ErrCRMNotConfigured
@@ -249,17 +259,34 @@ func (c *K3GCRMClient) FindCustomerByPhone(ctx context.Context, phone, companyID
 	if err := json.Unmarshal(body, &page); err != nil {
 		return nil, fmt.Errorf("%w: unexpected contacts response", ErrCRMRejected)
 	}
-	if len(page.Contacts) == 0 {
-		return nil, nil
+	wantPhone := onlyDigits(phone)
+	var found *CRMContact
+	for _, raw := range page.Contacts {
+		id := strings.TrimSpace(raw.ID)
+		if id == "" {
+			continue
+		}
+		if cid := strings.TrimSpace(raw.CompanyID); cid != "" && cid != companyID {
+			continue // another company's contact is never this one
+		}
+		if p := onlyDigits(raw.Phone); p != "" && p != wantPhone {
+			continue
+		}
+		if found != nil {
+			if found.ID == id {
+				continue // the same contact listed twice
+			}
+			return nil, ErrCRMAmbiguous
+		}
+		found = &CRMContact{
+			ID:        id,
+			Name:      strings.TrimSpace(raw.Name),
+			Phone:     strings.TrimSpace(raw.Phone),
+			Email:     strings.TrimSpace(raw.Email),
+			CompanyID: strings.TrimSpace(raw.CompanyID),
+		}
 	}
-	raw := page.Contacts[0]
-	return &CRMContact{
-		ID:        strings.TrimSpace(raw.ID),
-		Name:      strings.TrimSpace(raw.Name),
-		Phone:     strings.TrimSpace(raw.Phone),
-		Email:     strings.TrimSpace(raw.Email),
-		CompanyID: strings.TrimSpace(raw.CompanyID),
-	}, nil
+	return found, nil
 }
 
 // CreateContact cria um novo contato no CRM. Retorna o contato com ID atribuído

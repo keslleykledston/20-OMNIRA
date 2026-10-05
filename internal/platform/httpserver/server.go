@@ -451,6 +451,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	classificationHandler := contactsadapters.NewClassificationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
 	s.contactClassification = classificationHandler
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/classification", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.GetClassification))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/company-suggestions", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.ListCompanySuggestions))))
 	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/contacts/{contact_id}/classification", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.PutClassification))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/contacts/{contact_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.LinkAccount))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/contacts/{contact_id}/accounts/{link_id}/end", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.EndLink))))

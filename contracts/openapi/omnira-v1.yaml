@@ -1112,6 +1112,30 @@ paths:
         '422': { description: 'Customer without a company, or unknown/inactive/foreign company' }
         '502': { description: Company directory failed }
         '503': { description: Company directory not configured or unavailable }
+  /tenants/{tenant_id}/contacts/{contact_id}/company-suggestions:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: listContactCompanySuggestions
+      tags: [Accounts]
+      summary: Companies that integration evidence associated with a contact (a SUGGESTION only)
+      description: |
+        Needs `account.read`. Reads the local evidence table only (no provider call) and carries no provider metadata.
+        Evidence (a validated ticket selection) never classifies or links by itself; a person accepts a suggestion by
+        sending its `directory_company_id` together with its `evidence_id` (the server re-checks both).
+      responses:
+        '200':
+          description: Active evidence of the contact
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CompanySuggestion' } }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/contacts/{contact_id}/accounts:
     parameters:
       - { $ref: '#/components/parameters/TenantId' }
@@ -2449,6 +2473,20 @@ components:
         directory_company_id: { type: string }
         relationship_type: { type: string, enum: [employee, owner, technical_contact, billing_contact, administrative_contact, representative, contractor, other], default: other }
         primary: { type: boolean }
+        evidence_id: { type: string, format: uuid, description: 'With directory_company_id only: the suggestion this company came from. The server re-checks it belongs to this contact and names this company; the link is then recorded as ticket_flow.' }
+    CompanySuggestion:
+      type: object
+      required: [evidence_id, external_company_id, connection_id, source, first_verified_at, last_verified_at, already_linked]
+      properties:
+        evidence_id: { type: string, format: uuid }
+        external_company_id: { type: string, description: 'Use it as directory_company_id when accepting.' }
+        connection_id: { type: string, format: uuid }
+        source: { type: string, example: ticket_selection }
+        first_verified_at: { type: string, format: date-time }
+        last_verified_at: { type: string, format: date-time }
+        account_id: { type: string, format: uuid, description: 'The local account already materialized for this provider company, if any.' }
+        account_name: { type: string }
+        already_linked: { type: boolean }
     ContactAccountLink:
       type: object
       required: [id, account_id, account_name, relationship_type, status, primary, source, created_at]

@@ -94,6 +94,10 @@ type accountRefDTO struct {
 	DirectoryCompanyID string     `json:"directory_company_id"`
 	RelationshipType   string     `json:"relationship_type"`
 	Primary            bool       `json:"primary"`
+	// EvidenceID: the company was suggested by integration evidence (a validated ticket selection). The server
+	// re-checks it belongs to THIS contact and names exactly this directory company; the link is then recorded as
+	// ticket_flow. Evidence alone never classifies or links anything: a human still has to accept.
+	EvidenceID *uuid.UUID `json:"evidence_id"`
 }
 
 type linkDTO struct {
@@ -194,12 +198,14 @@ func (e *directoryError) Error() string { return e.message }
 // resolveRef turns one request entry into a link input. A directory company is revalidated against the tenant's own
 // CompanyDirectory, materialized as account + external link (source directory_selection) in the caller's transaction,
 // and refused when it is unknown or inactive in the provider.
-func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomain.TenantContext, ref accountRefDTO) (domain.AccountLinkInput, error) {
+func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomain.TenantContext, contactID uuid.UUID, ref accountRefDTO) (domain.AccountLinkInput, error) {
 	in := domain.AccountLinkInput{Relationship: domain.RelationshipType(ref.RelationshipType), Primary: ref.Primary, VerifiedByActor: true}
 	dirID := strings.TrimSpace(ref.DirectoryCompanyID)
 	switch {
 	case ref.AccountID != nil && dirID != "", ref.AccountID == nil && dirID == "":
 		return in, domain.ErrInvalidInput
+	case ref.EvidenceID != nil && dirID == "":
+		return in, domain.ErrInvalidInput // evidence names a provider company: it needs the directory id
 	case ref.AccountID != nil:
 		in.AccountID = *ref.AccountID
 		return in, nil
@@ -230,6 +236,19 @@ func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomai
 	if picked == nil || !picked.Active {
 		return in, &directoryError{http.StatusUnprocessableEntity, "company not found or inactive in the directory"}
 	}
+	if ref.EvidenceID != nil {
+		var ok bool
+		if err := platformdb.QuerierFromContext(ctx, h.pool).QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM crm_contact_company_evidence
+			              WHERE tenant_id=$1 AND id=$2 AND contact_id=$3 AND connection_id=$4 AND external_company_id=$5 AND revoked_at IS NULL)`,
+			tc.TenantID, *ref.EvidenceID, contactID, rt.ConnectionID, picked.ExternalID).Scan(&ok); err != nil {
+			return in, err
+		}
+		if !ok {
+			return in, &directoryError{http.StatusUnprocessableEntity, "evidence does not match this contact and company"}
+		}
+		in.Source = domain.SourceTicketFlow
+	}
 	existing, err := h.accounts.FindByExternal(ctx, tc.TenantID, directoryProvider, rt.ConnectionID, picked.ExternalID)
 	if err != nil {
 		return in, err
@@ -256,11 +275,11 @@ func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomai
 	return in, nil
 }
 
-func (h *ClassificationHandler) resolveRefs(ctx context.Context, tc *tenancydomain.TenantContext, refs []accountRefDTO) ([]domain.AccountLinkInput, error) {
+func (h *ClassificationHandler) resolveRefs(ctx context.Context, tc *tenancydomain.TenantContext, contactID uuid.UUID, refs []accountRefDTO) ([]domain.AccountLinkInput, error) {
 	out := make([]domain.AccountLinkInput, 0, len(refs))
 	primaries := 0
 	for _, ref := range refs {
-		in, err := h.resolveRef(ctx, tc, ref)
+		in, err := h.resolveRef(ctx, tc, contactID, ref)
 		if err != nil {
 			return nil, err
 		}
@@ -295,6 +314,69 @@ func (h *ClassificationHandler) recordKindRecompute(r *http.Request, tc *tenancy
 		return
 	}
 	h.record(r, tc, auditdomain.ActionConversationKindChanged, contactID, map[string]any{"conversations": c.ConversationsRecomputed, "groups": c.GroupsRecomputed, "contact_kind": string(c.Kind)})
+}
+
+type suggestionDTO struct {
+	EvidenceID        uuid.UUID  `json:"evidence_id"`
+	ExternalCompanyID string     `json:"external_company_id"`
+	ConnectionID      uuid.UUID  `json:"connection_id"`
+	Source            string     `json:"source"`
+	FirstVerifiedAt   string     `json:"first_verified_at"`
+	LastVerifiedAt    string     `json:"last_verified_at"`
+	AccountID         *uuid.UUID `json:"account_id,omitempty"`
+	AccountName       *string    `json:"account_name,omitempty"`
+	AlreadyLinked     bool       `json:"already_linked"`
+}
+
+// ListCompanySuggestions: GET /contacts/{contact_id}/company-suggestions (account.read). Companies that integration
+// evidence (a validated ticket selection) associated with this contact. It is a SUGGESTION: it reads the local table
+// only (no provider call), carries no provider metadata, and never classifies or links anything by itself.
+func (h *ClassificationHandler) ListCompanySuggestions(w http.ResponseWriter, r *http.Request) {
+	tc, contactID, ok := h.authorize(w, r, permAccountRead)
+	if !ok {
+		return
+	}
+	var exists bool
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	if err := q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM contacts WHERE tenant_id=$1 AND id=$2)`, tc.TenantID, contactID).Scan(&exists); err != nil {
+		failDomain(w, err)
+		return
+	}
+	if !exists {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	rows, err := q.Query(r.Context(), `
+		SELECT e.id, e.external_company_id, e.connection_id, e.source, e.first_verified_at, e.last_verified_at,
+		       l.account_id, a.name,
+		       COALESCE(EXISTS(SELECT 1 FROM contact_account_links cl
+		                       WHERE cl.tenant_id=e.tenant_id AND cl.contact_id=e.contact_id AND cl.account_id=l.account_id AND cl.status='active'), false)
+		FROM crm_contact_company_evidence e
+		LEFT JOIN account_external_links l ON l.tenant_id=e.tenant_id AND l.connection_id=e.connection_id AND l.external_company_id=e.external_company_id
+		LEFT JOIN customer_accounts a ON a.tenant_id=l.tenant_id AND a.id=l.account_id
+		WHERE e.tenant_id=$1 AND e.contact_id=$2 AND e.revoked_at IS NULL
+		ORDER BY e.last_verified_at DESC, e.id`, tc.TenantID, contactID)
+	if err != nil {
+		failDomain(w, err)
+		return
+	}
+	defer rows.Close()
+	out := []suggestionDTO{}
+	for rows.Next() {
+		var d suggestionDTO
+		var first, last time.Time
+		if err := rows.Scan(&d.EvidenceID, &d.ExternalCompanyID, &d.ConnectionID, &d.Source, &first, &last, &d.AccountID, &d.AccountName, &d.AlreadyLinked); err != nil {
+			failDomain(w, err)
+			return
+		}
+		d.FirstVerifiedAt, d.LastVerifiedAt = first.UTC().Format(time.RFC3339Nano), last.UTC().Format(time.RFC3339Nano)
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		failDomain(w, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusOK, map[string]any{"items": out})
 }
 
 // GetClassification: GET /contacts/{contact_id}/classification  (account.read)
@@ -340,7 +422,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 	}
 	var change Change
 	err := atomically(r.Context(), h.pool, func(ctx context.Context) error {
-		inputs, err := h.resolveRefs(ctx, tc, req.Accounts)
+		inputs, err := h.resolveRefs(ctx, tc, contactID, req.Accounts)
 		if err != nil {
 			return err
 		}
@@ -386,7 +468,7 @@ func (h *ClassificationHandler) LinkAccount(w http.ResponseWriter, r *http.Reque
 	}
 	var link *Link
 	err := atomically(r.Context(), h.pool, func(ctx context.Context) error {
-		in, err := h.resolveRef(ctx, tc, ref)
+		in, err := h.resolveRef(ctx, tc, contactID, ref)
 		if err != nil {
 			return err
 		}

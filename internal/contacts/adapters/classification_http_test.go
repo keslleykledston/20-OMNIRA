@@ -258,3 +258,110 @@ func TestClassificationAPIPermissionsAndTenantIsolation(t *testing.T) {
 		t.Fatal("A's contact changed")
 	}
 }
+
+func (e *httpEnv) evidence(contact uuid.UUID, company string) uuid.UUID {
+	e.t.Helper()
+	id := uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `
+		INSERT INTO crm_contact_company_evidence (id, tenant_id, contact_id, connection_id, external_company_id, source, first_verified_at, last_verified_at)
+		VALUES ($1,$2,$3,$4,$5,'ticket_selection', now(), now())`, id, e.tenant, contact, e.conn, company); err != nil {
+		e.t.Fatal(err)
+	}
+	return id
+}
+
+type suggestionsResp struct {
+	Items []struct {
+		EvidenceID        uuid.UUID  `json:"evidence_id"`
+		ExternalCompanyID string     `json:"external_company_id"`
+		AccountID         *uuid.UUID `json:"account_id"`
+		AccountName       *string    `json:"account_name"`
+		AlreadyLinked     bool       `json:"already_linked"`
+	} `json:"items"`
+}
+
+// ADR-0018: integration evidence is a SUGGESTION. It never classifies, never links, never calls the provider.
+func TestIntegrationEvidenceIsOnlyASuggestionUntilAHumanAccepts(t *testing.T) {
+	e := newHTTPEnv(t)
+	c, other := e.contact("+5592922220101"), e.contact("+5592922220102")
+	path := map[string]string{"contact_id": c.String()}
+	ev := e.evidence(c, "42")
+	e.evidence(other, "77")        // another contact's evidence
+	revoked := e.evidence(c, "55") // revoked evidence
+	if _, err := e.seed.Exec(context.Background(), `UPDATE crm_contact_company_evidence SET revoked_at=now() WHERE id=$1`, revoked); err != nil {
+		t.Fatal(err)
+	}
+	// recording evidence changed NOTHING in the product classification
+	if k := kindOf(t, e.seed, c); k != "unclassified" || e.n(`SELECT count(*) FROM contact_account_links WHERE contact_id=$1`, c) != 0 || e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant) != 0 {
+		t.Fatalf("evidence must not classify, link or create accounts: kind=%s", k)
+	}
+	rec := e.do(e.agent, e.tenant, http.MethodGet, "", path, e.h.ListCompanySuggestions)
+	var got suggestionsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != 200 {
+		t.Fatalf("suggestions = %d %s", rec.Code, rec.Body.String())
+	}
+	if len(got.Items) != 1 || got.Items[0].EvidenceID != ev || got.Items[0].ExternalCompanyID != "42" || got.Items[0].AccountID != nil || got.Items[0].AlreadyLinked {
+		t.Fatalf("only this contact's ACTIVE evidence, with no invented account: %+v", got.Items)
+	}
+	// accepting it (a human click): directory validation + the link is recorded as ticket_flow; the decision is manual
+	body := `{"kind":"customer","accounts":[{"directory_company_id":"42","evidence_id":"` + ev.String() + `","primary":true}]}`
+	rec = e.do(e.agent, e.tenant, http.MethodPut, body, path, e.h.PutClassification)
+	if rec.Code != 200 {
+		t.Fatalf("accept = %d %s", rec.Code, rec.Body.String())
+	}
+	if e.n(`SELECT count(*) FROM contact_account_links WHERE contact_id=$1 AND source='ticket_flow' AND status='active'`, c) != 1 ||
+		e.n(`SELECT count(*) FROM contacts WHERE id=$1 AND kind='customer' AND classification_source='manual'`, c) != 1 {
+		t.Fatal("the link carries the evidence provenance (ticket_flow); the classification decision stays manual")
+	}
+	got = suggestionsResp{}
+	_ = json.Unmarshal(e.do(e.agent, e.tenant, http.MethodGet, "", path, e.h.ListCompanySuggestions).Body.Bytes(), &got)
+	if len(got.Items) != 1 || !got.Items[0].AlreadyLinked || got.Items[0].AccountName == nil || *got.Items[0].AccountName != "ACME Telecom" {
+		t.Fatalf("after accepting, the suggestion shows the local account as linked: %+v", got.Items)
+	}
+}
+
+func TestEvidenceBackedAcceptIsRevalidatedByTheServer(t *testing.T) {
+	e := newHTTPEnv(t)
+	c, other := e.contact("+5592922220103"), e.contact("+5592922220104")
+	path := map[string]string{"contact_id": c.String()}
+	good := e.evidence(c, "42")
+	foreign := e.evidence(other, "42")
+	revoked := e.evidence(c, "77")
+	if _, err := e.seed.Exec(context.Background(), `UPDATE crm_contact_company_evidence SET revoked_at=now() WHERE id=$1`, revoked); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"evidence names another company":  `{"kind":"customer","accounts":[{"directory_company_id":"77","evidence_id":"` + good.String() + `"}]}`,
+		"another contact's evidence":      `{"kind":"customer","accounts":[{"directory_company_id":"42","evidence_id":"` + foreign.String() + `"}]}`,
+		"revoked evidence":                `{"kind":"customer","accounts":[{"directory_company_id":"77","evidence_id":"` + revoked.String() + `"}]}`,
+		"unknown evidence":                `{"kind":"customer","accounts":[{"directory_company_id":"42","evidence_id":"` + uuid.NewString() + `"}]}`,
+		"evidence without a directory id": `{"kind":"customer","accounts":[{"account_id":"` + uuid.NewString() + `","evidence_id":"` + good.String() + `"}]}`,
+	} {
+		rec := e.do(e.agent, e.tenant, http.MethodPut, body, path, e.h.PutClassification)
+		if rec.Code != http.StatusUnprocessableEntity && rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 422/400", name, rec.Code)
+		}
+	}
+	if kindOf(t, e.seed, c) != "unclassified" || e.n(`SELECT count(*) FROM contact_account_links WHERE tenant_id=$1`, e.tenant) != 0 || e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant) != 0 {
+		t.Fatal("a refused evidence accept changed data")
+	}
+}
+
+func TestSuggestionsRespectPermissionAndTenant(t *testing.T) {
+	e := newHTTPEnv(t)
+	other := seedTenant(t, e.seed, "clshttp-sugg-b")
+	adminB := seedMemberRole(t, e.seed, other, "tenant_admin", "active")
+	c := e.contact("+5592922220105")
+	e.evidence(c, "42")
+	path := map[string]string{"contact_id": c.String()}
+	if rec := e.do(adminB, other, http.MethodGet, "", path, e.h.ListCompanySuggestions); rec.Code != http.StatusNotFound {
+		t.Errorf("another tenant's contact = %d, want 404", rec.Code)
+	}
+	if rec := e.do(adminB, other, http.MethodGet, "", map[string]string{"contact_id": uuid.NewString()}, e.h.ListCompanySuggestions); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown contact = %d", rec.Code)
+	}
+	revoked := seedMemberRole(t, e.seed, e.tenant, "tenant_admin", "revoked")
+	if rec := e.do(revoked, e.tenant, http.MethodGet, "", path, e.h.ListCompanySuggestions); rec.Code != http.StatusForbidden {
+		t.Errorf("revoked = %d", rec.Code)
+	}
+}

@@ -82,4 +82,7 @@ type AccountLinkInput struct {
 	Primary         bool
 	Confidence      *float64
 	VerifiedByActor bool
+	// Source overrides the call's source for THIS link only (e.g. ticket_flow when a human accepted a suggestion that
+	// came from a validated ticket selection). Empty = the call's source.
+	Source ClassificationSource
 }

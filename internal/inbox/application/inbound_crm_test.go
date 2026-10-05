@@ -16,12 +16,16 @@ import (
 type mockCRMConnector struct {
 	findPhoneCalls   []struct{ phone, companyID string }
 	createCalls      []struct{ name, phone, companyID string }
+	findPhoneErr     error
 	findPhoneResult  map[string]string // phone -> contactID
 	createResult     map[string]string // phone -> contactID
 }
 
 func (m *mockCRMConnector) FindCustomerByPhone(ctx context.Context, phone, companyID string) (string, error) {
 	m.findPhoneCalls = append(m.findPhoneCalls, struct{ phone, companyID string }{phone, companyID})
+	if m.findPhoneErr != nil {
+		return "", m.findPhoneErr
+	}
 	return m.findPhoneResult[phone], nil
 }
 
@@ -49,7 +53,7 @@ func TestInboundServiceWithCRMCreatesContactOnFirstMessage(t *testing.T) {
 	tickets := &memoryTicketStore{}
 
 	svc := NewInboundService(contacts, conversations, messages, tickets)
-	svc.WithCRM(crmMock, companyID)
+	svc.WithCRM(crmMock, companyID).WithCRMAutoCreate(true) // creating a CRM contact is an explicit opt-in
 
 	ctx := tenancydomain.WithTenantContext(context.Background(), &tenancydomain.TenantContext{
 		TenantID: tenantID,
@@ -267,4 +271,63 @@ func (m *memoryTicketStore) FindOpenByConversation(ctx context.Context, conversa
 
 func (m *memoryTicketStore) Store(ctx context.Context, t *ticketdomain.Ticket) error {
 	return nil
+}
+
+type ambiguousErr struct{}
+
+func (ambiguousErr) Error() string   { return "several contacts match" }
+func (ambiguousErr) Ambiguous() bool { return true }
+
+func ingestWithCRM(t *testing.T, crm *mockCRMConnector, autoCreate bool) *InboundResult {
+	t.Helper()
+	tenantID, connectionID := uuid.New(), uuid.New()
+	contacts, conversations, messages, tickets := &memoryContactStore{}, &memoryConversationStore{}, &memoryMessageStore{}, &memoryTicketStore{}
+	svc := NewInboundService(contacts, conversations, messages, tickets)
+	svc.WithCRM(crm, uuid.New().String()).WithCRMAutoCreate(autoCreate)
+	ctx := tenancydomain.WithTenantContext(context.Background(), &tenancydomain.TenantContext{TenantID: tenantID, ActorID: uuid.New(), Source: tenancydomain.AccessSourceDirect})
+	contact, _ := contactdomain.NewContact(tenantID, "+5592991740090", "Alice")
+	contacts.upserted = contact
+	conn := domain.ChannelConnection{ID: connectionID, TenantID: tenantID, Provider: "meta_cloud"}
+	res, err := svc.Ingest(ctx, conn, domain.InboundMessage{ConnectionID: conn.ID.String(), ProviderMessageID: "m-1", FromE164: "+5592991740090", SenderName: "Alice", Text: "Olá", ProviderChatID: "c-1"})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	return res
+}
+
+// ADR-0018: creating a contact in the CRM is a provider write that needs a proven idempotency key; a phone lookup that
+// found nothing is not one. It is OFF unless explicitly enabled.
+func TestInboundNeverCreatesACRMContactUnlessOptedIn(t *testing.T) {
+	crm := &mockCRMConnector{findPhoneResult: map[string]string{}, createResult: map[string]string{"+5592991740090": uuid.NewString()}}
+	res := ingestWithCRM(t, crm, false)
+	if len(crm.createCalls) != 0 || res.Conversation.CRMContactID != nil {
+		t.Fatalf("no CRM write by default: creates=%d bound=%v", len(crm.createCalls), res.Conversation.CRMContactID)
+	}
+	if len(crm.findPhoneCalls) != 1 {
+		t.Fatal("the read-only lookup still happens")
+	}
+}
+
+// An ambiguous lookup (several contacts match) binds NOTHING and creates NOTHING: never "the first result".
+func TestInboundAmbiguousCRMMatchBindsAndCreatesNothing(t *testing.T) {
+	crm := &mockCRMConnector{findPhoneErr: ambiguousErr{}, createResult: map[string]string{"+5592991740090": uuid.NewString()}}
+	res := ingestWithCRM(t, crm, true) // even with auto-create ON
+	if res.Conversation == nil || res.Conversation.CRMContactID != nil || len(crm.createCalls) != 0 {
+		t.Fatalf("ambiguous: bound=%v creates=%d", res.Conversation.CRMContactID, len(crm.createCalls))
+	}
+}
+
+func TestInboundOtherCRMErrorsStillFail(t *testing.T) {
+	crm := &mockCRMConnector{findPhoneErr: context.DeadlineExceeded}
+	tenantID := uuid.New()
+	contacts := &memoryContactStore{}
+	contact, _ := contactdomain.NewContact(tenantID, "+5592991740090", "Alice")
+	contacts.upserted = contact
+	svc := NewInboundService(contacts, &memoryConversationStore{}, &memoryMessageStore{}, &memoryTicketStore{})
+	svc.WithCRM(crm, "company")
+	ctx := tenancydomain.WithTenantContext(context.Background(), &tenancydomain.TenantContext{TenantID: tenantID, ActorID: uuid.New(), Source: tenancydomain.AccessSourceDirect})
+	conn := domain.ChannelConnection{ID: uuid.New(), TenantID: tenantID, Provider: "meta_cloud"}
+	if _, err := svc.Ingest(ctx, conn, domain.InboundMessage{ConnectionID: conn.ID.String(), ProviderMessageID: "m", FromE164: "+5592991740090", Text: "x"}); err == nil {
+		t.Fatal("a real CRM failure must still surface (the webhook retries)")
+	}
 }
