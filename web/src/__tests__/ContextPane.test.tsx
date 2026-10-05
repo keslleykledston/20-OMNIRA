@@ -158,16 +158,26 @@ describe('ContextPane — honest counters and unassigned hint', () => {
 });
 
 describe('ContextPane — contact classification (ADR-0014)', () => {
-  it('shows the control for the conversation\'s contact and saves through the contacts API', async () => {
-    mockConversation({ contact_id: 'contact-9', contact_kind: 'other' });
-    vi.mocked(axios.patch).mockResolvedValue({ data: {} });
+  it('shows the control for the conversation\'s contact and saves through the classification API', async () => {
+    mockConversation({ contact_id: 'contact-9', contact_kind: 'unclassified' });
+    vi.mocked(axios.put).mockResolvedValue({ data: {} });
+    renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Maria Silva');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Outros' }));
+    await waitFor(() => expect(axios.put).toHaveBeenCalled());
+    expect(vi.mocked(axios.put).mock.calls[0][0]).toMatch(/\/contacts\/contact-9\/classification$/);
+    expect((vi.mocked(axios.put).mock.calls[0][1] as { kind: string }).kind).toBe('other');
+  });
+
+  it('Cliente asks for a company first and sends nothing', async () => {
+    mockConversation({ contact_id: 'contact-9', contact_kind: 'unclassified' });
     renderAt(<ContextPane conversationId={CONV} />);
     await screen.findByText('Maria Silva');
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Cliente' }));
-    await waitFor(() => expect(axios.patch).toHaveBeenCalled());
-    expect(vi.mocked(axios.patch).mock.calls[0][0]).toMatch(/\/contacts\/contact-9$/);
-    expect((vi.mocked(axios.patch).mock.calls[0][1] as { kind: string }).kind).toBe('customer');
+    expect(await screen.findByRole('group', { name: 'Empresa do cliente' })).toBeInTheDocument();
+    expect(axios.put).not.toHaveBeenCalled();
   });
 
   it('shows the spam state for a spam contact', async () => {

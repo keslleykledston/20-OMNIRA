@@ -33,9 +33,9 @@ const STATUS_LABELS: Record<Contact['status'], { label: string; tone: 'success' 
 }
 
 const KIND_TONE: Record<ContactKind, 'success' | 'danger' | 'default'> = {
+  unclassified: 'default',
   customer: 'success',
   other: 'default',
-  agent: 'default',
   spam: 'danger',
 }
 
@@ -130,7 +130,7 @@ export default function ContactsPage() {
             <option value="">Todos</option>
             <option value="customer">{CONTACT_KIND_LABEL.customer}s</option>
             <option value="other">{CONTACT_KIND_LABEL.other}</option>
-            <option value="agent">{CONTACT_KIND_LABEL.agent}</option>
+            <option value="unclassified">{CONTACT_KIND_LABEL.unclassified}s</option>
             <option value="spam">{CONTACT_KIND_LABEL.spam}</option>
           </select>
         </label>

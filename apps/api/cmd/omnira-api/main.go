@@ -265,7 +265,12 @@ func main() {
 		// resolves through the SAME tenant-scoped K3GTicketingRuntimeResolver
 		// as ticket creation below — REUSE, not a second resolver/credential.
 		// Nothing in crmHandler reads a global K3G client.
-		crmHandler.SetCompanyDirectoryResolver(ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials))
+		companyResolver := ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials)
+		crmHandler.SetCompanyDirectoryResolver(companyResolver)
+		// ADR-0018: the contact classification API validates provider companies in the SAME directory, server-side.
+		if ch := srv.ContactClassification(); ch != nil {
+			ch.SetCompanyDirectoryResolver(companyResolver)
+		}
 		// PRODUCT.7B1B: CreateActivity's authorization ("assignee or
 		// conversation.manage") and canonical crm_contact_id lookup — reusing
 		// the SAME permissions checker already constructed above for

@@ -13,12 +13,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
 	aiports "github.com/omnira/omnira/internal/ai/ports"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
-	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
@@ -62,9 +62,11 @@ type Server struct {
 	privateKey    *rsa.PrivateKey
 	publicKey     *rsa.PublicKey
 	authenticator authn.Authenticator
-	sessionStore  authn.SessionStore
-	natsConn      *nats.Conn
-	valkeyClient  *redis.Client
+	// contactClassification is wired to the company directory by main once the ticketing runtime exists.
+	contactClassification *contactsadapters.ClassificationHandler
+	sessionStore          authn.SessionStore
+	natsConn              *nats.Conn
+	valkeyClient          *redis.Client
 }
 
 // SetupPresence wires the Valkey client used by presence heartbeats
@@ -105,6 +107,12 @@ func (s *Server) SetupHealth(dbPool *pgxpool.Pool, natsConn *nats.Conn) {
 }
 
 // RegisterHealthHandlers — registra handlers de health/ready check.
+// ContactClassification returns the contact classification handler (nil until RegisterInboxHandlers ran) so main can
+// give it the tenant-scoped company directory.
+func (s *Server) ContactClassification() *contactsadapters.ClassificationHandler {
+	return s.contactClassification
+}
+
 func (s *Server) RegisterHealthHandlers() {
 	// /healthz — liveness + readiness (comprehensive health check)
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -432,6 +440,13 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContacts))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.GetContact))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.SetKind))))
+	classificationHandler := contactsadapters.NewClassificationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+	s.contactClassification = classificationHandler
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/classification", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.GetClassification))))
+	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/contacts/{contact_id}/classification", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.PutClassification))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/contacts/{contact_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.LinkAccount))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/contacts/{contact_id}/accounts/{link_id}/end", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.EndLink))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/contacts/{contact_id}/accounts/{link_id}/primary", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.SetPrimary))))
 	// CONTACT.360-A: read-only Contact 360 read model. Tickets are gated on
 	// ticket.read inside the handler, exactly like GET /tickets.
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/conversations", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContactConversations))))

@@ -5,14 +5,78 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 // Mirrors ContactItem in internal/contacts/adapters/http.go. The API
 // deliberately omits tenant_id: the session already establishes the tenant.
 // Who the contact is for the business (ADR-0014); distinct from `status`, the record lifecycle.
-export type ContactKind = 'customer' | 'other' | 'agent' | 'spam';
+// ADR-0018: K3G staff are Users, never contacts — there is no "agent" kind. A new contact is "unclassified".
+export type ContactKind = 'unclassified' | 'customer' | 'other' | 'spam';
 
 export const CONTACT_KIND_LABEL: Record<ContactKind, string> = {
+  unclassified: 'Não classificado',
   customer: 'Cliente',
   other: 'Outros',
-  agent: 'Agente',
   spam: 'Spam',
 };
+
+export type RelationshipType =
+  | 'employee'
+  | 'owner'
+  | 'technical_contact'
+  | 'billing_contact'
+  | 'administrative_contact'
+  | 'representative'
+  | 'contractor'
+  | 'other';
+
+export const RELATIONSHIP_LABEL: Record<RelationshipType, string> = {
+  employee: 'Funcionário',
+  owner: 'Proprietário',
+  technical_contact: 'Contato técnico',
+  billing_contact: 'Financeiro',
+  administrative_contact: 'Administrativo',
+  representative: 'Representante',
+  contractor: 'Prestador',
+  other: 'Outro vínculo',
+};
+
+// Mirrors linkDTO / classificationView in internal/contacts/adapters/classification_http.go.
+export interface ContactAccountLink {
+  id: string;
+  account_id: string;
+  account_name: string;
+  relationship_type: RelationshipType;
+  status: 'active' | 'ended';
+  primary: boolean;
+  source: string;
+  created_at: string;
+  ended_at?: string;
+}
+
+export interface ContactClassification {
+  kind: ContactKind;
+  classification_source: string | null;
+  classified_at: string | null;
+  accounts: ContactAccountLink[];
+}
+
+// One company the contact belongs to: a company of the tenant's directory (revalidated by the server, which never
+// trusts the name/CNPJ shown here) OR an account that already exists locally. Exactly one of the two ids.
+export interface AccountRef {
+  account_id?: string;
+  directory_company_id?: string;
+  relationship_type?: RelationshipType;
+  primary?: boolean;
+}
+
+export interface DirectoryCompany {
+  id: string;
+  name: string;
+  cnpj?: string;
+}
+
+export interface CustomerAccount {
+  id: string;
+  name: string;
+  account_type: string;
+  status: string;
+}
 
 export interface ContactFilters {
   q?: string;
@@ -133,6 +197,33 @@ export const contactsAPI = {
     ),
 };
 
+export const classificationAPI = {
+  get: (id: string) =>
+    call<ContactClassification>(() => axios.get(`${contactsBase()}/${id}/classification`, { headers: authHeaders() })),
+  // Kind and companies change in ONE transaction on the server. `customer` needs at least one company.
+  put: (id: string, body: { kind: ContactKind; accounts?: AccountRef[]; end_links?: boolean }) =>
+    call<ContactClassification>(() => axios.put(`${contactsBase()}/${id}/classification`, body, { headers: authHeaders() })),
+  linkAccount: (id: string, ref: AccountRef) =>
+    call<ContactAccountLink>(() => axios.post(`${contactsBase()}/${id}/accounts`, ref, { headers: authHeaders() })),
+  // Soft end. The last company of a customer needs `reclassify_to` (other | unclassified).
+  endLink: (id: string, linkId: string, reclassifyTo?: 'other' | 'unclassified') =>
+    call<ContactClassification>(() =>
+      axios.post(`${contactsBase()}/${id}/accounts/${linkId}/end`, reclassifyTo ? { reclassify_to: reclassifyTo } : {}, { headers: authHeaders() }),
+    ),
+  setPrimary: (id: string, linkId: string) =>
+    call<ContactClassification>(() => axios.post(`${contactsBase()}/${id}/accounts/${linkId}/primary`, {}, { headers: authHeaders() })),
+};
+
+export const accountDirectoryAPI = {
+  // The tenant's provider company directory (active companies only).
+  directory: () =>
+    call<{ items: DirectoryCompany[] }>(() => axios.get(`${API_BASE}/tenants/${getTenantId()}/crm/companies`, { headers: authHeaders() })),
+  localAccounts: (q?: string) =>
+    call<{ items: CustomerAccount[] }>(() =>
+      axios.get(`${API_BASE}/tenants/${getTenantId()}/accounts`, { headers: authHeaders(), params: { status: 'active', ...(q ? { q } : {}) } }),
+    ),
+};
+
 export function contactErrorMessage(err: any, fallback = 'Não foi possível carregar os contatos'): string {
   switch (err?.response?.status) {
     case 403:
@@ -152,6 +243,12 @@ export function contactKindErrorMessage(err: any): string {
       return 'Você não tem permissão para classificar contatos.';
     case 404:
       return 'Contato não encontrado.';
+    case 409:
+      return 'Esta é a última empresa do cliente. Reclassifique o contato junto com a remoção.';
+    case 422:
+      return 'Um cliente precisa de pelo menos uma empresa vinculada (ativa e válida).';
+    case 503:
+      return 'O diretório de empresas não está disponível agora.';
     default:
       return 'Não foi possível salvar. Tente novamente.';
   }

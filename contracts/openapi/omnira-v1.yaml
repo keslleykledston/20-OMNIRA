@@ -1054,6 +1054,125 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: Invalid account }
+  /tenants/{tenant_id}/contacts/{contact_id}/classification:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getContactClassification
+      tags: [Accounts]
+      summary: Classification of a contact and its active company links
+      description: 'Needs `account.read`.'
+      responses:
+        '200':
+          description: Classification
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactClassification' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: putContactClassification
+      tags: [Accounts]
+      summary: Classify a contact and set its companies in ONE transaction
+      description: |
+        Needs `contact.classify`. The source is always `manual` (set by the server). `customer` needs at least one
+        company in the same call or already linked (422 otherwise). Each entry is EITHER a local `account_id` OR a
+        `directory_company_id`: a provider company that the server revalidates against the tenant's own company
+        directory (unknown or inactive = 422; name, CNPJ and status sent by the browser are never accepted) and
+        materializes as account + provider link. At most one entry is `primary`. A failed call changes nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              additionalProperties: false
+              properties:
+                kind: { type: string, enum: [unclassified, customer, other, spam] }
+                accounts: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/AccountRef' } }
+                end_links: { type: boolean, description: 'End every active link when the contact stops being a customer (default: kept).' }
+      responses:
+        '200':
+          description: The new classification
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactClassification' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Customer without a company, or unknown/inactive/foreign company' }
+        '502': { description: Company directory failed }
+        '503': { description: Company directory not configured or unavailable }
+  /tenants/{tenant_id}/contacts/{contact_id}/accounts:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: linkContactAccount
+      tags: [Accounts]
+      summary: Link one more company to a contact (idempotent per contact+account)
+      description: 'Needs `contact.classify`. Making the link primary demotes the previous primary; the other companies stay active.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountRef' }
+      responses:
+        '200':
+          description: The link
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactAccountLink' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Unknown/inactive/foreign/archived company }
+  /tenants/{tenant_id}/contacts/{contact_id}/accounts/{link_id}/end:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: endContactAccountLink
+      tags: [Accounts]
+      summary: End a company link (soft end; never deleted)
+      description: 'Needs `contact.classify`. Ending the LAST active link of a customer is 409 unless `reclassify_to` (other | unclassified) is given: both happen in one transaction.'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { reclassify_to: { type: string, enum: [other, unclassified] } } }
+      responses:
+        '200':
+          description: The new classification
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactClassification' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Last company of a customer without reclassify_to }
+  /tenants/{tenant_id}/contacts/{contact_id}/accounts/{link_id}/primary:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: setContactPrimaryAccount
+      tags: [Accounts]
+      summary: Make an active link the contact's primary company (the others stay active)
+      responses:
+        '200':
+          description: The new classification
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactClassification' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/topics/{topic_id}/summaries:
     get:
       operationId: listTopicSummaries
@@ -2176,6 +2295,36 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    AccountRef:
+      type: object
+      additionalProperties: false
+      description: 'Exactly one of account_id or directory_company_id.'
+      properties:
+        account_id: { type: string, format: uuid }
+        directory_company_id: { type: string }
+        relationship_type: { type: string, enum: [employee, owner, technical_contact, billing_contact, administrative_contact, representative, contractor, other], default: other }
+        primary: { type: boolean }
+    ContactAccountLink:
+      type: object
+      required: [id, account_id, account_name, relationship_type, status, primary, source, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        account_name: { type: string }
+        relationship_type: { type: string }
+        status: { type: string, enum: [active, ended] }
+        primary: { type: boolean }
+        source: { type: string }
+        created_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+    ContactClassification:
+      type: object
+      required: [kind, accounts]
+      properties:
+        kind: { type: string, enum: [unclassified, customer, other, spam] }
+        classification_source: { type: string, nullable: true, description: 'manual | import | trusted_crm | ticket_flow | rule | ai_suggestion_confirmed | migration | backfill' }
+        classified_at: { type: string, format: date-time, nullable: true }
+        accounts: { type: array, items: { $ref: '#/components/schemas/ContactAccountLink' } }
     CustomerAccount:
       type: object
       required: [id, name, account_type, status, created_at, updated_at]
