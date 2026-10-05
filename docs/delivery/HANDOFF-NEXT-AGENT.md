@@ -526,3 +526,7 @@ Escopo implementado, todo o resto da ADR-0010 preservado:
 - Domínio: `CONTEXT.md`; MVP: `docs/product/MVP.md`; tenancy: `docs/adr/0001-tenant-context-and-rls.md`.
 - Roadmap: `docs/delivery/ROADMAP-TO-GOAL.md`; IAM3: `docs/delivery/IAM3-ENFORCEMENT.md`; IAM2C: `docs/delivery/IAM2C-INVITATION-EMAIL.md`.
 - IAM4 base: `migrations/000015_queues_routing.up.sql`, `internal/routing/`, `internal/tenancy/adapters/agents_handler.go`, `contracts/openapi/omnira-v1.yaml`.
+
+
+### Atualização (2026-10-05): chamado placeholder adotado por um assunto
+A opção A (2026-10-03) continua valendo. `RealTicketSQL` agora também considera **real** o chamado que é `primary` de um tópico (ADR-0017): adotar o chamado da conversa para um assunto é uma decisão de pessoa, então ele deixa de ser o implícito. Chamado só `related` a um tópico continua placeholder. Os chamados criados para um assunto (`topic_scoped`) já nascem com assunto.

@@ -79,17 +79,23 @@ func (t *Ticket) Close() {
 // 360) count only real tickets; the ERP and reconciliation flows keep seeing
 // every row.
 
-// IsPlaceholder reports whether the ticket is still the implicit one.
+// IsPlaceholder reports whether the ticket is still the implicit one. It cannot see topic links (a read-model concern):
+// use RealTicketSQL for counts and lists.
 func (t *Ticket) IsPlaceholder() bool {
 	return t.ExternalTicketID == nil && strings.TrimSpace(t.Subject) == ""
 }
 
-// RealTicketSQL is the SQL form of !IsPlaceholder for read models. Pass the
-// table alias ("t") or "" when the query has no alias.
+// RealTicketSQL is the SQL form of "not a placeholder" for read models. Pass the
+// table alias ("t") or "" when the query selects FROM tickets without an alias.
+// A ticket is real when it is linked to the ERP, has a subject, or a person (or the
+// policy) made it the PRIMARY ticket of a topic (ADR-0017): adopting the conversation
+// ticket for a subject is a decision, so it stops being the implicit one.
 func RealTicketSQL(alias string) string {
-	prefix := ""
-	if alias != "" {
-		prefix = alias + "."
+	prefix := alias
+	if prefix == "" {
+		prefix = "tickets"
 	}
-	return "(" + prefix + "external_ticket_id IS NOT NULL OR btrim(" + prefix + "subject) <> '')"
+	prefix += "."
+	return "(" + prefix + "external_ticket_id IS NOT NULL OR btrim(" + prefix + "subject) <> '' OR EXISTS (" +
+		"SELECT 1 FROM topic_ticket_links ttl WHERE ttl.tenant_id = " + prefix + "tenant_id AND ttl.ticket_id = " + prefix + "id AND ttl.relation = 'primary'))"
 }

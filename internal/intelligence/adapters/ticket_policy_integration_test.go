@@ -11,6 +11,7 @@ import (
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"github.com/omnira/omnira/internal/intelligence/application"
 	"github.com/omnira/omnira/internal/intelligence/domain"
+	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
 
 func (e *env) ticketSvc(flags application.Flags) *application.TopicTicketService {
@@ -310,5 +311,35 @@ func TestANewSubjectCanOpenItsOwnTicketAndTheConversationTicketGuaranteeStays(t 
 	// ...and the race protection of inbound is intact: a SECOND conversation ticket is still impossible
 	if _, err := e.seed.Exec(e.ctx, `INSERT INTO tickets(id,tenant_id,conversation_id,status,subject) VALUES(uuid_generate_v4(),$1,$2,'open','duplicado')`, a.id, a.conversation); err == nil {
 		t.Fatal("two conversation tickets in one conversation must remain impossible")
+	}
+}
+
+func TestAnAdoptedConversationTicketCountsAsARealTicket(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a.id, "tenant_admin")
+	placeholder := e.ticket(a.id, a.conversation, "open") // the implicit ticket: empty subject, no ERP link
+	e.exec(`UPDATE tickets SET subject='' WHERE id=$1`, placeholder)
+	topic, _ := e.topicWith(a, admin, "Pedido atrasado", "pedido 837 atrasado")
+	real := func() int {
+		return e.count(`SELECT count(*) FROM tickets WHERE tenant_id=$1 AND `+ticketdomain.RealTicketSQL(""), a.id)
+	}
+	if real() != 0 {
+		t.Fatal("the implicit ticket must not count as a real one")
+	}
+	e.session(a.id, admin, func(ctx context.Context) {
+		if _, err := e.ticketSvc(application.DefaultFlags()).Apply(ctx, topic.ID, domain.TicketActionAdoptActive, domain.TicketLinkAgent); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if real() != 1 {
+		t.Fatalf("a ticket a person adopted for a subject must count (placeholder %s)", placeholder)
+	}
+	// a merely RELATED link does not make it real
+	other := e.ticket(a.id, e.conversationFor(a.id, nil), "open")
+	e.exec(`UPDATE tickets SET subject='' WHERE id=$1`, other)
+	e.exec(`INSERT INTO topic_ticket_links(tenant_id,topic_thread_id,ticket_id,relation,created_by) VALUES($1,$2,$3,'related','agent')`, a.id, topic.ID, other)
+	if real() != 1 {
+		t.Fatal("a related link must not make a placeholder real")
 	}
 }

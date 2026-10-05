@@ -45,10 +45,10 @@ func TestPlaceholderTicketRule(t *testing.T) {
 }
 
 func TestRealTicketSQLQualifiesTheAlias(t *testing.T) {
-	if got, want := domain.RealTicketSQL(""), "(external_ticket_id IS NOT NULL OR btrim(subject) <> '')"; got != want {
+	if got, want := domain.RealTicketSQL(""), "(tickets.external_ticket_id IS NOT NULL OR btrim(tickets.subject) <> '' OR EXISTS (SELECT 1 FROM topic_ticket_links ttl WHERE ttl.tenant_id = tickets.tenant_id AND ttl.ticket_id = tickets.id AND ttl.relation = 'primary'))"; got != want {
 		t.Errorf("no alias: %q, want %q", got, want)
 	}
-	if got, want := domain.RealTicketSQL("t"), "(t.external_ticket_id IS NOT NULL OR btrim(t.subject) <> '')"; got != want {
+	if got, want := domain.RealTicketSQL("t"), "(t.external_ticket_id IS NOT NULL OR btrim(t.subject) <> '' OR EXISTS (SELECT 1 FROM topic_ticket_links ttl WHERE ttl.tenant_id = t.tenant_id AND ttl.ticket_id = t.id AND ttl.relation = 'primary'))"; got != want {
 		t.Errorf("alias t: %q, want %q", got, want)
 	}
 }
