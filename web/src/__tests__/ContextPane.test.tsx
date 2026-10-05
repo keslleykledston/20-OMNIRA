@@ -141,11 +141,11 @@ describe('ContextPane — honest counters and unassigned hint', () => {
       return Promise.reject({ response: { status: 404 } });
     });
     renderAt(<ContextPane conversationId={CONV} />);
-    expect(await screen.findByText('Assuma esta conversa para ver e criar o chamado.')).toBeInTheDocument();
+    expect(await screen.findByText('Sem chamado por enquanto. Assuma a conversa se quiser abrir um.')).toBeInTheDocument();
     expect(screen.queryByText('Sem permissão para ver o chamado desta conversa.')).not.toBeInTheDocument();
   });
 
-  it('keeps the permission message when the conversation IS assigned and the ticket is still refused', async () => {
+  it('does not alarm when the conversation is assigned and the ticket is simply not visible (a ticket is optional)', async () => {
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       if (url.endsWith(`/inbox/conversations/${CONV}`)) return { data: BASE_CONVERSATION };
       if (url.endsWith('/crm/companies')) return { data: { items: [] } };
@@ -153,7 +153,9 @@ describe('ContextPane — honest counters and unassigned hint', () => {
       return Promise.reject({ response: { status: 404 } });
     });
     renderAt(<ContextPane conversationId={CONV} />);
-    expect(await screen.findByText('Sem permissão para ver o chamado desta conversa.')).toBeInTheDocument();
+    expect(await screen.findByText('Esta conversa não tem chamado. Um chamado é opcional.')).toBeInTheDocument();
+    expect(screen.queryByText('Sem permissão para ver o chamado desta conversa.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sem permissão/)).not.toBeInTheDocument();
   });
 });
 

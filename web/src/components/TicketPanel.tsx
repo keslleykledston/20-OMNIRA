@@ -921,15 +921,11 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
               ação.
             </p>
           </div>
-        ) : readPhase === 'forbidden' && conversationUnassigned ? (
-          // Not a permission problem: nobody holds the conversation yet, and the
-          // chamado is shown to its assignee (or someone who can manage it).
-          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
-            Assuma esta conversa para ver e criar o chamado.
-          </div>
         ) : readPhase === 'forbidden' ? (
-          <div className="rounded-control border border-status-danger-border bg-status-danger-soft p-3 text-xs text-status-danger">
-            Sem permissão para ver o chamado desta conversa.
+          // A ticket is optional for an attendance: not being able to see or open one is not an alarm. (When nobody holds
+          // the conversation the chamado is shown to its assignee, so the hint says so without a warning.)
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
+            {conversationUnassigned ? 'Sem chamado por enquanto. Assuma a conversa se quiser abrir um.' : 'Esta conversa não tem chamado. Um chamado é opcional.'}
           </div>
         ) : readPhase === 'unavailable' ? (
           <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
