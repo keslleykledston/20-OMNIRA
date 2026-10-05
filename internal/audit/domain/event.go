@@ -10,11 +10,25 @@ import (
 type AuditAction string
 
 const (
-	ActionTenantCreated            AuditAction = "tenant.created"
-	ActionTenantDeactivated        AuditAction = "tenant.deactivated"
-	ActionTenantSuspended          AuditAction = "tenant.suspended"
-	ActionTenantInboxSettings      AuditAction = "tenant.inbox_settings_updated"
-	ActionContactKindChanged       AuditAction = "contact.kind_changed"
+	ActionTenantCreated       AuditAction = "tenant.created"
+	ActionTenantDeactivated   AuditAction = "tenant.deactivated"
+	ActionTenantSuspended     AuditAction = "tenant.suspended"
+	ActionTenantInboxSettings AuditAction = "tenant.inbox_settings_updated"
+	ActionContactKindChanged  AuditAction = "contact.kind_changed"
+	// ADR-0018: accounts, classification, company links and internal identities.
+	ActionAccountCreated           AuditAction = "account.created"
+	ActionAccountUpdated           AuditAction = "account.updated"
+	ActionContactClassified        AuditAction = "contact.classified"
+	ActionContactReclassified      AuditAction = "contact.reclassified"
+	ActionContactAccountLinked     AuditAction = "contact.account_linked"
+	ActionContactAccountUnlinked   AuditAction = "contact.account_unlinked"
+	ActionContactPrimaryAccount    AuditAction = "contact.primary_account_changed"
+	ActionUserIdentityCreated      AuditAction = "user.identity_created"
+	ActionUserIdentityVerified     AuditAction = "user.identity_verified"
+	ActionUserIdentityRevoked      AuditAction = "user.identity_revoked"
+	ActionIdentityConflictFound    AuditAction = "identity.conflict_found"
+	ActionIdentityConflictResolved AuditAction = "identity.conflict_resolved"
+	ActionConversationKindChanged  AuditAction = "conversation.kind_changed"
 	ActionTenantAIIntegration      AuditAction = "tenant.ai_integration_updated"
 	ActionGroupEnabled             AuditAction = "group.enabled"
 	ActionGroupDisabled            AuditAction = "group.disabled"
@@ -79,6 +93,9 @@ const (
 	ResourceQueue             ResourceType = "queue"
 	ResourceContact           ResourceType = "contact"
 	ResourceGroup             ResourceType = "wa_group"
+	ResourceAccount           ResourceType = "customer_account"
+	ResourceUserIdentity      ResourceType = "user_channel_identity"
+	ResourceIdentityConflict  ResourceType = "identity_conflict"
 )
 
 // AuditEvent — evento de auditoria.

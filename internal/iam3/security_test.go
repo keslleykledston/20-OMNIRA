@@ -17,11 +17,11 @@ import (
 // internal/tenancy/adapters/team_http_test.go.
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
-		"agent.manage", "agent.read", "audit.read", "channel.manage", "conversation.claim", "conversation.manage",
-		"dashboard.read", "group.manage", "group.read", "membership.manage", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.manage", "tenant.read", "topic.manage", "topic.read",
+		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "channel.manage", "contact.classify", "conversation.claim", "conversation.manage",
+		"dashboard.read", "group.manage", "group.read", "identity.manage", "membership.manage", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.manage", "tenant.read", "topic.manage", "topic.read",
 	},
 	"tenant_supervisor": {
-		"agent.manage", "agent.read", "audit.read", "conversation.claim", "conversation.manage", "dashboard.read", "group.manage", "group.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read", "topic.manage", "topic.read",
+		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "dashboard.read", "group.manage", "group.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read", "topic.manage", "topic.read",
 	},
 	// PRODUCT.6-F: ticket.create does NOT imply ticket.read — an agent may
 	// create a ticket from a conversation they are already authorized to
@@ -34,7 +34,7 @@ var systemRolePermissions = map[string][]string{
 	// PRODUCT.7A1: ticket.reconcile (migration 000051) is never granted to
 	// tenant_agent — it is a support/admin operational-visibility
 	// capability, not an operating-agent one.
-	"tenant_agent": {"conversation.claim", "tenant.read", "ticket.create", "ticket.update", "topic.manage", "topic.read"},
+	"tenant_agent": {"account.read", "contact.classify", "conversation.claim", "tenant.read", "ticket.create", "ticket.update", "topic.manage", "topic.read"},
 	"hub_admin":    {"hub.manage", "hub.read"},
 }
 

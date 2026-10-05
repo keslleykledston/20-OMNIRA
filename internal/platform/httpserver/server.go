@@ -18,6 +18,7 @@ import (
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
@@ -422,6 +423,11 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		}
 	}
 
+	accountsHandler := accountsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.ListAccounts))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.CreateAccount))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/accounts/{account_id}", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.GetAccount))))
+	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/accounts/{account_id}", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.UpdateAccount))))
 	contactsHandler := contactsadapters.NewContactsAPIHandler(dbPool).WithAudit(auditadapters.NewPostgresAuditEventRepository(dbPool))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContacts))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.GetContact))))
