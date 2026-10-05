@@ -50,7 +50,7 @@ func (r *PostgresRepository) Claim(ctx context.Context, limit int, lease time.Du
 			  FROM due WHERE mm.id = due.id
 			  RETURNING mm.id, mm.tenant_id, mm.message_id, mm.status, mm.attempts, mm.created_at
 			)
-			SELECT c.id, c.tenant_id, c.message_id, c.status, c.attempts, c.created_at, m.media_ref, m.mime_type
+			SELECT c.id, c.tenant_id, c.message_id, c.status, c.attempts, c.created_at, m.media_ref, m.mime_type, COALESCE(m.channel_connection_id, '00000000-0000-0000-0000-000000000000'::uuid)
 			FROM claimed c
 			JOIN messages m ON m.tenant_id = c.tenant_id AND m.id = c.message_id`, limit, lease.Seconds())
 		if err != nil {
@@ -60,7 +60,7 @@ func (r *PostgresRepository) Claim(ctx context.Context, limit int, lease time.Du
 		for rows.Next() {
 			var w ports.Work
 			var status string
-			if err := rows.Scan(&w.ID, &w.TenantID, &w.MessageID, &status, &w.Attempts, &w.CreatedAt, &w.MediaRef, &w.DeclaredMime); err != nil {
+			if err := rows.Scan(&w.ID, &w.TenantID, &w.MessageID, &status, &w.Attempts, &w.CreatedAt, &w.MediaRef, &w.DeclaredMime, &w.ConnectionID); err != nil {
 				return err
 			}
 			w.Status = ports.Status(status)

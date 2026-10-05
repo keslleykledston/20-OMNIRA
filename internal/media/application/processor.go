@@ -125,7 +125,14 @@ func (p *Processor) handle(ctx context.Context, w ports.Work) {
 }
 
 func (p *Processor) fetchAndQuarantine(ctx context.Context, w ports.Work) {
-	data, declared, err := p.fetcher.Fetch(ctx, w.MediaRef)
+	var data []byte
+	var declared string
+	var err error
+	if wf, ok := p.fetcher.(ports.WorkFetcher); ok {
+		data, declared, err = wf.FetchWork(ctx, w)
+	} else {
+		data, declared, err = p.fetcher.Fetch(ctx, w.MediaRef)
+	}
 	if err != nil {
 		p.fetchFailed(ctx, w, err)
 		return

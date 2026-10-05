@@ -26,6 +26,7 @@ import (
 	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
 	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
+	mediaports "github.com/omnira/omnira/internal/media/ports"
 	mediaapp "github.com/omnira/omnira/internal/media/application"
 	"github.com/omnira/omnira/internal/outbox/adapters"
 	"github.com/omnira/omnira/internal/outbox/application"
@@ -277,19 +278,34 @@ func main() {
 	// Inbound media (ADR-0016 M1): fetch from WAHA right away (it deletes its copy within minutes), check the real
 	// type, quarantine, scan with ClamAV, and only then publish. Fails closed: without the antivirus nothing is
 	// ever published, it just waits in quarantine.
-	if cfg.WahaEnabled && cfg.MediaDir != "" {
+	if (cfg.WahaEnabled || cfg.MetaEnabled) && cfg.MediaDir != "" {
 		store, err := mediaadapters.NewFileStore(cfg.MediaDir)
 		if err != nil {
 			log.Fatalf("media store error: %v", err)
 		}
-		wahaClient, err := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
-		if err != nil {
-			log.Fatalf("media: WAHA client config error: %v", err)
+		var wahaFetcher mediaports.Fetcher
+		if cfg.WahaEnabled {
+			wahaClient, err := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
+			if err != nil {
+				log.Fatalf("media: WAHA client config error: %v", err)
+			}
+			wf, err := mediaadapters.NewWahaFetcher(wahaClient, cfg.WahaBaseURL)
+			if err != nil {
+				log.Fatalf("media fetcher error: %v", err)
+			}
+			wahaFetcher = wf
 		}
-		fetcher, err := mediaadapters.NewWahaFetcher(wahaClient, cfg.WahaBaseURL)
-		if err != nil {
-			log.Fatalf("media fetcher error: %v", err)
+		var metaMediaClient *metachannel.Client
+		if cfg.MetaEnabled {
+			if metaMediaClient, err = metachannel.NewClient("", "", nil); err != nil {
+				log.Fatalf("media: Meta client config error: %v", err)
+			}
 		}
+		mediaCipher, err := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+		if err != nil {
+			log.Fatalf("media: credential cipher error: %v", err)
+		}
+		fetcher := mediaadapters.NewRoutingFetcher(dbPool, channeladapters.NewPostgresCredentialStore(dbPool, mediaCipher), wahaFetcher, metaMediaClient)
 		av := mediaadapters.NewClamAV(cfg.ClamAVAddr)
 		mediaCounters := mediaapp.NewCounters()
 		hc.ExtraMetrics = mediaCounters.Render

@@ -32,6 +32,9 @@ type Work struct {
 	Attempts     int
 	MediaRef     string
 	DeclaredMime string
+	// ConnectionID is the channel connection the message came in on: it tells which provider (and which credential)
+	// the file must be fetched with.
+	ConnectionID uuid.UUID
 	CreatedAt    time.Time
 }
 
@@ -72,6 +75,11 @@ type Store interface {
 // Fetcher downloads the file from the provider.
 type Fetcher interface {
 	Fetch(ctx context.Context, mediaRef string) (data []byte, declaredMime string, err error)
+}
+
+// WorkFetcher is a Fetcher that needs the whole claimed row (the connection) to pick the provider and credential.
+type WorkFetcher interface {
+	FetchWork(ctx context.Context, w Work) (data []byte, declaredMime string, err error)
 }
 
 // ErrSourceGone means the provider no longer has the file (permanent for the purposes of capture).
