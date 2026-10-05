@@ -246,6 +246,42 @@ export const contactsAPI = {
     ),
 };
 
+export interface ContactNote {
+  id: string;
+  body: string;
+  author_user_id: string | null;
+  author_name: string;
+  created_at: string;
+  updated_at: string;
+  // The caller wrote it: only the author edits or removes a note.
+  mine: boolean;
+}
+
+export const contactEditAPI = {
+  // Name and e-mail only: the phone is the contact's identity and is never edited.
+  update: (id: string, body: { display_name?: string; email?: string }) =>
+    call<Contact>(() => axios.put(`${contactsBase()}/${id}/details`, body, { headers: authHeaders() })),
+  notes: (id: string) =>
+    call<{ items: ContactNote[] }>(() => axios.get(`${contactsBase()}/${id}/notes`, { headers: authHeaders() })).then((d) => d.items ?? []),
+  addNote: (id: string, body: string) => call<ContactNote>(() => axios.post(`${contactsBase()}/${id}/notes`, { body }, { headers: authHeaders() })),
+  editNote: (id: string, noteId: string, body: string) =>
+    call<ContactNote>(() => axios.put(`${contactsBase()}/${id}/notes/${noteId}`, { body }, { headers: authHeaders() })),
+  deleteNote: (id: string, noteId: string) => call<unknown>(() => axios.delete(`${contactsBase()}/${id}/notes/${noteId}`, { headers: authHeaders() })),
+};
+
+export function contactEditErrorMessage(err: any): string {
+  switch (err?.response?.status) {
+    case 403:
+      return 'Você não tem permissão para editar contatos.';
+    case 404:
+      return 'Contato ou anotação não encontrados (só quem escreveu a anotação pode alterá-la).';
+    case 422:
+      return 'Confira os dados: o nome não pode ficar vazio e o e-mail precisa ser válido.';
+    default:
+      return 'Não foi possível salvar. Tente novamente.';
+  }
+}
+
 export const peopleAPI = {
   list: (cursor?: string, limit?: number, filters: PeopleFilters = {}) =>
     call<Page<Person>>(() =>

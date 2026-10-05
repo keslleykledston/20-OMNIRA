@@ -1211,6 +1211,96 @@ paths:
                   items: { type: array, items: { $ref: '#/components/schemas/CompanySuggestion' } }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/contacts/{contact_id}/details:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      operationId: updateContactDetails
+      tags: [Accounts]
+      summary: Edit a contact's name and/or e-mail (never the phone)
+      description: 'Needs `contact.classify` (whoever attends). An empty e-mail clears it. Audited as `contact.updated` (flags only, no values).'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, properties: { display_name: { type: string, maxLength: 200 }, email: { type: string, maxLength: 254 } } }
+      responses:
+        '200':
+          description: The updated contact
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactItem' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Blank name or invalid e-mail }
+  /tenants/{tenant_id}/contacts/{contact_id}/notes:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: listContactNotes
+      tags: [Accounts]
+      summary: Notes that document the context of a contact (newest first)
+      description: 'Needs `contact.classify`. Internal working notes: never sent to the contact.'
+      responses:
+        '200':
+          description: Notes
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/ContactNote' } } } }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: addContactNote
+      tags: [Accounts]
+      summary: Add a note
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [body], additionalProperties: false, properties: { body: { type: string, maxLength: 4000 } } }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactNote' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Empty or too long }
+  /tenants/{tenant_id}/contacts/{contact_id}/notes/{note_id}:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: note_id, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      operationId: editContactNote
+      tags: [Accounts]
+      summary: Edit a note (only its author; anyone else gets 404)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [body], additionalProperties: false, properties: { body: { type: string, maxLength: 4000 } } }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ContactNote' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Empty or too long }
+    delete:
+      operationId: deleteContactNote
+      tags: [Accounts]
+      summary: Delete a note (only its author; anyone else gets 404)
+      responses:
+        '204': { description: Deleted }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/contacts/{contact_id}/accounts:
     parameters:
       - { $ref: '#/components/parameters/TenantId' }
@@ -2730,6 +2820,17 @@ components:
         role_name: { type: string }
         manage_path: { type: string, description: 'SPA route where access is managed' }
         updated_at: { type: string, format: date-time }
+    ContactNote:
+      type: object
+      required: [id, body, author_name, created_at, updated_at, mine]
+      properties:
+        id: { type: string, format: uuid }
+        body: { type: string }
+        author_user_id: { type: string, format: uuid, nullable: true }
+        author_name: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        mine: { type: boolean, description: 'The caller wrote it: only the author edits or removes a note.' }
     CustomerAccount:
       type: object
       required: [id, name, account_type, status, created_at, updated_at]

@@ -15,6 +15,8 @@ const (
 	ActionTenantSuspended     AuditAction = "tenant.suspended"
 	ActionTenantInboxSettings AuditAction = "tenant.inbox_settings_updated"
 	ActionContactKindChanged  AuditAction = "contact.kind_changed"
+	ActionContactUpdated      AuditAction = "contact.updated"
+	ActionContactNoteChanged  AuditAction = "contact.note_changed"
 	// ADR-0018: accounts, classification, company links and internal identities.
 	ActionAccountCreated           AuditAction = "account.created"
 	ActionAccountUpdated           AuditAction = "account.updated"

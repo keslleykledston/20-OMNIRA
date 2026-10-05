@@ -38,22 +38,23 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
   const [error, setError] = useState<string | null>(null)
   const [confirmSpam, setConfirmSpam] = useState(false)
   const [links, setLinks] = useState<ContactAccountLink[]>([])
-  const [picking, setPicking] = useState(false)
+  // 'become': choose the company that makes this contact a customer; 'add': link one more company to a customer or to an "other" contact
+  const [picking, setPicking] = useState<'become' | 'add' | null>(null)
   const [removing, setRemoving] = useState<ContactAccountLink | null>(null)
 
   const loadLinks = useCallback(async () => {
     try {
       const c = await classificationAPI.get(contactId)
-      setLinks(c.accounts)
+      setLinks(c.accounts ?? [])
     } catch {
       setLinks([])
     }
   }, [contactId])
 
   useEffect(() => {
-    if (kind === 'customer') void loadLinks()
+    if (kind === 'customer' || kind === 'other') void loadLinks()
     else setLinks([])
-    setPicking(false)
+    setPicking(null)
   }, [kind, contactId, loadLinks])
 
   const run = async (action: () => Promise<unknown>, next?: ContactKind) => {
@@ -63,7 +64,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
     try {
       await action()
       setConfirmSpam(false)
-      setPicking(false)
+      setPicking(null)
       setRemoving(null)
       if (next) onChanged(next)
       else {
@@ -81,7 +82,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
   const change = (next: ContactKind) => {
     if (next === kind) return
     if (next === 'customer') {
-      setPicking(true)
+      setPicking('become')
       return
     }
     void run(() => classificationAPI.put(contactId, { kind: next }), next)
@@ -148,11 +149,11 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
         </>
       )}
 
-      {kind === 'customer' && (
+      {(kind === 'customer' || kind === 'other') && (
         <CompanyList
           links={links}
           pending={pending}
-          onAdd={() => setPicking(true)}
+          onAdd={() => setPicking('add')}
           onPrimary={(l) => void run(() => classificationAPI.setPrimary(contactId, l.id))}
           onRemove={(l) => setRemoving(l)}
         />
@@ -161,11 +162,11 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
       {picking && (
         <CompanyPicker
           contactId={contactId}
-          title={kind === 'customer' ? 'Adicionar empresa' : 'Empresa do cliente'}
+          title={picking === 'add' ? 'Adicionar empresa' : 'Empresa do cliente'}
           hasCompanies={links.length > 0}
           pending={pending}
-          onCancel={() => setPicking(false)}
-          onConfirm={(ref) => void (kind === 'customer' ? addCompany(ref) : becomeCustomer(ref))}
+          onCancel={() => setPicking(null)}
+          onConfirm={(ref) => void (picking === 'add' ? addCompany(ref) : becomeCustomer(ref))}
         />
       )}
 
@@ -186,7 +187,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
         onCancel={() => setConfirmSpam(false)}
       />
 
-      {removing && links.filter((l) => l.status === 'active').length > 1 && (
+      {removing && (kind !== 'customer' || links.filter((l) => l.status === 'active').length > 1) && (
         <ConfirmDialog
           open
           title="Remover empresa?"
@@ -198,7 +199,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
           onCancel={() => setRemoving(null)}
         />
       )}
-      {removing && links.filter((l) => l.status === 'active').length <= 1 && (
+      {removing && kind === 'customer' && links.filter((l) => l.status === 'active').length <= 1 && (
         <div role="dialog" aria-label="Última empresa" className="mt-3 rounded-control border border-border-subtle bg-surface-muted p-3 text-xs">
           <p className="font-semibold text-text-primary">Esta é a última empresa de {contactName ?? 'este contato'}.</p>
           <p className="mt-1 text-text-secondary">Um cliente precisa de uma empresa. Ao remover, reclassifique o contato:</p>

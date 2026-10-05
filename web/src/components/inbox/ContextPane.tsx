@@ -11,6 +11,8 @@ import { TechnicianSelectModal } from '../TechnicianSelectModal';
 import ConversationSummary from './ConversationSummary';
 import TopicsPanel from '../topics/TopicsPanel';
 import { ContactKindControl } from '../contacts/ContactKindControl';
+import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor';
+import { ContactNotes } from '../contacts/ContactNotes';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -132,6 +134,17 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
         </div>
       </div>
 
+      {conversation?.contact_id && (
+        <ContactDetailsEditor
+          contactId={conversation.contact_id}
+          onChanged={() => {
+            void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+            void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+            void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+          }}
+        />
+      )}
+
       {/* ADR-0014: who this contact is (customer / other / spam). Reclassifying changes which Inbox
           list the contact's conversations belong to, so the lists and this pane are refreshed. */}
       {conversation?.contact_id && (
@@ -146,6 +159,8 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
           }}
         />
       )}
+
+      {conversation?.contact_id && <ContactNotes contactId={conversation.contact_id} />}
 
       {/* PRODUCT.7C1: on-demand, non-persisted AI conversation summary */}
       <ConversationSummary conversationId={conversationId} />
