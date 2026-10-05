@@ -16,3 +16,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 
 ## Índice recente
 - 0017 - Conversation, TopicThread e Ticket são conceitos distintos (Conversation Intelligence)
+- 0018 - Usuários internos × contatos externos × contas de cliente
