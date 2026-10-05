@@ -223,3 +223,50 @@ func TestTopicAccountAPIValidationPermissionsAndTenantIsolation(t *testing.T) {
 		t.Errorf("unknown topic = %d", code)
 	}
 }
+
+// Scenario E of the ADR-0018 acceptance list: ONE conversation, one contact with two companies, two subjects. Each subject
+// carries its own company; the conversation carries none; a ticket per subject targets its own account.
+func TestTwoSubjectsOfOneConversationCarryTheirOwnCompanies(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a.id, "tenant_admin")
+	acme, xpto := e.account(a.id, "ACME", "active"), e.account(a.id, "XPTO", "active")
+	e.contactLink(a.id, a.contact, acme, true)
+	e.contactLink(a.id, a.contact, xpto, false)
+	one, _ := e.topicWith(a, admin, "Link caiu", "o link da ACME caiu")
+	two, _ := e.topicWith(a, admin, "Fatura errada", "a fatura da XPTO veio errada")
+
+	// both subjects start undecided: the contact belongs to two companies, nothing is guessed
+	for _, tp := range []uuid.UUID{one.ID, two.ID} {
+		if _, c := e.acctCtx(a.id, admin, tp); c.Status != "needs_choice" {
+			t.Fatalf("topic %s must ask: %+v", tp, c)
+		}
+	}
+	if code := e.linkTopic(a.id, admin, one.ID, fmt.Sprintf(`{"account_id":%q,"relation":"primary"}`, acme)); code != 200 {
+		t.Fatal(code)
+	}
+	if code := e.linkTopic(a.id, admin, two.ID, fmt.Sprintf(`{"account_id":%q,"relation":"primary"}`, xpto)); code != 200 {
+		t.Fatal(code)
+	}
+	_, c1 := e.acctCtx(a.id, admin, one.ID)
+	_, c2 := e.acctCtx(a.id, admin, two.ID)
+	if c1.Primary == nil || c1.Primary.AccountID != acme || c2.Primary == nil || c2.Primary.AccountID != xpto {
+		t.Fatalf("each subject keeps its own company: %+v / %+v", c1.Primary, c2.Primary)
+	}
+	// one ticket per subject, each targeting its own account (set server-side from a validated company)
+	for _, x := range []struct {
+		topic, account uuid.UUID
+		subject        string
+	}{{one.ID, acme, "Link caiu"}, {two.ID, xpto, "Fatura errada"}} {
+		tk := uuid.New()
+		e.exec(`INSERT INTO tickets(id,tenant_id,conversation_id,status,subject,topic_scoped,customer_account_id) VALUES($1,$2,$3,'open',$4,true,$5)`, tk, a.id, a.conversation, x.subject, x.account)
+		e.exec(`INSERT INTO topic_ticket_links(tenant_id,topic_thread_id,ticket_id,relation,created_by) VALUES($1,$2,$3,'primary','agent')`, a.id, x.topic, tk)
+	}
+	if e.count(`SELECT count(*) FROM tickets t JOIN topic_ticket_links l ON l.tenant_id=t.tenant_id AND l.ticket_id=t.id
+	            WHERE t.tenant_id=$1 AND ((l.topic_thread_id=$2 AND t.customer_account_id=$4) OR (l.topic_thread_id=$3 AND t.customer_account_id=$5))`, a.id, one.ID, two.ID, acme, xpto) != 2 {
+		t.Fatal("each subject's ticket targets its own account")
+	}
+	if e.count(`SELECT count(*) FROM information_schema.columns WHERE table_name='conversations' AND column_name LIKE '%account%'`) != 0 {
+		t.Fatal("the conversation carries no company")
+	}
+}

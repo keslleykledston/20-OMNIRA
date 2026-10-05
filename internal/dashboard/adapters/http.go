@@ -18,9 +18,12 @@ import (
 // composes it separately from the existing Valkey-backed presence snapshot
 // (PRODUCT.1), never from Postgres.
 type Snapshot struct {
+	// OpenConversations is ATTENDANCE: conversations with staff (conversation_kind internal) are not counted (ADR-0018).
 	OpenConversations int `json:"open_conversations"`
 	OpenTickets       int `json:"open_tickets"`
 	TotalContacts     int `json:"total_contacts"`
+	// UnclassifiedContacts are external contacts nobody has classified yet (customer / other): the backlog to clear.
+	UnclassifiedContacts int `json:"unclassified_contacts"`
 }
 
 type Handler struct {
@@ -76,7 +79,7 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	var snap Snapshot
 
 	if err := q.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM conversations WHERE tenant_id=$1 AND status='open'`, tc.TenantID,
+		`SELECT COUNT(*) FROM conversations WHERE tenant_id=$1 AND status='open' AND conversation_kind <> 'internal'`, tc.TenantID,
 	).Scan(&snap.OpenConversations); err != nil {
 		http.Error(w, "failed to count open conversations", http.StatusInternalServerError)
 		return
@@ -91,6 +94,12 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 		`SELECT COUNT(*) FROM contacts WHERE tenant_id=$1`, tc.TenantID,
 	).Scan(&snap.TotalContacts); err != nil {
 		http.Error(w, "failed to count contacts", http.StatusInternalServerError)
+		return
+	}
+	if err := q.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM contacts WHERE tenant_id=$1 AND kind='unclassified' AND status='active'`, tc.TenantID,
+	).Scan(&snap.UnclassifiedContacts); err != nil {
+		http.Error(w, "failed to count unclassified contacts", http.StatusInternalServerError)
 		return
 	}
 

@@ -291,3 +291,42 @@ func TestGetSnapshotOpenTicketsIgnoresPlaceholders(t *testing.T) {
 		t.Fatalf("open_tickets = %d, want 2 (subject + ERP-linked; 2 placeholders and 1 resolved excluded)", snap.OpenTickets)
 	}
 }
+
+// ADR-0018: a conversation with staff is not attendance, so it never counts as an open conversation; the backlog of
+// contacts nobody classified yet is its own number.
+func TestGetSnapshotLeavesStaffConversationsOutAndCountsTheUnclassifiedBacklog(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	tenantID := seedTenant(t, seed, "internal-excluded")
+	userID := seedMember(t, seed, tenantID, "tenant_admin", "active")
+	staff := seedMember(t, seed, tenantID, "tenant_agent", "active")
+
+	c1, c2, c3 := seedContact(t, seed, tenantID), seedContact(t, seed, tenantID), seedContact(t, seed, tenantID)
+	seedConversation(t, seed, tenantID, c1, "open")
+	seedConversation(t, seed, tenantID, c2, "open")
+	if _, err := seed.Exec(context.Background(), `INSERT INTO conversations (tenant_id, contact_id, internal_user_id, conversation_kind, status) VALUES ($1, NULL, $2, 'internal', 'open')`, tenantID, staff); err != nil {
+		t.Fatal(err)
+	}
+	// one contact is classified, one blocked-unclassified is not counted as backlog (only ACTIVE unclassified ones are)
+	if _, err := seed.Exec(context.Background(), `UPDATE contacts SET kind='other' WHERE id=$1`, c1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(context.Background(), `UPDATE contacts SET status='blocked' WHERE id=$1`, c3); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewHandler(app)
+	rec := callAsTenant(t, app, tenantID, userID, "/api/v1/tenants/"+tenantID.String()+"/dashboard/snapshot", h.GetSnapshot)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("snapshot = %d %q", rec.Code, rec.Body.String())
+	}
+	snap := decodeSnapshot(t, rec)
+	if snap.OpenConversations != 2 {
+		t.Fatalf("open_conversations = %d, want 2: a conversation with staff is not attendance", snap.OpenConversations)
+	}
+	if snap.TotalContacts != 3 {
+		t.Fatalf("total_contacts = %d: staff are not contacts", snap.TotalContacts)
+	}
+	if snap.UnclassifiedContacts != 1 {
+		t.Fatalf("unclassified_contacts = %d, want 1 (c2 only: c1 is classified, c3 is blocked)", snap.UnclassifiedContacts)
+	}
+}

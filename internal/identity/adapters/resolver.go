@@ -5,6 +5,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	channeldomain "github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/identity/domain"
@@ -17,19 +20,28 @@ import (
 type SenderResolver struct {
 	repo    *Repository
 	enabled bool
+	outcome metric.Int64Counter
 }
 
 var _ inboxapp.IdentityResolver = (*SenderResolver)(nil)
 
 func NewSenderResolver(pool *pgxpool.Pool, enabled bool) *SenderResolver {
-	return &SenderResolver{repo: NewRepository(pool), enabled: enabled}
+	outcome, _ := otel.Meter("omnira/identity").Int64Counter("sender_resolution_total")
+	return &SenderResolver{repo: NewRepository(pool), enabled: enabled, outcome: outcome}
+}
+
+// count records the outcome of one resolution. The only attribute is the outcome: no phone, id or name ever.
+func (r *SenderResolver) count(ctx context.Context, outcome string) {
+	if r.outcome != nil {
+		r.outcome.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+	}
 }
 
 // ResolveSender looks the sender up by phone and by provider participant id. Two DIFFERENT staff members matching the
 // same sender is ambiguous and is treated as a conflict (fail closed): nobody is assumed to be anybody.
 func (r *SenderResolver) ResolveSender(ctx context.Context, connection channeldomain.ChannelConnection, phoneE164, participantID string) (inboxapp.SenderIdentity, error) {
 	if r == nil || !r.enabled {
-		return inboxapp.SenderIdentity{}, nil
+		return inboxapp.SenderIdentity{}, nil // switched off: not even counted, ingestion is exactly as before
 	}
 	var matches []*domain.Match
 	if phone, err := domain.NormalizePhone(phoneE164); err == nil {
@@ -53,17 +65,21 @@ func (r *SenderResolver) ResolveSender(ctx context.Context, connection channeldo
 		}
 	}
 	if len(matches) == 0 {
+		r.count(ctx, "external")
 		return inboxapp.SenderIdentity{}, nil
 	}
 	user := matches[0].UserID
 	for _, m := range matches {
 		if m.UserID != user { // two staff members claim the same sender
+			r.count(ctx, "conflict")
 			return inboxapp.SenderIdentity{Conflict: true}, nil
 		}
 		if m.HasOpenConflict { // a human has not decided yet whether this is the staff member or the external contact
+			r.count(ctx, "conflict")
 			return inboxapp.SenderIdentity{Conflict: true}, nil
 		}
 	}
+	r.count(ctx, "internal")
 	return inboxapp.SenderIdentity{Internal: true, UserID: user}, nil
 }
 

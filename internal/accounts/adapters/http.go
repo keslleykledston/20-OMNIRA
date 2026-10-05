@@ -26,9 +26,16 @@ const (
 // Handler serves the customer-account API (ADR-0018). Authority is the permission matrix of an ACTIVE membership;
 // the tenant always comes from the session, never from a payload.
 type Handler struct {
-	pool  *pgxpool.Pool
-	repo  *PostgresRepository
-	audit auditports.AuditEventRepository
+	pool     *pgxpool.Pool
+	repo     *PostgresRepository
+	audit    auditports.AuditEventRepository
+	disabled bool
+}
+
+// WithEnabled switches the account API on (the default) or off (OMNIRA_CUSTOMER_ACCOUNTS_ENABLED=false): off answers 404.
+func (h *Handler) WithEnabled(on bool) *Handler {
+	h.disabled = !on
+	return h
 }
 
 func NewHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository) *Handler {
@@ -41,6 +48,9 @@ func (h *Handler) authorizeWith(r *http.Request, permission string) (*tenancydom
 }
 
 func (h *Handler) authorize(r *http.Request, permission string) (*tenancydomain.TenantContext, int) {
+	if h.disabled {
+		return nil, http.StatusNotFound
+	}
 	tc, err := tenancydomain.FromContext(r.Context())
 	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil {
 		return nil, http.StatusUnauthorized

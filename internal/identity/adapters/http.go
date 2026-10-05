@@ -10,6 +10,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	auditports "github.com/omnira/omnira/internal/audit/ports"
@@ -23,13 +26,22 @@ const permManage = "identity.manage"
 // Handler serves the internal-identity API. EVERY route needs identity.manage (a sensitive permission: it decides who
 // the system considers staff). The tenant always comes from the session.
 type Handler struct {
-	pool  *pgxpool.Pool
-	repo  *Repository
-	audit auditports.AuditEventRepository
+	pool      *pgxpool.Pool
+	repo      *Repository
+	audit     auditports.AuditEventRepository
+	conflicts metric.Int64Counter
 }
 
 func NewHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository) *Handler {
-	return &Handler{pool: pool, repo: NewRepository(pool), audit: audit}
+	conflicts, _ := otel.Meter("omnira/identity").Int64Counter("identity_conflict_events_total")
+	return &Handler{pool: pool, repo: NewRepository(pool), audit: audit, conflicts: conflicts}
+}
+
+// countConflict records a conflict event (opened | resolved_confirmed_internal | resolved_identity_revoked): no ids.
+func (h *Handler) countConflict(ctx context.Context, event string, n int) {
+	if h.conflicts != nil && n > 0 {
+		h.conflicts.Add(ctx, int64(n), metric.WithAttributes(attribute.String("event", event)))
+	}
 }
 
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) (*tenancydomain.TenantContext, bool) {
@@ -278,6 +290,7 @@ func (h *Handler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.record(r, tc, auditdomain.ActionUserIdentityVerified, auditdomain.ResourceUserIdentity, id, map[string]any{"verification_source": string(domain.SourceAdmin), "conflicts_opened": len(res.Conflicts)})
+	h.countConflict(r.Context(), "opened", len(res.Conflicts))
 	conflicts := make([]conflictDTO, 0, len(res.Conflicts))
 	for _, c := range res.Conflicts {
 		h.record(r, tc, auditdomain.ActionIdentityConflictFound, auditdomain.ResourceIdentityConflict, c.ID, map[string]any{"identity_id": id.String(), "contact_id": c.ContactID.String()})
@@ -359,6 +372,7 @@ func (h *Handler) ResolveConflict(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	h.countConflict(r.Context(), "resolved_"+req.Resolution, 1)
 	h.record(r, tc, auditdomain.ActionIdentityConflictResolved, auditdomain.ResourceIdentityConflict, id, map[string]any{"resolution": req.Resolution})
 	write(w, http.StatusOK, toConflictDTO(*got))
 }

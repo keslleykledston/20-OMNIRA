@@ -10,6 +10,8 @@ export interface DashboardSnapshot {
   open_conversations: number;
   open_tickets: number;
   total_contacts: number;
+  // External contacts nobody has classified yet (ADR-0018). Conversations with staff never count as open conversations.
+  unclassified_contacts?: number;
 }
 
 const dashboardBase = () => `${API_BASE}/tenants/${getTenantId()}/dashboard`;

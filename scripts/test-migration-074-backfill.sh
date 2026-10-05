@@ -17,6 +17,11 @@ run() {
 }
 sql() { docker exec -i "$NAME" psql -U omnira -d rt -v ON_ERROR_STOP=1 -At "$@"; }
 run up >/dev/null
+# roll back everything newer than 074, newest first, then 074 itself (down only ever undoes the latest migration)
+for f in $(ls migrations/*.up.sql | sort -r); do
+  n=$(basename "$f" .up.sql)
+  [ "${n%%_*}" -gt 74 ] 2>/dev/null && run down "$n" >/dev/null
+done
 run down 000074_contact_classification >/dev/null
 sql <<'SQL'
 INSERT INTO tenants(id,legal_name,status) VALUES ('00000000-0000-0000-0000-0000000000a1','t','active');
@@ -31,7 +36,7 @@ INSERT INTO audit_events(tenant_id,actor_id,action,resource_type,resource_id,out
  ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b1','contact.kind_changed','contact','00000000-0000-0000-0000-000000000c02','success','{"kind_to":"other"}'),
  ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b1','contact.kind_changed','contact','00000000-0000-0000-0000-000000000c05','success','{"kind_to":"spam"}');
 SQL
-run up >/dev/null
+run up >/dev/null # re-applies 074 and everything after it
 got=$(sql -c "SELECT display_name||'|'||kind||'|'||coalesce(classification_source,'-')||'|'||(classified_by_user_id IS NOT NULL) FROM contacts ORDER BY display_name")
 want='customer|unclassified|migration|false
 default other|unclassified|migration|false

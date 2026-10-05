@@ -419,3 +419,22 @@ func TestAccountTicketsAreTheRealTicketsThatTargetIt(t *testing.T) {
 		t.Errorf("unknown = %d", rec.Code)
 	}
 }
+
+func TestAccountAPIAnswers404WhenSwitchedOff(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin", "active")
+	h := NewHandler(e.app, nil).WithEnabled(false)
+	if rec := e.call(a, admin, http.MethodPost, `{"name":"ACME"}`, nil, h.CreateAccount); rec.Code != http.StatusNotFound {
+		t.Errorf("create = %d, want 404", rec.Code)
+	}
+	if rec := e.call(a, admin, http.MethodGet, "", nil, h.ListAccounts); rec.Code != http.StatusNotFound {
+		t.Errorf("list = %d, want 404", rec.Code)
+	}
+	if e.count(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, a) != 0 {
+		t.Fatal("a switched-off API created an account")
+	}
+	if rec := e.call(a, admin, http.MethodPost, `{"name":"ACME"}`, nil, h.WithEnabled(true).CreateAccount); rec.Code != http.StatusCreated {
+		t.Errorf("flag on = %d", rec.Code)
+	}
+}

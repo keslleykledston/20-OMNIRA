@@ -1,295 +1,290 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { accountsAPI } from '../lib/api'
-import { isDevSurface, UnavailableSurface } from '../components/UnavailableSurface'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { EmptyState, ErrorState, Icon, PageHeader, PermissionState, SearchField, Skeleton, StatusBadge } from '../components/primitives'
+import {
+  ACCOUNT_STATUS_LABEL,
+  ACCOUNT_TYPE_LABEL,
+  accountErrorMessage,
+  accountsAPI,
+  type Account,
+  type AccountStatus,
+  type AccountType,
+} from '../lib/accounts'
+import { useDebounced } from '../hooks/useDebounced'
+import { getTenantId } from '../lib/session'
+import { useAccess } from '../lib/useAccess'
+import { formatDate } from './ContactsPage'
 
+const FIELD =
+  'rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary ' +
+  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary'
+
+const STATUS_TONE: Record<AccountStatus, 'success' | 'default'> = { active: 'success', inactive: 'default', archived: 'default' }
+
+// Customer accounts (ADR-0018): the organizations the tenant serves. A provider (CRM) company is only a link to one of them
+// and is created the first time it is picked for a contact or a ticket; this screen is where they are reviewed and kept.
 export default function Accounts() {
-  const queryClient = useQueryClient()
-  const [showForm, setShowForm] = useState(false)
-  const [selectedAccount, setSelectedAccount] = useState<any>(null)
-  const [formData, setFormData] = useState({ name: '', account_type: 'operator' })
-  const [filter, setFilter] = useState('all')
+  const tenantId = getTenantId()
+  const qc = useQueryClient()
+  const access = useAccess()
+  const canRead = access.can('account.read')
+  const canManage = access.can('account.manage')
+  const canTickets = access.can('ticket.read')
+  const [search, setSearch] = useState('')
+  const q = useDebounced(search.trim(), 300)
+  const [status, setStatus] = useState<AccountStatus | ''>('')
+  const [selected, setSelected] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newType, setNewType] = useState<AccountType>('customer')
+  const [error, setError] = useState('')
 
-  const { data: accounts = [], isLoading } = useQuery({
-    queryKey: ['accounts'],
-    queryFn: () => accountsAPI.list().then(r => r.data)
+  const list = useQuery({
+    queryKey: ['accounts', tenantId, q, status],
+    queryFn: () => accountsAPI.list({ q: q || undefined, status: status || undefined }),
+    enabled: canRead,
+    retry: false,
+  })
+  const refresh = () => qc.invalidateQueries({ queryKey: ['accounts', tenantId] })
+  const create = useMutation({
+    mutationFn: () => accountsAPI.create({ name: newName.trim(), account_type: newType }),
+    onSuccess: (a) => {
+      setCreating(false)
+      setNewName('')
+      setError('')
+      setSelected(a.id)
+      void refresh()
+    },
+    onError: (e) => setError(accountErrorMessage(e)),
   })
 
-  const createMutation = useMutation({
-    mutationFn: (data: any) => accountsAPI.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['accounts'] })
-      setShowForm(false)
-      setFormData({ name: '', account_type: 'operator' })
-    }
-  })
-
-  const suspendMutation = useMutation({
-    mutationFn: (id: string) => accountsAPI.suspend(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['accounts'] })
-    }
-  })
-
-  const reactivateMutation = useMutation({
-    mutationFn: (id: string) => accountsAPI.reactivate(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['accounts'] })
-    }
-  })
-
-  // accountsAPI is a frontend fixture — no real "account" backend domain
-  // exists outside the orphaned internal/bpo package (never wired to HTTP).
-  // Never present fixture data as if it were real business data.
-  if (!isDevSurface()) return <UnavailableSurface title="Contas" />
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (formData.name.trim()) {
-      createMutation.mutate(formData)
-    }
+  if (!access.isLoading && !canRead) {
+    return (
+      <div className="px-6 py-6 lg:px-8 lg:py-8">
+        <PermissionState message="Você não tem permissão para ver as empresas." />
+      </div>
+    )
   }
 
-  const filteredAccounts = accounts.filter((acc: any) => {
-    if (filter === 'all') return true
-    return acc.status === filter
-  })
-
-  const accountTypeLabel = (type: string) => {
-    const labels: Record<string, string> = {
-      operator: 'Operador',
-      contact_center: 'Central de Atendimento',
-      reseller: 'Reseller'
-    }
-    return labels[type] || type
-  }
-
+  const items = list.data ?? []
   return (
-    <div className="container py-8">
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-slate-900">Contas BPO</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="btn-primary"
-        >
-          {showForm ? '✕ Cancelar' : '+ Nova Conta'}
-        </button>
+    <div className="space-y-6 px-6 py-6 lg:px-8 lg:py-8">
+      <PageHeader title="Empresas" description="As organizações que a sua operação atende. Uma empresa do CRM é só um vínculo: ela entra aqui na primeira vez que é escolhida." />
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="sm:max-w-sm sm:flex-1">
+          <SearchField aria-label="Buscar empresa" placeholder="Buscar por nome..." value={search} onChange={(e) => setSearch(e.target.value)} onClear={() => setSearch('')} />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-text-secondary">
+          Status
+          <select aria-label="Status" className={FIELD} value={status} onChange={(e) => setStatus(e.target.value as AccountStatus | '')}>
+            <option value="">Ativas e inativas</option>
+            <option value="active">Ativas</option>
+            <option value="inactive">Inativas</option>
+            <option value="archived">Arquivadas</option>
+          </select>
+        </label>
+        {canManage && (
+          <button type="button" onClick={() => setCreating((v) => !v)} className="rounded-control bg-accent-primary px-3 py-2 text-sm font-medium text-white hover:opacity-90">
+            Nova empresa
+          </button>
+        )}
       </div>
 
-      {showForm && (
-        <div className="bg-white rounded-lg shadow p-6 mb-8 border-l-4 border-blue-500">
-          <h2 className="text-lg font-semibold mb-4">Criar Nova Conta</h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Nome da Conta
-              </label>
-              <input
-                type="text"
-                placeholder="ex: Support Center SP"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                Tipo de Conta
-              </label>
-              <select
-                value={formData.account_type}
-                onChange={(e) => setFormData({ ...formData, account_type: e.target.value })}
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="operator">Operador</option>
-                <option value="contact_center">Central de Atendimento</option>
-                <option value="reseller">Reseller</option>
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={createMutation.isPending}
-              className="btn-primary w-full disabled:opacity-50"
-            >
-              {createMutation.isPending ? 'Criando...' : 'Criar Conta'}
-            </button>
-          </form>
-        </div>
+      {canManage && creating && (
+        <form
+          aria-label="Nova empresa"
+          className="flex flex-col gap-3 rounded-card border border-border-subtle bg-surface p-4 sm:flex-row sm:items-end"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (newName.trim()) create.mutate()
+          }}
+        >
+          <label className="flex-1 text-sm text-text-secondary">
+            Nome
+            <input aria-label="Nome da empresa" className={FIELD + ' mt-1 w-full'} maxLength={200} value={newName} onChange={(e) => setNewName(e.target.value)} />
+          </label>
+          <label className="text-sm text-text-secondary">
+            Tipo
+            <select aria-label="Tipo da empresa" className={FIELD + ' mt-1 w-full'} value={newType} onChange={(e) => setNewType(e.target.value as AccountType)}>
+              {(Object.keys(ACCOUNT_TYPE_LABEL) as AccountType[]).map((t) => (
+                <option key={t} value={t}>
+                  {ACCOUNT_TYPE_LABEL[t]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={!newName.trim() || create.isPending} className="rounded-control bg-accent-primary px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
+            Criar
+          </button>
+        </form>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-status-danger">
+          {error}
+        </p>
       )}
 
-      {/* Filtros */}
-      <div className="mb-6 flex gap-2">
-        <button
-          onClick={() => setFilter('all')}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            filter === 'all'
-              ? 'bg-blue-600 text-white'
-              : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-          }`}
-        >
-          Todas
-        </button>
-        <button
-          onClick={() => setFilter('active')}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            filter === 'active'
-              ? 'bg-green-600 text-white'
-              : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-          }`}
-        >
-          Ativas ({accounts.filter((a: any) => a.status === 'active').length})
-        </button>
-        <button
-          onClick={() => setFilter('inactive')}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            filter === 'inactive'
-              ? 'bg-yellow-600 text-white'
-              : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-          }`}
-        >
-          Inativas ({accounts.filter((a: any) => a.status === 'inactive').length})
-        </button>
-      </div>
-
-      {/* Tabela */}
-      {isLoading ? (
-        <div className="text-center py-8 text-slate-500">Carregando contas...</div>
-      ) : (
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Nome</th>
-                <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Tipo</th>
-                <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Status</th>
-                <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Criada em</th>
-                <th className="px-6 py-3 text-left text-sm font-semibold text-slate-700">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredAccounts.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
-                    Nenhuma conta encontrada
-                  </td>
-                </tr>
-              ) : (
-                filteredAccounts.map((account: any) => (
-                  <tr key={account.id} className="border-b border-slate-200 hover:bg-slate-50">
-                    <td className="px-6 py-4 text-sm font-medium text-slate-900">
-                      {account.name}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-slate-600">
-                      {accountTypeLabel(account.account_type)}
-                    </td>
-                    <td className="px-6 py-4 text-sm">
-                      <span
-                        className={`badge ${
-                          account.status === 'active'
-                            ? 'badge-success'
-                            : account.status === 'suspended'
-                            ? 'badge-error'
-                            : 'badge-warning'
-                        }`}
-                      >
-                        {account.status === 'active' ? '✓ Ativa' :
-                         account.status === 'suspended' ? '⊗ Suspensa' : '○ Inativa'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-slate-600">
-                      {new Date(account.created_at).toLocaleDateString('pt-BR')}
-                    </td>
-                    <td className="px-6 py-4 text-sm space-x-2">
-                      <button
-                        onClick={() => setSelectedAccount(account)}
-                        className="text-blue-600 hover:text-blue-800 font-medium"
-                      >
-                        Ver
-                      </button>
-                      {account.status === 'active' ? (
-                        <button
-                          onClick={() => suspendMutation.mutate(account.id)}
-                          disabled={suspendMutation.isPending}
-                          className="text-red-600 hover:text-red-800 font-medium disabled:opacity-50"
-                        >
-                          Suspender
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => reactivateMutation.mutate(account.id)}
-                          disabled={reactivateMutation.isPending}
-                          className="text-green-600 hover:text-green-800 font-medium disabled:opacity-50"
-                        >
-                          Ativar
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      {list.isError && <ErrorState message={accountErrorMessage(list.error, 'Não foi possível carregar as empresas.')} action={{ label: 'Tentar novamente', onClick: () => void list.refetch() }} />}
+      {list.isLoading && (
+        <div className="space-y-3 rounded-card border border-border-subtle bg-surface p-6">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} width="w-full" height="h-4" />
+          ))}
         </div>
       )}
+      {!list.isLoading && !list.isError && items.length === 0 && (
+        <EmptyState
+          icon={<Icon name="info" />}
+          title={q || status ? 'Nenhuma empresa encontrada' : 'Nenhuma empresa ainda'}
+          description={q || status ? 'Nenhuma empresa combina com a busca e o filtro.' : 'Ao classificar um contato como cliente ou abrir um chamado para uma empresa do CRM, ela aparece aqui.'}
+        />
+      )}
 
-      {/* Modal de Detalhes */}
-      {selectedAccount && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full">
-            <div className="flex justify-between items-start mb-4">
-              <h2 className="text-lg font-semibold text-slate-900">{selectedAccount.name}</h2>
-              <button
-                onClick={() => setSelectedAccount(null)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div className="bg-slate-50 p-4 rounded-lg">
-                <div className="text-xs font-medium text-slate-500 uppercase mb-2">Tipo</div>
-                <div className="text-sm font-semibold text-slate-900">
-                  {accountTypeLabel(selectedAccount.account_type)}
-                </div>
-              </div>
-
-              <div className="bg-slate-50 p-4 rounded-lg">
-                <div className="text-xs font-medium text-slate-500 uppercase mb-2">Status</div>
-                <div className="text-sm font-semibold">
-                  <span
-                    className={`badge ${
-                      selectedAccount.status === 'active'
-                        ? 'badge-success'
-                        : 'badge-warning'
-                    }`}
-                  >
-                    {selectedAccount.status}
-                  </span>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 p-4 rounded-lg">
-                <div className="text-xs font-medium text-slate-500 uppercase mb-2">ID</div>
-                <div className="text-xs font-mono text-slate-600 break-all">
-                  {selectedAccount.id}
-                </div>
-              </div>
-
-              <div className="border-t border-slate-200 pt-4">
+      {items.length > 0 && (
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <ul className="divide-y divide-border-subtle rounded-card border border-border-subtle bg-surface" aria-label="Empresas">
+            {items.map((a) => (
+              <li key={a.id}>
                 <button
-                  onClick={() => setSelectedAccount(null)}
-                  className="btn-secondary w-full"
+                  type="button"
+                  onClick={() => setSelected(selected === a.id ? null : a.id)}
+                  aria-pressed={selected === a.id}
+                  className={'flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-surface-muted ' + (selected === a.id ? 'bg-accent-primary-soft' : '')}
                 >
-                  Fechar
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-text-primary">{a.name}</span>
+                    <span className="block text-xs text-text-tertiary">
+                      {ACCOUNT_TYPE_LABEL[a.account_type]} · desde {formatDate(a.created_at)}
+                    </span>
+                  </span>
+                  <StatusBadge status={STATUS_TONE[a.status]} size="sm">
+                    {ACCOUNT_STATUS_LABEL[a.status]}
+                  </StatusBadge>
                 </button>
-              </div>
-            </div>
-          </div>
+              </li>
+            ))}
+          </ul>
+          {selected && <AccountDetail id={selected} canManage={canManage} canTickets={canTickets} onChanged={() => void refresh()} />}
         </div>
       )}
     </div>
+  )
+}
+
+function AccountDetail({ id, canManage, canTickets, onChanged }: { id: string; canManage: boolean; canTickets: boolean; onChanged: () => void }) {
+  const tenantId = getTenantId()
+  const qc = useQueryClient()
+  const [rename, setRename] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const key = ['account', tenantId, id]
+  const account = useQuery({ queryKey: key, queryFn: () => accountsAPI.get(id), retry: false })
+  const tickets = useQuery({ queryKey: ['account-tickets', tenantId, id], queryFn: () => accountsAPI.tickets(id), enabled: canTickets, retry: false })
+  const update = useMutation({
+    mutationFn: (body: Parameters<typeof accountsAPI.update>[1]) => accountsAPI.update(id, body),
+    onSuccess: () => {
+      setError('')
+      setRename(null)
+      void qc.invalidateQueries({ queryKey: key })
+      onChanged()
+    },
+    onError: (e) => setError(accountErrorMessage(e)),
+  })
+
+  if (account.isLoading) return <Skeleton width="w-full" height="h-40" />
+  if (account.isError || !account.data) return <ErrorState message={accountErrorMessage(account.error, 'Não foi possível carregar a empresa.')} />
+  const a: Account = account.data
+  return (
+    <section aria-label={`Empresa ${a.name}`} className="space-y-5 rounded-card border border-border-subtle bg-surface p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {rename === null ? (
+          <h2 className="text-section-sm font-semibold text-text-primary break-words">{a.name}</h2>
+        ) : (
+          <form
+            className="flex flex-1 gap-2"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (rename.trim()) update.mutate({ name: rename.trim() })
+            }}
+          >
+            <input aria-label="Novo nome" className={FIELD + ' flex-1'} maxLength={200} value={rename} onChange={(e) => setRename(e.target.value)} />
+            <button type="submit" disabled={!rename.trim() || update.isPending} className="rounded-control bg-accent-primary px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
+              Salvar
+            </button>
+            <button type="button" onClick={() => setRename(null)} className="rounded-control border border-border-subtle px-3 py-2 text-sm">
+              Cancelar
+            </button>
+          </form>
+        )}
+        <StatusBadge status={STATUS_TONE[a.status]}>{ACCOUNT_STATUS_LABEL[a.status]}</StatusBadge>
+      </div>
+
+      {canManage && rename === null && (
+        <div className="flex flex-wrap gap-2 text-sm">
+          <button type="button" onClick={() => setRename(a.name)} className="rounded-control border border-border-subtle px-3 py-1.5 hover:bg-surface-muted">
+            Renomear
+          </button>
+          {a.status === 'active' && (
+            <button type="button" disabled={update.isPending} onClick={() => update.mutate({ status: 'inactive' })} className="rounded-control border border-border-subtle px-3 py-1.5 hover:bg-surface-muted">
+              Inativar
+            </button>
+          )}
+          {a.status !== 'active' && (
+            <button type="button" disabled={update.isPending} onClick={() => update.mutate({ status: 'active' })} className="rounded-control border border-border-subtle px-3 py-1.5 hover:bg-surface-muted">
+              {a.status === 'archived' ? 'Restaurar' : 'Reativar'}
+            </button>
+          )}
+          {a.status !== 'archived' && (
+            <button type="button" disabled={update.isPending} onClick={() => update.mutate({ status: 'archived' })} className="rounded-control border border-status-danger-border px-3 py-1.5 text-status-danger hover:bg-status-danger-soft">
+              Arquivar
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-status-danger">
+          {error}
+        </p>
+      )}
+
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-tertiary">Vínculos com o CRM</h3>
+        {(a.external_links ?? []).length === 0 ? (
+          <p className="text-sm text-text-secondary">Nenhuma empresa do CRM vinculada. Esta empresa existe só no OMNIRA.</p>
+        ) : (
+          <ul className="space-y-1.5 text-sm">
+            {a.external_links!.map((l) => (
+              <li key={l.id} className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-text-primary">{l.external_name_snapshot ?? `Empresa ${l.external_company_id}`}</span>
+                <span className="text-xs text-text-tertiary">
+                  {l.provider} · id {l.external_company_id}
+                </span>
+                <StatusBadge status={l.status === 'active' ? 'success' : 'default'} size="sm">
+                  {l.status === 'active' ? 'ativo' : 'inativo no CRM'}
+                </StatusBadge>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {canTickets && (
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-tertiary">Chamados</h3>
+          {tickets.isLoading && <Skeleton width="w-full" height="h-4" />}
+          {tickets.isError && <p className="text-sm text-text-secondary">Não foi possível carregar os chamados.</p>}
+          {tickets.data && tickets.data.length === 0 && <p className="text-sm text-text-secondary">Nenhum chamado para esta empresa.</p>}
+          <ul className="space-y-1.5 text-sm">
+            {(tickets.data ?? []).map((t) => (
+              <li key={t.id} className="flex flex-wrap items-center gap-2">
+                {t.external_ticket_id && <span className="font-mono text-xs text-text-tertiary">#{t.external_ticket_id}</span>}
+                <span className="text-text-primary">{t.subject.trim() || 'Sem assunto'}</span>
+                <span className="text-xs text-text-tertiary">{t.status}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   )
 }

@@ -412,3 +412,27 @@ func TestContactTicketsExposeTheTargetAccount(t *testing.T) {
 		t.Fatalf("with=%d without=%d", with, without)
 	}
 }
+
+// A switched-off feature answers 404 on every route, like every other flag (OMNIRA_CONTACT_CLASSIFICATION_ENABLED).
+func TestClassificationAPIAnswers404WhenSwitchedOff(t *testing.T) {
+	e := newHTTPEnv(t)
+	c := e.contact("+5592922220301")
+	path := map[string]string{"contact_id": c.String(), "link_id": uuid.NewString()}
+	off := e.h.WithEnabled(false)
+	for name, fn := range map[string]http.HandlerFunc{
+		"get": off.GetClassification, "put": off.PutClassification, "link": off.LinkAccount,
+		"end": off.EndLink, "primary": off.SetPrimary, "suggestions": off.ListCompanySuggestions,
+	} {
+		if rec := e.do(e.agent, e.tenant, http.MethodPost, `{"kind":"other"}`, path, fn); rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404 with the flag off", name, rec.Code)
+		}
+	}
+	if kindOf(t, e.seed, c) != "unclassified" {
+		t.Fatal("a switched-off API changed data")
+	}
+	// and back on: the same call works
+	on := e.h.WithEnabled(true)
+	if rec := e.do(e.agent, e.tenant, http.MethodPut, `{"kind":"other"}`, path, on.PutClassification); rec.Code != 200 || kindOf(t, e.seed, c) != "other" {
+		t.Fatalf("flag on = %d", rec.Code)
+	}
+}

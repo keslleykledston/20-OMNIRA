@@ -127,3 +127,6 @@ Proposta, em fatias pequenas, nesta ordem:
 ## Emenda (2026-10-05): tipo `agent` (Agente da equipe)
 Quarto valor de `contacts.kind` (migration 000072): **`agent`** = membro da equipe K3G que atua no atendimento e escreve para o número de serviço. Escolha manual no controle "Tipo de contato" (Cliente / Outros / Agente), pela mesma permissão `conversation.claim`.
 Efeito: a conversa continua **visível** na lista padrão, mas **não é roteada** para fila (como spam) e as conversas abertas e sem dono saem da fila ao classificar; nada é inferido por número ou texto; o filtro `kind=agent` existe na API e na lista de contatos. Não vincula o contato a um usuário do OMNIRA (isso seria outra decisão).
+
+## Emenda (2026-10-05, ADR-0018): `agent` retirado, `unclassified` é o padrão
+A emenda anterior (tipo `agent`) foi um erro de modelagem: **quem atende é Usuário (User/Membership), nunca Contato**. A migration 000074 retira `agent` (vira `other`, `classification_source=migration`), troca o padrão para **`unclassified`** (um contato novo ainda não foi classificado) e acrescenta `classification_source`/`classified_at`/`classified_by_user_id`. `customer` exige ao menos um vínculo ativo com uma empresa (`contact_account_links`; gatilho adiado no banco + transação). Ver ADR-0018.

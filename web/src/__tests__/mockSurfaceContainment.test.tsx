@@ -1,19 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import ReportsPage from '../pages/Reports';
-import Accounts from '../pages/Accounts';
 import { renderAt, setSession } from './testUtils';
 
 // FRONTEND.1: mock-backed pages must never present fabricated business data
-// as if it were real outside development. The two pages here have no real
-// backend behind them (see docs/delivery/HANDOFF-NEXT-AGENT.md DESIGN.5).
+// as if it were real outside development. The page here has no real
+// backend behind it (see docs/delivery/HANDOFF-NEXT-AGENT.md DESIGN.5).
 // Supervisor became real in PRODUCT.1, Tickets in PRODUCT.2-B, Dashboard in
-// PRODUCT.3-B — none of the three is contained anymore; see
+// PRODUCT.3-B and Accounts (Empresas) in ADR-0018 — none of them is contained anymore; see
 // SupervisorDashboard.test.tsx / Tickets.test.tsx / Dashboard.test.tsx.
 
 const MOCK_SURFACES: Array<{ title: string; Component: () => JSX.Element }> = [
   { title: 'Relatórios', Component: ReportsPage },
-  { title: 'Contas', Component: Accounts },
 ];
 
 afterEach(() => {
@@ -34,7 +32,6 @@ describe('mock surface containment', () => {
       ).toBeInTheDocument();
 
       // None of this fixture's known fake business data ever reaches the DOM.
-      expect(screen.queryByText(/Test Company LTDA/)).not.toBeInTheDocument();
       expect(screen.queryByText(/Integração API com certificado SSL/)).not.toBeInTheDocument();
       expect(screen.queryByText(/Conformidade SLA/)).not.toBeInTheDocument();
     });

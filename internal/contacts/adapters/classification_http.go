@@ -12,6 +12,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	accountsdomain "github.com/omnira/omnira/internal/accounts/domain"
@@ -40,10 +43,29 @@ type ClassificationHandler struct {
 	accounts *accountsadapters.PostgresRepository
 	audit    auditports.AuditEventRepository
 	resolver ticketsports.TicketingRuntimeResolver
+	changes  metric.Int64Counter
+	disabled bool
+}
+
+// WithEnabled switches the whole classification/company API on (the default) or off
+// (OMNIRA_CONTACT_CLASSIFICATION_ENABLED=false): a switched-off feature answers 404, like every other flag.
+func (h *ClassificationHandler) WithEnabled(on bool) *ClassificationHandler {
+	h.disabled = !on
+	return h
 }
 
 func NewClassificationHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository) *ClassificationHandler {
-	return &ClassificationHandler{pool: pool, repo: NewClassificationRepository(pool), accounts: accountsadapters.NewPostgresRepository(pool), audit: audit}
+	changes, _ := otel.Meter("omnira/contacts").Int64Counter("contact_classification_changes_total")
+	return &ClassificationHandler{pool: pool, repo: NewClassificationRepository(pool), accounts: accountsadapters.NewPostgresRepository(pool), audit: audit, changes: changes}
+}
+
+// countChange records one classification change by from -> to and source; never a contact id, name or phone.
+func (h *ClassificationHandler) countChange(ctx context.Context, c Change, source domain.ClassificationSource) {
+	if h.changes == nil || !c.Changed {
+		return
+	}
+	h.changes.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("from", string(c.PreviousKind)), attribute.String("to", string(c.Kind)), attribute.String("source", string(source))))
 }
 
 // SetCompanyDirectoryResolver wires the SAME tenant-scoped runtime resolver ticketing uses (no second credential).
@@ -62,6 +84,10 @@ func memberHas(ctx context.Context, pool *pgxpool.Pool, tc *tenancydomain.Tenant
 }
 
 func (h *ClassificationHandler) authorize(w http.ResponseWriter, r *http.Request, permission string) (*tenancydomain.TenantContext, uuid.UUID, bool) {
+	if h.disabled {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil, uuid.Nil, false
+	}
 	tc, err := tenancydomain.FromContext(r.Context())
 	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -433,6 +459,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 		failDomain(w, err)
 		return
 	}
+	h.countChange(r.Context(), change, domain.SourceManual)
 	if change.Changed {
 		if kind == domain.KindSpam {
 			_, _ = platformdb.QuerierFromContext(r.Context(), h.pool).Exec(r.Context(), `
@@ -522,6 +549,7 @@ func (h *ClassificationHandler) EndLink(w http.ResponseWriter, r *http.Request) 
 		failDomain(w, err)
 		return
 	}
+	h.countChange(r.Context(), change, domain.SourceManual)
 	h.record(r, tc, auditdomain.ActionContactAccountUnlinked, contactID, map[string]any{"link_id": linkID.String(), "kind_changed": change.Changed, "kind_from": string(change.PreviousKind), "kind_to": string(change.Kind)})
 	if change.Changed {
 		h.record(r, tc, auditdomain.ActionContactReclassified, contactID, map[string]any{"kind_from": string(change.PreviousKind), "kind_to": string(change.Kind), "classification_source": string(domain.SourceManual)})

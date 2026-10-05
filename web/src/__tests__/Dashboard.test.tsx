@@ -16,7 +16,19 @@ beforeEach(() => {
 });
 
 describe('Dashboard', () => {
-  it('renders the four real V1 metric cards from the real snapshot and presence sources', async () => {
+  it('shows the unclassified-contacts backlog next to the real metric cards (ADR-0018)', async () => {
+    setSession();
+    mockGets({
+      '/me/access': { permissions: ['dashboard.read', 'agent.read'] },
+      '/dashboard/snapshot': { open_conversations: 3, open_tickets: 5, total_contacts: 12, unclassified_contacts: 7 },
+      '/agents/presence': { online_agent_profile_ids: [] },
+    });
+    renderAt(<Dashboard />);
+    const backlog = await screen.findByText('Não classificados');
+    expect(within(backlog.parentElement!).getByText('7')).toBeInTheDocument();
+  });
+
+  it('renders the real V1 metric cards from the real snapshot and presence sources', async () => {
     setSession();
     mockGets({
       '/me/access': { permissions: ['dashboard.read', 'agent.read'] },

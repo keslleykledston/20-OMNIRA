@@ -21,6 +21,7 @@ import (
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
+	identityapp "github.com/omnira/omnira/internal/identity/application"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -439,7 +440,9 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/identities/{identity_id}/revoke", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.Revoke))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/identity-conflicts", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.ListConflicts))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/identity-conflicts/{conflict_id}/resolve", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.ResolveConflict))))
-	accountsHandler := accountsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+	// ADR-0018 switches, read once like the rest of OMNIRA's flags (classification and accounts default ON).
+	identityFlags := identityapp.FlagsFromEnv(nil)
+	accountsHandler := accountsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool)).WithEnabled(identityFlags.CustomerAccountsEnabled)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.ListAccounts))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.CreateAccount))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/accounts/{account_id}", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.GetAccount))))
@@ -450,7 +453,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContacts))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.GetContact))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.SetKind))))
-	classificationHandler := contactsadapters.NewClassificationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+	classificationHandler := contactsadapters.NewClassificationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool)).WithEnabled(identityFlags.ContactClassificationEnabled)
 	s.contactClassification = classificationHandler
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/classification", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.GetClassification))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/company-suggestions", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.ListCompanySuggestions))))

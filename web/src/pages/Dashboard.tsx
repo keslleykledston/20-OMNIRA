@@ -75,6 +75,7 @@ export default function Dashboard() {
     { label: 'Conversas abertas', value: snapshot.data?.open_conversations, icon: 'conversations', tone: 'neutral', helperText: 'Em andamento agora' },
     { label: 'Tickets abertos', value: snapshot.data?.open_tickets, icon: 'tickets', tone: 'warning', helperText: 'Aguardando resolução' },
     { label: 'Contatos', value: snapshot.data?.total_contacts, icon: 'contacts', tone: 'info', helperText: 'Cadastrados no tenant' },
+    { label: 'Não classificados', value: snapshot.data?.unclassified_contacts, icon: 'contacts', tone: 'warning', helperText: 'Contatos sem tipo (cliente ou outros)' },
     { label: 'Agentes online', value: canViewPresence ? onlineIds.size : undefined, icon: 'supervisor', tone: 'success', helperText: 'Disponíveis agora' },
   ]
 
@@ -103,9 +104,9 @@ export default function Dashboard() {
             <h2 className="text-body-md font-bold text-text-primary">Indicadores operacionais</h2>
             <p className="mt-0.5 text-xs text-text-tertiary">Atualizado agora</p>
           </div>
-          <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 sm:p-6 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 sm:p-6 lg:grid-cols-3 xl:grid-cols-5">
             {snapshot.isLoading
-              ? Array.from({ length: 4 }).map((_, i) => <MetricCardSkeleton key={i} />)
+              ? Array.from({ length: 5 }).map((_, i) => <MetricCardSkeleton key={i} />)
               : cards.map((c) => (
                   <MetricCard key={c.label} label={c.label} value={c.value} icon={c.icon} tone={c.tone} helperText={c.helperText} />
                 ))}
