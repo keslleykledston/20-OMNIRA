@@ -93,9 +93,9 @@ func TestSetKindIsPermissionedAuditedIdempotentAndTenantScoped(t *testing.T) {
 		return call(t, app, tenant, user, http.MethodPatch, "/", body, map[string]string{"contact_id": contact.String()}, h.SetKind)
 	}
 
-	// New contacts start as 'other'.
-	if k := kindOf(t, seed, cA); k != "other" {
-		t.Fatalf("default kind = %q, want other", k)
+	// New contacts start unclassified (ADR-0018).
+	if k := kindOf(t, seed, cA); k != "unclassified" {
+		t.Fatalf("default kind = %q, want unclassified", k)
 	}
 	// Refused without touching anything: a revoked membership, and someone who belongs to another tenant only.
 	if rec := patch(a, revoked, cA, `{"kind":"spam"}`); rec.Code != http.StatusForbidden {
@@ -104,7 +104,7 @@ func TestSetKindIsPermissionedAuditedIdempotentAndTenantScoped(t *testing.T) {
 	if rec := patch(a, adminB, cA, `{"kind":"spam"}`); rec.Code != http.StatusForbidden {
 		t.Fatalf("outsider = %d, want 403", rec.Code)
 	}
-	if k := kindOf(t, seed, cA); k != "other" || kindAudits(t, seed, a) != 0 {
+	if k := kindOf(t, seed, cA); k != "unclassified" || kindAudits(t, seed, a) != 0 {
 		t.Fatalf("a refused request changed state: kind=%s audits=%d", k, kindAudits(t, seed, a))
 	}
 
@@ -145,8 +145,8 @@ func TestSetKindIsPermissionedAuditedIdempotentAndTenantScoped(t *testing.T) {
 	}
 	var from, to string
 	var dequeued int
-	if err := seed.QueryRow(context.Background(), `SELECT metadata->>'kind_from', metadata->>'kind_to', (metadata->>'conversations_dequeued')::int FROM audit_events WHERE tenant_id=$1 AND action='contact.kind_changed'`, a).Scan(&from, &to, &dequeued); err != nil || from != "other" || to != "spam" || dequeued != 1 {
-		t.Fatalf("audit = %s/%s dequeued=%d (%v), want other/spam/1", from, to, dequeued, err)
+	if err := seed.QueryRow(context.Background(), `SELECT metadata->>'kind_from', metadata->>'kind_to', (metadata->>'conversations_dequeued')::int FROM audit_events WHERE tenant_id=$1 AND action='contact.kind_changed'`, a).Scan(&from, &to, &dequeued); err != nil || from != "unclassified" || to != "spam" || dequeued != 1 {
+		t.Fatalf("audit = %s/%s dequeued=%d (%v), want unclassified/spam/1", from, to, dequeued, err)
 	}
 	// False positive: the same agent restores it. The conversation is NOT put back in the queue.
 	if rec := patch(a, agent, cA, `{"kind":"other"}`); rec.Code != http.StatusOK || kindOf(t, seed, cA) != "other" || kindAudits(t, seed, a) != 2 {
@@ -165,8 +165,8 @@ func TestSetKindIsPermissionedAuditedIdempotentAndTenantScoped(t *testing.T) {
 		t.Fatalf("idempotent = %d audits=%d", rec.Code, kindAudits(t, seed, a))
 	}
 	// Reclassify back: second audit.
-	if rec := patch(a, admin, cA, `{"kind":"customer"}`); rec.Code != http.StatusOK || kindOf(t, seed, cA) != "customer" || kindAudits(t, seed, a) != 4 {
-		t.Fatalf("customer = %d kind=%s audits=%d", rec.Code, kindOf(t, seed, cA), kindAudits(t, seed, a))
+	if rec := patch(a, admin, cA, `{"kind":"other"}`); rec.Code != http.StatusOK || kindOf(t, seed, cA) != "other" || kindAudits(t, seed, a) != 4 {
+		t.Fatalf("other = %d kind=%s audits=%d", rec.Code, kindOf(t, seed, cA), kindAudits(t, seed, a))
 	}
 
 	// Invalid input is refused without touching anything.
@@ -188,10 +188,10 @@ func TestSetKindIsPermissionedAuditedIdempotentAndTenantScoped(t *testing.T) {
 	if rb.Code != http.StatusNotFound || ru.Code != http.StatusNotFound || rb.Body.String() != ru.Body.String() {
 		t.Fatalf("enumeration oracle: %d %q vs %d %q", rb.Code, rb.Body.String(), ru.Code, ru.Body.String())
 	}
-	if kindOf(t, seed, cB) != "other" {
+	if kindOf(t, seed, cB) != "unclassified" {
 		t.Fatalf("tenant B contact changed by tenant A's admin: %s", kindOf(t, seed, cB))
 	}
-	if rec := patch(b, adminB, cB, `{"kind":"customer"}`); rec.Code != http.StatusOK || kindOf(t, seed, cA) != "customer" || kindOf(t, seed, cB) != "customer" {
+	if rec := patch(b, adminB, cB, `{"kind":"other"}`); rec.Code != http.StatusOK || kindOf(t, seed, cA) != "other" || kindOf(t, seed, cB) != "other" {
 		t.Fatalf("B's own admin: %d", rec.Code)
 	}
 }
@@ -204,6 +204,15 @@ func TestListContactsSearchAndFiltersAreServerSideAndTenantScoped(t *testing.T) 
 	now := time.Now().UTC().Truncate(time.Second)
 	mk := func(tn uuid.UUID, name, phone, email, status, kind string, ageMin int) uuid.UUID {
 		id := seedContact(t, seed, tn, name, phone, now.Add(-time.Duration(ageMin)*time.Minute))
+		if kind == "customer" { // a customer needs a company (ADR-0018): link it first, then classify
+			acc := uuid.New()
+			if _, err := seed.Exec(context.Background(), `INSERT INTO customer_accounts(id,tenant_id,name) VALUES($1,$2,'Empresa')`, acc, tn); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := seed.Exec(context.Background(), `INSERT INTO contact_account_links(tenant_id,contact_id,account_id,source) VALUES($1,$2,$3,'manual')`, tn, id, acc); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if _, err := seed.Exec(context.Background(), `UPDATE contacts SET email=$2, status=$3, kind=$4 WHERE id=$1`, id, email, status, kind); err != nil {
 			t.Fatal(err)
 		}
@@ -303,36 +312,27 @@ func TestListContactsSearchAndFiltersAreServerSideAndTenantScoped(t *testing.T) 
 	_ = foreign
 }
 
-// ADR-0014 amendment: "agent" is a K3G team member. Their conversation leaves the queue like spam, stays visible, and
-// the inbound routing never queues it.
-func TestAgentKindTakesTheConversationOutOfTheQueueAndKeepsItVisible(t *testing.T) {
+// ADR-0018: K3G staff are Users, never contacts. The "agent" kind is refused by the API and by the database, and a new
+// contact starts unclassified.
+func TestAgentKindIsRetiredAndNewContactsStartUnclassified(t *testing.T) {
 	seed, app := seedPool(t), appPool(t)
 	h := NewContactsAPIHandler(app).WithAudit(auditadapters.NewPostgresAuditEventRepository(app))
 	a := seedTenant(t, seed, "kind-agent")
 	attendant := seedMemberRole(t, seed, a, "tenant_agent", "active")
-	c := seedContact(t, seed, a, "Colega da equipe", "+5592900000077", time.Now())
-	queue, conv := uuid.New(), uuid.New()
-	if _, err := seed.Exec(context.Background(), `INSERT INTO queues(id,tenant_id,name,mode,is_default) VALUES($1,$2,'Default','round_robin',true)`, queue, a); err != nil {
-		t.Fatal(err)
+	c := seedContact(t, seed, a, "Alguem", "+5592900000077", time.Now())
+	if k := kindOf(t, seed, c); k != "unclassified" {
+		t.Fatalf("a new contact must start unclassified, got %s", k)
 	}
-	if _, err := seed.Exec(context.Background(), `INSERT INTO conversations(id,tenant_id,contact_id,status,queue_id,routing_retry_at) VALUES($1,$2,$3,'open',$4,now())`, conv, a, c, queue); err != nil {
-		t.Fatal(err)
+	if rec := call(t, app, a, attendant, http.MethodPatch, "/", `{"kind":"agent"}`, map[string]string{"contact_id": c.String()}, h.SetKind); rec.Code != http.StatusBadRequest {
+		t.Fatalf("agent kind = %d, want 400", rec.Code)
 	}
-	rec := call(t, app, a, attendant, http.MethodPatch, "/", `{"kind":"agent"}`, map[string]string{"contact_id": c.String()}, h.SetKind)
-	var got ContactItem
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.Kind != "agent" {
-		t.Fatalf("set agent = %d %s", rec.Code, rec.Body.String())
+	for _, bad := range []string{"agent", "vip"} {
+		if _, err := seed.Exec(context.Background(), `UPDATE contacts SET kind=$2 WHERE id=$1`, c, bad); err == nil {
+			t.Fatalf("the constraint must refuse kind %q", bad)
+		}
 	}
-	var q *uuid.UUID
-	var retry bool
-	if err := seed.QueryRow(context.Background(), `SELECT queue_id, routing_retry_at IS NOT NULL FROM conversations WHERE id=$1`, conv).Scan(&q, &retry); err != nil || q != nil || retry {
-		t.Fatalf("a team member's conversation must leave the queue: queue=%v retry=%v err=%v", q, retry, err)
-	}
-	if kindOf(t, seed, c) != "agent" || kindAudits(t, seed, a) != 1 {
-		t.Fatalf("kind=%s audits=%d", kindOf(t, seed, c), kindAudits(t, seed, a))
-	}
-	// and the database refuses a kind outside the list
-	if _, err := seed.Exec(context.Background(), `UPDATE contacts SET kind='vip' WHERE id=$1`, c); err == nil {
-		t.Fatal("the constraint must refuse an unknown kind")
+	// customer needs a linked company: the bare kind is refused and nothing changes
+	if rec := call(t, app, a, attendant, http.MethodPatch, "/", `{"kind":"customer"}`, map[string]string{"contact_id": c.String()}, h.SetKind); rec.Code != http.StatusUnprocessableEntity || kindOf(t, seed, c) != "unclassified" {
+		t.Fatalf("customer without account = %d kind=%s", rec.Code, kindOf(t, seed, c))
 	}
 }

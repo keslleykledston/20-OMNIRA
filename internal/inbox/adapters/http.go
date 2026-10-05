@@ -139,7 +139,7 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	switch kind := r.URL.Query().Get("kind"); kind {
 	case "":
 		where += " AND co.kind <> 'spam'"
-	case "customer", "other", "spam", "agent":
+	case "unclassified", "customer", "other", "spam":
 		where += " AND co.kind=" + arg(kind)
 	default:
 		http.Error(w, "invalid kind filter", http.StatusBadRequest)

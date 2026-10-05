@@ -72,7 +72,13 @@ func (e *kindEnv) member(tenant uuid.UUID, role string) uuid.UUID {
 // conversation seeds a contact of the given kind and an unrouted open conversation for it.
 func (e *kindEnv) conversation(tenant uuid.UUID, name, kind, phone string) uuid.UUID {
 	contact, conv := uuid.New(), uuid.New()
-	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164,kind) VALUES($1,$2,$3,$4,$5)`, contact, tenant, name, phone, kind)
+	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,$3,$4)`, contact, tenant, name, phone)
+	if kind == "customer" { // ADR-0018: a customer needs a linked company, committed before the classification
+		acc := uuid.New()
+		e.exec(`INSERT INTO customer_accounts(id,tenant_id,name) VALUES($1,$2,'Empresa')`, acc, tenant)
+		e.exec(`INSERT INTO contact_account_links(tenant_id,contact_id,account_id,source) VALUES($1,$2,$3,'manual')`, tenant, contact, acc)
+	}
+	e.exec(`UPDATE contacts SET kind=$2 WHERE id=$1`, contact, kind)
 	e.exec(`INSERT INTO conversations(id,tenant_id,contact_id,status) VALUES($1,$2,$3,'open')`, conv, tenant, contact)
 	return conv
 }

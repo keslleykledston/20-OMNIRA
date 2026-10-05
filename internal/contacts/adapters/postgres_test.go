@@ -7,10 +7,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/omnira/omnira/internal/testhelpers"
 	contactdomain "github.com/omnira/omnira/internal/contacts/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 func TestPostgresContactTenantIsolationAndUpsert(t *testing.T) {

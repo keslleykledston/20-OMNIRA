@@ -98,7 +98,7 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		    routing_retry_at = CASE WHEN selected.mode='round_robin' THEN now() + interval '90 seconds' ELSE NULL END
 		  FROM selected WHERE c.tenant_id=$1 AND c.id=$2 AND c.queue_id IS NULL
 		    -- ADR-0014: a spam contact's (or a team member's) conversation is stored but never routed to a queue.
-		    AND NOT EXISTS (SELECT 1 FROM contacts ct WHERE ct.tenant_id=c.tenant_id AND ct.id=c.contact_id AND ct.kind IN ('spam','agent'))
+		    AND NOT EXISTS (SELECT 1 FROM contacts ct WHERE ct.tenant_id=c.tenant_id AND ct.id=c.contact_id AND ct.kind = 'spam')
 		  RETURNING c.id,selected.mode
 		)
 		INSERT INTO outbox_events

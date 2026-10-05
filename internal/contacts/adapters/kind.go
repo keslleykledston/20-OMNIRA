@@ -7,22 +7,22 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
+	"github.com/omnira/omnira/internal/contacts/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// Contact kinds (ADR-0014). The same values the contacts_kind_check constraint allows. "agent" is a K3G team member.
+// Contact kinds (ADR-0014, ADR-0018): the values contacts_kind_check allows. K3G staff are Users, never contacts.
 const (
-	KindCustomer = "customer"
-	KindOther    = "other"
-	KindSpam     = "spam"
-	KindAgent    = "agent"
+	KindUnclassified = "unclassified"
+	KindCustomer     = "customer"
+	KindOther        = "other"
+	KindSpam         = "spam"
 )
 
 func validContactKind(k string) bool {
-	return k == KindCustomer || k == KindOther || k == KindSpam || k == KindAgent
+	return k == KindUnclassified || k == KindCustomer || k == KindOther || k == KindSpam
 }
 
 // escapeLike makes user text literal inside a LIKE/ILIKE pattern.
@@ -96,30 +96,30 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil || req.Kind == nil || !validContactKind(*req.Kind) {
-		http.Error(w, "kind must be customer, other, agent or spam", http.StatusBadRequest)
+		http.Error(w, "kind must be unclassified, customer, other or spam", http.StatusBadRequest)
 		return
 	}
 	next := *req.Kind
 
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
-	var prev string
-	err = q.QueryRow(r.Context(), `SELECT kind FROM contacts WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, contactID).Scan(&prev)
-	if errors.Is(err, pgx.ErrNoRows) {
+	// Customer needs an account link: that arrives with the edit API (kind + companies in one call). Here the kind
+	// alone is accepted for every value that does not require a company, and the origin is recorded.
+	change, err := NewClassificationRepository(h.pool).Classify(r.Context(), tc.TenantID, tc.ActorID, contactID, domain.ContactKind(next), domain.SourceManual, nil, false)
+	switch {
+	case errors.Is(err, domain.ErrContactNotFound):
 		http.Error(w, "contact not found", http.StatusNotFound)
 		return
-	}
-	if err != nil {
-		http.Error(w, "failed to read contact", http.StatusInternalServerError)
+	case errors.Is(err, domain.ErrCustomerNeedsAccount):
+		http.Error(w, "a customer needs at least one linked company", http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		http.Error(w, "failed to save contact", http.StatusInternalServerError)
 		return
 	}
-	if prev != next {
-		if _, err := q.Exec(r.Context(),
-			`UPDATE contacts SET kind = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, contactID, next); err != nil {
-			http.Error(w, "failed to save contact", http.StatusInternalServerError)
-			return
-		}
+	prev := string(change.PreviousKind)
+	if change.Changed {
 		dequeued := int64(0)
-		if next == KindSpam || next == KindAgent { // neither is customer service work: out of the queue
+		if next == KindSpam { // not customer service work: out of the queue
 			tag, err := q.Exec(r.Context(), `
 				UPDATE conversations SET queue_id = NULL, routing_retry_at = NULL, updated_at = now()
 				WHERE tenant_id = $1 AND contact_id = $2 AND status = 'open' AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL`,
@@ -150,6 +150,7 @@ func (h *ContactsAPIHandler) recordKind(r *http.Request, tc *tenancydomain.Tenan
 	}
 	ev.SetMetadata("kind_from", from)
 	ev.SetMetadata("kind_to", to)
+	ev.SetMetadata("classification_source", string(domain.SourceManual))
 	ev.SetMetadata("conversations_dequeued", dequeued)
 	_ = h.audit.Store(r.Context(), ev)
 }
