@@ -27,6 +27,8 @@ type PolicyFacts struct {
 	GroupLinks      int
 	OtherOpenTopics int
 	MessageCount    int
+	// ConversationKind of the topic's single conversation (ADR-0018); empty when the topic spans none or several.
+	ConversationKind string
 }
 
 type LegacyTicket struct {

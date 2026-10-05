@@ -37,6 +37,9 @@ func (s AccountStatus) Valid() bool {
 	return s == StatusActive || s == StatusInactive || s == StatusArchived
 }
 
+// ProviderK3G is the provider string of the company directory behind the ticketing runtime today.
+const ProviderK3G = "k3g"
+
 const MaxNameRunes = 200
 
 var (

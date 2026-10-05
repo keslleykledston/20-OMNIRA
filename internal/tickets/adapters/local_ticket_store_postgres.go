@@ -77,6 +77,25 @@ func (s *LocalTicketStore) FindEnrichmentCandidate(ctx context.Context, conversa
 // EnrichExternalProjection is idempotent (repeating with the same values is
 // a no-op) and refuses to replace an already-recorded, different
 // external_ticket_id.
+// SetCustomerAccount stores the account a ticket targets (ADR-0018). Set ONCE: re-setting the same account is a no-op
+// and a different one is refused, so a ticket can never silently move to another customer.
+func (s *LocalTicketStore) SetCustomerAccount(ctx context.Context, ticketID, accountID uuid.UUID) error {
+	tenantID, err := attemptTenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	tag, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
+		UPDATE tickets SET customer_account_id = $3, updated_at = now()
+		WHERE tenant_id = $1 AND id = $2 AND (customer_account_id IS NULL OR customer_account_id = $3)`, tenantID, ticketID, accountID)
+	if err != nil {
+		return fmt.Errorf("tickets: set customer account: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("tickets: ticket not found or already targets another account")
+	}
+	return nil
+}
+
 func (s *LocalTicketStore) EnrichExternalProjection(ctx context.Context, ticketID uuid.UUID, provider, externalTicketID, externalStatus, externalStatusLabel string, syncedAt time.Time) error {
 	tenantID, err := attemptTenantOf(ctx)
 	if err != nil {

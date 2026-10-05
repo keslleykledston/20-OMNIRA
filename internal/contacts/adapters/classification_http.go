@@ -24,7 +24,7 @@ import (
 )
 
 // directoryProvider is the provider string of the company directory behind TicketingRuntime (K3G today).
-const directoryProvider = "k3g"
+const directoryProvider = accountsdomain.ProviderK3G
 
 const (
 	permClassify    = "contact.classify"

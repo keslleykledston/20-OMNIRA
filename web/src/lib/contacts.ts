@@ -147,6 +147,9 @@ export interface ContactTicket {
   provider: string | null;
   external_ticket_id: string | null;
   external_status_label: string | null;
+  // The OMNIRA account the ticket targets (ADR-0018); absent for tickets that predate accounts.
+  customer_account_id?: string;
+  customer_account_name?: string;
   created_at: string;
   updated_at: string;
 }

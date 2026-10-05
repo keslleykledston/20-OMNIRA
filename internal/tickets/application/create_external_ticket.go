@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -131,6 +132,8 @@ type Result struct {
 	// the provider identity is read from the referenced connection
 	// (channel_connections.provider) when needed, never duplicated.
 	ConnectionID uuid.UUID
+	// CustomerAccountID (ADR-0018): the OMNIRA account the ticket now targets, when one was resolved and stored.
+	CustomerAccountID uuid.UUID
 }
 
 // Service implements CreateExternalTicket. It never imports a concrete
@@ -148,6 +151,15 @@ type Service struct {
 	// tenants (see runtime.Resolve, called once per CreateExternalTicket
 	// call, right after conversation authorization).
 	runtime ports.TicketingRuntimeResolver
+	// accounts (ADR-0018, optional) resolves the OMNIRA customer account of the validated company; without it tickets
+	// keep working exactly as before and simply carry no account.
+	accounts ports.AccountResolver
+}
+
+// WithAccounts enables the customer account projection of tickets.
+func (s *Service) WithAccounts(a ports.AccountResolver) *Service {
+	s.accounts = a
+	return s
 }
 
 func NewService(perms ports.PermissionChecker, conversation ports.ConversationAuthorizer, attempts ports.AttemptStore, localTickets ports.LocalTicketStore, runtime ports.TicketingRuntimeResolver) *Service {
@@ -238,7 +250,7 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		return nil, err
 	}
 
-	validatedCustomerExternalID, err := s.validateSelectedCompany(ctx, rt.CompanyDirectory, cmd.SelectedCustomerExternalID)
+	validatedCustomerExternalID, validatedCompany, err := s.validateSelectedCompany(ctx, rt.CompanyDirectory, cmd.SelectedCustomerExternalID)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +278,16 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		// ticket. No attempt acquired, no provider call, no projection
 		// write.
 		return &Result{Outcome: OutcomeReconciliationRequired, LocalTicketID: localTicket.ID, Severe: true}, nil
+	}
+
+	// ADR-0018: the account this ticket targets, resolved from the company the DIRECTORY validated (never from the
+	// browser). Before any provider write: a failure here leaves nothing behind but an idempotent local account.
+	var accountID uuid.UUID
+	if s.accounts != nil {
+		accountID, err = s.accounts.ResolveForCompany(ctx, cmd.TenantID, rt.ConnectionID, validatedCompany)
+		if err != nil {
+			return nil, fmt.Errorf("tickets: resolve customer account: %w", err)
+		}
 	}
 
 	hash := requestHash(cmd.TenantID, cmd.ConversationID, validatedCustomerExternalID, cmd.Subject, cmd.Description)
@@ -297,6 +319,18 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		// by any customer-validation/idempotency/status/ERP-authority
 		// logic above, never influences Outcome.
 		result.ConnectionID = rt.ConnectionID
+		// The projection is set only for a ticket THIS call (or a replay of the same intent) really created: an
+		// already-linked ticket belongs to whatever company it was created for.
+		if err == nil && accountID != uuid.Nil && (result.Outcome == OutcomeCreated || result.Outcome == OutcomeReplaySuccess) {
+			if setter, ok := s.localTickets.(ports.CustomerAccountSetter); ok {
+				if setErr := setter.SetCustomerAccount(ctx, localTicket.ID, accountID); setErr != nil {
+					// The external ticket exists and is recorded: never fail the call over a derived projection.
+					log.Printf("tickets: customer account projection failed (ticket=%s): %v", localTicket.ID, setErr)
+				} else {
+					result.CustomerAccountID = accountID
+				}
+			}
+		}
 	}
 	return result, err
 }
@@ -321,27 +355,27 @@ func validateCommand(cmd CreateExternalTicketCommand) error {
 // browser-provided SelectedCustomerExternalID is never trusted directly. It
 // must exactly match, uniquely, one ACTIVE company returned by the
 // tenant's real trusted company source.
-func (s *Service) validateSelectedCompany(ctx context.Context, directory ports.CompanyDirectory, selected string) (string, error) {
+func (s *Service) validateSelectedCompany(ctx context.Context, directory ports.CompanyDirectory, selected string) (string, ports.Company, error) {
 	selected = strings.TrimSpace(selected)
 	if selected == "" {
-		return "", ErrInvalidCompany
+		return "", ports.Company{}, ErrInvalidCompany
 	}
 	companies, err := directory.ListCompanies(ctx)
 	if err != nil {
-		return "", err
+		return "", ports.Company{}, err
 	}
 	matches := 0
-	var active bool
+	var found ports.Company
 	for _, c := range companies {
 		if c.ExternalID == selected {
 			matches++
-			active = c.Active
+			found = c
 		}
 	}
-	if matches != 1 || !active {
-		return "", ErrInvalidCompany
+	if matches != 1 || !found.Active {
+		return "", ports.Company{}, ErrInvalidCompany
 	}
-	return selected, nil
+	return selected, found, nil
 }
 
 // replay implements PRODUCT.6-K2 section 7 and PRODUCT.6-M4's recovery

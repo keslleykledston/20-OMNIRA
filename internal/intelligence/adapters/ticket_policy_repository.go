@@ -59,6 +59,9 @@ func (r *PostgresTicketPolicyRepository) TopicPolicyFacts(ctx context.Context, t
 		return f, err
 	}
 	if len(f.Conversations) == 1 {
+		if err := r.q(ctx).QueryRow(ctx, `SELECT conversation_kind FROM conversations WHERE tenant_id=$1 AND id=$2`, tenantID, f.Conversations[0]).Scan(&f.ConversationKind); err != nil {
+			return f, err
+		}
 		if err := r.q(ctx).QueryRow(ctx, `
 			SELECT count(*) FROM topic_threads t JOIN topic_conversation_links l ON l.tenant_id=t.tenant_id AND l.topic_thread_id=t.id
 			WHERE t.tenant_id=$1 AND l.conversation_id=$2 AND t.status='open' AND t.id <> $3`, tenantID, f.Conversations[0], topicID).Scan(&f.OtherOpenTopics); err != nil {

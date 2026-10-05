@@ -60,6 +60,10 @@ type ContactTicketItem struct {
 	Provider            *string    `json:"provider"`
 	ExternalTicketID    *string    `json:"external_ticket_id"`
 	ExternalStatusLabel *string    `json:"external_status_label"`
+	// CustomerAccountID / CustomerAccountName: the OMNIRA account the ticket targets (ADR-0018), set server-side from
+	// the company the directory validated; absent for tickets created before accounts existed.
+	CustomerAccountID   *uuid.UUID `json:"customer_account_id,omitempty"`
+	CustomerAccountName *string    `json:"customer_account_name,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
@@ -271,9 +275,10 @@ func (h *ContactsAPIHandler) ListContactTickets(w http.ResponseWriter, r *http.R
 	}
 
 	query := `SELECT t.id, t.conversation_id, t.subject, t.status, t.priority, t.assigned_to,
-		       t.provider, t.external_ticket_id, t.external_status_label, t.created_at, t.updated_at
+		       t.provider, t.external_ticket_id, t.external_status_label, t.customer_account_id, ca.name, t.created_at, t.updated_at
 		FROM tickets t
 		JOIN conversations cv ON cv.id = t.conversation_id AND cv.tenant_id = t.tenant_id
+		LEFT JOIN customer_accounts ca ON ca.tenant_id = t.tenant_id AND ca.id = t.customer_account_id
 		WHERE t.tenant_id = $1 AND cv.contact_id = $2 AND ` + ticketdomain.RealTicketSQL("t")
 	args := []any{tenantID, contactID}
 	if page.cursorTS != nil {
@@ -294,7 +299,7 @@ func (h *ContactsAPIHandler) ListContactTickets(w http.ResponseWriter, r *http.R
 	for rows.Next() {
 		var it ContactTicketItem
 		if err := rows.Scan(&it.ID, &it.ConversationID, &it.Subject, &it.Status, &it.Priority, &it.AssignedTo,
-			&it.Provider, &it.ExternalTicketID, &it.ExternalStatusLabel, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			&it.Provider, &it.ExternalTicketID, &it.ExternalStatusLabel, &it.CustomerAccountID, &it.CustomerAccountName, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			http.Error(w, "failed to read tickets", http.StatusInternalServerError)
 			return
 		}

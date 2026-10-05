@@ -1059,6 +1059,41 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: Invalid account }
+  /tenants/{tenant_id}/accounts/{account_id}/tickets:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: account_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: listCustomerAccountTickets
+      tags: [Accounts]
+      summary: Real tickets that target a customer account
+      description: 'Needs `account.read` AND `ticket.read` (tenant-wide ticket visibility is its own grant). Only REAL tickets (external link, subject or primary topic), never empty placeholders.'
+      responses:
+        '200':
+          description: Tickets, newest first (at most 100)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, conversation_id, subject, status, priority, created_at, updated_at]
+                      properties:
+                        id: { type: string, format: uuid }
+                        conversation_id: { type: string, format: uuid }
+                        subject: { type: string }
+                        status: { type: string }
+                        priority: { type: string }
+                        provider: { type: string, nullable: true }
+                        external_ticket_id: { type: string, nullable: true }
+                        created_at: { type: string, format: date-time }
+                        updated_at: { type: string, format: date-time }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/contacts/{contact_id}/classification:
     parameters:
       - { $ref: '#/components/parameters/TenantId' }
@@ -2922,6 +2957,8 @@ components:
         provider: { type: string, nullable: true }
         external_ticket_id: { type: string, nullable: true }
         external_status_label: { type: string, nullable: true }
+        customer_account_id: { type: string, format: uuid, description: "The OMNIRA account the ticket targets (ADR-0018); absent for tickets that predate accounts" }
+        customer_account_name: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     ContactTicketPage:

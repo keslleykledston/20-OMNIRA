@@ -34,9 +34,10 @@ func TestInternalConversationIsNeverRoutedToTopics(t *testing.T) {
 		if !m.Internal || m.ContactID != nil || !m.Inbound {
 			t.Fatalf("routable = %+v", m)
 		}
+		// topics belong to a contact: a staff conversation does not exist for the topic API (404 on every route)
 		info, err := NewPostgresTopicRepository(e.app).ConversationInfo(ctx, f.id, conv)
-		if err != nil || !info.Exists || info.ContactID != uuid.Nil {
-			t.Fatalf("ConversationInfo = %+v %v", info, err)
+		if err != nil || info.Exists {
+			t.Fatalf("ConversationInfo(internal) = %+v %v, want not found", info, err)
 		}
 	})
 	// the same message of an ordinary conversation is still routable (the gate is only for staff)

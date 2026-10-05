@@ -365,3 +365,50 @@ func TestSuggestionsRespectPermissionAndTenant(t *testing.T) {
 		t.Errorf("revoked = %d", rec.Code)
 	}
 }
+
+// The contact's tickets say which account each one targets (ADR-0018), absent for tickets that predate accounts.
+func TestContactTicketsExposeTheTargetAccount(t *testing.T) {
+	e := newHTTPEnv(t)
+	admin := seedMemberRole(t, e.seed, e.tenant, "tenant_admin", "active") // ticket.read
+	c := e.contact("+5592922220201")
+	conv1, conv2, acc := uuid.New(), uuid.New(), uuid.New()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO customer_accounts(id,tenant_id,name) VALUES($1,$2,'ACME Telecom')`, []any{acc, e.tenant}},
+		{`INSERT INTO conversations(id,tenant_id,contact_id,status) VALUES($1,$2,$3,'open')`, []any{conv1, e.tenant, c}},
+		{`INSERT INTO conversations(id,tenant_id,contact_id,status) VALUES($1,$2,$3,'open')`, []any{conv2, e.tenant, c}},
+		{`INSERT INTO tickets(tenant_id,conversation_id,status,subject,provider,external_ticket_id,customer_account_id) VALUES($1,$2,'open','Com conta','k3g','1',$3)`, []any{e.tenant, conv1, acc}},
+		{`INSERT INTO tickets(tenant_id,conversation_id,status,subject,provider,external_ticket_id) VALUES($1,$2,'open','Antigo','k3g','2')`, []any{e.tenant, conv2}},
+	} {
+		if _, err := e.seed.Exec(context.Background(), q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewContactsAPIHandler(e.app)
+	rec := call(t, e.app, e.tenant, admin, http.MethodGet, "/", "", map[string]string{"contact_id": c.String()}, h.ListContactTickets)
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("tickets = %d %s", rec.Code, rec.Body.String())
+	}
+	with, without := 0, 0
+	for _, it := range page.Items {
+		if it["subject"] == "Com conta" {
+			if it["customer_account_id"] != acc.String() || it["customer_account_name"] != "ACME Telecom" {
+				t.Errorf("account fields: %v", it)
+			}
+			with++
+		} else {
+			if _, has := it["customer_account_id"]; has {
+				t.Errorf("a ticket that predates accounts must omit the field: %v", it)
+			}
+			without++
+		}
+	}
+	if with != 1 || without != 1 {
+		t.Fatalf("with=%d without=%d", with, without)
+	}
+}

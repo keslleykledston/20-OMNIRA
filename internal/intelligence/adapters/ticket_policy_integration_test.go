@@ -343,3 +343,38 @@ func TestAnAdoptedConversationTicketCountsAsARealTicket(t *testing.T) {
 		t.Fatal("a related link must not make a placeholder real")
 	}
 }
+
+// ADR-0018: customer automation acts only on a customer service conversation. The same conversation, the same message
+// and the same flag do nothing while the contact is unclassified or "other", and the moment it becomes a customer
+// conversation the automation works as before.
+func TestAutomaticTicketPolicyOnlyActsOnCustomerServiceConversations(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a.id, "tenant_admin")
+	placeholder := e.ticket(a.id, a.conversation, "open")
+	topic, ids := e.topicWith(a, admin, "Pedido", "pedido atrasado")
+	on := application.DefaultFlags()
+	on.AutoTicketPolicyEnabled = true
+	svc := e.ticketSvc(on)
+	links := func() int {
+		return e.count(`SELECT count(*) FROM topic_ticket_links WHERE tenant_id=$1 AND ticket_id=$2`, a.id, placeholder)
+	}
+	for _, kind := range []string{"unclassified", "external_other"} {
+		e.exec(`UPDATE conversations SET conversation_kind=$2 WHERE id=$1`, a.conversation, kind)
+		e.session(a.id, admin, func(ctx context.Context) { svc.AutoForMessage(ctx, cnv(ids[0])) })
+		if links() != 0 || e.activeTickets(a.id, a.conversation) != 1 {
+			t.Fatalf("the automation acted on a %s conversation", kind)
+		}
+	}
+	// a person can still advise/choose: the policy itself is not blocked, only the SYSTEM acting alone
+	e.session(a.id, admin, func(ctx context.Context) {
+		if adv, err := svc.Advise(ctx, topic.ID); err != nil || adv.Action != domain.TicketActionAdoptActive {
+			t.Fatalf("advice stays available to people: %+v %v", adv, err)
+		}
+	})
+	e.exec(`UPDATE conversations SET conversation_kind='customer_service' WHERE id=$1`, a.conversation)
+	e.session(a.id, admin, func(ctx context.Context) { svc.AutoForMessage(ctx, cnv(ids[0])) })
+	if links() != 1 {
+		t.Fatal("on a customer service conversation the automation adopts the unowned ticket")
+	}
+}

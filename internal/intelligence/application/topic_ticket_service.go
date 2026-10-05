@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	conversationsdomain "github.com/omnira/omnira/internal/conversations/domain"
 	"github.com/omnira/omnira/internal/intelligence/domain"
 	"github.com/omnira/omnira/internal/intelligence/ports"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -41,7 +42,8 @@ func (s *TopicTicketService) tenant(ctx context.Context) (*tenancydomain.TenantC
 
 type policyState struct {
 	advice domain.TicketAdvice
-	conv   uuid.UUID // the single conversation, or Nil
+	kind   conversationsdomain.Kind // ADR-0018: kind of the single conversation, "" when none or several
+	conv   uuid.UUID                // the single conversation, or Nil
 	topic  *domain.TopicThread
 }
 
@@ -56,7 +58,7 @@ func (s *TopicTicketService) evaluate(ctx context.Context, tenantID, topicID uui
 	}
 	in := domain.TicketPolicyInput{TopicID: topicID, TopicOpen: f.Open, HasPrimaryTicket: f.HasPrimary, Conversations: len(f.Conversations),
 		InGroupOnly: len(f.Conversations) == 0 && f.GroupLinks > 0, OtherOpenTopics: f.OtherOpenTopics, MessageCount: f.MessageCount}
-	st := &policyState{topic: topic}
+	st := &policyState{topic: topic, kind: conversationsdomain.Kind(f.ConversationKind)}
 	if len(f.Conversations) == 1 {
 		st.conv = f.Conversations[0]
 		if in.ActiveTicket, err = s.policy.ActiveTicket(ctx, tenantID, st.conv); err != nil {
@@ -207,8 +209,17 @@ func (s *TopicTicketService) AutoForMessage(ctx context.Context, ref ports.Messa
 		return
 	}
 	for _, topicID := range topics {
-		adv, err := s.Advise(ctx, topicID)
-		if err != nil || (adv.Action != domain.TicketActionAdoptActive && adv.Action != domain.TicketActionCreate) {
+		st, err := s.evaluate(ctx, tc.TenantID, topicID)
+		if err != nil {
+			continue
+		}
+		// ADR-0018: customer automation acts only on a customer service conversation. internal, external_other and
+		// unclassified conversations never get a ticket opened or adopted by the system: a person decides.
+		if !st.kind.AllowsCustomerAutomation() {
+			continue
+		}
+		adv := st.advice
+		if adv.Action != domain.TicketActionAdoptActive && adv.Action != domain.TicketActionCreate {
 			continue
 		}
 		if _, err := s.Apply(ctx, topicID, adv.Action, domain.TicketLinkRule); err != nil && !errors.Is(err, domain.ErrInvalidTransition) {

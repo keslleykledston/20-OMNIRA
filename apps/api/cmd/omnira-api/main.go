@@ -24,6 +24,7 @@ import (
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
 	identityapp "github.com/omnira/omnira/internal/identity/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -306,6 +307,10 @@ func main() {
 			ticketsadapters.NewLocalTicketStore(dbPool),
 			ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials),
 		)
+		// ADR-0018: the ticket targets the OMNIRA account of the company the directory validated.
+		if identityFlags.CustomerAccountsEnabled {
+			externalTicketService = externalTicketService.WithAccounts(accountsadapters.NewTicketAccountResolver(dbPool))
+		}
 		crmHandler.SetExternalTicketService(externalTicketService)
 
 		// PRODUCT.6-O1: ativa o caminho real de leitura de ticket

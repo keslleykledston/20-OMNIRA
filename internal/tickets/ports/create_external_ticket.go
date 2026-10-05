@@ -73,6 +73,20 @@ type CompanyDirectory interface {
 	ListCompanies(ctx context.Context) ([]Company, error)
 }
 
+// AccountResolver maps a company the tenant's CompanyDirectory just VALIDATED to the OMNIRA customer account that
+// represents it (ADR-0018): the account linked to that provider company on that connection, created together with its
+// link when it does not exist yet. The company always comes from the directory, never from the browser.
+type AccountResolver interface {
+	ResolveForCompany(ctx context.Context, tenantID, connectionID uuid.UUID, company Company) (uuid.UUID, error)
+}
+
+// CustomerAccountSetter is the optional seam that stores the account a ticket targets. Kept apart from
+// LocalTicketStore so a store that does not know accounts keeps working. It is set ONCE: a ticket never switches to a
+// different account.
+type CustomerAccountSetter interface {
+	SetCustomerAccount(ctx context.Context, ticketID, accountID uuid.UUID) error
+}
+
 // LocalTicketStore is the smallest seam onto the existing tickets table
 // CreateExternalTicket needs: find the conversation's canonical open
 // ticket (PRODUCT.6-K2 section 1 — the exact rule already used by

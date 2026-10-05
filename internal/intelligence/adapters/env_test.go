@@ -80,7 +80,7 @@ func (e *env) tenant() tenantFixture {
 		}
 	})
 	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164,status) VALUES($1,$2,'C',$3,'active')`, f.contact, f.id, fmt.Sprintf("+55119%08d", rand.Intn(100000000)))
-	e.exec(`INSERT INTO conversations(id,tenant_id,contact_id,status) VALUES($1,$2,$3,'open')`, f.conversation, f.id, f.contact)
+	e.exec(`INSERT INTO conversations(id,tenant_id,contact_id,status,conversation_kind) VALUES($1,$2,$3,'open','customer_service')`, f.conversation, f.id, f.contact)
 	return f
 }
 
@@ -88,7 +88,7 @@ func (e *env) tenant() tenantFixture {
 func (e *env) conversationFor(tenant uuid.UUID, assignee *uuid.UUID) uuid.UUID {
 	contact, conv := uuid.New(), uuid.New()
 	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164,status) VALUES($1,$2,'C2',$3,'active')`, contact, tenant, fmt.Sprintf("+55119%08d", rand.Intn(100000000)))
-	e.exec(`INSERT INTO conversations(id,tenant_id,contact_id,status,assigned_to_user_id) VALUES($1,$2,$3,'open',$4)`, conv, tenant, contact, assignee)
+	e.exec(`INSERT INTO conversations(id,tenant_id,contact_id,status,assigned_to_user_id,conversation_kind) VALUES($1,$2,$3,'open',$4,'customer_service')`, conv, tenant, contact, assignee)
 	return conv
 }
 

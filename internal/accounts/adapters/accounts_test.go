@@ -381,3 +381,41 @@ func TestAccountNamesAreNormalizedAndBounded(t *testing.T) {
 		t.Error("types")
 	}
 }
+
+func TestAccountTicketsAreTheRealTicketsThatTargetIt(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(), e.tenant()
+	admin, agent := e.member(a, "tenant_admin", "active"), e.member(a, "tenant_agent", "active")
+	adminB := e.member(b, "tenant_admin", "active")
+	h := NewHandler(e.app, nil)
+	var acme, xpto accountDTO
+	decodeBody(t, e.call(a, admin, http.MethodPost, `{"name":"ACME"}`, nil, h.CreateAccount), &acme)
+	decodeBody(t, e.call(a, admin, http.MethodPost, `{"name":"XPTO"}`, nil, h.CreateAccount), &xpto)
+	contact, conv1, conv2, conv3 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164,status) VALUES($1,$2,'C','+5592944440001','active')`, contact, a)
+	for _, c := range []uuid.UUID{conv1, conv2, conv3} {
+		e.exec(`INSERT INTO conversations(id,tenant_id,contact_id,status) VALUES($1,$2,$3,'open')`, c, a, contact)
+	}
+	real, placeholder, other := uuid.New(), uuid.New(), uuid.New()
+	e.exec(`INSERT INTO tickets(id,tenant_id,conversation_id,status,subject,provider,external_ticket_id,customer_account_id) VALUES($1,$2,$3,'open','Link caiu','k3g','28180',$4)`, real, a, conv1, acme.ID)
+	e.exec(`INSERT INTO tickets(id,tenant_id,conversation_id,status,subject,customer_account_id) VALUES($1,$2,$3,'open','',$4)`, placeholder, a, conv2, acme.ID) // empty placeholder: not a real ticket
+	e.exec(`INSERT INTO tickets(id,tenant_id,conversation_id,status,subject,provider,external_ticket_id,customer_account_id) VALUES($1,$2,$3,'open','Outro','k3g','28181',$4)`, other, a, conv3, xpto.ID)
+	idp := map[string]string{"account_id": acme.ID.String()}
+	var out struct{ Items []accountTicketDTO }
+	rec := e.call(a, admin, http.MethodGet, "", idp, h.ListAccountTickets)
+	decodeBody(t, rec, &out)
+	if rec.Code != 200 || len(out.Items) != 1 || out.Items[0].ID != real {
+		t.Fatalf("only the real ticket of THIS account: %d %s", rec.Code, rec.Body.String())
+	}
+	// tenant-wide ticket visibility is its own grant: an agent (account.read, no ticket.read) is refused
+	if rec := e.call(a, agent, http.MethodGet, "", idp, h.ListAccountTickets); rec.Code != http.StatusForbidden {
+		t.Errorf("agent = %d, want 403", rec.Code)
+	}
+	// another tenant's admin gets the same 404 as an unknown account
+	if rec := e.call(b, adminB, http.MethodGet, "", idp, h.ListAccountTickets); rec.Code != http.StatusNotFound {
+		t.Errorf("foreign = %d", rec.Code)
+	}
+	if rec := e.call(a, admin, http.MethodGet, "", map[string]string{"account_id": uuid.NewString()}, h.ListAccountTickets); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown = %d", rec.Code)
+	}
+}

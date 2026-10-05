@@ -15,6 +15,7 @@ import (
 	auditports "github.com/omnira/omnira/internal/audit/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+	ticketsdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
 
 const (
@@ -32,6 +33,11 @@ type Handler struct {
 
 func NewHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository) *Handler {
 	return &Handler{pool: pool, repo: NewPostgresRepository(pool), audit: audit}
+}
+
+// authorizeWith checks a second permission for the same caller (the tenant context is already established).
+func (h *Handler) authorizeWith(r *http.Request, permission string) (*tenancydomain.TenantContext, int) {
+	return h.authorize(r, permission)
 }
 
 func (h *Handler) authorize(r *http.Request, permission string) (*tenancydomain.TenantContext, int) {
@@ -193,6 +199,67 @@ func (h *Handler) GetAccount(w http.ResponseWriter, r *http.Request) {
 		dto.External = append(dto.External, toLinkDTO(l))
 	}
 	write(w, http.StatusOK, dto)
+}
+
+type accountTicketDTO struct {
+	ID               uuid.UUID `json:"id"`
+	ConversationID   uuid.UUID `json:"conversation_id"`
+	Subject          string    `json:"subject"`
+	Status           string    `json:"status"`
+	Priority         string    `json:"priority"`
+	Provider         *string   `json:"provider"`
+	ExternalTicketID *string   `json:"external_ticket_id"`
+	CreatedAt        string    `json:"created_at"`
+	UpdatedAt        string    `json:"updated_at"`
+}
+
+// ListAccountTickets: GET /tenants/{tenant_id}/accounts/{account_id}/tickets — the REAL tickets (external link, subject
+// or primary topic) that target this account. Needs account.read AND ticket.read: tenant-wide ticket visibility is its
+// own grant.
+func (h *Handler) ListAccountTickets(w http.ResponseWriter, r *http.Request) {
+	tc, code := h.authorize(r, permAccountRead)
+	if code == 0 {
+		tc, code = h.authorizeWith(r, "ticket.read")
+	}
+	if code != 0 {
+		http.Error(w, http.StatusText(code), code)
+		return
+	}
+	id, err := uuid.Parse(r.PathValue("account_id"))
+	if err != nil {
+		http.Error(w, "invalid account_id", http.StatusBadRequest)
+		return
+	}
+	if _, err := h.repo.GetAccount(r.Context(), tc.TenantID, id); err != nil {
+		fail(w, err)
+		return
+	}
+	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
+		SELECT t.id, t.conversation_id, t.subject, t.status, t.priority, t.provider, t.external_ticket_id, t.created_at, t.updated_at
+		FROM tickets t
+		WHERE t.tenant_id = $1 AND t.customer_account_id = $2 AND `+ticketsdomain.RealTicketSQL("t")+`
+		ORDER BY t.updated_at DESC, t.id DESC LIMIT 100`, tc.TenantID, id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer rows.Close()
+	out := []accountTicketDTO{}
+	for rows.Next() {
+		var d accountTicketDTO
+		var created, updated time.Time
+		if err := rows.Scan(&d.ID, &d.ConversationID, &d.Subject, &d.Status, &d.Priority, &d.Provider, &d.ExternalTicketID, &created, &updated); err != nil {
+			fail(w, err)
+			return
+		}
+		d.CreatedAt, d.UpdatedAt = ts(created), ts(updated)
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		fail(w, err)
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"items": out})
 }
 
 type createAccountRequest struct {
