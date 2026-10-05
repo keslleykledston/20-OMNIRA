@@ -19,6 +19,7 @@ import {
 import type { IconName } from '../components/primitives'
 import { ChannelChip, ChannelChips } from '../components/contacts/ChannelChips'
 import { ContactKindControl } from '../components/contacts/ContactKindControl'
+import { WhatsAppName } from '../components/contacts/WhatsAppName'
 import { conversationPreview, formatInteraction, messageCountLabel } from '../lib/contactFormat'
 import {
   CONTACT_KIND_LABEL,
@@ -160,6 +161,7 @@ function ContactOverview({ contact }: { contact: Contact }) {
             <StatusBadge status={status.tone}>{status.label}</StatusBadge>
             <StatusBadge status={KIND_TONE[contact.kind]}>{CONTACT_KIND_LABEL[contact.kind]}</StatusBadge>
           </div>
+          <WhatsAppName principal={contact.display_name} whatsapp={contact.whatsapp_name} className="text-xs" />
           <p className="text-text-secondary tabular-nums">{formatPhone(contact.phone_e164)}</p>
           <p className="text-sm text-text-tertiary">Contato desde {formatDate(contact.created_at)}</p>
         </div>

@@ -10,7 +10,9 @@ export interface ConversationParticipant {
 
 export interface ConversationItem {
   id: string;
-  contact_name: string;
+  contact_name: string; // the PRINCIPAL name: the team's alias, else the name declared on WhatsApp
+  // What the person declared on WhatsApp; shown smaller below contact_name when it differs.
+  contact_whatsapp_name?: string;
   contact_phone: string;
   status: 'active' | 'closed' | 'pending';
   created_at?: string;

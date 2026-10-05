@@ -21,11 +21,16 @@ import (
 // tenant_id: the tenant is already established by the session, and echoing it
 // back only widens what a compromised client can learn.
 type ContactItem struct {
-	ID          uuid.UUID `json:"id"`
-	DisplayName string    `json:"display_name"`
-	PhoneE164   string    `json:"phone_e164"`
-	Email       string    `json:"email"`
-	Status      string    `json:"status"`
+	ID uuid.UUID `json:"id"`
+	// DisplayName is the PRINCIPAL name: the team's alias when there is one, else the name declared on WhatsApp.
+	DisplayName string `json:"display_name"`
+	// Alias is the name the team gave (null = none, the WhatsApp name is used); WhatsAppName is what the person declared,
+	// kept current from their messages and shown smaller below the principal name.
+	Alias        *string `json:"alias"`
+	WhatsAppName string  `json:"whatsapp_name"`
+	PhoneE164    string  `json:"phone_e164"`
+	Email        string  `json:"email"`
+	Status       string  `json:"status"`
 	// Kind is who the contact is for the business (ADR-0014): customer | other | spam.
 	// Distinct from Status, which is the record's lifecycle.
 	Kind      string    `json:"kind"`
@@ -59,7 +64,7 @@ func (h *ContactsAPIHandler) WithAudit(a auditports.AuditEventRepository) *Conta
 // contactSelect adds the three derived facts to the stored columns. Every
 // subquery is scoped by tenant_id AND contact_id (on top of RLS), and every
 // join carries tenant_id, so a row of another tenant can never contribute.
-const contactSelect = `SELECT c.id, c.display_name, c.phone_e164, c.email, c.status, c.kind, c.created_at, c.updated_at,
+const contactSelect = `SELECT c.id, c.display_name, c.alias, c.whatsapp_name, c.phone_e164, c.email, c.status, c.kind, c.created_at, c.updated_at,
 	(SELECT max(m.created_at) FROM messages m
 	   JOIN conversations cv ON cv.id = m.conversation_id AND cv.tenant_id = m.tenant_id
 	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id) AS last_interaction_at,
@@ -103,7 +108,7 @@ func (h *ContactsAPIHandler) ListContacts(w http.ResponseWriter, r *http.Request
 			return
 		}
 		like := arg("%" + escapeLike(q) + "%")
-		clause := "c.display_name ILIKE " + like + " OR c.email ILIKE " + like
+		clause := "c.display_name ILIKE " + like + " OR c.whatsapp_name ILIKE " + like + " OR c.email ILIKE " + like
 		if digits, ok := phoneDigits(q); ok {
 			clause += " OR c.phone_e164 LIKE " + arg("%"+digits+"%")
 		}
@@ -211,7 +216,7 @@ type contactRowScanner interface {
 
 func scanContactItem(row contactRowScanner) (ContactItem, error) {
 	var item ContactItem
-	err := row.Scan(&item.ID, &item.DisplayName, &item.PhoneE164, &item.Email, &item.Status, &item.Kind, &item.CreatedAt, &item.UpdatedAt,
+	err := row.Scan(&item.ID, &item.DisplayName, &item.Alias, &item.WhatsAppName, &item.PhoneE164, &item.Email, &item.Status, &item.Kind, &item.CreatedAt, &item.UpdatedAt,
 		&item.LastInteractionAt, &item.Channels, &item.OpenConversationCount)
 	if item.Channels == nil {
 		item.Channels = []string{}

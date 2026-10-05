@@ -1,3 +1,4 @@
+import { WhatsAppName } from '../contacts/WhatsAppName';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -156,6 +157,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             <h3 className="font-semibold text-text-primary truncate">
               {conversation?.contact_name}
             </h3>
+            <WhatsAppName principal={conversation?.contact_name} whatsapp={conversation?.contact_whatsapp_name} />
             <p className="text-xs text-text-secondary">
               {conversation?.contact_phone}
             </p>

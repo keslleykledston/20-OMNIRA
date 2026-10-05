@@ -132,7 +132,7 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 		}
 		if q != "" {
 			like := arg("%" + escapeLike(q) + "%")
-			clause := "c.display_name ILIKE " + like + " OR c.email ILIKE " + like
+			clause := "c.display_name ILIKE " + like + " OR c.whatsapp_name ILIKE " + like + " OR c.email ILIKE " + like
 			if digits, ok := phoneDigits(q); ok {
 				clause += " OR c.phone_e164 LIKE " + arg("%"+digits+"%")
 			}

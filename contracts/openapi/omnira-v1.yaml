@@ -1218,13 +1218,13 @@ paths:
     put:
       operationId: updateContactDetails
       tags: [Accounts]
-      summary: Edit a contact's name and/or e-mail (never the phone)
-      description: 'Needs `contact.classify` (whoever attends). An empty e-mail clears it. Audited as `contact.updated` (flags only, no values).'
+      summary: Edit a contact's alias and/or e-mail (never the phone)
+      description: 'Needs `contact.classify` (whoever attends). The alias is the name the team gives the contact and becomes its principal name; an empty alias CLEARS it and the name declared on WhatsApp is shown again on its own. An empty e-mail clears it. Audited as `contact.updated` (flags only, no values).'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: false, properties: { display_name: { type: string, maxLength: 200 }, email: { type: string, maxLength: 254 } } }
+            schema: { type: object, additionalProperties: false, properties: { alias: { type: string, maxLength: 200 }, email: { type: string, maxLength: 254 } } }
       responses:
         '200':
           description: The updated contact
@@ -1234,7 +1234,7 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
-        '422': { description: Blank name or invalid e-mail }
+        '422': { description: Alias too long or invalid e-mail }
   /tenants/{tenant_id}/contacts/{contact_id}/notes:
     parameters:
       - { $ref: '#/components/parameters/TenantId' }
@@ -3022,7 +3022,9 @@ components:
       required: [id, display_name, phone_e164, email, status, kind, created_at, updated_at, last_interaction_at, channels, open_conversation_count]
       properties:
         id: { type: string, format: uuid }
-        display_name: { type: string }
+        display_name: { type: string, description: "The PRINCIPAL name: the team's alias when there is one, else the name declared on WhatsApp" }
+        alias: { type: string, nullable: true, description: 'The name the team gave the contact; null = none (clearing it falls back to the WhatsApp name)' }
+        whatsapp_name: { type: string, description: 'The name the person declared on WhatsApp, kept current from their messages; shown smaller below the principal name' }
         phone_e164: { type: string, description: E.164 }
         email: { type: string }
         status: { type: string, enum: [active, blocked, archived] }
@@ -3249,7 +3251,8 @@ components:
         title: { type: string }
         assigned_to_user_id: { type: string, format: uuid, description: 'absent when unassigned' }
         queue_id: { type: string, format: uuid }
-        contact_name: { type: string }
+        contact_name: { type: string, description: "The principal name: the team's alias, else the name declared on WhatsApp" }
+        contact_whatsapp_name: { type: string, description: 'What the person declared on WhatsApp; shown smaller below contact_name when it differs' }
         contact_phone: { type: string, description: E.164 }
         ticket_status: { type: string }
         ticket_priority: { type: string }

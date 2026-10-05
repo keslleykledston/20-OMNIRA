@@ -240,3 +240,21 @@ func TestPeopleDirectoryPagesAcrossBothSubjectTypesWithoutRepeatsOrGaps(t *testi
 		t.Fatalf("expected several pages, got %d", pages)
 	}
 }
+
+// Search finds a contact by the team's alias AND by the name it declared on WhatsApp; the principal name is the alias.
+func TestPeopleSearchFindsBothNamesAndTheAliasIsThePrincipalName(t *testing.T) {
+	e := newClsEnv(t)
+	a := seedTenant(t, e.seed, "alias-search")
+	admin := seedMemberRole(t, e.seed, a, "tenant_admin", "active")
+	c := seedContact(t, e.seed, a, "x", "+5592977770001", time.Now())
+	e.exec2(`UPDATE contacts SET whatsapp_name='Zé Boladão', alias='José Carlos (ACME)' WHERE id=$1`, c)
+	for _, q := range []string{"Bolad", "ACME", "josé"} {
+		code, rows, _ := peopleCall(t, e, a, admin, "q="+url.QueryEscape(q))
+		if code != 200 || len(rows) != 1 {
+			t.Fatalf("q=%q = %d %v", q, code, names(rows))
+		}
+		if rows[0]["display_name"] != "José Carlos (ACME)" || rows[0]["whatsapp_name"] != "Zé Boladão" || rows[0]["alias"] != "José Carlos (ACME)" {
+			t.Fatalf("principal=alias, whatsapp beside it: %v", rows[0])
+		}
+	}
+}

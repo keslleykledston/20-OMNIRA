@@ -27,11 +27,22 @@ func TestEditingAContactNameAndEmail(t *testing.T) {
 		_ = seed.QueryRow(context.Background(), `SELECT display_name,email,phone_e164 FROM contacts WHERE id=$1`, c).Scan(&n, &e, &p)
 		return
 	}
-	if code := put(a, agent, c, `{"display_name":"  Fulano da Silva ","email":"fulano@exemplo.com"}`); code != 200 {
+	wa := func() (w string, alias *string) {
+		_ = seed.QueryRow(context.Background(), `SELECT whatsapp_name, alias FROM contacts WHERE id=$1`, c).Scan(&w, &alias)
+		return
+	}
+	if _, err := seed.Exec(context.Background(), `UPDATE contacts SET whatsapp_name='Fulano (WhatsApp)' WHERE id=$1`, c); err != nil {
+		t.Fatal(err)
+	}
+	if code := put(a, agent, c, `{"alias":"  Fulano da Silva ","email":"fulano@exemplo.com"}`); code != 200 {
 		t.Fatalf("edit = %d", code)
 	}
 	if n, e, p := row(); n != "Fulano da Silva" || e != "fulano@exemplo.com" || p != "+5592966660001" {
 		t.Fatalf("saved %q %q %q (the phone is the identity and never changes)", n, e, p)
+	}
+	// the alias is the principal name; the WhatsApp name is kept untouched beside it
+	if w, al := wa(); w != "Fulano (WhatsApp)" || al == nil || *al != "Fulano da Silva" {
+		t.Fatalf("whatsapp=%q alias=%v", w, al)
 	}
 	// only the e-mail: the name stays; an empty e-mail clears it
 	if code := put(a, agent, c, `{"email":""}`); code != 200 {
@@ -40,18 +51,31 @@ func TestEditingAContactNameAndEmail(t *testing.T) {
 	if n, e, _ := row(); n != "Fulano da Silva" || e != "" {
 		t.Fatalf("partial edit: %q %q", n, e)
 	}
+	// clearing the alias falls back to the WhatsApp name on its own
+	if code := put(a, agent, c, `{"alias":"   "}`); code != 200 {
+		t.Fatal(code)
+	}
+	if n, _, _ := row(); n != "Fulano (WhatsApp)" {
+		t.Fatalf("after clearing the alias the name must be the WhatsApp one, got %q", n)
+	}
+	if _, al := wa(); al != nil {
+		t.Fatalf("a blank alias must be NULL, got %q", *al)
+	}
+	if code := put(a, agent, c, `{"alias":"Fulano da Silva"}`); code != 200 {
+		t.Fatal(code)
+	}
 	for name, body := range map[string]string{
-		"blank name": `{"display_name":"   "}`, "bad email": `{"email":"nao-e-email"}`, "email with name": `{"email":"Fulano <f@x.com>"}`,
-		"phone": `{"phone_e164":"+5511999999999"}`, "tenant": `{"display_name":"x","tenant_id":"` + b.String() + `"}`, "empty": `{}`,
+		"too long alias": `{"alias":"` + repeat("a", 201) + `"}`, "name field": `{"display_name":"x"}`, "bad email": `{"email":"nao-e-email"}`, "email with name": `{"email":"Fulano <f@x.com>"}`,
+		"phone": `{"phone_e164":"+5511999999999"}`, "tenant": `{"alias":"x","tenant_id":"` + b.String() + `"}`, "empty": `{}`,
 	} {
 		if code := put(a, agent, c, body); code < 400 {
 			t.Errorf("%s = %d", name, code)
 		}
 	}
 	if n, _, p := row(); n != "Fulano da Silva" || p != "+5592966660001" {
-		t.Fatal("a refused edit changed data")
+		t.Fatalf("a refused edit changed data: %q", n)
 	}
-	if code := put(b, adminB, c, `{"display_name":"sequestrado"}`); code != http.StatusNotFound {
+	if code := put(b, adminB, c, `{"alias":"sequestrado"}`); code != http.StatusNotFound {
 		t.Errorf("another tenant's contact = %d, want 404", code)
 	}
 	if n, _, _ := row(); n == "sequestrado" {
@@ -60,8 +84,8 @@ func TestEditingAContactNameAndEmail(t *testing.T) {
 	_ = cB
 	var n int
 	_ = seed.QueryRow(context.Background(), `SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action='contact.updated' AND resource_id=$2`, a, c.String()).Scan(&n)
-	if n != 2 {
-		t.Fatalf("audits = %d, want 2", n)
+	if n != 4 {
+		t.Fatalf("audits = %d, want 4", n)
 	}
 }
 

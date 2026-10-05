@@ -254,12 +254,29 @@ func TestInboundContactNameFillsPlaceholderButNeverOverwritesCuratedName(t *test
 		t.Fatalf("nome de perfil não aplicado ao placeholder: %q", got)
 	}
 
-	// Operador renomeia; a partir daí o remetente não manda mais no rótulo.
-	if _, err := seed.Exec(ctx, `UPDATE contacts SET display_name=$3 WHERE tenant_id=$1 AND phone_e164=$2`, tenant, phone, "Cliente VIP"); err != nil {
+	// A equipe dá um apelido: ele vira o nome principal e o remetente não manda mais nele,
+	// mas o nome declarado no WhatsApp continua sendo atualizado (aparece abaixo, em segundo plano).
+	if _, err := seed.Exec(ctx, `UPDATE contacts SET alias=$3 WHERE tenant_id=$1 AND phone_e164=$2`, tenant, phone, "Cliente VIP"); err != nil {
 		t.Fatal(err)
 	}
 	ingest("m-3", "Banco Oficial Suporte")
 	if got := name(); got != "Cliente VIP" {
-		t.Fatalf("nome curado foi sobrescrito pelo remetente: %q", got)
+		t.Fatalf("o apelido foi sobrescrito pelo remetente: %q", got)
+	}
+	var wa string
+	if err := seed.QueryRow(ctx, `SELECT whatsapp_name FROM contacts WHERE tenant_id=$1 AND phone_e164=$2`, tenant, phone).Scan(&wa); err != nil || wa != "Banco Oficial Suporte" {
+		t.Fatalf("o nome do WhatsApp deve acompanhar o perfil atual: %q %v", wa, err)
+	}
+	// Apagar o apelido volta, sozinho, ao nome do WhatsApp.
+	if _, err := seed.Exec(ctx, `UPDATE contacts SET alias='   ' WHERE tenant_id=$1 AND phone_e164=$2`, tenant, phone); err != nil {
+		t.Fatal(err)
+	}
+	if got := name(); got != "Banco Oficial Suporte" {
+		t.Fatalf("sem apelido deve valer o nome do WhatsApp: %q", got)
+	}
+	// Uma mensagem sem nome de perfil não apaga o nome declarado.
+	ingest("m-4", "")
+	if got := name(); got != "Banco Oficial Suporte" {
+		t.Fatalf("mensagem sem nome apagou o nome do WhatsApp: %q", got)
 	}
 }

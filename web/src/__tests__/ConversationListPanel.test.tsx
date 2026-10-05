@@ -208,3 +208,19 @@ describe('ConversationListPanel — what a conversation is (ADR-0018)', () => {
     expect(props.onSegmentChange).toHaveBeenCalledWith('internal');
   });
 });
+
+
+describe('ConversationListPanel — alias first, WhatsApp name below', () => {
+  it('shows the principal name and, smaller below it, the name declared on WhatsApp when they differ', () => {
+    renderPanel([
+      conv('a', { contact_name: 'José Carlos (ACME)', contact_whatsapp_name: 'Zé Boladão' }),
+      conv('b', { contact_name: 'Maria', contact_whatsapp_name: 'Maria' }),
+      conv('c', { contact_name: 'Pedro' }),
+    ]);
+    const rows = screen.getAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('José Carlos (ACME)');
+    expect(rows[0]).toHaveTextContent('WhatsApp: Zé Boladão');
+    expect(rows[1]).not.toHaveTextContent('WhatsApp:');
+    expect(rows[2]).not.toHaveTextContent('WhatsApp:');
+  });
+});

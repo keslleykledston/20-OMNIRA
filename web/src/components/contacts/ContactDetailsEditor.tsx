@@ -15,7 +15,7 @@ export function ContactDetailsEditor({ contactId, onChanged }: { contactId: stri
   const key = ['contact', tenantId, contactId]
   const contact = useQuery({ queryKey: key, queryFn: () => contactsAPI.get(contactId), retry: false })
   const [editing, setEditing] = useState(false)
-  const [name, setName] = useState('')
+  const [alias, setAlias] = useState('')
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
 
@@ -25,7 +25,8 @@ export function ContactDetailsEditor({ contactId, onChanged }: { contactId: stri
   }, [contactId])
 
   const save = useMutation({
-    mutationFn: () => contactEditAPI.update(contactId, { display_name: name.trim(), email: email.trim() }),
+    // an empty alias CLEARS it: the name declared on WhatsApp is shown again on its own
+    mutationFn: () => contactEditAPI.update(contactId, { alias: alias.trim(), email: email.trim() }),
     onSuccess: (c) => {
       qc.setQueryData(key, c)
       setEditing(false)
@@ -41,10 +42,11 @@ export function ContactDetailsEditor({ contactId, onChanged }: { contactId: stri
     return (
       <div className="px-4 pb-3">
         {c.email && <p className="text-sm text-text-secondary break-words">{c.email}</p>}
+        {c.alias && c.whatsapp_name && <p className="text-[11px] text-text-tertiary break-words">Nome no WhatsApp: {c.whatsapp_name}</p>}
         <button
           type="button"
           onClick={() => {
-            setName(c.display_name)
+            setAlias(c.alias ?? '')
             setEmail(c.email ?? '')
             setEditing(true)
           }}
@@ -61,13 +63,23 @@ export function ContactDetailsEditor({ contactId, onChanged }: { contactId: stri
       className="space-y-2 px-4 pb-3"
       onSubmit={(e) => {
         e.preventDefault()
-        if (name.trim()) save.mutate()
+        save.mutate()
       }}
     >
       <label className="block text-xs text-text-secondary">
-        Nome
-        <input aria-label="Nome do contato" className={FIELD + ' mt-1'} maxLength={200} value={name} onChange={(e) => setName(e.target.value)} />
+        Apelido (nome exibido)
+        <input
+          aria-label="Apelido do contato"
+          className={FIELD + ' mt-1'}
+          maxLength={200}
+          placeholder={c.whatsapp_name || c.display_name}
+          value={alias}
+          onChange={(e) => setAlias(e.target.value)}
+        />
       </label>
+      <p className="text-[11px] text-text-tertiary">
+        {c.whatsapp_name ? `Nome no WhatsApp: ${c.whatsapp_name}. ` : ''}Apague o apelido para voltar ao nome do WhatsApp.
+      </p>
       <label className="block text-xs text-text-secondary">
         E-mail
         <input aria-label="E-mail do contato" type="email" className={FIELD + ' mt-1'} maxLength={254} value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -78,7 +90,7 @@ export function ContactDetailsEditor({ contactId, onChanged }: { contactId: stri
         </p>
       )}
       <div className="flex gap-2">
-        <Button size="sm" type="submit" disabled={!name.trim() || save.isPending}>
+        <Button size="sm" type="submit" disabled={save.isPending}>
           Salvar
         </Button>
         <Button size="sm" variant="tertiary" type="button" disabled={save.isPending} onClick={() => setEditing(false)}>

@@ -195,7 +195,10 @@ const groupSelect = `
 	SELECT g.id, g.name, g.enabled, g.last_message_at, lm.author_name, lm.from_me, lm.message_type, left(lm.body, 160)
 	FROM wa_groups g
 	LEFT JOIN LATERAL (
-	  SELECT m.author_name, m.from_me, m.message_type, m.body FROM wa_group_messages m
+	  -- the author shows under the team's alias when the participant is a known contact
+	  SELECT COALESCE(NULLIF(ct.alias, ''), m.author_name) AS author_name, m.from_me, m.message_type, m.body FROM wa_group_messages m
+	  LEFT JOIN channel_participants cp ON cp.tenant_id = m.tenant_id AND cp.id = m.sender_channel_participant_id
+	  LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
 	  WHERE m.tenant_id = g.tenant_id AND m.group_id = g.id
 	  ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) lm ON true`
 
@@ -465,7 +468,7 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := []any{tc.TenantID, id}
-	where := "tenant_id = $1 AND group_id = $2"
+	where := "m.tenant_id = $1 AND m.group_id = $2"
 	if cursor != nil {
 		cursorID, perr := uuid.Parse(cursor.ID)
 		if perr != nil {
@@ -473,12 +476,14 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		args = append(args, cursor.Timestamp, cursorID)
-		where += " AND (sent_at, id) < ($3, $4)"
+		where += " AND (m.sent_at, m.id) < ($3, $4)"
 	}
 	args = append(args, opts.Limit+1)
 	rows, err := q.Query(r.Context(), `
-		SELECT id, author_name, from_me, message_type, body, sent_at FROM wa_group_messages
-		WHERE `+where+` ORDER BY sent_at DESC, id DESC LIMIT $`+strconv.Itoa(len(args)), args...)
+		SELECT m.id, COALESCE(NULLIF(ct.alias, ''), m.author_name), m.from_me, m.message_type, m.body, m.sent_at FROM wa_group_messages m
+		LEFT JOIN channel_participants cp ON cp.tenant_id = m.tenant_id AND cp.id = m.sender_channel_participant_id
+		LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
+		WHERE `+where+` ORDER BY m.sent_at DESC, m.id DESC LIMIT $`+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		http.Error(w, "failed to list messages", http.StatusInternalServerError)
 		return

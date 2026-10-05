@@ -159,6 +159,15 @@ describe('ContextPane — honest counters and unassigned hint', () => {
   });
 });
 
+describe('ContextPane — alias first, WhatsApp name below', () => {
+  it('shows the principal name with the declared WhatsApp name smaller below it', async () => {
+    mockConversation({ contact_id: 'contact-9', contact_name: 'José Carlos (ACME)', contact_whatsapp_name: 'Zé Boladão' });
+    renderAt(<ContextPane conversationId={CONV} />);
+    expect(await screen.findByText('José Carlos (ACME)')).toBeInTheDocument();
+    expect(screen.getByText('WhatsApp: Zé Boladão')).toBeInTheDocument();
+  });
+});
+
 describe('ContextPane — contact classification (ADR-0014)', () => {
   it('shows the control for the conversation\'s contact and saves through the classification API', async () => {
     mockConversation({ contact_id: 'contact-9', contact_kind: 'unclassified' });

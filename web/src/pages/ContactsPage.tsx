@@ -19,6 +19,7 @@ import {
   TableRow,
 } from '../components/primitives'
 import { ChannelChips } from '../components/contacts/ChannelChips'
+import { WhatsAppName } from '../components/contacts/WhatsAppName'
 import { formatInteraction } from '../lib/contactFormat'
 import {
   CONTACT_KIND_LABEL,
@@ -291,6 +292,7 @@ function ContactRow({ c, onOpen }: { c: PersonContact; onOpen: () => void }) {
           <Avatar alt={c.display_name} initials={initials(c.display_name)} size="sm" />
           <div className="min-w-0">
             <p className="truncate font-medium text-text-primary">{c.display_name}</p>
+            <WhatsAppName principal={c.display_name} whatsapp={c.whatsapp_name} />
             {c.email && <p className="truncate text-xs text-text-secondary">{c.email}</p>}
             <CompanyLine c={c} />
           </div>
@@ -361,6 +363,7 @@ function ContactCard({ c, onOpen }: { c: PersonContact; onOpen: () => void }) {
         <Avatar alt={c.display_name} initials={initials(c.display_name)} size="md" />
         <div className="min-w-0 flex-1">
           <p className="font-medium text-text-primary truncate">{c.display_name}</p>
+          <WhatsAppName principal={c.display_name} whatsapp={c.whatsapp_name} />
           <p className="text-sm text-text-secondary tabular-nums">{formatPhone(c.phone_e164)}</p>
           <CompanyLine c={c} />
         </div>

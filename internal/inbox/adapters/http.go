@@ -58,6 +58,9 @@ type ConversationItem struct {
 	QueueID                     *uuid.UUID `json:"queue_id,omitempty"`
 	ContactName                 string     `json:"contact_name"`
 	ContactPhone                string     `json:"contact_phone"`
+	// ContactWhatsAppName is the name the person declared on WhatsApp; the UI shows it smaller below ContactName (the
+	// principal name: the team\'s alias when there is one) when they differ.
+	ContactWhatsAppName string `json:"contact_whatsapp_name,omitempty"`
 	// ContactKind is the contact's classification (ADR-0014/0018): unclassified | customer | other | spam; empty for an internal conversation.
 	ContactKind    string     `json:"contact_kind"`
 	TicketStatus   *string    `json:"ticket_status,omitempty"`
@@ -127,7 +130,8 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "invalid search", http.StatusBadRequest)
 			return
 		}
-		clause := displayNameSQL + " ILIKE " + arg("%"+escapeLike(q)+"%")
+		like := arg("%" + escapeLike(q) + "%")
+		clause := displayNameSQL + " ILIKE " + like + " OR co.whatsapp_name ILIKE " + like
 		if digits, ok := phoneDigits(q); ok {
 			clause += " OR co.phone_e164 LIKE " + arg("%"+digits+"%")
 		}
@@ -178,7 +182,7 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
 		       `+displayNameSQL+`,coalesce(co.phone_e164,''),t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at,
 		       `+activity+`,lm.created_at,coalesce(lm.direction,''),coalesce(lm.message_type,''),left(coalesce(lm.body,''),160),w.since,coalesce(co.kind,''),
-		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id
+		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,'')
 		FROM conversations c LEFT JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN users iu ON iu.id=c.internal_user_id
 		LEFT JOIN LATERAL (SELECT tk.status,tk.priority FROM tickets tk
@@ -257,7 +261,7 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 	item, err := scanConversationItem(platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
 		       `+displayNameSQL+`,coalesce(co.phone_e164,''),t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at,coalesce(co.kind,''),
-		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id
+		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,'')
 		FROM conversations c LEFT JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN users iu ON iu.id=c.internal_user_id
 		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
@@ -347,7 +351,7 @@ func scanConversationItem(row rowScanner) (ConversationItem, error) {
 	var ticketStatus, ticketPriority *string
 	var created, updated time.Time
 	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated, &item.ContactKind,
-		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID)
+		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName)
 	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
 	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
 	return item, err
@@ -361,7 +365,7 @@ func scanConversationListItem(row rowScanner) (ConversationItem, time.Time, erro
 	var lastAt, waitingSince *time.Time
 	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated,
 		&activity, &lastAt, &item.LastMessageDirection, &item.LastMessageType, &item.LastMessagePreview, &waitingSince, &item.ContactKind,
-		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID)
+		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName)
 	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
 	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
 	if lastAt != nil {

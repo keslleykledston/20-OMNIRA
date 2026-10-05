@@ -55,10 +55,10 @@ func (r *PostgresContactRepository) UpsertByPhone(ctx context.Context, contact *
 		return nil, err
 	}
 	return scanContact(platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx, `
-		INSERT INTO contacts (tenant_id, display_name, phone_e164, email, status)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO contacts (tenant_id, display_name, whatsapp_name, phone_e164, email, status)
+		VALUES ($1, $2, CASE WHEN $2 = $3 THEN '' ELSE $2 END, $3, $4, $5)
 		ON CONFLICT (tenant_id, phone_e164) DO UPDATE SET
-			display_name = CASE WHEN EXCLUDED.display_name <> '' THEN EXCLUDED.display_name ELSE contacts.display_name END,
+			whatsapp_name = CASE WHEN EXCLUDED.whatsapp_name <> '' THEN EXCLUDED.whatsapp_name ELSE contacts.whatsapp_name END,
 			updated_at = now()
 		RETURNING id, tenant_id, display_name, phone_e164, email, status, created_at, updated_at`,
 		contact.TenantID, contact.DisplayName, contact.PhoneE164, contact.Email, contact.Status))
@@ -98,7 +98,10 @@ func (r *PostgresContactRepository) Update(ctx context.Context, contact *contact
 		return err
 	}
 	result, err := platformdb.QuerierFromContext(ctx, r.pool).Exec(ctx, `
-		UPDATE contacts SET display_name = $3, email = $4, status = $5, updated_at = $6
+		UPDATE contacts SET
+		  -- a different name given here is the team's: it becomes the alias (the WhatsApp name is never overwritten)
+		  alias = CASE WHEN $3 = display_name THEN alias ELSE NULLIF(btrim($3), '') END,
+		  email = $4, status = $5, updated_at = $6
 		WHERE id = $1 AND tenant_id = $2`, contact.ID, contact.TenantID, contact.DisplayName, contact.Email, contact.Status, contact.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("contact: update: %w", err)

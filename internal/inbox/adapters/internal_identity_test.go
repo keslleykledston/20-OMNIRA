@@ -538,3 +538,37 @@ func TestInboxHidesInternalByDefaultAndShowsItWhenAsked(t *testing.T) {
 		t.Fatalf("get internal = %d %v", code, one)
 	}
 }
+
+// The Inbox shows the team's alias as the principal name and carries the WhatsApp name beside it; search finds both.
+func TestInboxListShowsAliasFirstAndSearchesBothNames(t *testing.T) {
+	e := newKindEnv(t)
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin")
+	conn := e.connection(a)
+	svc := e.service(svcOpts{resolver: true, kind: true})
+	res := e.ingest(svc, conn, "+5592999990401", "Zé Boladão", "")
+	e.exec(`UPDATE contacts SET alias='José Carlos (ACME)' WHERE id=$1`, res.Contact.ID)
+
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(e.app), tenancyadapters.NewPostgresTenantRepository(e.app))
+	h := inboxadapters.NewInboxAPIHandler(e.app)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", tenancyadapters.AuthorizationMiddleware(e.app, authz)(http.HandlerFunc(h.ListConversations)))
+	list := func(q string) []map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/"+a.String()+"/inbox/conversations?q="+q, nil)
+		req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: admin, Subject: admin.String()}))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		var page struct{ Items []map[string]any }
+		_ = json.Unmarshal(rec.Body.Bytes(), &page)
+		return page.Items
+	}
+	for _, q := range []string{"", "Bolad", "ACME"} {
+		items := list(q)
+		if len(items) != 1 || items[0]["contact_name"] != "José Carlos (ACME)" || items[0]["contact_whatsapp_name"] != "Zé Boladão" {
+			t.Fatalf("q=%q: %v", q, items)
+		}
+	}
+	if items := list("naoexiste"); len(items) != 0 {
+		t.Fatalf("no match expected: %v", items)
+	}
+}

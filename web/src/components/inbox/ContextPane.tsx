@@ -13,6 +13,7 @@ import TopicsPanel from '../topics/TopicsPanel';
 import { ContactKindControl } from '../contacts/ContactKindControl';
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor';
 import { ContactNotes } from '../contacts/ContactNotes';
+import { WhatsAppName } from '../contacts/WhatsAppName';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -127,6 +128,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
             <h5 className="font-semibold text-text-primary truncate">
               {conversation?.contact_name}
             </h5>
+            <WhatsAppName principal={conversation?.contact_name} whatsapp={conversation?.contact_whatsapp_name} />
             <p className="text-sm text-text-secondary break-words">
               {conversation?.contact_phone}
             </p>

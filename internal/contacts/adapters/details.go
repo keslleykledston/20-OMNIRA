@@ -59,8 +59,10 @@ func (h *ContactsAPIHandler) auditContact(r *http.Request, tc *tenancydomain.Ten
 }
 
 type updateDetailsRequest struct {
-	DisplayName *string `json:"display_name"`
-	Email       *string `json:"email"`
+	// Alias is the name the team gives the contact. An empty (or blank) alias CLEARS it and the name declared on WhatsApp
+	// is shown again on its own.
+	Alias *string `json:"alias"`
+	Email *string `json:"email"`
 }
 
 // UpdateDetails: PUT /tenants/{tenant_id}/contacts/{contact_id}/details — name and/or e-mail.
@@ -70,20 +72,20 @@ func (h *ContactsAPIHandler) UpdateDetails(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req updateDetailsRequest
-	if !decodeStrict(w, r, &req) || (req.DisplayName == nil && req.Email == nil) {
-		if req.DisplayName == nil && req.Email == nil {
+	if !decodeStrict(w, r, &req) || (req.Alias == nil && req.Email == nil) {
+		if req.Alias == nil && req.Email == nil {
 			http.Error(w, "nothing to change", http.StatusBadRequest)
 		}
 		return
 	}
-	var name, email *string
-	if req.DisplayName != nil {
-		n := strings.TrimSpace(*req.DisplayName)
-		if n == "" || utf8.RuneCountInString(n) > 200 {
-			http.Error(w, "invalid display_name", http.StatusUnprocessableEntity)
+	var alias, email *string
+	if req.Alias != nil {
+		n := strings.TrimSpace(*req.Alias)
+		if utf8.RuneCountInString(n) > 200 {
+			http.Error(w, "invalid alias", http.StatusUnprocessableEntity)
 			return
 		}
-		name = &n
+		alias = &n
 	}
 	if req.Email != nil {
 		e := strings.TrimSpace(*req.Email)
@@ -101,8 +103,8 @@ func (h *ContactsAPIHandler) UpdateDetails(w http.ResponseWriter, r *http.Reques
 	}
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 	tag, err := q.Exec(r.Context(), `
-		UPDATE contacts SET display_name = COALESCE($3, display_name), email = COALESCE($4, email), updated_at = now()
-		WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id, name, email)
+		UPDATE contacts SET alias = CASE WHEN $5::boolean THEN NULLIF($3, '') ELSE alias END, email = COALESCE($4, email), updated_at = now()
+		WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id, alias, email, alias != nil)
 	if err != nil {
 		http.Error(w, "failed to save contact", http.StatusInternalServerError)
 		return
@@ -111,7 +113,7 @@ func (h *ContactsAPIHandler) UpdateDetails(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "contact not found", http.StatusNotFound)
 		return
 	}
-	h.auditContact(r, tc, auditdomain.ActionContactUpdated, id, map[string]any{"name_changed": name != nil, "email_changed": email != nil})
+	h.auditContact(r, tc, auditdomain.ActionContactUpdated, id, map[string]any{"alias_changed": alias != nil, "email_changed": email != nil})
 	item, err := scanContactItem(q.QueryRow(r.Context(), contactSelect+` WHERE c.tenant_id = $1 AND c.id = $2`, tc.TenantID, id))
 	if err != nil {
 		http.Error(w, "failed to read contact", http.StatusInternalServerError)

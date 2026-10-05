@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { ConversationItem } from '../../types/api';
 import { Icon } from '../primitives';
+import { WhatsAppName } from '../contacts/WhatsAppName';
 import { DEFAULT_WAIT_THRESHOLDS, InboxSegment, inboxTimeLabel, previewText, waitInfo, WaitThresholds, WaitTone } from '../../lib/inboxModel';
 
 interface ConversationListPanelProps {
@@ -212,7 +213,10 @@ function ConversationRow({
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
-            <span className="truncate text-sm font-semibold text-text-primary">{name}</span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold text-text-primary">{name}</span>
+              <WhatsAppName principal={name} whatsapp={conv.contact_whatsapp_name} />
+            </span>
             <time
               dateTime={conv.last_message_at ?? conv.updated_at}
               className={clsx('flex-shrink-0 text-[11px] tabular-nums', wait ? 'text-accent-primary' : 'text-text-tertiary')}

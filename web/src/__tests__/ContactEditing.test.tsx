@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import axios from 'axios'
 import { ContactDetailsEditor } from '../components/contacts/ContactDetailsEditor'
 import { ContactNotes } from '../components/contacts/ContactNotes'
+import { WhatsAppName } from '../components/contacts/WhatsAppName'
 import { ContactKindControl } from '../components/contacts/ContactKindControl'
 import { setSession } from './testUtils'
 
@@ -22,56 +23,78 @@ beforeEach(() => {
   setSession()
 })
 
-describe('ContactDetailsEditor — name and e-mail', () => {
+describe('ContactDetailsEditor — alias and e-mail', () => {
   beforeEach(() => {
-    vi.mocked(axios.get).mockResolvedValue({ data: contact() })
+    vi.mocked(axios.get).mockResolvedValue({ data: contact({ display_name: 'Zé Boladão', alias: null, whatsapp_name: 'Zé Boladão' }) })
   })
 
-  it('shows the e-mail and edits name and e-mail through the contacts API (never the phone)', async () => {
-    vi.mocked(axios.put).mockResolvedValue({ data: contact({ display_name: 'Fulano da Silva', email: 'novo@x.com' }) })
+  it('edits the ALIAS (the name shown everywhere) and the e-mail, never the phone', async () => {
+    vi.mocked(axios.put).mockResolvedValue({ data: contact({ display_name: 'José Carlos (ACME)', alias: 'José Carlos (ACME)', whatsapp_name: 'Zé Boladão', email: 'novo@x.com' }) })
     const onChanged = vi.fn()
     const user = userEvent.setup()
     wrap(<ContactDetailsEditor contactId={ID} onChanged={onChanged} />)
     expect(await screen.findByText('f@x.com')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Editar contato' }))
-    const name = screen.getByLabelText('Nome do contato')
-    expect(name).toHaveValue('Fulano')
-    await user.clear(name)
-    await user.type(name, 'Fulano da Silva')
+    const alias = screen.getByLabelText('Apelido do contato')
+    expect(alias).toHaveValue('') // no alias yet: the placeholder is the WhatsApp name
+    expect(alias).toHaveAttribute('placeholder', 'Zé Boladão')
+    await user.type(alias, 'José Carlos (ACME)')
     const mail = screen.getByLabelText('E-mail do contato')
     await user.clear(mail)
     await user.type(mail, 'novo@x.com')
     await user.click(screen.getByRole('button', { name: 'Salvar' }))
     await waitFor(() => expect(axios.put).toHaveBeenCalled())
     expect(String(vi.mocked(axios.put).mock.calls[0][0])).toMatch(new RegExp(`/contacts/${ID}/details$`))
-    expect(vi.mocked(axios.put).mock.calls[0][1]).toEqual({ display_name: 'Fulano da Silva', email: 'novo@x.com' })
+    expect(vi.mocked(axios.put).mock.calls[0][1]).toEqual({ alias: 'José Carlos (ACME)', email: 'novo@x.com' })
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
-    expect(await screen.findByText('novo@x.com')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Nome do contato')).not.toBeInTheDocument()
+    expect(await screen.findByText('Nome no WhatsApp: Zé Boladão')).toBeInTheDocument()
   })
 
-  it('does not save an empty name, and explains a refusal', async () => {
+  it('explains that clearing the alias goes back to the WhatsApp name, and sends an empty alias to clear it', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: contact({ display_name: 'Apelido X', alias: 'Apelido X', whatsapp_name: 'Zé Boladão' }) })
+    vi.mocked(axios.put).mockResolvedValue({ data: contact({ display_name: 'Zé Boladão', alias: null, whatsapp_name: 'Zé Boladão' }) })
+    const user = userEvent.setup()
+    wrap(<ContactDetailsEditor contactId={ID} />)
+    await user.click(await screen.findByRole('button', { name: 'Editar contato' }))
+    expect(screen.getByText(/Apague o apelido para voltar ao nome do WhatsApp/)).toBeInTheDocument()
+    await user.clear(screen.getByLabelText('Apelido do contato'))
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(axios.put).toHaveBeenCalled())
+    expect(vi.mocked(axios.put).mock.calls[0][1]).toEqual({ alias: '', email: 'f@x.com' })
+  })
+
+  it('explains a refusal and keeps the form', async () => {
     vi.mocked(axios.put).mockImplementation(() => err(422))
     const user = userEvent.setup()
     wrap(<ContactDetailsEditor contactId={ID} />)
     await user.click(await screen.findByRole('button', { name: 'Editar contato' }))
-    const name = screen.getByLabelText('Nome do contato')
-    await user.clear(name)
-    expect(screen.getByRole('button', { name: 'Salvar' })).toBeDisabled()
-    await user.type(name, 'Novo')
+    await user.type(screen.getByLabelText('Apelido do contato'), 'X')
     await user.click(screen.getByRole('button', { name: 'Salvar' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Confira os dados')
-    expect(screen.getByLabelText('Nome do contato')).toBeInTheDocument()
+    expect(screen.getByLabelText('Apelido do contato')).toBeInTheDocument()
   })
 
   it('cancel leaves everything as it was', async () => {
     const user = userEvent.setup()
     wrap(<ContactDetailsEditor contactId={ID} />)
     await user.click(await screen.findByRole('button', { name: 'Editar contato' }))
-    await user.type(screen.getByLabelText('Nome do contato'), ' X')
+    await user.type(screen.getByLabelText('Apelido do contato'), 'X')
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
     expect(axios.put).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Editar contato' })).toBeInTheDocument()
+  })
+})
+
+describe('WhatsAppName — the declared name below the principal one', () => {
+  it('shows it smaller below the principal name only when it differs', () => {
+    const { rerender } = render(<WhatsAppName principal="José Carlos (ACME)" whatsapp="Zé Boladão" />)
+    expect(screen.getByText('WhatsApp: Zé Boladão')).toBeInTheDocument()
+    rerender(<WhatsAppName principal="Zé Boladão" whatsapp="Zé Boladão" />)
+    expect(screen.queryByText(/WhatsApp:/)).not.toBeInTheDocument()
+    rerender(<WhatsAppName principal="Fulano" whatsapp="" />)
+    expect(screen.queryByText(/WhatsApp:/)).not.toBeInTheDocument()
+    rerender(<WhatsAppName principal="Fulano" whatsapp={undefined} />)
+    expect(screen.queryByText(/WhatsApp:/)).not.toBeInTheDocument()
   })
 })
 

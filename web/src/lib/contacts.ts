@@ -102,7 +102,12 @@ export interface ContactFilters {
 
 export interface Contact {
   id: string;
+  // The PRINCIPAL name: the team's alias when there is one, else the name declared on WhatsApp.
   display_name: string;
+  // null = no alias (the WhatsApp name is used); clearing it falls back on its own.
+  alias?: string | null;
+  // What the person declared on WhatsApp, kept current from their messages; shown smaller below the principal name.
+  whatsapp_name?: string;
   phone_e164: string;
   email: string;
   status: 'active' | 'blocked' | 'archived';
@@ -258,8 +263,8 @@ export interface ContactNote {
 }
 
 export const contactEditAPI = {
-  // Name and e-mail only: the phone is the contact's identity and is never edited.
-  update: (id: string, body: { display_name?: string; email?: string }) =>
+  // Alias (the team's name for the contact; empty clears it) and e-mail. The phone is the identity and is never edited.
+  update: (id: string, body: { alias?: string; email?: string }) =>
     call<Contact>(() => axios.put(`${contactsBase()}/${id}/details`, body, { headers: authHeaders() })),
   notes: (id: string) =>
     call<{ items: ContactNote[] }>(() => axios.get(`${contactsBase()}/${id}/notes`, { headers: authHeaders() })).then((d) => d.items ?? []),
@@ -276,7 +281,7 @@ export function contactEditErrorMessage(err: any): string {
     case 404:
       return 'Contato ou anotação não encontrados (só quem escreveu a anotação pode alterá-la).';
     case 422:
-      return 'Confira os dados: o nome não pode ficar vazio e o e-mail precisa ser válido.';
+      return 'Confira os dados: o apelido tem até 200 caracteres e o e-mail precisa ser válido.';
     default:
       return 'Não foi possível salvar. Tente novamente.';
   }

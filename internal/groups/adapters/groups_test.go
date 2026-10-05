@@ -540,3 +540,54 @@ func TestIntakeRecordsExternalParticipantsAndResolvesRepliesInsideTheGroup(t *te
 		t.Fatalf("a message with no author must be stored without a participant, got %d", n)
 	}
 }
+
+// A group author who is a known contact shows under the team's alias; everyone else keeps the name declared on WhatsApp.
+func TestGroupAuthorsShowTheTeamsAliasWhenTheParticipantIsAKnownContact(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	admin := e.member(tenant, "tenant_admin", "active")
+	gid := e.group(tenant, conn, jid1, "Oficial", true)
+	intake := NewIntake(e.app, channeladapters.NewPostgresWebhookEventStore(e.app))
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, a := range []struct{ jid, name string }{{"111@lid", "João do WhatsApp"}, {"222@lid", "Maria"}} {
+		m := groupMsg(conn, jid1, "gm-"+a.jid, "oi", now.Add(time.Duration(i)*time.Minute))
+		m.AuthorJID, m.AuthorName = a.jid, a.name
+		if _, _, err := intake.ProcessGroupMessage(e.ctx, conn, "k"+a.jid, "message.any", "d"+a.jid, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// João is a known contact the team renamed; Maria is not a contact
+	contact := uuid.New()
+	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,whatsapp_name,alias,phone_e164,status) VALUES($1,$2,'x','João do WhatsApp','João Silva (ACME)','+5592955551111','active')`, contact, tenant)
+	e.exec(`UPDATE channel_participants SET contact_id=$2 WHERE tenant_id=$1 AND external_participant_id='111@lid'`, tenant, contact)
+	h := NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app), &fakeDir{conn: conn.ID})
+	rec := call(t, e.app, tenant, admin, http.MethodGet, "/", "", map[string]string{"group_id": gid.String()}, h.ListMessages)
+	var page struct {
+		Items []struct {
+			AuthorName string `json:"author_name"`
+		} `json:"items"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatalf("messages = %d %s", rec.Code, rec.Body.String())
+	}
+	got := map[string]bool{}
+	for _, it := range page.Items {
+		got[it.AuthorName] = true
+	}
+	if !got["João Silva (ACME)"] || !got["Maria"] || got["João do WhatsApp"] {
+		t.Fatalf("authors = %v: the alias replaces the declared name for a known contact only", got)
+	}
+	// and the group list's last-message author (Maria wrote last: unchanged; make João last and check the alias)
+	e.exec(`UPDATE wa_group_messages SET sent_at = now() + interval '1 hour' WHERE tenant_id=$1 AND author_jid='111@lid'`, tenant)
+	rec = call(t, e.app, tenant, admin, http.MethodGet, "/", "", nil, h.List)
+	var gl struct {
+		Items []struct {
+			LastMessage *struct {
+				AuthorName string `json:"author_name"`
+			} `json:"last_message"`
+		} `json:"items"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &gl) != nil || len(gl.Items) == 0 || gl.Items[0].LastMessage == nil || gl.Items[0].LastMessage.AuthorName != "João Silva (ACME)" {
+		t.Fatalf("group list = %d %s", rec.Code, rec.Body.String())
+	}
+}

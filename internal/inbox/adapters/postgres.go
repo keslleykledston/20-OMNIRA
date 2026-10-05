@@ -48,18 +48,14 @@ func (s *PostgresInboundStore) UpsertByPhone(ctx context.Context, contact *conta
 		return nil, err
 	}
 	return scanContact(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		INSERT INTO contacts (tenant_id, display_name, phone_e164, email, status)
-		VALUES ($1,$2,$3,$4,$5)
+		INSERT INTO contacts (tenant_id, display_name, whatsapp_name, phone_e164, email, status)
+		-- a name equal to the phone is the placeholder the domain uses when the sender declared none: not a declared name
+		VALUES ($1,$2, CASE WHEN $2 = $3 THEN '' ELSE $2 END, $3,$4,$5)
 		ON CONFLICT (tenant_id, phone_e164) DO UPDATE SET
-			-- O nome vem do perfil do remetente, que ele escolhe livremente.
-			-- Serve para batizar um contato que ainda não tem nome real (vazio
-			-- ou o próprio telefone como placeholder), mas nunca sobrescreve um
-			-- nome já curado pelo operador ou pelo CRM.
-			display_name = CASE
-				WHEN EXCLUDED.display_name = '' THEN contacts.display_name
-				WHEN contacts.display_name IN ('', contacts.phone_e164) THEN EXCLUDED.display_name
-				ELSE contacts.display_name
-			END,
+			-- O nome vem do perfil do remetente, que ele escolhe livremente: é o "nome no WhatsApp", atualizado a cada
+			-- mensagem e mostrado em segundo plano. O nome principal exibido é o apelido da equipe quando existe (um
+			-- gatilho mantém display_name = apelido, senão o nome do WhatsApp); o apelido nunca é tocado aqui.
+			whatsapp_name = CASE WHEN EXCLUDED.whatsapp_name = '' THEN contacts.whatsapp_name ELSE EXCLUDED.whatsapp_name END,
 			updated_at = now()
 		RETURNING id, tenant_id, display_name, phone_e164, email, status, created_at, updated_at`,
 		contact.TenantID, contact.DisplayName, contact.PhoneE164, contact.Email, contact.Status))
