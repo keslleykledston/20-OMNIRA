@@ -30,12 +30,12 @@ func TestDecideTicketIsConservative(t *testing.T) {
 			t.Errorf("%s: %+v, want %s", c.name, got, c.want)
 		}
 	}
-	// a second concurrent ticket is never advised, whatever the other facts
+	// a second concurrent ticket is never ADVISED (needs_agent), but a person may choose to open one for the new subject
 	adv := DecideTicket(with(func(i *TicketPolicyInput) {
 		i.ActiveTicket = &ActiveTicketFacts{TicketID: tk, PrimaryTopicID: &other}
 		i.OtherOpenTopics = 3
 	}))
-	if adv.CanApply(TicketActionCreate) || adv.CanApply(TicketActionAdoptActive) || !adv.CanApply(TicketActionShareActive) {
+	if adv.Action != TicketActionNeedsAgent || adv.CanApply(TicketActionAdoptActive) || !adv.CanApply(TicketActionCreate) || !adv.CanApply(TicketActionShareActive) {
 		t.Errorf("allowed = %v", adv.Allowed)
 	}
 	if adv := DecideTicket(base); !adv.CanApply(TicketActionCreate) || adv.CanApply(TicketActionShareActive) {

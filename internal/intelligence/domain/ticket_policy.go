@@ -41,8 +41,8 @@ type TicketAdvice struct {
 	Allowed []TicketAction
 }
 
-// DecideTicket is deterministic and conservative: it never opens a second concurrent ticket in a conversation, never
-// takes a ticket away from another topic and never guesses when a topic spans conversations.
+// DecideTicket is deterministic and conservative: it never opens a second concurrent ticket on its own (only a person's
+// choice does), never takes a ticket away from another topic and never guesses when a topic spans conversations.
 func DecideTicket(in TicketPolicyInput) TicketAdvice {
 	none := func(reason string) TicketAdvice { return TicketAdvice{Action: TicketActionNone, Reason: reason} }
 	switch {
@@ -67,9 +67,11 @@ func DecideTicket(in TicketPolicyInput) TicketAdvice {
 	if *in.ActiveTicket.PrimaryTopicID == in.TopicID {
 		return none("O assunto já tem chamado principal.")
 	}
+	// The conversation's ticket belongs to another subject. A new subject may need its own process: opening a ticket for
+	// it is allowed on a person's choice (never automatically), as is relating the topic to the existing ticket.
 	return TicketAdvice{Action: TicketActionNeedsAgent, TicketID: &id,
-		Reason:  "O chamado ativo da conversa já pertence a outro assunto; um segundo chamado simultâneo na mesma conversa exige decisão de um atendente.",
-		Allowed: []TicketAction{TicketActionShareActive}}
+		Reason:  "O chamado ativo da conversa já pertence a outro assunto. Abra um chamado para este assunto ou relacione-o ao existente.",
+		Allowed: []TicketAction{TicketActionCreate, TicketActionShareActive}}
 }
 
 // CanApply reports whether an action chosen by a person is among the ones the policy allows right now.

@@ -160,7 +160,7 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 		FROM conversations c JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN LATERAL (SELECT tk.status,tk.priority FROM tickets tk
 			WHERE tk.conversation_id=c.id AND tk.tenant_id=c.tenant_id AND tk.status IN ('open','in_progress','waiting')
-			ORDER BY tk.created_at DESC LIMIT 1) t ON true
+			ORDER BY tk.topic_scoped ASC, tk.created_at DESC LIMIT 1) t ON true
 		LEFT JOIN LATERAL (SELECT m.direction,m.message_type,m.body,m.created_at FROM messages m
 			WHERE m.tenant_id=c.tenant_id AND m.conversation_id=c.id
 			ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lm ON true
@@ -237,7 +237,7 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 		FROM conversations c JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
 		WHERE c.tenant_id=$1 AND c.id=$2
-		ORDER BY t.created_at DESC NULLS LAST LIMIT 1`, tenantID, conversationID))
+		ORDER BY t.topic_scoped ASC NULLS LAST, t.created_at DESC NULLS LAST LIMIT 1`, tenantID, conversationID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return

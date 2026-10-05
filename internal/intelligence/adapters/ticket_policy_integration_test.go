@@ -23,7 +23,7 @@ func (e *env) activeTickets(tenant, conv uuid.UUID) int {
 	return e.count(`SELECT count(*) FROM tickets WHERE tenant_id=$1 AND conversation_id=$2 AND status IN ('open','in_progress','waiting')`, tenant, conv)
 }
 
-func TestTicketPolicyNeverOpensASecondConcurrentTicketAndShareIsExplicit(t *testing.T) {
+func TestTicketPolicyNeverOpensASecondTicketOnItsOwnButAPersonMayChooseTo(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()
 	admin := e.member(a.id, "tenant_admin")
@@ -42,20 +42,19 @@ func TestTicketPolicyNeverOpensASecondConcurrentTicketAndShareIsExplicit(t *test
 			t.Fatalf("adopt: %+v %v", res, err)
 		}
 	})
-	// the second subject must not get a second active ticket, nor steal the first's
+	// the second subject is NOT advised a ticket automatically, and cannot steal the first's, but a person may choose
+	// to relate it or to open its own
 	e.attempt(a.id, admin, func(ctx context.Context) {
 		adv, _ := svc.Advise(ctx, second.ID)
-		if adv.Action != domain.TicketActionNeedsAgent || !adv.CanApply(domain.TicketActionShareActive) {
+		if adv.Action != domain.TicketActionNeedsAgent || !adv.CanApply(domain.TicketActionShareActive) || !adv.CanApply(domain.TicketActionCreate) || adv.CanApply(domain.TicketActionAdoptActive) {
 			t.Errorf("second topic advice: %+v", adv)
 		}
-		for _, bad := range []domain.TicketAction{domain.TicketActionCreate, domain.TicketActionAdoptActive} {
-			if _, err := svc.Apply(ctx, second.ID, bad, domain.TicketLinkAgent); err == nil {
-				t.Errorf("%s must be refused", bad)
-			}
+		if _, err := svc.Apply(ctx, second.ID, domain.TicketActionAdoptActive, domain.TicketLinkAgent); err == nil {
+			t.Error("adopting a ticket that belongs to another subject must be refused")
 		}
 	})
 	if e.activeTickets(a.id, a.conversation) != 1 {
-		t.Fatal("a second active ticket exists in the conversation")
+		t.Fatal("nothing may have opened a ticket yet")
 	}
 	e.session(a.id, admin, func(ctx context.Context) {
 		res, err := svc.Apply(ctx, second.ID, domain.TicketActionShareActive, domain.TicketLinkAgent)
@@ -75,7 +74,7 @@ func TestTicketPolicyNeverOpensASecondConcurrentTicketAndShareIsExplicit(t *test
 	})
 }
 
-func TestTicketPolicyOpensOneTicketWhenTheConversationHasNone(t *testing.T) {
+func TestTicketPolicyOpensOneTicketPerSubjectEvenWhenAttemptsRace(t *testing.T) {
 	e := newEnv(t)
 	a := e.tenant()
 	admin := e.member(a.id, "tenant_admin")
@@ -94,16 +93,28 @@ func TestTicketPolicyOpensOneTicketWhenTheConversationHasNone(t *testing.T) {
 		}(id)
 	}
 	wg.Wait()
-	if n := e.activeTickets(a.id, a.conversation); n != 1 {
-		t.Fatalf("concurrent policy actions left %d active tickets, want exactly 1", n)
+	// each subject ends with exactly ONE ticket of its own: the first created is the conversation's ticket, the other is
+	// scoped to its subject; six racing attempts never produce a third or a second conversation ticket
+	if n := e.activeTickets(a.id, a.conversation); n != 2 {
+		t.Fatalf("concurrent policy actions left %d active tickets, want exactly 2 (one per subject)", n)
 	}
-	if e.count(`SELECT count(*) FROM topic_ticket_links WHERE tenant_id=$1 AND relation='primary'`, a.id) != 1 {
-		t.Fatal("exactly one topic may own the new ticket")
+	if e.count(`SELECT count(*) FROM tickets WHERE tenant_id=$1 AND status='open' AND NOT topic_scoped`, a.id) != 1 || e.count(`SELECT count(*) FROM tickets WHERE tenant_id=$1 AND status='open' AND topic_scoped`, a.id) != 1 {
+		t.Fatal("exactly one conversation ticket and one subject ticket")
 	}
-	var subject string
-	_ = e.seed.QueryRow(e.ctx, `SELECT t.subject FROM tickets t WHERE t.tenant_id=$1 AND t.status='open'`, a.id).Scan(&subject)
-	if subject != "Troca de plano" && subject != "Mudança de endereço" {
-		t.Fatalf("the ticket subject should be the topic's title, got %q", subject)
+	if e.count(`SELECT count(*) FROM topic_ticket_links WHERE tenant_id=$1 AND relation='primary'`, a.id) != 2 ||
+		e.count(`SELECT count(DISTINCT topic_thread_id) FROM topic_ticket_links WHERE tenant_id=$1 AND relation='primary'`, a.id) != 2 {
+		t.Fatal("each topic owns exactly one primary ticket")
+	}
+	rows, _ := e.seed.Query(e.ctx, `SELECT t.subject FROM tickets t WHERE t.tenant_id=$1 AND t.status='open'`, a.id)
+	titles := map[string]bool{}
+	for rows.Next() {
+		var sub string
+		_ = rows.Scan(&sub)
+		titles[sub] = true
+	}
+	rows.Close()
+	if !titles["Troca de plano"] || !titles["Mudança de endereço"] {
+		t.Fatalf("each ticket subject should be its topic's title, got %v", titles)
 	}
 }
 
@@ -267,5 +278,37 @@ func TestTicketPolicyAPIAuthorization(t *testing.T) {
 	bare := e.handler()
 	if rec := e.call(a.id, attendant, http.MethodGet, "", tp, bare.GetTicketPolicy); rec.Code != http.StatusNotFound {
 		t.Errorf("unwired = %d, want 404", rec.Code)
+	}
+}
+
+func TestANewSubjectCanOpenItsOwnTicketAndTheConversationTicketGuaranteeStays(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a.id, "tenant_admin")
+	placeholder := e.ticket(a.id, a.conversation, "open")
+	first, _ := e.topicWith(a, admin, "Pedido atrasado", "pedido 837 atrasado")
+	second, _ := e.topicWith(a, admin, "Nota errada", "nota 992 errada")
+	svc := e.ticketSvc(application.DefaultFlags())
+	e.session(a.id, admin, func(ctx context.Context) {
+		if _, err := svc.Apply(ctx, first.ID, domain.TicketActionAdoptActive, domain.TicketLinkAgent); err != nil {
+			t.Fatal(err)
+		}
+		res, err := svc.Apply(ctx, second.ID, domain.TicketActionCreate, domain.TicketLinkAgent)
+		if err != nil || !res.Created || res.TicketID == placeholder || res.Relation != domain.TicketPrimary {
+			t.Fatalf("subject ticket: %+v %v", res, err)
+		}
+	})
+	if e.activeTickets(a.id, a.conversation) != 2 || e.count(`SELECT count(*) FROM tickets WHERE tenant_id=$1 AND topic_scoped AND conversation_id=$2`, a.id, a.conversation) != 1 {
+		t.Fatal("expected the conversation ticket plus one subject ticket")
+	}
+	// the conversation still reports ITS ticket (not the subject's) wherever one ticket per conversation is read
+	var picked uuid.UUID
+	_ = e.seed.QueryRow(e.ctx, `SELECT id FROM tickets WHERE tenant_id=$1 AND conversation_id=$2 AND status IN ('open','in_progress','waiting') ORDER BY topic_scoped ASC, updated_at DESC LIMIT 1`, a.id, a.conversation).Scan(&picked)
+	if picked != placeholder {
+		t.Fatal("the conversation ticket must stay the one conversation-level reads pick")
+	}
+	// ...and the race protection of inbound is intact: a SECOND conversation ticket is still impossible
+	if _, err := e.seed.Exec(e.ctx, `INSERT INTO tickets(id,tenant_id,conversation_id,status,subject) VALUES(uuid_generate_v4(),$1,$2,'open','duplicado')`, a.id, a.conversation); err == nil {
+		t.Fatal("two conversation tickets in one conversation must remain impossible")
 	}
 }

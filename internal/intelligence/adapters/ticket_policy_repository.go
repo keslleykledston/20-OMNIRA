@@ -76,7 +76,7 @@ func (r *PostgresTicketPolicyRepository) ActiveTicket(ctx context.Context, tenan
 	err := r.q(ctx).QueryRow(ctx, `
 		SELECT t.id, (SELECT l.topic_thread_id FROM topic_ticket_links l WHERE l.tenant_id=t.tenant_id AND l.ticket_id=t.id AND l.relation='primary')
 		FROM tickets t WHERE t.tenant_id=$1 AND t.conversation_id=$2 AND t.status IN ('open','in_progress','waiting')
-		ORDER BY t.updated_at DESC, t.id DESC LIMIT 1`, tenantID, conversationID).Scan(&f.TicketID, &f.PrimaryTopicID)
+		ORDER BY t.topic_scoped ASC, t.updated_at DESC, t.id DESC LIMIT 1`, tenantID, conversationID).Scan(&f.TicketID, &f.PrimaryTopicID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

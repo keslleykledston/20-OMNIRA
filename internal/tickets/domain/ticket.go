@@ -35,6 +35,9 @@ type Ticket struct {
 	UpdatedAt      time.Time
 	ResolvedAt     *time.Time
 	ClosedAt       *time.Time
+	// TopicScoped marks a ticket opened for one subject of a conversation that already had its conversation ticket
+	// (ADR-0017). Such tickets are outside the at-most-one-active-per-conversation guarantee.
+	TopicScoped bool
 
 	// PRODUCT.6-D (ADR-0013): external ERP ticket projection/link, all
 	// nullable. A ticket created locally (still the only path today — see

@@ -1061,7 +1061,7 @@ paths:
       operationId: getTopicTicketPolicy
       tags: [Topics]
       summary: What the ticket policy advises for a topic (read-only)
-      description: 'Never creates anything. OMNIRA allows ONE active ticket per conversation, so a second subject is advised needs_agent with share_active as the only option.'
+      description: 'Never creates anything. The conversation keeps ONE conversation ticket; a second subject is advised needs_agent and a person may choose create (a ticket for that subject, topic_scoped) or share_active.'
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/TopicId' }

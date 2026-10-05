@@ -53,7 +53,7 @@ func (s *LocalTicketStore) FindActiveByConversation(ctx context.Context, convers
 		       sync_status, last_synced_at
 		FROM tickets
 		WHERE tenant_id = $1 AND conversation_id = $2 AND status IN ('open', 'in_progress', 'waiting')
-		ORDER BY updated_at DESC, id DESC LIMIT 1`, tenantID, conversationID)
+		ORDER BY topic_scoped ASC, updated_at DESC, id DESC LIMIT 1`, tenantID, conversationID)
 	t := &domain.Ticket{}
 	err = row.Scan(&t.ID, &t.TenantID, &t.ConversationID, &t.Status, &t.Priority, &t.Subject, &t.AssignedTo, &t.CreatedAt, &t.UpdatedAt,
 		&t.ResolvedAt, &t.ClosedAt, &t.Provider, &t.ExternalTicketID, &t.ExternalStatus, &t.ExternalStatusLabel, &t.SyncStatus, &t.LastSyncedAt)

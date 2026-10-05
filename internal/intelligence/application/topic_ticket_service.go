@@ -147,6 +147,7 @@ func (s *TopicTicketService) Apply(ctx context.Context, topicID uuid.UUID, actio
 		if err != nil {
 			return nil, err
 		}
+		t.TopicScoped = st.advice.TicketID != nil // the conversation already has its ticket: this one is for the subject
 		if err := s.creator.Store(ctx, t); err != nil {
 			return nil, fmt.Errorf("%w: could not open the ticket: %v", domain.ErrInvalidTransition, err)
 		}

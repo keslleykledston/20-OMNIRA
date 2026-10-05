@@ -179,7 +179,7 @@ func (s *PostgresInboundStore) FindOpenByConversation(ctx context.Context, conve
 	return scanTicket(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
 		SELECT id, tenant_id, conversation_id, status, priority, subject, assigned_to, created_at, updated_at, resolved_at, closed_at
 		FROM tickets WHERE tenant_id=$1 AND conversation_id=$2 AND status IN ('open','in_progress','waiting')
-		ORDER BY updated_at DESC, id DESC LIMIT 1`, tenantID, conversationID))
+		ORDER BY topic_scoped ASC, updated_at DESC, id DESC LIMIT 1`, tenantID, conversationID))
 }
 
 func (s *PostgresInboundStore) StoreTicket(ctx context.Context, ticket *ticketdomain.Ticket) error {
@@ -190,8 +190,8 @@ func (s *PostgresInboundStore) StoreTicket(ctx context.Context, ticket *ticketdo
 		return err
 	}
 	_, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
-		INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, assigned_to, created_at, updated_at, resolved_at, closed_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, ticket.ID, ticket.TenantID, ticket.ConversationID, ticket.Status, ticket.Priority, ticket.Subject, ticket.AssignedTo, ticket.CreatedAt, ticket.UpdatedAt, ticket.ResolvedAt, ticket.ClosedAt)
+		INSERT INTO tickets (id, tenant_id, conversation_id, status, priority, subject, assigned_to, created_at, updated_at, resolved_at, closed_at, topic_scoped)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, ticket.ID, ticket.TenantID, ticket.ConversationID, ticket.Status, ticket.Priority, ticket.Subject, ticket.AssignedTo, ticket.CreatedAt, ticket.UpdatedAt, ticket.ResolvedAt, ticket.ClosedAt, ticket.TopicScoped)
 	return err
 }
 
