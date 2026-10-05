@@ -23,6 +23,7 @@ servers:
   - url: /api/v1
     description: Same-origin (web nginx / vite proxy forward /api to the API)
 tags:
+  - { name: Identity, description: "Verified channel identities of internal users (ADR-0018)" }
   - { name: Accounts, description: "Customer accounts (organizations) the tenant serves (ADR-0018)" }
   - { name: Auth, description: Mock login (development only) }
   - { name: Inbox, description: Conversations of the tenant }
@@ -1173,6 +1174,146 @@ paths:
               schema: { $ref: '#/components/schemas/ContactClassification' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/identities:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+    get:
+      operationId: listUserChannelIdentities
+      tags: [Identity]
+      summary: Channel identities of internal users
+      description: 'Needs `identity.manage` (admin only: it decides who the system treats as staff).'
+      parameters:
+        - { name: user_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [pending, verified, revoked] } }
+      responses:
+        '200':
+          description: Identities
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/UserChannelIdentity' } } } }
+        '403': { $ref: '#/components/responses/Text403' }
+    post:
+      operationId: createUserChannelIdentity
+      tags: [Identity]
+      summary: Register a PENDING identity of a staff member
+      description: |
+        Needs `identity.manage`. Always created `pending`; a pending identity never matches inbound traffic. The value is
+        normalized (E.164 / lowercase e-mail / provider participant id scoped to one connection). A provider participant
+        needs `provider` and `connection_id` of this tenant. The identity grants NO permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, identity_type, value]
+              additionalProperties: false
+              properties:
+                user_id: { type: string, format: uuid }
+                identity_type: { type: string, enum: [phone, email, provider_participant] }
+                value: { type: string }
+                provider: { type: string }
+                connection_id: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Created (pending)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserChannelIdentity' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '409': { description: The user already has that live identity }
+        '422': { description: Invalid value, user not in the tenant or unknown connection }
+  /tenants/{tenant_id}/identities/{identity_id}/verify:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: identity_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: verifyUserChannelIdentity
+      tags: [Identity]
+      summary: Verify a pending identity (human admin source only)
+      description: |
+        Needs `identity.manage`. Only `verification_source: admin` is accepted here; `provider_verified`, `challenge` and
+        `import_verified` are reserved for system flows that prove them, and there is no AI source. One VERIFIED owner per
+        identity per tenant (409 otherwise). Verification opens one conflict per existing external Contact that matches;
+        it is not blocked by them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [verification_source], additionalProperties: false, properties: { verification_source: { type: string, enum: [admin] } } }
+      responses:
+        '200':
+          description: Verified, with the conflicts it opened
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identity, conflicts]
+                properties:
+                  identity: { $ref: '#/components/schemas/UserChannelIdentity' }
+                  conflicts: { type: array, items: { $ref: '#/components/schemas/IdentityConflict' } }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Not pending, or already verified for another user }
+        '422': { description: Verification source not allowed }
+  /tenants/{tenant_id}/identities/{identity_id}/revoke:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: identity_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: revokeUserChannelIdentity
+      tags: [Identity]
+      summary: Revoke an identity (it stops matching; its open conflicts close)
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserChannelIdentity' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Already revoked }
+  /tenants/{tenant_id}/identity-conflicts:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+    get:
+      operationId: listIdentityConflicts
+      tags: [Identity]
+      summary: Conflicts between a verified internal identity and an external contact
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [open, all], default: open } }
+      responses:
+        '200':
+          description: Conflicts
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/IdentityConflict' } } } }
+        '403': { $ref: '#/components/responses/Text403' }
+  /tenants/{tenant_id}/identity-conflicts/{conflict_id}/resolve:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { name: conflict_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: resolveIdentityConflict
+      tags: [Identity]
+      summary: Resolve a conflict (the contact is never deleted or merged)
+      description: '`confirmed_internal` keeps the identity internal; `identity_revoked` revokes the identity.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [resolution], additionalProperties: false, properties: { resolution: { type: string, enum: [confirmed_internal, identity_revoked] }, note: { type: string, maxLength: 500 } } }
+      responses:
+        '200':
+          description: Resolved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdentityConflict' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Already resolved }
+        '422': { description: Invalid resolution }
   /tenants/{tenant_id}/topics/{topic_id}/summaries:
     get:
       operationId: listTopicSummaries
@@ -2325,6 +2466,31 @@ components:
         classification_source: { type: string, nullable: true, description: 'manual | import | trusted_crm | ticket_flow | rule | ai_suggestion_confirmed | migration | backfill' }
         classified_at: { type: string, format: date-time, nullable: true }
         accounts: { type: array, items: { $ref: '#/components/schemas/ContactAccountLink' } }
+    UserChannelIdentity:
+      type: object
+      required: [id, user_id, identity_type, value, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        identity_type: { type: string, enum: [phone, email, provider_participant] }
+        value: { type: string, description: 'Normalized value.' }
+        status: { type: string, enum: [pending, verified, revoked] }
+        verification_source: { type: string, enum: [admin, provider_verified, challenge, import_verified] }
+        verified_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    IdentityConflict:
+      type: object
+      required: [id, identity_id, contact_id, status, detected_at]
+      properties:
+        id: { type: string, format: uuid }
+        identity_id: { type: string, format: uuid }
+        contact_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, resolved] }
+        resolution: { type: string, enum: [confirmed_internal, identity_revoked] }
+        note: { type: string }
+        detected_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time }
     CustomerAccount:
       type: object
       required: [id, name, account_type, status, created_at, updated_at]

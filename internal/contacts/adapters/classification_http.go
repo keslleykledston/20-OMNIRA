@@ -84,22 +84,9 @@ func (h *ClassificationHandler) authorize(w http.ResponseWriter, r *http.Request
 	return tc, contactID, true
 }
 
-// atomically runs fn inside a savepoint: the request transaction commits even when the handler answers 4xx, so a call
-// that fails half way must not leave half of its writes behind.
+// atomically runs fn inside a savepoint (see platformdb.WithSavepoint).
 func atomically(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Context) error) error {
-	tx, ok := platformdb.QuerierFromContext(ctx, pool).(pgx.Tx)
-	if !ok {
-		return fn(ctx)
-	}
-	sp, err := tx.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	if err := fn(platformdb.WithQuerier(ctx, sp)); err != nil {
-		_ = sp.Rollback(ctx)
-		return err
-	}
-	return sp.Commit(ctx)
+	return platformdb.WithSavepoint(ctx, pool, fn)
 }
 
 type accountRefDTO struct {

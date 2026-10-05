@@ -20,6 +20,7 @@ import (
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
+	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -431,6 +432,13 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		}
 	}
 
+	identityHandler := identityadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/identities", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.List))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/identities", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.Create))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/identities/{identity_id}/verify", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.Verify))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/identities/{identity_id}/revoke", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.Revoke))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/identity-conflicts", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.ListConflicts))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/identity-conflicts/{conflict_id}/resolve", authnMiddleware(tenantSession(http.HandlerFunc(identityHandler.ResolveConflict))))
 	accountsHandler := accountsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.ListAccounts))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/accounts", authnMiddleware(tenantSession(http.HandlerFunc(accountsHandler.CreateAccount))))
