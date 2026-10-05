@@ -152,7 +152,7 @@ func main() {
 			log.Fatalf("Meta client config error: %v", metaErr)
 		}
 		management.Register(metaDescriptor.ID, channelapplication.NewMetaConnectionService(
-			metaDescriptor, erpConnections, erpCredentials, permissions, erpAudit, metachannel.NewAccountProbe(metaClient), cfg.PublicBaseURL))
+			metaDescriptor, erpConnections, erpCredentials, permissions, erpAudit, metachannel.NewAccountProbe(metaClient), cfg.WebBaseURL))
 	}
 	erpProviders := []struct {
 		descriptor ports.ProviderDescriptor

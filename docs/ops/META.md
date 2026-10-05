@@ -15,7 +15,7 @@ Estágio 1: texto, mídia recebida, status de entrega. Templates (fora da janela
 - Mídia recebida: id → URL (host em allowlist Meta) → download com o token da conexão → pipeline ADR-0016 (ClamAV).
 
 ## Ligar
-1. `OMNIRA_META_ENABLED=true` no `.env` (api e worker). `OMNIRA_PUBLIC_BASE_URL` = domínio público.
+1. `OMNIRA_META_ENABLED=true` no `.env` (api e worker). `OMNIRA_WEB_BASE_URL` = domínio público (a Callback URL mostrada na tela sai dele; `OMNIRA_PUBLIC_BASE_URL` é interna, não serve para a Meta).
 2. Canais → Adicionar canal → WhatsApp oficial: Phone Number ID, WABA ID, token permanente, App Secret.
 3. Copiar Callback URL + Verify Token para Meta → WhatsApp → Configuration → Webhook; assinar `messages`.
 4. "Testar conexão" (leitura apenas): a conexão só fica `active` se a Meta respondeu.
