@@ -292,7 +292,7 @@ func (r *PostgresTopicRepository) ListTopicTickets(ctx context.Context, tenantID
 
 func (r *PostgresTopicRepository) ConversationInfo(ctx context.Context, tenantID, conversationID uuid.UUID) (ports.ConversationInfo, error) {
 	var info ports.ConversationInfo
-	err := r.q(ctx).QueryRow(ctx, `SELECT contact_id, assigned_to_user_id FROM conversations WHERE tenant_id=$1 AND id=$2`,
+	err := r.q(ctx).QueryRow(ctx, `SELECT COALESCE(contact_id, '00000000-0000-0000-0000-000000000000'::uuid), assigned_to_user_id FROM conversations WHERE tenant_id=$1 AND id=$2`,
 		tenantID, conversationID).Scan(&info.ContactID, &info.AssignedTo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ports.ConversationInfo{}, nil

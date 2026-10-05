@@ -289,6 +289,14 @@ func (h *ClassificationHandler) record(r *http.Request, tc *tenancydomain.Tenant
 	_ = h.audit.Store(r.Context(), ev)
 }
 
+// recordKindRecompute audits the derived conversation_kind changes a reclassification caused (one entry, with counts).
+func (h *ClassificationHandler) recordKindRecompute(r *http.Request, tc *tenancydomain.TenantContext, contactID uuid.UUID, c Change) {
+	if c.ConversationsRecomputed == 0 && c.GroupsRecomputed == 0 {
+		return
+	}
+	h.record(r, tc, auditdomain.ActionConversationKindChanged, contactID, map[string]any{"conversations": c.ConversationsRecomputed, "groups": c.GroupsRecomputed, "contact_kind": string(c.Kind)})
+}
+
 // GetClassification: GET /contacts/{contact_id}/classification  (account.read)
 func (h *ClassificationHandler) GetClassification(w http.ResponseWriter, r *http.Request) {
 	tc, contactID, ok := h.authorize(w, r, permAccountRead)
@@ -354,6 +362,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 			action = auditdomain.ActionContactClassified
 		}
 		h.record(r, tc, action, contactID, map[string]any{"kind_from": string(change.PreviousKind), "kind_to": string(kind), "classification_source": string(domain.SourceManual), "accounts": len(req.Accounts)})
+		h.recordKindRecompute(r, tc, contactID, change)
 	} else if len(req.Accounts) > 0 {
 		h.record(r, tc, auditdomain.ActionContactAccountLinked, contactID, map[string]any{"accounts": len(req.Accounts), "classification_source": string(domain.SourceManual)})
 	}
@@ -434,6 +443,7 @@ func (h *ClassificationHandler) EndLink(w http.ResponseWriter, r *http.Request) 
 	h.record(r, tc, auditdomain.ActionContactAccountUnlinked, contactID, map[string]any{"link_id": linkID.String(), "kind_changed": change.Changed, "kind_from": string(change.PreviousKind), "kind_to": string(change.Kind)})
 	if change.Changed {
 		h.record(r, tc, auditdomain.ActionContactReclassified, contactID, map[string]any{"kind_from": string(change.PreviousKind), "kind_to": string(change.Kind), "classification_source": string(domain.SourceManual)})
+		h.recordKindRecompute(r, tc, contactID, change)
 	}
 	v, err := h.view(r.Context(), tc.TenantID, contactID)
 	if err != nil {

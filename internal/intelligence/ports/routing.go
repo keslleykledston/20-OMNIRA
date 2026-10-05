@@ -25,9 +25,11 @@ type MessageRef struct {
 
 // RoutableMessage is what the router needs about one message, loaded under the tenant's RLS.
 type RoutableMessage struct {
-	Ref           MessageRef
-	ContainerID   uuid.UUID  // conversation id or group id
-	ContactID     *uuid.UUID // conversation messages only
+	Ref         MessageRef
+	ContainerID uuid.UUID  // conversation id or group id
+	ContactID   *uuid.UUID // conversation messages only; nil for an internal (staff) conversation
+	// Internal: the conversation is with a verified staff member (ADR-0018). Topics belong to a contact: not routed.
+	Internal      bool
 	ParticipantID *uuid.UUID
 	Text          string
 	Inbound       bool

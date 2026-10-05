@@ -39,7 +39,7 @@ func (r *PostgresConversationContacts) ContactIDFor(ctx context.Context, convers
 	if err != nil || tc.TenantID == uuid.Nil {
 		return uuid.Nil, false, errors.New("inbox: tenant context required")
 	}
-	var contactID uuid.UUID
+	var contactID *uuid.UUID // NULL for an internal (staff) conversation: there is no contact to bind evidence to
 	err = platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx, `
 		SELECT contact_id FROM conversations WHERE tenant_id = $1 AND id = $2`,
 		tc.TenantID, conversationID).Scan(&contactID)
@@ -49,7 +49,10 @@ func (r *PostgresConversationContacts) ContactIDFor(ctx context.Context, convers
 	if err != nil {
 		return uuid.Nil, false, err
 	}
-	return contactID, true, nil
+	if contactID == nil {
+		return uuid.Nil, false, nil
+	}
+	return *contactID, true, nil
 }
 
 var _ conversationContactReader = (*PostgresConversationContacts)(nil)

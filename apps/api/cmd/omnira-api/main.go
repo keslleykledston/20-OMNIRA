@@ -24,6 +24,8 @@ import (
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
+	identityapp "github.com/omnira/omnira/internal/identity/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	inboxapplication "github.com/omnira/omnira/internal/inbox/application"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
@@ -74,6 +76,8 @@ func main() {
 	}
 
 	srv := httpserver.New(cfg.HTTPAddr)
+	// ADR-0018 switches (classification, accounts, verified internal identities, conversation kind): read once.
+	identityFlags := identityapp.FlagsFromEnv(nil)
 	srv.SetupHealth(dbPool, nc)
 
 	// Valkey (presence, IAM4.2-A): optional at boot like NATS above — a
@@ -183,9 +187,11 @@ func main() {
 			log.Fatalf("WAHA provider descriptor error: %v", err)
 		}
 		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
-		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
+		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool).WithConversationKind(identityFlags.ConversationKindEnabled)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
-			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool))
+			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
+			// ADR-0018: only VERIFIED internal identities make a sender "staff" (nothing matches until one is verified).
+			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)
 
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).
@@ -242,9 +248,10 @@ func main() {
 		}
 		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)
-		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool)
+		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool).WithConversationKind(identityFlags.ConversationKindEnabled)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
-			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool))
+			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
+			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)
 
 		srv.RegisterMetaWebhook(metachannel.Handler{
 			VerifyToken: cfg.MetaVerifyToken,

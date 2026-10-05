@@ -621,8 +621,12 @@ paths:
           schema: { type: boolean }
         - name: kind
           in: query
-          description: 'Contact classification (ADR-0014). Omitted = customers and others (spam is kept but out of the default view); `spam` lists the spam conversations.'
+          description: 'Contact classification (ADR-0014). Omitted = every classification except spam (kept, but out of the default view); `spam` lists the spam conversations.'
           schema: { type: string, enum: [unclassified, customer, other, spam] }
+        - name: conversation_kind
+          in: query
+          description: 'ADR-0018. Omitted = every kind except `internal` (conversations with staff are kept but are not attendance); ask for `internal` explicitly.'
+          schema: { type: string, enum: [internal, customer_service, external_other, unclassified] }
       responses:
         '200':
           description: A page of conversations
@@ -2895,10 +2899,13 @@ components:
         limit: { type: integer }
     ConversationItem:
       type: object
-      required: [id, contact_id, status, title, contact_name, contact_phone, created_at, updated_at]
+      required: [id, status, title, contact_name, contact_phone, conversation_kind, has_unclassified_participants, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
-        contact_id: { type: string, format: uuid }
+        contact_id: { type: string, format: uuid, description: 'Absent for an internal conversation: staff are never contacts (ADR-0018)' }
+        internal_user_id: { type: string, format: uuid, description: 'The verified staff member of an internal conversation' }
+        conversation_kind: { type: string, enum: [internal, customer_service, external_other, unclassified], description: 'Derived from who takes part (ADR-0018). There is no "mixed" kind.' }
+        has_unclassified_participants: { type: boolean, description: 'At least one participant is not classified yet (or an identity conflict is open)' }
         channel_connection_id: { type: string, format: uuid }
         status: { type: string, example: open }
         title: { type: string }

@@ -47,13 +47,11 @@ func (r *PostgresRoutingRepository) LoadRoutable(ctx context.Context, tenantID u
 			FROM wa_group_messages g WHERE g.tenant_id=$1 AND g.id=$2`, tenantID, ref.ID).
 			Scan(&m.ContainerID, &m.ParticipantID, &m.Text, &m.Inbound, &m.CreatedAt, &reply)
 	} else {
-		var contact uuid.UUID
 		err = r.q(ctx).QueryRow(ctx, `
-			SELECT m.conversation_id, c.contact_id, m.sender_channel_participant_id, m.body, m.direction='inbound', m.created_at, m.reply_to_message_id
+			SELECT m.conversation_id, c.contact_id, c.internal_user_id IS NOT NULL, m.sender_channel_participant_id, m.body, m.direction='inbound', m.created_at, m.reply_to_message_id
 			FROM messages m JOIN conversations c ON c.tenant_id=m.tenant_id AND c.id=m.conversation_id
 			WHERE m.tenant_id=$1 AND m.id=$2`, tenantID, ref.ID).
-			Scan(&m.ContainerID, &contact, &m.ParticipantID, &m.Text, &m.Inbound, &m.CreatedAt, &reply)
-		m.ContactID = &contact
+			Scan(&m.ContainerID, &m.ContactID, &m.Internal, &m.ParticipantID, &m.Text, &m.Inbound, &m.CreatedAt, &reply)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrReferenceNotFound

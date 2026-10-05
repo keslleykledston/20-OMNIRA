@@ -143,9 +143,16 @@ func (i *Intake) ProcessGroupMessage(ctx context.Context, conn channeldomain.Cha
 		}
 		if tag.RowsAffected() == 1 {
 			ingested = true
-			_, err = q.Exec(scoped, `
+			if _, err = q.Exec(scoped, `
 				UPDATE wa_groups SET last_message_at = GREATEST(COALESCE(last_message_at, '-infinity'::timestamptz), $3), updated_at = now()
-				WHERE tenant_id = $1 AND id = $2`, conn.TenantID, groupID, msg.SentAt)
+				WHERE tenant_id = $1 AND id = $2`, conn.TenantID, groupID, msg.SentAt); err != nil {
+				return err
+			}
+			// ADR-0018: each participant is classified individually; the group's kind follows (internal / customer_service /
+			// external_other / unclassified, never a guess).
+			if senderID != nil {
+				_, err = q.Exec(scoped, `SELECT recompute_group_kind($1, $2)`, conn.TenantID, groupID)
+			}
 			return err
 		}
 		duplicate = true

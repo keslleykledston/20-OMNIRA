@@ -137,7 +137,7 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
       {conversation?.contact_id && (
         <ContactKindControl
           contactId={conversation.contact_id}
-          kind={conversation.contact_kind ?? 'unclassified'}
+          kind={conversation.contact_kind || 'unclassified'}
           contactName={conversation.contact_name}
           onChanged={() => {
             void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });

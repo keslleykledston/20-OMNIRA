@@ -46,7 +46,11 @@ func (r *PostgresParticipantRecorder) RecordInbound(ctx context.Context, in appl
 		if err != nil {
 			return err
 		}
-		if err := channeladapters.LinkConversationParticipant(ctx, q, tc.TenantID, in.ConversationID, id, "customer"); err != nil {
+		role := in.Role
+		if role == "" {
+			role = "customer"
+		}
+		if err := channeladapters.LinkConversationParticipant(ctx, q, tc.TenantID, in.ConversationID, id, role); err != nil {
 			return err
 		}
 		participant = &id

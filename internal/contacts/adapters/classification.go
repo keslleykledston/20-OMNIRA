@@ -48,6 +48,19 @@ type Change struct {
 	PreviousKind domain.ContactKind
 	Kind         domain.ContactKind
 	Changed      bool
+	// ConversationsRecomputed / GroupsRecomputed: how many conversation_kind values the reclassification changed or
+	// re-derived (ADR-0018), so the caller can audit it.
+	ConversationsRecomputed int
+	GroupsRecomputed        int
+}
+
+// recomputeKinds re-derives conversation_kind for the contact's 1:1 conversations and for the groups it takes part in.
+// It runs in the SAME transaction as the reclassification: nothing observes a customer contact with stale kinds.
+func (r *ClassificationRepository) recomputeKinds(ctx context.Context, tenantID, contactID uuid.UUID, ch *Change) error {
+	if err := r.q(ctx).QueryRow(ctx, `SELECT recompute_contact_conversation_kinds($1,$2)`, tenantID, contactID).Scan(&ch.ConversationsRecomputed); err != nil {
+		return err
+	}
+	return r.q(ctx).QueryRow(ctx, `SELECT recompute_groups_for_contact($1,$2)`, tenantID, contactID).Scan(&ch.GroupsRecomputed)
 }
 
 // lockContact reads the kind under FOR UPDATE so concurrent reclassifications serialise.
@@ -101,6 +114,9 @@ func (r *ClassificationRepository) Classify(ctx context.Context, tenantID, actor
 		if _, err := r.q(ctx).Exec(ctx, `UPDATE contacts SET kind=$3, classification_source=$4, classified_at=now(), classified_by_user_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`,
 			tenantID, contactID, string(kind), string(source), nullableUUID(actorID)); err != nil {
 			return Change{}, mapPG(err)
+		}
+		if err := r.recomputeKinds(ctx, tenantID, contactID, &ch); err != nil {
+			return Change{}, err
 		}
 	}
 	return ch, nil
@@ -243,6 +259,9 @@ func (r *ClassificationRepository) EndLink(ctx context.Context, tenantID, actorI
 				return Change{}, mapPG(err)
 			}
 			ch.Kind, ch.Changed = kindAfter, true
+			if err := r.recomputeKinds(ctx, tenantID, contactID, &ch); err != nil {
+				return Change{}, err
+			}
 		}
 	}
 	return ch, nil

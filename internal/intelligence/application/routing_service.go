@@ -75,7 +75,7 @@ func (s *RoutingService) Route(ctx context.Context, ref ports.MessageRef, opts R
 	if err != nil {
 		return nil, err
 	}
-	if !msg.Inbound {
+	if !msg.Inbound || msg.Internal {
 		return nil, ErrNotRoutable
 	}
 	if existing, err := s.routing.ActiveDecision(ctx, tc.TenantID, ref); err != nil {

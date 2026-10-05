@@ -157,7 +157,29 @@ func (r *Repository) Verify(ctx context.Context, tenantID, actorID, id uuid.UUID
 		}
 		res.Conflicts = append(res.Conflicts, conf)
 	}
+	// ADR-0018: an open conflict makes the contact's conversations "unclassified"; a newly verified identity may turn a
+	// group's participant internal. Re-derive in the same transaction.
+	for _, c := range res.Conflicts {
+		if err := r.recompute(ctx, tenantID, &c.ContactID); err != nil {
+			return nil, err
+		}
+	}
+	if err := r.recompute(ctx, tenantID, nil); err != nil {
+		return nil, err
+	}
 	return res, nil
+}
+
+// recompute re-derives conversation_kind: for one contact's conversations (when given) and for every group of the tenant.
+func (r *Repository) recompute(ctx context.Context, tenantID uuid.UUID, contactID *uuid.UUID) error {
+	if contactID != nil {
+		var n int
+		if err := r.q(ctx).QueryRow(ctx, `SELECT recompute_contact_conversation_kinds($1,$2)`, tenantID, *contactID).Scan(&n); err != nil {
+			return err
+		}
+	}
+	var n int
+	return r.q(ctx).QueryRow(ctx, `SELECT recompute_tenant_group_kinds($1)`, tenantID).Scan(&n)
 }
 
 // matchingContacts finds the tenant's external contacts the identity also names (by phone, e-mail or participant link).
@@ -210,7 +232,29 @@ func (r *Repository) Revoke(ctx context.Context, tenantID, actorID, id uuid.UUID
 	if _, err := r.q(ctx).Exec(ctx, `UPDATE user_channel_identities SET status='revoked', revoked_at=now(), revoked_by_user_id=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenantID, id, nullable(actorID)); err != nil {
 		return nil, err
 	}
-	if _, err := r.q(ctx).Exec(ctx, `UPDATE identity_resolution_conflicts SET status='resolved', resolution='identity_revoked', resolved_at=now(), resolved_by_user_id=$3 WHERE tenant_id=$1 AND identity_id=$2 AND status='open'`, tenantID, id, nullable(actorID)); err != nil {
+	rows, err := r.q(ctx).Query(ctx, `UPDATE identity_resolution_conflicts SET status='resolved', resolution='identity_revoked', resolved_at=now(), resolved_by_user_id=$3 WHERE tenant_id=$1 AND identity_id=$2 AND status='open' RETURNING contact_id`, tenantID, id, nullable(actorID))
+	if err != nil {
+		return nil, err
+	}
+	var contacts []uuid.UUID
+	for rows.Next() {
+		var c uuid.UUID
+		if err := rows.Scan(&c); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		contacts = append(contacts, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range contacts {
+		if err := r.recompute(ctx, tenantID, &contacts[i]); err != nil {
+			return nil, err
+		}
+	}
+	if err := r.recompute(ctx, tenantID, nil); err != nil {
 		return nil, err
 	}
 	return r.Get(ctx, tenantID, id)
@@ -279,6 +323,9 @@ func (r *Repository) ResolveConflict(ctx context.Context, tenantID, actorID, con
 	// Revoke resolves every open conflict of the identity; a confirmation resolves just this one.
 	if _, err := r.q(ctx).Exec(ctx, `UPDATE identity_resolution_conflicts SET status='resolved', resolution=$3, note=$4, resolved_at=now(), resolved_by_user_id=$5 WHERE tenant_id=$1 AND id=$2 AND status='open'`,
 		tenantID, conflictID, string(res), n, nullable(actorID)); err != nil {
+		return nil, err
+	}
+	if err := r.recompute(ctx, tenantID, &c.ContactID); err != nil {
 		return nil, err
 	}
 	return scanConflict(r.q(ctx).QueryRow(ctx, `SELECT `+conflictColumns+` FROM identity_resolution_conflicts WHERE tenant_id=$1 AND id=$2`, tenantID, conflictID))

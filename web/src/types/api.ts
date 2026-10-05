@@ -28,7 +28,12 @@ export interface ConversationItem {
   crm_contact_id?: string;
   contact_id?: string;
   // Classification of the conversation's contact (ADR-0014).
-  contact_kind?: 'unclassified' | 'customer' | 'other' | 'spam';
+  contact_kind?: 'unclassified' | 'customer' | 'other' | 'spam' | '';
+  // ADR-0018: what the conversation is, derived from who takes part. There is no "mixed" kind.
+  conversation_kind?: 'internal' | 'customer_service' | 'external_other' | 'unclassified';
+  has_unclassified_participants?: boolean;
+  // Set INSTEAD of contact_id for a conversation with a verified staff member (staff are never contacts).
+  internal_user_id?: string;
   participants?: ConversationParticipant[];
 }
 

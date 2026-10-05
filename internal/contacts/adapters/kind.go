@@ -131,6 +131,13 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 			dequeued = tag.RowsAffected()
 		}
 		h.recordKind(r, tc, contactID, prev, next, dequeued)
+		if change.ConversationsRecomputed > 0 || change.GroupsRecomputed > 0 {
+			if ev, err := auditdomain.NewAuditEvent(tc.TenantID, tc.ActorID, auditdomain.ActionConversationKindChanged, auditdomain.ResourceContact, contactID, auditdomain.OutcomeSuccess, uuid.Nil); err == nil && h.audit != nil {
+				ev.SetMetadata("conversations", change.ConversationsRecomputed)
+				ev.SetMetadata("groups", change.GroupsRecomputed)
+				_ = h.audit.Store(r.Context(), ev)
+			}
+		}
 	}
 	item, err := scanContactItem(q.QueryRow(r.Context(), contactSelect+` WHERE c.tenant_id = $1 AND c.id = $2`, tc.TenantID, contactID))
 	if err != nil {

@@ -20,7 +20,19 @@ import (
 
 // PostgresInboundStore keeps every write scoped by both TenantContext and the
 // transaction querier. The service composes these methods in one transaction.
-type PostgresInboundStore struct{ pool *pgxpool.Pool }
+type PostgresInboundStore struct {
+	pool *pgxpool.Pool
+	// kindDisabled turns the conversation_kind derivation off (OMNIRA_CONVERSATION_KIND_ENABLED=false).
+	kindDisabled bool
+}
+
+// WithConversationKind switches the derivation of conversation_kind on (the default) or off.
+func (s *PostgresInboundStore) WithConversationKind(enabled bool) *PostgresInboundStore {
+	s.kindDisabled = !enabled
+	return s
+}
+
+func (s *PostgresInboundStore) kindEnabled() bool { return !s.kindDisabled }
 
 var _ inboxapp.ContactStore = (*PostgresInboundStore)(nil)
 var _ inboxapp.ConversationStore = (*PostgresInboundStore)(nil)
@@ -71,10 +83,35 @@ func (s *PostgresInboundStore) Store(ctx context.Context, conversation *conversa
 	if err := sameTenant(ctx, conversation.TenantID); err != nil {
 		return err
 	}
-	_, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
-		INSERT INTO conversations (id, tenant_id, contact_id, channel_connection_id, provider_chat_id, crm_contact_id, status, title, created_at, updated_at, closed_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, conversation.ID, conversation.TenantID, conversation.ContactID, conversation.ChannelConnectionID, conversation.ProviderChatID, conversation.CRMContactID, conversation.Status, conversation.Title, conversation.CreatedAt, conversation.UpdatedAt, conversation.ClosedAt)
+	q := platformdb.QuerierFromContext(ctx, s.pool)
+	if conversation.InternalUserID != nil { // a verified staff member: no contact, kind internal
+		_, err := q.Exec(ctx, `
+			INSERT INTO conversations (id, tenant_id, contact_id, internal_user_id, conversation_kind, channel_connection_id, provider_chat_id, status, title, created_at, updated_at, closed_at)
+			VALUES ($1,$2,NULL,$3,'internal',$4,$5,$6,$7,$8,$9,$10)`, conversation.ID, conversation.TenantID, conversation.InternalUserID, conversation.ChannelConnectionID, conversation.ProviderChatID, conversation.Status, conversation.Title, conversation.CreatedAt, conversation.UpdatedAt, conversation.ClosedAt)
+		return err
+	}
+	// The kind comes from the contact's classification (and an open identity conflict makes it unclassified), decided
+	// in the database from the SAME stored data, never from the provider payload. With the flag off the default stays.
+	_, err := q.Exec(ctx, `
+		INSERT INTO conversations (id, tenant_id, contact_id, conversation_kind, has_unclassified_participants, channel_connection_id, provider_chat_id, crm_contact_id, status, title, created_at, updated_at, closed_at)
+		SELECT $1,$2,$3, k.kind, (k.kind = 'unclassified'), $4,$5,$6,$7,$8,$9,$10,$11
+		FROM (SELECT CASE WHEN NOT $12::boolean THEN 'unclassified'
+		                  WHEN EXISTS (SELECT 1 FROM identity_resolution_conflicts x WHERE x.tenant_id=$2 AND x.contact_id=$3 AND x.status='open') THEN 'unclassified'
+		                  ELSE contact_kind_to_conversation_kind(COALESCE((SELECT ct.kind FROM contacts ct WHERE ct.tenant_id=$2 AND ct.id=$3),'unclassified')) END AS kind) k`,
+		conversation.ID, conversation.TenantID, conversation.ContactID, conversation.ChannelConnectionID, conversation.ProviderChatID, conversation.CRMContactID, conversation.Status, conversation.Title, conversation.CreatedAt, conversation.UpdatedAt, conversation.ClosedAt, s.kindEnabled())
 	return err
+}
+
+// FindOpenInternal is FindOpen for the conversation with a verified internal user.
+func (s *PostgresInboundStore) FindOpenInternal(ctx context.Context, userID, connectionID uuid.UUID) (*conversationdomain.Conversation, error) {
+	tenantID, err := tenantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return scanConversation(platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
+		SELECT id, tenant_id, contact_id, channel_connection_id, provider_chat_id, crm_contact_id, status, title, created_at, updated_at, closed_at
+		FROM conversations WHERE tenant_id=$1 AND internal_user_id=$2 AND channel_connection_id=$3 AND status='open'
+		ORDER BY updated_at DESC, id DESC LIMIT 1`, tenantID, userID, connectionID))
 }
 
 // RouteNew selects only the tenant's explicit default queue. Round-robin
@@ -98,6 +135,7 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		    routing_retry_at = CASE WHEN selected.mode='round_robin' THEN now() + interval '90 seconds' ELSE NULL END
 		  FROM selected WHERE c.tenant_id=$1 AND c.id=$2 AND c.queue_id IS NULL
 		    -- ADR-0014: a spam contact's (or a team member's) conversation is stored but never routed to a queue.
+		    AND c.internal_user_id IS NULL -- ADR-0018: a conversation with staff is never queued for customer service
 		    AND NOT EXISTS (SELECT 1 FROM contacts ct WHERE ct.tenant_id=c.tenant_id AND ct.id=c.contact_id AND ct.kind = 'spam')
 		  RETURNING c.id,selected.mode
 		)
@@ -234,9 +272,13 @@ func scanContact(row scanner) (*contactdomain.Contact, error) {
 func scanConversation(row scanner) (*conversationdomain.Conversation, error) {
 	c := &conversationdomain.Conversation{}
 	var status string
-	err := row.Scan(&c.ID, &c.TenantID, &c.ContactID, &c.ChannelConnectionID, &c.ProviderChatID, &c.CRMContactID, &status, &c.Title, &c.CreatedAt, &c.UpdatedAt, &c.ClosedAt)
+	var contact *uuid.UUID // NULL for an internal (staff) conversation
+	err := row.Scan(&c.ID, &c.TenantID, &contact, &c.ChannelConnectionID, &c.ProviderChatID, &c.CRMContactID, &status, &c.Title, &c.CreatedAt, &c.UpdatedAt, &c.ClosedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
+	}
+	if contact != nil {
+		c.ContactID = *contact
 	}
 	c.Status = conversationdomain.Status(status)
 	return c, err
