@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import ContactTopics from '../components/topics/ContactTopics'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -174,6 +175,8 @@ function ContactOverview({ contact }: { contact: Contact }) {
               <ChannelChips channels={contact.channels} />
             </StatCard>
           </div>
+
+          <ContactTopics contactId={contact.id} />
 
           <Section title="Histórico de conversas">
             {conversations.isLoading && <ListSkeleton label="Carregando conversas" />}

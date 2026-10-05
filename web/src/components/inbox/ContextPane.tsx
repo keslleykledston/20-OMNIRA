@@ -9,6 +9,7 @@ import { Icon } from '../primitives';
 import { TicketPanel } from '../TicketPanel';
 import { TechnicianSelectModal } from '../TechnicianSelectModal';
 import ConversationSummary from './ConversationSummary';
+import TopicsPanel from '../topics/TopicsPanel';
 import { ContactKindControl } from '../contacts/ContactKindControl';
 
 interface ContextPaneProps {
@@ -148,6 +149,8 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
 
       {/* PRODUCT.7C1: on-demand, non-persisted AI conversation summary */}
       <ConversationSummary conversationId={conversationId} />
+
+      <TopicsPanel conversationId={conversationId} />
 
       {/* Conversation Stats */}
       <div className="p-4 border-b border-border-subtle">

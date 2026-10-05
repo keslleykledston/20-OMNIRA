@@ -97,6 +97,8 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
 
   // H. this cleanup introduces no new backend/provider request: only the
   // pre-existing conversation/company/ticket reads happen, never a POST.
+  // ADR-0017 added the topic surface to this pane: it may also READ the conversation's topics and ambiguities and the
+  // caller's permissions (all GET, all tenant-scoped, none to a provider). Still never a POST on open.
   it('introduces no new backend/provider request', async () => {
     mockConversation({ crm_contact_id: 'k3g-contact-999' });
     renderAt(<ContextPane conversationId={CONV} />);
@@ -105,7 +107,8 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
     const urls = vi.mocked(axios.get).mock.calls.map((c) => c[0] as string);
     for (const url of urls) {
       expect(
-        url.endsWith(`/inbox/conversations/${CONV}`) || url.endsWith('/crm/companies') || url.endsWith('/ticket'),
+        url.endsWith(`/inbox/conversations/${CONV}`) || url.endsWith('/crm/companies') || url.endsWith('/ticket') ||
+          url.endsWith(`/inbox/conversations/${CONV}/topics`) || url.endsWith(`/inbox/conversations/${CONV}/ambiguities`) || url.endsWith('/me/access'),
       ).toBe(true);
     }
     expect(axios.post).not.toHaveBeenCalled();
