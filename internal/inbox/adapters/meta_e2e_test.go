@@ -13,11 +13,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/omnira/omnira/internal/testhelpers"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/meta"
 	inboxapp "github.com/omnira/omnira/internal/inbox/application"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
+
+// e2eSecrets stands in for the encrypted per-connection credential (covered in the meta package tests).
+type e2eSecrets struct{}
+
+func (e2eSecrets) AppSecret(context.Context, *domain.ChannelConnection) (string, error) {
+	return "secret", nil
+}
+func (e2eSecrets) CheckVerifyToken(context.Context, string) (bool, error) { return false, nil }
 
 func TestMetaWebhookEndToEndPersistsDedupesAndIsolates(t *testing.T) {
 	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
@@ -57,9 +66,9 @@ func TestMetaWebhookEndToEndPersistsDedupesAndIsolates(t *testing.T) {
 	svc := inboxapp.NewInboundService(store, store, store, TicketStore{store}, store)
 	events := channeladapters.NewPostgresWebhookEventStore(app)
 	h := meta.Handler{
-		AppSecret: "secret",
-		Resolver:  channeladapters.NewMetaWebhookConnectionResolver(app, channeladapters.NewPostgresChannelConnectionRepository(app)),
-		Intake:    NewWebhookIntake(app, events, svc),
+		Secrets:  e2eSecrets{},
+		Resolver: channeladapters.NewMetaWebhookConnectionResolver(app, channeladapters.NewPostgresChannelConnectionRepository(app)),
+		Intake:   NewWebhookIntake(app, events, svc),
 	}
 	post := func(body string) int {
 		mac := hmac.New(sha256.New, []byte("secret"))
@@ -99,7 +108,7 @@ func TestMetaWebhookEndToEndPersistsDedupesAndIsolates(t *testing.T) {
 	if a, b := count(tenantA), count(tenantB); a != 1 || b != 1 {
 		t.Fatalf("after B: A=%d B=%d", a, b)
 	}
-	if code := post(body("unknown-"+uuid.NewString(), "wamid.z")); code != http.StatusNotFound {
+	if code := post(body("unknown-"+uuid.NewString(), "wamid.z")); code != http.StatusUnauthorized {
 		t.Fatalf("unknown phone code=%d", code)
 	}
 }
