@@ -73,6 +73,7 @@ export default function InboxWorkspace() {
             assigned: segment === 'mine' ? 'me' : undefined,
             waiting: segment === 'waiting' ? true : undefined,
             kind: segment === 'spam' ? 'spam' : undefined,
+            conversation_kind: segment === 'unclassified' || segment === 'internal' ? segment : undefined,
           },
           headers: authHeaders(),
         });

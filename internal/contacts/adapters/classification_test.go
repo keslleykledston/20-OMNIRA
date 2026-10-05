@@ -51,6 +51,14 @@ func (e *clsEnv) inErr(tenant, user uuid.UUID, fn func(ctx context.Context) erro
 	})
 }
 
+// exec2 runs a statement as the table owner (fixtures).
+func (e *clsEnv) exec2(sql string, args ...any) {
+	e.t.Helper()
+	if _, err := e.seed.Exec(context.Background(), sql, args...); err != nil {
+		e.t.Fatalf("%s: %v", sql, err)
+	}
+}
+
 func (e *clsEnv) account(tenant, user uuid.UUID, name string) uuid.UUID {
 	var id uuid.UUID
 	if err := e.in(tenant, user, func(ctx context.Context) {

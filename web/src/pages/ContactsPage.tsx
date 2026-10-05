@@ -20,7 +20,17 @@ import {
 } from '../components/primitives'
 import { ChannelChips } from '../components/contacts/ChannelChips'
 import { formatInteraction } from '../lib/contactFormat'
-import { CONTACT_KIND_LABEL, contactErrorMessage, contactsAPI, type Contact, type ContactFilters, type ContactKind } from '../lib/contacts'
+import {
+  CONTACT_KIND_LABEL,
+  contactErrorMessage,
+  peopleAPI,
+  type Contact,
+  type ContactKind,
+  type PeopleFilters,
+  type PeopleView,
+  type PersonContact,
+  type PersonInternalUser,
+} from '../lib/contacts'
 import { useDebounced } from '../hooks/useDebounced'
 import { getTenantId } from '../lib/session'
 
@@ -37,6 +47,21 @@ const KIND_TONE: Record<ContactKind, 'success' | 'danger' | 'default'> = {
   customer: 'success',
   other: 'default',
   spam: 'danger',
+}
+
+// The directory views (ADR-0018). "Internos" are Users/Memberships: no classification, access is managed elsewhere.
+const VIEWS: { id: PeopleView; label: string }[] = [
+  { id: 'all', label: 'Todos' },
+  { id: 'customers', label: 'Clientes' },
+  { id: 'others', label: 'Outros' },
+  { id: 'unclassified', label: 'Não classificados' },
+  { id: 'internal', label: 'Internos' },
+  { id: 'spam', label: 'Spam' },
+]
+
+const STAFF_STATUS: Record<PersonInternalUser['status'], { label: string; tone: 'success' | 'default' }> = {
+  active: { label: 'Ativo', tone: 'success' },
+  inactive: { label: 'Inativo', tone: 'default' },
 }
 
 const SELECT =
@@ -77,16 +102,16 @@ export default function ContactsPage() {
   // Search and filters run on the server (every contact, not just the loaded page). Any change starts
   // again from the first page, because a cursor only makes sense for the filters that produced it.
   const [search, setSearch] = useState('')
-  const [kind, setKind] = useState<ContactKind | ''>('')
-  const [status, setStatus] = useState<Contact['status'] | ''>('')
+  const [view, setView] = useState<PeopleView>('all')
+  const [status, setStatus] = useState<NonNullable<PeopleFilters['status']> | ''>('')
   const q = useDebounced(search.trim(), 300)
-  const filters: ContactFilters = { q: q || undefined, kind: kind || undefined, status: status || undefined }
-  const filtering = Boolean(q || kind || status)
+  const filters: PeopleFilters = { view, q: q || undefined, status: status || undefined }
+  const filtering = Boolean(q || view !== 'all' || status)
   const resetPaging = () => setCursorStack([])
 
   const contacts = useQuery({
-    queryKey: ['contacts', tenantId, cursor ?? 'first', q, kind, status],
-    queryFn: () => contactsAPI.list(cursor, PAGE_SIZE, filters),
+    queryKey: ['people', tenantId, cursor ?? 'first', q, view, status],
+    queryFn: () => peopleAPI.list(cursor, PAGE_SIZE, filters),
     retry: false,
   })
 
@@ -96,8 +121,8 @@ export default function ContactsPage() {
   return (
     <div className="space-y-6 px-6 py-6 lg:px-8 lg:py-8">
       <PageHeader
-        title="Contatos"
-        description="Pessoas que já conversaram com a sua operação."
+        title="Pessoas"
+        description="Contatos que já conversaram com a sua operação e a equipe interna, separados por tipo."
       />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -117,24 +142,6 @@ export default function ContactsPage() {
           />
         </div>
         <label className="flex items-center gap-2 text-sm text-text-secondary">
-          Tipo
-          <select
-            aria-label="Tipo"
-            className={SELECT}
-            value={kind}
-            onChange={(e) => {
-              setKind(e.target.value as ContactKind | '')
-              resetPaging()
-            }}
-          >
-            <option value="">Todos</option>
-            <option value="customer">{CONTACT_KIND_LABEL.customer}s</option>
-            <option value="other">{CONTACT_KIND_LABEL.other}</option>
-            <option value="unclassified">{CONTACT_KIND_LABEL.unclassified}s</option>
-            <option value="spam">{CONTACT_KIND_LABEL.spam}</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-sm text-text-secondary">
           Status
           <select
             aria-label="Status"
@@ -149,8 +156,30 @@ export default function ContactsPage() {
             <option value="active">Ativos</option>
             <option value="blocked">Bloqueados</option>
             <option value="archived">Arquivados</option>
+            <option value="inactive">Inativos (equipe)</option>
           </select>
         </label>
+      </div>
+
+      <div role="tablist" aria-label="Tipo de pessoa" className="flex flex-wrap gap-1.5">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            type="button"
+            role="tab"
+            aria-selected={view === v.id}
+            onClick={() => {
+              setView(v.id)
+              resetPaging()
+            }}
+            className={
+              'px-3 py-1.5 text-sm font-medium rounded-pill transition-colors ' +
+              (view === v.id ? 'bg-accent-primary text-white' : 'bg-surface-muted text-text-secondary hover:bg-surface-tertiary')
+            }
+          >
+            {v.label}
+          </button>
+        ))}
       </div>
 
       {contacts.isError && (
@@ -181,7 +210,7 @@ export default function ContactsPage() {
                     label: 'Limpar filtros',
                     onClick: () => {
                       setSearch('')
-                      setKind('')
+                      setView('all')
                       setStatus('')
                       resetPaging()
                     },
@@ -198,7 +227,7 @@ export default function ContactsPage() {
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Contato</TableHeaderCell>
+                  <TableHeaderCell>Pessoa</TableHeaderCell>
                   <TableHeaderCell>Telefone</TableHeaderCell>
                   <TableHeaderCell>Canais</TableHeaderCell>
                   <TableHeaderCell>Última interação</TableHeaderCell>
@@ -208,70 +237,25 @@ export default function ContactsPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {items.map((c) => (
-                  <TableRow key={c.id} interactive onClick={() => navigate(`/contacts/${c.id}`)}>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <Avatar alt={c.display_name} initials={initials(c.display_name)} size="sm" />
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-text-primary">{c.display_name}</p>
-                          {c.email && <p className="truncate text-xs text-text-secondary">{c.email}</p>}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-text-secondary tabular-nums whitespace-nowrap">{formatPhone(c.phone_e164)}</TableCell>
-                    <TableCell>
-                      <ChannelChips channels={c.channels} />
-                    </TableCell>
-                    <TableCell className="text-text-secondary whitespace-nowrap">{formatInteraction(c.last_interaction_at)}</TableCell>
-                    <TableCell className="font-medium tabular-nums text-text-primary">{c.open_conversation_count}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={KIND_TONE[c.kind]} size="sm">
-                        {CONTACT_KIND_LABEL[c.kind]}
-                      </StatusBadge>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
-                        {STATUS_LABELS[c.status].label}
-                      </StatusBadge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {items.map((p) =>
+                  p.subject_type === 'internal_user' ? (
+                    <InternalRow key={`u-${p.id}`} user={p} onManage={() => navigate(p.manage_path)} />
+                  ) : (
+                    <ContactRow key={`c-${p.id}`} c={p} onOpen={() => navigate(`/contacts/${p.id}`)} />
+                  ),
+                )}
               </TableBody>
             </Table>
           </div>
 
           <div className="md:hidden space-y-3">
-            {items.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => navigate(`/contacts/${c.id}`)}
-                className="w-full text-left rounded-card border border-border-subtle bg-surface p-4 hover:bg-surface-hover transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <Avatar alt={c.display_name} initials={initials(c.display_name)} size="md" />
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-text-primary truncate">{c.display_name}</p>
-                    <p className="text-sm text-text-secondary tabular-nums">{formatPhone(c.phone_e164)}</p>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <StatusBadge status={KIND_TONE[c.kind]} size="sm">
-                      {CONTACT_KIND_LABEL[c.kind]}
-                    </StatusBadge>
-                    <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
-                      {STATUS_LABELS[c.status].label}
-                    </StatusBadge>
-                  </div>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary">
-                  <ChannelChips channels={c.channels} />
-                  <span>
-                    {formatInteraction(c.last_interaction_at)} · {c.open_conversation_count}{' '}
-                    {c.open_conversation_count === 1 ? 'conversa aberta' : 'conversas abertas'}
-                  </span>
-                </div>
-              </button>
-            ))}
+            {items.map((p) =>
+              p.subject_type === 'internal_user' ? (
+                <InternalCard key={`u-${p.id}`} user={p} onManage={() => navigate(p.manage_path)} />
+              ) : (
+                <ContactCard key={`c-${p.id}`} c={p} onOpen={() => navigate(`/contacts/${p.id}`)} />
+              ),
+            )}
           </div>
 
           <Pagination
@@ -279,10 +263,148 @@ export default function ContactsPage() {
             hasNext={Boolean(page?.has_more && page?.next_cursor)}
             onPrevious={() => setCursorStack((s) => s.slice(0, -1))}
             onNext={() => page?.next_cursor && setCursorStack((s) => [...s, page.next_cursor!])}
-            label={`${page?.count ?? 0} ${page?.count === 1 ? 'contato' : 'contatos'} nesta página`}
+            label={`${page?.count ?? 0} ${page?.count === 1 ? 'pessoa' : 'pessoas'} nesta página`}
           />
         </>
       )}
+    </div>
+  )
+}
+
+// "Empresa" under the name of a contact: the primary company and how many more it belongs to.
+function CompanyLine({ c }: { c: PersonContact }) {
+  if (!c.account_count) return null
+  const more = c.account_count - 1
+  return (
+    <p className="truncate text-xs text-text-tertiary">
+      {c.primary_account_name ?? `${c.account_count} empresas`}
+      {c.primary_account_name && more > 0 ? ` +${more}` : ''}
+    </p>
+  )
+}
+
+function ContactRow({ c, onOpen }: { c: PersonContact; onOpen: () => void }) {
+  return (
+    <TableRow interactive onClick={onOpen}>
+      <TableCell>
+        <div className="flex items-center gap-3">
+          <Avatar alt={c.display_name} initials={initials(c.display_name)} size="sm" />
+          <div className="min-w-0">
+            <p className="truncate font-medium text-text-primary">{c.display_name}</p>
+            {c.email && <p className="truncate text-xs text-text-secondary">{c.email}</p>}
+            <CompanyLine c={c} />
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="text-text-secondary tabular-nums whitespace-nowrap">{formatPhone(c.phone_e164)}</TableCell>
+      <TableCell>
+        <ChannelChips channels={c.channels} />
+      </TableCell>
+      <TableCell className="text-text-secondary whitespace-nowrap">{formatInteraction(c.last_interaction_at)}</TableCell>
+      <TableCell className="font-medium tabular-nums text-text-primary">{c.open_conversation_count}</TableCell>
+      <TableCell>
+        <StatusBadge status={KIND_TONE[c.kind]} size="sm">
+          {CONTACT_KIND_LABEL[c.kind]}
+        </StatusBadge>
+      </TableCell>
+      <TableCell>
+        <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
+          {STATUS_LABELS[c.status].label}
+        </StatusBadge>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+// A staff member: shown for reference, never classified. Access is managed in the Team screen.
+function InternalRow({ user, onManage }: { user: PersonInternalUser; onManage: () => void }) {
+  const name = user.display_name || user.email || 'Sem nome'
+  return (
+    <TableRow>
+      <TableCell>
+        <div className="flex items-center gap-3">
+          <Avatar alt={name} initials={initials(name)} size="sm" />
+          <div className="min-w-0">
+            <p className="truncate font-medium text-text-primary">{name}</p>
+            {user.email && user.email !== name && <p className="truncate text-xs text-text-secondary">{user.email}</p>}
+            <p className="truncate text-xs text-text-tertiary">{user.role_name}</p>
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="text-text-tertiary">—</TableCell>
+      <TableCell className="text-text-tertiary">—</TableCell>
+      <TableCell className="text-text-tertiary">—</TableCell>
+      <TableCell className="text-text-tertiary">—</TableCell>
+      <TableCell>
+        <StatusBadge status="default" size="sm">
+          Interno
+        </StatusBadge>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-3">
+          <StatusBadge status={STAFF_STATUS[user.status].tone} size="sm">
+            {STAFF_STATUS[user.status].label}
+          </StatusBadge>
+          <button type="button" onClick={onManage} className="text-xs font-medium text-accent-primary hover:underline whitespace-nowrap">
+            Gerenciar acesso
+          </button>
+        </div>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+function ContactCard({ c, onOpen }: { c: PersonContact; onOpen: () => void }) {
+  return (
+    <button onClick={onOpen} className="w-full text-left rounded-card border border-border-subtle bg-surface p-4 hover:bg-surface-hover transition-colors">
+      <div className="flex items-center gap-3">
+        <Avatar alt={c.display_name} initials={initials(c.display_name)} size="md" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-text-primary truncate">{c.display_name}</p>
+          <p className="text-sm text-text-secondary tabular-nums">{formatPhone(c.phone_e164)}</p>
+          <CompanyLine c={c} />
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <StatusBadge status={KIND_TONE[c.kind]} size="sm">
+            {CONTACT_KIND_LABEL[c.kind]}
+          </StatusBadge>
+          <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
+            {STATUS_LABELS[c.status].label}
+          </StatusBadge>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary">
+        <ChannelChips channels={c.channels} />
+        <span>
+          {formatInteraction(c.last_interaction_at)} · {c.open_conversation_count} {c.open_conversation_count === 1 ? 'conversa aberta' : 'conversas abertas'}
+        </span>
+      </div>
+    </button>
+  )
+}
+
+function InternalCard({ user, onManage }: { user: PersonInternalUser; onManage: () => void }) {
+  const name = user.display_name || user.email || 'Sem nome'
+  return (
+    <div className="rounded-card border border-border-subtle bg-surface p-4">
+      <div className="flex items-center gap-3">
+        <Avatar alt={name} initials={initials(name)} size="md" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-text-primary truncate">{name}</p>
+          <p className="text-sm text-text-secondary truncate">{user.role_name}</p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <StatusBadge status="default" size="sm">
+            Interno
+          </StatusBadge>
+          <StatusBadge status={STAFF_STATUS[user.status].tone} size="sm">
+            {STAFF_STATUS[user.status].label}
+          </StatusBadge>
+        </div>
+      </div>
+      <button type="button" onClick={onManage} className="mt-3 text-xs font-medium text-accent-primary hover:underline">
+        Gerenciar acesso
+      </button>
     </div>
   )
 }

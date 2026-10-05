@@ -143,9 +143,9 @@ describe('ConversationListPanel — no cap on the list', () => {
 });
 
 describe('ConversationListPanel — Spam inbox', () => {
-  it('offers the four filters, Spam last', () => {
+  it('offers the filters, Spam last', () => {
     renderPanel([conv('a')]);
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Todas', 'Aguardando', 'Minhas', 'Spam']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Todas', 'Aguardando', 'Minhas', 'Não classif.', 'Internas', 'Spam']);
   });
 
   it('in Spam nobody is "waiting" and nothing is "unassigned": those signals are for conversations to attend', () => {
@@ -168,5 +168,43 @@ describe('ConversationListPanel — Spam inbox', () => {
     renderPanel([], { segment: 'spam' });
     expect(screen.getByText(/Nenhum spam/)).toBeInTheDocument();
     expect(screen.getByText(/Não é spam/)).toBeInTheDocument();
+  });
+});
+
+
+describe('ConversationListPanel — what a conversation is (ADR-0018)', () => {
+  it('badges unclassified, internal and other conversations and nothing for plain customer service', () => {
+    renderPanel([
+      conv('cliente', { conversation_kind: 'customer_service' }),
+      conv('novo', { conversation_kind: 'unclassified', has_unclassified_participants: true }),
+      conv('time', { conversation_kind: 'internal' }),
+      conv('forn', { conversation_kind: 'external_other' }),
+      conv('sem-campo'),
+    ]);
+    const rows = screen.getAllByRole('listitem');
+    const row = (name: string) => rows.find((r) => r.textContent?.includes(name))!;
+    expect(row('Contato novo')).toHaveTextContent('Não classificado');
+    expect(row('Contato time')).toHaveTextContent('Interna');
+    expect(row('Contato forn')).toHaveTextContent('Outros');
+    for (const name of ['Contato cliente', 'Contato sem-campo']) {
+      expect(row(name)).not.toHaveTextContent(/Não classificado|Interna|Outros/);
+    }
+  });
+
+  it('a conversation with staff has no "waiting" signal and nothing to claim', () => {
+    renderPanel([
+      conv('time', { conversation_kind: 'internal', assigned_to_user_id: undefined, last_message_at: minutesAgo(90), last_message_direction: 'inbound', waiting_since: minutesAgo(90) }),
+    ], { segment: 'internal' });
+    const row = screen.getByRole('listitem');
+    expect(row).not.toHaveTextContent('min');
+    expect(screen.queryByLabelText('Sem atendente')).not.toBeInTheDocument();
+  });
+
+  it('switching to the new filters reports the segment, and each has its own empty state', async () => {
+    const user = userEvent.setup();
+    const props = renderPanel([], { segment: 'unclassified' });
+    expect(screen.getByText(/Nenhuma conversa sem classificação/)).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Internas' }));
+    expect(props.onSegmentChange).toHaveBeenCalledWith('internal');
   });
 });

@@ -171,6 +171,46 @@ paths:
         '200': { description: Caller access, content: { application/json: { schema: { $ref: '#/components/schemas/MyAccess' } } } }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/people:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+    get:
+      operationId: listPeople
+      tags: [Accounts]
+      summary: 'Unified people directory (ADR-0018): external contacts and internal staff, discriminated by subject_type'
+      description: |
+        `subject_type=contact` rows are external people (classification, companies); `subject_type=internal_user` rows
+        are staff (Users/Memberships): they have NO `kind` and are managed through `manage_path`, never classified.
+        Staff are listed only for callers with `membership.read`: `view=internal` is 403 without it and `view=all` then
+        returns the contacts part only. Keyset-paginated across both types by activity.
+      parameters:
+        - { name: view, in: query, required: false, schema: { type: string, enum: [all, customers, others, unclassified, spam, internal], default: all } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 100 } }
+        - { name: status, in: query, required: false, description: 'active|blocked|archived are contact states; active|inactive are membership states.', schema: { type: string, enum: [active, blocked, archived, inactive] } }
+        - { name: limit, in: query, required: false, schema: { type: integer } }
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: A page of people
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, has_more, count, limit]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      oneOf:
+                        - { $ref: '#/components/schemas/PersonContact' }
+                        - { $ref: '#/components/schemas/PersonInternalUser' }
+                      discriminator: { propertyName: subject_type }
+                  has_more: { type: boolean }
+                  next_cursor: { type: string }
+                  count: { type: integer }
+                  limit: { type: integer }
+        '400': { $ref: '#/components/responses/Text400' }
+        '403': { $ref: '#/components/responses/Text403' }
   /tenants/{tenant_id}/contacts:
     get:
       operationId: listContacts
@@ -2668,6 +2708,28 @@ components:
               name: { type: string }
               relationship_type: { type: string }
               contact_primary: { type: boolean, description: 'The contact''s own preference. It is not an answer: primary is not exclusive.' }
+    PersonContact:
+      allOf:
+        - { $ref: '#/components/schemas/ContactItem' }
+        - type: object
+          required: [subject_type, account_count]
+          properties:
+            subject_type: { type: string, enum: [contact] }
+            account_count: { type: integer, description: 'Active companies of the contact' }
+            primary_account_name: { type: string }
+    PersonInternalUser:
+      type: object
+      required: [subject_type, id, display_name, email, status, role_key, role_name, manage_path, updated_at]
+      properties:
+        subject_type: { type: string, enum: [internal_user] }
+        id: { type: string, format: uuid, description: 'The USER id (never a contact id)' }
+        display_name: { type: string }
+        email: { type: string }
+        status: { type: string, enum: [active, inactive], description: 'Membership status' }
+        role_key: { type: string }
+        role_name: { type: string }
+        manage_path: { type: string, description: 'SPA route where access is managed' }
+        updated_at: { type: string, format: date-time }
     CustomerAccount:
       type: object
       required: [id, name, account_type, status, created_at, updated_at]

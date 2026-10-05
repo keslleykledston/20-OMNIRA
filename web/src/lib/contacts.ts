@@ -115,6 +115,36 @@ export interface Contact {
   open_conversation_count: number;
 }
 
+// Unified people directory (ADR-0018): external contacts and internal staff side by side, DISCRIMINATED by subject_type.
+// Staff are never classified: they have no `kind`, and access is managed in the Team screen.
+export type PeopleView = 'all' | 'customers' | 'others' | 'unclassified' | 'spam' | 'internal';
+
+export interface PersonContact extends Contact {
+  subject_type: 'contact';
+  account_count: number;
+  primary_account_name?: string;
+}
+
+export interface PersonInternalUser {
+  subject_type: 'internal_user';
+  id: string;
+  display_name: string;
+  email: string;
+  status: 'active' | 'inactive';
+  role_key: string;
+  role_name: string;
+  manage_path: string;
+  updated_at: string;
+}
+
+export type Person = PersonContact | PersonInternalUser;
+
+export interface PeopleFilters {
+  view?: PeopleView;
+  q?: string;
+  status?: 'active' | 'blocked' | 'archived' | 'inactive';
+}
+
 export interface ContactLastMessage {
   direction: 'inbound' | 'outbound';
   message_type: 'text' | 'image' | 'video' | 'audio' | 'document' | 'sticker';
@@ -212,6 +242,22 @@ export const contactsAPI = {
       axios.get(`${contactsBase()}/${id}/tickets`, {
         headers: authHeaders(),
         params: { ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}) },
+      }),
+    ),
+};
+
+export const peopleAPI = {
+  list: (cursor?: string, limit?: number, filters: PeopleFilters = {}) =>
+    call<Page<Person>>(() =>
+      axios.get(`${API_BASE}/tenants/${getTenantId()}/people`, {
+        headers: authHeaders(),
+        params: {
+          ...(cursor ? { cursor } : {}),
+          ...(limit ? { limit } : {}),
+          ...(filters.view && filters.view !== 'all' ? { view: filters.view } : {}),
+          ...(filters.q ? { q: filters.q } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+        },
       }),
     ),
 };

@@ -282,6 +282,21 @@ describe('InboxWorkspace — list paging, search and filters', () => {
     await waitFor(() => expect(listCalls().filter((p) => p.kind === undefined).length).toBeGreaterThan(1));
   });
 
+  it('the Não classif. and Internas tabs ask the API for that conversation_kind, and the other tabs send none (ADR-0018)', async () => {
+    const user = userEvent.setup();
+    mockGets(mockDefaultList());
+    renderAt(<InboxWorkspace />, '/inbox');
+    await screen.findByRole('tab', { name: 'Todas' });
+    await user.click(screen.getByRole('tab', { name: 'Não classif.' }));
+    await waitFor(() => expect(listCalls().some((p) => p.conversation_kind === 'unclassified')).toBe(true));
+    await user.click(screen.getByRole('tab', { name: 'Internas' }));
+    await waitFor(() => expect(listCalls().some((p) => p.conversation_kind === 'internal')).toBe(true));
+    // the plain tabs never send it, so the server keeps staff conversations out of attendance
+    expect(listCalls().filter((p) => p.conversation_kind === undefined).every((p) => p.kind === undefined || p.kind === 'spam')).toBe(true);
+    await user.click(screen.getByRole('tab', { name: 'Todas' }));
+    await waitFor(() => expect(listCalls().filter((p) => p.conversation_kind === undefined).length).toBeGreaterThan(1));
+  });
+
   it('runs search and the Minhas / Aguardando filters on the server', async () => {
     const user = userEvent.setup();
     mockGets(mockDefaultList());

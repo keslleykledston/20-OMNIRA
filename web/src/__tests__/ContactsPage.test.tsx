@@ -11,8 +11,11 @@ import { mockGets, renderAt, setSession, TENANT } from './testUtils';
 vi.mock('axios');
 
 const CONTACTS = `/api/v1/tenants/${TENANT}/contacts`;
+const PEOPLE = `/api/v1/tenants/${TENANT}/people`;
 
 const contact = (over: object = {}) => ({
+  subject_type: 'contact',
+  account_count: 0,
   id: 'c1111111-1111-1111-1111-111111111111',
   display_name: 'Ana Souza',
   phone_e164: '+5511998887766',
@@ -208,7 +211,43 @@ describe('ContactDetailPage (Contact 360)', () => {
     expect(await screen.findByRole('heading', { name: 'Ana Souza' })).toBeInTheDocument();
     expect(screen.getByText('ana@example.com')).toBeInTheDocument();
     expect(screen.getByText('Ativo')).toBeInTheDocument();
-    expect(screen.getByText(/Cliente desde/)).toBeInTheDocument();
+    expect(screen.getByText(/Contato desde/)).toBeInTheDocument();
+  });
+
+  it('shows the classification in the header and lets whoever attends edit it (ADR-0018)', async () => {
+    serve({ contact: contact({ kind: 'unclassified' }) });
+    detail();
+    expect(await screen.findByRole('heading', { name: 'Ana Souza' })).toBeInTheDocument();
+    const section = screen.getByRole('region', { name: 'Classificação' });
+    expect(within(section).getByRole('group', { name: 'Tipo de contato' })).toBeInTheDocument();
+    expect(within(section).getByRole('button', { name: 'Cliente' })).toBeInTheDocument();
+    expect(within(section).getByRole('button', { name: 'Outros' })).toBeInTheDocument();
+    expect(within(section).getByText(/Ainda não classificado/)).toBeInTheDocument();
+    // the header badge says it too
+    expect(screen.getAllByText('Não classificado').length).toBeGreaterThan(0);
+  });
+
+  it('keeps integration evidence APART from the classification and says it is only evidence', async () => {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/company-suggestions')) {
+        return { data: { items: [{ evidence_id: 'e1', external_company_id: '42', connection_id: 'cn', source: 'ticket_selection', first_verified_at: '2026-10-01T10:00:00Z', last_verified_at: '2026-10-02T10:00:00Z', account_name: 'ACME Telecom', already_linked: false }] } };
+      }
+      if (url.endsWith('/conversations') || url.endsWith('/tickets')) return { data: subpage([]) };
+      return { data: contact({ kind: 'unclassified' }) };
+    });
+    detail();
+    const crm = await screen.findByRole('region', { name: 'Integração (CRM)' });
+    expect(within(crm).getByText('ACME Telecom')).toBeInTheDocument();
+    expect(within(crm).getByText('não vinculada')).toBeInTheDocument();
+    expect(within(crm).getByText(/É só evidência: não altera a classificação/)).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Classificação' })).queryByText('ACME Telecom')).not.toBeInTheDocument();
+  });
+
+  it('has no integration section without evidence (or without account.read)', async () => {
+    serve({});
+    detail();
+    await screen.findByRole('heading', { name: 'Ana Souza' });
+    expect(screen.queryByRole('region', { name: 'Integração (CRM)' })).not.toBeInTheDocument();
   });
 
   it('marks a missing email instead of inventing one', async () => {
@@ -356,7 +395,7 @@ describe('ContactDetailPage (Contact 360)', () => {
 describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
   const listCalls = () =>
     vi.mocked(axios.get).mock.calls
-      .filter(([url]) => (url as string).endsWith('/contacts'))
+      .filter(([url]) => (url as string).endsWith('/people'))
       .map(([, config]) => ((config as { params?: Record<string, unknown> } | undefined)?.params ?? {}));
 
   beforeEach(() => {
@@ -367,7 +406,7 @@ describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
 
   it('shows each contact\'s kind next to its status', async () => {
     mockGets({
-      [CONTACTS]: page([
+      [PEOPLE]: page([
         contact({ id: 'a', display_name: 'Cliente Ouro', kind: 'customer' }),
         contact({ id: 'b', display_name: 'Promo Chata', kind: 'spam' }),
         contact({ id: 'c', display_name: 'Colega', kind: 'other' }),
@@ -383,7 +422,7 @@ describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
 
   it('searches on the server after the typing pauses (not once per key) and combines the filters', async () => {
     const user = userEvent.setup();
-    mockGets({ [CONTACTS]: page([contact()]) });
+    mockGets({ [PEOPLE]: page([contact()]) });
     renderAt(<ContactsPage />, '/contacts');
     await screen.findAllByText('Ana Souza');
     expect(listCalls()[0]).toEqual({ limit: 20 }); // no filter sent by default
@@ -392,15 +431,15 @@ describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
     await waitFor(() => expect(listCalls().some((p) => p.q === 'maria')).toBe(true));
     expect(listCalls().filter((p) => typeof p.q === 'string' && p.q !== 'maria').length).toBe(0);
 
-    await user.selectOptions(screen.getByLabelText('Tipo'), 'spam');
+    await user.click(screen.getByRole('tab', { name: 'Spam' }));
     await user.selectOptions(screen.getByLabelText('Status'), 'blocked');
-    await waitFor(() => expect(listCalls().some((p) => p.q === 'maria' && p.kind === 'spam' && p.status === 'blocked')).toBe(true));
+    await waitFor(() => expect(listCalls().some((p) => p.q === 'maria' && p.view === 'spam' && p.status === 'blocked')).toBe(true));
   });
 
   it('goes back to the first page when a filter changes (a cursor only fits the filters that made it)', async () => {
     const user = userEvent.setup();
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
-      if (!(url as string).endsWith('/contacts')) return Promise.reject({ response: { status: 404 } });
+      if (!(url as string).endsWith('/people')) return Promise.reject({ response: { status: 404 } });
       return { data: config?.params?.cursor ? page([contact({ id: 'p2', display_name: 'Segunda Pagina' })]) : page([contact()], { has_more: true, next_cursor: 'CUR1' }) };
     });
     renderAt(<ContactsPage />, '/contacts');
@@ -408,24 +447,124 @@ describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
     await user.click(screen.getByRole('button', { name: /próxima|next/i }));
     await screen.findAllByText('Segunda Pagina');
     expect(listCalls().at(-1)?.cursor).toBe('CUR1');
-    await user.selectOptions(screen.getByLabelText('Tipo'), 'customer');
+    await user.click(screen.getByRole('tab', { name: 'Clientes' }));
     await screen.findAllByText('Ana Souza');
-    expect(listCalls().at(-1)).toMatchObject({ kind: 'customer' });
+    expect(listCalls().at(-1)).toMatchObject({ view: 'customers' });
     expect(listCalls().at(-1)?.cursor).toBeUndefined();
   });
 
   it('says nothing matched, and "Limpar filtros" brings everything back', async () => {
     const user = userEvent.setup();
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
-      if (!(url as string).endsWith('/contacts')) return Promise.reject({ response: { status: 404 } });
-      return { data: config?.params?.kind ? page([]) : page([contact()]) };
+      if (!(url as string).endsWith('/people')) return Promise.reject({ response: { status: 404 } });
+      return { data: config?.params?.view ? page([]) : page([contact()]) };
     });
     renderAt(<ContactsPage />, '/contacts');
     await screen.findAllByText('Ana Souza');
-    await user.selectOptions(screen.getByLabelText('Tipo'), 'spam');
+    await user.click(screen.getByRole('tab', { name: 'Spam' }));
     expect(await screen.findByText('Nenhum contato encontrado')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Limpar filtros' }));
     expect((await screen.findAllByText('Ana Souza')).length).toBeGreaterThan(0);
-    expect(screen.getByLabelText('Tipo')).toHaveValue('');
+    expect(screen.getByRole('tab', { name: 'Todos' })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+
+const staff = (over: object = {}) => ({
+  subject_type: 'internal_user',
+  id: 'u1',
+  display_name: 'Ana da K3G',
+  email: 'ana@k3g.com.br',
+  status: 'active',
+  role_key: 'tenant_agent',
+  role_name: 'Atendente',
+  manage_path: '/settings/team',
+  updated_at: '2026-02-20T15:30:00Z',
+  ...over,
+});
+
+describe('ContactsPage — people directory (ADR-0018)', () => {
+  const listCalls = () =>
+    vi.mocked(axios.get).mock.calls
+      .filter(([url]) => (url as string).endsWith('/people'))
+      .map(([, config]) => ((config as { params?: Record<string, unknown> } | undefined)?.params ?? {}));
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    localStorage.clear();
+    setSession();
+  });
+
+  it('offers the five views plus spam, and "Todos" is the default (no view sent)', async () => {
+    mockGets({ [PEOPLE]: page([contact()]) });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    const tabs = within(screen.getByRole('tablist', { name: 'Tipo de pessoa' })).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent)).toEqual(['Todos', 'Clientes', 'Outros', 'Não classificados', 'Internos', 'Spam']);
+    expect(screen.getByRole('tab', { name: 'Todos' })).toHaveAttribute('aria-selected', 'true');
+    expect(listCalls()[0]).toEqual({ limit: 20 });
+  });
+
+  it('each view asks the server for exactly that view', async () => {
+    const user = userEvent.setup();
+    mockGets({ [PEOPLE]: page([contact()]) });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    for (const [label, view] of [['Clientes', 'customers'], ['Outros', 'others'], ['Não classificados', 'unclassified'], ['Internos', 'internal']] as const) {
+      await user.click(screen.getByRole('tab', { name: label }));
+      await waitFor(() => expect(listCalls().at(-1)).toMatchObject({ view }));
+      expect(screen.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true');
+    }
+  });
+
+  it('shows staff and contacts side by side without ever classifying staff, and links to access management', async () => {
+    const user = userEvent.setup();
+    mockGets({ [PEOPLE]: page([contact({ display_name: 'Cliente Ouro', kind: 'customer', account_count: 3, primary_account_name: 'ACME' }), staff()]) });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Cliente Ouro');
+    const rows = screen.getAllByRole('row');
+    const customer = rows.find((r) => r.textContent?.includes('Cliente Ouro'))!;
+    expect(within(customer).getByText('Cliente')).toBeInTheDocument();
+    expect(within(customer).getByText('ACME +2')).toBeInTheDocument();
+    const internal = rows.find((r) => r.textContent?.includes('Ana da K3G'))!;
+    expect(within(internal).getByText('Interno')).toBeInTheDocument();
+    expect(within(internal).getByText('Atendente')).toBeInTheDocument();
+    // no classification control or kind badge for staff
+    for (const kind of ['Cliente', 'Outros', 'Não classificado', 'Spam']) {
+      expect(within(internal).queryByText(kind)).not.toBeInTheDocument();
+    }
+  });
+
+  it('"Gerenciar acesso" goes to the Team screen', async () => {
+    const user = userEvent.setup();
+    mockGets({ [PEOPLE]: page([staff()]) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    function Where() {
+      const l = useLocation();
+      return <div data-testid="where">{l.pathname}</div>;
+    }
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/contacts']}>
+          <Routes>
+            <Route path="/contacts" element={<ContactsPage />} />
+            <Route path="/settings/team" element={<Where />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await user.click((await screen.findAllByRole('button', { name: 'Gerenciar acesso' }))[0]);
+    expect(await screen.findByTestId('where')).toHaveTextContent('/settings/team');
+  });
+
+  it('a contact row still opens its profile; a staff row does not (it is not a contact)', async () => {
+    const user = userEvent.setup();
+    mockGets({ [PEOPLE]: page([staff(), contact({ id: 'c9', display_name: 'Ana Souza' })]) });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    const staffRow = screen.getAllByRole('row').find((r) => r.textContent?.includes('Ana da K3G'))!;
+    expect(staffRow).not.toHaveAttribute('tabindex');
+    await user.click(staffRow);
+    expect(screen.queryByText('Perfil do contato')).not.toBeInTheDocument();
   });
 });

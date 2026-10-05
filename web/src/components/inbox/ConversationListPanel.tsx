@@ -23,6 +23,8 @@ const SEGMENTS: { id: InboxSegment; label: string }[] = [
   { id: 'all', label: 'Todas' },
   { id: 'waiting', label: 'Aguardando' },
   { id: 'mine', label: 'Minhas' },
+  { id: 'unclassified', label: 'Não classif.' },
+  { id: 'internal', label: 'Internas' },
   { id: 'spam', label: 'Spam' },
 ];
 
@@ -121,7 +123,11 @@ export default function ConversationListPanel({
                 ? 'Nenhuma conversa'
                 : segment === 'spam'
                   ? 'Nenhum spam. Aqui ficam os contatos marcados como spam: abra um e use "Não é spam" para restaurar.'
-                  : 'Nada por aqui'}
+                  : segment === 'unclassified'
+                    ? 'Nenhuma conversa sem classificação. Quando alguém novo escrever, ela aparece aqui até você dizer se é cliente ou outro contato.'
+                    : segment === 'internal'
+                      ? 'Nenhuma conversa interna. Conversas com a sua equipe aparecem aqui quando o número delas é verificado.'
+                      : 'Nada por aqui'}
           </div>
         ) : (
           <ul>
@@ -144,6 +150,22 @@ export default function ConversationListPanel({
   );
 }
 
+// What the conversation is, when it is not plain customer service (ADR-0018). A customer conversation shows nothing: it is
+// the normal case. "Não classificado" tells the attendant to say who this is before treating it as a customer.
+function kindBadge(conv: ConversationItem) {
+  const base = 'flex-shrink-0 rounded-pill px-1.5 text-[10px] font-medium leading-4'
+  switch (conv.conversation_kind) {
+    case 'internal':
+      return <span className={clsx(base, 'bg-surface-muted text-text-secondary')}>Interna</span>
+    case 'unclassified':
+      return <span className={clsx(base, 'bg-status-warning-soft text-status-warning')}>Não classificado</span>
+    case 'external_other':
+      return <span className={clsx(base, 'bg-surface-muted text-text-secondary')}>Outros</span>
+    default:
+      return null
+  }
+}
+
 function ConversationRow({
   conv,
   selected,
@@ -160,9 +182,11 @@ function ConversationRow({
   onSelect: (id: string) => void;
 }) {
   const name = conv.contact_name || conv.contact_phone;
-  // In the Spam inbox nobody is "waiting" for an answer and there is nothing to assign.
-  const wait = inSpam ? null : waitInfo(conv.waiting_since, now, thresholds);
-  const unassigned = !inSpam && !conv.assigned_to_user_id && conv.status !== 'closed';
+  // In the Spam inbox nobody is "waiting" for an answer and there is nothing to assign. A conversation with staff is not
+  // attendance either (ADR-0018: no waiting metric, nothing to claim).
+  const internal = conv.conversation_kind === 'internal';
+  const wait = inSpam || internal ? null : waitInfo(conv.waiting_since, now, thresholds);
+  const unassigned = !inSpam && !internal && !conv.assigned_to_user_id && conv.status !== 'closed';
   return (
     <li>
       <button
@@ -210,6 +234,7 @@ function ConversationRow({
                 {wait.label}
               </span>
             )}
+            {kindBadge(conv)}
             {conv.status === 'closed' && (
               <span className="flex-shrink-0 rounded-pill bg-status-muted px-1.5 text-[10px] font-medium leading-4 text-text-secondary">
                 Fechada

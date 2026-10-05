@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import ContactTopics from '../components/topics/ContactTopics'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Avatar,
   Badge,
@@ -18,11 +18,15 @@ import {
 } from '../components/primitives'
 import type { IconName } from '../components/primitives'
 import { ChannelChip, ChannelChips } from '../components/contacts/ChannelChips'
+import { ContactKindControl } from '../components/contacts/ContactKindControl'
 import { conversationPreview, formatInteraction, messageCountLabel } from '../lib/contactFormat'
 import {
+  CONTACT_KIND_LABEL,
+  classificationAPI,
   contactErrorMessage,
   contactsAPI,
   type Contact,
+  type ContactKind,
   type ContactConversation,
   type ContactTicket,
 } from '../lib/contacts'
@@ -57,6 +61,13 @@ const TICKET_PRIORITY: Record<ContactTicket['priority'], string> = {
 }
 
 const ACTIVE_TICKET = new Set<ContactTicket['status']>(['open', 'in_progress', 'waiting'])
+const KIND_TONE: Record<ContactKind, 'success' | 'danger' | 'default'> = {
+  unclassified: 'default',
+  customer: 'success',
+  other: 'default',
+  spam: 'danger',
+}
+
 const SUBRESOURCE_LIMIT = 20
 
 function formatDateTime(iso: string): string {
@@ -118,6 +129,7 @@ export default function ContactDetailPage() {
 function ContactOverview({ contact }: { contact: Contact }) {
   const navigate = useNavigate()
   const tenantId = getTenantId()
+  const queryClient = useQueryClient()
   const status = STATUS_LABELS[contact.status]
   const firstName = contact.display_name.trim().split(/\s+/)[0] || contact.display_name
 
@@ -146,9 +158,10 @@ function ContactOverview({ contact }: { contact: Contact }) {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-section-lg font-semibold text-text-primary truncate">{contact.display_name}</h1>
             <StatusBadge status={status.tone}>{status.label}</StatusBadge>
+            <StatusBadge status={KIND_TONE[contact.kind]}>{CONTACT_KIND_LABEL[contact.kind]}</StatusBadge>
           </div>
           <p className="text-text-secondary tabular-nums">{formatPhone(contact.phone_e164)}</p>
-          <p className="text-sm text-text-tertiary">Cliente desde {formatDate(contact.created_at)}</p>
+          <p className="text-sm text-text-tertiary">Contato desde {formatDate(contact.created_at)}</p>
         </div>
       </header>
 
@@ -216,9 +229,57 @@ function ContactOverview({ contact }: { contact: Contact }) {
           </Section>
         </div>
 
-        <ProfileCard contact={contact} />
+        <div className="min-w-0 space-y-6">
+          <Section title="Classificação">
+            {/* ADR-0018: who this person is for the business and which companies they belong to (several allowed).
+                Staff are never contacts: they have no profile here. */}
+            <ContactKindControl
+              contactId={contact.id}
+              kind={contact.kind}
+              contactName={contact.display_name}
+              onChanged={() => {
+                void queryClient.invalidateQueries({ queryKey: ['contact', tenantId, contact.id] })
+                void queryClient.invalidateQueries({ queryKey: ['contact-conversations', tenantId, contact.id] })
+                void queryClient.invalidateQueries({ queryKey: ['contact-company-evidence', tenantId, contact.id] })
+              }}
+            />
+          </Section>
+          <CrmEvidenceSection contactId={contact.id} />
+          <ProfileCard contact={contact} />
+        </div>
       </div>
     </div>
+  )
+}
+
+// Integration state, kept APART from the classification above: companies that a validated ticket selection associated
+// with this contact. It is evidence, not a decision: it classifies nothing until a person accepts it in the picker.
+function CrmEvidenceSection({ contactId }: { contactId: string }) {
+  const tenantId = getTenantId()
+  const evidence = useQuery({
+    queryKey: ['contact-company-evidence', tenantId, contactId],
+    queryFn: () => classificationAPI.suggestions(contactId),
+    retry: false,
+  })
+  // no account.read, or nothing to show: the section does not exist
+  if (evidence.isLoading || evidence.isError) return null
+  const items = evidence.data?.items ?? []
+  if (items.length === 0) return null
+  return (
+    <Section title="Integração (CRM)">
+      <div className="space-y-2 px-6 py-4 text-sm">
+        <p className="text-text-secondary">Empresas associadas a este contato por chamados abertos no CRM. É só evidência: não altera a classificação.</p>
+        <ul className="space-y-1.5">
+          {items.map((e) => (
+            <li key={e.evidence_id} className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-text-primary">{e.account_name ?? `Empresa ${e.external_company_id}`}</span>
+              {e.already_linked ? <Badge>vinculada</Badge> : <Badge>não vinculada</Badge>}
+              <span className="text-xs text-text-tertiary">visto em {formatDate(e.last_verified_at)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Section>
   )
 }
 
