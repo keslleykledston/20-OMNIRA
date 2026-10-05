@@ -29,6 +29,7 @@ export interface ConversationItem {
   queue_id?: string;
   crm_contact_id?: string;
   contact_id?: string;
+  channel_connection_id?: string;
   // Classification of the conversation's contact (ADR-0014).
   contact_kind?: 'unclassified' | 'customer' | 'other' | 'spam' | '';
   // ADR-0018: what the conversation is, derived from who takes part. There is no "mixed" kind.

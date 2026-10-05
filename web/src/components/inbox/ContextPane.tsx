@@ -14,12 +14,15 @@ import { ContactKindControl } from '../contacts/ContactKindControl';
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor';
 import { ContactNotes } from '../contacts/ContactNotes';
 import { WhatsAppName } from '../contacts/WhatsAppName';
+import { ChannelSwitcher } from './ChannelSwitcher';
 
 interface ContextPaneProps {
   conversationId: string;
+  /** Show another conversation (opened/found on a different line). */
+  onOpenConversation?: (conversationId: string) => void;
 }
 
-export default function ContextPane({ conversationId }: ContextPaneProps) {
+export default function ContextPane({ conversationId, onOpenConversation }: ContextPaneProps) {
   const tenantId = getTenantId();
   const queryClient = useQueryClient();
   const [assignLoading, setAssignLoading] = useState(false);
@@ -135,6 +138,14 @@ export default function ContextPane({ conversationId }: ContextPaneProps) {
           </div>
         </div>
       </div>
+
+      {conversation?.contact_id && onOpenConversation && (
+        <ChannelSwitcher
+          contactId={conversation.contact_id}
+          currentChannelId={conversation.channel_connection_id}
+          onOpenConversation={onOpenConversation}
+        />
+      )}
 
       {conversation?.contact_id && (
         <ContactDetailsEditor

@@ -12,6 +12,8 @@ import MessageBubble from './MessageBubble';
 import MessageComposer from './MessageComposer';
 import { Icon } from '../primitives';
 import { dayLabel, sortChronological } from '../../lib/inboxModel';
+import { useChannelLines, useConversationChannel } from '../../lib/channelLines';
+import { ChannelBadge } from './ChannelBadge';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -30,6 +32,13 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   // of [A-Za-z0-9._:-] per contracts/openapi/omnira-v1.yaml) never queues a
   // duplicate for the same attempt.
   const pendingSend = useRef<{ text: string; key: string } | null>(null);
+
+  const lines = useChannelLines();
+  const channel = useConversationChannel(conversationId);
+  const line = (lines.data ?? []).find((l) => l.id === conversation?.channel_connection_id);
+  const cs = channel.data;
+  const windowClosed = !!cs && cs.window_required && !cs.window_open;
+  const channelDown = !!cs && !cs.can_send_text;
 
   // Fetch conversation details
   const { data: conversationData } = useQuery({
@@ -158,8 +167,9 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
               {conversation?.contact_name}
             </h3>
             <WhatsAppName principal={conversation?.contact_name} whatsapp={conversation?.contact_whatsapp_name} />
-            <p className="text-xs text-text-secondary">
+            <p className="flex items-center gap-1.5 text-xs text-text-secondary">
               {conversation?.contact_phone}
+              {(lines.data ?? []).length > 1 && <ChannelBadge line={line} />}
             </p>
           </div>
         </div>
@@ -245,9 +255,24 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             {sendError}
           </div>
         )}
+        {channelDown && (
+          <div role="status" className="mb-2 rounded-control bg-status-warning-soft p-2 text-xs text-status-warning">
+            O canal desta conversa está desconectado. Reconecte-o em Canais ou fale com a pessoa por outro canal pelo painel ao lado.
+          </div>
+        )}
+        {windowClosed && (
+          <div role="status" className="mb-2 rounded-control bg-status-warning-soft p-2 text-xs text-status-warning">
+            Janela de 24 h fechada: a Meta só aceita mensagem de template neste número até o cliente escrever de novo. O envio de templates chega na próxima etapa.
+          </div>
+        )}
+        {cs?.window_required && cs.window_open && cs.window_expires_at && (
+          <div className="mb-2 text-[11px] text-text-tertiary">
+            Resposta livre permitida até {new Date(cs.window_expires_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.
+          </div>
+        )}
         <MessageComposer
           onSend={handleSendMessage}
-          disabled={sending}
+          disabled={sending || windowClosed || channelDown}
           placeholder="Escreva uma resposta..."
         />
       </div>
@@ -262,6 +287,7 @@ function describeSendError(err: any): string {
   const status = err?.response?.status;
   const body = typeof err?.response?.data === 'string' ? err.response.data : '';
   if (status === 409) {
+    if (body.includes('window')) return 'Janela de 24 h da Meta fechada: só mensagem de template até o cliente escrever de novo.';
     return body.includes('assigned')
       ? 'Assuma esta conversa antes de responder.'
       : 'A conversa mudou, tente novamente.';

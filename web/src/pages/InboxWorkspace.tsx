@@ -13,6 +13,7 @@ import { InboxSegment } from '../lib/inboxModel';
 import { useInboxSettings } from '../hooks/useInboxSettings';
 import { useDebounced } from '../hooks/useDebounced';
 import type { ConversationItem } from '../types/api';
+import { useChannelLines } from '../lib/channelLines';
 
 // PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
 // <uuid> — never /inbox/:id (that path pattern is dead, see InboxPage.tsx/
@@ -38,6 +39,8 @@ export default function InboxWorkspace() {
   const debouncedSearch = useDebounced(search.trim(), 300);
   const { thresholds: waitThresholds } = useInboxSettings();
   const [showContext, setShowContext] = useState(true);
+  const [channelFilter, setChannelFilter] = useState('');
+  const channelLines = useChannelLines();
 
   // PRODUCT.6-O2D2 deep link: conversation_id is UNTRUSTED navigation
   // input, never authority. It is resolved through the exact same
@@ -61,7 +64,7 @@ export default function InboxWorkspace() {
     isFetchingNextPage,
     fetchNextPage,
   } = useInfiniteQuery({
-    queryKey: ['inbox-conversations', tenantId, segment, debouncedSearch],
+    queryKey: ['inbox-conversations', tenantId, segment, debouncedSearch, channelFilter],
     initialPageParam: '' as string,
     queryFn: async ({ pageParam }) => {
       try {
@@ -72,6 +75,7 @@ export default function InboxWorkspace() {
             q: debouncedSearch || undefined,
             assigned: segment === 'mine' ? 'me' : undefined,
             waiting: segment === 'waiting' ? true : undefined,
+            channel_connection_id: channelFilter || undefined,
             kind: segment === 'spam' ? 'spam' : undefined,
             conversation_kind: segment === 'unclassified' || segment === 'internal' ? segment : undefined,
           },
@@ -188,6 +192,9 @@ export default function InboxWorkspace() {
             isFetchingMore={isFetchingNextPage}
             onLoadMore={() => void fetchNextPage()}
             waitThresholds={waitThresholds}
+            channels={channelLines.data ?? []}
+            channelFilter={channelFilter}
+            onChannelFilterChange={setChannelFilter}
           />
         </div>
 
@@ -218,7 +225,7 @@ export default function InboxWorkspace() {
         {/* ContextPane: desktop only for now (mobile/tablet sheet is a follow-up slice) */}
         {showContext && selectedConversationId && (
           <div className="hidden lg:flex lg:col-span-1 border-l border-border-subtle overflow-hidden flex-col">
-            <ContextPane conversationId={selectedConversationId} />
+            <ContextPane conversationId={selectedConversationId} onOpenConversation={setSelectedConversationId} />
           </div>
         )}
       </div>
