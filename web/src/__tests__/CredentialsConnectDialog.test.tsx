@@ -24,7 +24,9 @@ function renderDialog() {
 }
 
 describe('CredentialsConnectDialog', () => {
-  beforeEach(() => vi.restoreAllMocks())
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
 
   it('masks secrets, needs every required field, then shows callback and verify token without the secret', async () => {
     vi.spyOn(integrationsAPI, 'create').mockResolvedValue({
