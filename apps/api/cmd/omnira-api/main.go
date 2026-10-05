@@ -133,7 +133,8 @@ func main() {
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions)
-	if err := providerRegistry.RegisterDescriptor(metachannel.Descriptor(), nil); err != nil {
+	metaDescriptor := metachannel.Descriptor(cfg.MetaEnabled, "A integração com o WhatsApp oficial (Meta) não está habilitada neste ambiente.")
+	if err := providerRegistry.RegisterDescriptor(metaDescriptor, nil); err != nil {
 		log.Fatalf("Meta provider descriptor error: %v", err)
 	}
 	// Sistemas de retaguarda (CRM/ERP) aparecem na mesma aba de Integrações.
@@ -145,6 +146,14 @@ func main() {
 	erpCredentials := channeladapters.NewPostgresCredentialStore(dbPool, erpCipher)
 	erpConnections := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 	erpAudit := channeladapters.NewChannelAuditRecorder(auditadapters.NewPostgresAuditEventRepository(dbPool))
+	if cfg.MetaEnabled {
+		metaClient, metaErr := metachannel.NewClient("", "", nil)
+		if metaErr != nil {
+			log.Fatalf("Meta client config error: %v", metaErr)
+		}
+		management.Register(metaDescriptor.ID, channelapplication.NewMetaConnectionService(
+			metaDescriptor, erpConnections, erpCredentials, permissions, erpAudit, metachannel.NewAccountProbe(metaClient), cfg.PublicBaseURL))
+	}
 	erpProviders := []struct {
 		descriptor ports.ProviderDescriptor
 		probe      channelapplication.CredentialProbe
@@ -244,9 +253,6 @@ func main() {
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
 	if cfg.MetaEnabled {
-		if cfg.MetaVerifyToken == "" || cfg.MetaAppSecret == "" {
-			log.Fatal("OMNIRA_META_VERIFY_TOKEN and OMNIRA_META_APP_SECRET are required when OMNIRA_META_ENABLED=true")
-		}
 		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)
 		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool).WithConversationKind(identityFlags.ConversationKindEnabled)
@@ -255,10 +261,9 @@ func main() {
 			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)
 
 		srv.RegisterMetaWebhook(metachannel.Handler{
-			VerifyToken: cfg.MetaVerifyToken,
-			AppSecret:   cfg.MetaAppSecret,
-			Resolver:    channeladapters.NewMetaWebhookConnectionResolver(dbPool, connectionRepo),
-			Intake:      inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService),
+			Resolver: channeladapters.NewMetaWebhookConnectionResolver(dbPool, connectionRepo),
+			Secrets:  channeladapters.NewMetaWebhookSecrets(dbPool, connectionRepo, erpCredentials),
+			Intake:   inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService),
 		})
 	}
 

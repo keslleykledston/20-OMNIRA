@@ -61,11 +61,18 @@ type Intake interface {
 	ProcessWebhook(ctx context.Context, connection domain.ChannelConnection, deduplicationKey, eventType, payloadDigest string, message *domain.InboundMessage, status *domain.DeliveryStatusUpdate) (duplicate bool, err error)
 }
 
+// SecretResolver supplies the secrets of the webhook PER CONNECTION. There is no global app secret or verify token.
+type SecretResolver interface {
+	// AppSecret is the app secret of this connection (it signs every payload sent for it).
+	AppSecret(ctx context.Context, conn *domain.ChannelConnection) (string, error)
+	// CheckVerifyToken validates the handshake token against the connection it names.
+	CheckVerifyToken(ctx context.Context, token string) (bool, error)
+}
+
 type Handler struct {
-	VerifyToken string
-	AppSecret   string
-	Resolver    ConnectionResolver
-	Intake      Intake // optional; nil keeps verify-only behavior
+	Resolver ConnectionResolver
+	Secrets  SecretResolver
+	Intake   Intake // optional; nil keeps verify-only behavior
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,17 +84,13 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.Resolver == nil || h.AppSecret == "" {
+	if h.Resolver == nil || h.Secrets == nil {
 		http.Error(w, "webhook unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxWebhookBody))
 	if err != nil {
 		http.Error(w, "payload too large or unreadable", http.StatusRequestEntityTooLarge)
-		return
-	}
-	if err := VerifySignature(body, r.Header.Get("X-Hub-Signature-256"), h.AppSecret); err != nil {
-		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
 	var envelope struct {
@@ -101,8 +104,10 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} `json:"changes"`
 		} `json:"entry"`
 	}
+	// The body is untrusted until its signature is checked with the secret of the connection it NAMES: it is only used
+	// to find which secret to check with. An unknown number and a bad signature are the same answer (no oracle).
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		http.Error(w, "malformed payload", http.StatusBadRequest)
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
 	phoneID := ""
@@ -110,12 +115,17 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		phoneID = envelope.Entry[0].Changes[0].Value.Metadata.PhoneNumberID
 	}
 	if phoneID == "" {
-		http.Error(w, "unknown connection", http.StatusNotFound)
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
 	conn, err := h.Resolver.ResolveInboundConnection(r.Context(), domain.ProviderMetaCloud, phoneID)
 	if err != nil || conn == nil {
-		http.Error(w, "unknown connection", http.StatusNotFound)
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+	secret, err := h.Secrets.AppSecret(r.Context(), conn)
+	if err != nil || VerifySignature(body, r.Header.Get("X-Hub-Signature-256"), secret) != nil {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
 	if conn.Status != domain.ConnectionStatusActive {
@@ -146,11 +156,16 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) challenge(w http.ResponseWriter, r *http.Request) {
-	challenge, err := VerifyChallenge(r.URL.Query().Get("hub.mode"), r.URL.Query().Get("hub.verify_token"), r.URL.Query().Get("hub.challenge"), h.VerifyToken)
-	if err != nil {
+	q := r.URL.Query()
+	if h.Secrets == nil || q.Get("hub.mode") != "subscribe" || q.Get("hub.challenge") == "" {
 		http.Error(w, "invalid verification", http.StatusForbidden)
 		return
 	}
+	if ok, err := h.Secrets.CheckVerifyToken(r.Context(), q.Get("hub.verify_token")); err != nil || !ok {
+		http.Error(w, "invalid verification", http.StatusForbidden)
+		return
+	}
+	challenge := q.Get("hub.challenge")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, challenge)
 }

@@ -48,6 +48,8 @@ type connectionJSON struct {
 	// live session status; omitted for views that never called the provider
 	// (List/Create). Operators use this to tell a fresh read from a stale one.
 	CheckedAt string `json:"checked_at,omitempty"`
+	// Displays: non-secret values to show the operator (callback URL, verify token, number facts).
+	Displays map[string]string `json:"displays,omitempty"`
 }
 
 func toJSON(v application.ConnectionView) connectionJSON {
@@ -64,6 +66,7 @@ func toJSON(v application.ConnectionView) connectionJSON {
 	if !v.CheckedAt.IsZero() {
 		out.CheckedAt = v.CheckedAt.UTC().Format(time.RFC3339)
 	}
+	out.Displays = v.Displays
 	return out
 }
 
@@ -264,6 +267,8 @@ func failConnection(w http.ResponseWriter, err error) {
 		http.Error(w, "connection not found", http.StatusNotFound)
 	case errors.Is(err, application.ErrRiskNotAcknowledged):
 		http.Error(w, "risk_acknowledged must be true for unofficial providers", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrMetaNumberTaken):
+		http.Error(w, "that WhatsApp number is already connected", http.StatusConflict)
 	case errors.Is(err, application.ErrCredentialRejected):
 		http.Error(w, "credential rejected by the provider: check the token and try again", http.StatusUnprocessableEntity)
 	case errors.Is(err, application.ErrInvalidCredentials):

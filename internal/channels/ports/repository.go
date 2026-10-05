@@ -2,12 +2,16 @@ package ports
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/domain"
 )
 
 // ChannelConnectionRepository — persistência de ChannelConnection.
+// ErrDuplicateConnection: the provider's external number id is already connected (unique per provider).
+var ErrDuplicateConnection = errors.New("channel: connection already exists for this provider number")
+
 type ChannelConnectionRepository interface {
 	Store(ctx context.Context, conn *domain.ChannelConnection) error
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.ChannelConnection, error)

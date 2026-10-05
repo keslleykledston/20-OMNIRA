@@ -55,12 +55,22 @@ var (
 	// provider não está na allowlist. Proteção SSRF — nunca contornar
 	// isto para "tentar mesmo assim".
 	ErrMediaSourceNotAllowed = errors.New("channel: media source host not in allowlist")
-	ErrAuthentication        = errors.New("channel: provider authentication failed")
-	ErrConfiguration         = errors.New("channel: provider configuration invalid")
-	ErrRateLimited           = errors.New("channel: provider rate limited")
-	ErrProviderUnavailable   = errors.New("channel: provider unavailable")
-	ErrSessionDisconnected   = errors.New("channel: provider session disconnected")
-	ErrUnknown               = errors.New("channel: provider error with unknown classification")
+	// ErrOutcomeUnknown — the request may or may not have been executed by the provider (timeout or 5xx AFTER the
+	// request was sent) and the provider has no idempotency key to make a second attempt safe (Meta Cloud). The
+	// delivery worker ends the message as "uncertain" and NEVER retries it automatically: a retry could deliver the
+	// same message twice to a customer.
+	ErrOutcomeUnknown = errors.New("channel: provider outcome unknown, not safe to retry automatically")
+
+	// ErrSessionWindowClosed — the provider only accepts a pre-approved template now (WhatsApp's 24 h customer
+	// service window is closed). Permanent for a free-text message: the person is told, nothing is retried.
+	ErrSessionWindowClosed = errors.New("channel: customer service window closed, a template is required")
+
+	ErrAuthentication      = errors.New("channel: provider authentication failed")
+	ErrConfiguration       = errors.New("channel: provider configuration invalid")
+	ErrRateLimited         = errors.New("channel: provider rate limited")
+	ErrProviderUnavailable = errors.New("channel: provider unavailable")
+	ErrSessionDisconnected = errors.New("channel: provider session disconnected")
+	ErrUnknown             = errors.New("channel: provider error with unknown classification")
 
 	// ErrProviderIDMismatch — the provider responded with a non-empty
 	// message id that differs from the caller's reserved id (PILOT.4A1/

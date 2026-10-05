@@ -24,6 +24,7 @@ import (
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
 	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
+	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	mediaapp "github.com/omnira/omnira/internal/media/application"
 	"github.com/omnira/omnira/internal/outbox/adapters"
@@ -212,21 +213,35 @@ func main() {
 	}
 
 	// Outbound channel delivery (unofficial WhatsApp via WAHA).
-	if cfg.WahaEnabled {
+	if cfg.WahaEnabled || cfg.MetaEnabled {
 		cipher, err := channelcrypto.NewAESGCM(cfg.CredentialsKey)
 		if err != nil {
-			log.Fatalf("WAHA credential cipher error: %v", err)
+			log.Fatalf("channel credential cipher error: %v", err)
 		}
-		client, err := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
-		if err != nil {
-			log.Fatalf("WAHA client config error: %v", err)
-		}
-		provider, err := waha.NewProvider(client, channeladapters.NewPostgresCredentialStore(dbPool, cipher))
-		if err != nil {
-			log.Fatalf("WAHA provider config error: %v", err)
-		}
+		credentialStore := channeladapters.NewPostgresCredentialStore(dbPool, cipher)
 		registry := channelapp.NewMapProviderRegistry()
-		registry.Register(domain.ProviderWAHA, provider)
+		if cfg.WahaEnabled {
+			client, err := waha.NewClient(cfg.WahaBaseURL, cfg.WahaAPIKey, nil)
+			if err != nil {
+				log.Fatalf("WAHA client config error: %v", err)
+			}
+			provider, err := waha.NewProvider(client, credentialStore)
+			if err != nil {
+				log.Fatalf("WAHA provider config error: %v", err)
+			}
+			registry.Register(domain.ProviderWAHA, provider)
+		}
+		if cfg.MetaEnabled {
+			metaClient, err := metachannel.NewClient("", "", nil)
+			if err != nil {
+				log.Fatalf("Meta client config error: %v", err)
+			}
+			metaProvider, err := metachannel.NewProvider(metaClient, credentialStore)
+			if err != nil {
+				log.Fatalf("Meta provider config error: %v", err)
+			}
+			registry.Register(domain.ProviderMetaCloud, metaProvider)
+		}
 		channelSvc := channelapp.NewChannelService(channeladapters.NewPostgresChannelConnectionRepository(dbPool), registry)
 		deliveryHandler, err := delivery.NewHandler(delivery.NewPostgresOutboundStore(dbPool), channelSvc, delivery.MaxAttempts)
 		if err != nil {
@@ -237,7 +252,7 @@ func main() {
 			log.Fatalf("failed to start delivery consumer: %v", err)
 		}
 		defer deliveryConsumer.Stop()
-		log.Printf("Outbound delivery consumer started (WAHA)\n")
+		log.Printf("Outbound delivery consumer started (waha=%t meta=%t)\n", cfg.WahaEnabled, cfg.MetaEnabled)
 
 		// Stranded-send reconciliation (PILOT.4D3-B2, activated PILOT.4D3-C1):
 		// recreates durable send intent for a queued message whose

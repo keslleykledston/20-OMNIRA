@@ -57,7 +57,7 @@ func TestVerifySignature(t *testing.T) {
 func TestHandlerResolvesTrustedPhoneNumberOnly(t *testing.T) {
 	body := []byte(`{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"phone-a"}}}]}]}`)
 	r := &resolver{conn: &domain.ChannelConnection{ID: uuid.New(), TenantID: uuid.New(), Provider: domain.ProviderMetaCloud, ProviderKind: domain.ProviderKindOfficial, Status: domain.ConnectionStatusActive}}
-	h := meta.Handler{AppSecret: "secret", VerifyToken: "verify", Resolver: r}
+	h := meta.Handler{Secrets: fakeSecrets{secret: "secret"}, Resolver: r}
 	req := httptest.NewRequest("POST", "/webhooks/v1/meta/whatsapp", strings.NewReader(string(body)))
 	req.Header.Set("X-Hub-Signature-256", signature(body, "secret"))
 	res := httptest.NewRecorder()
@@ -71,21 +71,19 @@ func TestHandlerResolvesTrustedPhoneNumberOnly(t *testing.T) {
 }
 
 func TestHandlerRejectsMalformedUnknownInactiveAndOversized(t *testing.T) {
-	base := meta.Handler{AppSecret: "secret", VerifyToken: "verify", Resolver: &resolver{}}
+	base := meta.Handler{Secrets: fakeSecrets{secret: "secret"}, Resolver: &resolver{}}
 	for name, body := range map[string]string{"malformed": "{", "unknown": `{"entry":[]}`} {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
 		req.Header.Set("X-Hub-Signature-256", signature([]byte(body), "secret"))
 		res := httptest.NewRecorder()
 		base.ServeHTTP(res, req)
-		if res.Code != 400 && name == "malformed" {
-			t.Fatalf("%s: got %d", name, res.Code)
-		}
-		if res.Code != 404 && name == "unknown" {
+		// malformed, unknown number and bad signature are one answer: no oracle for which numbers exist
+		if res.Code != 401 {
 			t.Fatalf("%s: got %d", name, res.Code)
 		}
 	}
 	r := &resolver{conn: &domain.ChannelConnection{Provider: domain.ProviderMetaCloud, ProviderKind: domain.ProviderKindOfficial, Status: domain.ConnectionStatusDisconnected}}
-	h := meta.Handler{AppSecret: "secret", Resolver: r}
+	h := meta.Handler{Secrets: fakeSecrets{secret: "secret"}, Resolver: r}
 	body := []byte(`{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"x"}}}]}]}`)
 	req := httptest.NewRequest("POST", "/", strings.NewReader(string(body)))
 	req.Header.Set("X-Hub-Signature-256", signature(body, "secret"))

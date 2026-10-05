@@ -246,6 +246,12 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 			h.count(scoped, "sent")
 			log.Printf("channel delivery: sent message_id=%s tenant_id=%s outcome=sent", messageID, tenantIDString(scoped))
 			return h.store.MarkSent(scoped, messageID, result.ProviderMessageID)
+		case errors.Is(sendErr, ports.ErrOutcomeUnknown):
+			// The provider (Meta Cloud) has no idempotency key: after an ambiguous failure a second attempt could
+			// deliver the message twice. Terminal 'uncertain', never retried automatically, a person decides.
+			h.count(scoped, "uncertain")
+			h.logUncertain(scoped, messageID, "outcome_unknown:ambiguous_send")
+			return h.store.MarkUncertain(scoped, messageID, "outcome_unknown:ambiguous_send")
 		case errors.Is(sendErr, ports.ErrProviderIDMismatch):
 			// OUTCOME_UNKNOWN_TERMINAL (PILOT.4A2): never retried automatically
 			// — the provider may already have dispatched something under the
@@ -335,6 +341,8 @@ func Classify(err error) string {
 		return "provider_unavailable"
 	case errors.Is(err, ports.ErrNotConfigured), errors.Is(err, ports.ErrConfiguration):
 		return "configuration"
+	case errors.Is(err, ports.ErrSessionWindowClosed):
+		return "window_closed"
 	case errors.Is(err, ports.ErrTransient):
 		return "transient"
 	case errors.Is(err, ports.ErrPermanent):

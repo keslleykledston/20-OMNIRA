@@ -41,6 +41,9 @@ type ConnectionView struct {
 	// session status. Only refresh() sets this: List/Create never call the
 	// provider, so their views carry a zero value (omitted from JSON).
 	CheckedAt time.Time
+	// Displays are non-secret facts the operator needs for this connection (e.g. the webhook callback URL and the verify
+	// token to paste into the Meta app). Never an access token or an app secret.
+	Displays map[string]string
 }
 
 // WahaConnectionService manages unofficial WhatsApp (WAHA) connections for the

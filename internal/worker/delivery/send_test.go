@@ -647,3 +647,19 @@ func TestLogSkipWhenAlreadyTerminal(t *testing.T) {
 		t.Fatalf("skip log missing message_id/status: %s", logs)
 	}
 }
+
+// Meta Cloud has no idempotency key: an ambiguous send (timeout/5xx after the request left) is terminal 'uncertain'
+// on the first occurrence and the provider is never called again.
+func TestOutcomeUnknownIsUncertainWithoutRetry(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	sender.err = ports.ErrOutcomeUnknown
+	if err := h.Handle(context.Background(), raw, 1); err != nil {
+		t.Fatalf("an unknown outcome must be acked as terminal, not retried: %v", err)
+	}
+	if store.job.Status != "uncertain" || store.failure != "outcome_unknown:ambiguous_send" {
+		t.Fatalf("status=%s reason=%q", store.job.Status, store.failure)
+	}
+	if err := h.Handle(context.Background(), raw, 2); err != nil || sender.calls != 1 {
+		t.Fatalf("calls=%d err=%v, want exactly 1 call", sender.calls, err)
+	}
+}

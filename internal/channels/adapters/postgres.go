@@ -3,7 +3,9 @@ package adapters
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -220,6 +222,10 @@ func (r *PostgresChannelConnectionRepository) Store(ctx context.Context, c *doma
 		c.ID, c.TenantID, string(c.Channel), c.Provider, string(c.ProviderKind),
 		c.ExternalAccountID, c.ExternalNumberID, c.ProviderSessionRef, string(c.Status), caps,
 		nullableUUID(c.SecretRef), c.RiskAcknowledgedAt, c.RiskAcknowledgedBy, c.CreatedAt, c.UpdatedAt)
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23505" {
+		return ports.ErrDuplicateConnection
+	}
 	return err
 }
 

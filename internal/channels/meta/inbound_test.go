@@ -68,6 +68,15 @@ func (f *fakeIntake) ProcessWebhook(_ context.Context, c domain.ChannelConnectio
 	return dup, nil
 }
 
+type fakeSecrets struct{ secret string }
+
+func (f fakeSecrets) AppSecret(context.Context, *domain.ChannelConnection) (string, error) {
+	return f.secret, nil
+}
+func (f fakeSecrets) CheckVerifyToken(_ context.Context, t string) (bool, error) {
+	return t == "omn-good", nil
+}
+
 func post(h http.Handler, body string) int {
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/v1/whatsapp/meta", strings.NewReader(body))
 	req.Header.Set("X-Hub-Signature-256", signature([]byte(body), "secret"))
@@ -80,7 +89,7 @@ func TestHandlerIntakeUsesConnectionTenantAndDedupes(t *testing.T) {
 	tenant := uuid.New()
 	conn := &domain.ChannelConnection{ID: uuid.New(), TenantID: tenant, Provider: domain.ProviderMetaCloud, ProviderKind: domain.ProviderKindOfficial, Status: domain.ConnectionStatusActive}
 	intake := &fakeIntake{seen: map[string]bool{}}
-	h := meta.Handler{AppSecret: "secret", Resolver: &resolver{conn: conn}, Intake: intake}
+	h := meta.Handler{Secrets: fakeSecrets{secret: "secret"}, Resolver: &resolver{conn: conn}, Intake: intake}
 	if code := post(h, inboundBody); code != 200 {
 		t.Fatalf("code=%d", code)
 	}
@@ -97,7 +106,7 @@ func TestHandlerIntakeUsesConnectionTenantAndDedupes(t *testing.T) {
 
 func TestHandlerIntakeFailureReturns503(t *testing.T) {
 	conn := &domain.ChannelConnection{ID: uuid.New(), TenantID: uuid.New(), Provider: domain.ProviderMetaCloud, ProviderKind: domain.ProviderKindOfficial, Status: domain.ConnectionStatusActive}
-	h := meta.Handler{AppSecret: "secret", Resolver: &resolver{conn: conn}, Intake: &fakeIntake{err: context.DeadlineExceeded}}
+	h := meta.Handler{Secrets: fakeSecrets{secret: "secret"}, Resolver: &resolver{conn: conn}, Intake: &fakeIntake{err: context.DeadlineExceeded}}
 	if code := post(h, inboundBody); code != http.StatusServiceUnavailable {
 		t.Fatalf("code=%d", code)
 	}
@@ -105,7 +114,7 @@ func TestHandlerIntakeFailureReturns503(t *testing.T) {
 
 func TestHandlerRejectsUnsignedBeforeIntake(t *testing.T) {
 	intake := &fakeIntake{seen: map[string]bool{}}
-	h := meta.Handler{AppSecret: "secret", Resolver: &resolver{conn: &domain.ChannelConnection{}}, Intake: intake}
+	h := meta.Handler{Secrets: fakeSecrets{secret: "secret"}, Resolver: &resolver{conn: &domain.ChannelConnection{}}, Intake: intake}
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(inboundBody))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

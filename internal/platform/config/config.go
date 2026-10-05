@@ -57,8 +57,6 @@ type Config struct {
 	SMTPReplyTo       string
 	SMTPTLS           string // starttls (padrão) | implicit | none (só dev)
 	AllowPrivilegedDB bool
-	MetaVerifyToken   string
-	MetaAppSecret     string
 	GracefulShutdown  int // segundos
 
 	// AI* (PRODUCT.7C0/7C1): deliberately NOT validated by Validate() below.
@@ -138,8 +136,6 @@ func Load() *Config {
 		SMTPReplyTo:       os.Getenv("OMNIRA_SMTP_REPLY_TO"),
 		SMTPTLS:           getEnv("OMNIRA_SMTP_TLS", "starttls"),
 		AllowPrivilegedDB: getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
-		MetaVerifyToken:   os.Getenv("OMNIRA_META_VERIFY_TOKEN"),
-		MetaAppSecret:     os.Getenv("OMNIRA_META_APP_SECRET"),
 		GracefulShutdown:  getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
 
 		AIEnabled:        getEnv("OMNIRA_AI_ENABLED", "false") == "true",
