@@ -24,6 +24,7 @@ import {
   ChannelConnectionCard,
 } from '../features/channels/components/ChannelConnectionCard'
 import { UnofficialProviderCallout } from '../features/channels/components/InfoCallout'
+import { CredentialsConnectDialog } from '../features/channels/components/CredentialsConnectDialog'
 import { AddChannelDialog } from '../features/channels/components/AddChannelDialog'
 import { connectionsKey, useLiveConnection } from '../features/channels/data/useChannelSession'
 
@@ -34,6 +35,8 @@ export default function ChannelsPage() {
 
   const [tab, setTab] = useState<string>('all')
   const [addOpen, setAddOpen] = useState(false)
+  const [credProvider, setCredProvider] = useState<ProviderDescriptor | null>(null)
+  const [credConnection, setCredConnection] = useState<ChannelConnection | null>(null)
   const [pendingStop, setPendingStop] = useState<ChannelConnection | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -91,6 +94,9 @@ export default function ChannelsPage() {
     setAddOpen(false)
     if (p.connect_method === 'qr_session') {
       navigate(`/channels/whatsapp/new?provider=${p.id}`)
+    } else if (p.connect_method === 'credentials') {
+      setCredConnection(null)
+      setCredProvider(p)
     }
   }
 
@@ -147,6 +153,10 @@ export default function ChannelsPage() {
                 onTest={(id) => test.mutate(id)}
                 onStart={(id) => start.mutate(id)}
                 onRequestStop={setPendingStop}
+                onOpenCredentials={(c, p) => {
+                  setCredConnection(c)
+                  setCredProvider(p)
+                }}
                 testPending={test.isPending}
                 startPending={start.isPending}
               />
@@ -162,6 +172,17 @@ export default function ChannelsPage() {
         providers={providers.data ?? []}
         onSelect={onPickProvider}
         onClose={() => setAddOpen(false)}
+      />
+
+      <CredentialsConnectDialog
+        open={!!credProvider}
+        provider={credProvider}
+        connection={credConnection}
+        onClose={() => {
+          setCredProvider(null)
+          setCredConnection(null)
+        }}
+        onChanged={() => void invalidate()}
       />
 
       <ConfirmDialog
@@ -193,6 +214,7 @@ function LiveChannelConnectionCard({
   onTest,
   onStart,
   onRequestStop,
+  onOpenCredentials,
   testPending,
   startPending,
 }: {
@@ -201,6 +223,7 @@ function LiveChannelConnectionCard({
   onTest: (id: string) => void
   onStart: (id: string) => void
   onRequestStop: (c: ChannelConnection) => void
+  onOpenCredentials: (c: ChannelConnection, p: ProviderDescriptor) => void
   testPending: boolean
   startPending: boolean
 }) {
@@ -208,7 +231,14 @@ function LiveChannelConnectionCard({
   const { connection: live, state } = useLiveConnection(connection)
   const isLive = state === 'connected' || state === 'degraded'
 
-  const actions: MenuAction[] = [
+  const credentialsBased = provider?.connect_method === 'credentials'
+  const credentialActions: MenuAction[] = provider
+    ? [
+        { label: 'Configurar webhook', onSelect: () => onOpenCredentials(live, provider) },
+        { label: 'Testar conexão', onSelect: () => onTest(live.id), disabled: testPending },
+      ]
+    : []
+  const actions: MenuAction[] = credentialsBased ? credentialActions : [
     { label: 'Testar conexão', onSelect: () => onTest(live.id), disabled: testPending },
     {
       label: state === 'connected' ? 'Reiniciar sessão' : 'Reconectar',

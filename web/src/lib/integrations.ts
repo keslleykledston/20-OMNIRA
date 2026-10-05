@@ -50,6 +50,8 @@ export interface ChannelConnection {
   capabilities: string[];
   risk_acknowledged_at?: string;
   created_at: string;
+  /** Non-secret values to show the operator (callback URL, verify token, number facts). */
+  displays?: Record<string, string>;
 }
 
 export interface QRImage {
@@ -92,6 +94,7 @@ export function integrationErrorMessage(err: any, fallback = 'Não foi possível
     case 404:
       return 'Integração não encontrada.';
     case 409:
+      if (err?.config?.method === 'post' && /connections$/.test(err?.config?.url ?? '')) return 'Esse número já está conectado.';
       return 'O QR ainda não está disponível. Aguarde um momento e tente novamente.';
     case 422:
       return 'Confira os dados e aceite o aviso de risco para continuar.';
