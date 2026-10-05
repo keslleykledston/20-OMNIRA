@@ -28,7 +28,7 @@ export interface ConversationItem {
   crm_contact_id?: string;
   contact_id?: string;
   // Classification of the conversation's contact (ADR-0014).
-  contact_kind?: 'customer' | 'other' | 'spam';
+  contact_kind?: 'customer' | 'other' | 'agent' | 'spam';
   participants?: ConversationParticipant[];
 }
 

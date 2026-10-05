@@ -5,11 +5,12 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 // Mirrors ContactItem in internal/contacts/adapters/http.go. The API
 // deliberately omits tenant_id: the session already establishes the tenant.
 // Who the contact is for the business (ADR-0014); distinct from `status`, the record lifecycle.
-export type ContactKind = 'customer' | 'other' | 'spam';
+export type ContactKind = 'customer' | 'other' | 'agent' | 'spam';
 
 export const CONTACT_KIND_LABEL: Record<ContactKind, string> = {
   customer: 'Cliente',
   other: 'Outros',
+  agent: 'Agente',
   spam: 'Spam',
 };
 

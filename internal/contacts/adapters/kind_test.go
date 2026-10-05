@@ -302,3 +302,37 @@ func TestListContactsSearchAndFiltersAreServerSideAndTenantScoped(t *testing.T) 
 	}
 	_ = foreign
 }
+
+// ADR-0014 amendment: "agent" is a K3G team member. Their conversation leaves the queue like spam, stays visible, and
+// the inbound routing never queues it.
+func TestAgentKindTakesTheConversationOutOfTheQueueAndKeepsItVisible(t *testing.T) {
+	seed, app := seedPool(t), appPool(t)
+	h := NewContactsAPIHandler(app).WithAudit(auditadapters.NewPostgresAuditEventRepository(app))
+	a := seedTenant(t, seed, "kind-agent")
+	attendant := seedMemberRole(t, seed, a, "tenant_agent", "active")
+	c := seedContact(t, seed, a, "Colega da equipe", "+5592900000077", time.Now())
+	queue, conv := uuid.New(), uuid.New()
+	if _, err := seed.Exec(context.Background(), `INSERT INTO queues(id,tenant_id,name,mode,is_default) VALUES($1,$2,'Default','round_robin',true)`, queue, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(context.Background(), `INSERT INTO conversations(id,tenant_id,contact_id,status,queue_id,routing_retry_at) VALUES($1,$2,$3,'open',$4,now())`, conv, a, c, queue); err != nil {
+		t.Fatal(err)
+	}
+	rec := call(t, app, a, attendant, http.MethodPatch, "/", `{"kind":"agent"}`, map[string]string{"contact_id": c.String()}, h.SetKind)
+	var got ContactItem
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.Kind != "agent" {
+		t.Fatalf("set agent = %d %s", rec.Code, rec.Body.String())
+	}
+	var q *uuid.UUID
+	var retry bool
+	if err := seed.QueryRow(context.Background(), `SELECT queue_id, routing_retry_at IS NOT NULL FROM conversations WHERE id=$1`, conv).Scan(&q, &retry); err != nil || q != nil || retry {
+		t.Fatalf("a team member's conversation must leave the queue: queue=%v retry=%v err=%v", q, retry, err)
+	}
+	if kindOf(t, seed, c) != "agent" || kindAudits(t, seed, a) != 1 {
+		t.Fatalf("kind=%s audits=%d", kindOf(t, seed, c), kindAudits(t, seed, a))
+	}
+	// and the database refuses a kind outside the list
+	if _, err := seed.Exec(context.Background(), `UPDATE contacts SET kind='vip' WHERE id=$1`, c); err == nil {
+		t.Fatal("the constraint must refuse an unknown kind")
+	}
+}

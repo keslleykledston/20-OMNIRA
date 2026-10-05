@@ -104,3 +104,20 @@ describe('ContactKindControl — spam', () => {
     expect(screen.queryByText('Marcar como spam?')).not.toBeInTheDocument()
   })
 })
+
+describe('ContactKindControl — agent (K3G team member)', () => {
+  it('offers Cliente, Outros and Agente and saves agent through the contacts API', async () => {
+    const user = userEvent.setup()
+    const { onChanged } = setup('other')
+    expect(screen.getAllByRole('button').slice(0, 3).map((b) => b.textContent)).toEqual(['Cliente', 'Outros', 'Agente'])
+    await user.click(screen.getByRole('button', { name: 'Agente' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith('agent'))
+    expect(patchedKind()).toBe('agent')
+  })
+
+  it('shows an agent as pressed and says it does not enter the queue', () => {
+    setup('agent')
+    expect(screen.getByRole('button', { name: 'Agente' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/não entra na fila/)).toBeInTheDocument()
+  })
+})

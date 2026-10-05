@@ -123,3 +123,7 @@ Proposta, em fatias pequenas, nesta ordem:
   404 sem oráculo de enumeração, auditoria, idempotência, saída da fila, restauração sem re-fila e
   roteamento (fila manual e rodízio) ignorando spam. Verificação por mutação do roteamento.
 
+
+## Emenda (2026-10-05): tipo `agent` (Agente da equipe)
+Quarto valor de `contacts.kind` (migration 000072): **`agent`** = membro da equipe K3G que atua no atendimento e escreve para o número de serviço. Escolha manual no controle "Tipo de contato" (Cliente / Outros / Agente), pela mesma permissão `conversation.claim`.
+Efeito: a conversa continua **visível** na lista padrão, mas **não é roteada** para fila (como spam) e as conversas abertas e sem dono saem da fila ao classificar; nada é inferido por número ou texto; o filtro `kind=agent` existe na API e na lista de contatos. Não vincula o contato a um usuário do OMNIRA (isso seria outra decisão).

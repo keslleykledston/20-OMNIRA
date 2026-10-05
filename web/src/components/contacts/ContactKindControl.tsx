@@ -57,7 +57,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
       ) : (
         <>
           <div className="flex gap-1.5">
-            {(['customer', 'other'] as const).map((k) => (
+            {(['customer', 'other', 'agent'] as const).map((k) => (
               <button
                 key={k}
                 type="button"
@@ -82,6 +82,10 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
             Marcar como spam ou golpe
           </button>
         </>
+      )}
+
+      {kind === 'agent' && (
+        <p className="mt-2 text-xs text-text-tertiary">Agente da equipe K3G: a conversa não entra na fila de atendimento.</p>
       )}
 
       {error && (

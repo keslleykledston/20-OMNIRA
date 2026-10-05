@@ -13,14 +13,17 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// Contact kinds (ADR-0014). The same three values the contacts_kind_check constraint allows.
+// Contact kinds (ADR-0014). The same values the contacts_kind_check constraint allows. "agent" is a K3G team member.
 const (
 	KindCustomer = "customer"
 	KindOther    = "other"
 	KindSpam     = "spam"
+	KindAgent    = "agent"
 )
 
-func validContactKind(k string) bool { return k == KindCustomer || k == KindOther || k == KindSpam }
+func validContactKind(k string) bool {
+	return k == KindCustomer || k == KindOther || k == KindSpam || k == KindAgent
+}
 
 // escapeLike makes user text literal inside a LIKE/ILIKE pattern.
 func escapeLike(s string) string {
@@ -93,7 +96,7 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil || req.Kind == nil || !validContactKind(*req.Kind) {
-		http.Error(w, "kind must be customer, other or spam", http.StatusBadRequest)
+		http.Error(w, "kind must be customer, other, agent or spam", http.StatusBadRequest)
 		return
 	}
 	next := *req.Kind
@@ -116,7 +119,7 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		dequeued := int64(0)
-		if next == KindSpam {
+		if next == KindSpam || next == KindAgent { // neither is customer service work: out of the queue
 			tag, err := q.Exec(r.Context(), `
 				UPDATE conversations SET queue_id = NULL, routing_retry_at = NULL, updated_at = now()
 				WHERE tenant_id = $1 AND contact_id = $2 AND status = 'open' AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL`,
