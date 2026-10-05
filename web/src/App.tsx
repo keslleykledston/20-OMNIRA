@@ -20,6 +20,7 @@ import { RolesPermissionsPage } from './pages/RolesPermissionsPage'
 import AcceptInvitePage from './pages/AcceptInvitePage'
 import ChannelsPage from './pages/ChannelsPage'
 import WahaWizardPage from './pages/WahaWizardPage'
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage'
 import Layout from './components/Layout'
 
 const queryClient = new QueryClient()
@@ -30,6 +31,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="/privacidade" element={<PrivacyPolicyPage />} />
           <Route path="/login" element={<Login />} />
           <Route path="/no-access" element={<NoAccess />} />
           <Route path="/invite/:token" element={<AcceptInvitePage />} />
