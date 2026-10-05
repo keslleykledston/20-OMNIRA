@@ -8,6 +8,7 @@ import { Chip, SectionTitle, SmallButton, describeError, formatWhen, isOff, plur
 import { SummarySection } from './SummarySection'
 import { TimelineSection } from './TimelineSection'
 import { TicketSection } from './TicketSection'
+import { AccountSection } from './AccountSection'
 import { CopilotSection } from './CopilotSection'
 import { HandoffSection } from './HandoffSection'
 
@@ -172,6 +173,7 @@ export default function TopicsPanel({ conversationId }: { conversationId: string
           </div>
           <SummarySection topicId={current.id} canManage={canManage} />
           <TimelineSection topicId={current.id} />
+          {can('account.read') && <AccountSection topicId={current.id} canManage={canManage} />}
           <TicketSection topicId={current.id} canManage={canManage} />
           {canManage && <CopilotSection topicId={current.id} />}
           {canManage && <HandoffSection topicId={current.id} />}

@@ -102,6 +102,30 @@ async function call<T>(fn: () => Promise<{ data: T; status?: number }>): Promise
   }
 }
 
+// Company context of a subject (ADR-0018). It belongs to the TOPIC, never to the conversation. A contact that belongs to
+// several companies is never resolved by guessing: the status is needs_choice and a person picks.
+export interface TopicAccountRef {
+  account_id: string
+  name: string
+  // topic_link: a person chose it (persisted). ticket / sole_company: derived on read, never stored.
+  source: 'topic_link' | 'ticket' | 'sole_company'
+  persisted: boolean
+  linked_to_contact: boolean
+}
+export interface TopicAccountCandidate {
+  account_id: string
+  name: string
+  relationship_type: string
+  // The contact's own preference, NOT an answer: primary is not exclusive.
+  contact_primary: boolean
+}
+export interface TopicAccountContext {
+  status: 'resolved' | 'needs_choice' | 'none'
+  primary?: TopicAccountRef
+  related: TopicAccountRef[]
+  candidates: TopicAccountCandidate[]
+}
+
 export class TopicsError extends Error {
   status: number
   constructor(status: number) {
@@ -111,6 +135,11 @@ export class TopicsError extends Error {
 }
 
 export const topicsAPI = {
+  accountContext: (topicId: string) => call<TopicAccountContext>(() => axios.get(`${base()}/topics/${topicId}/account-context`, cfg())),
+  linkAccount: (topicId: string, accountId: string, relation: 'primary' | 'related') =>
+    call<TopicAccountContext>(() => axios.post(`${base()}/topics/${topicId}/accounts`, { account_id: accountId, relation }, cfg())),
+  unlinkAccount: (topicId: string, accountId: string) =>
+    call<TopicAccountContext>(() => axios.delete(`${base()}/topics/${topicId}/accounts/${accountId}`, cfg())),
   listForConversation: (conversationId: string) =>
     call<{ items: Topic[] }>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/topics`, cfg())).then((d) => d.items ?? []),
   listForContact: (contactId: string) =>

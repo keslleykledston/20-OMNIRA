@@ -1377,6 +1377,79 @@ paths:
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: Already resolved }
         '422': { description: Invalid resolution }
+  /tenants/{tenant_id}/topics/{topic_id}/account-context:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { $ref: '#/components/parameters/TopicId' }
+    get:
+      operationId: getTopicAccountContext
+      tags: [Topics]
+      summary: Company context of a subject (ADR-0018)
+      description: |
+        Needs `topic.read` AND `account.read`. The company belongs to the TOPIC, never to the conversation.
+        `resolved`: a person chose it (`topic_link`, persisted), the topic's primary ticket targets it (`ticket`, derived)
+        or the contact belongs to exactly one company (`sole_company`, derived). `needs_choice`: the contact belongs to
+        several companies and a person must pick (the contact's own primary link is a preference, NOT an answer).
+        `none`: no company known. An AI may only suggest; nothing here lets it decide.
+      responses:
+        '200':
+          description: The context
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicAccountContext' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/topics/{topic_id}/accounts:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { $ref: '#/components/parameters/TopicId' }
+    post:
+      operationId: linkTopicAccount
+      tags: [Topics]
+      summary: A person records the company of the subject
+      description: |
+        Needs `topic.manage` AND `account.read` AND being the attendant of the topic's conversation (or `conversation.manage`).
+        At most ONE primary per topic: a new primary demotes the previous one to related. The account must exist in the
+        tenant and not be archived (422 otherwise, also for another tenant's id). A company the contact does not belong to is
+        allowed and flagged `linked_to_contact: false`. Idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, relation]
+              additionalProperties: false
+              properties:
+                account_id: { type: string, format: uuid }
+                relation: { type: string, enum: [primary, related] }
+      responses:
+        '200':
+          description: The new context
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicAccountContext' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Unknown, foreign or archived account, or invalid relation }
+  /tenants/{tenant_id}/topics/{topic_id}/accounts/{account_id}:
+    parameters:
+      - { $ref: '#/components/parameters/TenantId' }
+      - { $ref: '#/components/parameters/TopicId' }
+      - { name: account_id, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: unlinkTopicAccount
+      tags: [Topics]
+      summary: Remove a company from the subject (nothing is promoted in its place)
+      responses:
+        '200':
+          description: The new context
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TopicAccountContext' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/topics/{topic_id}/summaries:
     get:
       operationId: listTopicSummaries
@@ -2568,6 +2641,33 @@ components:
         note: { type: string }
         detected_at: { type: string, format: date-time }
         resolved_at: { type: string, format: date-time }
+    TopicAccountRef:
+      type: object
+      required: [account_id, name, source, persisted, linked_to_contact]
+      properties:
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        source: { type: string, enum: [topic_link, ticket, sole_company] }
+        persisted: { type: boolean, description: 'Only a person''s choice (topic_link) is stored; the other sources are derived on read.' }
+        linked_to_contact: { type: boolean }
+    TopicAccountContext:
+      type: object
+      required: [status, related, candidates]
+      properties:
+        status: { type: string, enum: [resolved, needs_choice, none] }
+        primary: { $ref: '#/components/schemas/TopicAccountRef' }
+        related: { type: array, items: { $ref: '#/components/schemas/TopicAccountRef' } }
+        candidates:
+          type: array
+          description: 'The contact''s active companies, when status is needs_choice.'
+          items:
+            type: object
+            required: [account_id, name, relationship_type, contact_primary]
+            properties:
+              account_id: { type: string, format: uuid }
+              name: { type: string }
+              relationship_type: { type: string }
+              contact_primary: { type: boolean, description: 'The contact''s own preference. It is not an answer: primary is not exclusive.' }
     CustomerAccount:
       type: object
       required: [id, name, account_type, status, created_at, updated_at]

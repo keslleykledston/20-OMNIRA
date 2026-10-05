@@ -29,6 +29,8 @@ const (
 	ActionIdentityConflictFound    AuditAction = "identity.conflict_found"
 	ActionIdentityConflictResolved AuditAction = "identity.conflict_resolved"
 	ActionConversationKindChanged  AuditAction = "conversation.kind_changed"
+	ActionTopicAccountLinked       AuditAction = "topic.account_linked"
+	ActionTopicAccountUnlinked     AuditAction = "topic.account_unlinked"
 	ActionTenantAIIntegration      AuditAction = "tenant.ai_integration_updated"
 	ActionGroupEnabled             AuditAction = "group.enabled"
 	ActionGroupDisabled            AuditAction = "group.disabled"
@@ -96,6 +98,7 @@ const (
 	ResourceAccount           ResourceType = "customer_account"
 	ResourceUserIdentity      ResourceType = "user_channel_identity"
 	ResourceIdentityConflict  ResourceType = "identity_conflict"
+	ResourceTopic             ResourceType = "topic_thread"
 )
 
 // AuditEvent — evento de auditoria.
