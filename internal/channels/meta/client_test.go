@@ -125,6 +125,11 @@ func TestHandlerPerConnectionSecretAndChallenge(t *testing.T) {
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?hub.mode=subscribe&hub.verify_token="+tok+"&hub.challenge=abc", nil))
 		return rec.Code
 	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?hub.mode=subscribe&hub.verify_token=omn-good&hub.challenge=%3Cb%3E1", nil))
+	if rec.Body.String() != "<b>1" || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") || rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("challenge must be the raw value as text/plain+nosniff: %q %v", rec.Body.String(), rec.Header())
+	}
 	if get("omn-good") != 200 || get("nope") != 403 {
 		t.Fatal("challenge must pass only for a valid per-connection token")
 	}

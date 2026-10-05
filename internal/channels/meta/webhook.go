@@ -166,6 +166,9 @@ func (h Handler) challenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	challenge := q.Get("hub.challenge")
+	// the challenge is request-controlled text: never let a browser sniff it into HTML
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprint(w, challenge)
 }
