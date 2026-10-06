@@ -176,7 +176,7 @@ func (s *Server) RegisterHealthHandlers() {
 // Quando é false a rota não é registrada: responder 403 de dentro do handler
 // ainda deixaria a superfície publicada, e o que queremos é que ela não exista.
 // Autoridade é do backend — o frontend esconder o formulário não substitui isto.
-func (s *Server) RegisterAuthHandlers(devAuthEnabled bool, sessionStore authn.SessionStore, secureCookie ...bool) {
+func (s *Server) RegisterAuthHandlers(dbPool *pgxpool.Pool, devAuthEnabled bool, sessionStore authn.SessionStore, secureCookie ...bool) {
 	// Gerar chave RSA para JWT (use valores reais em produção).
 	// A mesma keypair é reutilizada por RegisterTenancyHandlers para
 	// verificar os tokens emitidos aqui — por isso fica salva no Server em
@@ -204,6 +204,12 @@ func (s *Server) RegisterAuthHandlers(devAuthEnabled bool, sessionStore authn.Se
 	authHandler := authn.NewAuthHandler(s.privateKey, sessionStore, secureCookie...)
 	s.mux.HandleFunc("GET /api/v1/auth/health", authHandler.HealthCheck)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", authHandler.Logout)
+
+	// Password reset handlers
+	passwordHandler := authn.NewPasswordHandler(dbPool, nil) // emailSender nil por enquanto (será wired depois)
+	s.mux.HandleFunc("POST /api/v1/auth/password-reset-request", passwordHandler.PasswordResetRequest)
+	s.mux.HandleFunc("POST /api/v1/auth/password-reset", passwordHandler.PasswordReset)
+	s.mux.HandleFunc("POST /api/v1/auth/password-change", authn.WebMiddleware(s.authenticator, sessionStore)(http.HandlerFunc(passwordHandler.PasswordChange)))
 
 	mode := "unavailable"
 	if devAuthEnabled {
