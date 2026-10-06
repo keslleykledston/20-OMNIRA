@@ -14,6 +14,7 @@ export const agentsAPI = {
   list: () => call<{ items: OperationalAgent[] }>(() => axios.get(base(), { headers: authHeaders() })).then((r) => r.items),
   create: (membershipID: string) => call<{ id: string; status: AgentStatus }>(() => axios.post(base(), { membership_id: membershipID }, { headers: authHeaders() })),
   setStatus: (id: string, status: AgentStatus) => call<void>(() => axios.patch(`${base()}/${id}`, { status }, { headers: authHeaders() })),
+  delete: (id: string) => call<void>(() => axios.delete(`${base()}/${id}`, { headers: authHeaders() })),
   addQueue: (id: string, queueID: string, available: boolean, capacity: number) => call<{ id: string }>(() => axios.post(`${base()}/${id}/queues`, { queue_id: queueID, available, capacity }, { headers: authHeaders() })),
   updateQueue: (id: string, memberID: string, available: boolean, capacity: number) => call<void>(() => axios.patch(`${base()}/${id}/queues/${memberID}`, { available, capacity }, { headers: authHeaders() })),
   removeQueue: (id: string, memberID: string) => call<void>(() => axios.delete(`${base()}/${id}/queues/${memberID}`, { headers: authHeaders() })),
