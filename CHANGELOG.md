@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (ADR-0020 — Finalizar atendimento e memória do contato; implementado em `main`, NÃO implantado)
+- **Finalizar atendimento** (Inbox): fecha o episódio de atendimento em uma transação (mesma trava do motor de fluxos, idempotente), libera o bot, encerra só chamados locais (ERP/assunto ficam), registra motivo, resumo e o que ficou pendente/prometido/para lembrar, audita ids e contagens. Migration `000086` (aditiva, reversível): `conversation_closures` (imutável) e `follow_up_items`, RLS FORCE. Sem permissão nova (`conversation.claim`/`manage`).
+- API `contracts/openapi/attendance-v1.yaml` (6 operações, com teste de deriva): finalizar, sugerir com IA, contexto da conversa, busca no histórico do contato, histórico do contato, resolver pendência.
+- Interface: diálogo "Finalizar atendimento", painéis "Pendências do contato" e "Atendimentos anteriores", busca no histórico, aba "Encerradas", conversa finalizada sem campo de resposta. A lista do Inbox passa a mostrar só atendimentos abertos por padrão (`status=open|closed|all`) e o envio a conversa finalizada é recusado (409).
+- Copiloto (desligado por padrão): memória do mesmo contato no contexto (`OMNIRA_COPILOT_CONTACT_MEMORY_ENABLED`, prompt v2), ferramentas de leitura `contact.recent_attendances`, `contact.open_followups` e `contact.search_history` no gateway, e "Sugerir com IA" ao finalizar (rascunho `ai_inferred`, só leitura, sem trava). Detalhes e adiados: `docs/attendance/README.md`.
+
 ### Added (ADR-0019 — Visual Flow Builder, LAB, desligado por padrão)
 - Fluxos de atendimento configuráveis: rascunho editável, versões **imutáveis** (trigger no banco) e ponteiro ativo com rollback; 6 tabelas novas com RLS `FORCE` (migrations 000082–000084, aditivas e reversíveis).
 - Motor de execução transacional por conversa (idempotente, com retomada, limites, subflows com versão fixada), 20 tipos de nó, simulador sem efeitos, nós de IA opcionais que só sugerem.
@@ -13,6 +19,7 @@
 - Docs: `docs/flows/{STATUS,PRODUCTION-GATE,FINAL-REPORT,USER-GUIDE,OPERATIONS,CONFLICT-ANALYSIS}.md`.
 
 ### Fixed
+- Registry-size test of the AI tool gateway updated 5 -> 8 (the three new tools are read-only; a test now pins that).
 - Web: the app now runs on a data router (`createBrowserRouter`); the flow editor asks before any navigation, including browser Back/Forward, drops unsaved edits (FLOW-302), and after saving a blank or padded name the field matches what the server stored (FLOW-501).
 - Flow Builder (Codex rounds A/B): the editor no longer discards unsaved edits when settings are saved or a newer server revision arrives (explicit conflict + reload), asks before in-app navigation drops them; the ingest returns a bot-held new conversation to normal routing right away when its flow job cannot be enqueued.
 - Flow Builder (Codex review): `000085` makes a flow's active version belong to that same flow (composite FK); question nodes route a closed 24h window; the inbound gate no longer enqueues jobs the engine would discard.

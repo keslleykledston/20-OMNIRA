@@ -2,6 +2,14 @@
 
 Atualize este arquivo ao concluir trabalho substancial. Git e testes executáveis vencem este resumo quando divergirem. Não fazer push/tag sem ordem explícita; não declarar produção pronta sem evidência de deploy e gate.
 
+## ATENDIMENTO: FINALIZAR + MEMÓRIA DO CONTATO (ADR-0020) — 2026-10-06 (implementado em `main`, NÃO implantado)
+
+Estado: ondas W0–W3c e W4 prontas e testadas; **nada implantado** (api/web em execução são anteriores; migration `000086` não aplicada ao `omnira_dev`).
+Leia `docs/attendance/README.md` (guia, flags, implantação, reversão) e o ADR-0020. Achado que motivou tudo: nenhuma conversa podia ser fechada
+(156 abertas, nenhuma fechada), então roteamento e bot só atuavam na primeira conversa de cada contato. Para implantar: backup + migration 086,
+reconstruir `api` e `web` (worker não muda). As flags de IA continuam desligadas. Adiado de propósito: resolução de tópicos por evento,
+fechamento em lote das conversas legadas, finalização por inatividade, nó `fechar conversa`. Conversas fechadas por SQL em 2026-10-06 para um teste: duas (ids no scratchpad da sessão).
+
 ## FLOW BUILDER (ADR-0019) — 2026-10-06 (LEIA ANTES DE TOCAR EM `internal/flows`, `web/src/components/flows` OU NA FLAG `OMNIRA_FLOWS_ENABLED`)
 
 Estado: **LAB**, branch `feat/flow-builder` (commits em `git log main..HEAD`, sobre `main` @ `8af6d54`), **mesclado em `main` (sem push); migrations 082–085 aplicadas ao `omnira_dev` (inertes, flag desligada); worker em `d12ed5d`; api reconstruída do commit `a17b69e`; web do commit `4305478` (router de dados) em 2026-10-06 (rollback web: `rollback-pre-router-20261006`)**.
