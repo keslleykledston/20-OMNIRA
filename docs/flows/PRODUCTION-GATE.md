@@ -1,6 +1,6 @@
 # Flow Builder — gate de produção (FLOW.12)
 
-Data: 2026-10-06 · Branch `feat/flow-builder` (base `main` @ `8af6d54`, 12 commits) · ADR-0019.
+Data: 2026-10-06 · Branch `feat/flow-builder` (base `main` @ `8af6d54`, 13 commits) · ADR-0019.
 
 ## Decisão
 
