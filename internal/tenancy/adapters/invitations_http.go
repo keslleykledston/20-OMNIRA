@@ -188,15 +188,22 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Hash a senha temporária para validação no accept
+	tempPasswordHash, err := password.Hash(tempPassword)
+	if err != nil {
+		http.Error(w, "failed to hash temporary password", http.StatusInternalServerError)
+		return
+	}
+
 	var inv Invitation
 	var roleID uuid.UUID
 	expiresAt := time.Now().UTC().Add(invitationTTL)
 	err = q.QueryRow(r.Context(), `
 		WITH role AS (SELECT id, name FROM roles WHERE key=$1 AND tenant_id IS NULL)
-		INSERT INTO membership_invitations (tenant_id, email, role_id, token_hash, created_by, expires_at)
-		SELECT $2, $3, role.id, $4, $5, $6 FROM role
+		INSERT INTO membership_invitations (tenant_id, email, role_id, token_hash, temporary_password_hash, created_by, expires_at)
+		SELECT $2, $3, role.id, $4, $5, $6, $7 FROM role
 		RETURNING id, (SELECT id FROM role), (SELECT name FROM role), created_at`,
-		req.RoleKey, tc.TenantID, email, hash, tc.ActorID, expiresAt,
+		req.RoleKey, tc.TenantID, email, hash, tempPasswordHash, tc.ActorID, expiresAt,
 	).Scan(&inv.ID, &roleID, &inv.RoleName, &inv.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "role is not assignable in this tenant", http.StatusUnprocessableEntity)
@@ -405,11 +412,16 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, "failed to generate temporary password", http.StatusInternalServerError)
 		return
 	}
+	tempPasswordHash, err := password.Hash(tempPassword)
+	if err != nil {
+		http.Error(w, "failed to hash temporary password", http.StatusInternalServerError)
+		return
+	}
 	inv.ExpiresAt = time.Now().UTC().Add(invitationTTL)
 	if _, err := q.Exec(r.Context(), `
 		UPDATE membership_invitations
-		SET token_hash=$3, expires_at=$4, sent_at=NULL, updated_at=now()
-		WHERE id=$1 AND tenant_id=$2`, invitationID, tc.TenantID, hash, inv.ExpiresAt); err != nil {
+		SET token_hash=$3, temporary_password_hash=$4, expires_at=$5, sent_at=NULL, updated_at=now()
+		WHERE id=$1 AND tenant_id=$2`, invitationID, tc.TenantID, hash, tempPasswordHash, inv.ExpiresAt); err != nil {
 		http.Error(w, "failed to reissue invitation", http.StatusInternalServerError)
 		return
 	}
@@ -558,12 +570,28 @@ func (h *InvitationsHandler) InvitationStatus(w http.ResponseWriter, r *http.Req
 // ainda não é). A validação de identidade e de estado do convite é feita
 // explicitamente aqui, em Go — a sessão de sistema não tem RLS para
 // confiar, tem que ser o código.
+//
+// Requer POST body com { "password": "<senha temporária>" } para validar identidade.
+type acceptInvitationRequest struct {
+	Password string `json:"password"`
+}
+
 func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
 	principal, err := authn.FromContext(r.Context())
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	var req acceptInvitationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Password) == "" {
+		http.Error(w, "password is required", http.StatusBadRequest)
+		return
+	}
+
 	token := r.PathValue("token")
 	sum := sha256.Sum256([]byte(token))
 	hash := hex.EncodeToString(sum[:])
@@ -572,14 +600,14 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 	err = platformdb.WithTenantSession(r.Context(), h.pool, principal.UserID, true, func(ctx context.Context) error {
 		q := platformdb.QuerierFromContext(ctx, h.pool)
 
-		var email, status, roleKey string
+		var email, status, roleKey, tempPasswordHash string
 		var roleID uuid.UUID
 		var expiresAt time.Time
 		err := q.QueryRow(ctx, `
-			SELECT i.id, i.tenant_id, i.email, i.status, i.expires_at, i.role_id, r.key
+			SELECT i.id, i.tenant_id, i.email, i.status, i.expires_at, i.role_id, i.temporary_password_hash, r.key
 			FROM membership_invitations i JOIN roles r ON r.id = i.role_id
 			WHERE i.token_hash = $1 FOR UPDATE OF i`, hash,
-		).Scan(&invitationID, &tenantID, &email, &status, &expiresAt, &roleID, &roleKey)
+		).Scan(&invitationID, &tenantID, &email, &status, &expiresAt, &roleID, &tempPasswordHash, &roleKey)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errInvitationNotFound
 		}
@@ -604,12 +632,35 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 			return errInvitationExpired
 		}
 
+		// Validar a senha temporária contra o hash armazenado
+		if !password.Verify(tempPasswordHash, req.Password) {
+			return errInvitationPasswordInvalid
+		}
+
+		// Hash a senha temporária para armazenar como password_hash inicial
+		passwordHash, err := password.Hash(req.Password)
+		if err != nil {
+			return err
+		}
+		passwordExpiresAt := password.ExpiresAt()
+
 		if _, err := q.Exec(ctx, `
 			UPDATE membership_invitations
 			SET status='accepted', accepted_by_user_id=$2, accepted_at=now(), updated_at=now()
 			WHERE id=$1`, invitationID, principal.UserID); err != nil {
 			return err
 		}
+
+		// Criar ou atualizar user com password_hash e flag de troca obrigatória
+		// (password_expires_at não nulo = força troca de senha no login)
+		if _, err := q.Exec(ctx, `
+			UPDATE users
+			SET password_hash=$2, password_expires_at=$3, updated_at=now()
+			WHERE id=$1`,
+			principal.UserID, passwordHash, passwordExpiresAt); err != nil {
+			return err
+		}
+
 		// Reativa uma membership antiga (ex.: revogada e convidada de novo) com o papel
 		// do convite. Se já estiver ativa, o papel atual é preservado: um convite não
 		// rebaixa nem promove quem já é membro (isso é PATCH /team, com o invariante do
@@ -640,6 +691,8 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, "invitation expired", http.StatusGone)
 	case errors.Is(err, errInvitationEmailUnverified):
 		http.Error(w, "email not verified by the identity provider", http.StatusForbidden)
+	case errors.Is(err, errInvitationPasswordInvalid):
+		http.Error(w, "invalid temporary password", http.StatusUnauthorized)
 	case err != nil:
 		http.Error(w, "failed to accept invitation", http.StatusInternalServerError)
 	default:
@@ -648,11 +701,12 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 }
 
 var (
-	errInvitationNotFound        = errors.New("invitation not found")
-	errInvitationAlreadyUsed     = errors.New("invitation already accepted")
-	errInvitationRevoked         = errors.New("invitation revoked")
-	errInvitationExpired         = errors.New("invitation expired")
-	errInvitationEmailUnverified = errors.New("invitation e-mail not verified by the identity provider")
+	errInvitationNotFound         = errors.New("invitation not found")
+	errInvitationAlreadyUsed      = errors.New("invitation already accepted")
+	errInvitationRevoked          = errors.New("invitation revoked")
+	errInvitationExpired          = errors.New("invitation expired")
+	errInvitationEmailUnverified  = errors.New("invitation e-mail not verified by the identity provider")
+	errInvitationPasswordInvalid  = errors.New("invitation temporary password is invalid")
 )
 
 // emailVerified: o e-mail do convite só vale como prova de identidade se o IdP afirmou
