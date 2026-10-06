@@ -34,6 +34,8 @@ export default function AgentsPage() {
   const queryClient = useQueryClient()
   const canManage = access.can('agent.manage')
   const [selected, setSelected] = useState<OperationalAgent | null>(null)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [selectedMembershipID, setSelectedMembershipID] = useState('')
   const [queueID, setQueueID] = useState('')
   const [capacity, setCapacity] = useState('1')
   const [available, setAvailable] = useState(true)
@@ -80,6 +82,14 @@ export default function AgentsPage() {
     },
   })
   const removeQueue = useMutation({ mutationFn: (memberID: string) => agentsAPI.removeQueue(selected!.id, memberID), onSuccess: refresh })
+  const createAgent = useMutation({
+    mutationFn: () => agentsAPI.create(selectedMembershipID),
+    onSuccess: () => { setShowCreateModal(false); setSelectedMembershipID(''); refresh() }
+  })
+  const deleteAgent = useMutation({
+    mutationFn: (id: string) => agentsAPI.delete(id),
+    onSuccess: () => { setSelected(null); refresh() }
+  })
   const current = selected && result.data?.find((agent) => agent.id === selected.id) || selected
   return (
     <SettingsShell
@@ -88,6 +98,12 @@ export default function AgentsPage() {
       description="Visão operacional de elegibilidade por fila. Isso não representa presença humana."
     >
       <div className="space-y-6">
+        {canManage && (
+          <div className="flex justify-between items-center">
+            <div />
+            <Button onClick={() => setShowCreateModal(true)}>+ Ativar novo agente</Button>
+          </div>
+        )}
         {!access.isLoading && !access.can('agent.read') && (
           <ErrorState title="Sem permissão" message="Você não tem permissão para visualizar agentes." />
         )}
@@ -127,6 +143,8 @@ export default function AgentsPage() {
                       isTogglingStatus={update.isPending}
                       onOpenDetails={() => setSelected(agent)}
                       onToggleStatus={() => update.mutate({ id: agent.id, status: agent.status === 'active' ? 'disabled' : 'active' })}
+                      onDelete={deleteAgent.mutate}
+                      isDeleting={deleteAgent.isPending}
                     />
                   ))}
                 </TableBody>
@@ -143,6 +161,8 @@ export default function AgentsPage() {
                   isTogglingStatus={update.isPending}
                   onOpenDetails={() => setSelected(agent)}
                   onToggleStatus={() => update.mutate({ id: agent.id, status: agent.status === 'active' ? 'disabled' : 'active' })}
+                  onDelete={deleteAgent.mutate}
+                  isDeleting={deleteAgent.isPending}
                 />
               ))}
             </div>
@@ -217,6 +237,40 @@ export default function AgentsPage() {
           </div>
         </Modal>
       )}
+
+      {showCreateModal && (
+        <Modal
+          open
+          title="Ativar novo agente"
+          description="Selecione um membro de equipe para ativar como agente operacional."
+          onClose={() => { setShowCreateModal(false); setSelectedMembershipID('') }}
+          footer={
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => { setShowCreateModal(false); setSelectedMembershipID('') }}>Cancelar</Button>
+              <Button disabled={!selectedMembershipID || createAgent.isPending} isLoading={createAgent.isPending} onClick={() => createAgent.mutate()}>Ativar</Button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">ID de Membership</label>
+              <input
+                type="text"
+                placeholder="Cole o UUID do membro"
+                value={selectedMembershipID}
+                onChange={(e) => setSelectedMembershipID(e.target.value)}
+                className="w-full px-3 py-2 border border-border-subtle rounded"
+              />
+              <p className="text-xs text-text-secondary mt-1">Encontre em Settings → Team (copie o ID do membro)</p>
+            </div>
+            {createAgent.isError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+                Erro ao ativar agente. Verifique o ID e tente novamente.
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </SettingsShell>
   )
 }
@@ -228,9 +282,12 @@ interface AgentRowProps {
   isTogglingStatus: boolean
   onOpenDetails: () => void
   onToggleStatus: () => void
+  onDelete?: (id: string) => void
+  isDeleting?: boolean
 }
 
-function AgentRow({ agent, online, canManage, isTogglingStatus, onOpenDetails, onToggleStatus }: AgentRowProps) {
+function AgentRow({ agent, online, canManage, isTogglingStatus, onOpenDetails, onToggleStatus, onDelete, isDeleting }: AgentRowProps) {
+  const [showDeleteMenu, setShowDeleteMenu] = useState(false)
   return (
     <TableRow>
       <TableCell>
@@ -251,9 +308,30 @@ function AgentRow({ agent, online, canManage, isTogglingStatus, onOpenDetails, o
         <div className="flex gap-2">
           <Button variant="secondary" size="sm" onClick={onOpenDetails}>Detalhes</Button>
           {canManage && (
-            <Button variant="secondary" size="sm" disabled={isTogglingStatus} onClick={onToggleStatus}>
-              {agent.status === 'active' ? 'Desativar' : 'Ativar'}
-            </Button>
+            <>
+              <Button variant="secondary" size="sm" disabled={isTogglingStatus} onClick={onToggleStatus}>
+                {agent.status === 'active' ? 'Desativar' : 'Ativar'}
+              </Button>
+              <div className="relative">
+                <button
+                  className="px-2 py-1 text-gray-600 hover:bg-gray-100 rounded text-sm"
+                  onClick={() => setShowDeleteMenu(!showDeleteMenu)}
+                >
+                  ⋯
+                </button>
+                {showDeleteMenu && (
+                  <div className="absolute right-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10">
+                    <button
+                      className="block w-full text-left px-4 py-2 text-red-600 hover:bg-red-50 text-sm"
+                      onClick={() => { onDelete?.(agent.id); setShowDeleteMenu(false) }}
+                      disabled={isDeleting}
+                    >
+                      {isDeleting ? 'Deletando...' : 'Deletar'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       </TableCell>
@@ -261,12 +339,36 @@ function AgentRow({ agent, online, canManage, isTogglingStatus, onOpenDetails, o
   )
 }
 
-function AgentCard({ agent, online, canManage, isTogglingStatus, onOpenDetails, onToggleStatus }: AgentRowProps) {
+function AgentCard({ agent, online, canManage, isTogglingStatus, onOpenDetails, onToggleStatus, onDelete, isDeleting }: AgentRowProps) {
+  const [showDeleteMenu, setShowDeleteMenu] = useState(false)
   return (
     <div className="rounded-card border border-border-subtle bg-surface p-4">
-      <div className="min-w-0">
-        <p className="font-medium text-text-primary truncate">{agent.name || agent.email}</p>
-        <p className="text-sm text-text-secondary truncate">{agent.email}</p>
+      <div className="flex justify-between items-start">
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-text-primary truncate">{agent.name || agent.email}</p>
+          <p className="text-sm text-text-secondary truncate">{agent.email}</p>
+        </div>
+        {canManage && (
+          <div className="relative ml-2">
+            <button
+              className="px-2 py-1 text-gray-600 hover:bg-gray-100 rounded text-sm"
+              onClick={() => setShowDeleteMenu(!showDeleteMenu)}
+            >
+              ⋯
+            </button>
+            {showDeleteMenu && (
+              <div className="absolute right-0 mt-1 bg-white border border-gray-200 rounded shadow-lg z-10">
+                <button
+                  className="block w-full text-left px-4 py-2 text-red-600 hover:bg-red-50 text-sm"
+                  onClick={() => { onDelete?.(agent.id); setShowDeleteMenu(false) }}
+                  disabled={isDeleting}
+                >
+                  {isDeleting ? 'Deletando...' : 'Deletar'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Badge>{agent.role}</Badge>
