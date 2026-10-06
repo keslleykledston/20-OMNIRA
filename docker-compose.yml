@@ -42,6 +42,9 @@ x-omnira-runtime: &omnira-runtime
   # ADR-0016 M2: local speech-to-text (systemd unit omnira-whisper on the host, GPU). Reached through the docker0
   # gateway; the host firewall only lets the OMNIRA compose network in. Empty disables transcription.
   OMNIRA_WHISPER_URL: ${OMNIRA_WHISPER_URL-http://172.17.0.1:18181}
+  # WhatsApp oficial (Meta Cloud API): per-connection credentials live encrypted in the DB (no global secret).
+  # Off by default; docs/ops/META.md.
+  OMNIRA_META_ENABLED: ${OMNIRA_META_ENABLED-false}
 
 services:
   postgres:
