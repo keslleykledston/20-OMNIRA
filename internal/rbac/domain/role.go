@@ -22,6 +22,7 @@ const (
 	ResourceMembership PermissionResource = "membership"
 	ResourceAudit      PermissionResource = "audit"
 	ResourceSettings   PermissionResource = "settings"
+	ResourceAgent      PermissionResource = "agent"
 )
 
 // Permission — permissão com recurso + ação
@@ -103,6 +104,7 @@ var SystemRoles = map[string]*Role{
 			{Resource: ResourceMembership, Action: ActionAdmin},
 			{Resource: ResourceAudit, Action: ActionRead},
 			{Resource: ResourceSettings, Action: ActionAdmin},
+			{Resource: ResourceAgent, Action: ActionAdmin},
 		},
 	},
 	// tenant_supervisor: supervisor/lead role
@@ -114,6 +116,7 @@ var SystemRoles = map[string]*Role{
 			{Resource: ResourceTenant, Action: ActionRead},
 			{Resource: ResourceMembership, Action: ActionRead},
 			{Resource: ResourceAudit, Action: ActionRead},
+			{Resource: ResourceAgent, Action: ActionRead},
 		},
 	},
 	// tenant_agent: agent/operator role
