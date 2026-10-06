@@ -62,6 +62,8 @@ type StepResult struct {
 	State    map[string]any // this node's private state (nil clears it)
 	Output   map[string]any // recorded in the audit trail (redacted)
 	Call     *SubflowCall   // enter a subflow
+	// ActiveCustomer is the company the contact chose (or the only one they have); the engine records it on the run.
+	ActiveCustomer *uuid.UUID
 }
 
 // SubflowCall asks the engine to push a frame and continue inside a pinned subflow version.
@@ -388,6 +390,9 @@ func (e *Engine) drive(ctx context.Context, facts *ports.ConversationFacts, run 
 		for k, v := range res.Reserved {
 			run.Variables[k] = v
 		}
+		if res.ActiveCustomer != nil {
+			run.ActiveCustomerAccountID, facts.ActiveCustomerAccountID = res.ActiveCustomer, res.ActiveCustomer
+		}
 		setState(run, node.ID, res.State)
 
 		switch {
@@ -399,6 +404,7 @@ func (e *Engine) drive(ctx context.Context, facts *ports.ConversationFacts, run 
 			run.UpdatedAt = done
 			return e.runs.SaveRun(ctx, run)
 		case res.Handoff:
+			facts.AutomationMode = domain.AutomationWaitingHuman
 			run.Status = domain.RunWaitingHuman
 			run.CurrentNodeID = node.ID
 			run.UpdatedAt = done

@@ -93,26 +93,46 @@ func (v memVersions) GetVersion(_ context.Context, id uuid.UUID) (*domain.FlowVe
 }
 
 type fakeEffects struct {
-	sent      []string
-	keys      map[string]bool
-	status    ports.SendStatus
-	assigned  []*uuid.UUID
-	handoffs  int
-	sendError error
+	candidates []ports.CustomerCandidate
+	activeSet  []uuid.UUID
+	tickets    ports.TicketSummary
+	ensureErr  error
+	assignErr  error
+	ensured    []string
+	explicitQ  []uuid.UUID
+	sent       []string
+	keys       map[string]bool
+	status     ports.SendStatus
+	assigned   []*uuid.UUID
+	handoffs   int
+	sendError  error
 }
 
 func (f *fakeEffects) CustomerCandidates(context.Context, uuid.UUID) ([]ports.CustomerCandidate, error) {
-	return nil, nil
+	return f.candidates, nil
 }
-func (f *fakeEffects) SetActiveCustomer(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (f *fakeEffects) SetActiveCustomer(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
+	f.activeSet = append(f.activeSet, id)
+	return nil
+}
 func (f *fakeEffects) OpenTickets(context.Context, *ports.ConversationFacts) (ports.TicketSummary, error) {
-	return ports.TicketSummary{}, nil
+	return f.tickets, nil
 }
-func (f *fakeEffects) EnsureTicket(context.Context, uuid.UUID, string, string) (uuid.UUID, bool, error) {
+func (f *fakeEffects) EnsureTicket(_ context.Context, _ uuid.UUID, subject, priority string) (uuid.UUID, bool, error) {
+	if f.ensureErr != nil {
+		return uuid.Nil, false, f.ensureErr
+	}
+	f.ensured = append(f.ensured, subject+"|"+priority)
 	return uuid.New(), true, nil
 }
 func (f *fakeEffects) AssignQueue(_ context.Context, _ uuid.UUID, q *uuid.UUID) error {
+	if f.assignErr != nil {
+		return f.assignErr
+	}
 	f.assigned = append(f.assigned, q)
+	if q != nil {
+		f.explicitQ = append(f.explicitQ, *q)
+	}
 	return nil
 }
 func (f *fakeEffects) Handoff(context.Context, uuid.UUID, *uuid.UUID) error { f.handoffs++; return nil }
@@ -159,7 +179,7 @@ func newWorld(t *testing.T, flows ...flowSpec) *world {
 	}
 	tc, _ := tenancydomain.NewTenantContext(tenant, uuid.Nil, tenancydomain.AccessSourceSystem)
 	w.ctx = tenancydomain.WithTenantContext(context.Background(), tc)
-	w.eng = NewEngine(w.runs, w.ver, w.fx, append(PureExecutors(), failExec{})).WithClock(func() time.Time { return w.now }).WithLogger(func(f string, a ...any) { w.logs = append(w.logs, fmt.Sprintf(f, a...)) })
+	w.eng = NewEngine(w.runs, w.ver, w.fx, append(AllExecutors(), failExec{})).WithClock(func() time.Time { return w.now }).WithLogger(func(f string, a ...any) { w.logs = append(w.logs, fmt.Sprintf(f, a...)) })
 	return w
 }
 
