@@ -19,6 +19,7 @@ import (
 
 // Permission keys (migration 000083). Editing and publishing are separate on purpose.
 const (
+	PermRunView         = "flow_run.view"
 	PermTemplateView    = "flow_template.view"
 	PermTemplateInstall = "flow_template.install"
 	PermView            = "flow.view"
@@ -37,6 +38,13 @@ type Handler struct {
 	pool *pgxpool.Pool
 	cp   *application.ControlPlane
 	ts   *application.TemplateService
+	runs ports.RunReader
+}
+
+// WithRuns enables the runs, timeline and analytics endpoints.
+func (h *Handler) WithRuns(r ports.RunReader) *Handler {
+	h.runs = r
+	return h
 }
 
 // WithTemplates enables the template/pack catalog and installation endpoints.
@@ -554,6 +562,81 @@ func (h *Handler) InstallPack(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, res)
 }
 
+func (h *Handler) runsReady(w http.ResponseWriter) bool {
+	if h.runs == nil {
+		writeErr(w, http.StatusNotImplemented, "runs_unavailable", "run history is not enabled")
+		return false
+	}
+	return true
+}
+
+func optionalUUID(r *http.Request, key string) (*uuid.UUID, bool) {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return nil, true
+	}
+	id, err := uuid.Parse(v)
+	if err != nil {
+		return nil, false
+	}
+	return &id, true
+}
+
+// ListRuns serves the paginated run history (flow_run.view), filtered by flow, conversation or status.
+func (h *Handler) ListRuns(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermRunView); !ok || !h.runsReady(w) {
+		return
+	}
+	flowID, ok1 := optionalUUID(r, "flow_id")
+	convID, ok2 := optionalUUID(r, "conversation_id")
+	if !ok1 || !ok2 {
+		writeErr(w, http.StatusBadRequest, "invalid", "flow_id and conversation_id must be ids")
+		return
+	}
+	runs, err := h.runs.ListRuns(r.Context(), ports.RunFilter{FlowID: flowID, ConversationID: convID, Status: r.URL.Query().Get("status"), Limit: intQuery(r, "limit", 50), Offset: intQuery(r, "offset", 0)})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": runs})
+}
+
+// GetRun serves one run with its execution timeline.
+func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermRunView); !ok || !h.runsReady(w) {
+		return
+	}
+	id, ok := pathID(r, "run_id")
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	d, err := h.runs.GetRunDetail(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// FlowAnalytics serves measured run statistics of one flow.
+func (h *Handler) FlowAnalytics(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermRunView); !ok || !h.runsReady(w) {
+		return
+	}
+	id, ok := pathID(r, "flow_id")
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	a, err := h.runs.FlowAnalytics(r.Context(), id, intQuery(r, "days", 7))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
 // NodeTypes serves the node library of the builder.
 func (h *Handler) NodeTypes(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.session(w, r, PermView); !ok {
@@ -584,6 +667,9 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	mux.Handle("POST "+base+"/{flow_id}/versions/{version}/activate", wrap(h.Activate))
 	mux.Handle("POST "+base+"/{flow_id}/archive", wrap(h.Archive))
 	mux.Handle("GET /api/v1/tenants/{tenant_id}/flow-node-types", wrap(h.NodeTypes))
+	mux.Handle("GET "+base+"/{flow_id}/analytics", wrap(h.FlowAnalytics))
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/flow-runs", wrap(h.ListRuns))
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/flow-runs/{run_id}", wrap(h.GetRun))
 	const lib = "/api/v1/tenants/{tenant_id}"
 	mux.Handle("GET "+lib+"/flow-templates", wrap(h.ListTemplates))
 	mux.Handle("GET "+lib+"/flow-templates/{slug}", wrap(h.GetTemplate))

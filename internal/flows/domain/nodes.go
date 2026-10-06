@@ -65,7 +65,7 @@ func SpecFor(t NodeType) (NodeSpec, bool) { s, ok := specs[t]; return s, ok }
 func Specs() []NodeSpec {
 	order := []NodeType{NodeTrigger, NodeSendMessage, NodeAsk, NodeChoice, NodeCondition, NodeSwitch, NodeSetVariable,
 		NodeBusinessHours, NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets,
-		NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeEnd}
+		NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd}
 	out := make([]NodeSpec, 0, len(order))
 	for _, t := range order {
 		if s, ok := specs[t]; ok {
@@ -375,6 +375,69 @@ func init() {
 			if c, ok := cfg[SubflowConfig](n, &a); ok {
 				if err := ValidateSlug(c.Flow); err != nil {
 					a.Issues = append(a.Issues, errIssue(n, "invalid_subflow", fmt.Sprintf("%q: subflow must name a flow slug", n.ID)))
+				}
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeAIClassify, Label: "AI: classify intent", Category: "ai", SideEffect: EffectExternal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{}
+			c, ok := cfg[AIClassifyConfig](n, &a)
+			if !ok {
+				a.Ports = req("low_confidence", "error")
+				return a
+			}
+			if len(c.Intents) < 2 || len(c.Intents) > 10 {
+				a.Issues = append(a.Issues, errIssue(n, "invalid_intents", fmt.Sprintf("%q: classification needs 2 to 10 intents", n.ID)))
+			}
+			if c.MinConfidence < 0 || c.MinConfidence > 1 {
+				a.Issues = append(a.Issues, errIssue(n, "invalid_confidence", fmt.Sprintf("%q: min_confidence must be between 0 and 1", n.ID)))
+			}
+			seen := map[string]bool{}
+			for _, it := range c.Intents {
+				if !idPattern.MatchString(it.ID) || it.ID == "low_confidence" || it.ID == "error" {
+					a.Issues = append(a.Issues, errIssue(n, "invalid_intent_id", fmt.Sprintf("%q: intent id %q is invalid or reserved", n.ID, it.ID)))
+				}
+				if seen[it.ID] {
+					a.Issues = append(a.Issues, errIssue(n, "duplicate_intent", fmt.Sprintf("%q: duplicate intent id %q", n.ID, it.ID)))
+				}
+				seen[it.ID] = true
+				if strings.TrimSpace(it.Label) == "" {
+					a.Issues = append(a.Issues, errIssue(n, "missing_text", fmt.Sprintf("%q: intent %q has no label", n.ID, it.ID)))
+				}
+				a.Ports = append(a.Ports, Port{Name: it.ID, Required: true})
+			}
+			a.Ports = append(a.Ports, Port{"low_confidence", true}, Port{"error", true})
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeAIExtract, Label: "AI: extract data", Category: "ai", SideEffect: EffectExternal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: req("next", "error")}
+			if c, ok := cfg[AIExtractConfig](n, &a); ok {
+				if len(c.Fields) < 1 || len(c.Fields) > 10 {
+					a.Issues = append(a.Issues, errIssue(n, "invalid_fields", fmt.Sprintf("%q: 1 to 10 fields", n.ID)))
+				}
+				for _, f := range c.Fields {
+					checkVarName(n, &a, "variable", f.Variable)
+					switch f.Type {
+					case "string", "number", "boolean", "email", "phone":
+					default:
+						a.Issues = append(a.Issues, errIssue(n, "invalid_field_type", fmt.Sprintf("%q: field %q type must be string, number, boolean, email or phone", n.ID, f.Variable)))
+					}
+				}
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeAISummarize, Label: "AI: summarize conversation", Category: "ai", SideEffect: EffectExternal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: req("next", "error")}
+			if c, ok := cfg[AISummarizeConfig](n, &a); ok {
+				checkVarName(n, &a, "variable", c.Variable)
+				if c.MaxMessages < 0 || c.MaxMessages > 30 {
+					a.Issues = append(a.Issues, errIssue(n, "invalid_max_messages", fmt.Sprintf("%q: max_messages must be between 1 and 30", n.ID)))
 				}
 			}
 			return a

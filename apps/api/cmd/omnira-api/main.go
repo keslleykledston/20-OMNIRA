@@ -274,7 +274,7 @@ func main() {
 		}
 		flowAuditor := flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool))
 		templateService := flowsapplication.NewTemplateService(templateRegistry, flowRepo, controlPlane, flowRepo, flowsadapters.NewSavepointAtomic(dbPool), flowAuditor)
-		srv.RegisterFlowHandlers(dbPool, flowsadapters.NewHandler(dbPool, controlPlane).WithTemplates(templateService))
+		srv.RegisterFlowHandlers(dbPool, flowsadapters.NewHandler(dbPool, controlPlane).WithTemplates(templateService).WithRuns(flowRepo))
 		log.Printf("Flow Builder API enabled (OMNIRA_FLOWS_ENABLED=true)\n")
 	}
 	if cfg.MetaEnabled {

@@ -5,6 +5,7 @@ package ports
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/flows/domain"
@@ -66,4 +67,76 @@ type Auditor interface {
 // request middleware may still commit) stays usable. The Postgres implementation is a savepoint.
 type Atomic interface {
 	Do(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// RunSummary is one row of the runs list (read model).
+type RunSummary struct {
+	ID             uuid.UUID  `json:"id"`
+	FlowID         uuid.UUID  `json:"flow_id"`
+	FlowSlug       string     `json:"flow_slug"`
+	FlowName       string     `json:"flow_name"`
+	FlowVersion    int        `json:"flow_version"`
+	ConversationID uuid.UUID  `json:"conversation_id"`
+	Status         string     `json:"status"`
+	CurrentNodeID  string     `json:"current_node_id,omitempty"`
+	NodeExecCount  int        `json:"node_executions"`
+	Error          string     `json:"error,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	DurationMs     *int64     `json:"duration_ms,omitempty"`
+}
+
+type RunFilter struct {
+	FlowID         *uuid.UUID
+	ConversationID *uuid.UUID
+	Status         string
+	Limit, Offset  int
+}
+
+// ExecutionView is one step of a run's timeline (inputs/outputs were redacted before they were stored).
+type ExecutionView struct {
+	Seq        int             `json:"seq"`
+	NodeID     string          `json:"node_id"`
+	NodeType   string          `json:"node_type"`
+	Status     string          `json:"status"`
+	Port       string          `json:"port,omitempty"`
+	Input      json.RawMessage `json:"input"`
+	Output     json.RawMessage `json:"output"`
+	Error      string          `json:"error,omitempty"`
+	StartedAt  time.Time       `json:"started_at"`
+	DurationMs int             `json:"duration_ms"`
+}
+
+type RunDetail struct {
+	RunSummary
+	Variables  map[string]any  `json:"variables"`
+	Handoff    map[string]any  `json:"handoff,omitempty"`
+	Executions []ExecutionView `json:"timeline"`
+}
+
+type NodeCount struct {
+	NodeID   string `json:"node_id"`
+	NodeType string `json:"node_type,omitempty"`
+	Count    int    `json:"count"`
+}
+
+// FlowAnalytics are measured numbers only: with no runs every figure is zero (nothing is estimated or invented).
+type FlowAnalytics struct {
+	Since        time.Time      `json:"since"`
+	Days         int            `json:"days"`
+	Runs         int            `json:"runs"`
+	ByStatus     map[string]int `json:"by_status"`
+	Completed    int            `json:"completed"`
+	Failed       int            `json:"failed"`
+	HumanHandoff int            `json:"human_handoffs"`
+	AvgDuration  *int64         `json:"avg_duration_ms"` // completed runs only; null when none
+	NodeErrors   []NodeCount    `json:"node_errors"`
+	DropOff      []NodeCount    `json:"drop_off_by_node"` // where failed/cancelled/expired runs stopped
+}
+
+// RunReader is the read side used by the runs/timeline/analytics endpoints.
+type RunReader interface {
+	ListRuns(ctx context.Context, f RunFilter) ([]RunSummary, error)
+	GetRunDetail(ctx context.Context, id uuid.UUID) (*RunDetail, error)
+	FlowAnalytics(ctx context.Context, flowID uuid.UUID, days int) (*FlowAnalytics, error)
 }

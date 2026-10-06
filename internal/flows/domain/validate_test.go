@@ -169,7 +169,7 @@ func TestParseDefinitionLimits(t *testing.T) {
 
 func TestEveryNodeTypeHasASpec(t *testing.T) {
 	all := []NodeType{NodeTrigger, NodeSendMessage, NodeAsk, NodeChoice, NodeCondition, NodeSwitch, NodeSetVariable, NodeBusinessHours,
-		NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets, NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeEnd}
+		NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets, NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd}
 	for _, nt := range all {
 		if _, ok := SpecFor(nt); !ok {
 			t.Errorf("node type %s has no spec", nt)
@@ -255,6 +255,16 @@ func TestRedact(t *testing.T) {
 	long := Redact(strings.Repeat("a", 5000)).(string)
 	if len(long) > 2100 {
 		t.Fatalf("long strings must be truncated, got %d", len(long))
+	}
+	// A credential embedded in a sentence is masked on its own; the sentence survives.
+	if got := Redact("cliente respondeu Bearer abcdefghijklmnop1234 ontem").(string); got != "cliente respondeu [redacted] ontem" {
+		t.Fatalf("inline credential: %q", got)
+	}
+	if got := Redact("o ASN é 65001 e a chave AKIAABCDEFGHIJKLMNOP vence").(string); !strings.Contains(got, "65001") || strings.Contains(got, "AKIA") {
+		t.Fatalf("inline AWS key: %q", got)
+	}
+	if got := Redact("Bearer é só uma palavra").(string); got != "Bearer é só uma palavra" {
+		t.Fatalf("the word alone is not a secret: %q", got)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(RedactJSON([]byte(`{"token":"x","k":1}`)), &m); err != nil || m["token"] != "[redacted]" {

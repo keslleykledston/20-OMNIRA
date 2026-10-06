@@ -85,6 +85,7 @@ type Engine struct {
 	execs    map[domain.NodeType]Executor
 	now      func() time.Time
 	logf     func(format string, args ...any)
+	metrics  Metrics
 }
 
 func NewEngine(runs ports.RunRepository, versions ports.VersionReader, effects ports.Effects, execs []Executor) *Engine {
@@ -92,11 +93,19 @@ func NewEngine(runs ports.RunRepository, versions ports.VersionReader, effects p
 	for _, e := range execs {
 		m[e.Type()] = e
 	}
-	return &Engine{runs: runs, versions: versions, effects: effects, execs: m, now: func() time.Time { return time.Now().UTC() }, logf: log.Printf}
+	return &Engine{runs: runs, versions: versions, effects: effects, execs: m, now: func() time.Time { return time.Now().UTC() }, logf: log.Printf, metrics: noMetrics{}}
 }
 
 // WithClock is for tests.
 func (e *Engine) WithClock(now func() time.Time) *Engine { e.now = now; return e }
+
+// WithMetrics enables runtime counters (worker /metrics).
+func (e *Engine) WithMetrics(m Metrics) *Engine {
+	if m != nil {
+		e.metrics = m
+	}
+	return e
+}
 
 func (e *Engine) WithLogger(f func(string, ...any)) *Engine { e.logf = f; return e }
 
@@ -145,6 +154,7 @@ func (e *Engine) OnInbound(ctx context.Context, ev InboundEvent) (Outcome, error
 	}
 	eventID := ev.MessageID.String()
 	if _, err := e.runs.RunByEvent(ctx, eventID); err == nil {
+		e.metrics.Run("duplicate")
 		return OutcomeDuplicate, nil
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return OutcomeIgnored, err
@@ -295,6 +305,7 @@ func (e *Engine) start(ctx context.Context, facts *ports.ConversationFacts, flow
 	if err := e.runs.CreateRun(ctx, run); err != nil {
 		return err // ErrDuplicateEvent / ErrConversationBusy: a concurrent twin won; the caller treats it as already handled
 	}
+	e.metrics.Run("started")
 	if facts.AutomationMode != domain.AutomationBot {
 		if err := e.runs.SetAutomationMode(ctx, facts.ID, domain.AutomationBot); err != nil {
 			return err
@@ -413,6 +424,7 @@ func (e *Engine) drive(ctx context.Context, facts *ports.ConversationFacts, run 
 		if err != nil {
 			rec.Status, rec.Error = domain.ExecFailed, truncate(err.Error(), 500)
 			_ = e.runs.AppendExecution(ctx, rec)
+			e.metrics.Node(node.Type, rec.Status, done.Sub(started))
 			return e.finish(ctx, facts, run, domain.RunFailed, fmt.Sprintf("node %q (%s) failed: %s", node.ID, node.Type, truncate(err.Error(), 300)))
 		}
 		if res.Wait {
@@ -421,6 +433,7 @@ func (e *Engine) drive(ctx context.Context, facts *ports.ConversationFacts, run 
 		if err := e.runs.AppendExecution(ctx, rec); err != nil {
 			return err
 		}
+		e.metrics.Node(node.Type, rec.Status, done.Sub(started))
 		for k, v := range res.SetVars {
 			run.Variables[k] = v
 		}
@@ -442,6 +455,7 @@ func (e *Engine) drive(ctx context.Context, facts *ports.ConversationFacts, run 
 			return e.runs.SaveRun(ctx, run)
 		case res.Handoff:
 			facts.AutomationMode = domain.AutomationWaitingHuman
+			e.metrics.Run("handoff")
 			run.Status = domain.RunWaitingHuman
 			run.CurrentNodeID = node.ID
 			run.UpdatedAt = done
@@ -502,6 +516,7 @@ func (e *Engine) finish(ctx context.Context, facts *ports.ConversationFacts, run
 	if err := e.runs.SaveRun(ctx, run); err != nil {
 		return err
 	}
+	e.metrics.Run(string(status))
 	if status != domain.RunCompleted {
 		e.logf("flows: run %s tenant=%s flow=%s conversation=%s ended %s: %s", run.ID, run.TenantID, run.FlowID, run.ConversationID, status, reason)
 	}

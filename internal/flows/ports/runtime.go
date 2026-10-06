@@ -91,3 +91,22 @@ type Effects interface {
 	Handoff(ctx context.Context, conversationID uuid.UUID, queueID *uuid.UUID) error
 	SendText(ctx context.Context, conversationID uuid.UUID, text, idempotencyKey string) (SendStatus, error)
 }
+
+// AIClassification is a SUGGESTION: the executor decides what to do with it (route or fall back).
+type AIClassification struct {
+	IntentID   string
+	Confidence float64
+}
+
+// AIGateway is what the AI nodes use. The real implementation sits on the platform's provider-neutral TextGenerator and the
+// AI usage ledger; the simulator supplies scenario-defined answers so a simulation never calls a model.
+type AIGateway interface {
+	Classify(ctx context.Context, conversationID uuid.UUID, text string, intents []domain.AIIntent) (AIClassification, error)
+	Extract(ctx context.Context, conversationID uuid.UUID, text string, fields []domain.AIField) (map[string]string, error)
+	Summarize(ctx context.Context, conversationID uuid.UUID, maxMessages int) (string, error)
+}
+
+// MessageSource gives the summarizer the contact's recent text messages (tenant session, RLS).
+type MessageSource interface {
+	RecentInboundTexts(ctx context.Context, conversationID uuid.UUID, limit int) ([]string, error)
+}

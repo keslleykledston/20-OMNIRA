@@ -250,5 +250,5 @@ func DataExecutors() []Executor {
 	return []Executor{resolveContactExec{}, resolveCustomerExec{}, customerChoiceExec{}, findOpenTicketsExec{}, createTicketExec{}, assignQueueExec{}, humanHandoffExec{}}
 }
 
-// AllExecutors is the full catalog; a test enforces parity with domain.Specs().
-func AllExecutors() []Executor { return append(PureExecutors(), DataExecutors()...) }
+// AllExecutors is the full catalog without an AI gateway (AI nodes take their error port); a test enforces parity with domain.Specs().
+func AllExecutors() []Executor { return AllExecutorsWith(nil) }

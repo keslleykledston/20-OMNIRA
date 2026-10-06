@@ -44,7 +44,45 @@ type Scenario struct {
 	OpenTickets       int          `json:"open_tickets,omitempty"`
 	OpenTicketSubject string       `json:"open_ticket_subject,omitempty"`
 	Now               *time.Time   `json:"now,omitempty"` // the clock (business hours); default: now
-	Events            []SimEvent   `json:"events,omitempty"`
+	// AI scripts what the AI nodes answer. A simulation NEVER calls a model (cost, privacy, determinism); without this block
+	// the AI nodes take their error port, exactly as in a tenant that has no AI configured.
+	AI     *SimAI     `json:"ai,omitempty"`
+	Events []SimEvent `json:"events,omitempty"`
+}
+
+// SimAI is the scripted answer of the AI nodes in a simulation.
+type SimAI struct {
+	Intent     string            `json:"intent,omitempty"`
+	Confidence float64           `json:"confidence,omitempty"`
+	Extract    map[string]string `json:"extract,omitempty"`
+	Summary    string            `json:"summary,omitempty"`
+	Fail       bool              `json:"fail,omitempty"` // the model errors/times out
+}
+
+type simAIGateway struct{ sc *SimAI }
+
+func (g simAIGateway) Classify(_ context.Context, _ uuid.UUID, _ string, intents []domain.AIIntent) (ports.AIClassification, error) {
+	if g.sc.Fail {
+		return ports.AIClassification{}, errors.New("simulated model failure")
+	}
+	for _, it := range intents {
+		if it.ID == g.sc.Intent {
+			return ports.AIClassification{IntentID: it.ID, Confidence: g.sc.Confidence}, nil
+		}
+	}
+	return ports.AIClassification{}, errors.New("the scripted intent is not one of the listed ones")
+}
+func (g simAIGateway) Extract(_ context.Context, _ uuid.UUID, _ string, _ []domain.AIField) (map[string]string, error) {
+	if g.sc.Fail {
+		return nil, errors.New("simulated model failure")
+	}
+	return g.sc.Extract, nil
+}
+func (g simAIGateway) Summarize(context.Context, uuid.UUID, int) (string, error) {
+	if g.sc.Fail {
+		return "", errors.New("simulated model failure")
+	}
+	return g.sc.Summary, nil
 }
 
 type SimStep struct {
@@ -120,6 +158,9 @@ func (sc *Scenario) normalize() error {
 	default:
 		return fmt.Errorf("%w: contact kind must be unclassified, customer or other", domain.ErrInvalid)
 	}
+	if sc.AI != nil && (sc.AI.Confidence < 0 || sc.AI.Confidence > 1 || len(sc.AI.Summary) > 4000) {
+		return fmt.Errorf("%w: ai.confidence must be between 0 and 1", domain.ErrInvalid)
+	}
 	switch sc.Provider {
 	case "", "waha", "meta_cloud":
 	default:
@@ -190,7 +231,11 @@ func (s *Simulator) run(ctx context.Context, in SimInput, sc Scenario, def *doma
 	for id, v := range in.Versions {
 		own[id] = v
 	}
-	eng := NewEngine(store, simVersions{own: own, fallback: s.fallback}, fx, AllExecutors()).
+	var aiGW ports.AIGateway
+	if sc.AI != nil {
+		aiGW = simAIGateway{sc: sc.AI}
+	}
+	eng := NewEngine(store, simVersions{own: own, fallback: s.fallback}, fx, AllExecutorsWith(aiGW)).
 		WithClock(func() time.Time { return clock }).WithLogger(func(string, ...any) {})
 
 	res := &SimResult{}

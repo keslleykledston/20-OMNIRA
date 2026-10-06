@@ -13,10 +13,10 @@ var builtinPaths = map[string]bool{
 	"customer.account_id": true, "customer.name": true, "customer.candidates_count": true,
 	"tickets.count": true, "tickets.first_id": true, "tickets.first_subject": true,
 	"conversation.id": true, "conversation.kind": true,
-	"message.text": true, "channel.provider": true,
+	"message.text": true, "channel.provider": true, "ai.intent": true, "ai.confidence": true,
 }
 
-var builtinRoots = map[string]bool{"contact": true, "customer": true, "tickets": true, "conversation": true, "message": true, "channel": true}
+var builtinRoots = map[string]bool{"contact": true, "customer": true, "tickets": true, "conversation": true, "message": true, "channel": true, "ai": true}
 
 func IsBuiltinPath(p string) bool     { return builtinPaths[p] }
 func IsReservedRoot(name string) bool { return builtinRoots[name] }

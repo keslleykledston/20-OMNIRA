@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,6 +15,8 @@ import (
 	"github.com/omnira/omnira/internal/flows/application"
 	"github.com/omnira/omnira/internal/flows/flowstest"
 	"github.com/omnira/omnira/internal/flows/templates"
+	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -34,7 +37,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := adapters.NewHandler(env.App, cp).WithTemplates(application.NewTemplateService(reg, repo, cp, repo, adapters.NewSavepointAtomic(env.App), nil))
+	h := adapters.NewHandler(env.App, cp).WithRuns(repo).WithTemplates(application.NewTemplateService(reg, repo, cp, repo, adapters.NewSavepointAtomic(env.App), nil))
 	mux := http.NewServeMux()
 	h.Routes(mux, func(fn http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +216,7 @@ func TestHTTPLiveValidationAndNodeCatalog(t *testing.T) {
 	}
 	code, cat := hn.call(env.UserA, env.TenantA, "GET", "/flow-node-types", nil)
 	items, _ := cat["items"].([]any)
-	if code != 200 || len(items) != 17 {
+	if code != 200 || len(items) != 20 {
 		t.Fatalf("catalog: %d %d", code, len(items))
 	}
 }
@@ -343,4 +346,116 @@ func TestHTTPTemplateLibraryAndPackInstall(t *testing.T) {
 		t.Fatalf("single template install: %d %v", code, res)
 	}
 	_ = one
+}
+
+// A real run produced through the production engine, then read back through the API.
+func TestHTTPRunsTimelineAndAnalytics(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	admin := env.UserA
+	supervisor := hn.member(env.TenantA, "tenant_supervisor")
+	agent := hn.member(env.TenantA, "tenant_agent")
+	repo := adapters.NewPostgresFlowRepository(env.App)
+	cp := application.NewControlPlane(repo, repo, nil)
+	effects := adapters.NewPostgresEffects(env.App, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(env.App)))
+	engine := application.NewEngine(repo, repo, effects, application.AllExecutors())
+	queue := uuid.New()
+	if _, err := env.Seed.Exec(context.Background(), `INSERT INTO queues(id, tenant_id, name) VALUES($1,$2,'q')`, queue, env.TenantA); err != nil {
+		t.Fatal(err)
+	}
+	line := uuid.New()
+	if _, err := env.Seed.Exec(context.Background(), `INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active','["text"]')`, line, env.TenantA, line.String()); err != nil {
+		t.Fatal(err)
+	}
+	def := fmt.Sprintf(`{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},{"id":"q","type":"ask","config":{"text":"Qual o token?","variable":"resposta"}},
+	  {"id":"h","type":"human_handoff","config":{"queue":%q,"summary":"cliente respondeu {{resposta}}"}},{"id":"t","type":"end"}],
+	  "edges":[{"id":"1","source":"start","sourcePort":"next","target":"q"},{"id":"2","source":"q","sourcePort":"next","target":"h"},{"id":"3","source":"q","sourcePort":"timeout","target":"t"}]}`, queue)
+	var flowID uuid.UUID
+	env.AsUser(t, env.TenantA, env.UserA, func(ctx context.Context) {
+		f, err := cp.Create(ctx, application.CreateInput{Slug: "obs", Name: "Obs"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := cp.SaveDraft(ctx, f.ID, f.DraftRevision, f.Name, "", json.RawMessage(def))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cp.Publish(ctx, f.ID, res.Flow.DraftRevision, ""); err != nil {
+			t.Fatal(err)
+		}
+		flowID = f.ID
+	})
+
+	analytics := func(user uuid.UUID, tenant uuid.UUID) (int, map[string]any) {
+		return hn.call(user, tenant, "GET", "/flows/"+flowID.String()+"/analytics", nil)
+	}
+	// No runs yet: every figure is zero and the average is null — nothing is estimated.
+	code, a := analytics(admin, env.TenantA)
+	if code != 200 || a["runs"].(float64) != 0 || a["avg_duration_ms"] != nil || a["human_handoffs"].(float64) != 0 {
+		t.Fatalf("empty analytics must be zeros: %d %v", code, a)
+	}
+
+	conv, _ := env.SeedConversation(t, env.TenantA, "bot")
+	_, _ = env.Seed.Exec(context.Background(), `UPDATE conversations SET channel_connection_id=$2 WHERE id=$1`, conv, line)
+	deliver := func(text string, isNew bool) {
+		msg := env.SeedInbound(t, env.TenantA, conv, text)
+		env.AsSystem(t, env.TenantA, func(ctx context.Context) {
+			if _, err := engine.OnInbound(ctx, application.InboundEvent{ConversationID: conv, MessageID: msg, NewConversation: isNew}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	deliver("oi", true)
+	deliver("Bearer abcdefghijklmnop1234", false)
+
+	// Permissions: flow_run.view is needed (agent has none); supervisor and admin read.
+	if code, _ := hn.call(agent, env.TenantA, "GET", "/flow-runs", nil); code != 403 {
+		t.Fatalf("an agent cannot read runs: %d", code)
+	}
+	code, list := hn.call(supervisor, env.TenantA, "GET", "/flow-runs?conversation_id="+conv.String(), nil)
+	runs, _ := list["items"].([]any)
+	if code != 200 || len(runs) != 1 {
+		t.Fatalf("run list: %d %v", code, list)
+	}
+	run := runs[0].(map[string]any)
+	if run["status"] != "waiting_human" || run["flow_slug"] != "obs" || run["flow_version"].(float64) != 1 {
+		t.Fatalf("run summary: %v", run)
+	}
+	code, d := hn.call(supervisor, env.TenantA, "GET", "/flow-runs/"+run["id"].(string), nil)
+	timeline, _ := d["timeline"].([]any)
+	if code != 200 || len(timeline) != 4 {
+		t.Fatalf("detail: %d timeline=%d %v", code, len(timeline), d)
+	}
+	raw, _ := json.Marshal(d)
+	if strings.Contains(string(raw), "abcdefghijklmnop1234") {
+		t.Fatalf("a secret leaked through the run API: %s", raw)
+	}
+	handoff, _ := d["handoff"].(map[string]any)
+	if handoff == nil || !strings.HasPrefix(fmt.Sprint(handoff["summary"]), "cliente respondeu") {
+		t.Fatalf("the operator context must be visible: %v", d["handoff"])
+	}
+	vars, _ := d["variables"].(map[string]any)
+	for k := range vars {
+		if strings.HasPrefix(k, "_") {
+			t.Fatalf("engine-private variable %q exposed", k)
+		}
+	}
+	// Measured analytics now: one run, one handoff.
+	code, a = analytics(supervisor, env.TenantA)
+	if code != 200 || a["runs"].(float64) != 1 || a["human_handoffs"].(float64) != 1 || a["by_status"].(map[string]any)["waiting_human"].(float64) != 1 {
+		t.Fatalf("analytics: %d %v", code, a)
+	}
+	// Tenant isolation: tenant B sees neither the run, nor the flow's analytics, nor the list entry.
+	if code, _ := hn.call(env.UserB, env.TenantB, "GET", "/flow-runs/"+run["id"].(string), nil); code != 404 {
+		t.Fatalf("another tenant's run: %d", code)
+	}
+	if code, _ := analytics(env.UserB, env.TenantB); code != 404 {
+		t.Fatalf("another tenant's analytics: %d", code)
+	}
+	if code, l := hn.call(env.UserB, env.TenantB, "GET", "/flow-runs", nil); code != 200 || len(l["items"].([]any)) != 0 {
+		t.Fatalf("tenant B list: %v", l)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "GET", "/flow-runs?flow_id=not-a-uuid", nil); code != 400 {
+		t.Fatalf("a bad filter is a 400: %d", code)
+	}
 }

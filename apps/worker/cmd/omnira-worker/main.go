@@ -18,8 +18,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
+	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
+	flowsports "github.com/omnira/omnira/internal/flows/ports"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
@@ -440,7 +442,27 @@ func main() {
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
 		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool)))
-		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects, flowsapplication.AllExecutors())
+		flowCounters := flowsapplication.NewCounters()
+		prevMetrics := hc.ExtraMetrics
+		hc.ExtraMetrics = func() string {
+			out := flowCounters.Render()
+			if prevMetrics != nil {
+				out = prevMetrics() + out
+			}
+			return out
+		}
+		// AI nodes (ADR-0019): only with OMNIRA_FLOWS_AI_ENABLED=true AND a ready platform model; otherwise they take their error port.
+		var flowAI flowsports.AIGateway
+		if cfg.FlowsAIEnabled && cfg.AIReady() {
+			gen, gerr := aiadapters.NewOpenAIGenerator(aiadapters.OpenAIConfig{APIKey: cfg.AIAPIKey, Model: cfg.AIModel, Timeout: time.Duration(cfg.AITimeoutSeconds) * time.Second})
+			if gerr != nil {
+				log.Printf("Flow AI nodes disabled: %v\n", gerr)
+			} else {
+				flowAI = flowsapplication.NewAIService(gen, aiusageadapters.NewPostgresLedger(dbPool), flowRepo, cfg.AIProvider, cfg.AIModel)
+				log.Printf("Flow AI nodes enabled (provider=%s)\n", cfg.AIProvider)
+			}
+		}
+		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects, flowsapplication.AllExecutorsWith(flowAI)).WithMetrics(flowCounters)
 		flowHandler, err := flowsworker.NewHandler(flowsworker.NewPostgresConversationRunner(dbPool), flowEngine)
 		if err != nil {
 			log.Fatalf("flows handler error: %v", err)
@@ -450,7 +472,7 @@ func main() {
 			log.Fatalf("failed to start flows consumer: %v", err)
 		}
 		defer flowConsumer.Stop()
-		go flowsworker.NewSweeper(dbPool, flowRepo, flowEngine).Run(workerCtx, 15*time.Second)
+		go flowsworker.NewSweeper(dbPool, flowRepo, flowEngine).WithMetrics(flowCounters).Run(workerCtx, 15*time.Second)
 		log.Printf("Flow Builder runtime started\n")
 	}
 

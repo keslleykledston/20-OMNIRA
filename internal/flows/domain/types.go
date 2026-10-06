@@ -120,5 +120,8 @@ const (
 	NodeAssignQueue        NodeType = "assign_queue"
 	NodeHumanHandoff       NodeType = "human_handoff"
 	NodeSubflow            NodeType = "subflow"
+	NodeAIClassify         NodeType = "ai_classify_intent"
+	NodeAIExtract          NodeType = "ai_extract"
+	NodeAISummarize        NodeType = "ai_summarize"
 	NodeEnd                NodeType = "end"
 )

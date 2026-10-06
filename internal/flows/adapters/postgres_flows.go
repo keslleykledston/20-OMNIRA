@@ -559,3 +559,31 @@ func NewSavepointAtomic(pool *pgxpool.Pool) SavepointAtomic { return SavepointAt
 func (a SavepointAtomic) Do(ctx context.Context, fn func(ctx context.Context) error) error {
 	return platformdb.WithSavepoint(ctx, a.pool, fn)
 }
+
+var _ ports.MessageSource = (*PostgresFlowRepository)(nil)
+
+// RecentInboundTexts returns the contact's most recent text messages, newest first.
+func (r *PostgresFlowRepository) RecentInboundTexts(ctx context.Context, conversationID uuid.UUID, limit int) ([]string, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 30 {
+		limit = 15
+	}
+	rows, err := r.q(ctx).Query(ctx, `SELECT body FROM messages WHERE tenant_id=$1 AND conversation_id=$2 AND direction='inbound' AND message_type='text' AND body <> ''
+		ORDER BY created_at DESC, id DESC LIMIT $3`, tenantID, conversationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var b string
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}

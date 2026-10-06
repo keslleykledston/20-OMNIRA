@@ -562,3 +562,45 @@ func TestSecretsNeverReachTheAuditTrail(t *testing.T) {
 		}
 	}
 }
+
+type countingMetrics struct {
+	runs   map[string]int
+	nodes  map[string]int
+	sweeps map[string]int
+}
+
+func (c *countingMetrics) Run(e string) { c.runs[e]++ }
+func (c *countingMetrics) Node(t domain.NodeType, s domain.NodeExecStatus, _ time.Duration) {
+	c.nodes[string(t)+"/"+string(s)]++
+}
+func (c *countingMetrics) Sweep(k string, n int) { c.sweeps[k] += n }
+
+func TestEngineReportsMetricsWithBoundedLabels(t *testing.T) {
+	w := newWorld(t, flowSpec{slug: "ask", def: askFlow})
+	m := &countingMetrics{runs: map[string]int{}, nodes: map[string]int{}, sweeps: map[string]int{}}
+	w.eng.WithMetrics(m)
+	_, first, _ := w.inbound("oi", true)
+	w.eng.OnInbound(w.ctx, InboundEvent{ConversationID: w.conv.ID, MessageID: first, NewConversation: true}) // redelivery
+	w.inbound("Carlos", false)
+	if m.runs["started"] != 1 || m.runs["completed"] != 1 || m.runs["duplicate"] != 1 {
+		t.Fatalf("run events: %v", m.runs)
+	}
+	if m.nodes["ask/waiting"] != 1 || m.nodes["ask/completed"] != 1 || m.nodes["trigger/completed"] != 1 || m.nodes["send_message/completed"] != 1 {
+		t.Fatalf("node events: %v", m.nodes)
+	}
+	// the rendered text never carries a tenant, flow, conversation or run id
+	c := NewCounters()
+	c.Run("started")
+	c.Node(domain.NodeAsk, domain.ExecCompleted, 3*time.Millisecond)
+	c.Sweep("timeout", 2)
+	c.Sweep("released", 0)
+	out := c.Render()
+	for _, want := range []string{`omnira_flow_runs_total{event="started"} 1`, `omnira_flow_node_executions_total{type="ask",status="completed"} 1`, `omnira_flow_sweeper_total{kind="timeout"} 2`, "omnira_flow_node_duration_ms_count 1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `kind="released"`) || strings.Contains(out, w.conv.ID.String()) {
+		t.Fatalf("zero counters and ids must not be rendered:\n%s", out)
+	}
+}

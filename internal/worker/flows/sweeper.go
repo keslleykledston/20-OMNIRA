@@ -27,11 +27,15 @@ type Sweeper struct {
 	engine *application.Engine
 	now    func() time.Time
 	logf   func(string, ...any)
+	m      application.Metrics
 }
 
 func NewSweeper(pool *pgxpool.Pool, repo *adapters.PostgresFlowRepository, engine *application.Engine) *Sweeper {
 	return &Sweeper{pool: pool, repo: repo, engine: engine, now: func() time.Time { return time.Now().UTC() }, logf: log.Printf}
 }
+
+// WithMetrics reports the sweeper's actions as counters.
+func (s *Sweeper) WithMetrics(m application.Metrics) *Sweeper { s.m = m; return s }
 
 func (s *Sweeper) WithClock(now func() time.Time) *Sweeper { s.now = now; return s }
 
@@ -90,6 +94,11 @@ func (s *Sweeper) Tick(ctx context.Context) SweepResult {
 		return err
 	}); err != nil {
 		s.logf("flows sweeper: cancelling runs of closed conversations: %v", err)
+	}
+	if s.m != nil {
+		s.m.Sweep("timeout", res.TimedOut)
+		s.m.Sweep("released", res.Released)
+		s.m.Sweep("cancelled", res.Cancelled)
 	}
 	return res
 }

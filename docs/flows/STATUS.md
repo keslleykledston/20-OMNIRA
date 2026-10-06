@@ -39,8 +39,10 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 | 4b | Integração: gancho no ingest, consumidor do worker, varredura de timeouts/encalhadas, compose | **feita** |
 | 5 | Simulador (spec FLOW.6) | **feita** |
 | 6 | Templates/Packs, instalador, packs Starter/K3G/ISP NOC + testes (spec FLOW.7–9) | **feita** |
-| 7 | Frontend em `web/` (não em `apps/web`) | pendente |
-| 8 | Nodes de IA, analytics/observabilidade, production gate, relatório final | pendente |
+| 7 | Runs, timeline, analytics e métricas (spec FLOW.11) | **feita** |
+| 8 | Nós de IA (spec FLOW.10) | **feita** |
+| 9 | Frontend em `web/` (builder visual, templates, packs, simulador, runs) | pendente |
+| 10 | Production gate, auditoria final e relatório | pendente |
 
 ## Evidências por fase
 **FLOW.1** (banco descartável, 84 migrations aplicadas do zero):
@@ -95,6 +97,20 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 - **Instalador (`TemplateService`) — só rascunhos, nunca publica:** valida **antes de qualquer escrita** que cada placeholder está mapeado e que a fila é **do tenant** (faltando, desconhecido, digitado errado ou de outro tenant = recusa, `400 missing_mappings` com as chaves); instala **dependências primeiro**; slug já usado vira cópia `-2` com **referências de subflow reescritas**; a recepção só vira *default* se o tenant não tem uma; grava proveniência (`source_template_*`) e histórico (`flow_template_installations`, `flow_pack_installations`) **sem vínculo operacional** com o template; roda em **savepoint** (a requisição faz commit mesmo em 4xx), então uma falha no meio **não deixa pack pela metade** (teste com falha simulada na 3ª instalação: nenhuma linha restou e a sessão continuou usável).
 - **Prova de ciclo completo em Postgres real:** instalar o Starter → publicar subflows e depois a recepção → o motor real atende uma conversa nova (nome, empresa, menu "3") → a conversa chega à **fila comercial que o administrador mapeou**, o bot só falou como sistema e **nenhuma empresa foi criada**.
 - API (6 rotas; `flow_template.view` para ver, `flow_template.install` para instalar; supervisor vê e não instala): catálogo com filtros, preview read-only da definição, preview de pack com mapeamentos agregados, instalação de template (com seus subflows) e de pack, recomendação por perfil (`recommended_for=isp` → Starter + ISP NOC). Contrato `flows-v1.yaml` com 20 operações (guarda de deriva passa).
+
+**Observabilidade (spec FLOW.11):**
+- `GET /flow-runs` (filtra por flow, conversa, status), `GET /flow-runs/{id}` (timeline por nó: porta, entrada/saída **já redigidas**, duração; contexto entregue ao operador no handoff) e `GET /flows/{id}/analytics?days=` (**só números medidos**: runs por status, concluídos, falhos, handoffs, duração média dos concluídos — `null` quando não há —, erros por nó e onde runs falhos/cancelados/expirados pararam; sem runs tudo é zero). Permissão `flow_run.view` (agent 403), tenant B recebe 404/lista vazia.
+- Métricas Prometheus no `/metrics` do worker (`omnira_flow_runs_total{event}`, `omnira_flow_node_executions_total{type,status}`, `omnira_flow_node_duration_ms`, `omnira_flow_sweeper_total{kind}`) com **rótulos limitados**: nunca tenant, flow, conversa ou run.
+- **Vazamento real achado e corrigido pelo teste de API:** `handoff.summary` interpolava o que o contato digitou (`"cliente respondeu Bearer abc…"`) e saía sem redação; além disso `Redact` só mascarava segredo no **início** da string. Agora mascara a credencial **dentro de qualquer texto** (só o token; a frase sobrevive) e o handoff também é redigido na saída. O validador continua só rejeitando segredo *embutido pelo autor* (texto livre pode citar a palavra "Bearer"). Nota de projeto: o `flow_runs.variables` guarda a resposta crua (o fluxo precisa dela para continuar); toda saída (API, timeline, simulador, logs) a redige.
+
+**Nós de IA (spec FLOW.10)** — `ai_classify_intent`, `ai_extract`, `ai_summarize`:
+- Regra de projeto: **a IA só sugere**. Severidade, fila e dados de ticket nunca vêm da IA: `create_ticket.priority` só aceita literal `low|medium|high|critical` (teste prova que `{{ai.intent}}` é recusado) e fila é recurso validado do tenant. O namespace `ai.*` é reservado.
+- Toda saída do modelo é **estritamente validada**: JSON extraído de prosa/cerca de código; intenção **fora da lista do autor é recusada** (mutação confirmada: remover a checagem derruba o teste); confiança limitada a [0,1]; campos extraídos só se pedidos **e** válidos pelo tipo (e-mail/telefone/número/booleano); resumo limitado a 1000 caracteres e redigido.
+- Instruções do servidor **fixas**; o texto do cliente viaja só como dado (`Input`), truncado a 2000 caracteres; teste de injeção de prompt confirma que o texto nunca chega às instruções.
+- Falhas viram **portas, não erro de run**: `low_confidence` (abaixo do limiar, padrão 0,7, ou mensagem vazia) e `error` (IA desligada, erro/timeout do provedor, resposta inválida, teto de 5 chamadas por run); o validador **obriga** ambas as portas a estarem ligadas, então todo flow com IA tem fallback determinístico. Com a IA desligada o comportamento é exatamente o fallback.
+- Usa o `TextGenerator` neutro e o ledger `aiusage` já existentes (cada chamada, com sucesso ou falha, vira uma linha; tokens medidos, custo desconhecido = `NULL`). Liga só com `OMNIRA_FLOWS_AI_ENABLED=true` **e** `OMNIRA_AI_*` pronto (padrão desligado).
+- O **simulador nunca chama modelo**: `scenario.ai` define a resposta (intenção/confiança/campos/resumo/falha); sem isso, as portas de erro (como num tenant sem IA).
+- Pendência honesta: `ai_agent` (agente autônomo com ferramentas) **não foi implementado** — fica como decisão futura (ADR própria): seria a primeira capacidade da IA com efeito, e exige modelo de permissões de ferramentas.
 
 ## Histórico de correções desta sessão (transparência)
 Um primeiro scaffold foi escrito sem compilar (módulo errado, RLS fora do padrão, `apps/web` duplicado) e suas mensagens de commit afirmavam testes que não foram rodados. Foi **revertido e descartado** (`feat/flow-builder-discarded-scaffold`, backup em `backup/flow-builder-before-rebuild-*` e em `git bundle` fora do repo). Tudo abaixo é refeito com compilação e testes reais.

@@ -227,6 +227,59 @@ paths:
         '200': { description: Node types, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/NodeType' } } } } } } }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}/analytics:
+    get:
+      operationId: getFlowAnalytics
+      tags: [Runs]
+      summary: Measured run statistics of a flow
+      description: |
+        Requires `flow_run.view`. Only measured numbers over the last `days` (default 7, max 90): runs by status, completed and
+        failed, human handoffs, average duration of completed runs (`null` when there is none), node errors and where
+        failed/cancelled/expired runs stopped. With no runs every figure is zero: nothing is estimated.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/FlowId' }
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 90 } }
+      responses:
+        '200': { description: Analytics, content: { application/json: { schema: { $ref: '#/components/schemas/FlowAnalytics' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-runs:
+    get:
+      operationId: listFlowRuns
+      tags: [Runs]
+      summary: Run history
+      description: Requires `flow_run.view`. Newest first; filter by `flow_id`, `conversation_id` or `status`. `limit` max 100.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: flow_id, in: query, schema: { type: string, format: uuid } }
+        - { name: conversation_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [running, waiting_input, waiting_human, completed, failed, cancelled, expired] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200': { description: Runs, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/RunSummary' } } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-runs/{run_id}:
+    get:
+      operationId: getFlowRun
+      tags: [Runs]
+      summary: One run with its execution timeline
+      description: |
+        Requires `flow_run.view`. The timeline lists every node step (port taken, redacted input/output, duration). Variables
+        hide engine-private state and secrets; `handoff` is the context the bot handed to the operator (summary, queue).
+        Another tenant's run is `404`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: run_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The run, content: { application/json: { schema: { $ref: '#/components/schemas/RunDetail' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/flow-templates:
     get:
       operationId: listFlowTemplates
@@ -343,7 +396,7 @@ components:
       type: object
       required: [error]
       properties:
-        error: { type: string, description: 'unauthorized, forbidden, not_found, slug_taken, revision_conflict, archived, invalid, invalid_body, not_publishable, missing_mappings, templates_unavailable, internal' }
+        error: { type: string, description: 'unauthorized, forbidden, not_found, slug_taken, revision_conflict, archived, invalid, invalid_body, not_publishable, missing_mappings, templates_unavailable, runs_unavailable, internal' }
         missing: { type: array, items: { type: string }, description: Placeholder keys still to map (missing_mappings) }
         detail: { type: string }
         issues: { type: array, items: { $ref: '#/components/schemas/Issue' } }
@@ -445,6 +498,7 @@ components:
         open_tickets: { type: integer }
         open_ticket_subject: { type: string }
         now: { type: string, format: date-time, description: The clock the flow sees (business hours) }
+        ai: { type: object, description: Scripted answer of the AI nodes (a simulation never calls a model; without it AI nodes take their error port), properties: { intent: { type: string }, confidence: { type: number, minimum: 0, maximum: 1 }, extract: { type: object, additionalProperties: { type: string } }, summary: { type: string }, fail: { type: boolean } } }
         events:
           type: array
           maxItems: 30
@@ -461,6 +515,43 @@ components:
         error: { type: string }
         events_consumed: { type: integer }
         waiting_at: { type: string }
+    RunSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        flow_id: { type: string, format: uuid }
+        flow_slug: { type: string }
+        flow_name: { type: string }
+        flow_version: { type: integer }
+        conversation_id: { type: string, format: uuid }
+        status: { type: string }
+        current_node_id: { type: string }
+        node_executions: { type: integer }
+        error: { type: string }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        duration_ms: { type: integer, nullable: true }
+    RunDetail:
+      allOf:
+        - { $ref: '#/components/schemas/RunSummary' }
+        - type: object
+          properties:
+            variables: { type: object }
+            handoff: { type: object, description: Context handed to the operator (summary, queue) }
+            timeline: { type: array, items: { type: object, properties: { seq: { type: integer }, node_id: { type: string }, node_type: { type: string }, status: { type: string }, port: { type: string }, input: { type: object }, output: { type: object }, error: { type: string }, started_at: { type: string, format: date-time }, duration_ms: { type: integer } } } }
+    FlowAnalytics:
+      type: object
+      properties:
+        since: { type: string, format: date-time }
+        days: { type: integer }
+        runs: { type: integer }
+        by_status: { type: object, additionalProperties: { type: integer } }
+        completed: { type: integer }
+        failed: { type: integer }
+        human_handoffs: { type: integer }
+        avg_duration_ms: { type: integer, nullable: true }
+        node_errors: { type: array, items: { type: object, properties: { node_id: { type: string }, node_type: { type: string }, count: { type: integer } } } }
+        drop_off_by_node: { type: array, items: { type: object, properties: { node_id: { type: string }, count: { type: integer } } } }
     MappingInfo:
       type: object
       properties: { key: { type: string, example: queue.technical }, kind: { type: string, enum: [queue] }, description: { type: string }, required: { type: boolean } }

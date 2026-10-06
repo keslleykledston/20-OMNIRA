@@ -14,6 +14,12 @@ Sweeper (15 s): timeouts vencidos | conversa retida sem run > 2 min | runs de co
 ```
 Garantias: o bot só fala se `automation_mode='bot'` **e** a conversa não tem responsável; qualquer fim sem handoff devolve a conversa às filas; falha do gate nunca perde mensagem.
 
+## Configuração
+| Variável | Padrão | Efeito |
+|---|---|---|
+| `OMNIRA_FLOWS_ENABLED` | `false` | API de controle, gate do ingest, consumidor, sweeper e métricas |
+| `OMNIRA_FLOWS_AI_ENABLED` | `false` | nós de IA chamam o modelo da plataforma (exige também `OMNIRA_AI_ENABLED` + `OMNIRA_AI_MODEL` + `OMNIRA_AI_API_KEY`); desligada, os nós seguem a porta `error` |
+
 ## Permissões (tabela `permissions`/`role_permissions`)
 | Chave | tenant_admin | tenant_supervisor | tenant_agent |
 |---|---|---|---|

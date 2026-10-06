@@ -47,6 +47,8 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_META_ENABLED: ${OMNIRA_META_ENABLED-false}
   # Flow Builder (ADR-0019): conversational flows API + runtime. Off by default; docs/flows/OPERATIONS.md.
   OMNIRA_FLOWS_ENABLED: ${OMNIRA_FLOWS_ENABLED-false}
+  # Flow AI nodes (classify/extract/summarize) also need OMNIRA_AI_ENABLED + a model; off by default (nodes take their error port).
+  OMNIRA_FLOWS_AI_ENABLED: ${OMNIRA_FLOWS_AI_ENABLED-false}
 
 services:
   postgres:

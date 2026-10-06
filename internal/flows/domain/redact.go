@@ -8,6 +8,10 @@ import (
 
 const redacted = "[redacted]"
 
+// secretInText finds a credential ANYWHERE inside a string (the validator's secretValue is anchored on purpose: author text may
+// mention the word "Bearer"). Redact masks just the credential, so "cliente respondeu Bearer abc…" keeps its meaning.
+var secretInText = regexp.MustCompile(`(?i)(\bbearer\s+[A-Za-z0-9._~+/=-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16})`)
+
 var secretValue = regexp.MustCompile(`(?i)(^bearer\s+\S{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16})`)
 
 var secretWords = []string{"password", "passwd", "secret", "token", "apikey", "authorization", "bearer", "privatekey", "credential", "cookie"}
@@ -52,9 +56,7 @@ func Redact(v any) any {
 		}
 		return out
 	case string:
-		if secretValue.MatchString(x) {
-			return redacted
-		}
+		x = secretInText.ReplaceAllString(x, redacted)
 		if len(x) > maxLoggedString {
 			return strings.ToValidUTF8(x[:maxLoggedString], "") + "…"
 		}
