@@ -111,14 +111,14 @@ type fakeEffects struct {
 func (f *fakeEffects) CustomerCandidates(context.Context, uuid.UUID) ([]ports.CustomerCandidate, error) {
 	return f.candidates, nil
 }
-func (f *fakeEffects) SetActiveCustomer(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
+func (f *fakeEffects) ValidateCustomer(_ context.Context, _ uuid.UUID, id uuid.UUID) error {
 	f.activeSet = append(f.activeSet, id)
 	return nil
 }
 func (f *fakeEffects) OpenTickets(context.Context, *ports.ConversationFacts) (ports.TicketSummary, error) {
 	return f.tickets, nil
 }
-func (f *fakeEffects) EnsureTicket(_ context.Context, _ uuid.UUID, subject, priority string) (uuid.UUID, bool, error) {
+func (f *fakeEffects) EnsureTicket(_ context.Context, _ uuid.UUID, subject, priority string, _ *uuid.UUID) (uuid.UUID, bool, error) {
 	if f.ensureErr != nil {
 		return uuid.Nil, false, f.ensureErr
 	}
@@ -471,7 +471,7 @@ func TestStartConditions(t *testing.T) {
 		"spam/other contact":    func(f *ports.ConversationFacts) { f.Kind = "external_other" },
 		"already assigned":      func(f *ports.ConversationFacts) { f.AssignedTo = ptr(uuid.New()) },
 		"closed":                func(f *ports.ConversationFacts) { f.Status = "closed" },
-		"identity conflict":     func(f *ports.ConversationFacts) { f.HasUnclassifiedParticipants = true },
+		"identity conflict":     func(f *ports.ConversationFacts) { f.IdentityConflict = true },
 		"no contact":            func(f *ports.ConversationFacts) { f.ContactID = nil },
 	} {
 		w := newWorld(t, flowSpec{slug: "greet", def: greetFlow})

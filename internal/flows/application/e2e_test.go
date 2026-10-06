@@ -109,13 +109,15 @@ func TestEndToEndLinkDownFlowOnRealEffects(t *testing.T) {
 	var status, mode, subject, priority string
 	var queue, account *uuid.UUID
 	_ = env.Seed.QueryRow(ctx, `SELECT status FROM flow_runs WHERE conversation_id=$1`, conv).Scan(&status)
-	_ = env.Seed.QueryRow(ctx, `SELECT automation_mode, queue_id, active_customer_account_id FROM conversations WHERE id=$1`, conv).Scan(&mode, &queue, &account)
-	_ = env.Seed.QueryRow(ctx, `SELECT subject, priority FROM tickets WHERE conversation_id=$1`, conv).Scan(&subject, &priority)
+	var ticketAccount *uuid.UUID
+	_ = env.Seed.QueryRow(ctx, `SELECT automation_mode, queue_id FROM conversations WHERE id=$1`, conv).Scan(&mode, &queue)
+	_ = env.Seed.QueryRow(ctx, `SELECT active_customer_account_id FROM flow_runs WHERE conversation_id=$1`, conv).Scan(&account)
+	_ = env.Seed.QueryRow(ctx, `SELECT subject, priority, customer_account_id FROM tickets WHERE conversation_id=$1`, conv).Scan(&subject, &priority, &ticketAccount)
 	if status != "waiting_human" || mode != "waiting_human" {
 		t.Fatalf("handoff state: run=%s mode=%s", status, mode)
 	}
-	if queue == nil || *queue != noc || account == nil || *account != acme {
-		t.Fatalf("routing/context: queue=%v account=%v", queue, account)
+	if queue == nil || *queue != noc || account == nil || *account != acme || ticketAccount == nil || *ticketAccount != acme {
+		t.Fatalf("routing/context: queue=%v run account=%v ticket account=%v (the company lives on the run and the ticket, not the conversation)", queue, account, ticketAccount)
 	}
 	if subject != "Link down - circuito POA-123 (ACME)" || priority != "high" || count(`SELECT count(*) FROM tickets WHERE conversation_id=$1`, conv) != 1 {
 		t.Fatalf("ticket: %q %q", subject, priority)

@@ -63,7 +63,7 @@ func (f *fx) link(tenant, contact, account uuid.UUID, primary bool) {
 	f.exec(`INSERT INTO contact_account_links(tenant_id, contact_id, account_id, source, is_primary) VALUES($1,$2,$3,'manual',$4)`, tenant, contact, account, primary)
 }
 
-func TestCustomerCandidatesAndActiveCustomerAreBoundToTheContact(t *testing.T) {
+func TestCustomerCandidatesAndCompanyValidationAreBoundToTheContact(t *testing.T) {
 	f := newFx(t)
 	env := f.env
 	convA, contactA := env.SeedConversation(t, env.TenantA, "bot")
@@ -78,18 +78,19 @@ func TestCustomerCandidatesAndActiveCustomerAreBoundToTheContact(t *testing.T) {
 		if err != nil || len(c) != 2 || c[0].AccountID != beta {
 			t.Fatalf("candidates (primary first): %v %v", c, err)
 		}
-		if err := f.effects.SetActiveCustomer(ctx, convA, acme); err != nil {
+		if err := f.effects.ValidateCustomer(ctx, convA, acme); err != nil {
 			t.Fatalf("a linked company can be selected: %v", err)
 		}
 	})
-	if n := f.count(`SELECT count(*) FROM conversations WHERE id=$1 AND active_customer_account_id=$2`, convA, acme); n != 1 {
-		t.Fatal("active company not persisted on the conversation")
+	// ADR-0017/0018: a conversation carries no company (it can have several subjects); validation writes nothing.
+	if n := f.count(`SELECT count(*) FROM information_schema.columns WHERE table_name='conversations' AND column_name LIKE '%account%'`); n != 0 {
+		t.Fatal("the conversation must not carry a company column")
 	}
 	// A company the contact is not linked to (another contact's, another tenant's) can never be set.
 	for name, bad := range map[string]uuid.UUID{"another contact's company": f.accountOf(otherContact), "another tenant's company": foreign, "unknown id": uuid.New()} {
 		f.sys(env.TenantA, func(ctx context.Context) {})
 		err := platformdbSession(context.Background(), env, func(sc context.Context) error {
-			return f.effects.SetActiveCustomer(withTenant(sc, env.TenantA, uuid.Nil), convA, bad)
+			return f.effects.ValidateCustomer(withTenant(sc, env.TenantA, uuid.Nil), convA, bad)
 		})
 		if err == nil {
 			t.Errorf("%s was accepted", name)
@@ -125,12 +126,12 @@ func TestEnsureTicketAdoptsThePlaceholderOnceAndNeverOverwritesARealTicket(t *te
 	f.exec(`INSERT INTO tickets(tenant_id, conversation_id) VALUES($1,$2)`, env.TenantA, conv) // the ingest's placeholder (empty subject)
 	var first uuid.UUID
 	f.sys(env.TenantA, func(ctx context.Context) {
-		id, created, err := f.effects.EnsureTicket(ctx, conv, "VPN caiu", "high")
+		id, created, err := f.effects.EnsureTicket(ctx, conv, "VPN caiu", "high", nil)
 		if err != nil || !created {
 			t.Fatalf("adopt: %v %v", created, err)
 		}
 		first = id
-		id2, created2, err := f.effects.EnsureTicket(ctx, conv, "Outro assunto", "low")
+		id2, created2, err := f.effects.EnsureTicket(ctx, conv, "Outro assunto", "low", nil)
 		if err != nil || created2 || id2 != first {
 			t.Fatalf("second call must be a no-op on the same ticket: %v %v %v", id2, created2, err)
 		}
@@ -144,7 +145,7 @@ func TestEnsureTicketAdoptsThePlaceholderOnceAndNeverOverwritesARealTicket(t *te
 	conv2, _ := env.SeedConversation(t, env.TenantA, "bot")
 	f.exec(`INSERT INTO tickets(tenant_id, conversation_id, subject, provider, external_ticket_id) VALUES($1,$2,'ERP subject','k3g','ERP-1')`, env.TenantA, conv2)
 	f.sys(env.TenantA, func(ctx context.Context) {
-		if _, created, err := f.effects.EnsureTicket(ctx, conv2, "bot subject", "low"); err != nil || created {
+		if _, created, err := f.effects.EnsureTicket(ctx, conv2, "bot subject", "low", nil); err != nil || created {
 			t.Fatalf("an ERP ticket must be left alone: %v %v", created, err)
 		}
 	})
@@ -154,7 +155,7 @@ func TestEnsureTicketAdoptsThePlaceholderOnceAndNeverOverwritesARealTicket(t *te
 	// No ticket yet: one is created (the ingest normally made the placeholder, but a flow must not depend on it).
 	conv3, _ := env.SeedConversation(t, env.TenantA, "bot")
 	f.sys(env.TenantA, func(ctx context.Context) {
-		if _, created, err := f.effects.EnsureTicket(ctx, conv3, "novo", "medium"); err != nil || !created {
+		if _, created, err := f.effects.EnsureTicket(ctx, conv3, "novo", "medium", nil); err != nil || !created {
 			t.Fatalf("create: %v %v", created, err)
 		}
 	})

@@ -81,6 +81,12 @@ func main() {
 	srv := httpserver.New(cfg.HTTPAddr)
 	// ADR-0018 switches (classification, accounts, verified internal identities, conversation kind): read once.
 	identityFlags := identityapp.FlagsFromEnv(nil)
+	// Flow Builder (ADR-0019): nil unless OMNIRA_FLOWS_ENABLED=true, in which case ingestion lets a published flow take new
+	// conversations. A nil gate leaves the inbound pipeline exactly as it was.
+	var flowGate *flowsadapters.Gate
+	if cfg.FlowsEnabled {
+		flowGate = flowsadapters.NewGate(dbPool, flowsadapters.NewPostgresFlowRepository(dbPool))
+	}
 	srv.SetupHealth(dbPool, nc)
 
 	// Valkey (presence, IAM4.2-A): optional at boot like NATS above — a
@@ -204,6 +210,9 @@ func main() {
 			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
 			// ADR-0018: only VERIFIED internal identities make a sender "staff" (nothing matches until one is verified).
 			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)
+		if flowGate != nil {
+			inboundService.WithFlows(flowGate)
+		}
 
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).
@@ -268,6 +277,9 @@ func main() {
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
 			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
 			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)
+		if flowGate != nil {
+			inboundService.WithFlows(flowGate)
+		}
 
 		srv.RegisterMetaWebhook(metachannel.Handler{
 			Resolver: channeladapters.NewMetaWebhookConnectionResolver(dbPool, connectionRepo),

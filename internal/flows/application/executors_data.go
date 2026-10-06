@@ -75,7 +75,7 @@ func (resolveCustomerExec) Execute(in StepInput) (StepResult, error) {
 		return StepResult{Port: "none", Reserved: map[string]any{"customer": customerVar(nil, "", 0)}, Output: map[string]any{"candidates": 0}}, nil
 	case 1:
 		c := cands[0]
-		if err := in.Effects.SetActiveCustomer(in.Ctx, in.Facts.ID, c.AccountID); err != nil {
+		if err := in.Effects.ValidateCustomer(in.Ctx, in.Facts.ID, c.AccountID); err != nil {
 			return StepResult{}, err
 		}
 		id := c.AccountID
@@ -137,7 +137,7 @@ func (customerChoiceExec) Execute(in StepInput) (StepResult, error) {
 		if perr != nil {
 			return StepResult{}, perr
 		}
-		if err := in.Effects.SetActiveCustomer(in.Ctx, in.Facts.ID, id); err != nil {
+		if err := in.Effects.ValidateCustomer(in.Ctx, in.Facts.ID, id); err != nil {
 			return StepResult{}, err
 		}
 		return StepResult{Port: "selected", ActiveCustomer: &id, Reserved: map[string]any{"customer": customerVar(&id, opts[i].Label, len(opts)), "_candidates": nil},
@@ -190,7 +190,7 @@ func (createTicketExec) Execute(in StepInput) (StepResult, error) {
 	if len([]rune(subject)) > 200 {
 		subject = string([]rune(subject)[:200])
 	}
-	id, created, err := in.Effects.EnsureTicket(in.Ctx, in.Facts.ID, subject, priority)
+	id, created, err := in.Effects.EnsureTicket(in.Ctx, in.Facts.ID, subject, priority, in.Facts.ActiveCustomerAccountID)
 	if err != nil {
 		return routeError(in, err)
 	}

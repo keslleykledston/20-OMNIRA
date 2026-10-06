@@ -18,6 +18,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
+	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
+	flowsapplication "github.com/omnira/omnira/internal/flows/application"
+	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapp "github.com/omnira/omnira/internal/channels/application"
 	"github.com/omnira/omnira/internal/channels/domain"
@@ -43,6 +47,7 @@ import (
 	"github.com/omnira/omnira/internal/worker/jobsstream"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	"github.com/omnira/omnira/internal/worker/realtime"
+	flowsworker "github.com/omnira/omnira/internal/worker/flows"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
 	"github.com/redis/go-redis/v9"
 )
@@ -428,6 +433,25 @@ func main() {
 		}
 		defer intelligenceConsumer.Stop()
 		log.Printf("Conversation Intelligence pipeline started (auto routing=%v)\n", intelligenceFlags.TopicAutoRoutingEnabled)
+	}
+
+	// Flow Builder runtime (ADR-0019), only when OMNIRA_FLOWS_ENABLED=true: the inbound-message consumer and the sweeper for
+	// timeouts, stranded conversations and runs of closed conversations.
+	if cfg.FlowsEnabled {
+		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
+		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool)))
+		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects, flowsapplication.AllExecutors())
+		flowHandler, err := flowsworker.NewHandler(flowsworker.NewPostgresConversationRunner(dbPool), flowEngine)
+		if err != nil {
+			log.Fatalf("flows handler error: %v", err)
+		}
+		flowConsumer, err := flowsworker.StartConsumer(workerCtx, js, flowHandler)
+		if err != nil {
+			log.Fatalf("failed to start flows consumer: %v", err)
+		}
+		defer flowConsumer.Stop()
+		go flowsworker.NewSweeper(dbPool, flowRepo, flowEngine).Run(workerCtx, 15*time.Second)
+		log.Printf("Flow Builder runtime started\n")
 	}
 
 	log.Printf("Worker starting (env: %s)\n", cfg.Env)

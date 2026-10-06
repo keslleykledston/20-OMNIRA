@@ -61,11 +61,11 @@ func (f *RecordingEffects) SentTexts() []string {
 func (f *RecordingEffects) CustomerCandidates(context.Context, uuid.UUID) ([]ports.CustomerCandidate, error) {
 	return nil, nil
 }
-func (f *RecordingEffects) SetActiveCustomer(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (f *RecordingEffects) ValidateCustomer(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (f *RecordingEffects) OpenTickets(context.Context, *ports.ConversationFacts) (ports.TicketSummary, error) {
 	return ports.TicketSummary{}, nil
 }
-func (f *RecordingEffects) EnsureTicket(context.Context, uuid.UUID, string, string) (uuid.UUID, bool, error) {
+func (f *RecordingEffects) EnsureTicket(context.Context, uuid.UUID, string, string, *uuid.UUID) (uuid.UUID, bool, error) {
 	return uuid.New(), true, nil
 }
 func (f *RecordingEffects) AssignQueue(_ context.Context, _ uuid.UUID, q *uuid.UUID) error {

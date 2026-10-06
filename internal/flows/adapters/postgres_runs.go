@@ -28,16 +28,18 @@ func (r *PostgresFlowRepository) LoadConversation(ctx context.Context, id uuid.U
 	var mode string
 	err = r.q(ctx).QueryRow(ctx, `
 		SELECT c.id, c.tenant_id, c.conversation_kind, c.status, c.automation_mode, c.assigned_to_user_id, c.queue_id,
-		       c.channel_connection_id, COALESCE(cc.provider, ''), c.has_unclassified_participants, c.contact_id,
+		       c.channel_connection_id, COALESCE(cc.provider, ''),
+		       EXISTS (SELECT 1 FROM identity_resolution_conflicts ic WHERE ic.tenant_id = c.tenant_id AND ic.contact_id = c.contact_id AND ic.status = 'open'), c.contact_id,
 		       COALESCE(NULLIF(ct.alias, ''), NULLIF(ct.whatsapp_name, ''), ct.display_name, ''), COALESCE(ct.phone_e164, ''),
-		       COALESCE(ct.kind, ''), c.active_customer_account_id
+		       COALESCE(ct.kind, ''),
+		       (SELECT r.active_customer_account_id FROM flow_runs r WHERE r.tenant_id = c.tenant_id AND r.conversation_id = c.id AND r.active_customer_account_id IS NOT NULL ORDER BY r.started_at DESC LIMIT 1)
 		FROM conversations c
 		LEFT JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.channel_connection_id
 		LEFT JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
 		WHERE c.tenant_id = $1 AND c.id = $2
 		FOR UPDATE OF c`, tenantID, id).
 		Scan(&f.ID, &f.TenantID, &f.Kind, &f.Status, &mode, &f.AssignedTo, &f.QueueID, &f.ConnectionID, &f.Provider,
-			&f.HasUnclassifiedParticipants, &f.ContactID, &f.ContactName, &f.ContactPhone, &f.ContactKind, &f.ActiveCustomerAccountID)
+			&f.IdentityConflict, &f.ContactID, &f.ContactName, &f.ContactPhone, &f.ContactKind, &f.ActiveCustomerAccountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -284,4 +286,46 @@ func (r *PostgresFlowRepository) DueRuns(ctx context.Context, now time.Time, lim
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// StrandedConversation is a conversation the bot holds although no run exists for it.
+type StrandedConversation struct {
+	TenantID       uuid.UUID
+	ConversationID uuid.UUID
+}
+
+// StrandedConversations lists bot-held conversations without an active run that were last touched before cutoff
+// (system-admin session; each is then released in its own tenant session).
+func (r *PostgresFlowRepository) StrandedConversations(ctx context.Context, cutoff time.Time, limit int) ([]StrandedConversation, error) {
+	rows, err := r.q(ctx).Query(ctx, `
+		SELECT c.tenant_id, c.id FROM conversations c
+		WHERE c.automation_mode = 'bot' AND c.updated_at < $1
+		  AND NOT EXISTS (SELECT 1 FROM flow_runs r WHERE r.tenant_id = c.tenant_id AND r.conversation_id = c.id AND r.status IN ('running','waiting_input','waiting_human'))
+		ORDER BY c.updated_at LIMIT $2`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []StrandedConversation
+	for rows.Next() {
+		var s StrandedConversation
+		if err := rows.Scan(&s.TenantID, &s.ConversationID); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// CancelRunsOfClosedConversations frees the one-active-run slot of conversations closed while a run waited.
+func (r *PostgresFlowRepository) CancelRunsOfClosedConversations(ctx context.Context) (int64, error) {
+	tag, err := r.q(ctx).Exec(ctx, `
+		UPDATE flow_runs r SET status = 'cancelled', error = 'conversation closed', completed_at = now(), updated_at = now(), wait_until = NULL
+		FROM conversations c
+		WHERE c.tenant_id = r.tenant_id AND c.id = r.conversation_id AND c.status = 'closed'
+		  AND r.status IN ('running','waiting_input','waiting_human')`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

@@ -82,24 +82,24 @@ func (e *PostgresEffects) CustomerCandidates(ctx context.Context, contactID uuid
 	return out, rows.Err()
 }
 
-// SetActiveCustomer records the company a conversation is about. It only succeeds when the conversation's own contact has
-// an ACTIVE link to that account: a forged or stale id (another contact's company, another tenant's) matches nothing.
-func (e *PostgresEffects) SetActiveCustomer(ctx context.Context, conversationID, accountID uuid.UUID) error {
+// ValidateCustomer succeeds only when the conversation's own contact has an ACTIVE link to that active account: a forged or
+// stale id (another contact's company, another tenant's) matches nothing. It writes nothing; the engine records the choice on
+// the run and the ticket carries it (a conversation has no company column: ADR-0017/0018).
+func (e *PostgresEffects) ValidateCustomer(ctx context.Context, conversationID, accountID uuid.UUID) error {
 	tenantID, err := tenantOf(ctx)
 	if err != nil {
 		return err
 	}
-	tag, err := e.q(ctx).Exec(ctx, `
-		UPDATE conversations c SET active_customer_account_id = $3, updated_at = now()
-		WHERE c.tenant_id = $1 AND c.id = $2
-		  AND EXISTS (SELECT 1 FROM contact_account_links l
-		              JOIN customer_accounts a ON a.tenant_id = l.tenant_id AND a.id = l.account_id
-		              WHERE l.tenant_id = c.tenant_id AND l.contact_id = c.contact_id AND l.account_id = $3
-		                AND l.status = 'active' AND a.status = 'active')`, tenantID, conversationID, accountID)
+	var ok bool
+	err = e.q(ctx).QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM conversations c
+		  JOIN contact_account_links l ON l.tenant_id = c.tenant_id AND l.contact_id = c.contact_id AND l.account_id = $3 AND l.status = 'active'
+		  JOIN customer_accounts a ON a.tenant_id = l.tenant_id AND a.id = l.account_id AND a.status = 'active'
+		  WHERE c.tenant_id = $1 AND c.id = $2)`, tenantID, conversationID, accountID).Scan(&ok)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if !ok {
 		return fmt.Errorf("account %s is not an active company of this conversation's contact", accountID)
 	}
 	return nil
@@ -136,7 +136,7 @@ func (e *PostgresEffects) OpenTickets(ctx context.Context, f *ports.Conversation
 // EnsureTicket makes the conversation's ticket real. It is idempotent: the conversation has at most one active ticket
 // (tickets_active_conversation_uq); a placeholder is adopted (subject/priority/company set), a ticket that is already real
 // is left exactly as it is (a flow never overwrites an operator's or the ERP's ticket), and a missing one is created.
-func (e *PostgresEffects) EnsureTicket(ctx context.Context, conversationID uuid.UUID, subject, priority string) (uuid.UUID, bool, error) {
+func (e *PostgresEffects) EnsureTicket(ctx context.Context, conversationID uuid.UUID, subject, priority string, customerAccountID *uuid.UUID) (uuid.UUID, bool, error) {
 	tenantID, err := tenantOf(ctx)
 	if err != nil {
 		return uuid.Nil, false, err
@@ -152,17 +152,16 @@ func (e *PostgresEffects) EnsureTicket(ctx context.Context, conversationID uuid.
 		if external != nil || strings.TrimSpace(cur) != "" {
 			return id, false, nil
 		}
-		_, err = q.Exec(ctx, `UPDATE tickets SET subject=$3, priority=$4, updated_at=now(),
-			customer_account_id = COALESCE(customer_account_id, (SELECT active_customer_account_id FROM conversations WHERE tenant_id=$1 AND id=$2))
-			WHERE tenant_id=$1 AND id=$5`, tenantID, conversationID, subject, priority, id)
+		_, err = q.Exec(ctx, `UPDATE tickets SET subject=$3, priority=$4, updated_at=now(), customer_account_id = COALESCE(customer_account_id, $5)
+			WHERE tenant_id=$1 AND id=$2`, tenantID, id, subject, priority, customerAccountID)
 		return id, err == nil, err
 	case !errors.Is(err, pgx.ErrNoRows):
 		return uuid.Nil, false, err
 	}
 	id = uuid.New()
 	_, err = q.Exec(ctx, `INSERT INTO tickets (id, tenant_id, conversation_id, subject, priority, customer_account_id)
-		SELECT $1, c.tenant_id, c.id, $3, $4, c.active_customer_account_id FROM conversations c WHERE c.tenant_id=$2 AND c.id=$5`,
-		id, tenantID, subject, priority, conversationID)
+		SELECT $1, c.tenant_id, c.id, $3, $4, $6 FROM conversations c WHERE c.tenant_id=$2 AND c.id=$5`,
+		id, tenantID, subject, priority, conversationID, customerAccountID)
 	if err != nil {
 		return uuid.Nil, false, err
 	}

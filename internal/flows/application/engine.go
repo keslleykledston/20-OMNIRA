@@ -123,8 +123,12 @@ func controls(f *ports.ConversationFacts) bool {
 	return f.Status == "open" && f.AutomationMode == domain.AutomationBot && f.AssignedTo == nil
 }
 
-func startable(f *ports.ConversationFacts) bool {
-	if f.Status != "open" || f.AssignedTo != nil || f.ContactID == nil || f.HasUnclassifiedParticipants {
+// Startable reports whether a conversation may be taken by a flow at all: an open conversation with an external contact
+// (customer service or not yet classified: an unknown contact is served, it is not "new customer"), nobody assigned, and no
+// open identity conflict. The ingest's gate and the engine use the
+// same rule so what is held is exactly what can start.
+func Startable(f *ports.ConversationFacts) bool {
+	if f.Status != "open" || f.AssignedTo != nil || f.ContactID == nil || f.IdentityConflict {
 		return false
 	}
 	return f.Kind == "customer_service" || f.Kind == "unclassified"
@@ -168,7 +172,7 @@ func (e *Engine) OnInbound(ctx context.Context, ev InboundEvent) (Outcome, error
 		return OutcomeIgnored, err
 	}
 
-	if !startable(facts) {
+	if !Startable(facts) {
 		return OutcomeIgnored, nil
 	}
 	flow, err := e.pickFlow(ctx, facts)
@@ -210,21 +214,54 @@ func (e *Engine) OnTimeout(ctx context.Context, runID uuid.UUID) (Outcome, error
 	return OutcomeTimedOut, e.resume(ctx, facts, run, nil, true, run.LastEventID)
 }
 
+// PickFlow chooses the first candidate (already ordered: specific by priority, defaults last) whose channel filter matches
+// the conversation's line.
+func PickFlow(flows []*domain.Flow, facts *ports.ConversationFacts) *domain.Flow {
+	var conn uuid.UUID
+	if facts.ConnectionID != nil {
+		conn = *facts.ConnectionID
+	}
+	for _, f := range flows {
+		if f.ActiveVersionID != nil && f.TriggerFilter.Matches(conn, facts.Provider) {
+			return f
+		}
+	}
+	return nil
+}
+
 func (e *Engine) pickFlow(ctx context.Context, facts *ports.ConversationFacts) (*domain.Flow, error) {
 	flows, err := e.runs.CandidateFlows(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range flows {
-		var conn uuid.UUID
-		if facts.ConnectionID != nil {
-			conn = *facts.ConnectionID
-		}
-		if f.ActiveVersionID != nil && f.TriggerFilter.Matches(conn, facts.Provider) {
-			return f, nil
-		}
+	return PickFlow(flows, facts), nil
+}
+
+// ReleaseStranded gives a conversation back to the normal queue flow when the bot holds it but no run exists any more
+// (the start failed permanently, the flow vanished...). A bot hold must never outlive its run.
+func (e *Engine) ReleaseStranded(ctx context.Context, conversationID uuid.UUID) error {
+	if _, err := systemTenant(ctx); err != nil {
+		return err
 	}
-	return nil, nil
+	facts, err := e.runs.LoadConversation(ctx, conversationID) // row lock
+	if err != nil {
+		return err
+	}
+	if facts.AutomationMode != domain.AutomationBot {
+		return nil
+	}
+	if _, err := e.runs.ActiveRun(ctx, conversationID); err == nil {
+		return nil // a run exists: it owns the hold
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+	if err := e.runs.SetAutomationMode(ctx, conversationID, domain.AutomationNone); err != nil {
+		return err
+	}
+	if facts.QueueID == nil && facts.AssignedTo == nil {
+		return e.effects.AssignQueue(ctx, conversationID, nil)
+	}
+	return nil
 }
 
 func (e *Engine) loadDefinition(ctx context.Context, versionID uuid.UUID) (*domain.FlowVersion, *domain.Definition, error) {
