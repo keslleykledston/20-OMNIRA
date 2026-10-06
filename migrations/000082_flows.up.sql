@@ -104,6 +104,7 @@ CREATE TABLE flow_runs (
 CREATE UNIQUE INDEX flow_runs_one_active_per_conversation_uq ON flow_runs(tenant_id, conversation_id)
   WHERE status IN ('running','waiting_input','waiting_human');
 CREATE INDEX flow_runs_due_idx ON flow_runs(wait_until) WHERE status = 'waiting_input' AND wait_until IS NOT NULL;
+CREATE INDEX flow_runs_last_event_idx ON flow_runs(tenant_id, last_event_id) WHERE last_event_id IS NOT NULL;
 CREATE INDEX flow_runs_flow_idx ON flow_runs(tenant_id, flow_id, started_at DESC);
 CREATE INDEX flow_runs_conversation_idx ON flow_runs(tenant_id, conversation_id, started_at DESC);
 
