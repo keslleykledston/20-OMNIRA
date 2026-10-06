@@ -68,7 +68,11 @@ func TestExpiresAt(t *testing.T) {
 	diff := expiry.Sub(now)
 
 	// Deve ser ~72h no futuro (±10 minutos de tolerância)
-	if diff < 71*time.Hour*60 || diff > 73*time.Hour {
-		t.Errorf("ExpiresAt() = %v ago, want ~72h in future", diff)
+	const tolerance = 10 * time.Minute
+	minExpected := 72*time.Hour - tolerance
+	maxExpected := 72*time.Hour + tolerance
+
+	if diff < minExpected || diff > maxExpected {
+		t.Errorf("ExpiresAt() diff = %v, want ~72h (between %v and %v)", diff, minExpected, maxExpected)
 	}
 }
