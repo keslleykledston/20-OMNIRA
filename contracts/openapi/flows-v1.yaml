@@ -1,0 +1,358 @@
+openapi: 3.0.3
+info:
+  title: OMNIRA Flow Builder API
+  version: 0.1.0
+  description: |
+    Control plane of the Visual Flow Builder (ADR-0019). Available only when `OMNIRA_FLOWS_ENABLED=true`.
+    Kept as its own contract so the module can ship without touching `omnira-v1.yaml`; a drift test
+    (`internal/flows/adapters/contract_test.go`) fails the build when this file and the routes diverge.
+    Authentication is the session cookie; the tenant comes from the URL and is re-checked against the session's
+    memberships. Authorization is by permission key (never role name). A flow is never executed from the API:
+    only published, immutable versions run, and only in the runtime.
+servers:
+  - url: /api/v1
+paths:
+  /tenants/{tenant_id}/flows:
+    get:
+      operationId: listFlows
+      tags: [Flows]
+      summary: List flows
+      description: Requires `flow.view`. Newest first. `limit` max 100.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: status, in: query, schema: { type: string, enum: [draft, published, archived] } }
+        - { name: type, in: query, schema: { $ref: '#/components/schemas/FlowType' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200': { description: Flows, content: { application/json: { schema: { $ref: '#/components/schemas/FlowList' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createFlow
+      tags: [Flows]
+      summary: Create a flow (draft only)
+      description: Requires `flow.create`. The flow starts as an empty draft; audited as `flow.created`.
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateFlowRequest' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Flow' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { description: Slug already used in this tenant, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  /tenants/{tenant_id}/flows/validate:
+    post:
+      operationId: validateDefinition
+      tags: [Flows]
+      summary: Validate an unsaved definition (live validation while editing)
+      description: Requires `flow.edit`. Nothing is stored. Errors block publishing; warnings do not.
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [definition], properties: { definition: { $ref: '#/components/schemas/Definition' } } } } }
+      responses:
+        '200': { description: Validation result, content: { application/json: { schema: { $ref: '#/components/schemas/ValidationResult' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}:
+    get:
+      operationId: getFlow
+      tags: [Flows]
+      summary: Get a flow with its draft definition
+      description: Requires `flow.view`. Another tenant's flow is `404`, never `403`.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      responses:
+        '200': { description: The flow, content: { application/json: { schema: { $ref: '#/components/schemas/FlowDetail' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}/draft:
+    put:
+      operationId: saveFlowDraft
+      tags: [Flows]
+      summary: Save the draft (optimistic)
+      description: |
+        Requires `flow.edit`. `revision` must equal the revision the client read, otherwise `409 revision_conflict`.
+        The definition must parse (known fields, size limits) but may still have semantic errors; they are returned as
+        `issues`. Audited as `flow.draft_saved`.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SaveDraftRequest' } } }
+      responses:
+        '200': { description: Saved, content: { application/json: { schema: { $ref: '#/components/schemas/SaveDraftResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { description: Stale revision or archived flow, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  /tenants/{tenant_id}/flows/{flow_id}/validate:
+    post:
+      operationId: validateStoredFlow
+      tags: [Flows]
+      summary: Validate the stored draft
+      description: Requires `flow.view`. Also checks that queues/lines referenced belong to this tenant and that subflows are published.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      responses:
+        '200': { description: Validation result, content: { application/json: { schema: { $ref: '#/components/schemas/ValidationResult' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}/settings:
+    patch:
+      operationId: updateFlowSettings
+      tags: [Flows]
+      summary: Edit resolver settings (priority, default, channel lines, restart policy)
+      description: Requires `flow.edit`. Channel lines in `trigger_filter` must belong to the tenant. Audited as `flow.settings_updated`.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FlowSettings' } } }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Flow' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}/publish:
+    post:
+      operationId: publishFlow
+      tags: [Flows]
+      summary: Publish the draft as a new immutable version
+      description: |
+        Requires `flow.publish` (distinct from `flow.edit`). Validates the draft at `revision`, pins subflows to their
+        active versions and snapshots it atomically; the new version becomes the active one for NEW runs only. An unchanged
+        draft re-activates the latest version instead of creating a duplicate. `422` carries the blocking `issues`.
+        Audited as `flow.published`.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [revision], properties: { revision: { type: integer }, note: { type: string, maxLength: 500 } } } } }
+      responses:
+        '201': { description: Published, content: { application/json: { schema: { type: object, properties: { version: { $ref: '#/components/schemas/FlowVersion' }, warnings: { type: array, items: { $ref: '#/components/schemas/Issue' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { description: Stale revision or archived flow, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '422': { description: Blocking errors in the definition, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  /tenants/{tenant_id}/flows/{flow_id}/versions:
+    get:
+      operationId: listFlowVersions
+      tags: [Flows]
+      summary: Version history, newest first
+      description: Requires `flow.view`.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      responses:
+        '200': { description: Versions, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/FlowVersion' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}/versions/{version}:
+    get:
+      operationId: getFlowVersion
+      tags: [Flows]
+      summary: One immutable version with its definition
+      description: Requires `flow.view`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/FlowId' }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200': { description: The version, content: { application/json: { schema: { $ref: '#/components/schemas/FlowVersion' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}/versions/{version}/activate:
+    post:
+      operationId: activateFlowVersion
+      tags: [Flows]
+      summary: Roll back (or forward) the active version
+      description: |
+        Requires `flow.publish`. Only moves the pointer used by NEW runs; version contents and runs already started are
+        untouched. Audited as `flow.version_activated`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/FlowId' }
+        - { name: version, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200': { description: Activated, content: { application/json: { schema: { $ref: '#/components/schemas/Flow' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { description: Flow is archived, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  /tenants/{tenant_id}/flows/{flow_id}/archive:
+    post:
+      operationId: archiveFlow
+      tags: [Flows]
+      summary: Archive a flow (idempotent, final)
+      description: Requires `flow.archive`. Archived flows are read-only and never resolved for new conversations. Audited as `flow.archived`.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      responses:
+        '204': { description: Archived }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-node-types:
+    get:
+      operationId: listFlowNodeTypes
+      tags: [Flows]
+      summary: Node library for the builder
+      description: Requires `flow.view`. Derived from the same specs the validator uses (ports, side-effect class, waits/terminal).
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      responses:
+        '200': { description: Node types, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/NodeType' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    TenantId: { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+    FlowId: { name: flow_id, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Error: { description: Error, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, description: 'unauthorized, forbidden, not_found, slug_taken, revision_conflict, archived, invalid, invalid_body, not_publishable, internal' }
+        detail: { type: string }
+        issues: { type: array, items: { $ref: '#/components/schemas/Issue' } }
+    Issue:
+      type: object
+      required: [severity, code, message]
+      properties:
+        severity: { type: string, enum: [error, warning] }
+        code: { type: string }
+        node_id: { type: string }
+        edge_id: { type: string }
+        message: { type: string }
+    ValidationResult:
+      type: object
+      properties:
+        valid: { type: boolean }
+        issues: { type: array, items: { $ref: '#/components/schemas/Issue' } }
+    FlowType: { type: string, enum: [INBOUND, INTERNAL, SUBFLOW, EVENT, SURVEY, AFTER_HOURS, AI_WORKFLOW] }
+    TriggerFilter:
+      type: object
+      properties:
+        connection_ids: { type: array, items: { type: string, format: uuid }, description: Channel lines (WAHA/Meta) the flow applies to; empty = all }
+        providers: { type: array, items: { type: string } }
+    FlowSettings:
+      type: object
+      required: [priority, restart_policy]
+      properties:
+        priority: { type: integer, minimum: 1, maximum: 1000, description: Lower runs first }
+        is_default: { type: boolean }
+        trigger_filter: { $ref: '#/components/schemas/TriggerFilter' }
+        restart_policy: { type: string, enum: [new_conversation_only, always] }
+    CreateFlowRequest:
+      type: object
+      required: [slug, name]
+      properties:
+        slug: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$' }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        type: { $ref: '#/components/schemas/FlowType' }
+    Flow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        type: { $ref: '#/components/schemas/FlowType' }
+        status: { type: string, enum: [draft, published, archived] }
+        draft_revision: { type: integer }
+        active_version: { type: integer, nullable: true }
+        priority: { type: integer }
+        is_default: { type: boolean }
+        trigger_filter: { $ref: '#/components/schemas/TriggerFilter' }
+        restart_policy: { type: string }
+        source_template_slug: { type: string, nullable: true }
+        source_template_version: { type: integer, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    FlowDetail:
+      allOf:
+        - { $ref: '#/components/schemas/Flow' }
+        - type: object
+          properties: { definition: { $ref: '#/components/schemas/Definition' } }
+    FlowList:
+      type: object
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Flow' } } }
+    SaveDraftRequest:
+      type: object
+      required: [revision, name, definition]
+      properties:
+        revision: { type: integer, description: The draft_revision the client read }
+        name: { type: string }
+        description: { type: string }
+        definition: { $ref: '#/components/schemas/Definition' }
+    SaveDraftResponse:
+      type: object
+      properties:
+        flow: { $ref: '#/components/schemas/Flow' }
+        issues: { type: array, items: { $ref: '#/components/schemas/Issue' } }
+    FlowVersion:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer }
+        definition_hash: { type: string }
+        note: { type: string }
+        subflow_pins: { type: object, additionalProperties: { type: string, format: uuid }, description: Subflow slug to the version fixed at publish }
+        published_by: { type: string, format: uuid, nullable: true }
+        published_at: { type: string, format: date-time }
+        definition: { $ref: '#/components/schemas/Definition' }
+    NodeType:
+      type: object
+      properties:
+        type: { type: string }
+        label: { type: string }
+        category: { type: string }
+        side_effect: { type: string, enum: [none, local, external] }
+        waits: { type: boolean }
+        terminal: { type: boolean }
+        ports: { type: array, items: { type: string } }
+    Definition:
+      type: object
+      description: |
+        The executable graph. Unknown fields are rejected. Max 200 nodes, 400 edges, 100 variables, 1 MiB.
+        Loops are not allowed; every non-optional port needs a destination; secrets must never be embedded
+        (reference a credential by id).
+      required: [schema_version, nodes, edges]
+      properties:
+        schema_version: { type: integer, enum: [1] }
+        nodes:
+          type: array
+          items:
+            type: object
+            required: [id, type]
+            properties:
+              id: { type: string }
+              type: { type: string }
+              label: { type: string }
+              position: { type: object, properties: { x: { type: number }, y: { type: number } } }
+              config: { type: object }
+        edges:
+          type: array
+          items:
+            type: object
+            required: [source, sourcePort, target]
+            properties:
+              id: { type: string }
+              source: { type: string }
+              sourcePort: { type: string }
+              target: { type: string }
+              targetPort: { type: string }
+        variables:
+          type: array
+          items: { type: object, properties: { name: { type: string }, type: { type: string, enum: [string, number, boolean] }, description: { type: string } } }
+        settings:
+          type: object
+          properties: { max_node_executions: { type: integer, maximum: 1000 }, input_timeout_seconds: { type: integer } }
+        metadata: { type: object }

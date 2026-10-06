@@ -130,6 +130,7 @@ type FlowVersion struct {
 	Definition     json.RawMessage
 	DefinitionHash string
 	Note           string
+	SubflowPins    map[string]uuid.UUID
 	PublishedBy    *uuid.UUID
 	PublishedAt    time.Time
 }

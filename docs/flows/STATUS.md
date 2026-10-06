@@ -33,7 +33,7 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 |---|---|---|
 | 0 | Backup, análise de conflito, ADR-0019, baseline | **feita** |
 | 1 | Migrations 082–084, domínio, repositório Postgres + testes de isolamento | **feita** (ver evidências) |
-| 2 | Control plane: validador, publicar/rollback, RBAC, HTTP, OpenAPI | pendente |
+| 2 | Control plane: validador, publicar/rollback, RBAC, HTTP, OpenAPI | **feita** |
 | 3 | Runtime: resolver, passo transacional, wait/resume, idempotência, limites, gancho de ingest, worker | pendente |
 | 4 | Nodes determinísticos + SystemSender | pendente |
 | 5 | Simulador | pendente |
@@ -47,6 +47,13 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 - Suítes existentes dependentes de `conversations`/`messages` com as migrations aplicadas: `platform/db` (inclui `TestRLSCompleteness` e `TestRLSPolicyCoverage` sobre as tabelas novas), `conversations`, `messages`, `inbox`, `routing`, `contacts`, `tickets`, `accounts`, `identity`, `channels`, `dashboard`: todas **ok**.
 - `scripts/test-migration-roundtrip.sh 000084_...`: PASS (schema idêntico após down/up). O script só reverte a migration mais recente; `000082`/`000083` foram revertidas e reaplicadas manualmente em banco descartável (sem erro).
 - `gofmt -l internal/flows` limpo; `go vet ./internal/flows/...` limpo.
+
+**FLOW.2** (control plane):
+- Domínio puro: modelo de definição (parse estrito, limites 200 nós/400 arestas/100 variáveis/1 MiB), catálogo de **17 nodes** (portas, classe de efeito colateral, waits/terminal), validador (nó/aresta duplicados ou inexistentes, porta inválida, porta obrigatória sem destino, trigger ausente/múltiplo, ciclos, variável inexistente/reservada, segredo embutido, placeholder não resolvido, órfãos como aviso), avaliação determinística de condições, interpolação `{{var}}`, horário comercial com fuso, redação de segredos. 13 testes; **teste de mutação** (desligar detecção de ciclo/segredo) faz os testes falharem.
+- Aplicação (`ControlPlane`): criar, rascunho com validação ao vivo, validar com checagem de recursos **no tenant** (fila de outro tenant = `resource_not_found`), publicar (pin de subflows, profundidade ≤ 3, auto-chamada recusada), rollback, archive, settings (linha de canal precisa ser do tenant), auditoria (`flow.*`).
+- HTTP + RBAC: 13 operações, permissão por chave (`flow.view|create|edit|test|publish|archive`); testes com admin/supervisor/agent: agent 403 até para listar, supervisor só leitura, **editar ≠ publicar**, tenant B recebe 404 em flow do A e 403 na URL de A, 401 sem sessão, 409 em revisão velha/slug repetido, 422 com `issues` acionáveis.
+- Contrato: `contracts/openapi/flows-v1.yaml` (YAML válido, refs resolvidas) + guarda de deriva nos dois sentidos (`contract_test.go`). Ficou em arquivo próprio porque o guarda genérico de `omnira-v1.yaml` (httpserver/contract_test.go, hoje não compila por IAM5) exige registrar toda operação documentada no servidor de teste; ao unificar, basta mover os paths e registrar `RegisterFlowHandlers` lá.
+- Cabeamento mínimo atrás de `OMNIRA_FLOWS_ENABLED` (padrão `false`): `config.go` (+2 linhas), `server.go` (função nova `RegisterFlowHandlers`), `main.go` da API (1 bloco). `go build ./...` = ok. `gofmt -l internal/flows` limpo (os 3 arquivos compartilhados já estavam fora do gofmt no HEAD e não foram reformatados).
 
 ## Histórico de correções desta sessão (transparência)
 Um primeiro scaffold foi escrito sem compilar (módulo errado, RLS fora do padrão, `apps/web` duplicado) e suas mensagens de commit afirmavam testes que não foram rodados. Foi **revertido e descartado** (`feat/flow-builder-discarded-scaffold`, backup em `backup/flow-builder-before-rebuild-*` e em `git bundle` fora do repo). Tudo abaixo é refeito com compilação e testes reais.

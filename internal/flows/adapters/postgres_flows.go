@@ -80,18 +80,37 @@ func scanFlow(row pgx.Row) (*domain.Flow, error) {
 	return &f, nil
 }
 
-const versionColumns = `id, tenant_id, flow_id, version, definition, definition_hash, note, published_by, published_at`
+const versionColumns = `id, tenant_id, flow_id, version, definition, definition_hash, note, subflow_pins, published_by, published_at`
 
 func scanVersion(row pgx.Row) (*domain.FlowVersion, error) {
 	var v domain.FlowVersion
-	err := row.Scan(&v.ID, &v.TenantID, &v.FlowID, &v.Version, &v.Definition, &v.DefinitionHash, &v.Note, &v.PublishedBy, &v.PublishedAt)
+	var pins []byte
+	err := row.Scan(&v.ID, &v.TenantID, &v.FlowID, &v.Version, &v.Definition, &v.DefinitionHash, &v.Note, &pins, &v.PublishedBy, &v.PublishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNoSuchVersion
 	}
 	if err != nil {
 		return nil, err
 	}
+	v.SubflowPins = map[string]uuid.UUID{}
+	if len(pins) > 0 {
+		if err := json.Unmarshal(pins, &v.SubflowPins); err != nil {
+			return nil, fmt.Errorf("flows: corrupt subflow_pins: %w", err)
+		}
+	}
 	return &v, nil
+}
+
+func samePins(a, b map[string]uuid.UUID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func mapWriteErr(err error) error {
@@ -232,12 +251,19 @@ func (r *PostgresFlowRepository) UpdateSettings(ctx context.Context, id uuid.UUI
 	return f, mapWriteErr(err)
 }
 
-func (r *PostgresFlowRepository) Publish(ctx context.Context, id uuid.UUID, expectedRevision int, note string, by *uuid.UUID) (*domain.FlowVersion, error) {
+func (r *PostgresFlowRepository) Publish(ctx context.Context, id uuid.UUID, expectedRevision int, note string, by *uuid.UUID, pins map[string]uuid.UUID) (*domain.FlowVersion, error) {
 	tenantID, err := tenantOf(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var out *domain.FlowVersion
+	if pins == nil {
+		pins = map[string]uuid.UUID{}
+	}
+	pinsJSON, err := json.Marshal(pins)
+	if err != nil {
+		return nil, err
+	}
 	err = r.inTx(ctx, func(ctx context.Context, q platformdb.Querier) error {
 		var revision int
 		var status string
@@ -260,7 +286,7 @@ func (r *PostgresFlowRepository) Publish(ctx context.Context, id uuid.UUID, expe
 		if err := q.QueryRow(ctx, `SELECT encode(sha256(convert_to(draft_definition::text, 'UTF8')), 'hex') FROM flows WHERE tenant_id=$1 AND id=$2`, tenantID, id).Scan(&draftHash); err != nil {
 			return err
 		}
-		if latest, err := scanVersion(q.QueryRow(ctx, `SELECT `+versionColumns+` FROM flow_versions WHERE tenant_id=$1 AND flow_id=$2 ORDER BY version DESC LIMIT 1`, tenantID, id)); err == nil && latest.DefinitionHash == draftHash {
+		if latest, err := scanVersion(q.QueryRow(ctx, `SELECT `+versionColumns+` FROM flow_versions WHERE tenant_id=$1 AND flow_id=$2 ORDER BY version DESC LIMIT 1`, tenantID, id)); err == nil && latest.DefinitionHash == draftHash && samePins(latest.SubflowPins, pins) {
 			if _, err := q.Exec(ctx, `UPDATE flows SET status='published', active_version_id=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenantID, id, latest.ID); err != nil {
 				return err
 			}
@@ -270,14 +296,14 @@ func (r *PostgresFlowRepository) Publish(ctx context.Context, id uuid.UUID, expe
 			return err
 		}
 		v, err := scanVersion(q.QueryRow(ctx, `
-			INSERT INTO flow_versions (tenant_id, flow_id, version, definition, definition_hash, note, published_by)
+			INSERT INTO flow_versions (tenant_id, flow_id, version, definition, definition_hash, note, subflow_pins, published_by)
 			SELECT f.tenant_id, f.id,
 			       COALESCE((SELECT max(version) FROM flow_versions WHERE flow_id=f.id), 0) + 1,
 			       f.draft_definition,
 			       encode(sha256(convert_to(f.draft_definition::text, 'UTF8')), 'hex'),
-			       $3, $4
+			       $3, $5, $4
 			FROM flows f WHERE f.tenant_id=$1 AND f.id=$2
-			RETURNING `+versionColumns, tenantID, id, note, by))
+			RETURNING `+versionColumns, tenantID, id, note, by, pinsJSON))
 		if err != nil {
 			return err
 		}
@@ -443,6 +469,72 @@ func (r *PostgresFlowRepository) ListTemplateInstallations(ctx context.Context, 
 		}
 		_ = json.Unmarshal(maps, &t.Mappings)
 		out = append(out, &t)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgresFlowRepository) ActiveSubflow(ctx context.Context, slug string) (*domain.Flow, *domain.FlowVersion, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	f, err := scanFlow(r.q(ctx).QueryRow(ctx, `SELECT `+flowColumns+` FROM flows WHERE tenant_id=$1 AND slug=$2 AND flow_type='SUBFLOW' AND status='published'`, tenantID, slug))
+	if err != nil {
+		return nil, nil, err
+	}
+	v, err := r.GetVersion(ctx, *f.ActiveVersionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, v, nil
+}
+
+// ExistingQueues returns which of ids are queues of the session tenant (RLS + explicit filter).
+func (r *PostgresFlowRepository) ExistingQueues(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[uuid.UUID]bool{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.q(ctx).Query(ctx, `SELECT id FROM queues WHERE tenant_id=$1 AND id = ANY($2)`, tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// ExistingConnections returns which of ids are channel connections (lines) of the session tenant.
+func (r *PostgresFlowRepository) ExistingConnections(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[uuid.UUID]bool{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.q(ctx).Query(ctx, `SELECT id FROM channel_connections WHERE tenant_id=$1 AND id = ANY($2)`, tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
 	}
 	return out, rows.Err()
 }

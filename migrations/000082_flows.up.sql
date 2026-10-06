@@ -49,6 +49,9 @@ CREATE TABLE flow_versions (
   definition JSONB NOT NULL CHECK (octet_length(definition::text) <= 1048576),
   definition_hash TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '' CHECK (char_length(note) <= 500),
+  -- subflow slug -> flow_versions.id, resolved ONCE at publish: a run never follows "the active version" of a
+  -- subflow, so a later publish of the subflow cannot change a run (or this version) in flight.
+  subflow_pins JSONB NOT NULL DEFAULT '{}'::jsonb,
   published_by UUID REFERENCES users(id) ON DELETE SET NULL,
   published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (flow_id, version),

@@ -33,7 +33,7 @@ func TestFlowTenantIsolation(t *testing.T) {
 		if err := repo.CreateFlow(ctx, flowA); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := repo.Publish(ctx, flowA.ID, 1, "first", &env.UserA); err != nil {
+		if _, err := repo.Publish(ctx, flowA.ID, 1, "first", &env.UserA, nil); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -57,7 +57,7 @@ func TestFlowTenantIsolation(t *testing.T) {
 		if _, err := repo.SaveDraft(ctx, flowB.ID, 1, "hijack", "", domain.EmptyDefinition); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("tenant A wrote tenant B draft: %v", err)
 		}
-		if _, err := repo.Publish(ctx, flowB.ID, 1, "", nil); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := repo.Publish(ctx, flowB.ID, 1, "", nil, nil); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("tenant A published tenant B flow: %v", err)
 		}
 		if err := repo.Archive(ctx, flowB.ID); !errors.Is(err, domain.ErrNotFound) {
@@ -115,18 +115,18 @@ func TestPublishSnapshotsAreImmutableAndRollbackMovesOnlyThePointer(t *testing.T
 		if _, err := repo.SaveDraft(ctx, flow.ID, 1, flow.Name, "", defV1); err != nil {
 			t.Fatal(err)
 		}
-		v1, err := repo.Publish(ctx, flow.ID, 2, "v1", &env.UserA)
+		v1, err := repo.Publish(ctx, flow.ID, 2, "v1", &env.UserA, nil)
 		if err != nil || v1.Version != 1 || v1.DefinitionHash == "" {
 			t.Fatalf("publish v1: %+v %v", v1, err)
 		}
 		// Publishing the same stale revision again is refused: it would otherwise publish unvalidated content.
-		if _, err := repo.Publish(ctx, flow.ID, 1, "", nil); !errors.Is(err, domain.ErrRevisionConflict) {
+		if _, err := repo.Publish(ctx, flow.ID, 1, "", nil, nil); !errors.Is(err, domain.ErrRevisionConflict) {
 			t.Fatalf("stale publish: %v", err)
 		}
 		if _, err := repo.SaveDraft(ctx, flow.ID, 2, flow.Name, "", defV2); err != nil {
 			t.Fatal(err)
 		}
-		v2, err := repo.Publish(ctx, flow.ID, 3, "v2", &env.UserA)
+		v2, err := repo.Publish(ctx, flow.ID, 3, "v2", &env.UserA, nil)
 		if err != nil || v2.Version != 2 {
 			t.Fatalf("publish v2: %+v %v", v2, err)
 		}
@@ -187,7 +187,7 @@ func TestConcurrentPublishesNeverCollide(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20e9)
 			defer cancel()
 			err := platformdbSession(ctx, env, func(sc context.Context) error {
-				_, err := repo.Publish(withTenant(sc, env.TenantA, env.UserA), flow.ID, 1, "race", &env.UserA)
+				_, err := repo.Publish(withTenant(sc, env.TenantA, env.UserA), flow.ID, 1, "race", &env.UserA, nil)
 				return err
 			})
 			results <- err
@@ -262,7 +262,7 @@ func TestArchiveIsFinalAndIdempotent(t *testing.T) {
 		if _, err := repo.SaveDraft(ctx, f.ID, 1, "x", "", domain.EmptyDefinition); !errors.Is(err, domain.ErrArchived) {
 			t.Fatalf("archived flows are read-only: %v", err)
 		}
-		if _, err := repo.Publish(ctx, f.ID, 1, "", nil); !errors.Is(err, domain.ErrArchived) {
+		if _, err := repo.Publish(ctx, f.ID, 1, "", nil, nil); !errors.Is(err, domain.ErrArchived) {
 			t.Fatalf("archived flows cannot be published: %v", err)
 		}
 	})

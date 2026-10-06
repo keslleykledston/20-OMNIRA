@@ -23,6 +23,8 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
+	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
+	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
@@ -253,6 +255,12 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
+	if cfg.FlowsEnabled {
+		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
+		controlPlane := flowsapplication.NewControlPlane(flowRepo, flowRepo, flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
+		srv.RegisterFlowHandlers(dbPool, flowsadapters.NewHandler(dbPool, controlPlane))
+		log.Printf("Flow Builder API enabled (OMNIRA_FLOWS_ENABLED=true)\n")
+	}
 	if cfg.MetaEnabled {
 		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)

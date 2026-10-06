@@ -25,7 +25,8 @@ Risco residual: a UI de papéis/equipe (frente RBAC) pode listar chaves de permi
 | Arquivo | Mudança | Conflito potencial |
 |---|---|---|
 | `internal/inbox/application/inbound.go` | opção `WithFlowGate(...)` + 2 chamadas protegidas por `if s.flows != nil` e savepoint; nil = idêntico a hoje | nenhum commit recente toca; baixo |
-| `internal/platform/httpserver/server.go` | nova `RegisterFlowHandlers` (função nova, nenhum corpo existente editado) | baixo |
+| `internal/platform/httpserver/server.go` | nova `RegisterFlowHandlers` (função nova + 1 import; nenhum corpo existente editado) | baixo |
+| `contracts/openapi/omnira-v1.yaml` | **não alterado**: a API fica em `flows-v1.yaml` com guarda de deriva próprio (o guarda genérico exige registrar tudo no servidor de teste, cujo arquivo hoje não compila) | nenhum |
 | `apps/api/cmd/omnira-api/main.go`, `apps/worker/cmd/omnira-worker/main.go` | um bloco novo cada, atrás da flag | baixo |
 | `internal/platform/config` | variável `OMNIRA_FLOWS_ENABLED` (+ limites) | baixo |
 | `web/src/App.tsx`, `web/src/components/Sidebar.tsx` | 1 rota e 1 item de menu | **médio**: a frente RBAC/agentes editou exatamente esses arquivos (6 e 7 linhas). Mitigação: hunks de poucas linhas, resolvo sobre o `main` mais recente antes do relatório final |

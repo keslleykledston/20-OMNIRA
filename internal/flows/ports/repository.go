@@ -35,14 +35,27 @@ type FlowRepository interface {
 	UpdateSettings(ctx context.Context, id uuid.UUID, s Settings) (*domain.Flow, error)
 	// Publish snapshots the draft at expectedRevision into a new immutable version and makes it the active one,
 	// atomically and serialized per flow. It never publishes content other than the revision the caller validated.
-	Publish(ctx context.Context, id uuid.UUID, expectedRevision int, note string, by *uuid.UUID) (*domain.FlowVersion, error)
+	Publish(ctx context.Context, id uuid.UUID, expectedRevision int, note string, by *uuid.UUID, pins map[string]uuid.UUID) (*domain.FlowVersion, error)
 	// ActivateVersion points new runs at an existing version (rollback); history is untouched.
 	ActivateVersion(ctx context.Context, flowID uuid.UUID, version int) (*domain.Flow, *domain.FlowVersion, error)
 	Archive(ctx context.Context, id uuid.UUID) error
+	// ActiveSubflow resolves a SUBFLOW flow of the tenant by slug to its currently active version (used to pin at publish).
+	ActiveSubflow(ctx context.Context, slug string) (*domain.Flow, *domain.FlowVersion, error)
 	GetVersion(ctx context.Context, id uuid.UUID) (*domain.FlowVersion, error)
 	GetVersionByNumber(ctx context.Context, flowID uuid.UUID, version int) (*domain.FlowVersion, error)
 	ListVersions(ctx context.Context, flowID uuid.UUID, limit, offset int) ([]*domain.FlowVersion, error)
 	RecordPackInstallation(ctx context.Context, p *domain.PackInstallation) error
 	RecordTemplateInstallation(ctx context.Context, t *domain.TemplateInstallation) error
 	ListTemplateInstallations(ctx context.Context, flowID uuid.UUID) ([]*domain.TemplateInstallation, error)
+}
+
+// ResourceChecker confirms that referenced resources belong to the SESSION tenant (a foreign or unknown id is simply absent).
+type ResourceChecker interface {
+	ExistingQueues(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error)
+	ExistingConnections(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error)
+}
+
+// Auditor records administrative actions in the append-only audit log. Failures must not hide the action's own result.
+type Auditor interface {
+	Record(ctx context.Context, action string, flowID uuid.UUID, meta map[string]any)
 }
