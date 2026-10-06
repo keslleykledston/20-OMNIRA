@@ -341,6 +341,42 @@ describe('FlowEditorPage unsaved work', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: /Nó Início/ })).toBeNull()) // explicit reload adopts the server draft
   })
 
+  it('also protects a rename: an edit that only changed the flow name survives a newer server revision (FLOW-401)', async () => {
+    let server = flow({ draft_revision: 3 })
+    serve({ permissions: ADMIN })
+    const base = vi.mocked(axios.get).getMockImplementation()!
+    vi.mocked(axios.get).mockImplementation(async (url: string, cfg?: unknown) =>
+      url.endsWith(`/flows/${FLOW_ID}`) ? { data: server } : base(url, cfg as never))
+    const user = userEvent.setup()
+    render()
+    const nameInput = await screen.findByLabelText('Nome do fluxo')
+    await user.type(nameInput, ' (novo)') // only the name changes: the definition stays identical to the saved one
+    expect(screen.getByText('Alterações não salvas')).toBeInTheDocument()
+    server = flow({ draft_revision: 4, name: 'Renomeado por outra pessoa' })
+    window.dispatchEvent(new Event('visibilitychange'))
+    expect(await screen.findByText(/Outra pessoa salvou uma versão mais nova/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Nome do fluxo')).toHaveValue('Recepção (novo)') // the typed name is kept, not replaced
+  })
+
+  it('does not call a freshly saved name "unsaved"', async () => {
+    let server = flow({ draft_revision: 3 })
+    serve({ permissions: ADMIN })
+    const base = vi.mocked(axios.get).getMockImplementation()!
+    vi.mocked(axios.get).mockImplementation(async (url: string, cfg?: unknown) =>
+      url.endsWith(`/flows/${FLOW_ID}`) ? { data: server } : base(url, cfg as never))
+    // a real server stores what it was sent and bumps the revision
+    vi.mocked(axios.put).mockImplementation(async (_url: string, body: any) => {
+      server = flow({ name: body.name, draft_revision: body.revision + 1 })
+      return { data: { flow: server, issues: [] } }
+    })
+    const user = userEvent.setup()
+    render()
+    await user.type(await screen.findByLabelText('Nome do fluxo'), 'X')
+    await user.click(screen.getByRole('button', { name: 'Salvar rascunho' }))
+    expect(await screen.findByText('Rascunho salvo.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('Alterações não salvas')).toBeNull())
+  })
+
   it('asks before an in-app navigation discards unsaved edits, and navigates freely when saved', async () => {
     serve({ permissions: ADMIN })
     const confirm = vi.spyOn(window, 'confirm')

@@ -44,6 +44,7 @@ export default function FlowEditorPage() {
   const [name, setName] = useState('')
   const [revision, setRevision] = useState(0)
   const [savedJSON, setSavedJSON] = useState('')
+  const [savedName, setSavedName] = useState('') // o nome também é rascunho: editar só o nome conta como alteração não salva
   const [issues, setIssues] = useState<Issue[]>([])
   const [checking, setChecking] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -59,8 +60,8 @@ export default function FlowEditorPage() {
   const [archiveOpen, setArchiveOpen] = useState(false)
   const loadedFor = useRef('')
   const [reloadTick, setReloadTick] = useState(0) // "Recarregar" precisa reaplicar o servidor mesmo quando a busca devolve dados idênticos
-  const local = useRef<{ def: FlowDefinition | null; savedJSON: string }>({ def: null, savedJSON: '' })
-  local.current = { def, savedJSON }
+  const local = useRef<{ def: FlowDefinition | null; savedJSON: string; name: string; savedName: string }>({ def: null, savedJSON: '', name: '', savedName: '' })
+  local.current = { def, savedJSON, name, savedName }
 
   // Carrega o rascunho uma vez por revisão do servidor. Nunca sobrescreve edição em andamento: se outra pessoa salvou uma
   // revisão mais nova enquanto há alterações locais não salvas, mantém as locais e pede uma recarga explícita (Recarregar).
@@ -69,7 +70,8 @@ export default function FlowEditorPage() {
     if (!f) return
     const key = `${f.id}:${f.draft_revision}`
     if (loadedFor.current === key) return
-    const hasUnsaved = !!local.current.def && stableJSON(local.current.def) !== local.current.savedJSON
+    const l = local.current
+    const hasUnsaved = !!l.def && (stableJSON(l.def) !== l.savedJSON || l.name !== l.savedName)
     if (loadedFor.current.startsWith(`${f.id}:`) && hasUnsaved) {
       loadedFor.current = key
       setConflict(true)
@@ -79,12 +81,13 @@ export default function FlowEditorPage() {
     loadedFor.current = key
     setDef(f.definition)
     setName(f.name)
+    setSavedName(f.name)
     setRevision(f.draft_revision)
     setSavedJSON(stableJSON(f.definition))
     setConflict(false)
   }, [flowQ.data, reloadTick])
 
-  const dirty = !!def && (stableJSON(def) !== savedJSON || name !== (flowQ.data?.name ?? name))
+  const dirty = !!def && (stableJSON(def) !== savedJSON || name !== savedName)
   const archived = flowQ.data?.status === 'archived'
   const readOnly = !canEdit || archived
 
@@ -108,6 +111,7 @@ export default function FlowEditorPage() {
     onSuccess: (r) => {
       setRevision(r.flow.draft_revision)
       setSavedJSON(stableJSON(def as FlowDefinition))
+      setSavedName(r.flow.name)
       setIssues(r.issues)
       loadedFor.current = `${r.flow.id}:${r.flow.draft_revision}`
       setNotice({ tone: 'info', text: 'Rascunho salvo.' })
