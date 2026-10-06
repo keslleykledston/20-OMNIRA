@@ -32,11 +32,14 @@ Em **uma única transação** com a mesma trava de linha que o motor de fluxos u
 1. autoriza (seção 4) e confere que a conversa é de um contato (conversa interna, ADR-0018, não se finaliza);
 2. se já estiver fechada, devolve o fechamento existente (idempotente, 200 com `changed=false`);
 3. grava o registro de fechamento (`conversation_closures`) e as pendências informadas (`follow_up_items`);
-4. fecha os **tickets locais** da conversa (`external_ticket_id IS NULL`). Ticket ligado ao ERP **nunca** é fechado por aqui (o ERP é a
-   autoridade, ADR-0013): o fechamento registra quantos ficaram abertos e a tela avisa;
+4. fecha os **tickets locais** da conversa (`external_ticket_id IS NULL` **e** `NOT topic_scoped`). Ticket ligado ao ERP **nunca** é fechado
+   por aqui (o ERP é a autoridade, ADR-0013), nem ticket escopado a um assunto (pode atravessar conversas, ADR-0017): o fechamento
+   registra quantos ficaram abertos (`tickets_kept`) e a tela avisa. (O índice `tickets_active_conversation_uq` admite um único ticket
+   ativo não escopado por conversa, então o caso comum é um só.)
 5. `automation_mode='none'` (um bot não pode reter conversa fechada); a execução de fluxo em andamento é cancelada pelo caminho que
    já existe (o motor ignora/cancela runs de conversa fechada e o sweeper de 15 s também);
-6. grava auditoria (`conversation.closed`) e um evento de outbox `conversation.closed.v1` (**só ids**, nunca texto);
+6. grava auditoria (`conversation.closed`: ids, enums e contagens, nunca o texto do resumo). O evento de outbox `conversation.closed.v1`
+   (**só ids**) é emitido na onda W3, junto do consumidor que o usa, para não deixar evento sem destino;
 7. o gatilho de realtime já existente (`conversations_realtime_trg`, `UPDATE OF status`) avisa a interface.
 
 A atribuição (`assigned_to_user_id`) é mantida como histórico; a capacidade do atendente é liberada porque só conversas abertas contam.
@@ -62,7 +65,7 @@ Mesma regra do `Unassign`: precisa de `conversation.claim` ou `conversation.mana
 finalizar com `conversation.manage`; conversa **sem responsável** (fila ou bot) só com `conversation.manage`. Papéis padrão:
 `tenant_admin` e `tenant_supervisor` têm `manage`; `tenant_agent` finaliza as suas. Tenant vem do `TenantContext`, nunca do payload.
 
-### 5. A inteligência reage por evento (ADR-0017: Intelligence nunca é ponto único de falha)
+### 5. A inteligência reage por evento (onda W3) (ADR-0017: Intelligence nunca é ponto único de falha)
 O consumidor idempotente de `conversation.closed.v1` resolve os tópicos ligados **somente** a essa conversa e dispara, se ligado, o
 resumo por IA do tópico. Se o worker de inteligência estiver desligado, finalizar funciona igual. Tópicos que também atravessam
 outras conversas abertas permanecem abertos.
@@ -118,7 +121,7 @@ Tabelas e rotas existentes não mudam de significado. `tickets.conversation_id`,
 | Onda | Entrega | Verificação |
 |---|---|---|
 | W0 | Este ADR + índice | revisão |
-| W1 | Migration 000086; serviço `Finalize`; rotas (finalizar, histórico do contato, pendências); auditoria; evento; contrato OpenAPI | Postgres real: tenant A/B, autorização, idempotência, concorrência com o bot, ticket local x externo, ingest cria conversa nova após fechar |
+| W1 | Migration 000086; serviço `Finalize`; rotas (finalizar, contexto da conversa, histórico do contato, resolver pendência); auditoria; contrato OpenAPI (`attendance-v1.yaml`) | Postgres real: tenant A/B, autorização, idempotência, concorrência com o bot, ticket local x externo, ingest cria conversa nova após fechar |
 | W2 | Interface: botão e diálogo "Finalizar", painéis "Atendimentos anteriores" e "Pendências"; testes e Chromium real | vitest + Playwright |
 | W3 | Inteligência: consumidor de `conversation.closed.v1`; ferramentas `contact.*`; seção *Memória do contato*; sugestão ao finalizar | injeção de prompt, escopo por contato, limites, ledger |
 | W4 | Docs, changelog, handoff, backup; gate | suíte completa |

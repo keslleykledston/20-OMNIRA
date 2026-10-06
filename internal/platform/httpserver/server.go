@@ -16,15 +16,16 @@ import (
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
 	aiports "github.com/omnira/omnira/internal/ai/ports"
+	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
-	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
-	identityapp "github.com/omnira/omnira/internal/identity/application"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
+	identityapp "github.com/omnira/omnira/internal/identity/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
@@ -702,6 +703,21 @@ func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.H
 	s.mux.Handle("PATCH "+base+"/{group_id}", wrap(h.SetEnabled))
 	s.mux.Handle("GET "+base+"/{group_id}/messages", wrap(h.ListMessages))
 	s.mux.Handle("DELETE "+base+"/{group_id}/messages", wrap(h.DeleteHistory))
+}
+
+// RegisterAttendanceHandlers exposes finalizing an attendance and the contact's attendance history (ADR-0020) behind authn +
+// the tenant session. Permissions (conversation.claim / conversation.manage) are checked by the service.
+func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendanceadapters.Handler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) })
 }
 
 // RegisterFlowHandlers exposes the Flow Builder control plane (ADR-0019) behind authn + the tenant session. It is only

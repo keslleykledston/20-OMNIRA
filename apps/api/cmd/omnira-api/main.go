@@ -17,6 +17,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
+	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
+	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
+	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
@@ -27,7 +30,6 @@ import (
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	flowstemplates "github.com/omnira/omnira/internal/flows/templates"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
-	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
 	identityapp "github.com/omnira/omnira/internal/identity/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -265,6 +267,11 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
+	// ADR-0020: finalize an attendance, and the contact's attendance history and pending items. Always on: it is an explicit
+	// action behind the existing conversation.claim / conversation.manage permissions.
+	attendanceService := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
+		attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
+	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
 		controlPlane := flowsapplication.NewControlPlane(flowRepo, flowRepo, flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))

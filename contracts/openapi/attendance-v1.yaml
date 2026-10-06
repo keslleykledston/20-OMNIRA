@@ -1,0 +1,166 @@
+openapi: 3.0.3
+info:
+  title: OMNIRA Attendance API
+  version: 0.1.0
+  description: |
+    Finalizing an attendance and remembering what happened across attendances (ADR-0020). Kept as its own contract so the
+    module ships without touching `omnira-v1.yaml`; a drift test (`internal/attendance/adapters/contract_test.go`) fails the
+    build when this file and the routes diverge. Authentication is the session cookie; the tenant comes from the URL and is
+    re-checked against the session's memberships. Authorization is by permission key (never role name): finalizing and
+    resolving items need `conversation.claim` or `conversation.manage` (finalizing someone else's or an unassigned
+    conversation needs `conversation.manage`); reading history is open to any active member (same visibility as the Inbox).
+servers:
+  - url: /api/v1
+paths:
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/finalize:
+    post:
+      operationId: finalizeConversation
+      tags: [Attendance]
+      summary: Finalize the attendance of a conversation
+      description: |
+        One transaction, serialized with the flow engine: closes the conversation (`closed`, released from any bot), closes its
+        local tickets (never ERP-linked or topic-scoped ones; they are counted in `tickets_kept`), records the closure and the
+        follow-up items, and audits `conversation.closed`. Idempotent: finalizing an already finalized conversation returns the
+        original closure with `changed=false`. Unknown body fields are rejected. Free text is refused when it looks like a credential.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/FinalizeRequest' } } }
+      responses:
+        '200': { description: Finalized (or already finalized), content: { application/json: { schema: { $ref: '#/components/schemas/FinalizeResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/attendance-context:
+    get:
+      operationId: getConversationAttendanceContext
+      tags: [Attendance]
+      summary: What happened before with this conversation's contact
+      description: Previous attendances (newest first, `limit` max 20, default 5) and the contact's open follow-up items. Any active member may read.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 20 } }
+      responses:
+        '200': { description: History, content: { application/json: { schema: { $ref: '#/components/schemas/History' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/contacts/{contact_id}/attendance-history:
+    get:
+      operationId: getContactAttendanceHistory
+      tags: [Attendance]
+      summary: Attendance history and open follow-up items of a contact
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 20 } }
+      responses:
+        '200': { description: History, content: { application/json: { schema: { $ref: '#/components/schemas/History' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/follow-ups/{follow_up_id}/resolve:
+    post:
+      operationId: resolveFollowUp
+      tags: [Attendance]
+      summary: Mark an open follow-up item done or dropped
+      description: Requires `conversation.claim` or `conversation.manage`. Audited as `followup.resolved`. An item resolves once (409 afterwards).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: follow_up_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ResolveRequest' } } }
+      responses:
+        '200': { description: The resolved item, content: { application/json: { schema: { $ref: '#/components/schemas/FollowUp' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    TenantId: { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+    ConversationId: { name: conversation_id, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Error: { description: Error, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, description: 'unauthorized, forbidden, not_found, not_a_contact_conversation, already_resolved, invalid, internal' }
+        detail: { type: string }
+    FinalizeRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        reason: { type: string, enum: [resolved, no_response, duplicate, spam, transferred, other] }
+        note: { type: string, maxLength: 1000 }
+        summary: { type: string, maxLength: 4000, description: What was handled; shown to the next attendant (and, when enabled, to the copilot) }
+        summary_truth: { type: string, enum: [agent_confirmed, ai_inferred], default: agent_confirmed, description: Use ai_inferred when the text is an unedited model draft }
+        follow_ups:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/FollowUpInput' }
+    FollowUpInput:
+      type: object
+      required: [kind, text]
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [pending, promise, info] }
+        text: { type: string, minLength: 1, maxLength: 500 }
+        owner_user_id: { type: string, format: uuid, nullable: true, description: Must be an active member of the tenant }
+        due_at: { type: string, format: date-time, nullable: true }
+    ResolveRequest:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status: { type: string, enum: [done, dropped] }
+        note: { type: string, maxLength: 500 }
+    FinalizeResponse:
+      type: object
+      required: [changed]
+      properties:
+        changed: { type: boolean }
+        closure: { $ref: '#/components/schemas/Closure' }
+    Closure:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        closed_by_user_id: { type: string, format: uuid, nullable: true }
+        source: { type: string, enum: [agent, supervisor, system] }
+        reason: { type: string, enum: [resolved, no_response, duplicate, spam, transferred, other] }
+        note: { type: string }
+        summary: { type: string }
+        summary_truth: { type: string, enum: [agent_confirmed, ai_inferred] }
+        local_tickets_closed: { type: integer }
+        tickets_kept: { type: integer, description: Active tickets left open on purpose (ERP-linked or topic-scoped) }
+        created_at: { type: string, format: date-time }
+        follow_ups: { type: array, items: { $ref: '#/components/schemas/FollowUp' } }
+    FollowUp:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        kind: { type: string, enum: [pending, promise, info] }
+        text: { type: string }
+        owner_user_id: { type: string, format: uuid, nullable: true }
+        due_at: { type: string, format: date-time, nullable: true }
+        status: { type: string, enum: [open, done, dropped] }
+        truth: { type: string, enum: [agent_confirmed, ai_inferred] }
+        created_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        resolution_note: { type: string }
+    History:
+      type: object
+      properties:
+        contact_id: { type: string, format: uuid }
+        attendances: { type: array, items: { $ref: '#/components/schemas/Closure' } }
+        open_follow_ups: { type: array, items: { $ref: '#/components/schemas/FollowUp' } }
