@@ -538,3 +538,24 @@ func (r *PostgresFlowRepository) ExistingConnections(ctx context.Context, ids []
 	}
 	return out, rows.Err()
 }
+
+func (r *PostgresFlowRepository) ExistsDefault(ctx context.Context, t domain.FlowType) (bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return false, err
+	}
+	var ok bool
+	err = r.q(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM flows WHERE tenant_id=$1 AND flow_type=$2 AND is_default AND status <> 'archived')`, tenantID, string(t)).Scan(&ok)
+	return ok, err
+}
+
+// SavepointAtomic is ports.Atomic over a SAVEPOINT of the request/worker transaction.
+type SavepointAtomic struct{ pool *pgxpool.Pool }
+
+var _ ports.Atomic = SavepointAtomic{}
+
+func NewSavepointAtomic(pool *pgxpool.Pool) SavepointAtomic { return SavepointAtomic{pool: pool} }
+
+func (a SavepointAtomic) Do(ctx context.Context, fn func(ctx context.Context) error) error {
+	return platformdb.WithSavepoint(ctx, a.pool, fn)
+}

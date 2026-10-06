@@ -25,6 +25,7 @@ import (
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
+	flowstemplates "github.com/omnira/omnira/internal/flows/templates"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
@@ -267,7 +268,13 @@ func main() {
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
 		controlPlane := flowsapplication.NewControlPlane(flowRepo, flowRepo, flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
-		srv.RegisterFlowHandlers(dbPool, flowsadapters.NewHandler(dbPool, controlPlane))
+		templateRegistry, err := flowstemplates.Default()
+		if err != nil {
+			log.Fatalf("flow template library error: %v", err)
+		}
+		flowAuditor := flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool))
+		templateService := flowsapplication.NewTemplateService(templateRegistry, flowRepo, controlPlane, flowRepo, flowsadapters.NewSavepointAtomic(dbPool), flowAuditor)
+		srv.RegisterFlowHandlers(dbPool, flowsadapters.NewHandler(dbPool, controlPlane).WithTemplates(templateService))
 		log.Printf("Flow Builder API enabled (OMNIRA_FLOWS_ENABLED=true)\n")
 	}
 	if cfg.MetaEnabled {

@@ -95,7 +95,7 @@ type SimMessage struct {
 // SimEffect is a side effect that WOULD happen (ticket, queue, handoff, company).
 type SimEffect struct {
 	Step   int            `json:"step"` // seq of the node that would do it
-	Kind   string         `json:"kind"` // ticket | assign_queue | handoff | company_validated
+	Kind   string         `json:"kind"` // ticket | assign_queue | handoff | company_validated | return_to_queue
 	Detail map[string]any `json:"detail,omitempty"`
 }
 
@@ -152,12 +152,15 @@ func (f *simEffects) EnsureTicket(_ context.Context, _ uuid.UUID, subject, prior
 	f.add("ticket", d)
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(subject)), true, nil
 }
+
+// AssignQueue with an explicit queue is an assign_queue node; with nil it is the engine's safety net (the flow ended without
+// handing off, so the conversation returns to the normal queue flow), which is shown as return_to_queue.
 func (f *simEffects) AssignQueue(_ context.Context, _ uuid.UUID, q *uuid.UUID) error {
-	d := map[string]any{"queue": "default"}
-	if q != nil {
-		d["queue"] = q.String()
+	if q == nil {
+		f.add("return_to_queue", map[string]any{"queue": "default"})
+		return nil
 	}
-	f.add("assign_queue", d)
+	f.add("assign_queue", map[string]any{"queue": q.String()})
 	return nil
 }
 func (f *simEffects) Handoff(_ context.Context, _ uuid.UUID, q *uuid.UUID) error {

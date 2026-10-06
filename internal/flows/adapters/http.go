@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,12 +19,14 @@ import (
 
 // Permission keys (migration 000083). Editing and publishing are separate on purpose.
 const (
-	PermView    = "flow.view"
-	PermCreate  = "flow.create"
-	PermEdit    = "flow.edit"
-	PermTest    = "flow.test"
-	PermPublish = "flow.publish"
-	PermArchive = "flow.archive"
+	PermTemplateView    = "flow_template.view"
+	PermTemplateInstall = "flow_template.install"
+	PermView            = "flow.view"
+	PermCreate          = "flow.create"
+	PermEdit            = "flow.edit"
+	PermTest            = "flow.test"
+	PermPublish         = "flow.publish"
+	PermArchive         = "flow.archive"
 )
 
 const maxBody = 2 << 20
@@ -33,6 +36,13 @@ const maxBody = 2 << 20
 type Handler struct {
 	pool *pgxpool.Pool
 	cp   *application.ControlPlane
+	ts   *application.TemplateService
+}
+
+// WithTemplates enables the template/pack catalog and installation endpoints.
+func (h *Handler) WithTemplates(ts *application.TemplateService) *Handler {
+	h.ts = ts
+	return h
 }
 
 func NewHandler(pool *pgxpool.Pool, cp *application.ControlPlane) *Handler {
@@ -64,9 +74,10 @@ func (h *Handler) session(w http.ResponseWriter, r *http.Request, permission str
 }
 
 type apiError struct {
-	Error  string         `json:"error"`
-	Detail string         `json:"detail,omitempty"`
-	Issues []domain.Issue `json:"issues,omitempty"`
+	Error   string         `json:"error"`
+	Detail  string         `json:"detail,omitempty"`
+	Issues  []domain.Issue `json:"issues,omitempty"`
+	Missing []string       `json:"missing,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -82,7 +93,10 @@ func writeErr(w http.ResponseWriter, status int, code, detail string) {
 // fail maps domain errors to HTTP. Unknown errors are 500 with no internals leaked.
 func fail(w http.ResponseWriter, err error) {
 	var pe *application.PublishError
+	var mm *application.MissingMappingsError
 	switch {
+	case errors.As(err, &mm):
+		writeJSON(w, http.StatusBadRequest, apiError{Error: "missing_mappings", Detail: "map every placeholder to one of your own resources", Missing: mm.Keys})
 	case errors.As(err, &pe):
 		writeJSON(w, http.StatusUnprocessableEntity, apiError{Error: "not_publishable", Detail: "the flow has blocking errors", Issues: pe.Issues})
 	case errors.Is(err, domain.ErrNotFound), errors.Is(err, domain.ErrNoSuchVersion):
@@ -446,6 +460,100 @@ func (h *Handler) Simulate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+func (h *Handler) templatesReady(w http.ResponseWriter) bool {
+	if h.ts == nil {
+		writeErr(w, http.StatusNotImplemented, "templates_unavailable", "the template library is not enabled")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermTemplateView); !ok || !h.templatesReady(w) {
+		return
+	}
+	q := r.URL.Query()
+	writeJSON(w, http.StatusOK, map[string]any{"items": h.ts.Templates(application.TemplateFilter{Category: q.Get("category"), Query: q.Get("q"), RecommendedFor: q.Get("recommended_for")})})
+}
+
+func (h *Handler) GetTemplate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermTemplateView); !ok || !h.templatesReady(w) {
+		return
+	}
+	info, err := h.ts.Template(r.PathValue("slug"), intQuery(r, "version", 0))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (h *Handler) ListPacks(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermTemplateView); !ok || !h.templatesReady(w) {
+		return
+	}
+	packs, err := h.ts.Packs(r.URL.Query().Get("recommended_for"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": packs})
+}
+
+func (h *Handler) GetPack(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermTemplateView); !ok || !h.templatesReady(w) {
+		return
+	}
+	var selected []string
+	if v := strings.TrimSpace(r.URL.Query().Get("templates")); v != "" {
+		selected = strings.Split(v, ",")
+	}
+	info, err := h.ts.Pack(r.PathValue("slug"), intQuery(r, "version", 0), selected)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+type installBody struct {
+	Version   int               `json:"version"`
+	Templates []string          `json:"templates"`
+	Mappings  map[string]string `json:"mappings"`
+}
+
+func (h *Handler) InstallTemplate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermTemplateInstall); !ok || !h.templatesReady(w) {
+		return
+	}
+	var in installBody
+	if !decode(w, r, &in) {
+		return
+	}
+	res, err := h.ts.Install(r.Context(), application.InstallRequest{Templates: []string{r.PathValue("slug")}, Version: in.Version, Mappings: in.Mappings})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
+func (h *Handler) InstallPack(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermTemplateInstall); !ok || !h.templatesReady(w) {
+		return
+	}
+	var in installBody
+	if !decode(w, r, &in) {
+		return
+	}
+	res, err := h.ts.Install(r.Context(), application.InstallRequest{Pack: r.PathValue("slug"), Version: in.Version, Templates: in.Templates, Mappings: in.Mappings})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, res)
+}
+
 // NodeTypes serves the node library of the builder.
 func (h *Handler) NodeTypes(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.session(w, r, PermView); !ok {
@@ -476,4 +584,11 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	mux.Handle("POST "+base+"/{flow_id}/versions/{version}/activate", wrap(h.Activate))
 	mux.Handle("POST "+base+"/{flow_id}/archive", wrap(h.Archive))
 	mux.Handle("GET /api/v1/tenants/{tenant_id}/flow-node-types", wrap(h.NodeTypes))
+	const lib = "/api/v1/tenants/{tenant_id}"
+	mux.Handle("GET "+lib+"/flow-templates", wrap(h.ListTemplates))
+	mux.Handle("GET "+lib+"/flow-templates/{slug}", wrap(h.GetTemplate))
+	mux.Handle("POST "+lib+"/flow-templates/{slug}/install", wrap(h.InstallTemplate))
+	mux.Handle("GET "+lib+"/flow-packs", wrap(h.ListPacks))
+	mux.Handle("GET "+lib+"/flow-packs/{slug}", wrap(h.GetPack))
+	mux.Handle("POST "+lib+"/flow-packs/{slug}/install", wrap(h.InstallPack))
 }

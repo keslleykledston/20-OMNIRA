@@ -39,6 +39,8 @@ type FlowRepository interface {
 	// ActivateVersion points new runs at an existing version (rollback); history is untouched.
 	ActivateVersion(ctx context.Context, flowID uuid.UUID, version int) (*domain.Flow, *domain.FlowVersion, error)
 	Archive(ctx context.Context, id uuid.UUID) error
+	// ExistsDefault tells whether the tenant already has a live (non-archived) default flow of this type.
+	ExistsDefault(ctx context.Context, t domain.FlowType) (bool, error)
 	// ActiveSubflow resolves a SUBFLOW flow of the tenant by slug to its currently active version (used to pin at publish).
 	ActiveSubflow(ctx context.Context, slug string) (*domain.Flow, *domain.FlowVersion, error)
 	GetVersion(ctx context.Context, id uuid.UUID) (*domain.FlowVersion, error)
@@ -58,4 +60,10 @@ type ResourceChecker interface {
 // Auditor records administrative actions in the append-only audit log. Failures must not hide the action's own result.
 type Auditor interface {
 	Record(ctx context.Context, action string, flowID uuid.UUID, meta map[string]any)
+}
+
+// Atomic runs fn so that, when it returns an error, everything fn wrote is undone, while the caller's transaction (which the
+// request middleware may still commit) stays usable. The Postgres implementation is a savepoint.
+type Atomic interface {
+	Do(ctx context.Context, fn func(ctx context.Context) error) error
 }

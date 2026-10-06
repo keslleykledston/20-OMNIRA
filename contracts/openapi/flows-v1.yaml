@@ -227,6 +227,111 @@ paths:
         '200': { description: Node types, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/NodeType' } } } } } } }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-templates:
+    get:
+      operationId: listFlowTemplates
+      tags: [Templates]
+      summary: Browse the system template library
+      description: Requires `flow_template.view`. System templates are versioned, immutable sources; filter by `category`, `q` (text) or `recommended_for` (isp, msp, general).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: recommended_for, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Templates (latest version of each), content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/TemplateInfo' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-templates/{slug}:
+    get:
+      operationId: getFlowTemplate
+      tags: [Templates]
+      summary: Preview a template (read-only definition, mappings, features)
+      description: Requires `flow_template.view`. `version` defaults to the latest.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - { name: version, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: The template with its definition, content: { application/json: { schema: { $ref: '#/components/schemas/TemplateInfo' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-templates/{slug}/install:
+    post:
+      operationId: installFlowTemplate
+      tags: [Templates]
+      summary: Install one template (and the subflows it calls) as tenant-owned drafts
+      description: |
+        Requires `flow_template.install`. Creates DRAFT flows only: nothing is published and the installed flow has no runtime
+        link to the template (provenance is metadata). Every placeholder must be mapped to one of THIS tenant's resources; a
+        missing, unknown or foreign mapping is refused before anything is written (`400`, with `missing`). All or nothing.
+        A slug already used gets a numbered copy (`-2`); subflow references are rewritten accordingly.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/InstallRequest' } } }
+      responses:
+        '201': { description: Installed as drafts, content: { application/json: { schema: { $ref: '#/components/schemas/InstallResult' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { description: The resolved definition has blocking errors, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+  /tenants/{tenant_id}/flow-packs:
+    get:
+      operationId: listFlowPacks
+      tags: [Templates]
+      summary: List template packs
+      description: Requires `flow_template.view`. `recommended_for=isp` returns the packs an ISP should start with.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: recommended_for, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Packs, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/PackInfo' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-packs/{slug}:
+    get:
+      operationId: getFlowPack
+      tags: [Templates]
+      summary: Preview a pack (items, dependencies, mappings asked once, features)
+      description: Requires `flow_template.view`. `templates` (comma-separated) previews a chosen subset; default is every non-optional item.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: slug, in: path, required: true, schema: { type: string } }
+        - { name: version, in: query, schema: { type: integer } }
+        - { name: templates, in: query, schema: { type: string } }
+      responses:
+        '200': { description: The pack preview, content: { application/json: { schema: { $ref: '#/components/schemas/PackInfo' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flow-packs/{slug}/install:
+    post:
+      operationId: installFlowPack
+      tags: [Templates]
+      summary: Install a pack as tenant-owned drafts
+      description: |
+        Requires `flow_template.install`. Same guarantees as installing a template; shared placeholders (a queue used by ten
+        templates) are mapped once. `templates` chooses a subset (default: every non-optional item). Dependencies come first.
+        The pack's reception becomes the default INBOUND flow only when the tenant has none. Nothing is published.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/InstallRequest' } } }
+      responses:
+        '201': { description: Installed as drafts, content: { application/json: { schema: { $ref: '#/components/schemas/InstallResult' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { description: A resolved definition has blocking errors, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
 components:
   parameters:
     TenantId: { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -238,7 +343,8 @@ components:
       type: object
       required: [error]
       properties:
-        error: { type: string, description: 'unauthorized, forbidden, not_found, slug_taken, revision_conflict, archived, invalid, invalid_body, not_publishable, internal' }
+        error: { type: string, description: 'unauthorized, forbidden, not_found, slug_taken, revision_conflict, archived, invalid, invalid_body, not_publishable, missing_mappings, templates_unavailable, internal' }
+        missing: { type: array, items: { type: string }, description: Placeholder keys still to map (missing_mappings) }
         detail: { type: string }
         issues: { type: array, items: { $ref: '#/components/schemas/Issue' } }
     Issue:
@@ -349,12 +455,61 @@ components:
         status: { type: string, enum: [completed, waiting_input, waiting_human, failed, cancelled, blocked, no_run] }
         steps: { type: array, items: { type: object, properties: { seq: { type: integer }, node_id: { type: string }, node_type: { type: string }, status: { type: string }, port: { type: string }, output: { type: object }, error: { type: string } } } }
         messages: { type: array, items: { type: object, properties: { step: { type: integer }, text: { type: string } } } }
-        effects: { type: array, items: { type: object, properties: { step: { type: integer }, kind: { type: string, enum: [ticket, assign_queue, handoff, company_validated] }, detail: { type: object } } } }
+        effects: { type: array, items: { type: object, properties: { step: { type: integer }, kind: { type: string, enum: [ticket, assign_queue, handoff, company_validated, return_to_queue], description: return_to_queue is the engine's safety net when a flow ends without handing off }, detail: { type: object } } } }
         variables: { type: object }
         issues: { type: array, items: { $ref: '#/components/schemas/Issue' } }
         error: { type: string }
         events_consumed: { type: integer }
         waiting_at: { type: string }
+    MappingInfo:
+      type: object
+      properties: { key: { type: string, example: queue.technical }, kind: { type: string, enum: [queue] }, description: { type: string }, required: { type: boolean } }
+    TemplateInfo:
+      type: object
+      properties:
+        slug: { type: string }
+        version: { type: integer }
+        name: { type: string }
+        description: { type: string }
+        type: { $ref: '#/components/schemas/FlowType' }
+        categories: { type: array, items: { type: string } }
+        difficulty: { type: string, enum: [starter, intermediate] }
+        recommended_for: { type: array, items: { type: string } }
+        required_features: { type: array, items: { type: string } }
+        optional_features: { type: array, items: { type: string } }
+        mappings: { type: array, items: { $ref: '#/components/schemas/MappingInfo' } }
+        requires_subflows: { type: array, items: { type: string } }
+        test_cases: { type: integer }
+        settings: { type: object, properties: { priority: { type: integer }, is_default: { type: boolean }, restart_policy: { type: string } } }
+        hash: { type: string }
+        definition: { $ref: '#/components/schemas/Definition' }
+    PackInfo:
+      type: object
+      properties:
+        slug: { type: string }
+        version: { type: integer }
+        name: { type: string }
+        description: { type: string }
+        categories: { type: array, items: { type: string } }
+        recommended_for: { type: array, items: { type: string } }
+        items: { type: array, items: { type: object, properties: { template: { type: string }, name: { type: string }, type: { type: string }, version: { type: integer }, optional: { type: boolean }, dependency: { type: boolean } } } }
+        mappings: { type: array, items: { $ref: '#/components/schemas/MappingInfo' } }
+        required_features: { type: array, items: { type: string } }
+        optional_features: { type: array, items: { type: string } }
+        hash: { type: string }
+    InstallRequest:
+      type: object
+      required: [mappings]
+      properties:
+        version: { type: integer, description: 0 or absent = latest }
+        templates: { type: array, items: { type: string }, description: Pack install only; default every non-optional item }
+        mappings: { type: object, additionalProperties: { type: string, format: uuid }, description: Placeholder key to the id of one of the tenant's own queues }
+    InstallResult:
+      type: object
+      properties:
+        pack_installation_id: { type: string, format: uuid, nullable: true }
+        flows: { type: array, items: { type: object, properties: { flow_id: { type: string, format: uuid }, slug: { type: string }, template: { type: string }, template_version: { type: integer }, is_default: { type: boolean }, dependency: { type: boolean }, issues: { type: array, items: { $ref: '#/components/schemas/Issue' } } } } }
+        notes: { type: array, items: { type: string } }
     NodeType:
       type: object
       properties:

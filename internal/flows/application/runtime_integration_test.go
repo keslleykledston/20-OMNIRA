@@ -15,6 +15,8 @@ import (
 	. "github.com/omnira/omnira/internal/flows/application"
 	"github.com/omnira/omnira/internal/flows/domain"
 	"github.com/omnira/omnira/internal/flows/flowstest"
+	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 )
 
 type rt struct {
@@ -326,4 +328,10 @@ func TestAuditTrailIsRedactedInTheDatabase(t *testing.T) {
 	if leaked != 0 {
 		t.Fatalf("%d audit rows contain the secret", leaked)
 	}
+}
+
+// newRealEngine builds the production engine (real effects and system sender) for end-to-end tests.
+func newRealEngine(env *flowstest.Env, repo *adapters.PostgresFlowRepository) *Engine {
+	effects := adapters.NewPostgresEffects(env.App, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(env.App)))
+	return NewEngine(repo, repo, effects, AllExecutors()).WithLogger(func(string, ...any) {})
 }

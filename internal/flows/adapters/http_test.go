@@ -13,6 +13,7 @@ import (
 	"github.com/omnira/omnira/internal/flows/adapters"
 	"github.com/omnira/omnira/internal/flows/application"
 	"github.com/omnira/omnira/internal/flows/flowstest"
+	"github.com/omnira/omnira/internal/flows/templates"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -28,7 +29,12 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	env := flowstest.New(t)
 	repo := adapters.NewPostgresFlowRepository(env.App)
-	h := adapters.NewHandler(env.App, application.NewControlPlane(repo, repo, nil))
+	cp := application.NewControlPlane(repo, repo, nil)
+	reg, err := templates.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := adapters.NewHandler(env.App, cp).WithTemplates(application.NewTemplateService(reg, repo, cp, repo, adapters.NewSavepointAtomic(env.App), nil))
 	mux := http.NewServeMux()
 	h.Routes(mux, func(fn http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,4 +257,90 @@ func TestHTTPSimulateIsGuardedByFlowTestAndNeverWrites(t *testing.T) {
 	if code, _ := hn.call(env.UserB, env.TenantB, "POST", "/flows/"+id+"/simulate", body); code != 404 {
 		t.Fatalf("tenant B must not simulate tenant A's flow: %d", code)
 	}
+}
+
+func TestHTTPTemplateLibraryAndPackInstall(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	admin := env.UserA
+	supervisor := hn.member(env.TenantA, "tenant_supervisor")
+	agent := hn.member(env.TenantA, "tenant_agent")
+	queue := func(tenant uuid.UUID, name string) string {
+		id := uuid.New()
+		if _, err := env.Seed.Exec(context.Background(), `INSERT INTO queues(id, tenant_id, name) VALUES($1,$2,$3)`, id, tenant, name); err != nil {
+			t.Fatal(err)
+		}
+		return id.String()
+	}
+
+	// browse: view permission only
+	if code, _ := hn.call(agent, env.TenantA, "GET", "/flow-templates", nil); code != 403 {
+		t.Fatalf("an agent cannot browse the library: %d", code)
+	}
+	code, list := hn.call(supervisor, env.TenantA, "GET", "/flow-templates?category=ISP", nil)
+	items, _ := list["items"].([]any)
+	if code != 200 || len(items) < 12 {
+		t.Fatalf("a supervisor browses and filters: %d %d", code, len(items))
+	}
+	code, tpl := hn.call(supervisor, env.TenantA, "GET", "/flow-templates/isp-link-down", nil)
+	if code != 200 || tpl["definition"] == nil || tpl["test_cases"].(float64) < 1 {
+		t.Fatalf("template preview: %d %v", code, tpl)
+	}
+	if code, _ := hn.call(supervisor, env.TenantA, "GET", "/flow-templates/does-not-exist", nil); code != 404 {
+		t.Fatalf("unknown template: %d", code)
+	}
+	code, packs := hn.call(supervisor, env.TenantA, "GET", "/flow-packs?recommended_for=isp", nil)
+	if code != 200 || len(packs["items"].([]any)) != 2 {
+		t.Fatalf("the ISP profile recommends two packs: %d %v", code, packs)
+	}
+	code, prev := hn.call(supervisor, env.TenantA, "GET", "/flow-packs/isp-noc", nil)
+	maps, _ := prev["mappings"].([]any)
+	if code != 200 || len(maps) != 5 {
+		t.Fatalf("pack preview must aggregate the mappings once: %d %v", code, prev)
+	}
+
+	// install: its own permission (a supervisor can look, not install)
+	body := map[string]any{"mappings": map[string]string{"queue.technical": queue(env.TenantA, "t"), "queue.finance": queue(env.TenantA, "f"), "queue.commercial": queue(env.TenantA, "c"), "queue.fallback": queue(env.TenantA, "x")}}
+	if code, _ := hn.call(supervisor, env.TenantA, "POST", "/flow-packs/omnira-starter/install", body); code != 403 {
+		t.Fatalf("a supervisor cannot install: %d", code)
+	}
+	// missing mapping => 400 naming the keys, nothing written
+	if code, res := hn.call(admin, env.TenantA, "POST", "/flow-packs/omnira-starter/install", map[string]any{"mappings": map[string]string{"queue.technical": queue(env.TenantA, "only")}}); code != 400 || res["error"] != "missing_mappings" || len(res["missing"].([]any)) != 3 {
+		t.Fatalf("missing mappings: %d %v", code, res)
+	}
+	// another tenant's queue => 400
+	bad := map[string]any{"mappings": map[string]string{"queue.technical": queue(env.TenantB, "b"), "queue.finance": queue(env.TenantA, "f2"), "queue.commercial": queue(env.TenantA, "c2"), "queue.fallback": queue(env.TenantA, "x2")}}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flow-packs/omnira-starter/install", bad); code != 400 {
+		t.Fatalf("a foreign queue must be refused: %d", code)
+	}
+	var n int
+	_ = env.Seed.QueryRow(context.Background(), `SELECT count(*) FROM flows WHERE tenant_id=$1`, env.TenantA).Scan(&n)
+	if n != 0 {
+		t.Fatalf("refused installs wrote %d flows", n)
+	}
+	// the real thing
+	code, res := hn.call(admin, env.TenantA, "POST", "/flow-packs/omnira-starter/install", body)
+	flows, _ := res["flows"].([]any)
+	if code != 201 || len(flows) != 5 || res["pack_installation_id"] == nil {
+		t.Fatalf("install: %d %v", code, res)
+	}
+	_ = env.Seed.QueryRow(context.Background(), `SELECT count(*) FROM flows WHERE tenant_id=$1 AND status='draft'`, env.TenantA).Scan(&n)
+	if n != 5 {
+		t.Fatalf("all drafts: %d", n)
+	}
+	// they show up in the tenant's flow list, and only there
+	code, mine := hn.call(admin, env.TenantA, "GET", "/flows", nil)
+	if code != 200 || len(mine["items"].([]any)) != 5 {
+		t.Fatalf("flow list: %d %v", code, mine)
+	}
+	code, theirs := hn.call(env.UserB, env.TenantB, "GET", "/flows", nil)
+	if code != 200 || len(theirs["items"].([]any)) != 0 {
+		t.Fatalf("tenant B must see nothing: %v", theirs)
+	}
+	// installing a single template through the API too
+	one := map[string]any{"mappings": map[string]string{"queue.noc": queue(env.TenantA, "noc")}}
+	if code, res := hn.call(admin, env.TenantA, "POST", "/flow-templates/isp-financial/install", map[string]any{"mappings": map[string]string{"queue.finance": queue(env.TenantA, "fin3")}}); code != 201 {
+		t.Fatalf("single template install: %d %v", code, res)
+	}
+	_ = one
 }
