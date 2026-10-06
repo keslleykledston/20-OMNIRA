@@ -48,4 +48,7 @@ Logs do runtime não contêm texto de mensagem; trazem `tenant`, `flow`, `conver
 
 ## Rollback da feature
 1. `OMNIRA_FLOWS_ENABLED=false` e reiniciar API/worker: a feature para imediatamente.
-2. Se necessário reverter schema: `migrations/000084*.down.sql`, `000083*.down.sql`, `000082*.down.sql` (nessa ordem; os `down` foram testados em banco descartável).
+2. Se necessário reverter schema: `migrations/000085*.down.sql`, `000084*.down.sql`, `000083*.down.sql`, `000082*.down.sql` (nessa ordem; os `down` foram testados em banco descartável).
+3. Antes de desligar, confira que não há conversas retidas pelo bot (`select count(*) from conversations where automation_mode='bot'` = 0): o sweeper só roda com a flag ligada.
+
+Roteiro do teste com telefone real: `SMOKE-REAL-PHONE.md`.
