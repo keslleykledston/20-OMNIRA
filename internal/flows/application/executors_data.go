@@ -120,8 +120,10 @@ func (customerChoiceExec) Execute(in StepInput) (StepResult, error) {
 	menu := menuText(domain.Interpolate(prompt, in.Vars), opts)
 	wait := in.Def.Settings.EffectiveInputTimeout(c.TimeoutSeconds)
 	if !in.Resuming {
-		if _, err := say(in, menu); err != nil {
+		if port, err := say(in, menu); err != nil {
 			return StepResult{}, err
+		} else if port != "" {
+			return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
 		}
 		return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": 0}, Output: map[string]any{"asked": true}}, nil
 	}
@@ -147,8 +149,10 @@ func (customerChoiceExec) Execute(in StepInput) (StepResult, error) {
 	if n >= maxAttempts(c.MaxAttempts) {
 		return StepResult{Port: "timeout", Output: map[string]any{"attempts_exhausted": true}}, nil
 	}
-	if _, err := say(in, "Não consegui entender. "+menu); err != nil {
+	if port, err := say(in, "Não consegui entender. "+menu); err != nil {
 		return StepResult{}, err
+	} else if port != "" {
+		return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
 	}
 	return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": n}, Output: map[string]any{"invalid": true, "attempts": n}}, nil
 }

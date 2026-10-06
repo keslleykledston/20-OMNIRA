@@ -96,10 +96,10 @@ export function portsOf(node: FlowNode): PortDef[] {
     case 'send_message':
       return [req('next'), opt('window_closed'), opt('error')]
     case 'ask':
-      return [req('next'), req('timeout')]
+      return [req('next'), req('timeout'), opt('window_closed'), opt('error')]
     case 'choice': {
       const options = ((cfg as ChoiceCfg).options ?? []).filter((o) => o.id)
-      return [...options.map((o) => req(o.id, o.label || o.id)), req('timeout'), opt('other')]
+      return [...options.map((o) => req(o.id, o.label || o.id)), req('timeout'), opt('other'), opt('window_closed'), opt('error')]
     }
     case 'condition':
       return [req('true'), req('false')]
@@ -114,7 +114,7 @@ export function portsOf(node: FlowNode): PortDef[] {
     case 'resolve_customer_context':
       return [req('none'), req('single'), req('multiple')]
     case 'customer_choice':
-      return [req('selected'), req('timeout')]
+      return [req('selected'), req('timeout'), opt('window_closed'), opt('error')]
     case 'find_open_tickets':
       return [req('none'), req('found')]
     case 'create_ticket':

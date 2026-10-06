@@ -56,13 +56,15 @@ CREATE TABLE flow_versions (
   published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (flow_id, version),
   UNIQUE (tenant_id, id),
+  -- target of flows_active_version_fk: a flow's active version must belong to THAT flow, not just to the same tenant.
+  UNIQUE (tenant_id, flow_id, id),
   FOREIGN KEY (tenant_id, flow_id) REFERENCES flows(tenant_id, id) ON DELETE CASCADE
 );
 CREATE INDEX flow_versions_flow_idx ON flow_versions(tenant_id, flow_id, version DESC);
 
 -- The active pointer is deferred: a tenant/flow cascade deletes both sides in one statement.
 ALTER TABLE flows ADD CONSTRAINT flows_active_version_fk
-  FOREIGN KEY (tenant_id, active_version_id) REFERENCES flow_versions(tenant_id, id) DEFERRABLE INITIALLY DEFERRED;
+  FOREIGN KEY (tenant_id, id, active_version_id) REFERENCES flow_versions(tenant_id, flow_id, id) DEFERRABLE INITIALLY DEFERRED;
 
 -- A published version never changes (defense in depth: omnira_app also has no UPDATE/DELETE grant).
 CREATE FUNCTION flow_versions_immutable() RETURNS trigger LANGUAGE plpgsql AS $$

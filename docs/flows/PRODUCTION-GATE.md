@@ -65,9 +65,16 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
 
 ## O que NÃO foi feito (honesto)
 
-- **Revisão do Codex: `CODEX_PLUGIN_NOT_EXECUTED`.** Não rodei revisão independente; **não declaro "zero CRITICAL/HIGH"**. Recomendo a
-  revisão antes do piloto, com atenção a `internal/flows/application/engine.go`, `adapters/effects_postgres.go`,
-  `adapters/gate.go`, `messages/adapters/outbound_system.go` e `application/templates.go`.
+- **Revisão do Codex (2026-10-06): executada, mas SÓ ESTÁTICA.** O sandbox do Codex bloqueou Docker (`bwrap: loopback: Failed RTM_NEWADDR`) e não há `go` no host: **nenhum teste, migration, RLS, concorrência ou redelivery foi verificado por ele**. Resultado: **0 CRITICAL, 0 HIGH, 2 MEDIUM, 2 LOW** (`git diff --check` limpo). Veredito dele: "NÃO BLOQUEIA por CRITICAL/HIGH confirmado em análise estática", piloto "não validado" até rodar os testes. Tratamento dos achados abaixo; a execução dos testes foi feita por mim (não pelo Codex) e **não substitui** uma rodada do Codex com acesso a Docker.
+
+  | Achado | Sev. | Tratamento |
+  |---|---|---|
+  | FLOW-001 `ask`/`choice`/`customer_choice` sem saída `window_closed` | MEDIUM | **Corrigido**: portas opcionais `window_closed` e `error` nos três nós (servidor, executores, espelho no web); ids de opção reservados; `TestQuestionNodesRouteAClosedWindow` (falha sem a correção) |
+  | FLOW-002 `down` da 083 apaga permissões preexistentes | MEDIUM | **Aceito, sem mudança**: mesmo padrão das migrations 063 e 073; `flow.*`/`flow_template.*`/`flow_run.*` são chaves novas, criadas só por esta migration. Reabrir se alguma outra migration passar a registrar essas chaves |
+  | FLOW-003 `active_version_id` não amarra a versão ao mesmo `flow_id` | LOW | **Corrigido** na 082 (nunca aplicada em banco vivo): `UNIQUE (tenant_id, flow_id, id)` e FK composta; `TestActiveVersionMustBelongToItsOwnFlow` (falha sem a correção) |
+  | FLOW-004 gate enfileira job para toda mensagem com flow `always` | LOW | **Corrigido**: só conversas abertas, sem responsável, com contato e do tipo atendimento/não classificado (parte barata de `Startable`; conflito de identidade segue com o motor); teste cobre atribuída, fechada e não-cliente |
+
+  Verificação após as correções: suíte Go completa em banco novo = 69 ok + as mesmas 5 falhas da baseline; migrations 084→082 e 082→084 sem erro; web 617 passam (mesmas 2 falhas de `main`); navegador real 5 passam.
 - **Sem E2E contra a stack Docker completa e sem teste com telefone real** (equivalente ao P7 do goal WAHA). O que existe:
   Postgres real, ingest real (`PostgresInboundStore` + `InboundService`), motor real, envio de sistema real **até o outbox**
   (o provedor não foi chamado) e navegador real contra API mockada.
@@ -84,7 +91,7 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
 ## Condições para o piloto (`INTERNAL_PILOT`)
 
 1. Aceite humano documentado do dono.
-2. Revisão independente (Codex) sem CRITICAL/HIGH, com a saída real anexada.
+2. Nova revisão do Codex **com acesso a Docker/banco descartável** (a de 2026-10-06 foi só estática), sem CRITICAL/HIGH, com a saída real anexada.
 3. Aplicar as migrations 082–084 em **banco restaurado de um dump** (não no vivo) e conferir; só então, com backup fresco, no vivo.
 4. Build das imagens e subida com `OMNIRA_FLOWS_ENABLED=true` **em um tenant de teste**, com 1 flow simples publicado.
 5. **Smoke com telefone real** (conversa nova → bot → resposta → handoff → fila → atendente assume → bot cala) nas duas linhas (WAHA e Meta, se houver).

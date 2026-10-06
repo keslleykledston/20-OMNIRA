@@ -194,8 +194,10 @@ func (askExec) Execute(in StepInput) (StepResult, error) {
 	wait := in.Def.Settings.EffectiveInputTimeout(c.TimeoutSeconds)
 	prompt := domain.Interpolate(c.Text, in.Vars)
 	if !in.Resuming {
-		if _, err := say(in, prompt); err != nil {
+		if port, err := say(in, prompt); err != nil {
 			return StepResult{}, err
+		} else if port != "" {
+			return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
 		}
 		return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": 0}, Output: map[string]any{"asked": true}}, nil
 	}
@@ -213,8 +215,10 @@ func (askExec) Execute(in StepInput) (StepResult, error) {
 	if n >= maxAttempts(c.MaxAttempts) {
 		return StepResult{Port: "timeout", Output: map[string]any{"attempts_exhausted": true}}, nil
 	}
-	if _, err := say(in, "Não consegui entender. "+prompt); err != nil {
+	if port, err := say(in, "Não consegui entender. "+prompt); err != nil {
 		return StepResult{}, err
+	} else if port != "" {
+		return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
 	}
 	return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": n}, Output: map[string]any{"invalid": true, "attempts": n}}, nil
 }
@@ -242,8 +246,10 @@ func (choiceExec) Execute(in StepInput) (StepResult, error) {
 	if !in.Resuming {
 		// Every channel gets the numbered text menu: interactive buttons/lists are a capability layer for later; the
 		// text form works on WAHA and Meta alike and is what the contact's reply is matched against.
-		if _, err := say(in, menu); err != nil {
+		if port, err := say(in, menu); err != nil {
 			return StepResult{}, err
+		} else if port != "" {
+			return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
 		}
 		return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": 0}, Output: map[string]any{"asked": true}}, nil
 	}
@@ -269,8 +275,10 @@ func (choiceExec) Execute(in StepInput) (StepResult, error) {
 	if n >= maxAttempts(c.MaxAttempts) {
 		return StepResult{Port: "timeout", Output: map[string]any{"attempts_exhausted": true}}, nil
 	}
-	if _, err := say(in, "Não consegui entender. "+menu); err != nil {
+	if port, err := say(in, "Não consegui entender. "+menu); err != nil {
 		return StepResult{}, err
+	} else if port != "" {
+		return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
 	}
 	return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": n}, Output: map[string]any{"invalid": true, "attempts": n}}, nil
 }

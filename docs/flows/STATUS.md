@@ -129,3 +129,6 @@ Um primeiro scaffold foi escrito sem compilar (módulo errado, RLS fora do padr�
 
 ## Polimento visual (Lovable, 2026-10-06)
 Projeto de design OmniFlow Hub (`07c08567…`), commits `4c9d2c0` (editor) e `eae1ccf` (biblioteca/assistente). Revisado e portado só o visual para `web/`: canvas com grade pontilhada, saídas divididas, estados dos conectores (ligado/pendente/recebível), anéis de estado do nó, cards de pack em 3 colunas, modelos em lista dividida, stepper do assistente. Verificação: tsc limpo, 617 testes web (mesmas 2 falhas preexistentes de `main`), 5 cenários Chromium.
+
+## Revisão do Codex (2026-10-06, estática)
+0 CRITICAL, 0 HIGH, 2 MEDIUM, 2 LOW. FLOW-001 (portas `window_closed`/`error` nos nós de pergunta), FLOW-003 (FK composta da versão ativa) e FLOW-004 (filtro do gate) corrigidos com testes que falham sem a correção; FLOW-002 aceito (padrão das migrations 063/073). Detalhes e verificação em `PRODUCTION-GATE.md`.

@@ -83,6 +83,10 @@ func warnIssue(n Node, code, msg string) Issue {
 	return Issue{Severity: SeverityWarning, Code: code, NodeID: n.ID, Message: msg}
 }
 
+// sendOutcomePorts are the optional outcomes of ANY node that sends text to the contact: the 24h Meta window closed, or no
+// usable text channel. Unwired, the run fails cleanly and the conversation returns to humans (see application.say).
+var sendOutcomePorts = []Port{{"window_closed", false}, {"error", false}}
+
 func req(names ...string) []Port {
 	out := make([]Port, len(names))
 	for i, n := range names {
@@ -186,7 +190,7 @@ func init() {
 
 	register(NodeSpec{Type: NodeAsk, Label: "Ask a question", Category: "conversation", SideEffect: EffectExternal, Waits: true,
 		Analyze: func(n Node) NodeAnalysis {
-			a := NodeAnalysis{Ports: req("next", "timeout")}
+			a := NodeAnalysis{Ports: append(req("next", "timeout"), sendOutcomePorts...)}
 			if c, ok := cfg[AskConfig](n, &a); ok {
 				checkText(n, &a, "text", c.Text, true)
 				checkVarName(n, &a, "variable", c.Variable)
@@ -216,7 +220,7 @@ func init() {
 			}
 			seen := map[string]bool{}
 			for _, o := range c.Options {
-				if !idPattern.MatchString(o.ID) || o.ID == "timeout" || o.ID == "other" {
+				if !idPattern.MatchString(o.ID) || o.ID == "timeout" || o.ID == "other" || o.ID == "window_closed" || o.ID == "error" {
 					a.Issues = append(a.Issues, errIssue(n, "invalid_option_id", fmt.Sprintf("%q: option id %q is invalid or reserved", n.ID, o.ID)))
 				}
 				if seen[o.ID] {
@@ -229,6 +233,7 @@ func init() {
 				a.Ports = append(a.Ports, Port{Name: o.ID, Required: true})
 			}
 			a.Ports = append(a.Ports, Port{"timeout", true}, Port{"other", false})
+			a.Ports = append(a.Ports, sendOutcomePorts...)
 			return a
 		}})
 
@@ -318,7 +323,7 @@ func init() {
 
 	register(NodeSpec{Type: NodeCustomerChoice, Label: "Choose company", Category: "conversation", SideEffect: EffectExternal, Waits: true,
 		Analyze: func(n Node) NodeAnalysis {
-			a := NodeAnalysis{Ports: req("selected", "timeout")}
+			a := NodeAnalysis{Ports: append(req("selected", "timeout"), sendOutcomePorts...)}
 			if c, ok := cfg[CustomerChoiceConfig](n, &a); ok {
 				checkText(n, &a, "text", c.Text, false)
 				checkTimeout(n, &a, c.TimeoutSeconds, c.MaxAttempts)

@@ -42,7 +42,7 @@ function linked(def: FlowDefinition, source: string, port: string, target: strin
 describe('portsOf', () => {
   it('derives choice ports from its options, then timeout (required) and other (optional)', () => {
     const n: FlowNode = { id: 'm', type: 'choice', position: { x: 0, y: 0 }, config: { options: [{ id: 'tech', label: 'Suporte' }, { id: 'fin', label: 'Financeiro' }] } }
-    expect(portsOf(n).map((p) => [p.name, p.required])).toEqual([['tech', true], ['fin', true], ['timeout', true], ['other', false]])
+    expect(portsOf(n).map((p) => [p.name, p.required])).toEqual([['tech', true], ['fin', true], ['timeout', true], ['other', false], ['window_closed', false], ['error', false]])
     expect(portsOf(n)[0].label).toBe('Suporte')
   })
 
@@ -61,6 +61,10 @@ describe('portsOf', () => {
     expect(portsOf(n('resolve_customer_context')).map((p) => p.name)).toEqual(['none', 'single', 'multiple'])
     expect(portsOf(n('send_message')).map((p) => p.name)).toEqual(['next', 'window_closed', 'error'])
     expect(portsOf(n('ask')).filter((p) => p.required).map((p) => p.name)).toEqual(['next', 'timeout'])
+    // every node that sends text can route a closed 24h window / missing channel (server: sendOutcomePorts)
+    for (const t of ['ask', 'choice', 'customer_choice', 'send_message']) {
+      expect(portsOf(n(t)).filter((p) => !p.required).map((p) => p.name)).toEqual(expect.arrayContaining(['window_closed', 'error']))
+    }
     expect(portsOf(n('unknown_future_node'))).toEqual([])
   })
 })

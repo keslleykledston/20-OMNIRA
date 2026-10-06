@@ -8,8 +8,7 @@ Estado: **LAB**, branch `feat/flow-builder` (commits em `git log main..HEAD`, so
 Ponto de entrada: `docs/flows/STATUS.md` (evidência por fase), `docs/flows/PRODUCTION-GATE.md` (decisão e condições do piloto),
 `docs/flows/FINAL-REPORT.md` (resumo, decisões e pendências), `docs/flows/USER-GUIDE.md` (operador), `docs/flows/OPERATIONS.md`.
 Invariantes que testes protegem: `conversations` **não** tem coluna de empresa; a matriz de papéis em `internal/iam3` é fixada por teste;
-`messages.Sender` é só humano (o bot usa `SystemSender`); a IA nunca define severidade. Pendências: revisão Codex
-(`CODEX_PLUGIN_NOT_EXECUTED`), smoke com telefone real, `ai_agent`, renumerar migrations no merge.
+`messages.Sender` é só humano (o bot usa `SystemSender`); a IA nunca define severidade. Revisão Codex rodou em 2026-10-06 só de forma estática (0 CRITICAL/HIGH; 3 achados corrigidos, 1 aceito: ver `PRODUCTION-GATE.md`). Pendências: nova rodada do Codex com Docker, smoke com telefone real, `ai_agent`, renumerar migrations no merge.
 
 ## PILOT STATUS — 2026-09-28 (LEIA PRIMEIRO)
 

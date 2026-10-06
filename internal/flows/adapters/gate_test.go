@@ -140,6 +140,40 @@ func TestGateOnInboundEnqueuesReferencesOnlyAndOnlyWhenRelevant(t *testing.T) {
 	if n := g.count(`SELECT count(*) FROM outbox_events WHERE event_type=$1 AND aggregate_id=$2`, adapters.JobFlowInbound, legacy.String()); n != 1 {
 		t.Fatalf("restart_policy=always must enqueue: %d", n)
 	}
+	// ...but only conversations a flow could actually start: not assigned, not closed, not a staff/other conversation.
+	op := uuid.New()
+	g.exec(`INSERT INTO users(id, external_subject, email, status) VALUES($1,$2,$3,'active')`, op, op, op.String()+"@invalid")
+	t.Cleanup(func() { _, _ = env.Seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, op) })
+	for name, set := range map[string]string{
+		"assigned to a human": `assigned_to_user_id='` + op.String() + `'`,
+		"closed":              `status='closed'`,
+		"not a customer":      `conversation_kind='external_other'`,
+	} {
+		c, _ := env.SeedConversation(t, env.TenantA, "none")
+		g.exec(`UPDATE conversations SET `+set+` WHERE id=$1`, c)
+		m := env.SeedInbound(t, env.TenantA, c, "oi")
+		g.sys(env.TenantA, func(ctx context.Context) { g.gate.OnInbound(ctx, c, m, false) })
+		if n := g.count(`SELECT count(*) FROM outbox_events WHERE event_type=$1 AND aggregate_id=$2`, adapters.JobFlowInbound, c.String()); n != 0 {
+			t.Errorf("%s: a restart-always flow must not make the gate enqueue a job the engine would discard (%d)", name, n)
+		}
+	}
+}
+
+// A flow's active version must belong to THAT flow: the pointer is a composite FK on (tenant, flow, version).
+func TestActiveVersionMustBelongToItsOwnFlow(t *testing.T) {
+	g := newGateEnv(t)
+	g.publish("flow-a", nil)
+	g.publish("flow-b", nil)
+	var aID, bVersion uuid.UUID
+	if err := g.env.Seed.QueryRow(context.Background(), `SELECT id FROM flows WHERE tenant_id=$1 AND slug='flow-a'`, g.env.TenantA).Scan(&aID); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.env.Seed.QueryRow(context.Background(), `SELECT v.id FROM flow_versions v JOIN flows f ON f.id=v.flow_id WHERE f.tenant_id=$1 AND f.slug='flow-b'`, g.env.TenantA).Scan(&bVersion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.env.Seed.Exec(context.Background(), `UPDATE flows SET active_version_id=$2 WHERE id=$1`, aID, bVersion); err == nil {
+		t.Fatal("pointing flow A at a version of flow B must be refused by the database, even for the owner role")
+	}
 }
 
 func TestGateNeverBreaksTheIngestTransaction(t *testing.T) {

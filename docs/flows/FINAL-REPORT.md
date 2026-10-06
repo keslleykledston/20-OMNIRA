@@ -62,7 +62,7 @@ Série de commits por fase (`git log main..HEAD`) · 114+ arquivos · ~9,1 mil l
 
 ## Decisões que precisam de você
 
-1. **Revisão independente (Codex)** antes do piloto: não foi executada (`CODEX_PLUGIN_NOT_EXECUTED`); não afirmo "zero CRITICAL/HIGH".
+1. **Revisão independente (Codex):** rodada **estática** em 2026-10-06 (sem testes: o sandbox bloqueou Docker): 0 CRITICAL, 0 HIGH, 2 MEDIUM, 2 LOW; 3 corrigidos e 1 aceito (tabela em `PRODUCTION-GATE.md`). Falta uma rodada com acesso a Docker.
 2. ~~Polimento visual pelo Lovable~~ **feito** (2026-10-06): 2 pedidos ao projeto OmniFlow Hub (editor; biblioteca + assistente; 8,3 créditos), prévias em `/design/flow-editor` e `/design/flow-templates` lá. Portei só a apresentação (grade pontilhada, divisórias, estados dos conectores, cards de pack, lista de modelos, stepper); posições fixas, arestas manuais e dados de exemplo não foram portados. Lógica, textos e testes intactos.
 3. ~~Corrigir o `Modal` compartilhado~~ **feito** (2026-10-06). Os testes quebrados de `main` seguem com as frentes IAM5/agentes.
 4. **Ordem de merge:** reconferir o número das migrations (`0000082+`) e resolver por união os 4 arquivos compartilhados (`App.tsx`, `Sidebar.tsx`, `permissions.ts`, `iam3/security_test.go`).

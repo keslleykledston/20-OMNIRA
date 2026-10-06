@@ -465,6 +465,32 @@ func TestWindowClosedIsRoutableOrFailsCleanly(t *testing.T) {
 	}
 }
 
+// Every node that sends text routes a closed 24h window the same way as send_message (FLOW-001 of the Codex review).
+func TestQuestionNodesRouteAClosedWindow(t *testing.T) {
+	cases := map[string]string{
+		"ask":    `{"id":"q","type":"ask","config":{"text":"nome?","variable":"nome"}}`,
+		"choice": `{"id":"q","type":"choice","config":{"text":"qual?","variable":"v","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}}`,
+	}
+	for name, node := range cases {
+		routed := wf(`{"id":"start","type":"trigger"},`+node+`,{"id":"ok","type":"end"},{"id":"closed","type":"end"}`,
+			edge("1", "start", "next", "q")+","+edge("2", "q", "next", "ok")+","+edge("3", "q", "a", "ok")+","+edge("4", "q", "b", "ok")+","+edge("5", "q", "timeout", "ok")+","+edge("6", "q", "window_closed", "closed"), "")
+		w := newWorld(t, flowSpec{slug: "w-" + name, def: routed})
+		w.fx.status = ports.SendWindowClosed
+		w.inbound("oi", true)
+		if r := w.onlyRun(); r.Status != domain.RunCompleted || w.runs.execs[len(w.runs.execs)-1].NodeID != "closed" {
+			t.Errorf("%s: a closed window must follow its window_closed port: %+v", name, r)
+		}
+		unrouted := wf(`{"id":"start","type":"trigger"},`+node+`,{"id":"ok","type":"end"}`,
+			edge("1", "start", "next", "q")+","+edge("2", "q", "next", "ok")+","+edge("3", "q", "a", "ok")+","+edge("4", "q", "b", "ok")+","+edge("5", "q", "timeout", "ok"), "")
+		w = newWorld(t, flowSpec{slug: "u-" + name, def: unrouted})
+		w.fx.status = ports.SendWindowClosed
+		w.inbound("oi", true)
+		if r := w.onlyRun(); r.Status != domain.RunFailed || !strings.Contains(r.Error, "window") {
+			t.Errorf("%s: an unrouted closed window must still fail cleanly: %+v", name, r)
+		}
+	}
+}
+
 func TestStartConditions(t *testing.T) {
 	for name, mutate := range map[string]func(*ports.ConversationFacts){
 		"internal conversation": func(f *ports.ConversationFacts) { f.Kind = "internal" },
