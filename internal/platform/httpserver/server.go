@@ -211,7 +211,7 @@ func (s *Server) RegisterAuthHandlers(dbPool *pgxpool.Pool, devAuthEnabled bool,
 	passwordHandler := authn.NewPasswordHandler(dbPool, nil) // emailSender nil por enquanto (será wired depois)
 	s.mux.HandleFunc("POST /api/v1/auth/password-reset-request", passwordHandler.PasswordResetRequest)
 	s.mux.HandleFunc("POST /api/v1/auth/password-reset", passwordHandler.PasswordReset)
-	s.mux.HandleFunc("POST /api/v1/auth/password-change", authn.WebMiddleware(s.authenticator, sessionStore)(http.HandlerFunc(passwordHandler.PasswordChange)))
+	s.mux.Handle("POST /api/v1/auth/password-change", authn.WebMiddleware(s.authenticator, sessionStore)(http.HandlerFunc(passwordHandler.PasswordChange)))
 
 	mode := "unavailable"
 	if devAuthEnabled {
