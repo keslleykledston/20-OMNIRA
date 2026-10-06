@@ -31,9 +31,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
-  { label: 'Equipe e acesso', path: '/settings/team', icon: 'settings', alsoActiveOn: '/settings/roles' },
-  { label: 'Pessoas e grupos', path: '/settings/people', icon: 'contacts' },
-  { label: 'Agentes', path: '/settings/agents', icon: 'supervisor' },
+  { label: 'Pessoas', path: '/settings/people', icon: 'contacts', alsoActiveOn: '/settings/people/team,/settings/people/agents,/settings/roles' },
   { label: 'Configurações', path: '/settings/general', icon: 'settings' },
 ]
 
@@ -74,7 +72,8 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {visibleNavItems.map(item => {
-          const active = isActive(item.path) || (item.alsoActiveOn ? isActive(item.alsoActiveOn) : false)
+          const alsoActivePaths = item.alsoActiveOn?.split(',').map(p => p.trim()) || []
+          const active = isActive(item.path) || alsoActivePaths.some(p => isActive(p))
           return (
             <Link
               key={item.path}
