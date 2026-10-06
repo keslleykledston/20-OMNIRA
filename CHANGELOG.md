@@ -13,6 +13,7 @@
 - Docs: `docs/flows/{STATUS,PRODUCTION-GATE,FINAL-REPORT,USER-GUIDE,OPERATIONS,CONFLICT-ANALYSIS}.md`.
 
 ### Fixed
+- Web: the app now runs on a data router (`createBrowserRouter`); the flow editor asks before any navigation, including browser Back/Forward, drops unsaved edits (FLOW-302), and after saving a blank or padded name the field matches what the server stored (FLOW-501).
 - Flow Builder (Codex rounds A/B): the editor no longer discards unsaved edits when settings are saved or a newer server revision arrives (explicit conflict + reload), asks before in-app navigation drops them; the ingest returns a bot-held new conversation to normal routing right away when its flow job cannot be enqueued.
 - Flow Builder (Codex review): `000085` makes a flow's active version belong to that same flow (composite FK); question nodes route a closed 24h window; the inbound gate no longer enqueues jobs the engine would discard.
 - `go build ./...` em `main`: import sem uso em `authn/password_handler.go` e `HandleFunc` recebendo `http.Handler` em `httpserver/server.go:214` (IAM5).

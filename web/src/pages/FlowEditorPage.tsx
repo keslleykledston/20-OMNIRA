@@ -15,7 +15,7 @@ import { queuesAPI } from '../lib/queues'
 import { useChannelLines } from '../lib/channelLines'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
-import { useUnsavedGuard } from '../lib/useUnsavedGuard'
+import UnsavedChangesGuard from '../components/UnsavedChangesGuard'
 
 type SideTab = 'props' | 'issues' | 'simulate' | 'versions'
 
@@ -102,7 +102,6 @@ export default function FlowEditorPage() {
     return () => window.clearTimeout(t)
   }, [def, canView, canEdit, flowId])
 
-  useUnsavedGuard(dirty)
 
   const edit = useCallback((fn: (d: FlowDefinition) => FlowDefinition) => setDef((d) => (d ? fn(d) : d)), [])
 
@@ -112,6 +111,9 @@ export default function FlowEditorPage() {
       setRevision(r.flow.draft_revision)
       setSavedJSON(stableJSON(def as FlowDefinition))
       setSavedName(r.flow.name)
+      // O servidor grava o nome já aparado (ou mantém o anterior se veio em branco): alinhar o campo, senão o editor continua "sujo".
+      // Se a pessoa digitou mais enquanto salvava, o campo difere do que foi gravado e a alteração segue pendente.
+      setName((cur) => (cur.trim() === '' || cur.trim() === r.flow.name ? r.flow.name : cur))
       setIssues(r.issues)
       loadedFor.current = `${r.flow.id}:${r.flow.draft_revision}`
       setNotice({ tone: 'info', text: 'Rascunho salvo.' })
@@ -220,6 +222,7 @@ export default function FlowEditorPage() {
 
   return (
     <div className="flex h-[calc(100vh-theme(spacing.16))] flex-col">
+      <UnsavedChangesGuard dirty={dirty} />
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle bg-surface px-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           <Link to="/flows" className="text-sm text-accent-primary no-underline">← Fluxos</Link>

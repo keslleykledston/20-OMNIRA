@@ -181,4 +181,31 @@ test.describe('Editor visual de fluxos (ADR-0019)', () => {
     await expect(page.getByRole('button', { name: 'Publicar' })).toBeDisabled();
     await page.screenshot({ path: `${SHOTS}/04-conflito.png` });
   });
+  test('botão voltar/avançar do navegador respeita alterações não salvas (router de dados)', async ({ page }) => {
+    const api = makeApi(page);
+    await api.install();
+    await page.goto(`/flows/${FLOW}`);
+    await expect(page.getByLabel('Nome do fluxo')).toHaveValue('Recepção', { timeout: 15_000 });
+    // dá ao histórico uma entrada à frente do editor: vai para outra página do app e volta com o botão voltar
+    await page.getByRole('link', { name: /Contatos/ }).first().click();
+    await expect(page).toHaveURL(/\/contacts/);
+    await page.goBack();
+    await expect(page.getByLabel('Nome do fluxo')).toHaveValue('Recepção');
+    // sem alterações: avançar é livre
+    await page.goForward();
+    await expect(page).toHaveURL(/\/contacts/);
+    await page.goBack();
+    await expect(page.getByLabel('Nome do fluxo')).toHaveValue('Recepção');
+    // com alteração não salva: avançar pergunta; recusar mantém o editor e o rascunho
+    await page.getByRole('navigation', { name: 'Paleta de nós' }).getByRole('button', { name: /^Início/ }).click();
+    await expect(page.getByText('Alterações não salvas')).toBeVisible();
+    page.once('dialog', (d) => { expect(d.message()).toContain('alterações não salvas'); void d.dismiss(); });
+    await page.goForward();
+    await expect(page).toHaveURL(new RegExp(`/flows/${FLOW}$`));
+    await expect(page.getByRole('group', { name: /Nó Início/ })).toBeVisible();
+    // aceitar sai da página
+    page.once('dialog', (d) => { void d.accept(); });
+    await page.goForward();
+    await expect(page).toHaveURL(/\/contacts/);
+  });
 });

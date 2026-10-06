@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event'
 import axios from 'axios'
 import FlowEditorPage from '../pages/FlowEditorPage'
 import type { FlowDefinition, FlowDetail, Issue, NodeTypeInfo } from '../lib/flows'
-import { renderAt, setSession } from './testUtils'
+import { act } from '@testing-library/react'
+import { renderAt, renderInDataRouter, setSession } from './testUtils'
 
 vi.mock('axios')
 
@@ -377,6 +378,30 @@ describe('FlowEditorPage unsaved work', () => {
     await waitFor(() => expect(screen.queryByText('Alterações não salvas')).toBeNull())
   })
 
+  it('after saving a blank or padded name the field shows what the server stored and nothing stays unsaved (FLOW-501)', async () => {
+    let server = flow({ draft_revision: 3 })
+    serve({ permissions: ADMIN })
+    const base = vi.mocked(axios.get).getMockImplementation()!
+    vi.mocked(axios.get).mockImplementation(async (url: string, cfg?: unknown) =>
+      url.endsWith(`/flows/${FLOW_ID}`) ? { data: server } : base(url, cfg as never))
+    vi.mocked(axios.put).mockImplementation(async (_url: string, body: any) => {
+      server = flow({ name: String(body.name).trim(), draft_revision: body.revision + 1 }) // the server stores the trimmed name it was sent
+      return { data: { flow: server, issues: [] } }
+    })
+    const user = userEvent.setup()
+    render()
+    const input = await screen.findByLabelText('Nome do fluxo')
+    await user.clear(input) // blank: the page sends the current name instead
+    await user.click(screen.getByRole('button', { name: 'Salvar rascunho' }))
+    expect(await screen.findByText('Rascunho salvo.')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('Nome do fluxo')).toHaveValue('Recepção'))
+    await waitFor(() => expect(screen.queryByText('Alterações não salvas')).toBeNull())
+    await user.type(screen.getByLabelText('Nome do fluxo'), '   ') // trailing spaces: the server trims them
+    await user.click(screen.getByRole('button', { name: 'Salvar rascunho' }))
+    await waitFor(() => expect(screen.queryByText('Alterações não salvas')).toBeNull())
+    expect(screen.getByLabelText('Nome do fluxo')).toHaveValue('Recepção')
+  })
+
   it('asks before an in-app navigation discards unsaved edits, and navigates freely when saved', async () => {
     serve({ permissions: ADMIN })
     const confirm = vi.spyOn(window, 'confirm')
@@ -402,5 +427,44 @@ describe('FlowEditorPage unsaved work', () => {
     confirm.mockReturnValue(true)
     await user.click(screen.getByRole('link', { name: /Fluxos/ }))
     expect(await screen.findByTestId('elsewhere')).toBeInTheDocument()
+  })
+})
+
+// Router de dados (como o app roda): o botão "voltar" do navegador também respeita alterações não salvas.
+describe('FlowEditorPage with a data router (browser Back)', () => {
+  const mount = () => renderInDataRouter(<FlowEditorPage />, '/flows/:flowId', ['/flows', `/flows/${FLOW_ID}`])
+
+  it('asks before browser Back drops unsaved edits, stays when declined and leaves when accepted', async () => {
+    serve({ permissions: ADMIN })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const user = userEvent.setup()
+    const { router } = mount()
+    await addNodes(user, 'Início')
+    await act(async () => { await router.navigate(-1) }) // the browser Back button
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(router.state.location.pathname).toBe(`/flows/${FLOW_ID}`)
+    expect(screen.getByRole('group', { name: /Nó Início/ })).toBeInTheDocument()
+    confirm.mockReturnValue(true)
+    await act(async () => { await router.navigate(-1) })
+    await waitFor(() => expect(router.state.location.pathname).toBe('/flows'))
+    expect(await screen.findByTestId('elsewhere')).toBeInTheDocument()
+  })
+
+  it('also guards link navigation, and does not prompt when there is nothing unsaved', async () => {
+    serve({ permissions: ADMIN })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const user = userEvent.setup()
+    const { router } = mount()
+    await screen.findByLabelText('Nome do fluxo')
+    await act(async () => { await router.navigate(-1) }) // clean: leaves silently
+    expect(confirm).not.toHaveBeenCalled()
+    await waitFor(() => expect(router.state.location.pathname).toBe('/flows'))
+    // a second mount, now dirty, via the in-page link
+    const second = mount()
+    await addNodes(user, 'Início')
+    confirm.mockReturnValue(false)
+    await user.click(screen.getByRole('link', { name: /Fluxos/ }))
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(second.router.state.location.pathname).toBe(`/flows/${FLOW_ID}`)
   })
 })
