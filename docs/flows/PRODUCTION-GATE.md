@@ -92,7 +92,7 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
 
 1. Aceite humano documentado do dono.
 2. Nova revisão do Codex **com acesso a Docker/banco descartável** (a de 2026-10-06 foi só estática), sem CRITICAL/HIGH, com a saída real anexada.
-3. As migrations 082–084 já estão no `omnira_dev` (inertes). Falta: validar **085** em banco restaurado de um dump e só então aplicá-la ao vivo, com backup fresco (`down` testado). A imagem de api/worker em execução é anterior às correções do Codex (FLOW-001/004): rebuild antes de ligar a flag.
+3. As migrations 082–084 já estão no `omnira_dev` (inertes). **085 validada em 2026-10-06 sobre um dump restaurado do `omnira_dev`** (up, down e up de novo sem erro; contagens de tenants/conversas/mensagens idênticas; dump apagado depois). Falta aplicá-la ao vivo, com backup fresco, por ordem do dono. A imagem de api/worker em execução é anterior às correções do Codex (FLOW-001/004): rebuild antes de ligar a flag.
 4. Build das imagens e subida com `OMNIRA_FLOWS_ENABLED=true` **em um tenant de teste**, com 1 flow simples publicado.
 5. **Smoke com telefone real** (conversa nova → bot → resposta → handoff → fila → atendente assume → bot cala) nas duas linhas (WAHA e Meta, se houver).
 6. Observar `/metrics` (`omnira_flow_*`) e o log do sweeper por 24 h supervisionadas antes de ampliar.
