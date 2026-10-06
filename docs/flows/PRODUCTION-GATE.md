@@ -73,7 +73,7 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
   (o provedor não foi chamado) e navegador real contra API mockada.
 - **Backup/restore e saúde:** os dados dos fluxos estão no mesmo PostgreSQL e entram no backup horário existente; **não** rodei um
   restore com dados de fluxo. `/healthz` não ganhou checagem específica (as métricas do runtime ganharam).
-- **Frontend:** sem suporte a toque; testado com API mockada; um defeito do `Modal` compartilhado foi **contornado, não corrigido**.
+- **Frontend:** sem suporte a toque; testado com API mockada.
 - **Não implementado (decisão consciente):** `ai_agent` (agente autônomo com ferramentas: seria a primeira capacidade da IA com
   efeito e exige ADR e modelo de permissões de ferramenta); diff visual entre versões; exportar/importar fluxo; marketplace;
   assistente de atualização de templates; integração de monitoramento (os modelos de ISP funcionam sem ela); criação de
@@ -89,7 +89,7 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
 4. Build das imagens e subida com `OMNIRA_FLOWS_ENABLED=true` **em um tenant de teste**, com 1 flow simples publicado.
 5. **Smoke com telefone real** (conversa nova → bot → resposta → handoff → fila → atendente assume → bot cala) nas duas linhas (WAHA e Meta, se houver).
 6. Observar `/metrics` (`omnira_flow_*`) e o log do sweeper por 24 h supervisionadas antes de ampliar.
-7. Decidir sobre a correção do `Modal` compartilhado e sobre os 5 testes quebrados de `main`.
+7. Decidir sobre os 5 testes quebrados de `main` (o `Modal` já foi corrigido).
 
 ## Rollback
 

@@ -9,7 +9,7 @@ Ponto de entrada: `docs/flows/STATUS.md` (evidência por fase), `docs/flows/PROD
 `docs/flows/FINAL-REPORT.md` (resumo, decisões e pendências), `docs/flows/USER-GUIDE.md` (operador), `docs/flows/OPERATIONS.md`.
 Invariantes que testes protegem: `conversations` **não** tem coluna de empresa; a matriz de papéis em `internal/iam3` é fixada por teste;
 `messages.Sender` é só humano (o bot usa `SystemSender`); a IA nunca define severidade. Pendências: revisão Codex
-(`CODEX_PLUGIN_NOT_EXECUTED`), smoke com telefone real, `ai_agent`, correção do `Modal` compartilhado, renumerar migrations no merge.
+(`CODEX_PLUGIN_NOT_EXECUTED`), smoke com telefone real, `ai_agent`, renumerar migrations no merge.
 
 ## PILOT STATUS — 2026-09-28 (LEIA PRIMEIRO)
 

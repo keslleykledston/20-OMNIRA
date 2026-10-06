@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Badge, Button, ConfirmDialog, ErrorState, LoadingState, PermissionState, Tabs, TextArea } from '../components/primitives'
-import StableModal from '../components/flows/StableModal'
+import { Badge, Button, ConfirmDialog, ErrorState, LoadingState, PermissionState, Tabs, TextArea, Modal } from '../components/primitives'
 import FlowCanvas, { type PendingConnection } from '../components/flows/FlowCanvas'
 import NodePalette from '../components/flows/NodePalette'
 import NodeInspector from '../components/flows/NodeInspector'
@@ -315,7 +314,7 @@ export default function FlowEditorPage() {
         </aside>
       </div>
 
-      <StableModal
+      <Modal
         open={publishing}
         title="Publicar fluxo"
         description="Será criada uma nova versão, que nunca mais muda. Ela passa a valer para as próximas conversas; as em andamento continuam na versão atual."
@@ -323,7 +322,7 @@ export default function FlowEditorPage() {
         footer={<><Button variant="secondary" onClick={() => setPublishing(false)}>Cancelar</Button><Button isLoading={publish.isPending} onClick={() => publish.mutate()}>Publicar</Button></>}
       >
         <TextArea label="Nota da versão (opcional)" value={publishNote} maxLength={500} rows={3} onChange={(e) => setPublishNote(e.target.value)} />
-      </StableModal>
+      </Modal>
       <FlowSettingsModal open={settingsOpen} flow={flow} lines={lines.data ?? []} saving={settings.isPending} error={settings.isError ? flowErrorMessage(settings.error) : null} onClose={() => setSettingsOpen(false)} onSave={(v) => settings.mutate(v)} />
       <ConfirmDialog open={archiveOpen} title="Arquivar este fluxo?" message="Um fluxo arquivado deixa de atender conversas novas e não pode mais ser editado." confirmLabel="Arquivar" destructive isPending={archive.isPending} onConfirm={() => archive.mutate()} onCancel={() => setArchiveOpen(false)} />
     </div>

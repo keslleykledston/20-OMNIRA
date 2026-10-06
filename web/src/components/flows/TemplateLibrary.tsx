@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Badge, Button, Card, CardBody, EmptyState, ErrorState, LoadingState, SearchField } from '../primitives'
-import StableModal from './StableModal'
+import { Badge, Button, Card, CardBody, EmptyState, ErrorState, LoadingState, SearchField, Modal } from '../primitives'
 import InstallWizard from './InstallWizard'
 import { flowErrorMessage, flowsAPI, type PackInfo, type TemplateInfo } from '../../lib/flows'
 import { queuesAPI } from '../../lib/queues'
@@ -110,7 +109,7 @@ export default function TemplateLibrary({ canInstall }: Props) {
 
       {wizard && <InstallWizard pack={wizard.pack} template={wizard.template} queues={queues.data ?? []} onClose={() => setWizard(null)} />}
 
-      <StableModal open={!!preview} title={preview?.name ?? ''} description={preview?.description} onClose={() => setPreview(null)} footer={<Button onClick={() => setPreview(null)}>Fechar</Button>}>
+      <Modal open={!!preview} title={preview?.name ?? ''} description={preview?.description} onClose={() => setPreview(null)} footer={<Button onClick={() => setPreview(null)}>Fechar</Button>}>
         {preview && (
           <div className="space-y-3 text-sm">
             <p className="text-text-secondary">Versão {preview.version} · {preview.test_cases} cenário(s) de teste já validados.</p>
@@ -130,7 +129,7 @@ export default function TemplateLibrary({ canInstall }: Props) {
             )}
           </div>
         )}
-      </StableModal>
+      </Modal>
     </div>
   )
 }

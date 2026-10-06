@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Badge, Button, EmptyState, ErrorState, Input, LoadingState, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from '../primitives'
-import StableModal from './StableModal'
+import { Badge, Button, EmptyState, ErrorState, Input, LoadingState, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Modal } from '../primitives'
 import { flowErrorMessage, flowsAPI, type Flow, type FlowType } from '../../lib/flows'
 import { getTenantId } from '../../lib/session'
 
@@ -87,7 +86,7 @@ export default function FlowListSection({ canCreate }: { canCreate: boolean }) {
           </TableBody>
         </Table>
       )}
-      <StableModal
+      <Modal
         open={creating}
         title="Novo fluxo"
         description="O fluxo começa como rascunho vazio: nada atende conversas até você publicar."
@@ -105,7 +104,7 @@ export default function FlowListSection({ canCreate }: { canCreate: boolean }) {
           </label>
           {create.isError && <p role="alert" className="text-sm text-status-danger">{flowErrorMessage(create.error)}</p>}
         </div>
-      </StableModal>
+      </Modal>
     </div>
   )
 }

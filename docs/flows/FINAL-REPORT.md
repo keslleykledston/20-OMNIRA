@@ -58,13 +58,13 @@ Série de commits por fase (`git log main..HEAD`) · 114+ arquivos · ~9,1 mil l
 - `main` **não compilava** (`authn` com import sem uso; `server.go:214` com `HandleFunc` recebendo `http.Handler`): consertado em commit isolado e descartável (`fbeffeb`). Três pacotes de **teste** (`authn`, `httpserver`, `tenancy/adapters`) seguem sem compilar por mudança de assinatura do IAM5.
 - `web/src/__tests__/SettingsShell.test.tsx` falha em `main` (o commit `6f2a380` mudou o componente sem atualizar o teste).
 - `internal/outbox/adapters TestStoreUsesInjectedTransaction` e o teste de performance de `intelligence/adapters` falham na baseline.
-- **`web/src/components/primitives/Modal.tsx`**: refoca o primeiro controle sempre que `onClose` muda de identidade e **engole texto digitado** em modais com campo. Contornado com `StableModal`. Correção sugerida: guardar `onClose` num `ref` e depender só de `[open]`.
+- **`web/src/components/primitives/Modal.tsx`** refocava o primeiro controle a cada mudança de `onClose` e engolia texto digitado. **Corrigido** (ref + dependência só de `[open]`, com teste de regressão); o contorno `StableModal` foi removido.
 
 ## Decisões que precisam de você
 
 1. **Revisão independente (Codex)** antes do piloto: não foi executada (`CODEX_PLUGIN_NOT_EXECUTED`); não afirmo "zero CRITICAL/HIGH".
 2. **Polimento visual pelo Lovable?** Construí localmente (sem custo de créditos e sem dependência). Se quiser o acabamento do projeto OmniFlow Hub, o modelo e a API não mudam.
-3. **Corrigir o `Modal` compartilhado** e os testes quebrados de `main` (donos: frentes IAM5/agentes).
+3. ~~Corrigir o `Modal` compartilhado~~ **feito** (2026-10-06). Os testes quebrados de `main` seguem com as frentes IAM5/agentes.
 4. **Ordem de merge:** reconferir o número das migrations (`0000082+`) e resolver por união os 4 arquivos compartilhados (`App.tsx`, `Sidebar.tsx`, `permissions.ts`, `iam3/security_test.go`).
 5. **`ai_agent`** (agente autônomo com ferramentas) ficou de fora por ser a primeira capacidade da IA com efeito: pede ADR e modelo de permissão de ferramenta.
 6. **Piloto:** seguir as condições do gate (aceite, revisão, restore, tenant de teste, smoke com telefone real, 24 h observadas).

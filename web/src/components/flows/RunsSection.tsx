@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Badge, Card, CardBody, EmptyState, ErrorState, LoadingState, Button, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from '../primitives'
-import StableModal from './StableModal'
+import { Badge, Card, CardBody, EmptyState, ErrorState, LoadingState, Button, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Modal } from '../primitives'
 import { flowErrorMessage, flowsAPI, type RunDetail } from '../../lib/flows'
 import { nodeLabel } from '../../lib/flowModel'
 import { getTenantId } from '../../lib/session'
@@ -111,11 +110,11 @@ export default function RunsSection() {
         </Table>
       )}
 
-      <StableModal open={!!openRun} title="Detalhe da execução" onClose={() => setOpenRun(null)} footer={<Button onClick={() => setOpenRun(null)}>Fechar</Button>}>
+      <Modal open={!!openRun} title="Detalhe da execução" onClose={() => setOpenRun(null)} footer={<Button onClick={() => setOpenRun(null)}>Fechar</Button>}>
         {detail.isLoading && <LoadingState message="Carregando…" />}
         {detail.isError && <ErrorState message={flowErrorMessage(detail.error)} />}
         {detail.data && <RunTimeline run={detail.data} />}
-      </StableModal>
+      </Modal>
     </div>
   )
 }

@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Badge, Button, LoadingState } from '../primitives'
-import StableModal from './StableModal'
+import { Badge, Button, LoadingState, Modal } from '../primitives'
 import { flowErrorMessage, flowsAPI, type InstallResult, type PackInfo, type TemplateInfo } from '../../lib/flows'
 import type { Queue } from '../../lib/queues'
 import { getTenantId } from '../../lib/session'
@@ -56,7 +55,7 @@ export default function InstallWizard({ pack, template, queues, onClose }: Props
   const toggle = (slug: string) => setSelected((s) => (s.includes(slug) ? s.filter((x) => x !== slug) : [...s, slug]))
 
   return (
-    <StableModal
+    <Modal
       open
       title={title}
       description={step === 'done' ? undefined : 'Os fluxos são criados como rascunhos seus. Nada é publicado até você revisar, simular e publicar.'}
@@ -147,6 +146,6 @@ export default function InstallWizard({ pack, template, queues, onClose }: Props
         )}
         {preview.isLoading && step === 'choose' && <LoadingState message="Carregando…" />}
       </div>
-    </StableModal>
+    </Modal>
   )
 }

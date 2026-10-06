@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Input } from '../primitives'
-import StableModal from './StableModal'
+import { Button, Input, Modal } from '../primitives'
 import type { Flow, RestartPolicy } from '../../lib/flows'
 import type { ChannelLine } from '../../lib/channelLines'
 
@@ -33,7 +32,7 @@ export default function FlowSettingsModal({ open, flow, lines, saving, error, on
 
   const toggle = (list: string[], v: string, set: (l: string[]) => void) => set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v])
   return (
-    <StableModal
+    <Modal
       open={open}
       title="Configurações do fluxo"
       description="Define quais conversas este fluxo atende e em que ordem."
@@ -76,6 +75,6 @@ export default function FlowSettingsModal({ open, flow, lines, saving, error, on
         </fieldset>
         {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
       </div>
-    </StableModal>
+    </Modal>
   )
 }
