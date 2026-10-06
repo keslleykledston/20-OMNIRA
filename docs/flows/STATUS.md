@@ -32,7 +32,7 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 | Fase | Escopo | Estado |
 |---|---|---|
 | 0 | Backup, análise de conflito, ADR-0019, baseline | **feita** |
-| 1 | Migrations 082–084, domínio, repositório Postgres + testes de isolamento | em andamento |
+| 1 | Migrations 082–084, domínio, repositório Postgres + testes de isolamento | **feita** (ver evidências) |
 | 2 | Control plane: validador, publicar/rollback, RBAC, HTTP, OpenAPI | pendente |
 | 3 | Runtime: resolver, passo transacional, wait/resume, idempotência, limites, gancho de ingest, worker | pendente |
 | 4 | Nodes determinísticos + SystemSender | pendente |
@@ -40,6 +40,13 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 | 6 | Templates/Packs (embed), instalador, packs Starter/K3G/ISP NOC + testes | pendente |
 | 7 | Frontend em `web/` (não em `apps/web`) | pendente |
 | 8 | Nodes de IA, analytics/observabilidade, production gate, relatório final | pendente |
+
+## Evidências por fase
+**FLOW.1** (banco descartável, 84 migrations aplicadas do zero):
+- `go test ./internal/flows/...`: domínio (3) + repositório (6) PASS — isolamento tenant A/B (leitura, escrita, publish, archive, FK/`CreateFlow` com tenant forjado, RLS escondendo a linha mesmo sem filtro explícito), rascunho otimista (conflito de revisão), publish atômico, snapshots imutáveis (trigger bloqueia até o owner; `omnira_app` sem grant), rollback só move o ponteiro, publish concorrente idempotente (6 goroutines → 1 versão), unicidade de slug/default, archive final e idempotente.
+- Suítes existentes dependentes de `conversations`/`messages` com as migrations aplicadas: `platform/db` (inclui `TestRLSCompleteness` e `TestRLSPolicyCoverage` sobre as tabelas novas), `conversations`, `messages`, `inbox`, `routing`, `contacts`, `tickets`, `accounts`, `identity`, `channels`, `dashboard`: todas **ok**.
+- `scripts/test-migration-roundtrip.sh 000084_...`: PASS (schema idêntico após down/up). O script só reverte a migration mais recente; `000082`/`000083` foram revertidas e reaplicadas manualmente em banco descartável (sem erro).
+- `gofmt -l internal/flows` limpo; `go vet ./internal/flows/...` limpo.
 
 ## Histórico de correções desta sessão (transparência)
 Um primeiro scaffold foi escrito sem compilar (módulo errado, RLS fora do padrão, `apps/web` duplicado) e suas mensagens de commit afirmavam testes que não foram rodados. Foi **revertido e descartado** (`feat/flow-builder-discarded-scaffold`, backup em `backup/flow-builder-before-rebuild-*` e em `git bundle` fora do repo). Tudo abaixo é refeito com compilação e testes reais.
