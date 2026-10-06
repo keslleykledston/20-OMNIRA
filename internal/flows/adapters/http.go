@@ -421,6 +421,31 @@ func (h *Handler) Archive(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Simulate runs a scenario against the draft (or an unsaved definition) with the real engine and no side effects.
+func (h *Handler) Simulate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.session(w, r, PermTest); !ok {
+		return
+	}
+	id, ok := pathID(r, "flow_id")
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	var in struct {
+		Definition json.RawMessage      `json:"definition"`
+		Scenario   application.Scenario `json:"scenario"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	res, err := h.cp.SimulateFlow(r.Context(), id, in.Definition, in.Scenario)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 // NodeTypes serves the node library of the builder.
 func (h *Handler) NodeTypes(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.session(w, r, PermView); !ok {
@@ -444,6 +469,7 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	mux.Handle("PUT "+base+"/{flow_id}/draft", wrap(h.SaveDraft))
 	mux.Handle("POST "+base+"/{flow_id}/validate", wrap(h.ValidateStored))
 	mux.Handle("PATCH "+base+"/{flow_id}/settings", wrap(h.UpdateSettings))
+	mux.Handle("POST "+base+"/{flow_id}/simulate", wrap(h.Simulate))
 	mux.Handle("POST "+base+"/{flow_id}/publish", wrap(h.Publish))
 	mux.Handle("GET "+base+"/{flow_id}/versions", wrap(h.Versions))
 	mux.Handle("GET "+base+"/{flow_id}/versions/{version}", wrap(h.Version))

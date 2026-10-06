@@ -405,3 +405,37 @@ func NodeCatalog() []NodeCatalogEntry {
 	}
 	return out
 }
+
+// SimulateFlow runs a scenario against the flow's draft (or, when override is given, an unsaved definition the editor holds).
+// It applies the full publish-time judgement first (tenant resources, subflows) and does not run a blocked definition. The
+// simulation itself cannot write anything: it uses the real engine over an in-memory store and recording effects.
+func (c *ControlPlane) SimulateFlow(ctx context.Context, flowID uuid.UUID, override json.RawMessage, sc Scenario) (*SimResult, error) {
+	f, err := c.repo.GetFlow(ctx, flowID)
+	if err != nil {
+		return nil, err
+	}
+	raw := override
+	if len(raw) == 0 {
+		raw = f.DraftDefinition
+	}
+	if err := sc.normalize(); err != nil {
+		return nil, err
+	}
+	def, err := domain.ParseDefinition(raw)
+	if err != nil {
+		return &SimResult{Status: "blocked", Issues: []domain.Issue{{Severity: domain.SeverityError, Code: "invalid_definition", Message: err.Error()}}, Steps: []SimStep{}, Messages: []SimMessage{}, Effects: []SimEffect{}}, nil
+	}
+	issues, pins, err := c.check(ctx, f.Slug, def, false)
+	if err != nil {
+		return nil, err
+	}
+	if domain.HasErrors(issues) {
+		return &SimResult{Status: "blocked", Issues: issues, Steps: []SimStep{}, Messages: []SimMessage{}, Effects: []SimEffect{}}, nil
+	}
+	res, err := NewSimulator(c.repo).run(ctx, SimInput{Raw: raw, Pins: pins, Scenario: sc}, sc, def)
+	if err != nil {
+		return nil, err
+	}
+	res.Issues = issues // warnings
+	return res, nil
+}

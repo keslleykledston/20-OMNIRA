@@ -211,3 +211,44 @@ func TestHTTPLiveValidationAndNodeCatalog(t *testing.T) {
 		t.Fatalf("catalog: %d %d", code, len(items))
 	}
 }
+
+func TestHTTPSimulateIsGuardedByFlowTestAndNeverWrites(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	admin := env.UserA
+	supervisor := hn.member(env.TenantA, "tenant_supervisor")
+	agent := hn.member(env.TenantA, "tenant_agent")
+	code, flow := hn.call(admin, env.TenantA, "POST", "/flows", map[string]any{"slug": "sim", "name": "Sim"})
+	if code != 201 {
+		t.Fatalf("create: %d", code)
+	}
+	id := flow["id"].(string)
+	def := json.RawMessage(`{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},{"id":"hi","type":"send_message","config":{"text":"Olá {{contact.name}}"}},{"id":"e","type":"end"}],
+	  "edges":[{"id":"1","source":"start","sourcePort":"next","target":"hi"},{"id":"2","source":"hi","sourcePort":"next","target":"e"}]}`)
+	body := map[string]any{"definition": def, "scenario": map[string]any{"contact": map[string]any{"name": "Ana"}}}
+	if code, _ := hn.call(agent, env.TenantA, "POST", "/flows/"+id+"/simulate", body); code != 403 {
+		t.Fatalf("an agent has no flow.test: %d", code)
+	}
+	for who, u := range map[string]uuid.UUID{"admin": admin, "supervisor": supervisor} {
+		code, res := hn.call(u, env.TenantA, "POST", "/flows/"+id+"/simulate", body)
+		if code != 200 || res["status"] != "completed" {
+			t.Fatalf("%s must simulate: %d %v", who, code, res)
+		}
+		msgs, _ := res["messages"].([]any)
+		if len(msgs) != 1 || msgs[0].(map[string]any)["text"] != "Olá Ana" {
+			t.Fatalf("%s: messages %v", who, msgs)
+		}
+	}
+	if n := func() (n int) {
+		_ = env.Seed.QueryRow(context.Background(), `SELECT count(*) FROM messages WHERE tenant_id=$1`, env.TenantA).Scan(&n)
+		return
+	}(); n != 0 {
+		t.Fatalf("a simulation sent %d real messages", n)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows/"+id+"/simulate", map[string]any{"scenario": map[string]any{"provider": "telegram"}}); code != 400 {
+		t.Fatalf("an invalid scenario is a 400, got %d", code)
+	}
+	if code, _ := hn.call(env.UserB, env.TenantB, "POST", "/flows/"+id+"/simulate", body); code != 404 {
+		t.Fatalf("tenant B must not simulate tenant A's flow: %d", code)
+	}
+}

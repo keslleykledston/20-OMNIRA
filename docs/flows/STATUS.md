@@ -37,7 +37,7 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 | 3 | Runtime: resolver, passo transacional, wait/resume, idempotência, limites | **feita** (gancho de ingest + worker entram na fase 4, com os efeitos reais) |
 | 4 | Nodes determinísticos + SystemSender + efeitos reais | **feita** (gancho de ingest, worker e varredura: fase 4b) |
 | 4b | Integração: gancho no ingest, consumidor do worker, varredura de timeouts/encalhadas, compose | **feita** |
-| 5 | Simulador | pendente |
+| 5 | Simulador (spec FLOW.6) | **feita** |
 | 6 | Templates/Packs (embed), instalador, packs Starter/K3G/ISP NOC + testes | pendente |
 | 7 | Frontend em `web/` (não em `apps/web`) | pendente |
 | 8 | Nodes de IA, analytics/observabilidade, production gate, relatório final | pendente |
@@ -81,6 +81,12 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 **Suíte completa do repositório após a 4b (`go test ./...`, banco descartável): 68 pacotes ok, 5 falhos — os MESMOS 5 da baseline** (authn/httpserver/tenancy: testes que não compilam por IAM5; `intelligence` perf; `outbox TestStoreUsesInjectedTransaction`). Antes da correção abaixo havia 2 regressões minhas, pegas por essa rodada:
 - `internal/intelligence TestTwoSubjectsOfOneConversationCarryTheirOwnCompanies` falhou com *"the conversation carries no company"*: o ADR-0017/0018 **proíbe coluna de empresa em `conversations`** (uma conversa tem vários assuntos, cada um com sua empresa). Minha coluna `conversations.active_customer_account_id` (migration 000084) violava o invariante. **Removida**; o contexto de empresa vive no run e no ticket; a empresa já confirmada de uma conversa é reaproveitada lendo o **último run** dela. O teste voltou a passar.
 - `internal/iam3 TestSystemRolePermissionMatrix` falhou porque a matriz de papéis é **fixada por teste** e a migration 000083 adiciona 9 chaves. Atualizei a matriz (admin: 9 chaves; supervisor: `flow.view/test`, `flow_run.view`, `flow_template.view`; agent: nenhuma) — mudança deliberada, de 4 linhas, documentada em CONFLICT-ANALYSIS.
+
+**FLOW.6** (simulador, `POST .../flows/{id}/simulate`, permissão `flow.test`):
+- Usa o **motor real e todos os executores** sobre repositório **em memória** e efeitos que só registram: não existe conexão de escrita no simulador. Cenário opcional: contato (nome/tipo), provedor (WAHA / Meta) e **janela de 24 h aberta ou fechada**, empresas vinculadas (0/1/N), tickets abertos, relógio (horário comercial), e eventos `message`/`timeout` (limites: 30 eventos, 10 empresas, 4096 caracteres). Devolve passos (porta, saída redigida), mensagens que **seriam** enviadas, efeitos que **aconteceriam** (ticket, fila, handoff, empresa validada, com o passo responsável), variáveis (sem estado privado e sem segredos) e onde ficou esperando.
+- Definição com erro bloqueante (inclusive fila de outro tenant) volta `blocked` com as `issues` e **nada roda**. Simula também uma definição ainda não salva do editor.
+- Provas: **7 testes unitários/integração + 1 de API**; o de isolamento conta as linhas de 10 tabelas (`flow_runs`, `flow_node_executions`, `messages`, `outbox_events`, `tickets`, `conversations`, `queues`, `contacts`, `flow_versions`, `audit_events`) antes e depois de simular um flow que **executa** send_message, create_ticket, assign_queue e human_handoff: nenhuma muda, e a conversa real continua `bot`. Agente recebe 403, supervisor e admin simulam, tenant B recebe 404 no flow do A, cenário inválido é 400.
+- Contrato: `simulateFlow` em `flows-v1.yaml` (guarda de deriva passa).
 
 ## Histórico de correções desta sessão (transparência)
 Um primeiro scaffold foi escrito sem compilar (módulo errado, RLS fora do padrão, `apps/web` duplicado) e suas mensagens de commit afirmavam testes que não foram rodados. Foi **revertido e descartado** (`feat/flow-builder-discarded-scaffold`, backup em `backup/flow-builder-before-rebuild-*` e em `git bundle` fora do repo). Tudo abaixo é refeito com compilação e testes reais.

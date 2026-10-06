@@ -118,6 +118,26 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/flows/{flow_id}/simulate:
+    post:
+      operationId: simulateFlow
+      tags: [Flows]
+      summary: Simulate a scenario against the draft (no side effects)
+      description: |
+        Requires `flow.test`. Runs the REAL engine over an in-memory store with recording effects: no run, message, ticket,
+        queue assignment or audit row is written, and no provider is called. `definition` (optional) simulates an unsaved
+        definition the editor holds instead of the stored draft. Blocking validation errors (including references to queues
+        that are not this tenant's) return `status: blocked` with the issues and nothing runs. At most 30 events.
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/FlowId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { definition: { $ref: '#/components/schemas/Definition' }, scenario: { $ref: '#/components/schemas/Scenario' } } } } }
+      responses:
+        '200': { description: Simulation result, content: { application/json: { schema: { $ref: '#/components/schemas/SimulationResult' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/flows/{flow_id}/publish:
     post:
       operationId: publishFlow
@@ -308,6 +328,33 @@ components:
         published_by: { type: string, format: uuid, nullable: true }
         published_at: { type: string, format: date-time }
         definition: { $ref: '#/components/schemas/Definition' }
+    Scenario:
+      type: object
+      description: All fields optional. Defaults model a new, unclassified contact on a WAHA line who writes "oi".
+      properties:
+        contact: { type: object, properties: { name: { type: string }, phone: { type: string }, kind: { type: string, enum: [unclassified, customer, other] } } }
+        provider: { type: string, enum: [waha, meta_cloud] }
+        window_open: { type: boolean, description: Meta 24h window (default true) }
+        companies: { type: array, maxItems: 10, items: { type: object, properties: { name: { type: string } } } }
+        open_tickets: { type: integer }
+        open_ticket_subject: { type: string }
+        now: { type: string, format: date-time, description: The clock the flow sees (business hours) }
+        events:
+          type: array
+          maxItems: 30
+          items: { type: object, required: [type], properties: { type: { type: string, enum: [message, timeout] }, text: { type: string, maxLength: 4096 } } }
+    SimulationResult:
+      type: object
+      properties:
+        status: { type: string, enum: [completed, waiting_input, waiting_human, failed, cancelled, blocked, no_run] }
+        steps: { type: array, items: { type: object, properties: { seq: { type: integer }, node_id: { type: string }, node_type: { type: string }, status: { type: string }, port: { type: string }, output: { type: object }, error: { type: string } } } }
+        messages: { type: array, items: { type: object, properties: { step: { type: integer }, text: { type: string } } } }
+        effects: { type: array, items: { type: object, properties: { step: { type: integer }, kind: { type: string, enum: [ticket, assign_queue, handoff, company_validated] }, detail: { type: object } } } }
+        variables: { type: object }
+        issues: { type: array, items: { $ref: '#/components/schemas/Issue' } }
+        error: { type: string }
+        events_consumed: { type: integer }
+        waiting_at: { type: string }
     NodeType:
       type: object
       properties:
