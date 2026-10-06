@@ -90,8 +90,34 @@ type SummaryContext struct {
 	Truth   TruthLevel
 }
 
+// MemoryAttendance and MemoryFollowUp are what the contact's earlier attendances left behind (ADR-0020). They are the ONE
+// deliberate exception to "only this topic": the SAME contact, and only what staff recorded (or a model drafted and staff
+// confirmed), never raw earlier messages.
+type MemoryAttendance struct {
+	At      time.Time
+	Reason  string
+	Summary string
+	Truth   TruthLevel
+}
+
+type MemoryFollowUp struct {
+	Kind  string // pending | promise | info
+	Text  string
+	DueAt *time.Time
+	Truth TruthLevel
+}
+
+type ContactMemoryContext struct {
+	Attendances []MemoryAttendance
+	FollowUps   []MemoryFollowUp
+}
+
+func (m *ContactMemoryContext) Empty() bool {
+	return m == nil || (len(m.Attendances) == 0 && len(m.FollowUps) == 0)
+}
+
 // TopicContext is the canonical, bounded, topic-scoped input of every AI step about a topic. It contains ONLY material
-// linked to this topic: another topic's messages can never appear in it.
+// linked to this topic: another topic's messages can never appear in it. The one exception is Memory (see above).
 type TopicContext struct {
 	Topic            TopicThread
 	ConfirmedSummary *SummaryContext
@@ -106,6 +132,8 @@ type TopicContext struct {
 	MessageCount     int // all messages linked to the topic, not only the ones included
 	LastMessageAt    *time.Time
 	Truncated        bool
+	// Memory is nil unless the contact-memory flag is on and the contact has something recorded.
+	Memory *ContactMemoryContext
 }
 
 // SanitizeDerivedText cleans text that came from outside OMNIRA before it is stored or sent anywhere.
@@ -147,6 +175,9 @@ func (c TopicContext) Render(nonce string) RenderedPrompt {
 	if c.ConfirmedSummary != nil {
 		fmt.Fprintf(&t, "confirmed_summary: version=%d truth=%s (its text is in the untrusted zone)\n", c.ConfirmedSummary.Version, c.ConfirmedSummary.Truth)
 	}
+	if !c.Memory.Empty() {
+		fmt.Fprintf(&t, "contact_memory: earlier_attendances=%d open_follow_ups=%d (texts are in the untrusted zone; may be out of date)\n", len(c.Memory.Attendances), len(c.Memory.FollowUps))
+	}
 
 	budget := MaxContextTotalRunes
 	truncated := c.Truncated
@@ -166,6 +197,19 @@ func (c TopicContext) Render(nonce string) RenderedPrompt {
 	}
 	if c.InferredSummary != nil && (c.ConfirmedSummary == nil || c.InferredSummary.Version > c.ConfirmedSummary.Version) {
 		line(fmt.Sprintf("[machine summary v%d %s]", c.InferredSummary.Version, c.InferredSummary.Truth), c.InferredSummary.Text)
+	}
+	if !c.Memory.Empty() {
+		// open commitments first: they are what a continuing attendance most needs
+		for _, f := range c.Memory.FollowUps {
+			due := "none"
+			if f.DueAt != nil {
+				due = f.DueAt.UTC().Format("2006-01-02")
+			}
+			line(fmt.Sprintf("[open follow-up %s due=%s %s]", f.Kind, due, f.Truth), f.Text)
+		}
+		for _, a := range c.Memory.Attendances {
+			line(fmt.Sprintf("[earlier attendance %s reason=%s %s]", a.At.UTC().Format("2006-01-02"), a.Reason, a.Truth), a.Summary)
+		}
 	}
 	ents := append([]EntityContext(nil), c.Entities...)
 	sort.Slice(ents, func(i, j int) bool {
@@ -220,6 +264,14 @@ func (c TopicContext) PlainText() string {
 	}
 	for _, e := range c.Entities {
 		add(e.Key)
+	}
+	if c.Memory != nil {
+		for _, f := range c.Memory.FollowUps {
+			add(f.Text)
+		}
+		for _, a := range c.Memory.Attendances {
+			add(a.Summary)
+		}
 	}
 	for _, m := range c.RelevantMessages {
 		add(m.Text)

@@ -238,6 +238,11 @@ func main() {
 	}
 	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management))
 	srv.RegisterChannelDirectory(dbPool, channeladapters.NewDirectoryHandler(erpConnections, erpCredentials))
+	// ADR-0020: finalize an attendance, and the contact's attendance history and pending items. Always on: it is an explicit
+	// action behind the existing conversation.claim / conversation.manage permissions. Built first because the copilot's
+	// contact memory (flagged off by default) reads from it.
+	attendanceService := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
+		attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
 	intelligenceFlags := intelligenceapp.FlagsFromEnv(nil)
 	if intelligenceFlags.TopicThreadsEnabled {
 		topicRepo := intelligenceadapters.NewPostgresTopicRepository(dbPool)
@@ -248,7 +253,9 @@ func main() {
 			intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 		ticketPolicySvc := intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool), routingRepo,
 			inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)
-		copilotSvc := intelligenceapp.NewCopilotService(intelligenceapp.NewContextBuilder(topicRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), summaryRepo),
+		contactMemory := intelligenceadapters.NewContactMemory(dbPool, attendanceService)
+		copilotSvc := intelligenceapp.NewCopilotService(intelligenceapp.NewContextBuilder(topicRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), summaryRepo).
+			WithContactMemory(contactMemory, intelligenceFlags.CopilotContactMemoryEnabled),
 			intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 		handoffSvc := intelligenceapp.NewHandoffService(intelligenceadapters.NewPostgresHandoffRepository(dbPool), routingRepo, intelligenceFlags, nil)
 		topicSvc := intelligenceapp.NewTopicService(topicRepo).WithRouting(routingRepo)
@@ -257,8 +264,12 @@ func main() {
 			WithRestructure(intelligenceapp.NewRestructureService(topicRepo, intelligenceadapters.NewPostgresRestructureRepository(dbPool), routingRepo)).
 			WithEvaluation(intelligenceadapters.NewPostgresEvaluationRepository(dbPool))
 		// the AI tool gateway: a closed registry of real tools, run with the requesting user's own permissions
+		toolExecutors := intelligenceapp.NewToolExecutors(topicSvc, summarySvc, ticketPolicySvc)
+		for name, run := range intelligenceapp.NewContactMemoryExecutors(contactMemory) { // ADR-0020: read-only memory of the topic's contact
+			toolExecutors[name] = run
+		}
 		topicHandler.WithTools(intelligenceapp.NewToolGateway(intelligenceadapters.NewPostgresToolCallRepository(dbPool), topicRepo, topicHandler.ToolAuthorizer(),
-			intelligenceapp.NewToolExecutors(topicSvc, summarySvc, ticketPolicySvc), intelligenceFlags))
+			toolExecutors, intelligenceFlags))
 		srv.RegisterIntelligenceHandlers(dbPool, topicHandler)
 	}
 	if erpCipherErr == nil && erpCipher != nil {
@@ -267,10 +278,6 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
-	// ADR-0020: finalize an attendance, and the contact's attendance history and pending items. Always on: it is an explicit
-	// action behind the existing conversation.claim / conversation.manage permissions.
-	attendanceService := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
-		attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
 	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)

@@ -16,6 +16,7 @@ import { ContactNotes } from '../contacts/ContactNotes';
 import { WhatsAppName } from '../contacts/WhatsAppName';
 import { ChannelSwitcher } from './ChannelSwitcher';
 import AttendanceMemoryPanel from './AttendanceMemoryPanel';
+import HistorySearch from './HistorySearch';
 import FinalizeDialog from './FinalizeDialog';
 
 interface ContextPaneProps {
@@ -227,6 +228,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
 
       {/* ADR-0020: o que aconteceu antes com este contato e o que ficou pendente ou prometido */}
       {conversation?.conversation_kind !== 'internal' && <AttendanceMemoryPanel conversationId={conversationId} />}
+      {conversation?.conversation_kind !== 'internal' && <HistorySearch conversationId={conversationId} />}
 
       {/* Chamado + atividade CRM */}
       <TicketPanel

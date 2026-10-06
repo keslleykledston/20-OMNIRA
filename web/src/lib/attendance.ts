@@ -60,6 +60,13 @@ export interface AttendanceHistory {
   open_follow_ups: FollowUp[]
 }
 
+export interface HistoryHit {
+  at: string
+  role: 'customer' | 'agent'
+  snippet: string
+  conversation_id: string
+}
+
 export interface FollowUpInput {
   kind: FollowUpKind
   text: string
@@ -92,6 +99,8 @@ export const attendanceAPI = {
     call<{ changed: boolean; closure?: Closure }>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize`, body, h())),
   contextOf: (conversationId: string, limit = 5) =>
     call<AttendanceHistory>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/attendance-context`, { ...h(), params: { limit } })),
+  searchHistory: (conversationId: string, q: string, limit = 5) =>
+    call<{ items: HistoryHit[] }>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/history-search`, { ...h(), params: { q, limit } })).then((r) => r.items),
   resolveFollowUp: (id: string, body: { status: 'done' | 'dropped'; note?: string }) =>
     call<FollowUp>(() => axios.post(`${base()}/follow-ups/${id}/resolve`, body, h())),
 }
@@ -104,6 +113,7 @@ export function attendanceErrorMessage(err: unknown): string {
   if (status === 404) return 'Conversa não encontrada.'
   if (status === 409 && data?.error === 'already_resolved') return 'Esta pendência já foi resolvida.'
   if (status === 422) return 'Esta conversa não pode ser finalizada (não é um atendimento a um contato).'
+  if (status === 400 && data?.detail?.includes('query')) return 'Digite de 2 a 100 caracteres, sem senhas ou chaves.'
   if (status === 400 && data?.detail) return data.detail.replace(/^attendance: invalid input: /, '')
   return 'Não foi possível concluir. Tente novamente.'
 }

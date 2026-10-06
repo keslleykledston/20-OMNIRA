@@ -140,3 +140,58 @@ describe('Histórico e pendências do contato', () => {
     expect(screen.queryByRole('region', { name: 'Histórico do contato' })).toBeNull()
   })
 })
+
+describe('Busca no histórico do contato', () => {
+  it('searches only when asked, shows who said what and when, and tells when nothing matches', async () => {
+    serve()
+    const get = vi.mocked(axios.get)
+    const user = userEvent.setup()
+    renderAt(<ContextPane conversationId={CONV} />)
+    await screen.findByText('Maria Silva')
+    expect(get.mock.calls.some((c) => String(c[0]).endsWith('/history-search'))).toBe(false) // nothing on open
+    const section = screen.getByRole('region', { name: 'Buscar no histórico' })
+    const input = within(section).getByLabelText('Buscar no histórico do contato')
+    expect(within(section).getByRole('button', { name: 'Buscar' })).toBeDisabled() // needs 2+ characters
+    get.mockImplementation(async (url: string, cfg?: any) => {
+      if (String(url).endsWith('/history-search')) {
+        return { data: { items: cfg.params.q === 'fatura' ? [{ at: '2026-09-20T12:00:00Z', role: 'customer', snippet: 'a fatura de agosto veio errada', conversation_id: 'c-0' }, { at: '2026-09-20T12:05:00Z', role: 'agent', snippet: 'vamos conferir a fatura', conversation_id: 'c-0' }] : [] } }
+      }
+      return { data: { ...base } }
+    })
+    await user.type(input, 'fatura')
+    await user.click(within(section).getByRole('button', { name: 'Buscar' }))
+    const list = await within(section).findByRole('list', { name: 'Resultados da busca' })
+    expect(within(list).getByText('Cliente')).toBeInTheDocument()
+    expect(within(list).getByText('Atendente')).toBeInTheDocument()
+    expect(within(list).getByText('a fatura de agosto veio errada')).toBeInTheDocument()
+    const call = get.mock.calls.find((c) => String(c[0]).endsWith('/history-search'))!
+    expect(String(call[0])).toContain(`/inbox/conversations/${CONV}/`) // the contact is the conversation's: never a parameter
+    expect((call[1] as any).params).toEqual({ q: 'fatura', limit: 5 })
+    await user.clear(input)
+    await user.type(input, 'xyz')
+    await user.click(within(section).getByRole('button', { name: 'Buscar' }))
+    expect(await within(section).findByText(/Nada encontrado nas conversas anteriores/)).toBeInTheDocument()
+  })
+
+  it('explains a refusal in plain words', async () => {
+    serve()
+    const user = userEvent.setup()
+    renderAt(<ContextPane conversationId={CONV} />)
+    await screen.findByText('Maria Silva')
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/history-search')) return Promise.reject({ response: { status: 400, data: { error: 'invalid', detail: 'attendance: invalid input: query looks like it contains a credential' } } })
+      return { data: { ...base } }
+    })
+    const section = screen.getByRole('region', { name: 'Buscar no histórico' })
+    await user.type(within(section).getByLabelText('Buscar no histórico do contato'), 'senha')
+    await user.click(within(section).getByRole('button', { name: 'Buscar' }))
+    expect(await within(section).findByRole('alert')).toHaveTextContent(/sem senhas ou chaves/)
+  })
+
+  it('is not offered for a staff (internal) conversation', async () => {
+    serve({ conversation: { conversation_kind: 'internal' } })
+    renderAt(<ContextPane conversationId={CONV} />)
+    await screen.findByText('Maria Silva')
+    expect(screen.queryByRole('region', { name: 'Buscar no histórico' })).toBeNull()
+  })
+})

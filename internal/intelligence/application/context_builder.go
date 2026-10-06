@@ -24,10 +24,57 @@ type ContextBuilder struct {
 	Recent    int
 	Relevant  int
 	Media     int
+	// memory is the optional contact memory (ADR-0020). nil or !memoryOn: the context is exactly what it always was.
+	memory   ports.ContactMemory
+	memoryOn bool
 }
 
 func NewContextBuilder(topics ports.TopicRepository, data ports.ContextRepository, summaries ports.SummaryRepository) *ContextBuilder {
 	return &ContextBuilder{topics: topics, data: data, summaries: summaries, Recent: 20, Relevant: 8, Media: 6}
+}
+
+// WithContactMemory enables adding the contact's earlier attendances and open follow-ups to the context. A failing memory
+// never blocks the copilot (Intelligence is never a single point of failure): the context is simply built without it.
+func (b *ContextBuilder) WithContactMemory(mem ports.ContactMemory, enabled bool) *ContextBuilder {
+	b.memory, b.memoryOn = mem, enabled
+	return b
+}
+
+const (
+	memoryAttendances = 3
+	memoryFollowUps   = 8
+)
+
+func memoryTruth(t string) domain.TruthLevel {
+	if t == "agent_confirmed" {
+		return domain.TruthAgentConfirmed
+	}
+	return domain.TruthAIInferred // anything else is treated as the weakest level
+}
+
+func (b *ContextBuilder) loadMemory(ctx context.Context, topicID uuid.UUID) *domain.ContactMemoryContext {
+	atts, err := b.memory.RecentAttendances(ctx, topicID, memoryAttendances)
+	if err != nil {
+		return nil
+	}
+	fus, err := b.memory.OpenFollowUps(ctx, topicID, memoryFollowUps)
+	if err != nil {
+		return nil
+	}
+	m := &domain.ContactMemoryContext{}
+	for _, a := range atts {
+		if a.Summary == "" {
+			continue // nothing to remember from an attendance with no summary
+		}
+		m.Attendances = append(m.Attendances, domain.MemoryAttendance{At: a.At, Reason: a.Reason, Summary: a.Summary, Truth: memoryTruth(a.Truth)})
+	}
+	for _, f := range fus {
+		m.FollowUps = append(m.FollowUps, domain.MemoryFollowUp{Kind: f.Kind, Text: f.Text, DueAt: f.DueAt, Truth: memoryTruth(f.Truth)})
+	}
+	if m.Empty() {
+		return nil
+	}
+	return m
 }
 
 // Build returns the context of a topic. current, when given, must be a message of that same topic.
@@ -118,6 +165,9 @@ func (b *ContextBuilder) Build(ctx context.Context, topicID uuid.UUID, current *
 		return out, err
 	} else if inferred != nil {
 		out.InferredSummary = &domain.SummaryContext{Version: inferred.Version, Status: inferred.Status, Text: inferred.SummaryText, Truth: domain.TruthAIInferred}
+	}
+	if b.memoryOn && b.memory != nil {
+		out.Memory = b.loadMemory(ctx, topicID)
 	}
 	return out, nil
 }

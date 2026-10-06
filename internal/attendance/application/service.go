@@ -247,6 +247,17 @@ func (s *Service) SearchHistoryOfConversation(ctx context.Context, conversationI
 	return s.SearchHistoryOfContact(ctx, contactID, domain.SearchInput{Query: query, Limit: limit, ExcludeConversationID: &conversationID})
 }
 
+// OpenFollowUpsOfContact lists the contact's open items (dated first), at most `limit` (default and cap: 50).
+func (s *Service) OpenFollowUpsOfContact(ctx context.Context, contactID uuid.UUID, limit int) ([]domain.FollowUp, error) {
+	if _, err := actor(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > maxFollowUpList {
+		limit = maxFollowUpList
+	}
+	return s.repo.ListFollowUps(ctx, contactID, domain.StatusOpen, limit)
+}
+
 // ResolveFollowUp marks an open item done or dropped. Needs conversation.claim or conversation.manage.
 func (s *Service) ResolveFollowUp(ctx context.Context, id uuid.UUID, raw domain.ResolveFollowUpInput) (*domain.FollowUp, error) {
 	tc, err := actor(ctx)

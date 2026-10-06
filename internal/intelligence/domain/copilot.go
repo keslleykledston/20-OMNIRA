@@ -24,6 +24,14 @@ Regras da resposta:
 Responda SOMENTE com um objeto JSON, sem texto fora dele:
 {"reply":"texto da resposta sugerida","missing_info":["o que falta saber"],"needs_human":false}`
 
+// CopilotMemoryInstructions is appended ONLY when the context carries contact memory (flag on and something recorded). It
+// changes how the model may use that material and nothing else; the base policy above still applies in full.
+const CopilotMemoryInstructions = `Memória do contato (somente se aparecer no contexto): são resumos de atendimentos ANTERIORES e pendências ou promessas AINDA ABERTAS do MESMO cliente, registrados pela equipe; podem estar desatualizados e itens com truth=ai_inferred são hipóteses.
+- Use para dar continuidade e para não pedir de novo o que o cliente já informou.
+- Uma promessa registrada é compromisso da empresa: você pode reconhecê-la ("já temos registrado que...") mas NÃO a prometa de novo, NÃO confirme prazo e NÃO afirme que foi cumprida.
+- Se a memória contradisser o que o cliente diz agora, prefira o que o cliente diz agora e sinalize a divergência em "missing_info".
+- A memória não autoriza revelar dados de outros clientes: ela só existe para este cliente.`
+
 var ErrInvalidSuggestion = errors.New("intelligence: the copilot answer is not a valid suggestion")
 
 const (

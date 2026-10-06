@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/omnira/omnira/internal/platform/untrusted"
 )
 
 // Tool gateway (ADR-0017 Wave 12). The AI can only ask for capabilities that really exist in OMNIRA and that are listed
@@ -104,6 +107,21 @@ type applyTicketArgs struct {
 	Action string `json:"action"`
 }
 
+type limitArgs struct {
+	Limit int `json:"limit,omitempty"`
+}
+
+type searchArgs struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+const (
+	MaxMemoryLimit      = 20
+	minSearchQueryRunes = 2
+	maxSearchQueryRunes = 100
+)
+
 // ToolRegistry is the closed list of tools. It is code, not data: a tenant cannot add to it.
 func ToolRegistry() map[string]ToolSpec {
 	none := func(raw json.RawMessage) (json.RawMessage, error) {
@@ -113,7 +131,36 @@ func ToolRegistry() map[string]ToolSpec {
 		}
 		return normalise(a)
 	}
+	limited := func(raw json.RawMessage) (json.RawMessage, error) {
+		var a limitArgs
+		if err := strictArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if a.Limit < 0 || a.Limit > MaxMemoryLimit {
+			return nil, fmt.Errorf("%w: limit out of range", ErrInvalidArgs)
+		}
+		return normalise(a)
+	}
+	search := func(raw json.RawMessage) (json.RawMessage, error) {
+		var a searchArgs
+		if err := strictArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		a.Query = strings.TrimSpace(a.Query)
+		if n := utf8.RuneCountInString(a.Query); n < minSearchQueryRunes || n > maxSearchQueryRunes || untrusted.ContainsCredential(a.Query) {
+			return nil, fmt.Errorf("%w: query must have 2 to 100 characters and no credential", ErrInvalidArgs)
+		}
+		if a.Limit < 0 || a.Limit > MaxMemoryLimit {
+			return nil, fmt.Errorf("%w: limit out of range", ErrInvalidArgs)
+		}
+		return normalise(a)
+	}
 	specs := []ToolSpec{
+		// ADR-0020: memory of the topic's contact. Read only; the contact is derived from the topic on the server, so there is
+		// no argument that can point these at another contact or tenant.
+		{Name: "contact.recent_attendances", Description: "Summaries of the contact's earlier finalized attendances", Risk: RiskRead, Permission: "topic.read", Args: limited},
+		{Name: "contact.open_followups", Description: "What is still pending or was promised to this contact", Risk: RiskRead, Permission: "topic.read", Args: limited},
+		{Name: "contact.search_history", Description: "Find earlier messages of THIS contact by text", Risk: RiskRead, Permission: "topic.read", Args: search},
 		{Name: "topic.get_summary", Description: "Latest versions of the topic's summaries", Risk: RiskRead, Permission: "topic.read", Args: none},
 		{Name: "topic.list_tickets", Description: "Tickets linked to the topic", Risk: RiskRead, Permission: "topic.read", Args: none},
 		{Name: "topic.ticket_policy_advice", Description: "What the ticket policy advises for the topic", Risk: RiskRead, Permission: "topic.read", Args: none},

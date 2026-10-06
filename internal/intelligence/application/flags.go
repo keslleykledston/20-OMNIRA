@@ -17,6 +17,8 @@ type Flags struct {
 	CopilotEnabled            bool
 	AIToolGatewayEnabled      bool
 	AutoTicketPolicyEnabled   bool // never creates tickets by itself unless this is on
+	// CopilotContactMemoryEnabled adds the contact's earlier attendances and open follow-ups to the copilot's context (ADR-0020).
+	CopilotContactMemoryEnabled bool
 }
 
 // DefaultFlags is the safe default: topics exist, nothing acts on its own.
@@ -47,5 +49,6 @@ func FlagsFromEnv(get func(string) string) Flags {
 	set("OMNIRA_COPILOT_ENABLED", &f.CopilotEnabled)
 	set("OMNIRA_AI_TOOL_GATEWAY_ENABLED", &f.AIToolGatewayEnabled)
 	set("OMNIRA_AUTO_TICKET_POLICY_ENABLED", &f.AutoTicketPolicyEnabled)
+	set("OMNIRA_COPILOT_CONTACT_MEMORY_ENABLED", &f.CopilotContactMemoryEnabled)
 	return f
 }

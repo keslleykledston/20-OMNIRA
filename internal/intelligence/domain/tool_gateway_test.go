@@ -8,7 +8,8 @@ import (
 
 func TestTheRegistryIsClosedAndHasNoDangerousTools(t *testing.T) {
 	reg := ToolRegistry()
-	if len(reg) != 5 {
+	// 5 topic tools + 3 contact-memory tools (ADR-0020, all read-only: see TestContactMemoryToolsAreReadOnly...)
+	if len(reg) != 8 {
 		t.Fatalf("registry has %d tools", len(reg))
 	}
 	// capabilities that must NEVER be reachable by the AI, however they are spelled
@@ -72,5 +73,37 @@ func TestIdempotencyKeys(t *testing.T) {
 		if ValidIdempotencyKey(k) != want {
 			t.Errorf("%q = %v", k, !want)
 		}
+	}
+}
+
+func TestContactMemoryToolsAreReadOnlyAndTheirArgumentsAreStrict(t *testing.T) {
+	reg := ToolRegistry()
+	for _, name := range []string{"contact.recent_attendances", "contact.open_followups", "contact.search_history"} {
+		s, ok := reg[name]
+		if !ok || s.Risk != RiskRead || s.Permission != "topic.read" {
+			t.Fatalf("%s must exist, read-only, behind topic.read: %+v", name, s)
+		}
+		if DecideTool(s, SourceAIToolCall) != DecisionExecute {
+			t.Errorf("%s: a read runs without approval", name)
+		}
+		// nothing can name a contact or a tenant, however it is spelled
+		for _, bad := range []string{`{"contact_id":"x"}`, `{"tenant_id":"x"}`, `{"sql":"select 1"}`, `[]`, `{"limit":-1}`, `{"limit":21}`} {
+			if _, err := s.Args([]byte(bad)); !errors.Is(err, ErrInvalidArgs) {
+				t.Errorf("%s must reject %s: %v", name, bad, err)
+			}
+		}
+	}
+	search := reg["contact.search_history"]
+	for _, bad := range []string{`{}`, `{"query":""}`, `{"query":"a"}`, `{"query":"` + strings.Repeat("a", 101) + `"}`, `{"query":"Bearer abcdefghijk123"}`} {
+		if _, err := search.Args([]byte(bad)); !errors.Is(err, ErrInvalidArgs) {
+			t.Errorf("search must reject %s: %v", bad, err)
+		}
+	}
+	out, err := search.Args([]byte(`{"query":"  fatura  ","limit":3}`))
+	if err != nil || string(out) != `{"query":"fatura","limit":3}` {
+		t.Fatalf("normalised: %s %v", out, err)
+	}
+	if out, err := reg["contact.open_followups"].Args([]byte(``)); err != nil || string(out) != `{}` {
+		t.Fatalf("no arguments is fine: %s %v", out, err)
 	}
 }

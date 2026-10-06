@@ -22,6 +22,8 @@ import (
 const (
 	TaskCopilotReply     Task = "copilot_reply"
 	CopilotPromptVersion      = "copilot-reply-v1"
+	// CopilotPromptVersionMemory is recorded instead when the context carried contact memory (ADR-0020).
+	CopilotPromptVersionMemory = "copilot-reply-v2"
 )
 
 var (
@@ -151,7 +153,11 @@ func (s *CopilotService) Suggest(ctx context.Context, topicID uuid.UUID) (*Copil
 		callCtx, cancel = context.WithTimeout(ctx, route.Timeout)
 		defer cancel()
 	}
-	resp, err := route.Generator.Generate(callCtx, aiports.GenerateRequest{Instructions: domain.CopilotInstructions, Input: input, MaxOutputTokens: route.MaxOutputTokens})
+	instructions, version := domain.CopilotInstructions, CopilotPromptVersion
+	if !in.Memory.Empty() {
+		instructions, version = instructions+"\n\n"+domain.CopilotMemoryInstructions, CopilotPromptVersionMemory
+	}
+	resp, err := route.Generator.Generate(callCtx, aiports.GenerateRequest{Instructions: instructions, Input: input, MaxOutputTokens: route.MaxOutputTokens})
 	if err != nil {
 		s.account(ctx, tc.TenantID, route, resp, topicID, false, "provider_error")
 		return nil, ErrCopilotUnavailable
@@ -163,7 +169,7 @@ func (s *CopilotService) Suggest(ctx context.Context, topicID uuid.UUID) (*Copil
 	}
 	sug.Warnings = domain.CheckSuggestion(sug.Reply, in.PlainText())
 	s.account(ctx, tc.TenantID, route, resp, topicID, true, "")
-	res := &CopilotResult{Suggestion: sug, BasedOnMessages: in.MessageCount, AnsweredMessageID: current.ID, Model: route.Model, PromptVersion: CopilotPromptVersion}
+	res := &CopilotResult{Suggestion: sug, BasedOnMessages: in.MessageCount, AnsweredMessageID: current.ID, Model: route.Model, PromptVersion: version}
 	if in.ConfirmedSummary != nil {
 		v := in.ConfirmedSummary.Version
 		res.ConfirmedSummary = &v
