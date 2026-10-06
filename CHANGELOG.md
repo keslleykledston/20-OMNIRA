@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added (ADR-0019 — Visual Flow Builder, LAB, desligado por padrão)
+- Fluxos de atendimento configuráveis: rascunho editável, versões **imutáveis** (trigger no banco) e ponteiro ativo com rollback; 6 tabelas novas com RLS `FORCE` (migrations 000082–000084, aditivas e reversíveis).
+- Motor de execução transacional por conversa (idempotente, com retomada, limites, subflows com versão fixada), 20 tipos de nó, simulador sem efeitos, nós de IA opcionais que só sugerem.
+- Biblioteca de 24 templates em 3 packs (OMNIRA Starter, K3G Support, ISP NOC), instalados como rascunhos do tenant (atômico, só filas do próprio tenant).
+- API `contracts/openapi/flows-v1.yaml` (23 operações) com permissões `flow.*` (editar e publicar separados), histórico de execuções, analytics medidos e métricas Prometheus.
+- Envio do bot por `SystemSender` (mesma janela de 24 h e mesmo job de entrega; calado quando há operador).
+- Integração opcional ao ingest (`FlowGate`), consumidor `worker-flows` e sweeper; flags `OMNIRA_FLOWS_ENABLED` e `OMNIRA_FLOWS_AI_ENABLED` (padrão `false`).
+- Frontend: editor visual, biblioteca/assistente de instalação e execuções (rotas `/flows`, `/flows/:flowId`).
+- Docs: `docs/flows/{STATUS,PRODUCTION-GATE,FINAL-REPORT,USER-GUIDE,OPERATIONS,CONFLICT-ANALYSIS}.md`.
+
+### Fixed
+- `go build ./...` em `main`: import sem uso em `authn/password_handler.go` e `HandleFunc` recebendo `http.Handler` em `httpserver/server.go:214` (IAM5).
+
 ### Added (M03.1 — Inbound persistence foundation)
 - Provider-neutral inbound orchestration for Contact, Conversation, Message and Ticket.
 - PostgreSQL adapter scoped by TenantContext and transaction querier.

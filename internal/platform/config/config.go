@@ -45,6 +45,11 @@ type Config struct {
 	// WhisperURL: the local speech-to-text server (omnira-whisper systemd unit). Empty disables transcription.
 	WhisperURL string
 	MetaEnabled       bool
+	// FlowsEnabled turns on the Flow Builder API and runtime (ADR-0019). Off by default: nothing changes when unset.
+	FlowsEnabled bool
+	// FlowsAIEnabled lets Flow AI nodes call the platform's configured model (also needs OMNIRA_AI_* ready). Off by default:
+	// AI nodes then take their error port.
+	FlowsAIEnabled bool
 	PublicBaseURL     string
 	// WebBaseURL: host do frontend como o navegador enxerga (links de e-mail). Diferente
 	// de PublicBaseURL, que é a URL server-to-server usada por webhooks.
@@ -127,6 +132,8 @@ func Load() *Config {
 		ClamAVAddr:        os.Getenv("OMNIRA_CLAMAV_ADDR"),
 		WhisperURL:        os.Getenv("OMNIRA_WHISPER_URL"),
 		MetaEnabled:       getEnv("OMNIRA_META_ENABLED", "false") == "true",
+		FlowsEnabled:      getEnv("OMNIRA_FLOWS_ENABLED", "false") == "true",
+		FlowsAIEnabled:    getEnv("OMNIRA_FLOWS_AI_ENABLED", "false") == "true",
 		PublicBaseURL:     os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
 		WebBaseURL:        os.Getenv("OMNIRA_WEB_BASE_URL"),
 		SMTPHost:          os.Getenv("OMNIRA_SMTP_HOST"),

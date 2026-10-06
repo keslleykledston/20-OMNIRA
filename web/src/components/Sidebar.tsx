@@ -27,6 +27,8 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Reconciliação', path: '/ticket-reconciliation', icon: 'clock' },
   // ADR-0015: always visible, like Supervisor; access is gated inside the page (group.read).
   { label: 'Grupos', path: '/groups', icon: 'whatsapp' },
+  // ADR-0019: always visible like Supervisor; each area is gated inside the page by flow.view / flow_template.view / flow_run.view.
+  { label: 'Automação', path: '/flows', icon: 'sparkles' },
   { label: 'Contatos', path: '/contacts', icon: 'contacts' },
   { label: 'Canais', path: '/channels', icon: 'channels' },
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },

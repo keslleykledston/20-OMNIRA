@@ -66,7 +66,19 @@ type InitialRouter interface {
 	RouteNew(context.Context, uuid.UUID) error
 }
 
+// FlowGate lets the Flow Builder (ADR-0019) take a new conversation before default routing and be told about every inbound
+// message. It must never fail or slow ingestion: implementations swallow and log their own errors. Without one, ingestion
+// is exactly as before.
+type FlowGate interface {
+	// Engage is called for a NEW conversation of an external contact; true means a published flow holds it, so the default
+	// queue routing is skipped (the flow routes it on handoff or at any end).
+	Engage(ctx context.Context, conversationID uuid.UUID) bool
+	// OnInbound is called once per persisted, non-duplicate inbound message of an external contact's conversation.
+	OnInbound(ctx context.Context, conversationID, messageID uuid.UUID, newConversation bool)
+}
+
 type InboundService struct {
+	flows         FlowGate
 	contacts      ContactStore
 	conversations ConversationStore
 	messages      MessageStore
@@ -121,6 +133,12 @@ type ParticipantRecorder interface {
 // WithParticipants enables participant and reply tracking (ADR-0017). Without it ingestion is exactly as before.
 func (s *InboundService) WithParticipants(r ParticipantRecorder) *InboundService {
 	s.participants = r
+	return s
+}
+
+// WithFlows enables the Flow Builder hook (OMNIRA_FLOWS_ENABLED). Without it ingestion is exactly as before.
+func (s *InboundService) WithFlows(g FlowGate) *InboundService {
+	s.flows = g
 	return s
 }
 
@@ -188,7 +206,9 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 	if err != nil {
 		return nil, fmt.Errorf("inbox: find conversation: %w", err)
 	}
+	newConversation := false
 	if conversation == nil {
+		newConversation = true
 		conversation, err = conversationdomain.NewConversation(tc.TenantID, contact.ID, &connection.ID)
 		if err != nil {
 			return nil, err
@@ -224,7 +244,9 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		if err := s.conversations.Store(ctx, conversation); err != nil {
 			return nil, fmt.Errorf("inbox: store conversation: %w", err)
 		}
-		if s.router != nil {
+		// A published flow may take the conversation: it then routes it itself (handoff, or at any end).
+		heldByFlow := s.flows != nil && s.flows.Engage(ctx, conversation.ID)
+		if s.router != nil && !heldByFlow {
 			if err := s.router.RouteNew(ctx, conversation.ID); err != nil {
 				return nil, fmt.Errorf("inbox: route conversation: %w", err)
 			}
@@ -268,6 +290,9 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		if err := s.tickets.Store(ctx, ticket); err != nil {
 			return nil, fmt.Errorf("inbox: store ticket: %w", err)
 		}
+	}
+	if s.flows != nil {
+		s.flows.OnInbound(ctx, conversation.ID, stored.ID, newConversation)
 	}
 	return &InboundResult{Contact: contact, Conversation: conversation, Message: stored, Ticket: ticket}, nil
 }

@@ -35,6 +35,20 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       { key: 'membership.manage', label: 'Gerenciar equipe' },
     ],
   },
+  {
+    title: 'Automação',
+    items: [
+      { key: 'flow.view', label: 'Ver fluxos de atendimento' },
+      { key: 'flow.create', label: 'Criar fluxos' },
+      { key: 'flow.edit', label: 'Editar o rascunho de um fluxo' },
+      { key: 'flow.test', label: 'Simular fluxos' },
+      { key: 'flow.publish', label: 'Publicar fluxos e voltar a uma versão anterior' },
+      { key: 'flow.archive', label: 'Arquivar fluxos' },
+      { key: 'flow_template.view', label: 'Ver modelos e packs de fluxos' },
+      { key: 'flow_template.install', label: 'Instalar modelos e packs' },
+      { key: 'flow_run.view', label: 'Ver execuções dos fluxos' },
+    ],
+  },
   { title: 'Auditoria', items: [{ key: 'audit.read', label: 'Visualizar auditoria' }] },
   {
     title: 'Organização',

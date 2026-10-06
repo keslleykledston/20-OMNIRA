@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/password"
-	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
 // PasswordHandler gerencia endpoints de reset/mudança de senha

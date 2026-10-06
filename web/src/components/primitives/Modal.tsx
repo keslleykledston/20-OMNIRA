@@ -19,6 +19,10 @@ interface ModalProps {
 export function Modal({ open, title, description, onClose, children, footer, size = 'md' }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const restoreTo = useRef<HTMLElement | null>(null)
+  // O efeito de foco só deve rodar quando o modal abre/fecha. Com `onClose` nas dependências, um callback inline (identidade nova a
+  // cada render) refazia o foco inicial a cada tecla e engolia o texto digitado em qualquer campo dentro do modal.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
     if (!open) return
@@ -30,7 +34,7 @@ export function Modal({ open, title, description, onClose, children, footer, siz
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (e.key !== 'Tab' || !panel) return
@@ -52,7 +56,7 @@ export function Modal({ open, title, description, onClose, children, footer, siz
       document.removeEventListener('keydown', onKey)
       restoreTo.current?.focus()
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

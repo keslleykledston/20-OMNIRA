@@ -23,6 +23,7 @@ import (
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
 	identityapp "github.com/omnira/omnira/internal/identity/application"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
+	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
@@ -211,7 +212,7 @@ func (s *Server) RegisterAuthHandlers(dbPool *pgxpool.Pool, devAuthEnabled bool,
 	passwordHandler := authn.NewPasswordHandler(dbPool, nil) // emailSender nil por enquanto (será wired depois)
 	s.mux.HandleFunc("POST /api/v1/auth/password-reset-request", passwordHandler.PasswordResetRequest)
 	s.mux.HandleFunc("POST /api/v1/auth/password-reset", passwordHandler.PasswordReset)
-	s.mux.HandleFunc("POST /api/v1/auth/password-change", authn.WebMiddleware(s.authenticator, sessionStore)(http.HandlerFunc(passwordHandler.PasswordChange)))
+	s.mux.Handle("POST /api/v1/auth/password-change", authn.WebMiddleware(s.authenticator, sessionStore)(http.HandlerFunc(passwordHandler.PasswordChange)))
 
 	mode := "unavailable"
 	if devAuthEnabled {
@@ -701,6 +702,21 @@ func (s *Server) RegisterGroupHandlers(dbPool *pgxpool.Pool, h *groupsadapters.H
 	s.mux.Handle("PATCH "+base+"/{group_id}", wrap(h.SetEnabled))
 	s.mux.Handle("GET "+base+"/{group_id}/messages", wrap(h.ListMessages))
 	s.mux.Handle("DELETE "+base+"/{group_id}/messages", wrap(h.DeleteHistory))
+}
+
+// RegisterFlowHandlers exposes the Flow Builder control plane (ADR-0019) behind authn + the tenant session. It is only
+// called when OMNIRA_FLOWS_ENABLED is true; per-route permissions (flow.*) are checked by the handler.
+func (s *Server) RegisterFlowHandlers(dbPool *pgxpool.Pool, h *flowsadapters.Handler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) })
 }
 
 // RegisterWahaConnectionHandlers exposes tenant-scoped WAHA connection/session

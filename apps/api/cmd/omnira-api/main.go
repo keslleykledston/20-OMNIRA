@@ -23,6 +23,9 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
+	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
+	flowsapplication "github.com/omnira/omnira/internal/flows/application"
+	flowstemplates "github.com/omnira/omnira/internal/flows/templates"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
@@ -79,6 +82,12 @@ func main() {
 	srv := httpserver.New(cfg.HTTPAddr)
 	// ADR-0018 switches (classification, accounts, verified internal identities, conversation kind): read once.
 	identityFlags := identityapp.FlagsFromEnv(nil)
+	// Flow Builder (ADR-0019): nil unless OMNIRA_FLOWS_ENABLED=true, in which case ingestion lets a published flow take new
+	// conversations. A nil gate leaves the inbound pipeline exactly as it was.
+	var flowGate *flowsadapters.Gate
+	if cfg.FlowsEnabled {
+		flowGate = flowsadapters.NewGate(dbPool, flowsadapters.NewPostgresFlowRepository(dbPool))
+	}
 	srv.SetupHealth(dbPool, nc)
 
 	// Valkey (presence, IAM4.2-A): optional at boot like NATS above — a
@@ -202,6 +211,9 @@ func main() {
 			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
 			// ADR-0018: only VERIFIED internal identities make a sender "staff" (nothing matches until one is verified).
 			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)
+		if flowGate != nil {
+			inboundService.WithFlows(flowGate)
+		}
 
 		intake := inboxadapters.NewWebhookIntake(dbPool, eventStore, inboundService)
 		srv.RegisterWahaWebhook(waha.NewWebhookHandler(provider, resolver, eventStore).
@@ -253,6 +265,18 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
+	if cfg.FlowsEnabled {
+		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
+		controlPlane := flowsapplication.NewControlPlane(flowRepo, flowRepo, flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
+		templateRegistry, err := flowstemplates.Default()
+		if err != nil {
+			log.Fatalf("flow template library error: %v", err)
+		}
+		flowAuditor := flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool))
+		templateService := flowsapplication.NewTemplateService(templateRegistry, flowRepo, controlPlane, flowRepo, flowsadapters.NewSavepointAtomic(dbPool), flowAuditor)
+		srv.RegisterFlowHandlers(dbPool, flowsadapters.NewHandler(dbPool, controlPlane).WithTemplates(templateService).WithRuns(flowRepo))
+		log.Printf("Flow Builder API enabled (OMNIRA_FLOWS_ENABLED=true)\n")
+	}
 	if cfg.MetaEnabled {
 		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)
@@ -260,6 +284,9 @@ func main() {
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
 			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
 			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)
+		if flowGate != nil {
+			inboundService.WithFlows(flowGate)
+		}
 
 		srv.RegisterMetaWebhook(metachannel.Handler{
 			Resolver: channeladapters.NewMetaWebhookConnectionResolver(dbPool, connectionRepo),

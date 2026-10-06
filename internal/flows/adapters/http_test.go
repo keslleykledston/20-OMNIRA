@@ -1,0 +1,461 @@
+package adapters_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/flows/adapters"
+	"github.com/omnira/omnira/internal/flows/application"
+	"github.com/omnira/omnira/internal/flows/flowstest"
+	"github.com/omnira/omnira/internal/flows/templates"
+	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapplication "github.com/omnira/omnira/internal/messages/application"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
+)
+
+// harness mounts the real routes behind a test "middleware" that does what the product's does: a tenant session for the
+// calling user plus a TenantContext. The user comes from the X-Test-User header; the tenant from the URL.
+type harness struct {
+	t   *testing.T
+	env *flowstest.Env
+	mux *http.ServeMux
+}
+
+func newHarness(t *testing.T) *harness {
+	env := flowstest.New(t)
+	repo := adapters.NewPostgresFlowRepository(env.App)
+	cp := application.NewControlPlane(repo, repo, nil)
+	reg, err := templates.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := adapters.NewHandler(env.App, cp).WithRuns(repo).WithTemplates(application.NewTemplateService(reg, repo, cp, repo, adapters.NewSavepointAtomic(env.App), nil))
+	mux := http.NewServeMux()
+	h.Routes(mux, func(fn http.HandlerFunc) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, uerr := uuid.Parse(r.Header.Get("X-Test-User"))
+			tenant, terr := uuid.Parse(r.PathValue("tenant_id"))
+			if uerr != nil || terr != nil {
+				fn(w, r) // no TenantContext: the handler must answer 401
+				return
+			}
+			_ = platformdb.WithTenantSession(r.Context(), env.App, user, false, func(sc context.Context) error {
+				tc, _ := tenancydomain.NewTenantContext(tenant, user, tenancydomain.AccessSourceDirect)
+				fn(w, r.WithContext(tenancydomain.WithTenantContext(sc, tc)))
+				return nil
+			})
+		})
+	})
+	return &harness{t: t, env: env, mux: mux}
+}
+
+// member adds a user with the given system role to a tenant.
+func (hn *harness) member(tenant uuid.UUID, role string) uuid.UUID {
+	hn.t.Helper()
+	ctx := context.Background()
+	user := uuid.New()
+	var roleID uuid.UUID
+	if err := hn.env.Seed.QueryRow(ctx, `SELECT id FROM roles WHERE key=$1 AND tenant_id IS NULL`, role).Scan(&roleID); err != nil {
+		hn.t.Fatal(err)
+	}
+	if _, err := hn.env.Seed.Exec(ctx, `INSERT INTO users(id, external_subject, email, status) VALUES($1,$2,$3,'active')`, user, user, user.String()+"@invalid"); err != nil {
+		hn.t.Fatal(err)
+	}
+	if _, err := hn.env.Seed.Exec(ctx, `INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, tenant, user, roleID); err != nil {
+		hn.t.Fatal(err)
+	}
+	hn.t.Cleanup(func() { _, _ = hn.env.Seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, user) })
+	return user
+}
+
+func (hn *harness) call(user uuid.UUID, tenant uuid.UUID, method, path string, body any) (int, map[string]any) {
+	hn.t.Helper()
+	var rd *bytes.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	} else {
+		rd = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, fmt.Sprintf("/api/v1/tenants/%s%s", tenant, path), rd)
+	if user != uuid.Nil {
+		req.Header.Set("X-Test-User", user.String())
+	}
+	rec := httptest.NewRecorder()
+	hn.mux.ServeHTTP(rec, req)
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec.Code, out
+}
+
+func TestHTTPRBACAndLifecycle(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	admin := env.UserA
+	supervisor := hn.member(env.TenantA, "tenant_supervisor")
+	agent := hn.member(env.TenantA, "tenant_agent")
+
+	// authentication: no TenantContext => 401
+	if code, _ := hn.call(uuid.Nil, env.TenantA, "GET", "/flows", nil); code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d", code)
+	}
+	// authorization matrix
+	for _, c := range []struct {
+		who          string
+		user         uuid.UUID
+		method, path string
+		body         any
+		want         int
+	}{
+		{"agent cannot even list", agent, "GET", "/flows", nil, 403},
+		{"supervisor can list", supervisor, "GET", "/flows", nil, 200},
+		{"supervisor cannot create", supervisor, "POST", "/flows", map[string]any{"slug": "x", "name": "X"}, 403},
+		{"agent cannot read node catalog", agent, "GET", "/flow-node-types", nil, 403},
+		{"supervisor reads node catalog", supervisor, "GET", "/flow-node-types", nil, 200},
+	} {
+		if code, _ := hn.call(c.user, env.TenantA, c.method, c.path, c.body); code != c.want {
+			t.Errorf("%s: got %d want %d", c.who, code, c.want)
+		}
+	}
+
+	// admin lifecycle
+	code, flow := hn.call(admin, env.TenantA, "POST", "/flows", map[string]any{"slug": "reception", "name": "Reception"})
+	if code != 201 {
+		t.Fatalf("create: %d %v", code, flow)
+	}
+	id := flow["id"].(string)
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows", map[string]any{"slug": "reception", "name": "Again"}); code != 409 {
+		t.Fatalf("duplicate slug must be 409, got %d", code)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows", map[string]any{"slug": "BAD SLUG", "name": "x"}); code != 400 {
+		t.Fatalf("bad slug must be 400, got %d", code)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows", "not an object"); code != 400 {
+		t.Fatalf("bad body must be 400, got %d", code)
+	}
+
+	// An empty draft cannot be published: 422 with actionable issues.
+	code, body := hn.call(admin, env.TenantA, "POST", "/flows/"+id+"/publish", map[string]any{"revision": 1})
+	if code != 422 || len(body["issues"].([]any)) == 0 {
+		t.Fatalf("empty draft publish: %d %v", code, body)
+	}
+
+	queue := uuid.New()
+	if _, err := env.Seed.Exec(context.Background(), `INSERT INTO queues(id, tenant_id, name) VALUES($1,$2,'q')`, queue, env.TenantA); err != nil {
+		t.Fatal(err)
+	}
+	def := json.RawMessage(fmt.Sprintf(`{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},{"id":"q","type":"assign_queue","config":{"queue":"%s"}},{"id":"h","type":"human_handoff"}],
+	  "edges":[{"id":"1","source":"start","sourcePort":"next","target":"q"},{"id":"2","source":"q","sourcePort":"next","target":"h"}]}`, queue))
+	// supervisor (view, no edit) cannot save; admin can
+	if code, _ := hn.call(supervisor, env.TenantA, "PUT", "/flows/"+id+"/draft", map[string]any{"revision": 1, "name": "Reception", "definition": def}); code != 403 {
+		t.Fatalf("supervisor must not edit: %d", code)
+	}
+	code, saved := hn.call(admin, env.TenantA, "PUT", "/flows/"+id+"/draft", map[string]any{"revision": 1, "name": "Reception", "definition": def})
+	if code != 200 {
+		t.Fatalf("save: %d %v", code, saved)
+	}
+	// stale revision => 409
+	if code, _ := hn.call(admin, env.TenantA, "PUT", "/flows/"+id+"/draft", map[string]any{"revision": 1, "name": "Reception", "definition": def}); code != 409 {
+		t.Fatalf("stale save must be 409, got %d", code)
+	}
+	// supervisor cannot publish (edit and publish are distinct permissions), admin can
+	if code, _ := hn.call(supervisor, env.TenantA, "POST", "/flows/"+id+"/publish", map[string]any{"revision": 2}); code != 403 {
+		t.Fatalf("supervisor must not publish: %d", code)
+	}
+	if code, body := hn.call(admin, env.TenantA, "POST", "/flows/"+id+"/publish", map[string]any{"revision": 2, "note": "first"}); code != 201 {
+		t.Fatalf("publish: %d %v", code, body)
+	}
+	code, got := hn.call(supervisor, env.TenantA, "GET", "/flows/"+id, nil)
+	if code != 200 || got["active_version"].(float64) != 1 || got["status"] != "published" {
+		t.Fatalf("get: %d %v", code, got)
+	}
+	if code, _ := hn.call(supervisor, env.TenantA, "POST", "/flows/"+id+"/archive", nil); code != 403 {
+		t.Fatalf("supervisor must not archive: %d", code)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows/"+id+"/versions/1/activate", nil); code != 200 {
+		t.Fatalf("activate: %d", code)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows/"+id+"/versions/9/activate", nil); code != 404 {
+		t.Fatalf("unknown version must be 404, got %d", code)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows/"+id+"/archive", nil); code != 204 {
+		t.Fatalf("archive: %d", code)
+	}
+
+	// Tenant isolation over HTTP: tenant B's admin cannot see, edit or publish tenant A's flow, and a tenant B session
+	// pointed at tenant A's URL is not a member there (403: the permission check is membership-based).
+	if code, _ := hn.call(env.UserB, env.TenantB, "GET", "/flows/"+id, nil); code != 404 {
+		t.Fatalf("tenant B must not see tenant A's flow: %d", code)
+	}
+	if code, _ := hn.call(env.UserB, env.TenantB, "PUT", "/flows/"+id+"/draft", map[string]any{"revision": 1, "name": "x", "definition": def}); code != 404 {
+		t.Fatalf("tenant B must not edit tenant A's flow: %d", code)
+	}
+	if code, _ := hn.call(env.UserB, env.TenantA, "GET", "/flows", nil); code != 403 {
+		t.Fatalf("a non-member must be refused on another tenant's URL: %d", code)
+	}
+	code, list := hn.call(env.UserB, env.TenantB, "GET", "/flows", nil)
+	if code != 200 || len(list["items"].([]any)) != 0 {
+		t.Fatalf("tenant B list must be empty: %d %v", code, list)
+	}
+}
+
+func TestHTTPLiveValidationAndNodeCatalog(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	code, body := hn.call(env.UserA, env.TenantA, "POST", "/flows/validate", map[string]any{"definition": json.RawMessage(`{"schema_version":1,"nodes":[],"edges":[]}`)})
+	if code != 200 || body["valid"] != false {
+		t.Fatalf("live validation: %d %v", code, body)
+	}
+	code, cat := hn.call(env.UserA, env.TenantA, "GET", "/flow-node-types", nil)
+	items, _ := cat["items"].([]any)
+	if code != 200 || len(items) != 20 {
+		t.Fatalf("catalog: %d %d", code, len(items))
+	}
+}
+
+func TestHTTPSimulateIsGuardedByFlowTestAndNeverWrites(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	admin := env.UserA
+	supervisor := hn.member(env.TenantA, "tenant_supervisor")
+	agent := hn.member(env.TenantA, "tenant_agent")
+	code, flow := hn.call(admin, env.TenantA, "POST", "/flows", map[string]any{"slug": "sim", "name": "Sim"})
+	if code != 201 {
+		t.Fatalf("create: %d", code)
+	}
+	id := flow["id"].(string)
+	def := json.RawMessage(`{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},{"id":"hi","type":"send_message","config":{"text":"Olá {{contact.name}}"}},{"id":"e","type":"end"}],
+	  "edges":[{"id":"1","source":"start","sourcePort":"next","target":"hi"},{"id":"2","source":"hi","sourcePort":"next","target":"e"}]}`)
+	body := map[string]any{"definition": def, "scenario": map[string]any{"contact": map[string]any{"name": "Ana"}}}
+	if code, _ := hn.call(agent, env.TenantA, "POST", "/flows/"+id+"/simulate", body); code != 403 {
+		t.Fatalf("an agent has no flow.test: %d", code)
+	}
+	for who, u := range map[string]uuid.UUID{"admin": admin, "supervisor": supervisor} {
+		code, res := hn.call(u, env.TenantA, "POST", "/flows/"+id+"/simulate", body)
+		if code != 200 || res["status"] != "completed" {
+			t.Fatalf("%s must simulate: %d %v", who, code, res)
+		}
+		msgs, _ := res["messages"].([]any)
+		if len(msgs) != 1 || msgs[0].(map[string]any)["text"] != "Olá Ana" {
+			t.Fatalf("%s: messages %v", who, msgs)
+		}
+	}
+	if n := func() (n int) {
+		_ = env.Seed.QueryRow(context.Background(), `SELECT count(*) FROM messages WHERE tenant_id=$1`, env.TenantA).Scan(&n)
+		return
+	}(); n != 0 {
+		t.Fatalf("a simulation sent %d real messages", n)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flows/"+id+"/simulate", map[string]any{"scenario": map[string]any{"provider": "telegram"}}); code != 400 {
+		t.Fatalf("an invalid scenario is a 400, got %d", code)
+	}
+	if code, _ := hn.call(env.UserB, env.TenantB, "POST", "/flows/"+id+"/simulate", body); code != 404 {
+		t.Fatalf("tenant B must not simulate tenant A's flow: %d", code)
+	}
+}
+
+func TestHTTPTemplateLibraryAndPackInstall(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	admin := env.UserA
+	supervisor := hn.member(env.TenantA, "tenant_supervisor")
+	agent := hn.member(env.TenantA, "tenant_agent")
+	queue := func(tenant uuid.UUID, name string) string {
+		id := uuid.New()
+		if _, err := env.Seed.Exec(context.Background(), `INSERT INTO queues(id, tenant_id, name) VALUES($1,$2,$3)`, id, tenant, name); err != nil {
+			t.Fatal(err)
+		}
+		return id.String()
+	}
+
+	// browse: view permission only
+	if code, _ := hn.call(agent, env.TenantA, "GET", "/flow-templates", nil); code != 403 {
+		t.Fatalf("an agent cannot browse the library: %d", code)
+	}
+	code, list := hn.call(supervisor, env.TenantA, "GET", "/flow-templates?category=ISP", nil)
+	items, _ := list["items"].([]any)
+	if code != 200 || len(items) < 12 {
+		t.Fatalf("a supervisor browses and filters: %d %d", code, len(items))
+	}
+	code, tpl := hn.call(supervisor, env.TenantA, "GET", "/flow-templates/isp-link-down", nil)
+	if code != 200 || tpl["definition"] == nil || tpl["test_cases"].(float64) < 1 {
+		t.Fatalf("template preview: %d %v", code, tpl)
+	}
+	if code, _ := hn.call(supervisor, env.TenantA, "GET", "/flow-templates/does-not-exist", nil); code != 404 {
+		t.Fatalf("unknown template: %d", code)
+	}
+	code, packs := hn.call(supervisor, env.TenantA, "GET", "/flow-packs?recommended_for=isp", nil)
+	if code != 200 || len(packs["items"].([]any)) != 2 {
+		t.Fatalf("the ISP profile recommends two packs: %d %v", code, packs)
+	}
+	code, prev := hn.call(supervisor, env.TenantA, "GET", "/flow-packs/isp-noc", nil)
+	maps, _ := prev["mappings"].([]any)
+	if code != 200 || len(maps) != 5 {
+		t.Fatalf("pack preview must aggregate the mappings once: %d %v", code, prev)
+	}
+
+	// install: its own permission (a supervisor can look, not install)
+	body := map[string]any{"mappings": map[string]string{"queue.technical": queue(env.TenantA, "t"), "queue.finance": queue(env.TenantA, "f"), "queue.commercial": queue(env.TenantA, "c"), "queue.fallback": queue(env.TenantA, "x")}}
+	if code, _ := hn.call(supervisor, env.TenantA, "POST", "/flow-packs/omnira-starter/install", body); code != 403 {
+		t.Fatalf("a supervisor cannot install: %d", code)
+	}
+	// missing mapping => 400 naming the keys, nothing written
+	if code, res := hn.call(admin, env.TenantA, "POST", "/flow-packs/omnira-starter/install", map[string]any{"mappings": map[string]string{"queue.technical": queue(env.TenantA, "only")}}); code != 400 || res["error"] != "missing_mappings" || len(res["missing"].([]any)) != 3 {
+		t.Fatalf("missing mappings: %d %v", code, res)
+	}
+	// another tenant's queue => 400
+	bad := map[string]any{"mappings": map[string]string{"queue.technical": queue(env.TenantB, "b"), "queue.finance": queue(env.TenantA, "f2"), "queue.commercial": queue(env.TenantA, "c2"), "queue.fallback": queue(env.TenantA, "x2")}}
+	if code, _ := hn.call(admin, env.TenantA, "POST", "/flow-packs/omnira-starter/install", bad); code != 400 {
+		t.Fatalf("a foreign queue must be refused: %d", code)
+	}
+	var n int
+	_ = env.Seed.QueryRow(context.Background(), `SELECT count(*) FROM flows WHERE tenant_id=$1`, env.TenantA).Scan(&n)
+	if n != 0 {
+		t.Fatalf("refused installs wrote %d flows", n)
+	}
+	// the real thing
+	code, res := hn.call(admin, env.TenantA, "POST", "/flow-packs/omnira-starter/install", body)
+	flows, _ := res["flows"].([]any)
+	if code != 201 || len(flows) != 5 || res["pack_installation_id"] == nil {
+		t.Fatalf("install: %d %v", code, res)
+	}
+	_ = env.Seed.QueryRow(context.Background(), `SELECT count(*) FROM flows WHERE tenant_id=$1 AND status='draft'`, env.TenantA).Scan(&n)
+	if n != 5 {
+		t.Fatalf("all drafts: %d", n)
+	}
+	// they show up in the tenant's flow list, and only there
+	code, mine := hn.call(admin, env.TenantA, "GET", "/flows", nil)
+	if code != 200 || len(mine["items"].([]any)) != 5 {
+		t.Fatalf("flow list: %d %v", code, mine)
+	}
+	code, theirs := hn.call(env.UserB, env.TenantB, "GET", "/flows", nil)
+	if code != 200 || len(theirs["items"].([]any)) != 0 {
+		t.Fatalf("tenant B must see nothing: %v", theirs)
+	}
+	// installing a single template through the API too
+	one := map[string]any{"mappings": map[string]string{"queue.noc": queue(env.TenantA, "noc")}}
+	if code, res := hn.call(admin, env.TenantA, "POST", "/flow-templates/isp-financial/install", map[string]any{"mappings": map[string]string{"queue.finance": queue(env.TenantA, "fin3")}}); code != 201 {
+		t.Fatalf("single template install: %d %v", code, res)
+	}
+	_ = one
+}
+
+// A real run produced through the production engine, then read back through the API.
+func TestHTTPRunsTimelineAndAnalytics(t *testing.T) {
+	hn := newHarness(t)
+	env := hn.env
+	admin := env.UserA
+	supervisor := hn.member(env.TenantA, "tenant_supervisor")
+	agent := hn.member(env.TenantA, "tenant_agent")
+	repo := adapters.NewPostgresFlowRepository(env.App)
+	cp := application.NewControlPlane(repo, repo, nil)
+	effects := adapters.NewPostgresEffects(env.App, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(env.App)))
+	engine := application.NewEngine(repo, repo, effects, application.AllExecutors())
+	queue := uuid.New()
+	if _, err := env.Seed.Exec(context.Background(), `INSERT INTO queues(id, tenant_id, name) VALUES($1,$2,'q')`, queue, env.TenantA); err != nil {
+		t.Fatal(err)
+	}
+	line := uuid.New()
+	if _, err := env.Seed.Exec(context.Background(), `INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities) VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active','["text"]')`, line, env.TenantA, line.String()); err != nil {
+		t.Fatal(err)
+	}
+	def := fmt.Sprintf(`{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},{"id":"q","type":"ask","config":{"text":"Qual o token?","variable":"resposta"}},
+	  {"id":"h","type":"human_handoff","config":{"queue":%q,"summary":"cliente respondeu {{resposta}}"}},{"id":"t","type":"end"}],
+	  "edges":[{"id":"1","source":"start","sourcePort":"next","target":"q"},{"id":"2","source":"q","sourcePort":"next","target":"h"},{"id":"3","source":"q","sourcePort":"timeout","target":"t"}]}`, queue)
+	var flowID uuid.UUID
+	env.AsUser(t, env.TenantA, env.UserA, func(ctx context.Context) {
+		f, err := cp.Create(ctx, application.CreateInput{Slug: "obs", Name: "Obs"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := cp.SaveDraft(ctx, f.ID, f.DraftRevision, f.Name, "", json.RawMessage(def))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cp.Publish(ctx, f.ID, res.Flow.DraftRevision, ""); err != nil {
+			t.Fatal(err)
+		}
+		flowID = f.ID
+	})
+
+	analytics := func(user uuid.UUID, tenant uuid.UUID) (int, map[string]any) {
+		return hn.call(user, tenant, "GET", "/flows/"+flowID.String()+"/analytics", nil)
+	}
+	// No runs yet: every figure is zero and the average is null — nothing is estimated.
+	code, a := analytics(admin, env.TenantA)
+	if code != 200 || a["runs"].(float64) != 0 || a["avg_duration_ms"] != nil || a["human_handoffs"].(float64) != 0 {
+		t.Fatalf("empty analytics must be zeros: %d %v", code, a)
+	}
+
+	conv, _ := env.SeedConversation(t, env.TenantA, "bot")
+	_, _ = env.Seed.Exec(context.Background(), `UPDATE conversations SET channel_connection_id=$2 WHERE id=$1`, conv, line)
+	deliver := func(text string, isNew bool) {
+		msg := env.SeedInbound(t, env.TenantA, conv, text)
+		env.AsSystem(t, env.TenantA, func(ctx context.Context) {
+			if _, err := engine.OnInbound(ctx, application.InboundEvent{ConversationID: conv, MessageID: msg, NewConversation: isNew}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	deliver("oi", true)
+	deliver("Bearer abcdefghijklmnop1234", false)
+
+	// Permissions: flow_run.view is needed (agent has none); supervisor and admin read.
+	if code, _ := hn.call(agent, env.TenantA, "GET", "/flow-runs", nil); code != 403 {
+		t.Fatalf("an agent cannot read runs: %d", code)
+	}
+	code, list := hn.call(supervisor, env.TenantA, "GET", "/flow-runs?conversation_id="+conv.String(), nil)
+	runs, _ := list["items"].([]any)
+	if code != 200 || len(runs) != 1 {
+		t.Fatalf("run list: %d %v", code, list)
+	}
+	run := runs[0].(map[string]any)
+	if run["status"] != "waiting_human" || run["flow_slug"] != "obs" || run["flow_version"].(float64) != 1 {
+		t.Fatalf("run summary: %v", run)
+	}
+	code, d := hn.call(supervisor, env.TenantA, "GET", "/flow-runs/"+run["id"].(string), nil)
+	timeline, _ := d["timeline"].([]any)
+	if code != 200 || len(timeline) != 4 {
+		t.Fatalf("detail: %d timeline=%d %v", code, len(timeline), d)
+	}
+	raw, _ := json.Marshal(d)
+	if strings.Contains(string(raw), "abcdefghijklmnop1234") {
+		t.Fatalf("a secret leaked through the run API: %s", raw)
+	}
+	handoff, _ := d["handoff"].(map[string]any)
+	if handoff == nil || !strings.HasPrefix(fmt.Sprint(handoff["summary"]), "cliente respondeu") {
+		t.Fatalf("the operator context must be visible: %v", d["handoff"])
+	}
+	vars, _ := d["variables"].(map[string]any)
+	for k := range vars {
+		if strings.HasPrefix(k, "_") {
+			t.Fatalf("engine-private variable %q exposed", k)
+		}
+	}
+	// Measured analytics now: one run, one handoff.
+	code, a = analytics(supervisor, env.TenantA)
+	if code != 200 || a["runs"].(float64) != 1 || a["human_handoffs"].(float64) != 1 || a["by_status"].(map[string]any)["waiting_human"].(float64) != 1 {
+		t.Fatalf("analytics: %d %v", code, a)
+	}
+	// Tenant isolation: tenant B sees neither the run, nor the flow's analytics, nor the list entry.
+	if code, _ := hn.call(env.UserB, env.TenantB, "GET", "/flow-runs/"+run["id"].(string), nil); code != 404 {
+		t.Fatalf("another tenant's run: %d", code)
+	}
+	if code, _ := analytics(env.UserB, env.TenantB); code != 404 {
+		t.Fatalf("another tenant's analytics: %d", code)
+	}
+	if code, l := hn.call(env.UserB, env.TenantB, "GET", "/flow-runs", nil); code != 200 || len(l["items"].([]any)) != 0 {
+		t.Fatalf("tenant B list: %v", l)
+	}
+	if code, _ := hn.call(admin, env.TenantA, "GET", "/flow-runs?flow_id=not-a-uuid", nil); code != 400 {
+		t.Fatalf("a bad filter is a 400: %d", code)
+	}
+}
