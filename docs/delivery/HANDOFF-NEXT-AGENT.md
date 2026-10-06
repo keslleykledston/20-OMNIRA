@@ -2,6 +2,15 @@
 
 Atualize este arquivo ao concluir trabalho substancial. Git e testes executáveis vencem este resumo quando divergirem. Não fazer push/tag sem ordem explícita; não declarar produção pronta sem evidência de deploy e gate.
 
+## FLOW BUILDER (ADR-0019) — 2026-10-06 (LEIA ANTES DE TOCAR EM `internal/flows`, `web/src/components/flows` OU NA FLAG `OMNIRA_FLOWS_ENABLED`)
+
+Estado: **LAB**, branch `feat/flow-builder` (12 commits sobre `main` @ `8af6d54`), **não implantado, não mesclado, flag desligada**.
+Ponto de entrada: `docs/flows/STATUS.md` (evidência por fase), `docs/flows/PRODUCTION-GATE.md` (decisão e condições do piloto),
+`docs/flows/FINAL-REPORT.md` (resumo, decisões e pendências), `docs/flows/USER-GUIDE.md` (operador), `docs/flows/OPERATIONS.md`.
+Invariantes que testes protegem: `conversations` **não** tem coluna de empresa; a matriz de papéis em `internal/iam3` é fixada por teste;
+`messages.Sender` é só humano (o bot usa `SystemSender`); a IA nunca define severidade. Pendências: revisão Codex
+(`CODEX_PLUGIN_NOT_EXECUTED`), smoke com telefone real, `ai_agent`, correção do `Modal` compartilhado, renumerar migrations no merge.
+
 ## PILOT STATUS — 2026-09-28 (LEIA PRIMEIRO)
 
 PILOT GO: **YES**

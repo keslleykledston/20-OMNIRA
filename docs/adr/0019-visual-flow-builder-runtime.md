@@ -1,7 +1,7 @@
 # ADR-0019: Visual Flow Builder, Flow Runtime e biblioteca de Templates/Packs
 
 ## Status
-Proposed (2026-10-06). Implementação em fases na branch `feat/flow-builder`; **nasce desligada** (`OMNIRA_FLOWS_ENABLED=false`) e **não foi implantada**. Nenhuma tabela existente muda de semântica.
+**Implementado em LAB** (2026-10-06) na branch `feat/flow-builder`; **desligado por padrão** (`OMNIRA_FLOWS_ENABLED=false`), **não implantado**. Evidência: `docs/flows/STATUS.md` e `docs/flows/PRODUCTION-GATE.md`. Nenhuma tabela existente muda de semântica.
 
 ## Contexto
 O OMNIRA precisa de uma camada de orquestração conversacional (chatbot de entrada, triagem, handoff) configurável pelo tenant. Já existem e **devem ser reutilizados**, não duplicados:
