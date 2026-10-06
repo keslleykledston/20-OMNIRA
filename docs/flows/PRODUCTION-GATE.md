@@ -5,7 +5,7 @@ Data: 2026-10-06 · Branch `feat/flow-builder` (base `main` @ `8af6d54`; lista e
 ## Decisão
 
 **Estado: `LAB`.** O código está **completo e verificado em laboratório**, mas **não** está liberado para `INTERNAL_PILOT` nem
-para produção. Nada foi implantado, nenhuma migration foi aplicada em banco vivo, nada foi enviado (`push`), etiquetado
+para produção. Nada foi enviado (`push`) nem etiquetado; **atenção ao banco vivo:** as migrations 082–084 foram aplicadas ao `omnira_dev` em 2026-10-06 07:54 (-04), **fora da sessão de desenvolvimento** (inertes: `OMNIRA_FLOWS_ENABLED=false`, 0 linhas em `flows`/`flow_runs`); a migration **085** (FLOW-003) existe no repositório mas **não foi aplicada** ao banco vivo. A feature segue desligada; nada foi (re)implantado por esta sessão. Nada foi etiquetado
 (`tag`) ou mesclado. A flag `OMNIRA_FLOWS_ENABLED` vem **desligada**; desligada, o comportamento é o de hoje (provado abaixo).
 
 Para subir a `INTERNAL_PILOT` faltam, no mínimo, os itens da seção **"Condições para o piloto"**. Esta página não substitui o
@@ -71,7 +71,7 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
   |---|---|---|
   | FLOW-001 `ask`/`choice`/`customer_choice` sem saída `window_closed` | MEDIUM | **Corrigido**: portas opcionais `window_closed` e `error` nos três nós (servidor, executores, espelho no web); ids de opção reservados; `TestQuestionNodesRouteAClosedWindow` (falha sem a correção) |
   | FLOW-002 `down` da 083 apaga permissões preexistentes | MEDIUM | **Aceito, sem mudança**: mesmo padrão das migrations 063 e 073; `flow.*`/`flow_template.*`/`flow_run.*` são chaves novas, criadas só por esta migration. Reabrir se alguma outra migration passar a registrar essas chaves |
-  | FLOW-003 `active_version_id` não amarra a versão ao mesmo `flow_id` | LOW | **Corrigido** na 082 (nunca aplicada em banco vivo): `UNIQUE (tenant_id, flow_id, id)` e FK composta; `TestActiveVersionMustBelongToItsOwnFlow` (falha sem a correção) |
+  | FLOW-003 `active_version_id` não amarra a versão ao mesmo `flow_id` | LOW | **Corrigido** pela migration **000085** (forward-only; a 082 já estava aplicada no `omnira_dev`, por isso não foi editada): `UNIQUE (tenant_id, flow_id, id)` e FK composta; `TestActiveVersionMustBelongToItsOwnFlow` (falha sem a correção) |
   | FLOW-004 gate enfileira job para toda mensagem com flow `always` | LOW | **Corrigido**: só conversas abertas, sem responsável, com contato e do tipo atendimento/não classificado (parte barata de `Startable`; conflito de identidade segue com o motor); teste cobre atribuída, fechada e não-cliente |
 
   Verificação após as correções: suíte Go completa em banco novo = 69 ok + as mesmas 5 falhas da baseline; migrations 084→082 e 082→084 sem erro; web 617 passam (mesmas 2 falhas de `main`); navegador real 5 passam.
@@ -92,7 +92,7 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
 
 1. Aceite humano documentado do dono.
 2. Nova revisão do Codex **com acesso a Docker/banco descartável** (a de 2026-10-06 foi só estática), sem CRITICAL/HIGH, com a saída real anexada.
-3. Aplicar as migrations 082–084 em **banco restaurado de um dump** (não no vivo) e conferir; só então, com backup fresco, no vivo.
+3. As migrations 082–084 já estão no `omnira_dev` (inertes). Falta: validar **085** em banco restaurado de um dump e só então aplicá-la ao vivo, com backup fresco (`down` testado). A imagem de api/worker em execução é anterior às correções do Codex (FLOW-001/004): rebuild antes de ligar a flag.
 4. Build das imagens e subida com `OMNIRA_FLOWS_ENABLED=true` **em um tenant de teste**, com 1 flow simples publicado.
 5. **Smoke com telefone real** (conversa nova → bot → resposta → handoff → fila → atendente assume → bot cala) nas duas linhas (WAHA e Meta, se houver).
 6. Observar `/metrics` (`omnira_flow_*`) e o log do sweeper por 24 h supervisionadas antes de ampliar.

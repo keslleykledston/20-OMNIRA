@@ -13,6 +13,7 @@
 - Docs: `docs/flows/{STATUS,PRODUCTION-GATE,FINAL-REPORT,USER-GUIDE,OPERATIONS,CONFLICT-ANALYSIS}.md`.
 
 ### Fixed
+- Flow Builder (Codex review): `000085` makes a flow's active version belong to that same flow (composite FK); question nodes route a closed 24h window; the inbound gate no longer enqueues jobs the engine would discard.
 - `go build ./...` em `main`: import sem uso em `authn/password_handler.go` e `HandleFunc` recebendo `http.Handler` em `httpserver/server.go:214` (IAM5).
 
 ### Added (M03.1 — Inbound persistence foundation)

@@ -125,7 +125,7 @@ Se a frente IAM5 já corrigiu, o commit pode ser descartado sem afetar a feature
 Um primeiro scaffold foi escrito sem compilar (módulo errado, RLS fora do padrão, `apps/web` duplicado) e suas mensagens de commit afirmavam testes que não foram rodados. Foi **revertido e descartado** (`feat/flow-builder-discarded-scaffold`, backup em `backup/flow-builder-before-rebuild-*` e em `git bundle` fora do repo). Tudo abaixo é refeito com compilação e testes reais.
 
 ## Limitações conhecidas (atualizar)
-- Nenhuma migration aplicada em banco vivo; nenhuma imagem/stack reconstruída; nada publicado, tagueado ou mesclado.
+- (Atualizado 2026-10-06) Migrations 082–084 aplicadas ao `omnira_dev` às 07:54 (-04) fora da sessão de desenvolvimento, inertes (flag desligada, 0 linhas); **085 não aplicada**. Nada publicado ou tagueado; mesclado em `main` sem `push`.
 
 ## Polimento visual (Lovable, 2026-10-06)
 Projeto de design OmniFlow Hub (`07c08567…`), commits `4c9d2c0` (editor) e `eae1ccf` (biblioteca/assistente). Revisado e portado só o visual para `web/`: canvas com grade pontilhada, saídas divididas, estados dos conectores (ligado/pendente/recebível), anéis de estado do nó, cards de pack em 3 colunas, modelos em lista dividida, stepper do assistente. Verificação: tsc limpo, 617 testes web (mesmas 2 falhas preexistentes de `main`), 5 cenários Chromium.

@@ -1,7 +1,7 @@
 # Flow Builder — relatório final da entrega
 
 Data: 2026-10-06 · Branch `feat/flow-builder` (worktree `/home/suporte/projects/omnira-flow-builder`, base `main` @ `8af6d54`) · ADR-0019.
-Estado: **LAB** · Nada implantado, enviado, etiquetado ou mesclado · Gate: `PRODUCTION-GATE.md` · Uso: `USER-GUIDE.md`.
+Estado: **LAB** · Mesclado em `main` localmente, sem `push`/tag · migrations 082–084 já aplicadas ao `omnira_dev` (inertes, flag desligada; 085 pendente) · Gate: `PRODUCTION-GATE.md` · Uso: `USER-GUIDE.md`.
 
 ## Resumo
 
