@@ -46,13 +46,13 @@ func (r *PostgresIdentityResolver) SessionProfile(ctx context.Context, userID uu
 	var profile SessionProfile
 	err := platformdb.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(scoped context.Context) error {
 		return platformdb.QuerierFromContext(scoped, r.pool).QueryRow(scoped, `
-		SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.display_name,''), t.id::text, t.legal_name
+		SELECT u.id::text, COALESCE(u.email,''), COALESCE(u.display_name,''), t.id::text, t.legal_name, u.password_expires_at
 		FROM users u
 		JOIN memberships m ON m.user_id=u.id AND m.status='active'
 		JOIN tenants t ON t.id=m.tenant_id AND t.status='active'
 		WHERE u.id=$1 AND u.status='active'
 		ORDER BY m.created_at, t.id
-		LIMIT 1`, userID).Scan(&profile.User.ID, &profile.User.Email, &profile.User.Name, &profile.Tenant.ID, &profile.Tenant.Name)
+		LIMIT 1`, userID).Scan(&profile.User.ID, &profile.User.Email, &profile.User.Name, &profile.Tenant.ID, &profile.Tenant.Name, &profile.User.PasswordExpiresAt)
 	})
 	return profile, err
 }

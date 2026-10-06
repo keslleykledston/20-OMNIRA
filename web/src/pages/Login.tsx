@@ -52,6 +52,11 @@ export default function Login() {
             // gets the one they last chose, if it is still theirs.
             const tenantId = await resolveSessionTenant(tenant?.id)
             saveSession('', tenantId, user)
+            // Se password_expires_at existe, força troca de senha antes de entrar
+            if (user.password_expires_at) {
+              navigate('/settings/password', { replace: true })
+              return
+            }
             navigate(tenantId ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
             return
           } catch (err: any) {

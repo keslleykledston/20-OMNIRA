@@ -65,7 +65,13 @@ export const authAPI = {
     // own session ends too (otherwise the next login reuses the previous account).
     return { data: { status: 'ok', endSessionUrl: endSessionUrlFrom(res?.data) } }
   },
-  refresh: () => api.post('/v1/auth/refresh')
+  refresh: () => api.post('/v1/auth/refresh'),
+  changePassword: (payload: { old_password: string; new_password: string }) =>
+    api.post('/v1/auth/password-change', payload),
+  resetPasswordRequest: (email: string) =>
+    api.post('/v1/auth/password-reset-request', { email }),
+  resetPassword: (token: string, password: string) =>
+    api.post('/v1/auth/password-reset', { token, password })
 }
 
 const MOCK_TEMPLATES = [

@@ -67,9 +67,10 @@ type SessionProfile struct {
 }
 
 type SessionUser struct {
-	ID    string `json:"id"`
-	Email string `json:"email,omitempty"`
-	Name  string `json:"name,omitempty"`
+	ID                string `json:"id"`
+	Email             string `json:"email,omitempty"`
+	Name              string `json:"name,omitempty"`
+	PasswordExpiresAt *time.Time `json:"password_expires_at,omitempty"`
 }
 
 type SessionTenant struct {

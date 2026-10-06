@@ -6,6 +6,7 @@ export interface User {
   email: string
   name: string
   roles: string[]
+  password_expires_at?: string // ISO 8601 datetime, undefined se não há troca obrigatória
 }
 
 export interface AuthState {

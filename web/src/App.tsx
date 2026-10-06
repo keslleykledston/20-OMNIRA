@@ -21,6 +21,7 @@ import AcceptInvitePage from './pages/AcceptInvitePage'
 import ChannelsPage from './pages/ChannelsPage'
 import WahaWizardPage from './pages/WahaWizardPage'
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage'
+import PasswordChangePage from './pages/PasswordChangePage'
 import Layout from './components/Layout'
 
 const queryClient = new QueryClient()
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
+            <Route path="/settings/password" element={<PasswordChangePage />} />
             <Route path="/settings/team" element={<TeamPage />} />
             <Route path="/settings/agents" element={<AgentsPage />} />
             <Route path="/settings/people" element={<PeopleAndGroupsPage />} />
