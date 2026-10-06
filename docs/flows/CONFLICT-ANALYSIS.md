@@ -29,7 +29,8 @@ Risco residual: a UI de papéis/equipe (frente RBAC) pode listar chaves de permi
 | `contracts/openapi/omnira-v1.yaml` | **não alterado**: a API fica em `flows-v1.yaml` com guarda de deriva próprio (o guarda genérico exige registrar tudo no servidor de teste, cujo arquivo hoje não compila) | nenhum |
 | `apps/api/cmd/omnira-api/main.go`, `apps/worker/cmd/omnira-worker/main.go` | um bloco novo cada, atrás da flag | baixo |
 | `internal/platform/config` | variável `OMNIRA_FLOWS_ENABLED` (+ limites) | baixo |
-| `web/src/App.tsx`, `web/src/components/Sidebar.tsx` | 1 rota e 1 item de menu | **médio**: a frente RBAC/agentes editou exatamente esses arquivos (6 e 7 linhas). Mitigação: hunks de poucas linhas, resolvo sobre o `main` mais recente antes do relatório final |
+| `web/src/App.tsx`, `web/src/components/Sidebar.tsx`, `web/src/lib/permissions.ts` | +4, +2 e +14 linhas (2 rotas, 1 item de menu "Automação", 9 rótulos de permissão) | **médio**: a frente RBAC/agentes editou exatamente esses arquivos. Hunks pequenos e só de adição; ao mesclar, resolver por união |
+| `web/src/components/primitives/*` | **não alterado**. Defeito do `Modal` documentado em STATUS (foco roubado com `onClose` inline); contornado por `StableModal` | nenhum |
 | `internal/iam3/security_test.go` | +4 linhas: as chaves `flow.*` na **matriz de papéis fixada por teste** (o teste existe para que toda permissão nova seja decisão consciente) | **médio**: a frente RBAC edita essa matriz; ao mesclar, resolver por união das chaves |
 | `docker-compose.yml` | +2 linhas no bloco de ambiente compartilhado (`OMNIRA_FLOWS_ENABLED`, padrão `false`) | baixo |
 | `apps/api/cmd/omnira-api/main.go`, `apps/worker/cmd/omnira-worker/main.go` | +12 e +24 linhas, 0 removidas | baixo |
