@@ -97,7 +97,7 @@ export default function FlowCanvas({ def, selectedId, issues, pending, readOnly,
   }
 
   return (
-    <div ref={scrollerRef} className="relative h-full w-full overflow-auto bg-surface-muted" data-testid="flow-canvas" onClick={() => { onSelect(null); onStartConnect(null) }}>
+    <div ref={scrollerRef} className="flow-canvas-grid relative h-full w-full overflow-auto bg-surface-muted" data-testid="flow-canvas" onClick={() => { onSelect(null); onStartConnect(null) }}>
       <div ref={planeRef} className="relative" style={{ width: size.width, height: size.height }}>
         <svg className="absolute inset-0" width={size.width} height={size.height} aria-hidden={false}>
           {def.edges.map((e) => {
@@ -147,10 +147,10 @@ export default function FlowCanvas({ def, selectedId, issues, pending, readOnly,
               data-node-id={n.id}
               data-selected={selected || undefined}
               className={clsx(
-                'absolute select-none rounded-card border bg-surface shadow-sm',
-                blocking ? 'border-status-danger' : warn ? 'border-status-warning' : 'border-border-subtle',
+                'absolute select-none rounded-card border bg-surface shadow-sm transition-shadow hover:shadow-md',
+                blocking ? 'border-status-danger ring-1 ring-status-danger/25' : warn ? 'border-status-warning ring-1 ring-status-warning/25' : 'border-border-subtle',
                 selected && 'ring-2 ring-accent-primary',
-                lit && 'ring-2 ring-status-success',
+                lit && 'border-status-success ring-2 ring-status-success/30',
               )}
               style={{ left: n.position.x, top: n.position.y, width: NODE_WIDTH, height: nodeHeight(n) }}
               onClick={(e) => { e.stopPropagation(); onSelect(n.id) }}
@@ -170,12 +170,12 @@ export default function FlowCanvas({ def, selectedId, issues, pending, readOnly,
                     onClick={(e) => { e.stopPropagation(); onFinishConnect(n.id) }}
                     className={clsx(
                       'h-4 w-4 shrink-0 rounded-full border-2',
-                      canReceive ? 'border-accent-primary bg-accent-primary-soft animate-pulse' : 'border-border-strong bg-surface',
+                      canReceive ? 'border-accent-primary bg-accent-primary-soft ring-2 ring-accent-primary/40 animate-pulse motion-reduce:animate-none' : 'border-border-strong bg-surface',
                     )}
                   />
                 )}
               </div>
-              <ul className="m-0 list-none p-0">
+              <ul className="m-0 list-none divide-y divide-border-subtle p-0">
                 {ports.length === 0 && (
                   <li className="flex items-center px-3 text-xs text-text-tertiary" style={{ height: PORT_ROW }}>
                     {n.type === 'human_handoff' ? 'entrega a conversa a uma pessoa' : 'fim do fluxo'}
@@ -198,8 +198,8 @@ export default function FlowCanvas({ def, selectedId, issues, pending, readOnly,
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); onStartConnect(isPending ? null : { source: n.id, port: p.name }) }}
                         className={clsx(
-                          '-mr-2 h-4 w-4 shrink-0 rounded-full border-2',
-                          isPending ? 'border-accent-primary bg-accent-primary' : connected ? 'border-accent-primary bg-accent-primary-soft' : 'border-border-strong bg-surface',
+                          '-mr-2 h-4 w-4 shrink-0 rounded-full border-2 transition-colors',
+                          isPending ? 'border-accent-primary bg-accent-primary' : connected ? 'border-accent-primary bg-accent-primary-soft' : 'border-border-strong bg-surface hover:border-accent-primary',
                         )}
                       />
                     </li>

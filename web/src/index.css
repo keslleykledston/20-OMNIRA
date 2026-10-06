@@ -52,3 +52,9 @@ input, textarea, select {
   outline: none;
   box-shadow: var(--focus-ring);
 }
+
+/* Canvas do editor de fluxos: grade pontilhada discreta (visual vindo do projeto de design). */
+.flow-canvas-grid {
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--color-text-tertiary) 28%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
