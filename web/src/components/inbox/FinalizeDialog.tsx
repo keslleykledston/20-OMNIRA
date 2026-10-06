@@ -25,6 +25,7 @@ interface DraftItem {
   kind: FollowUpKind
   text: string
   due: string // yyyy-mm-dd ou vazio
+  ai?: boolean // sugerido pela IA: a pessoa confere e pode editar ou remover
 }
 
 const selectClass = 'w-full rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary'
@@ -39,13 +40,17 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   const [note, setNote] = useState('')
   const [items, setItems] = useState<DraftItem[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [aiDraft, setAiDraft] = useState<string | null>(null) // o texto exato que a IA sugeriu para o resumo
+  const [aiNote, setAiNote] = useState<string | null>(null)
 
   const finalize = useMutation({
     mutationFn: () => {
       const follow_ups: FollowUpInput[] = items
         .filter((i) => i.text.trim() !== '')
         .map((i) => ({ kind: i.kind, text: i.text.trim(), due_at: i.due ? new Date(`${i.due}T12:00:00`).toISOString() : null }))
-      return attendanceAPI.finalize(conversationId, { reason, note: note.trim(), summary: summary.trim(), follow_ups })
+      // O resumo só vale como "da IA" enquanto estiver exatamente como a IA o escreveu; se a pessoa editou, ela o confirmou.
+      const summary_truth = aiDraft !== null && summary.trim() === aiDraft.trim() && summary.trim() !== '' ? 'ai_inferred' : 'agent_confirmed'
+      return attendanceAPI.finalize(conversationId, { reason, note: note.trim(), summary: summary.trim(), summary_truth, follow_ups })
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] })
@@ -55,11 +60,28 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       setItems([])
       setSummary('')
       setNote('')
+      setAiDraft(null)
+      setAiNote(null)
       setError(null)
       onFinalized?.()
       onClose()
     },
     onError: (err) => setError(attendanceErrorMessage(err)),
+  })
+
+  const suggest = useMutation({
+    mutationFn: () => attendanceAPI.suggestClosing(conversationId),
+    onSuccess: (s) => {
+      setError(null)
+      setSummary(s.summary)
+      setAiDraft(s.summary)
+      setAiNote(`Rascunho da IA com base em ${s.based_on_messages} mensagem(ns). Confira e edite antes de finalizar.`)
+      setItems((cur) => {
+        let k = cur.reduce((m, i) => Math.max(m, i.key), 0)
+        return [...cur, ...s.follow_ups.map((f) => ({ key: ++k, kind: f.kind, text: f.text, due: '', ai: true }))].slice(0, 20)
+      })
+    },
+    onError: (err) => { setAiNote(null); setError(attendanceErrorMessage(err)) },
   })
 
   let seq = items.reduce((m, i) => Math.max(m, i.key), 0)
@@ -86,6 +108,10 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
             {(Object.keys(CLOSE_REASON_LABEL) as CloseReason[]).map((r) => <option key={r} value={r}>{CLOSE_REASON_LABEL[r]}</option>)}
           </select>
         </label>
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="secondary" size="sm" isLoading={suggest.isPending} disabled={suggest.isPending || finalize.isPending} onClick={() => suggest.mutate()}>Sugerir com IA</Button>
+          {aiNote && <p role="status" className="m-0 text-xs text-text-secondary">{aiNote}</p>}
+        </div>
         <TextArea
           label="Resumo do atendimento"
           helperText="O que foi tratado. A próxima pessoa que atender este contato vê este resumo."
@@ -99,6 +125,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
           {items.length === 0 && <p className="text-xs text-text-tertiary">Nada a registrar. Adicione se algo ficou em aberto.</p>}
           {items.map((i, n) => (
             <div key={i.key} className="space-y-2 rounded-control border border-border-subtle p-2">
+              {i.ai && <p className="m-0 text-xs text-text-tertiary">Sugerido pela IA: confira antes de finalizar.</p>}
               <div className="grid grid-cols-2 gap-2">
                 <select aria-label={`Tipo do item ${n + 1}`} className={selectClass} value={i.kind} onChange={(e) => patch(i.key, { kind: e.target.value as FollowUpKind })}>
                   {(Object.keys(FOLLOW_UP_KIND_LABEL) as FollowUpKind[]).map((k) => <option key={k} value={k}>{FOLLOW_UP_KIND_LABEL[k]}</option>)}

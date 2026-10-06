@@ -29,6 +29,7 @@ type Registrar interface {
 func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler) {
 	const base = "/api/v1/tenants/{tenant_id}"
 	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize", wrap(h.finalize))
+	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize/suggest", wrap(h.suggest))
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/attendance-context", wrap(h.contextOfConversation))
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/history-search", wrap(h.searchHistory))
 	mux.Handle("GET "+base+"/contacts/{contact_id}/attendance-history", wrap(h.historyOfContact))
@@ -59,6 +60,12 @@ func fail(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
 	case errors.Is(err, domain.ErrNotAContact):
 		writeErr(w, http.StatusUnprocessableEntity, "not_a_contact_conversation", "only a conversation with a contact can be finalized")
+	case errors.Is(err, domain.ErrSuggestionDisabled):
+		writeErr(w, http.StatusServiceUnavailable, "ai_disabled", "the AI suggestion is not enabled")
+	case errors.Is(err, domain.ErrSuggestionUnavailable):
+		writeErr(w, http.StatusServiceUnavailable, "ai_unavailable", "the AI suggestion is not available right now")
+	case errors.Is(err, domain.ErrNothingToSuggest):
+		writeErr(w, http.StatusUnprocessableEntity, "nothing_to_suggest", "there is nothing in the conversation to summarize")
 	case errors.Is(err, domain.ErrAlreadyHandled):
 		writeErr(w, http.StatusConflict, "already_resolved", "the item was already resolved")
 	case errors.Is(err, domain.ErrInvalid):
@@ -164,6 +171,44 @@ func (h *Handler) finalize(w http.ResponseWriter, r *http.Request) {
 		body["closure"] = closure(res.Closure, res.FollowUps)
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+type suggestionDTO struct {
+	Summary      string `json:"summary"`
+	SummaryTruth string `json:"summary_truth"`
+	FollowUps    []struct {
+		Kind string `json:"kind"`
+		Text string `json:"text"`
+	} `json:"follow_ups"`
+	Model           string `json:"model"`
+	BasedOnMessages int    `json:"based_on_messages"`
+}
+
+func (h *Handler) suggest(w http.ResponseWriter, r *http.Request) {
+	if !authenticated(w, r) {
+		return
+	}
+	id, ok := pathUUID(w, r, "conversation_id")
+	if !ok {
+		return
+	}
+	sg, err := h.svc.SuggestClosing(r.Context(), id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := suggestionDTO{Summary: sg.Summary, SummaryTruth: string(domain.TruthAIInferred), Model: sg.Model, BasedOnMessages: sg.BasedOnMessages}
+	out.FollowUps = make([]struct {
+		Kind string `json:"kind"`
+		Text string `json:"text"`
+	}, 0, len(sg.FollowUps))
+	for _, f := range sg.FollowUps {
+		out.FollowUps = append(out.FollowUps, struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		}{string(f.Kind), f.Text})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 type historyDTO struct {

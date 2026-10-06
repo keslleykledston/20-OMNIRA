@@ -35,6 +35,25 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/finalize/suggest:
+    post:
+      operationId: suggestClosing
+      tags: [Attendance]
+      summary: Ask the AI for a DRAFT closing summary and follow-up items
+      description: |
+        Same authorization as finalizing. Read-only: stores nothing and holds no lock. The answer is always `ai_inferred`
+        and meant to be edited; only finalizing records anything. 503 `ai_disabled` / `ai_unavailable` when the feature is off or
+        the model is unreachable (finalizing by hand is never blocked); 422 `nothing_to_suggest` for a finalized or empty conversation.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200': { description: The draft, content: { application/json: { schema: { $ref: '#/components/schemas/ClosingSuggestion' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/attendance-context:
     get:
       operationId: getConversationAttendanceContext
@@ -113,7 +132,7 @@ components:
       type: object
       required: [error]
       properties:
-        error: { type: string, description: 'unauthorized, forbidden, not_found, not_a_contact_conversation, already_resolved, invalid, internal' }
+        error: { type: string, description: 'unauthorized, forbidden, not_found, not_a_contact_conversation, already_resolved, invalid, ai_disabled, ai_unavailable, nothing_to_suggest, internal' }
         detail: { type: string }
     FinalizeRequest:
       type: object
@@ -179,6 +198,20 @@ components:
         created_at: { type: string, format: date-time }
         resolved_at: { type: string, format: date-time, nullable: true }
         resolution_note: { type: string }
+    ClosingSuggestion:
+      type: object
+      properties:
+        summary: { type: string }
+        summary_truth: { type: string, enum: [ai_inferred] }
+        follow_ups:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [pending, promise, info] }
+              text: { type: string }
+        model: { type: string }
+        based_on_messages: { type: integer }
     HistoryHits:
       type: object
       properties:

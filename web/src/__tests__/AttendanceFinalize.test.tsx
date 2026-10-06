@@ -195,3 +195,64 @@ describe('Busca no histórico do contato', () => {
     expect(screen.queryByRole('region', { name: 'Buscar no histórico' })).toBeNull()
   })
 })
+
+describe('Sugestão da IA ao finalizar (ADR-0020)', () => {
+  const suggestion = { summary: 'Link voltou após reiniciar a ONU.', summary_truth: 'ai_inferred', follow_ups: [{ kind: 'promise', text: 'Ligar na sexta' }, { kind: 'pending', text: 'Enviar a segunda via' }], model: 'mini', based_on_messages: 7 }
+
+  async function openDialog(user: ReturnType<typeof userEvent.setup>) {
+    serve()
+    renderAt(<ContextPane conversationId={CONV} />)
+    await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
+    return screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+  }
+
+  it('fills a draft the person can review, marks the items, and records the summary as the AI wrote it only while unedited', async () => {
+    vi.mocked(axios.post).mockImplementation(async (url: string) => (String(url).endsWith('/finalize/suggest') ? { data: suggestion } : { data: { changed: true } }))
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Sugerir com IA' }))
+    expect(await within(dialog).findByText(/Rascunho da IA com base em 7 mensagem/)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('Resumo do atendimento')).toHaveValue('Link voltou após reiniciar a ONU.')
+    expect(within(dialog).getByLabelText('Texto do item 1')).toHaveValue('Ligar na sexta')
+    expect(within(dialog).getAllByText(/Sugerido pela IA/)).toHaveLength(2)
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
+    const finalize = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith(`/conversations/${CONV}/finalize`))!
+    expect((finalize[1] as any).summary_truth).toBe('ai_inferred') // unedited draft
+    expect((finalize[1] as any).follow_ups).toHaveLength(2)
+  })
+
+  it('treats an edited summary as confirmed by the person', async () => {
+    vi.mocked(axios.post).mockImplementation(async (url: string) => (String(url).endsWith('/finalize/suggest') ? { data: suggestion } : { data: { changed: true } }))
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Sugerir com IA' }))
+    const box = await within(dialog).findByDisplayValue('Link voltou após reiniciar a ONU.')
+    await user.type(box, ' Cliente confirmou.')
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith(`/conversations/${CONV}/finalize`))).toBe(true))
+    const finalize = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith(`/conversations/${CONV}/finalize`))!
+    expect((finalize[1] as any).summary_truth).toBe('agent_confirmed')
+  })
+
+  it('a manual summary is always confirmed by the person (no suggestion involved)', async () => {
+    vi.mocked(axios.post).mockResolvedValue({ data: { changed: true } })
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await user.type(within(dialog).getByLabelText('Resumo do atendimento'), 'Resolvido por telefone')
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(axios.post).toHaveBeenCalled())
+    expect((vi.mocked(axios.post).mock.calls[0][1] as any).summary_truth).toBe('agent_confirmed')
+  })
+
+  it('explains when the AI is off or unavailable and keeps finalizing by hand possible', async () => {
+    vi.mocked(axios.post).mockRejectedValueOnce({ response: { status: 503, data: { error: 'ai_disabled' } } }).mockRejectedValueOnce({ response: { status: 503, data: { error: 'ai_unavailable' } } })
+    const user = userEvent.setup()
+    const dialog = await openDialog(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Sugerir com IA' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/não está ativada neste ambiente/)
+    await user.click(within(dialog).getByRole('button', { name: 'Sugerir com IA' }))
+    await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent(/não está disponível agora/))
+    expect(within(dialog).getByRole('button', { name: 'Finalizar atendimento' })).toBeEnabled()
+  })
+})

@@ -18,7 +18,15 @@ type ConversationFacts struct {
 	AssignedTo *uuid.UUID
 }
 
+// ClosingSuggester drafts a closing summary and follow-up items for a conversation (ADR-0020). Implemented by the intelligence
+// module; optional. It must NOT be called while a row lock is held: a model call is slow.
+type ClosingSuggester interface {
+	SuggestClosing(ctx context.Context, conversationID uuid.UUID) (domain.ClosingSuggestion, error)
+}
+
 type Repository interface {
+	// ReadConversation is LockConversation without the lock: for read-only paths that wait on something slow.
+	ReadConversation(ctx context.Context, conversationID uuid.UUID) (*ConversationFacts, error)
 	// LockConversation reads the conversation FOR UPDATE: the same lock the flow engine takes, so a bot step and a
 	// finalization of one conversation are serialized. ErrNotFound when RLS hides it or it does not exist.
 	LockConversation(ctx context.Context, conversationID uuid.UUID) (*ConversationFacts, error)

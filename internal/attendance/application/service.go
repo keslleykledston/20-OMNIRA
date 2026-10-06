@@ -31,10 +31,56 @@ type Service struct {
 	authz ports.Authorizer
 	audit ports.Auditor
 	now   func() time.Time
+	// suggester is optional (the intelligence module); nil means the AI suggestion is not offered.
+	suggester ports.ClosingSuggester
 }
 
 func NewService(repo ports.Repository, authz ports.Authorizer, audit ports.Auditor) *Service {
 	return &Service{repo: repo, authz: authz, audit: audit, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// WithSuggester enables the AI closing suggestion.
+func (s *Service) WithSuggester(g ports.ClosingSuggester) *Service {
+	s.suggester = g
+	return s
+}
+
+// SuggestClosing asks the model for a DRAFT summary and follow-up items. Same authorization as finalizing (the owner, or a
+// supervisor), because what it reads is the conversation the person is about to close. Read-only: it takes no lock (a model call
+// is slow), stores nothing, and a finalized conversation has nothing left to suggest.
+func (s *Service) SuggestClosing(ctx context.Context, conversationID uuid.UUID) (domain.ClosingSuggestion, error) {
+	tc, err := actor(ctx)
+	if err != nil {
+		return domain.ClosingSuggestion{}, err
+	}
+	if s.suggester == nil {
+		return domain.ClosingSuggestion{}, domain.ErrSuggestionDisabled
+	}
+	claim, err := s.has(ctx, tc.ActorID, PermissionClaim)
+	if err != nil {
+		return domain.ClosingSuggestion{}, err
+	}
+	manage, err := s.has(ctx, tc.ActorID, PermissionManage)
+	if err != nil {
+		return domain.ClosingSuggestion{}, err
+	}
+	if !claim && !manage {
+		return domain.ClosingSuggestion{}, domain.ErrForbidden
+	}
+	facts, err := s.repo.ReadConversation(ctx, conversationID)
+	if err != nil {
+		return domain.ClosingSuggestion{}, err
+	}
+	if facts.ContactID == nil || facts.Kind == "internal" {
+		return domain.ClosingSuggestion{}, domain.ErrNotAContact
+	}
+	if owner := facts.AssignedTo != nil && *facts.AssignedTo == tc.ActorID; !owner && !manage {
+		return domain.ClosingSuggestion{}, domain.ErrForbidden
+	}
+	if facts.Status == "closed" {
+		return domain.ClosingSuggestion{}, domain.ErrNothingToSuggest
+	}
+	return s.suggester.SuggestClosing(ctx, conversationID)
 }
 
 type FinalizeResult struct {

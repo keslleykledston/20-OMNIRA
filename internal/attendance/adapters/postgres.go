@@ -60,6 +60,21 @@ func (r *PostgresRepository) LockConversation(ctx context.Context, id uuid.UUID)
 	return f, nil
 }
 
+func (r *PostgresRepository) ReadConversation(ctx context.Context, id uuid.UUID) (*ports.ConversationFacts, error) {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f := &ports.ConversationFacts{}
+	err = r.q(ctx).QueryRow(ctx, `
+		SELECT id, contact_id, status, conversation_kind, assigned_to_user_id
+		FROM conversations WHERE tenant_id=$1 AND id=$2`, tenant, id).Scan(&f.ID, &f.ContactID, &f.Status, &f.Kind, &f.AssignedTo)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	return f, nil
+}
+
 func (r *PostgresRepository) ContactOfConversation(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	tenant, err := tenantOf(ctx)
 	if err != nil {

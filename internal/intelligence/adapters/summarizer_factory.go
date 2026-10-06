@@ -35,6 +35,7 @@ func NewModelRouterFromConfig(cfg *config.Config) *application.ModelRouter {
 	add(application.TaskTopicClassify, "OMNIRA_AI_MODEL_TOPIC_CLASSIFY", 200)
 	add(application.TaskTopicSummary, "OMNIRA_AI_MODEL_TOPIC_SUMMARY", 600)
 	add(application.TaskCopilotReply, "OMNIRA_AI_MODEL_COPILOT", 700)
+	add(application.TaskClosingSuggest, "OMNIRA_AI_MODEL_CLOSING_SUGGEST", 700) // ADR-0020: closing summary and follow-up items
 	return router
 }
 

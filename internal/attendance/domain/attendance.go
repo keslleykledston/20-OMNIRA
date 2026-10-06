@@ -84,6 +84,10 @@ var (
 	ErrInvalid        = errors.New("attendance: invalid input")
 	ErrNotAContact    = errors.New("attendance: only a conversation with a contact can be finalized")
 	ErrAlreadyHandled = errors.New("attendance: the item is already resolved")
+	// the AI suggestion is optional: none of these blocks finalizing by hand
+	ErrSuggestionDisabled    = errors.New("attendance: the AI closing suggestion is not enabled")
+	ErrSuggestionUnavailable = errors.New("attendance: the AI closing suggestion is not available right now")
+	ErrNothingToSuggest      = errors.New("attendance: there is nothing in the conversation to summarize")
 )
 
 // FollowUpInput is one item the person lists while finalizing.
@@ -302,4 +306,14 @@ func Snippet(body, query string) string {
 		out += "…"
 	}
 	return out
+}
+
+// ClosingSuggestion is a DRAFT from a model: a summary and the items it thinks remain (pending, promised, worth remembering).
+// It is never stored by itself; the person edits it and only then does finalizing record it (as ai_inferred when the summary
+// was kept unedited).
+type ClosingSuggestion struct {
+	Summary         string
+	FollowUps       []FollowUpInput
+	Model           string
+	BasedOnMessages int
 }

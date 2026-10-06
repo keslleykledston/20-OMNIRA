@@ -254,6 +254,10 @@ func main() {
 		ticketPolicySvc := intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool), routingRepo,
 			inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)
 		contactMemory := intelligenceadapters.NewContactMemory(dbPool, attendanceService)
+		// ADR-0020: the AI closing suggestion (a draft only; runs on the copilot flag and the model router)
+		attendanceService.WithSuggester(intelligenceadapters.NewClosingSuggestAdapter(
+			intelligenceapp.NewClosingSuggester(intelligenceadapters.NewPostgresClosingReader(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags).
+				WithLedger(aiusageadapters.NewPostgresLedger(dbPool))))
 		copilotSvc := intelligenceapp.NewCopilotService(intelligenceapp.NewContextBuilder(topicRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), summaryRepo).
 			WithContactMemory(contactMemory, intelligenceFlags.CopilotContactMemoryEnabled),
 			intelligenceadapters.NewPostgresContextRepository(dbPool), intelligenceadapters.NewModelRouterFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))

@@ -67,6 +67,14 @@ export interface HistoryHit {
   conversation_id: string
 }
 
+export interface ClosingSuggestion {
+  summary: string
+  summary_truth: 'ai_inferred'
+  follow_ups: { kind: FollowUpKind; text: string }[]
+  model: string
+  based_on_messages: number
+}
+
 export interface FollowUpInput {
   kind: FollowUpKind
   text: string
@@ -97,6 +105,8 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 export const attendanceAPI = {
   finalize: (conversationId: string, body: FinalizeBody) =>
     call<{ changed: boolean; closure?: Closure }>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize`, body, h())),
+  suggestClosing: (conversationId: string) =>
+    call<ClosingSuggestion>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize/suggest`, {}, h())),
   contextOf: (conversationId: string, limit = 5) =>
     call<AttendanceHistory>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/attendance-context`, { ...h(), params: { limit } })),
   searchHistory: (conversationId: string, q: string, limit = 5) =>
@@ -112,6 +122,9 @@ export function attendanceErrorMessage(err: unknown): string {
   if (status === 403) return 'Só o responsável pela conversa (ou um supervisor) pode finalizar o atendimento.'
   if (status === 404) return 'Conversa não encontrada.'
   if (status === 409 && data?.error === 'already_resolved') return 'Esta pendência já foi resolvida.'
+  if (status === 422 && data?.error === 'nothing_to_suggest') return 'Não há mensagens de texto para resumir.'
+  if (status === 503 && data?.error === 'ai_disabled') return 'A sugestão por IA não está ativada neste ambiente. Você pode finalizar normalmente.'
+  if (status === 503) return 'A sugestão por IA não está disponível agora. Você pode finalizar normalmente.'
   if (status === 422) return 'Esta conversa não pode ser finalizada (não é um atendimento a um contato).'
   if (status === 400 && data?.detail?.includes('query')) return 'Digite de 2 a 100 caracteres, sem senhas ou chaves.'
   if (status === 400 && data?.detail) return data.detail.replace(/^attendance: invalid input: /, '')
