@@ -4,7 +4,7 @@ Atualize este arquivo ao concluir trabalho substancial. Git e testes executávei
 
 ## FLOW BUILDER (ADR-0019) — 2026-10-06 (LEIA ANTES DE TOCAR EM `internal/flows`, `web/src/components/flows` OU NA FLAG `OMNIRA_FLOWS_ENABLED`)
 
-Estado: **LAB**, branch `feat/flow-builder` (13 commits sobre `main` @ `8af6d54`), **não implantado, não mesclado, flag desligada**.
+Estado: **LAB**, branch `feat/flow-builder` (commits em `git log main..HEAD`, sobre `main` @ `8af6d54`), **não implantado, não mesclado, flag desligada**.
 Ponto de entrada: `docs/flows/STATUS.md` (evidência por fase), `docs/flows/PRODUCTION-GATE.md` (decisão e condições do piloto),
 `docs/flows/FINAL-REPORT.md` (resumo, decisões e pendências), `docs/flows/USER-GUIDE.md` (operador), `docs/flows/OPERATIONS.md`.
 Invariantes que testes protegem: `conversations` **não** tem coluna de empresa; a matriz de papéis em `internal/iam3` é fixada por teste;

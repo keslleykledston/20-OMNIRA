@@ -35,7 +35,7 @@ tinham rodado. Foi **revertida e descartada** (branch `feat/flow-builder-discard
 
 ## Números
 
-13 commits · 114+ arquivos · ~9,1 mil linhas de Go de produção e ~4,8 mil de teste · ~2,9 mil linhas de web de produção ·
+Série de commits por fase (`git log main..HEAD`) · 114+ arquivos · ~9,1 mil linhas de Go de produção e ~4,8 mil de teste · ~2,9 mil linhas de web de produção ·
 3 migrations · 23 operações REST documentadas · 20 tipos de nó · 24 templates / 3 packs / 88 cenários Given-When-Then ·
 **117 testes Go** dos módulos novos (0 falhas; suíte completa 69 pacotes ok com as mesmas 5 falhas preexistentes de `main`) ·
 **614 testes web** passam · 2 cenários em Chromium real · **0 dependências novas**.
