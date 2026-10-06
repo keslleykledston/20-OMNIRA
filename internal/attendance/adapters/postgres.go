@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -283,4 +284,45 @@ func (a *Authorizer) Has(ctx context.Context, userID uuid.UUID, permission strin
 		SELECT EXISTS(SELECT 1 FROM memberships m JOIN role_permissions rp ON rp.role_id = m.role_id
 		  WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND rp.permission_key=$3)`, tenant, userID, permission).Scan(&ok)
 	return ok, err
+}
+
+// likeEscape makes user text literal inside an ILIKE pattern (the % and _ a person types are not wildcards).
+func likeEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+func (r *PostgresRepository) SearchContactMessages(ctx context.Context, contactID uuid.UUID, in domain.SearchInput) ([]domain.HistoryHit, error) {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q(ctx).Query(ctx, `
+		SELECT m.created_at, m.direction, m.body, m.conversation_id
+		FROM messages m
+		JOIN conversations c ON c.tenant_id = m.tenant_id AND c.id = m.conversation_id
+		WHERE m.tenant_id = $1 AND c.contact_id = $2 AND m.message_type = 'text' AND m.body ILIKE $3 ESCAPE '\'
+		  AND ($4::uuid IS NULL OR m.conversation_id <> $4)
+		  AND ($5::uuid IS NULL OR NOT EXISTS (
+		        SELECT 1 FROM message_topic_links l WHERE l.tenant_id = m.tenant_id AND l.message_id = m.id AND l.topic_thread_id = $5))
+		ORDER BY m.created_at DESC, m.id
+		LIMIT $6`, tenant, contactID, "%"+likeEscape(in.Query)+"%", in.ExcludeConversationID, in.ExcludeTopicID, in.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.HistoryHit{}
+	for rows.Next() {
+		var h domain.HistoryHit
+		var direction, body string
+		if err := rows.Scan(&h.At, &direction, &body, &h.ConversationID); err != nil {
+			return nil, err
+		}
+		h.Role = "customer"
+		if direction == "outbound" {
+			h.Role = "agent"
+		}
+		h.Snippet = domain.Snippet(body, in.Query)
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }

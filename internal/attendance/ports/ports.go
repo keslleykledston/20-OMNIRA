@@ -38,6 +38,8 @@ type Repository interface {
 	ListFollowUps(ctx context.Context, contactID uuid.UUID, status domain.FollowUpStatus, limit int) ([]domain.FollowUp, error)
 	LockFollowUp(ctx context.Context, id uuid.UUID) (*domain.FollowUp, error)
 	ResolveFollowUp(ctx context.Context, id uuid.UUID, status domain.FollowUpStatus, note string, by uuid.UUID) error
+	// SearchContactMessages finds earlier text messages of ONE contact (any of its conversations), newest first.
+	SearchContactMessages(ctx context.Context, contactID uuid.UUID, in domain.SearchInput) ([]domain.HistoryHit, error)
 }
 
 // Authorizer answers from the role -> permission matrix (never by role name).

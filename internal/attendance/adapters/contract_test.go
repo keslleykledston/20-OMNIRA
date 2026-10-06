@@ -51,8 +51,8 @@ func TestOpenAPIAndRoutesAgree(t *testing.T) {
 	for _, p := range rec.patterns {
 		routed[paramRE.ReplaceAllString(p, "{}")] = true
 	}
-	if len(documented) != 4 || len(routed) != 4 {
-		t.Fatalf("expected 4 operations: documented=%d routed=%d", len(documented), len(routed))
+	if len(documented) != 5 || len(routed) != 5 {
+		t.Fatalf("expected 5 operations: documented=%d routed=%d", len(documented), len(routed))
 	}
 	var problems []string
 	for d := range documented {

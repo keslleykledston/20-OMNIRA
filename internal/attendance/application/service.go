@@ -219,6 +219,34 @@ func (s *Service) HistoryOfContact(ctx context.Context, contactID uuid.UUID, lim
 	return h, nil
 }
 
+// SearchHistoryOfContact finds earlier messages of one contact. Any active member may read (same visibility as the Inbox);
+// the caller supplies a contact it can already see (derived from a conversation or a topic, never from user input).
+func (s *Service) SearchHistoryOfContact(ctx context.Context, contactID uuid.UUID, raw domain.SearchInput) ([]domain.HistoryHit, error) {
+	if _, err := actor(ctx); err != nil {
+		return nil, err
+	}
+	in, err := raw.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.SearchContactMessages(ctx, contactID, in)
+}
+
+// SearchHistoryOfConversation searches the contact of a conversation, leaving that conversation out.
+func (s *Service) SearchHistoryOfConversation(ctx context.Context, conversationID uuid.UUID, query string, limit int) ([]domain.HistoryHit, error) {
+	if _, err := actor(ctx); err != nil {
+		return nil, err
+	}
+	contactID, err := s.repo.ContactOfConversation(ctx, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	if contactID == uuid.Nil {
+		return nil, domain.ErrNotAContact
+	}
+	return s.SearchHistoryOfContact(ctx, contactID, domain.SearchInput{Query: query, Limit: limit, ExcludeConversationID: &conversationID})
+}
+
 // ResolveFollowUp marks an open item done or dropped. Needs conversation.claim or conversation.manage.
 func (s *Service) ResolveFollowUp(ctx context.Context, id uuid.UUID, raw domain.ResolveFollowUpInput) (*domain.FollowUp, error) {
 	tc, err := actor(ctx)

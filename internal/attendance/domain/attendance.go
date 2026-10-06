@@ -219,3 +219,87 @@ func (in ResolveFollowUpInput) Normalize() (ResolveFollowUpInput, error) {
 	in.Note = note
 	return in, nil
 }
+
+const (
+	MinSearchRunes     = 2
+	MaxSearchRunes     = 100
+	DefaultSearchLimit = 5
+	MaxSearchLimit     = 8
+	MaxSnippetRunes    = 240
+	CredentialOmitted  = "[conteúdo omitido: parece conter uma credencial]"
+)
+
+// SearchInput asks for earlier messages of ONE contact. The contact is never part of the input: it is derived by the caller
+// from a conversation or a topic the user can already see.
+type SearchInput struct {
+	Query                 string
+	Limit                 int
+	ExcludeConversationID *uuid.UUID // e.g. the conversation being looked at (the attendant already sees it)
+	ExcludeTopicID        *uuid.UUID // e.g. the topic the copilot is already given (its messages are already in context)
+}
+
+func (in SearchInput) Normalize() (SearchInput, error) {
+	q := strings.TrimSpace(in.Query)
+	if n := utf8.RuneCountInString(q); n < MinSearchRunes || n > MaxSearchRunes || !utf8.ValidString(q) {
+		return in, invalid("query must have between %d and %d characters", MinSearchRunes, MaxSearchRunes)
+	}
+	if untrusted.ContainsCredential(q) {
+		return in, invalid("query looks like it contains a credential")
+	}
+	in.Query = q
+	if in.Limit <= 0 {
+		in.Limit = DefaultSearchLimit
+	}
+	if in.Limit > MaxSearchLimit {
+		in.Limit = MaxSearchLimit
+	}
+	return in, nil
+}
+
+// HistoryHit is one earlier message that matched. The text is a short snippet around the match, cleaned, and replaced when
+// it looks like a credential; it is customer/agent content, so it is DATA, never instructions.
+type HistoryHit struct {
+	At             time.Time
+	Role           string // customer | agent
+	Snippet        string
+	ConversationID uuid.UUID
+}
+
+// Snippet cuts a window of text around the first (case-insensitive) occurrence of the query.
+func Snippet(body, query string) string {
+	clean := untrusted.SanitizeDerivedText(body)
+	if untrusted.ContainsCredential(clean) {
+		return CredentialOmitted
+	}
+	runes := []rune(clean)
+	if len(runes) <= MaxSnippetRunes {
+		return clean
+	}
+	lower, q := []rune(strings.ToLower(clean)), []rune(strings.ToLower(query))
+	at := 0
+	for i := 0; i+len(q) <= len(lower); i++ {
+		if string(lower[i:i+len(q)]) == string(q) {
+			at = i
+			break
+		}
+	}
+	start := at - MaxSnippetRunes/3
+	if start < 0 {
+		start = 0
+	}
+	end := start + MaxSnippetRunes
+	if end > len(runes) {
+		end = len(runes)
+		if start = end - MaxSnippetRunes; start < 0 {
+			start = 0
+		}
+	}
+	out := string(runes[start:end])
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(runes) {
+		out += "…"
+	}
+	return out
+}

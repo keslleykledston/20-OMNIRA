@@ -438,3 +438,67 @@ func TestTheNextMessageAfterFinalizingStartsANewAttendance(t *testing.T) {
 }
 
 var _ = pgxpool.New // keep the import used by helpers in other test files of the package
+
+func (s *stack) message(conv uuid.UUID, direction, body string, ago time.Duration) {
+	s.t.Helper()
+	s.exec(`INSERT INTO messages(id, tenant_id, conversation_id, direction, message_type, body, status, created_at) VALUES($1,$2,$3,$4,'text',$5,'received',$6)`,
+		uuid.New(), s.env.TenantA, conv, direction, body, time.Now().Add(-ago))
+}
+
+// Earlier messages of the SAME contact only: another contact of the tenant and another tenant never match.
+func TestSearchHistoryIsScopedToTheContact(t *testing.T) {
+	s := newStack(t)
+	current, contact := s.conversation(&s.agent)
+	previous, _ := s.env.SeedConversation(t, s.env.TenantA, "none")
+	s.exec(`UPDATE conversations SET contact_id=$2, status='closed', closed_at=now() WHERE id=$1`, previous, contact)
+	other, _ := s.conversation(&s.agent) // a different contact of the same tenant
+	s.message(previous, "inbound", "a fatura de agosto veio com valor errado", 48*time.Hour)
+	s.message(previous, "outbound", "vamos conferir a fatura e retornar", 47*time.Hour)
+	s.message(previous, "inbound", "o token é Bearer abcdefghijklmnop1234 da fatura", 46*time.Hour)
+	s.message(previous, "inbound", "100% certo de que a fatura_2 chegou", 45*time.Hour)
+	s.message(current, "inbound", "fatura de novo", time.Hour)
+	s.message(other, "inbound", "fatura do OUTRO contato", time.Hour)
+
+	var hits []domain.HistoryHit
+	var err error
+	s.as(s.agent, s.env.TenantA, func(ctx context.Context) { hits, err = s.svc.SearchHistoryOfConversation(ctx, current, "fatura", 8) })
+	if err != nil || len(hits) != 4 {
+		t.Fatalf("the contact's earlier messages only, the current conversation left out: %d %v", len(hits), err)
+	}
+	for _, h := range hits {
+		if h.ConversationID != previous || strings.Contains(h.Snippet, "OUTRO") || strings.Contains(h.Snippet, "Bearer") {
+			t.Fatalf("scope or credential leak: %+v", h)
+		}
+	}
+	if hits[0].At.Before(hits[len(hits)-1].At) {
+		t.Fatal("newest first")
+	}
+	if !strings.Contains(fmt.Sprint(hits), domain.CredentialOmitted) {
+		t.Fatalf("the message with a credential is replaced, not dropped: %+v", hits)
+	}
+	// % and _ are literal: "100%" matches only the message that really contains it
+	s.as(s.agent, s.env.TenantA, func(ctx context.Context) { hits, _ = s.svc.SearchHistoryOfConversation(ctx, current, "100%", 8) })
+	if len(hits) != 1 {
+		t.Fatalf("wildcards are literal: %d", len(hits))
+	}
+	s.as(s.agent, s.env.TenantA, func(ctx context.Context) { hits, _ = s.svc.SearchHistoryOfConversation(ctx, current, "tu_a", 8) })
+	if len(hits) != 0 {
+		t.Fatalf("an underscore is not 'any character': %d", len(hits))
+	}
+	s.as(s.agent, s.env.TenantA, func(ctx context.Context) { hits, _ = s.svc.SearchHistoryOfConversation(ctx, current, "fatura", 2) })
+	if len(hits) != 2 {
+		t.Fatalf("limit: %d", len(hits))
+	}
+	// excluding a topic leaves out the messages already linked to it (they are already in the copilot's context)
+	// tenant B cannot search tenant A's contact; an invalid query is refused
+	s.as(s.env.UserB, s.env.TenantB, func(ctx context.Context) {
+		if _, err := s.svc.SearchHistoryOfConversation(ctx, current, "fatura", 5); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("across tenants must look like not found: %v", err)
+		}
+	})
+	s.as(s.agent, s.env.TenantA, func(ctx context.Context) {
+		if _, err := s.svc.SearchHistoryOfConversation(ctx, current, "a", 5); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("short query: %v", err)
+		}
+	})
+}

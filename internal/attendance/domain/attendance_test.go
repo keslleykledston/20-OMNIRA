@@ -64,3 +64,35 @@ func TestResolveInput(t *testing.T) {
 		t.Error("credentials in the note are refused")
 	}
 }
+
+func TestSearchInput(t *testing.T) {
+	ok, err := (SearchInput{Query: "  fatura  ", Limit: 99}).Normalize()
+	if err != nil || ok.Query != "fatura" || ok.Limit != MaxSearchLimit {
+		t.Fatalf("%+v %v", ok, err)
+	}
+	if got, _ := (SearchInput{Query: "ok"}).Normalize(); got.Limit != DefaultSearchLimit {
+		t.Fatalf("default limit: %d", got.Limit)
+	}
+	for name, q := range map[string]string{"too short": "a", "blank": "   ", "too long": strings.Repeat("a", MaxSearchRunes+1), "credential": "Bearer abcdefghijk123"} {
+		if _, err := (SearchInput{Query: q}).Normalize(); err == nil {
+			t.Errorf("%s must be refused", name)
+		}
+	}
+}
+
+func TestSnippetCentersOnTheMatchAndNeverLeaksACredential(t *testing.T) {
+	body := strings.Repeat("a", 400) + " a fatura de agosto veio errada " + strings.Repeat("b", 400)
+	s := Snippet(body, "FATURA")
+	if !strings.Contains(s, "fatura de agosto") || len([]rune(s)) > MaxSnippetRunes+2 || !strings.HasPrefix(s, "…") || !strings.HasSuffix(s, "…") {
+		t.Fatalf("window around the match: %q", s)
+	}
+	if got := Snippet("curto", "curto"); got != "curto" {
+		t.Fatalf("short text is kept whole: %q", got)
+	}
+	if got := Snippet("o token é Bearer abcdefghijklmnop1234 ok", "token"); got != CredentialOmitted {
+		t.Fatalf("a credential never reaches the snippet: %q", got)
+	}
+	if got := Snippet("linha1\x00\x07 com controle", "controle"); strings.ContainsAny(got, "\x00\x07") {
+		t.Fatalf("control characters are removed: %q", got)
+	}
+}

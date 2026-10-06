@@ -50,6 +50,27 @@ paths:
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/history-search:
+    get:
+      operationId: searchContactHistory
+      tags: [Attendance]
+      summary: Search earlier messages of this conversation's contact
+      description: |
+        Text search over the messages of the SAME contact in its other conversations (the contact is derived from the
+        conversation, never from the request). `q` has 2 to 100 characters and is literal (wildcards are not special);
+        `limit` max 8, default 5. Snippets are short, cleaned, and replaced when they look like a credential. Any active
+        member may read.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 8 } }
+      responses:
+        '200': { description: Matches, newest first, content: { application/json: { schema: { $ref: '#/components/schemas/HistoryHits' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/contacts/{contact_id}/attendance-history:
     get:
       operationId: getContactAttendanceHistory
@@ -158,6 +179,18 @@ components:
         created_at: { type: string, format: date-time }
         resolved_at: { type: string, format: date-time, nullable: true }
         resolution_note: { type: string }
+    HistoryHits:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              at: { type: string, format: date-time }
+              role: { type: string, enum: [customer, agent] }
+              snippet: { type: string }
+              conversation_id: { type: string, format: uuid }
     History:
       type: object
       properties:

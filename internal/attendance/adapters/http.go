@@ -30,6 +30,7 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	const base = "/api/v1/tenants/{tenant_id}"
 	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize", wrap(h.finalize))
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/attendance-context", wrap(h.contextOfConversation))
+	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/history-search", wrap(h.searchHistory))
 	mux.Handle("GET "+base+"/contacts/{contact_id}/attendance-history", wrap(h.historyOfContact))
 	mux.Handle("POST "+base+"/follow-ups/{follow_up_id}/resolve", wrap(h.resolveFollowUp))
 }
@@ -215,6 +216,33 @@ func (h *Handler) historyOfContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, historyBody(hist))
+}
+
+type hitDTO struct {
+	At             time.Time `json:"at"`
+	Role           string    `json:"role"`
+	Snippet        string    `json:"snippet"`
+	ConversationID uuid.UUID `json:"conversation_id"`
+}
+
+func (h *Handler) searchHistory(w http.ResponseWriter, r *http.Request) {
+	if !authenticated(w, r) {
+		return
+	}
+	id, ok := pathUUID(w, r, "conversation_id")
+	if !ok {
+		return
+	}
+	hits, err := h.svc.SearchHistoryOfConversation(r.Context(), id, r.URL.Query().Get("q"), limitQuery(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := make([]hitDTO, 0, len(hits))
+	for _, x := range hits {
+		out = append(out, hitDTO{At: x.At, Role: x.Role, Snippet: x.Snippet, ConversationID: x.ConversationID})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
 func (h *Handler) resolveFollowUp(w http.ResponseWriter, r *http.Request) {
