@@ -8,7 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"time"
+	"time" // import já existe
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -176,7 +176,8 @@ func (s *Server) RegisterHealthHandlers() {
 // Quando é false a rota não é registrada: responder 403 de dentro do handler
 // ainda deixaria a superfície publicada, e o que queremos é que ela não exista.
 // Autoridade é do backend — o frontend esconder o formulário não substitui isto.
-func (s *Server) RegisterAuthHandlers(dbPool *pgxpool.Pool, devAuthEnabled bool, sessionStore authn.SessionStore, secureCookie ...bool) {
+// sessionIdleTimeoutSeconds: idle timeout da sessão em segundos (padrão 7200 = 2h)
+func (s *Server) RegisterAuthHandlers(dbPool *pgxpool.Pool, devAuthEnabled bool, sessionStore authn.SessionStore, sessionIdleTimeoutSeconds int, secureCookie ...bool) {
 	// Gerar chave RSA para JWT (use valores reais em produção).
 	// A mesma keypair é reutilizada por RegisterTenancyHandlers para
 	// verificar os tokens emitidos aqui — por isso fica salva no Server em
@@ -201,7 +202,8 @@ func (s *Server) RegisterAuthHandlers(dbPool *pgxpool.Pool, devAuthEnabled bool,
 		return
 	}
 
-	authHandler := authn.NewAuthHandler(s.privateKey, sessionStore, secureCookie...)
+	sessionTTL := time.Duration(sessionIdleTimeoutSeconds) * time.Second
+	authHandler := authn.NewAuthHandler(s.privateKey, sessionStore, sessionTTL, secureCookie...)
 	s.mux.HandleFunc("GET /api/v1/auth/health", authHandler.HealthCheck)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", authHandler.Logout)
 

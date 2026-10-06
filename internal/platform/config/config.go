@@ -58,6 +58,7 @@ type Config struct {
 	SMTPTLS           string // starttls (padrão) | implicit | none (só dev)
 	AllowPrivilegedDB bool
 	GracefulShutdown  int // segundos
+	SessionIdleTimeout int // segundos (padrão 7200 = 2h)
 
 	// AI* (PRODUCT.7C0/7C1): deliberately NOT validated by Validate() below.
 	// AI is an optional, best-effort subsystem — a misconfigured/incomplete
@@ -137,6 +138,7 @@ func Load() *Config {
 		SMTPTLS:           getEnv("OMNIRA_SMTP_TLS", "starttls"),
 		AllowPrivilegedDB: getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
 		GracefulShutdown:  getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
+		SessionIdleTimeout: getEnvInt("OMNIRA_SESSION_IDLE_TIMEOUT", 7200), // padrão: 2h
 
 		AIEnabled:        getEnv("OMNIRA_AI_ENABLED", "false") == "true",
 		AIProvider:       getEnv("OMNIRA_AI_PROVIDER", "openai"),

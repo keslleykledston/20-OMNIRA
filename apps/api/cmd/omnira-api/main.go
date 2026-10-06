@@ -110,7 +110,7 @@ func main() {
 		srv.RegisterOIDCAuthHandlers(oidcAuth, sessionStore, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
 			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
 	} else {
-		srv.RegisterAuthHandlers(dbPool, cfg.DevAuthActive(), sessionStore, cfg.AuthCookieSecure)
+		srv.RegisterAuthHandlers(dbPool, cfg.DevAuthActive(), sessionStore, cfg.SessionIdleTimeout, cfg.AuthCookieSecure)
 	}
 	// Convites por e-mail: com OMNIRA_SMTP_HOST há um sender SMTP real; sem ele a capability
 	// de entrega é só o dev auth (o admin copia o link). Ver InvitationsHandler.deliveryAvailable.

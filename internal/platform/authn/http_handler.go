@@ -14,19 +14,23 @@ type AuthHandler struct {
 	privateKey   *rsa.PrivateKey
 	secureCookie bool
 	sessionStore SessionStore
+	sessionTTL   time.Duration
 }
 
 // NewAuthHandler — cria novo handler de auth. sessionStore cria a sessão
 // server-side opaca por trás do cookie omnira_session; o JWT continua no
 // corpo da resposta (compat: dev tooling que ainda envia Bearer), mas nunca
 // mais é ele que vai para o cookie.
-func NewAuthHandler(privateKey *rsa.PrivateKey, sessionStore SessionStore, secureCookie ...bool) *AuthHandler {
+func NewAuthHandler(privateKey *rsa.PrivateKey, sessionStore SessionStore, sessionTTL time.Duration, secureCookie ...bool) *AuthHandler {
 	secure := false
 	if len(secureCookie) > 0 {
 		secure = secureCookie[0]
 	}
+	if sessionTTL <= 0 {
+		sessionTTL = 2 * time.Hour // padrão: 2h
+	}
 	return &AuthHandler{
-		privateKey: privateKey, secureCookie: secure, sessionStore: sessionStore,
+		privateKey: privateKey, secureCookie: secure, sessionStore: sessionStore, sessionTTL: sessionTTL,
 	}
 }
 
@@ -77,13 +81,14 @@ func (h *AuthHandler) DevLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, "invalid dev user id", http.StatusInternalServerError)
 		return
 	}
-	ttl := time.Duration(resp.ExpiresIn) * time.Second
-	sessionID, err := h.sessionStore.CreateSession(r.Context(), userID, "dev", ttl)
+	sessionID, err := h.sessionStore.CreateSession(r.Context(), userID, "dev", h.sessionTTL)
 	if err != nil {
 		writeJSONError(w, "session creation error", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: sessionID, Path: "/", MaxAge: resp.ExpiresIn,
+	// Cookie MaxAge em segundos; arredonda sessionTTL
+	maxAge := int(h.sessionTTL.Seconds())
+	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: sessionID, Path: "/", MaxAge: maxAge,
 		HttpOnly: true, Secure: h.secureCookie, SameSite: http.SameSiteLaxMode})
 
 	w.Header().Set("Content-Type", "application/json")

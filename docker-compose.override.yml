@@ -1,0 +1,21 @@
+# Machine-local settings (untracked). Time zone: instants are stored and transported in UTC everywhere;
+# only logs and text written for a person use Manaus (UTC-4). Infra containers (postgres, keycloak, waha,
+# nats, valkey) are NOT restarted for this: they keep logging in UTC, and the database presents Manaus to
+# new sessions through ALTER DATABASE ... SET timezone.
+services:
+  api:
+    ports: !override
+      - "127.0.0.1:28080:8080"
+    environment:
+      TZ: America/Manaus
+    volumes:
+      # media files live on the roomy /opt partition (same mount target as the tracked file, so this replaces it)
+      - /opt/omnira-media:/var/lib/omnira/media:ro
+  worker:
+    environment:
+      TZ: America/Manaus
+    volumes:
+      - /opt/omnira-media:/var/lib/omnira/media
+  web:
+    environment:
+      TZ: America/Manaus
