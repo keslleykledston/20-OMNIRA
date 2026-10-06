@@ -73,10 +73,14 @@ Enviar do telefone de teste para o número Meta do tenant. O telefone deve ser *
 | T3 | Responder `3` | **Nenhuma mensagem nova no telefone** (o nó de transferência não envia texto; só move a conversa). Na tela: a conversa aparece na fila **Default**, sem responsável, com o resumo do handoff ("Comercial. Contato: …"); no banco `automation_mode='waiting_human'` |
 | T4 | No Inbox, **assumir** a conversa e responder de lá; depois escrever de novo do telefone | A resposta humana chega; o **bot não responde mais** (nada de menu/saudação) |
 | T5 | Resposta inválida no menu (em outra conversa nova, se quiser) | "Não consegui entender." e repete o menu até 3 vezes (opcional) |
-| T6 | Fechar a conversa no app e escrever de novo do telefone | Nova conversa; a recepção recomeça (saudação) |
+| T6 | ~~Fechar a conversa no app e escrever de novo~~ **Não executável hoje:** o app não tem ação de fechar conversa (só fechar o *ticket*; ver "Limitação" abaixo). Pular, ou fazer só com fechamento por SQL autorizado pelo dono | Nova conversa; a recepção recomeça (saudação) |
 | T7 | **Desligar** (seção 8) e escrever do telefone | Sem bot: entra na fila padrão como sempre |
 
 Cada mensagem do bot deve chegar **uma vez** (sem duplicata), e as respostas do bot não podem ser atribuídas a nenhum usuário (`sent_by_user_id` nulo).
+
+### Limitação descoberta ao preparar o teste (2026-10-06)
+
+Não existe rota nem botão para **fechar uma conversa**: `conversations.status` só vale `open`/`closed`, o método de domínio `Close()` existe, mas nada o chama; hoje há 158 conversas, todas abertas, e uma conversa só é reaproveitada enquanto estiver aberta (`FindOpen(contato, linha)`). Consequências para os fluxos: com `restart_policy=new_conversation_only` o bot só começa na **primeira conversa de um contato naquela linha**; mensagens seguintes entram na mesma conversa para sempre e o bot não volta a atuar. Para o teste: use um **número que não seja contato** (caminho de contato desconhecido) ou autorize o dono o fechamento por SQL das conversas abertas do contato de teste (dado de produção: só com ordem explícita). A solução de produto (ação "Finalizar atendimento") está proposta e aguarda decisão.
 
 ## 6. Critérios
 
