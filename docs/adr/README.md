@@ -18,3 +18,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0017 - Conversation, TopicThread e Ticket são conceitos distintos (Conversation Intelligence)
 - 0018 - Usuários internos × contatos externos × contas de cliente
 - 0019 - Visual Flow Builder, Flow Runtime e biblioteca de Templates/Packs
+- 0020 - Finalizar atendimento e memória do contato entre atendimentos
