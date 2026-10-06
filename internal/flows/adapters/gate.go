@@ -64,10 +64,10 @@ func (g *Gate) Engage(ctx context.Context, conversationID uuid.UUID) (held bool)
 // job exists exactly when the message does). Only conversations a flow can act on are enqueued: held by the bot, or open,
 // unassigned external conversations when some published INBOUND flow restarts on every message (the cheap part of
 // Startable; an identity conflict is left to the engine, so this filter may over-enqueue but never misses a start).
-func (g *Gate) OnInbound(ctx context.Context, conversationID, messageID uuid.UUID, newConversation bool) {
+func (g *Gate) OnInbound(ctx context.Context, conversationID, messageID uuid.UUID, newConversation bool) bool {
 	tc, err := tenancydomain.FromContext(ctx)
 	if err != nil || tc.TenantID == uuid.Nil {
-		return
+		return false
 	}
 	err = platformdb.WithSavepoint(ctx, g.pool, func(ctx context.Context) error {
 		_, err := g.repo.q(ctx).Exec(ctx, `
@@ -82,5 +82,18 @@ func (g *Gate) OnInbound(ctx context.Context, conversationID, messageID uuid.UUI
 	})
 	if err != nil {
 		g.logf("flows: gate could not enqueue the inbound job (message %s): %v", messageID, err)
+		return false
+	}
+	return true
+}
+
+// Release takes back the bot hold Engage placed on a new conversation whose job could not be enqueued (the caller then routes
+// it the normal way). Best effort and contained: if this fails too, the sweeper's stranded-conversation backstop still applies.
+func (g *Gate) Release(ctx context.Context, conversationID uuid.UUID) {
+	err := platformdb.WithSavepoint(ctx, g.pool, func(ctx context.Context) error {
+		return g.repo.SetAutomationMode(ctx, conversationID, domain.AutomationNone)
+	})
+	if err != nil {
+		g.logf("flows: gate could not release conversation %s (the sweeper will): %v", conversationID, err)
 	}
 }

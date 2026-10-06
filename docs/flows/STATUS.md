@@ -132,3 +132,5 @@ Projeto de design OmniFlow Hub (`07c08567…`), commits `4c9d2c0` (editor) e `ea
 
 ## Revisão do Codex (2026-10-06, estática)
 0 CRITICAL, 0 HIGH, 2 MEDIUM, 2 LOW. FLOW-001 (portas `window_closed`/`error` nos nós de pergunta), FLOW-003 (FK composta da versão ativa) e FLOW-004 (filtro do gate) corrigidos com testes que falham sem a correção; FLOW-002 aceito (padrão das migrations 063/073). Detalhes e verificação em `PRODUCTION-GATE.md`.
+
+Rodadas A/B do Codex (estáticas): FLOW-201 (ingest libera conversa nova retida quando o job falha), FLOW-301 (**HIGH**: editor perdia edição local ao salvar configurações/refetch) e FLOW-302 (confirmação ao sair com alterações não salvas) corrigidos com testes que falham sem a correção; ver `PRODUCTION-GATE.md`.

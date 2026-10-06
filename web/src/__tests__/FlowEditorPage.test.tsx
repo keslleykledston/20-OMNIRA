@@ -295,3 +295,76 @@ describe('FlowEditorPage simulator and versions', () => {
     expect(await screen.findByText(/Versão reativada/)).toBeInTheDocument()
   })
 })
+
+// Regressões da revisão independente (FLOW-301/302): perder edição local silenciosamente é o pior defeito de um editor.
+describe('FlowEditorPage unsaved work', () => {
+  it('keeps unsaved node edits when the flow settings are saved (settings never reload the draft)', async () => {
+    let server = flow()
+    serve({ permissions: ADMIN })
+    const base = vi.mocked(axios.get).getMockImplementation()!
+    vi.mocked(axios.get).mockImplementation(async (url: string, cfg?: unknown) =>
+      url.endsWith(`/flows/${FLOW_ID}`) ? { data: server } : base(url, cfg as never))
+    // a real server answers with changed data after a settings save (new priority, new updated_at), so the refetch is not a no-op
+    vi.mocked(axios.patch).mockImplementation(async () => { server = flow({ priority: 50, updated_at: '2026-10-06T12:00:00Z' }); return { data: server } })
+    const user = userEvent.setup()
+    render()
+    await addNodes(user, 'Início')
+    expect(screen.getByText('Alterações não salvas')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Configurações' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Salvar' }))
+    expect(await screen.findByText('Configurações salvas.')).toBeInTheDocument()
+    await waitFor(() => expect(vi.mocked(axios.get).mock.calls.filter(([u]) => String(u).endsWith(`/flows/${FLOW_ID}`)).length).toBeGreaterThan(1)) // the refetch happened
+    expect(screen.getByRole('group', { name: /Nó Início/ })).toBeInTheDocument()
+    expect(screen.getByText('Alterações não salvas')).toBeInTheDocument()
+  })
+
+  it('never overwrites local edits when someone else saved a newer revision: flags a conflict and offers a reload', async () => {
+    let server = flow({ draft_revision: 3 })
+    serve({ permissions: ADMIN })
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/me/access')) return { data: { role_key: 'x', permissions: ADMIN } }
+      if (url.endsWith(`/flows/${FLOW_ID}/versions`)) return { data: { items: [] } }
+      if (url.endsWith(`/flows/${FLOW_ID}`)) return { data: server }
+      if (url.endsWith('/flow-node-types')) return { data: { items: NODE_TYPES } }
+      if (url.endsWith('/queues')) return { data: { items: [] } }
+      return { data: { items: [] } }
+    })
+    const user = userEvent.setup()
+    render()
+    await addNodes(user, 'Início')
+    server = flow({ draft_revision: 4, name: 'Editado por outra pessoa' }) // another operator saved meanwhile
+    window.dispatchEvent(new Event('visibilitychange')) // the tab regains focus: react-query refetches
+    expect(await screen.findByText(/Outra pessoa salvou uma versão mais nova/)).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: /Nó Início/ })).toBeInTheDocument() // the local edit survives
+    expect(screen.getByRole('button', { name: 'Salvar rascunho' })).toBeDisabled() // saving over the newer revision is blocked
+    await user.click(screen.getByRole('button', { name: 'Recarregar' }))
+    await waitFor(() => expect(screen.queryByRole('group', { name: /Nó Início/ })).toBeNull()) // explicit reload adopts the server draft
+  })
+
+  it('asks before an in-app navigation discards unsaved edits, and navigates freely when saved', async () => {
+    serve({ permissions: ADMIN })
+    const confirm = vi.spyOn(window, 'confirm')
+    const user = userEvent.setup()
+    render()
+    await screen.findByLabelText('Nome do fluxo')
+    // nothing unsaved: no prompt
+    await user.click(screen.getByRole('link', { name: /Fluxos/ }))
+    expect(confirm).not.toHaveBeenCalled()
+    expect(await screen.findByTestId('elsewhere')).toBeInTheDocument()
+  })
+
+  it('keeps the editor open when the user declines to leave with unsaved edits', async () => {
+    serve({ permissions: ADMIN })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const user = userEvent.setup()
+    render()
+    await addNodes(user, 'Início')
+    await user.click(screen.getByRole('link', { name: /Fluxos/ }))
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('elsewhere')).toBeNull()
+    expect(screen.getByRole('group', { name: /Nó Início/ })).toBeInTheDocument()
+    confirm.mockReturnValue(true)
+    await user.click(screen.getByRole('link', { name: /Fluxos/ }))
+    expect(await screen.findByTestId('elsewhere')).toBeInTheDocument()
+  })
+})

@@ -73,8 +73,11 @@ type FlowGate interface {
 	// Engage is called for a NEW conversation of an external contact; true means a published flow holds it, so the default
 	// queue routing is skipped (the flow routes it on handoff or at any end).
 	Engage(ctx context.Context, conversationID uuid.UUID) bool
-	// OnInbound is called once per persisted, non-duplicate inbound message of an external contact's conversation.
-	OnInbound(ctx context.Context, conversationID, messageID uuid.UUID, newConversation bool)
+	// OnInbound is called once per persisted, non-duplicate inbound message of an external contact's conversation. It
+	// reports false when the flow job could not be enqueued (the failure is contained, never an ingest error).
+	OnInbound(ctx context.Context, conversationID, messageID uuid.UUID, newConversation bool) bool
+	// Release gives back a conversation Engage took, when its job could not be enqueued: nothing would ever run it.
+	Release(ctx context.Context, conversationID uuid.UUID)
 }
 
 type InboundService struct {
@@ -207,6 +210,7 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		return nil, fmt.Errorf("inbox: find conversation: %w", err)
 	}
 	newConversation := false
+	heldNew := false // a flow holds this brand-new conversation (default routing was skipped)
 	if conversation == nil {
 		newConversation = true
 		conversation, err = conversationdomain.NewConversation(tc.TenantID, contact.ID, &connection.ID)
@@ -246,6 +250,7 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 		}
 		// A published flow may take the conversation: it then routes it itself (handoff, or at any end).
 		heldByFlow := s.flows != nil && s.flows.Engage(ctx, conversation.ID)
+		heldNew = heldByFlow
 		if s.router != nil && !heldByFlow {
 			if err := s.router.RouteNew(ctx, conversation.ID); err != nil {
 				return nil, fmt.Errorf("inbox: route conversation: %w", err)
@@ -291,8 +296,15 @@ func (s *InboundService) Ingest(ctx context.Context, connection channeldomain.Ch
 			return nil, fmt.Errorf("inbox: store ticket: %w", err)
 		}
 	}
-	if s.flows != nil {
-		s.flows.OnInbound(ctx, conversation.ID, stored.ID, newConversation)
+	if s.flows != nil && !s.flows.OnInbound(ctx, conversation.ID, stored.ID, newConversation) && heldNew {
+		// The bot holds a brand-new conversation but its job could not be enqueued, so no run would ever start: take the
+		// hold back and route it the normal way right now instead of leaving it to the sweeper's backstop.
+		s.flows.Release(ctx, conversation.ID)
+		if s.router != nil {
+			if err := s.router.RouteNew(ctx, conversation.ID); err != nil {
+				return nil, fmt.Errorf("inbox: route conversation: %w", err)
+			}
+		}
 	}
 	return &InboundResult{Contact: contact, Conversation: conversation, Message: stored, Ticket: ticket}, nil
 }

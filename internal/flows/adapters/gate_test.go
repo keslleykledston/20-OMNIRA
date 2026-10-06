@@ -186,12 +186,44 @@ func TestGateNeverBreaksTheIngestTransaction(t *testing.T) {
 		if g.gate.Engage(ctx, foreign) {
 			t.Error("a foreign conversation must never be held")
 		}
-		g.gate.OnInbound(ctx, foreign, uuid.New(), true)
-		g.gate.OnInbound(context.Background(), uuid.New(), uuid.New(), true) // no tenant context at all
+		// (a conversation of another tenant is simply not relevant: nothing is enqueued and that is not a failure)
+		if !g.gate.OnInbound(ctx, foreign, uuid.New(), true) {
+			t.Error("nothing to enqueue is not a failure")
+		}
+		if n := g.count(`SELECT count(*) FROM outbox_events WHERE event_type=$1 AND aggregate_id=$2`, adapters.JobFlowInbound, foreign.String()); n != 0 {
+			t.Errorf("a foreign conversation must never get a job: %d", n)
+		}
+		if g.gate.OnInbound(context.Background(), uuid.New(), uuid.New(), true) { // no tenant context at all
+			t.Error("a failed enqueue (here: no tenant context) must be reported so the ingest can give the conversation back")
+		}
 		// ... and the surrounding transaction is still perfectly usable afterwards (savepoint rolled back, not aborted).
 		var one int
 		if err := platformdb.QuerierFromContext(ctx, g.env.App).QueryRow(ctx, `SELECT 1`).Scan(&one); err != nil || one != 1 {
 			t.Fatalf("the ingest transaction was poisoned by the gate: %v", err)
 		}
 	})
+}
+
+// FLOW-201: Release takes back the hold of a new conversation, and only a bot hold.
+func TestGateReleaseGivesBackABotHeldConversation(t *testing.T) {
+	g := newGateEnv(t)
+	env := g.env
+	g.publish("reception", nil)
+	conv, _ := env.SeedConversation(t, env.TenantA, "none")
+	var held bool
+	g.sys(env.TenantA, func(ctx context.Context) { held = g.gate.Engage(ctx, conv) })
+	if !held || g.mode(conv) != "bot" {
+		t.Fatalf("setup: the flow must hold the new conversation (mode %s)", g.mode(conv))
+	}
+	g.sys(env.TenantA, func(ctx context.Context) { g.gate.Release(ctx, conv) })
+	if g.mode(conv) != "none" {
+		t.Fatalf("Release must return the conversation to the normal routing: mode=%s", g.mode(conv))
+	}
+	// A successful enqueue reports true.
+	m := env.SeedInbound(t, env.TenantA, conv, "oi")
+	var ok bool
+	g.sys(env.TenantA, func(ctx context.Context) { g.gate.Engage(ctx, conv); ok = g.gate.OnInbound(ctx, conv, m, true) })
+	if !ok {
+		t.Fatal("a successful enqueue must report true")
+	}
 }

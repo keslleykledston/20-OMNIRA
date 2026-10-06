@@ -15,6 +15,7 @@ import { queuesAPI } from '../lib/queues'
 import { useChannelLines } from '../lib/channelLines'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
+import { useUnsavedGuard } from '../lib/useUnsavedGuard'
 
 type SideTab = 'props' | 'issues' | 'simulate' | 'versions'
 
@@ -57,20 +58,31 @@ export default function FlowEditorPage() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
   const loadedFor = useRef('')
+  const [reloadTick, setReloadTick] = useState(0) // "Recarregar" precisa reaplicar o servidor mesmo quando a busca devolve dados idênticos
+  const local = useRef<{ def: FlowDefinition | null; savedJSON: string }>({ def: null, savedJSON: '' })
+  local.current = { def, savedJSON }
 
-  // Carrega o rascunho uma vez por revisão do servidor (não sobrescreve edição em andamento).
+  // Carrega o rascunho uma vez por revisão do servidor. Nunca sobrescreve edição em andamento: se outra pessoa salvou uma
+  // revisão mais nova enquanto há alterações locais não salvas, mantém as locais e pede uma recarga explícita (Recarregar).
   useEffect(() => {
     const f = flowQ.data
     if (!f) return
     const key = `${f.id}:${f.draft_revision}`
     if (loadedFor.current === key) return
+    const hasUnsaved = !!local.current.def && stableJSON(local.current.def) !== local.current.savedJSON
+    if (loadedFor.current.startsWith(`${f.id}:`) && hasUnsaved) {
+      loadedFor.current = key
+      setConflict(true)
+      setNotice({ tone: 'error', text: 'Outra pessoa salvou uma versão mais nova deste rascunho. Suas alterações não salvas foram mantidas; recarregue para ver a versão do servidor (isso descarta as suas).' })
+      return
+    }
     loadedFor.current = key
     setDef(f.definition)
     setName(f.name)
     setRevision(f.draft_revision)
     setSavedJSON(stableJSON(f.definition))
     setConflict(false)
-  }, [flowQ.data])
+  }, [flowQ.data, reloadTick])
 
   const dirty = !!def && (stableJSON(def) !== savedJSON || name !== (flowQ.data?.name ?? name))
   const archived = flowQ.data?.status === 'archived'
@@ -87,12 +99,7 @@ export default function FlowEditorPage() {
     return () => window.clearTimeout(t)
   }, [def, canView, canEdit, flowId])
 
-  useEffect(() => {
-    if (!dirty) return undefined
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
+  useUnsavedGuard(dirty)
 
   const edit = useCallback((fn: (d: FlowDefinition) => FlowDefinition) => setDef((d) => (d ? fn(d) : d)), [])
 
@@ -148,8 +155,9 @@ export default function FlowEditorPage() {
       flowsAPI.updateSettings(flowId, { priority: v.priority, is_default: v.is_default, restart_policy: v.restart_policy, trigger_filter: { connection_ids: v.connection_ids, providers: v.providers } }),
     onSuccess: () => {
       setSettingsOpen(false)
+      // As configurações não fazem parte do rascunho (não mudam draft_revision): não recarregar a definição aqui, senão as
+      // edições locais não salvas seriam sobrescritas.
       setNotice({ tone: 'info', text: 'Configurações salvas.' })
-      loadedFor.current = ''
       qc.invalidateQueries({ queryKey: ['flow', tenantId, flowId] })
       qc.invalidateQueries({ queryKey: ['flows', tenantId] })
     },
@@ -240,7 +248,7 @@ export default function FlowEditorPage() {
         <div role={notice.tone === 'error' ? 'alert' : 'status'} className={`flex items-center justify-between px-4 py-2 text-sm ${notice.tone === 'error' ? 'bg-status-danger-soft text-status-danger' : 'bg-status-info-soft text-text-primary'}`}>
           <span>{notice.text}</span>
           <span className="flex gap-2">
-            {conflict && <Button size="sm" variant="secondary" onClick={() => { loadedFor.current = ''; setConflict(false); setNotice(null); flowQ.refetch() }}>Recarregar</Button>}
+            {conflict && <Button size="sm" variant="secondary" onClick={() => { loadedFor.current = ''; setConflict(false); setNotice(null); setReloadTick((t) => t + 1); flowQ.refetch() }}>Recarregar</Button>}
             <button type="button" aria-label="Dispensar aviso" className="text-text-tertiary" onClick={() => setNotice(null)}>×</button>
           </span>
         </div>

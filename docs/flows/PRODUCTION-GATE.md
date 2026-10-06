@@ -74,7 +74,17 @@ produção** de `main` que impediam `go build ./...` foram consertadas em um com
   | FLOW-003 `active_version_id` não amarra a versão ao mesmo `flow_id` | LOW | **Corrigido** pela migration **000085** (forward-only; a 082 já estava aplicada no `omnira_dev`, por isso não foi editada): `UNIQUE (tenant_id, flow_id, id)` e FK composta; `TestActiveVersionMustBelongToItsOwnFlow` (falha sem a correção) |
   | FLOW-004 gate enfileira job para toda mensagem com flow `always` | LOW | **Corrigido**: só conversas abertas, sem responsável, com contato e do tipo atendimento/não classificado (parte barata de `Startable`; conflito de identidade segue com o motor); teste cobre atribuída, fechada e não-cliente |
 
-  Verificação após as correções: suíte Go completa em banco novo = 69 ok + as mesmas 5 falhas da baseline; migrations 084→082 e 082→084 sem erro; web 617 passam (mesmas 2 falhas de `main`); navegador real 5 passam.
+  **Rodadas A e B do Codex (2026-10-06, estáticas, commit `d28834f`)** cobriram o que faltava (migrations 082–085, `templates.go`, edições em código existente e todo o frontend): a 085 foi dada como OK e vieram 3 achados novos, todos verificados no código e corrigidos com testes que falham sem a correção:
+
+  | Achado | Sev. | Tratamento |
+  |---|---|---|
+  | FLOW-201 `inbound.go`: `Engage` retém a conversa nova (`bot`), e se o enfileiramento do job falhar (só logado) ela fica sem job e sem fila até o sweeper (2 min) | MEDIUM | **Corrigido**: `OnInbound` informa falha e há `Gate.Release`; o ingest devolve a conversa nova ao roteamento padrão na hora (follow-up que falha não libera: já há run dono). Testes em `inbound_flows_test.go` e `gate_test.go` |
+  | FLOW-301 `FlowEditorPage.tsx`: salvar configurações zerava `loadedFor`, e a refetch sobrescrevia as edições locais não salvas (perda silenciosa) | **HIGH** | **Corrigido**: configurações não recarregam o rascunho; além disso, revisão mais nova do servidor com edição local pendente vira conflito explícito (mantém as edições, "Recarregar" força a recarga). O teste de mutação ainda achou um defeito na minha 1ª versão (Recarregar não reaplicava dados idênticos): corrigido |
+  | FLOW-302 saída do editor por link/barra lateral com alterações não salvas perdia o rascunho sem confirmação | MEDIUM | **Corrigido** com `useUnsavedGuard` (confirmação em cliques de navegação interna). **Limitação:** o botão "voltar" do navegador não é interceptado (o app usa `BrowserRouter`, sem `useBlocker`); fechar/recarregar a aba já era coberto por `beforeunload` |
+
+  Com isso a cobertura estática do Codex fica completa (rodada 1: itens 2–5 e parte do 1; A: migrations, `templates.go` e item 7; B: item 8). **Ainda falta** uma nova passada do Codex para conferir estas 3 correções, e a execução dos testes por ele (sandbox sem Docker). **As correções NÃO estão no ambiente vivo:** api e web em execução são anteriores a elas.
+
+  Verificação após as correções: suíte Go completa em banco novo = 69 ok + as mesmas 5 falhas da baseline; migrations 084→082 e 082→084 sem erro; web 621 passam (mesmas 2 falhas de `main`); navegador real 5 passam; após FLOW-201/301/302: suíte Go completa 69 ok + mesmas 5 falhas, `-race` limpo em flows/inbox/worker, web 621 passam.
 - **Sem E2E contra a stack Docker completa e sem teste com telefone real** (equivalente ao P7 do goal WAHA). O que existe:
   Postgres real, ingest real (`PostgresInboundStore` + `InboundService`), motor real, envio de sistema real **até o outbox**
   (o provedor não foi chamado) e navegador real contra API mockada.

@@ -14,6 +14,9 @@ type gateStub struct {
 	engaged   []uuid.UUID
 	inbound   []gateCall
 	onInbound func()
+	// failEnqueue makes OnInbound report that the job could not be enqueued.
+	failEnqueue bool
+	released    []uuid.UUID
 }
 
 type gateCall struct {
@@ -25,9 +28,11 @@ func (g *gateStub) Engage(_ context.Context, id uuid.UUID) bool {
 	g.engaged = append(g.engaged, id)
 	return g.hold
 }
-func (g *gateStub) OnInbound(_ context.Context, conv, msg uuid.UUID, isNew bool) {
+func (g *gateStub) OnInbound(_ context.Context, conv, msg uuid.UUID, isNew bool) bool {
 	g.inbound = append(g.inbound, gateCall{conv, msg, isNew})
+	return !g.failEnqueue
 }
+func (g *gateStub) Release(_ context.Context, id uuid.UUID) { g.released = append(g.released, id) }
 
 // distinctMessages stores every message it is given (the shared fake keeps a single one and reports the next as a duplicate),
 // except a repeated provider id, which it reports as the duplicate it is.
@@ -113,5 +118,33 @@ func TestIngestWithoutAGateIsUnchanged(t *testing.T) {
 	res := ingestOne(t, svc, uuid.New(), uuid.New(), "wamid-1")
 	if stores.routeCalls != 1 || res.Ticket == nil {
 		t.Fatalf("no gate => exactly the previous behaviour: routes=%d ticket=%v", stores.routeCalls, res.Ticket)
+	}
+}
+
+// FLOW-201 (Codex review): a held new conversation whose job cannot be enqueued must not wait for the sweeper.
+func TestHeldNewConversationIsReleasedAndRoutedWhenItsJobCannotBeEnqueued(t *testing.T) {
+	g := &gateStub{hold: true, failEnqueue: true}
+	stores, svc := flowIngest(t, g)
+	tenant, conn := uuid.New(), uuid.New()
+	first := ingestOne(t, svc, tenant, conn, "wamid-1")
+	if len(g.released) != 1 || g.released[0] != first.Conversation.ID {
+		t.Fatalf("the bot hold must be given back: %v", g.released)
+	}
+	if stores.routeCalls != 1 {
+		t.Fatalf("the conversation must be routed the normal way right away: %d", stores.routeCalls)
+	}
+	// A follow-up whose job fails is NOT a stranded conversation (a run already owns it): nothing is released or re-routed.
+	ingestOne(t, svc, tenant, conn, "wamid-2")
+	if len(g.released) != 1 || stores.routeCalls != 1 {
+		t.Fatalf("a failed follow-up enqueue must not release or re-route: released=%d routed=%d", len(g.released), stores.routeCalls)
+	}
+}
+
+func TestNoReleaseWhenTheFlowNeverHeldTheConversation(t *testing.T) {
+	g := &gateStub{hold: false, failEnqueue: true}
+	stores, svc := flowIngest(t, g)
+	ingestOne(t, svc, uuid.New(), uuid.New(), "wamid-1")
+	if len(g.released) != 0 || stores.routeCalls != 1 {
+		t.Fatalf("not held: default routing once and nothing to release: released=%d routed=%d", len(g.released), stores.routeCalls)
 	}
 }
