@@ -1,7 +1,7 @@
 import type { ConversationItem, MessageItem } from '../types/api';
 
 // 'unclassified' and 'internal' filter by conversation_kind (ADR-0018); the default list leaves internal conversations out.
-export type InboxSegment = 'all' | 'waiting' | 'mine' | 'unclassified' | 'internal' | 'spam';
+export type InboxSegment = 'all' | 'waiting' | 'mine' | 'unclassified' | 'internal' | 'spam' | 'closed';
 
 const DAY_MS = 86_400_000;
 

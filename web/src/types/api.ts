@@ -14,7 +14,7 @@ export interface ConversationItem {
   // What the person declared on WhatsApp; shown smaller below contact_name when it differs.
   contact_whatsapp_name?: string;
   contact_phone: string;
-  status: 'active' | 'closed' | 'pending';
+  status: 'active' | 'open' | 'closed' | 'pending'; // the API sends 'open' for a live attendance
   created_at?: string;
   updated_at: string;
   assigned_to_user_id?: string;

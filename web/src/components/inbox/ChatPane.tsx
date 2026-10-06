@@ -244,7 +244,11 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       </div>
 
       {/* Composer. Replying to a spam contact is switched off (ADR-0014): restore it first. */}
-      {conversation?.contact_kind === 'spam' ? (
+      {conversation?.status === 'closed' ? (
+        <div role="status" className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
+          Atendimento finalizado. Se o contato escrever de novo, abre-se um atendimento novo.
+        </div>
+      ) : conversation?.contact_kind === 'spam' ? (
         <div className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
           Contato marcado como spam: as respostas ficam desativadas. Use <strong>Não é spam</strong> no painel ao lado para restaurar.
         </div>

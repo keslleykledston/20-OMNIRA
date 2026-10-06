@@ -15,6 +15,8 @@ import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor';
 import { ContactNotes } from '../contacts/ContactNotes';
 import { WhatsAppName } from '../contacts/WhatsAppName';
 import { ChannelSwitcher } from './ChannelSwitcher';
+import AttendanceMemoryPanel from './AttendanceMemoryPanel';
+import FinalizeDialog from './FinalizeDialog';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -28,6 +30,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showFinalize, setShowFinalize] = useState(false);
 
   const handleAssign = async () => {
     setAssignLoading(true);
@@ -222,6 +225,9 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
           render. Removed rather than left as unreachable dead code.
           External/group participant modeling is future scope. */}
 
+      {/* ADR-0020: o que aconteceu antes com este contato e o que ficou pendente ou prometido */}
+      {conversation?.conversation_kind !== 'internal' && <AttendanceMemoryPanel conversationId={conversationId} />}
+
       {/* Chamado + atividade CRM */}
       <TicketPanel
         conversationId={conversationId}
@@ -238,8 +244,13 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
         </div>
       )}
 
+      {/* Finalized attendance (ADR-0020): nothing left to do here; the contact's next message opens a new one. */}
+      {conversation?.status === 'closed' && (
+        <div role="status" className="p-4 text-xs text-text-secondary">Atendimento finalizado.</div>
+      )}
+
       {/* Actions. A spam contact's conversation is not for attending: restore it first (ADR-0014). */}
-      {conversation?.contact_kind !== 'spam' && (
+      {conversation?.contact_kind !== 'spam' && conversation?.status !== 'closed' && (
       <div className="p-4 space-y-2">
         {conversation?.assigned_to_user_id ? (
           <button
@@ -285,8 +296,30 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
           <Icon name="info" className="w-4 h-4 mr-2" />
           Transferir
         </button>
+        {conversation?.conversation_kind !== 'internal' && (
+          <button
+            onClick={() => setShowFinalize(true)}
+            disabled={assignLoading}
+            className={clsx(
+              'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
+              'bg-surface text-text-primary hover:bg-surface-muted',
+              'border border-border-subtle',
+              assignLoading && 'opacity-50 cursor-not-allowed'
+            )}
+          >
+            <Icon name="check" className="w-4 h-4 mr-2" />
+            Finalizar atendimento
+          </button>
+        )}
       </div>
       )}
+
+      <FinalizeDialog
+        open={showFinalize}
+        conversationId={conversationId}
+        contactName={conversation?.contact_name}
+        onClose={() => setShowFinalize(false)}
+      />
 
       {/* Transfer Modal */}
       <TechnicianSelectModal

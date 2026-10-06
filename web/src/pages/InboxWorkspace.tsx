@@ -77,6 +77,8 @@ export default function InboxWorkspace() {
             waiting: segment === 'waiting' ? true : undefined,
             channel_connection_id: channelFilter || undefined,
             kind: segment === 'spam' ? 'spam' : undefined,
+            // finalized attendances (ADR-0020) are out of the default list; this segment asks for them
+            status: segment === 'closed' ? 'closed' : undefined,
             conversation_kind: segment === 'unclassified' || segment === 'internal' ? segment : undefined,
           },
           headers: authHeaders(),

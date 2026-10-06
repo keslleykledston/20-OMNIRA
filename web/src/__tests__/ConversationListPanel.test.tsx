@@ -145,7 +145,7 @@ describe('ConversationListPanel — no cap on the list', () => {
 describe('ConversationListPanel — Spam inbox', () => {
   it('offers the filters, Spam last', () => {
     renderPanel([conv('a')]);
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Todas', 'Aguardando', 'Minhas', 'Não classif.', 'Internas', 'Spam']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Todas', 'Aguardando', 'Minhas', 'Não classif.', 'Internas', 'Encerradas', 'Spam']);
   });
 
   it('in Spam nobody is "waiting" and nothing is "unassigned": those signals are for conversations to attend', () => {

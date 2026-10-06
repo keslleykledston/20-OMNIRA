@@ -32,6 +32,7 @@ const SEGMENTS: { id: InboxSegment; label: string }[] = [
   { id: 'mine', label: 'Minhas' },
   { id: 'unclassified', label: 'Não classif.' },
   { id: 'internal', label: 'Internas' },
+  { id: 'closed', label: 'Encerradas' },
   { id: 'spam', label: 'Spam' },
 ];
 
