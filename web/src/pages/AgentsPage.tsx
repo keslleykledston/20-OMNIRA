@@ -92,6 +92,12 @@ export default function AgentsPage() {
     mutationFn: (id: string) => agentsAPI.delete(id),
     onSuccess: () => { setSelected(null); refresh() }
   })
+  const availableMembers = useQuery({
+    queryKey: ['team-members', tenantId],
+    queryFn: () => agentsAPI.availableMembers(),
+    enabled: showCreateModal && canManage,
+    retry: false,
+  })
   const current = selected && result.data?.find((agent) => agent.id === selected.id) || selected
   return (
     <SettingsShell
@@ -256,19 +262,30 @@ export default function AgentsPage() {
         >
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-2">ID de Membership</label>
-              <input
-                type="text"
-                placeholder="Cole o UUID do membro"
-                value={selectedMembershipID}
-                onChange={(e) => setSelectedMembershipID(e.target.value)}
-                className="w-full px-3 py-2 border border-border-subtle rounded"
-              />
-              <p className="text-xs text-text-secondary mt-1">Encontre em Settings → Team (copie o ID do membro)</p>
+              <label className="block text-sm font-medium mb-2">Membro de Equipe</label>
+              {availableMembers.isLoading && <p className="text-sm text-text-secondary">Carregando...</p>}
+              {availableMembers.isError && <p className="text-sm text-red-600">Erro ao carregar membros</p>}
+              {availableMembers.data && availableMembers.data.length === 0 && (
+                <p className="text-sm text-text-secondary">Nenhum membro disponível para ativar</p>
+              )}
+              {availableMembers.data && availableMembers.data.length > 0 && (
+                <select
+                  value={selectedMembershipID}
+                  onChange={(e) => setSelectedMembershipID(e.target.value)}
+                  className="w-full px-3 py-2 border border-border-subtle rounded"
+                >
+                  <option value="">Selecione um membro...</option>
+                  {availableMembers.data.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name || member.email} ({member.email})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             {createAgent.isError && (
               <div className="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
-                Erro ao ativar agente. Verifique o ID e tente novamente.
+                Erro ao ativar agente. Tente novamente.
               </div>
             )}
           </div>

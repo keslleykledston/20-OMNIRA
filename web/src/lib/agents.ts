@@ -5,6 +5,7 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 export type AgentStatus = 'active' | 'disabled'
 export interface QueueAssignment { id: string; queue_id: string; queue_name: string; available: boolean; capacity: number }
 export interface OperationalAgent { id: string; membership_id: string; user_id: string; name: string; email: string; role: string; status: AgentStatus; queues: QueueAssignment[] }
+export interface TeamMember { id: string; name: string; email: string; role: string }
 
 const base = () => `${API_BASE}/tenants/${getTenantId()}/agents`
 async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
@@ -12,6 +13,7 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 }
 export const agentsAPI = {
   list: () => call<{ items: OperationalAgent[] }>(() => axios.get(base(), { headers: authHeaders() })).then((r) => r.items),
+  availableMembers: () => call<{ items: TeamMember[] }>(() => axios.get(`${API_BASE}/tenants/${getTenantId()}/team`, { headers: authHeaders() })).then((r) => r.items || []),
   create: (membershipID: string) => call<{ id: string; status: AgentStatus }>(() => axios.post(base(), { membership_id: membershipID }, { headers: authHeaders() })),
   setStatus: (id: string, status: AgentStatus) => call<void>(() => axios.patch(`${base()}/${id}`, { status }, { headers: authHeaders() })),
   delete: (id: string) => call<void>(() => axios.delete(`${base()}/${id}`, { headers: authHeaders() })),
