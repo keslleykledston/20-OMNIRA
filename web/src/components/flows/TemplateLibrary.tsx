@@ -50,21 +50,21 @@ export default function TemplateLibrary({ canInstall }: Props) {
       <section aria-label="Packs de modelos" className="space-y-3">
         <h2 className="text-base font-semibold text-text-primary">Packs</h2>
         {packs.isLoading && <LoadingState message="Carregando packs…" />}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {(packs.data ?? []).map((p) => (
-            <Card key={p.slug}>
-              <CardBody>
+            <Card key={p.slug} className="h-full shadow-sm">
+              <CardBody className="flex h-full flex-col">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-semibold text-text-primary">{p.name}</h3>
-                    <p className="mt-1 text-sm text-text-secondary">{p.description}</p>
+                    <p className="mt-1 line-clamp-3 text-sm text-text-secondary">{p.description}</p>
                   </div>
                   <Badge size="sm">v{p.version}</Badge>
                 </div>
                 <p className="mt-2 text-xs text-text-tertiary">{p.items.filter((i) => !i.dependency).length} modelos · pede {p.mappings.length} fila(s)</p>
                 {p.optional_features.length > 0 && <p className="text-xs text-text-tertiary">Melhora com: {p.optional_features.join(', ')}</p>}
-                <div className="mt-3">
-                  {canInstall ? <Button size="sm" onClick={() => setWizard({ pack: p })}>Instalar pack</Button> : <span className="text-xs text-text-tertiary">Você não tem permissão para instalar.</span>}
+                <div className="mt-auto pt-4">
+                  {canInstall ? <Button size="sm" className="w-full" onClick={() => setWizard({ pack: p })}>Instalar pack</Button> : <span className="text-xs text-text-tertiary">Você não tem permissão para instalar.</span>}
                 </div>
               </CardBody>
             </Card>
@@ -85,23 +85,21 @@ export default function TemplateLibrary({ canInstall }: Props) {
         </div>
         {templates.isLoading && <LoadingState message="Carregando modelos…" />}
         {!templates.isLoading && (templates.data ?? []).length === 0 && <EmptyState title="Nenhum modelo encontrado" description="Ajuste a busca ou o filtro." />}
-        <ul className="m-0 grid list-none grid-cols-1 gap-3 p-0 md:grid-cols-2 xl:grid-cols-3">
+        <ul className="m-0 list-none divide-y divide-border-subtle overflow-hidden rounded-card border border-border-subtle bg-surface p-0">
           {(templates.data ?? []).map((t) => (
-            <li key={t.slug}>
-              <Card className="h-full">
-                <CardBody>
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-text-primary">{t.name}</h3>
-                    <Badge size="sm" variant={t.difficulty === 'starter' ? 'success' : 'info'}>{t.difficulty === 'starter' ? 'inicial' : 'intermediário'}</Badge>
-                  </div>
-                  <p className="mt-1 text-sm text-text-secondary">{t.description}</p>
-                  <p className="mt-2 text-xs text-text-tertiary">{t.categories.map((c) => CATEGORY_LABEL[c] ?? c).join(' · ')}</p>
-                  <div className="mt-3 flex gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => openPreview(t.slug)}>Ver detalhes</Button>
-                    {canInstall && <Button size="sm" onClick={() => setWizard({ template: t })}>Instalar</Button>}
-                  </div>
-                </CardBody>
-              </Card>
+            <li key={t.slug} className="grid gap-3 p-4 transition-colors hover:bg-surface-muted sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-text-primary">{t.name}</h3>
+                  <Badge size="sm" variant={t.difficulty === 'starter' ? 'success' : 'info'}>{t.difficulty === 'starter' ? 'inicial' : 'intermediário'}</Badge>
+                </div>
+                <p className="mt-1 text-sm text-text-secondary">{t.description}</p>
+                <p className="mt-1 text-xs text-text-tertiary">{t.categories.map((c) => CATEGORY_LABEL[c] ?? c).join(' · ')}</p>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" onClick={() => openPreview(t.slug)}>Ver detalhes</Button>
+                {canInstall && <Button size="sm" onClick={() => setWizard({ template: t })}>Instalar</Button>}
+              </div>
             </li>
           ))}
         </ul>

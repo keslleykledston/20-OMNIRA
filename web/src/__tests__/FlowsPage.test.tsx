@@ -171,6 +171,8 @@ describe('Template library and install wizard', () => {
     await user.click(await screen.findByRole('button', { name: 'Instalar pack' }))
     const dialog = await screen.findByRole('dialog', { name: /Instalar OMNIRA Starter Pack/ })
     expect(within(dialog).getByText(/Nada é publicado/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('list', { name: 'Etapas' })).toHaveTextContent('1Seleção2Filas3Confirmação')
+    expect(within(dialog).getByText('Seleção').closest('li')).toHaveAttribute('aria-current', 'step')
     // choose: non-optional preselected, optional not, dependency announced rather than offered
     expect(within(dialog).getByLabelText(/Recepção inteligente/)).toBeChecked()
     expect(within(dialog).getByLabelText(/Pesquisa de satisfação/)).not.toBeChecked()

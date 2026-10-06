@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import clsx from 'clsx'
 import { Badge, Button, LoadingState, Modal } from '../primitives'
 import { flowErrorMessage, flowsAPI, type InstallResult, type PackInfo, type TemplateInfo } from '../../lib/flows'
 import type { Queue } from '../../lib/queues'
@@ -50,6 +51,8 @@ export default function InstallWizard({ pack, template, queues, onClose }: Props
     })
   }, [queues, needed])
 
+  const steps = pack ? ([['choose', 'Seleção'], ['map', 'Filas'], ['confirm', 'Confirmação']] as const) : ([['map', 'Filas'], ['confirm', 'Confirmação']] as const)
+  const stepIndex = steps.findIndex(([k]) => k === step)
   const title = pack ? `Instalar ${pack.name}` : `Instalar ${template?.name ?? ''}`
   const queueName = useMemo(() => new Map(queues.map((q) => [q.id, q.name])), [queues])
   const toggle = (slug: string) => setSelected((s) => (s.includes(slug) ? s.filter((x) => x !== slug) : [...s, slug]))
@@ -76,11 +79,21 @@ export default function InstallWizard({ pack, template, queues, onClose }: Props
       }
     >
       <div className="space-y-4">
+        {step !== 'done' && (
+          <ol aria-label="Etapas" className="m-0 flex list-none gap-2 border-b border-border-subtle p-0 pb-3">
+            {steps.map(([k, label], i) => (
+              <li key={k} aria-current={k === step ? 'step' : undefined} className={clsx('flex min-w-0 flex-1 items-center gap-2 text-xs font-semibold', k === step ? 'text-accent-primary' : i < stepIndex ? 'text-status-success' : 'text-text-tertiary')}>
+                <span className={clsx('grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[11px]', k === step ? 'border-accent-primary bg-accent-primary text-white' : i < stepIndex ? 'border-status-success bg-status-success-soft' : 'border-border-subtle bg-surface')}>{i < stepIndex ? '✓' : i + 1}</span>
+                <span className="truncate">{label}</span>
+              </li>
+            ))}
+          </ol>
+        )}
         {step === 'choose' && pack && (
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-semibold text-text-primary">O que instalar</legend>
+          <fieldset className="divide-y divide-border-subtle rounded-card border border-border-subtle">
+            <legend className="mb-2 px-1 text-sm font-semibold text-text-primary">O que instalar</legend>
             {pack.items.filter((i) => !i.dependency).map((i) => (
-              <label key={i.template} className="flex items-start gap-2 text-sm text-text-primary">
+              <label key={i.template} className="flex items-start gap-3 p-3 text-sm text-text-primary hover:bg-surface-muted">
                 <input type="checkbox" checked={selected.includes(i.template)} onChange={() => toggle(i.template)} className="mt-1" />
                 <span>{i.name}{i.optional && <span className="text-text-tertiary"> (opcional)</span>}</span>
               </label>
@@ -124,7 +137,7 @@ export default function InstallWizard({ pack, template, queues, onClose }: Props
                 <div key={m.key} className="flex justify-between gap-3"><dt className="text-text-secondary">{m.description}</dt><dd className="font-medium text-text-primary">{queueName.get(mappings[m.key]) ?? '—'}</dd></div>
               ))}
             </dl>
-            <p className="text-xs text-text-secondary">Se o identificador de um fluxo já existir, o novo recebe um sufixo numérico e o seu não é alterado.</p>
+            <p className="rounded-control bg-surface-muted p-3 text-xs leading-5 text-text-secondary">Se o identificador de um fluxo já existir, o novo recebe um sufixo numérico e o seu não é alterado.</p>
             {install.isError && <p role="alert" className="text-sm text-status-danger">{flowErrorMessage(install.error)}</p>}
           </div>
         )}

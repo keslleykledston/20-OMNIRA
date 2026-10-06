@@ -126,3 +126,6 @@ Um primeiro scaffold foi escrito sem compilar (módulo errado, RLS fora do padr�
 
 ## Limitações conhecidas (atualizar)
 - Nenhuma migration aplicada em banco vivo; nenhuma imagem/stack reconstruída; nada publicado, tagueado ou mesclado.
+
+## Polimento visual (Lovable, 2026-10-06)
+Projeto de design OmniFlow Hub (`07c08567…`), commits `4c9d2c0` (editor) e `eae1ccf` (biblioteca/assistente). Revisado e portado só o visual para `web/`: canvas com grade pontilhada, saídas divididas, estados dos conectores (ligado/pendente/recebível), anéis de estado do nó, cards de pack em 3 colunas, modelos em lista dividida, stepper do assistente. Verificação: tsc limpo, 617 testes web (mesmas 2 falhas preexistentes de `main`), 5 cenários Chromium.
