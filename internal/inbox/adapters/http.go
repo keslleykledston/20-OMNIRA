@@ -170,6 +170,18 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid conversation_kind filter", http.StatusBadRequest)
 		return
 	}
+	// ADR-0020: finalized attendances are out of the default view (the work queue), like spam and staff conversations; ask for
+	// them with status=closed, or for everything with status=all.
+	switch st := r.URL.Query().Get("status"); st {
+	case "", "open":
+		where += " AND c.status='open'"
+	case "closed":
+		where += " AND c.status='closed'"
+	case "all":
+	default:
+		http.Error(w, "invalid status filter", http.StatusBadRequest)
+		return
+	}
 	if ch := r.URL.Query().Get("channel_connection_id"); ch != "" {
 		chID, perr := uuid.Parse(ch)
 		if perr != nil {

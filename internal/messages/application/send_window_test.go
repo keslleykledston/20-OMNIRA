@@ -54,3 +54,22 @@ func TestSendRefusesFreeTextOutsideTheMetaWindowBeforeQueueing(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0020: a finalized conversation takes no more replies (the contact's next message starts a new attendance).
+func TestSendRefusesAFinalizedConversationBeforeQueueing(t *testing.T) {
+	user, conn, conv := uuid.New(), uuid.New(), uuid.New()
+	tc, _ := tenancydomain.NewTenantContext(uuid.New(), user, tenancydomain.AccessSourceDirect)
+	ctx := tenancydomain.WithTenantContext(context.Background(), tc)
+	recent := time.Now().Add(-1 * time.Hour)
+	store := &fakeStore{sc: ports.SendContext{ConversationID: conv, AssignedTo: &user, ConnectionID: &conn, ConnectionReady: true, ToE164: "+5592966660001", Provider: "waha", LastInboundAt: &recent, Closed: true}}
+	if _, err := NewSender(store, allowAll{}).Send(ctx, conv, "olá", "key-12345678"); !errors.Is(err, ErrConversationClosed) {
+		t.Fatalf("want ErrConversationClosed, got %v", err)
+	}
+	if store.inserted != 0 {
+		t.Fatal("nothing may be queued")
+	}
+	store.sc.Closed = false
+	if _, err := NewSender(store, allowAll{}).Send(ctx, conv, "olá", "key-12345678"); err != nil || store.inserted != 1 {
+		t.Fatalf("an open conversation still sends: %v inserted=%d", err, store.inserted)
+	}
+}

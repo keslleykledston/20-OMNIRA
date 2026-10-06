@@ -27,6 +27,7 @@ var (
 	ErrNotFound            = errors.New("messages: conversation not found")
 	ErrNotAssignedToYou    = errors.New("messages: conversation is assigned to another agent")
 	ErrUnassigned          = errors.New("messages: conversation must be assigned before replying")
+	ErrConversationClosed  = errors.New("messages: the conversation was finalized; the contact's next message starts a new attendance")
 	ErrChannelUnavailable  = errors.New("messages: conversation has no active text channel")
 	ErrWindowClosed        = errors.New("messages: the 24 h customer-service window is closed, a template is required")
 	ErrInvalidText         = errors.New("messages: text is required (max 4096 characters)")
@@ -85,6 +86,9 @@ func (s *Sender) Send(ctx context.Context, conversationID uuid.UUID, text, idemp
 	}
 	if sc == nil {
 		return SendResult{}, ErrNotFound
+	}
+	if sc.Closed {
+		return SendResult{}, ErrConversationClosed
 	}
 	manage, err := s.has(ctx, tc.ActorID, PermissionManage)
 	if err != nil {

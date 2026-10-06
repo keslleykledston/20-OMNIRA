@@ -23,6 +23,9 @@ type SendContext struct {
 	// conversation. Together they decide whether the provider's 24 h customer-service window allows free text.
 	Provider      string
 	LastInboundAt *time.Time
+	// Closed: the attendance was finalized (ADR-0020). A reply would be stored in a closed conversation while the contact's next
+	// message starts a NEW one, splitting the context, so sending is refused.
+	Closed bool
 }
 
 // QueuedMessage is the persisted outbound message returned to the caller.
