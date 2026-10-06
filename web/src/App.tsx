@@ -48,9 +48,9 @@ export default function App() {
             <Route path="/contacts" element={<ContactsPage />} />
             <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
             <Route path="/settings/password" element={<PasswordChangePage />} />
-            <Route path="/settings/team" element={<TeamPage />} />
-            <Route path="/settings/agents" element={<AgentsPage />} />
-            <Route path="/settings/people" element={<PeopleAndGroupsPage />} />
+            <Route path="/settings/people/team" element={<TeamPage />} />
+            <Route path="/settings/people/agents" element={<AgentsPage />} />
+            <Route path="/settings/people" element={<Navigate to="/settings/people/team" replace />} />
             <Route path="/settings/roles" element={<RolesPermissionsPage />} />
             <Route path="/settings/general" element={<SettingsPage />} />
             {/* Legacy duplicate retired (DESIGN.5-A) — /channels is the sole Channels UI. */}

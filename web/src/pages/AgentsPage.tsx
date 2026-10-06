@@ -16,7 +16,7 @@ import {
   TableHeaderCell,
   TableRow,
 } from '../components/primitives'
-import { SettingsShell, SETTINGS_SECTIONS } from '../components/SettingsShell'
+import { SettingsShell, SETTINGS_SECTIONS, type SettingsSection } from '../components/SettingsShell'
 import { getTenantId } from '../lib/session'
 import { agentsAPI, type OperationalAgent } from '../lib/agents'
 import { presenceAPI } from '../lib/presence'
@@ -33,6 +33,8 @@ export default function AgentsPage() {
   const access = useAccess()
   const queryClient = useQueryClient()
   const canManage = access.can('agent.manage')
+  const peopleSection = SETTINGS_SECTIONS.find(s => s.key === 'people')
+  const subsections = peopleSection?.subsections || []
   const [selected, setSelected] = useState<OperationalAgent | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [selectedMembershipID, setSelectedMembershipID] = useState('')
@@ -94,6 +96,7 @@ export default function AgentsPage() {
   return (
     <SettingsShell
       sections={SETTINGS_SECTIONS}
+      subsections={subsections}
       title="Agentes"
       description="Visão operacional de elegibilidade por fila. Isso não representa presença humana."
     >

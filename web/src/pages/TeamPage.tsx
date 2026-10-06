@@ -221,9 +221,12 @@ export default function TeamPage() {
     }
   }, [members])
 
+  const peopleSection = SETTINGS_SECTIONS.find(s => s.key === 'people')
+  const subsections = peopleSection?.subsections || []
+
   if (access.isError) {
     return (
-      <SettingsShell sections={SETTINGS_SECTIONS} title="Equipe e acesso">
+      <SettingsShell sections={SETTINGS_SECTIONS} subsections={subsections} title="Equipe e acesso">
         <ErrorState
           title="Sem acesso"
           message="Você não tem permissão para gerenciar a equipe."
@@ -235,6 +238,7 @@ export default function TeamPage() {
   return (
     <SettingsShell
       sections={SETTINGS_SECTIONS}
+      subsections={subsections}
       title="Equipe e acesso"
       description="Gerencie os usuários da sua equipe, defina permissões e controle o acesso à plataforma."
       actions={
