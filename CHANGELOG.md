@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (IA da plataforma com Gemini)
+- `OMNIRA_AI_PROVIDER=gemini`: `GeminiGenerator` na porta `TextGenerator` (chave só no cabeçalho, sem redirecionamento nem retentativa, resposta limitada, bloqueio do provedor tratado). `NewTextGenerator` passa a ser o único construtor (resumo, roteador de modelos e nós de IA dos fluxos). `OMNIRA_GEMINI_API_KEY` vale como chave quando o provedor é Gemini. Guia: `docs/ai/PLATFORM-AI-PROVIDERS.md`.
+
+### Fixed (IA da plataforma)
+- `docker-compose.yml` não repassava `OMNIRA_AI_*`, `OMNIRA_COPILOT_ENABLED`, `OMNIRA_AI_TOOL_GATEWAY_ENABLED` nem os demais interruptores do Conversation Intelligence aos contêineres: nenhum valor do `.env` chegava à api/worker. Agora são repassados (vazio = padrão do código).
+
 ### Added (ADR-0020 — Finalizar atendimento e memória do contato; implementado em `main`, NÃO implantado)
 - **Finalizar atendimento** (Inbox): fecha o episódio de atendimento em uma transação (mesma trava do motor de fluxos, idempotente), libera o bot, encerra só chamados locais (ERP/assunto ficam), registra motivo, resumo e o que ficou pendente/prometido/para lembrar, audita ids e contagens. Migration `000086` (aditiva, reversível): `conversation_closures` (imutável) e `follow_up_items`, RLS FORCE. Sem permissão nova (`conversation.claim`/`manage`).
 - API `contracts/openapi/attendance-v1.yaml` (6 operações, com teste de deriva): finalizar, sugerir com IA, contexto da conversa, busca no histórico do contato, histórico do contato, resolver pendência.
