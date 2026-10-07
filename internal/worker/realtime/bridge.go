@@ -100,6 +100,8 @@ func (b *Bridge) forward(payload string) {
 		return
 	}
 	body, err := json.Marshal(map[string]any{
+		"event_id":  uuid.NewString(), // unique per event: clients de-duplicate with it (it is also the SSE `id:`)
+		"v":         1,                // payload version
 		"type":      n.Type,
 		"id":        n.ConversationID.String(),
 		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),

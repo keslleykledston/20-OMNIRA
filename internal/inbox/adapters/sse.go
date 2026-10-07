@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,11 +19,31 @@ import (
 
 // RealtimeEvent is what the SSE stream forwards: {type, id (conversation), timestamp, data}.
 // Producers (row triggers -> Outbox -> worker publisher) put only references in data.
+//
+// EventID and Version (additive, MOBILE.READINESS) let any client de-duplicate events and recognise the payload version: the
+// same event can legitimately reach a client twice (tenant stream + conversation stream, or a reconnect). Events from an older
+// bridge carry neither; they are forwarded as they are. There is no replay: the stream is best-effort and a client that reconnects
+// refetches through the REST API.
 type RealtimeEvent struct {
-	Type      string    `json:"type"` // message_received | message_status | conversation_updated
-	ID        uuid.UUID `json:"id"`   // conversation id
+	EventID   string    `json:"event_id,omitempty"` // unique per event; also sent as the SSE `id:` field
+	Version   int       `json:"v,omitempty"`        // payload version, 1 today
+	Type      string    `json:"type"`               // message_received | message_status | conversation_updated
+	ID        uuid.UUID `json:"id"`                 // conversation id
 	Timestamp time.Time `json:"timestamp"`
 	Data      any       `json:"data"`
+}
+
+// sseFrame renders one event as an SSE frame. The data line keeps the exact JSON shape the web already consumes; the optional
+// `id:` line is ignored by clients that only read `data:`.
+func sseFrame(e RealtimeEvent) []byte {
+	data, _ := json.Marshal(e)
+	var b []byte
+	if e.EventID != "" && !strings.ContainsAny(e.EventID, "\r\n") {
+		b = append(b, "id: "+e.EventID+"\n"...)
+	}
+	b = append(b, "data: "...)
+	b = append(b, data...)
+	return append(b, '\n', '\n')
 }
 
 // StreamAuthorizer authorizes the user against the tenant using a short, self-contained
@@ -217,8 +238,7 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 				log.Printf("inbox realtime: dropping malformed event on %s", msg.Subject)
 				continue
 			}
-			data, _ := json.Marshal(event)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			_, _ = w.Write(sseFrame(event))
 			flusher.Flush()
 		case <-keepalive.C:
 			fmt.Fprint(w, ": keepalive\n\n")

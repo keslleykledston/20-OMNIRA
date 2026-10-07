@@ -64,6 +64,8 @@ components:
         type: object
         required: [type, id, timestamp]
         properties:
+          event_id: { type: string, format: uuid, description: 'Unique per event (absent on events from a bridge older than MOBILE.READINESS). Also the SSE `id:` field. The same event can reach a client twice (tenant + conversation stream, reconnect): de-duplicate with it. There is no replay: after a reconnect, refetch through the REST API.' }
+          v: { type: integer, enum: [1], description: 'Payload version (absent on older events = 1)' }
           type: { type: string, enum: [message_received, message_status, conversation_updated] }
           id: { type: string, format: uuid, description: conversation id }
           timestamp: { type: string, format: date-time }
