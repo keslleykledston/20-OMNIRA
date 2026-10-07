@@ -161,7 +161,7 @@ Sem migration, sem dependência nova, sem rota nova, sem flag ligada.
 
 | ID | Classe | Descrição | Quando / como |
 |---|---|---|---|
-| R-1 | P1 de fase | Sem credencial nativa (cliente OIDC próprio, audiência, renovação, aparelho) | MOBILE.1, ADR-0022 — **depende de decisão do dono** |
+| R-1 | P1 de fase | Sem credencial nativa (cliente OIDC próprio, audiência, renovação, aparelho) | MOBILE.1, ADR-0022 — **decisões do dono aprovadas em 2026-10-07**; falta implementar |
 | R-2 | P2 | `ratelimit.Middleware` lê `context.Value("tenant_context")` (chave string) mas o contexto do tenant só nasce depois (camada interna) e com `domain.TenantContextKey`: na prática todo tráfego cai no balde `anonymous` (10 000/min por processo, em memória), webhooks inclusos. **Verificado** com teste descartável: cota de tenant = 1/min, 3 requisições com o contexto injetado como o servidor injeta passaram e todas foram contadas no balde `global:anonymous`. Um cliente barulhento pode gerar 429 para todos | Antes do MOBILE.3: aplicar o limite por (tenant, usuário) *depois* do `AuthorizationMiddleware` e isentar `/webhooks/*` do balde global. **Cuidado:** ao ativar, os padrões (100/min/usuário, 1 000/min/tenant) são baixos para o Inbox e estrangulariam o Web; recalibrar com medição antes |
 | R-3 | P2 | SSE só reverifica *membership* (30 s); sessão/token revogado mantém o fluxo até 30 min | MOBILE.11 (revogação por aparelho): reverificar a sessão no `recheck` |
 | R-4 | P2 | Falta upload de anexo de saída | MOBILE.6 (multipart + URL assinada, mesmo pipeline de antivírus) |
@@ -205,7 +205,7 @@ Dependências entre fases: MOBILE.0 → 1 → 2 → (3, 4, 5) → (6, 7, 8) → 
 | Fase | Entrega | Depende de | Testes / segurança | Aceite |
 |---|---|---|---|---|
 | MOBILE.0 | Estrutura (`apps/mobile` Expo, `packages/api-contracts`, `packages/api-client`), geração de tipos da OpenAPI, CI com lint/type/test | decisão ADR-0021 | tipos gerados idênticos aos do Web; sem segredo no repositório | app "hello" compila Android/iOS; Web inalterado |
-| MOBILE.1 | Autenticação nativa (ADR-0022): cliente OIDC próprio, Code+PKCE, token de acesso curto, renovação, Keychain/Keystore | decisão do dono sobre IdP/audiência/renovação | negativos: token expirado, revogado, audiência errada; nenhum token em log | login, renovação silenciosa e logout revogando no servidor |
+| MOBILE.1 | Autenticação nativa (ADR-0022): cliente OIDC próprio, Code+PKCE, token de acesso curto, renovação, Keychain/Keystore | ADR-0022 aceita; criar o cliente `omnira-mobile` no Keycloak | negativos: token expirado, revogado, audiência errada; nenhum token em log | login, renovação silenciosa e logout revogando no servidor |
 | MOBILE.2 | Contexto de tenant/usuário (`/me`, `/tenants`, `/me/access`), troca de tenant | 1 | membership forjada recusada; troca de tenant limpa cache | permissões do app = permissões do Web |
 | MOBILE.3 | Inbox (lista, filtros, cursor) | 2; **R-2 resolvido** | isolamento A/B; 429 tratado | lista idêntica à do Web para o mesmo usuário |
 | MOBILE.4 | Conversa (mensagens, enviar com `Idempotency-Key`, atribuir/transferir/finalizar) | 3 | reenvio não duplica; ação sem permissão recusada | fluxo completo de atendimento |

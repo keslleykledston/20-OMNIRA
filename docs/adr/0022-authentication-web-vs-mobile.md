@@ -1,8 +1,8 @@
 # ADR-0022: Autenticação — Web (cookie de sessão) × Mobile (credencial por aparelho)
 
 ## Status
-**Proposed (2026-10-07).** Documenta o estado real e recomenda um caminho. **Não há código** e a implementação (MOBILE.1) só começa com a aprovação do dono
-nos pontos "Decisões do dono". O Web não muda.
+**Accepted (2026-10-07)** pelo dono, "conforme proposto" (Opção A e as decisões 1–5 abaixo, nos valores propostos). **Ainda não há código**: a implementação é o MOBILE.1.
+O Web não muda. O cliente `omnira-mobile` no Keycloak (decisão 5) é criado no início do MOBILE.1, junto com o código que o usa; nada muda em produção até lá.
 
 ## Contexto (verificado no código)
 - **IdP:** Keycloak (OIDC). **Login Web:** Authorization Code + PKCE `S256` + `state` + `nonce`; o servidor troca o código (cliente confidencial), valida o
@@ -28,7 +28,7 @@ nos pontos "Decisões do dono". O Web não muda.
   nem listagem, refresh dependente do IdP, ID Token como credencial. **Rejeitada** como destino; aceitável só como atalho de desenvolvimento.
 - **C. Senha direta (ROPC).** Rejeitada: o app veria a senha, quebra MFA/SSO.
 
-## Decisão (proposta)
+## Decisão (aprovada)
 Opção A. Endpoints futuros (não criados):
 `POST /api/v1/auth/mobile/token` · `POST /api/v1/auth/mobile/refresh` · `POST /api/v1/auth/mobile/logout` · `GET /api/v1/me/devices` · `DELETE /api/v1/me/devices/{device_id}`
 (e visão de administrador para revogar aparelho de outro usuário com permissão própria). Regras:
@@ -39,12 +39,12 @@ Opção A. Endpoints futuros (não criados):
 - Web **não muda**: cookie HttpOnly continua sendo o único mecanismo do navegador; nada de `localStorage` para credencial sensível;
 - `Authorization: Bearer` do IdP continua aceito como hoje (compatibilidade), sem ampliar audiências.
 
-## Decisões do dono (bloqueiam o MOBILE.1)
-1. Confirmar a Opção A (vs. aceitar B como destino).
-2. TTLs: acesso 15 min; *refresh* 30 dias deslizante, 90 absoluto. Ajustar?
-3. Quem pode revogar aparelho de outro usuário (proposta: `membership.manage`).
-4. Um aparelho pode ter vários tenants? (proposta: sim, o mesmo usuário; a troca é no cliente e revalidada no servidor).
-5. Criar o cliente `omnira-mobile` no Keycloak de produção (mudança de infraestrutura de identidade).
+## Decisões do dono (aprovadas em 2026-10-07, valores propostos)
+1. Opção A confirmada (B fica só como atalho de desenvolvimento).
+2. TTLs: acesso 15 min; *refresh* 30 dias deslizante, 90 absoluto.
+3. Revogar aparelho de outro usuário: permissão `membership.manage`.
+4. Um aparelho pode ter vários tenants: sim, o mesmo usuário; a troca é no cliente e revalidada no servidor.
+5. Criar o cliente `omnira-mobile` (público, sem segredo, Code+PKCE) no Keycloak de produção: autorizado, executado no MOBILE.1 (mudança de infraestrutura de identidade).
 
 ## Consequências
-O Core ganha um segundo *front door* de sessão sem enfraquecer o Web; o custo é uma tabela de aparelhos e a rotação de *refresh*. Até a aprovação, **nada muda em produção**.
+O Core ganha um segundo *front door* de sessão sem enfraquecer o Web; o custo é uma tabela de aparelhos e a rotação de *refresh*. Até o MOBILE.1, **nada muda em produção** por causa desta ADR.
