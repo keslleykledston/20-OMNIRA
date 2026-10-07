@@ -37,10 +37,12 @@ import (
 type fakeScanner struct {
 	down  atomic.Bool
 	calls atomic.Int32
+	delay time.Duration // widens the window between the pending-count check and the insert
 }
 
 func (f *fakeScanner) Scan(_ context.Context, data []byte) (ports.VirusVerdict, error) {
 	f.calls.Add(1)
+	time.Sleep(f.delay)
 	if f.down.Load() {
 		return ports.VirusVerdict{}, errors.New("clamd unreachable")
 	}
@@ -52,6 +54,7 @@ func (f *fakeScanner) Scan(_ context.Context, data []byte) (ports.VirusVerdict, 
 
 type attEnv struct {
 	*env
+	h       *messagesadapters.SendHandler
 	mux     *http.ServeMux
 	scanner *fakeScanner
 	dir     string
@@ -76,7 +79,7 @@ func newAttEnv(t *testing.T) *attEnv {
 	mux.Handle("POST "+base+"/messages", mw(http.HandlerFunc(h.Send)))
 	mux.Handle("POST "+base+"/attachments", h.BufferUpload(mw(http.HandlerFunc(h.Upload))))
 	mux.Handle("DELETE "+base+"/attachments/{attachment_id}", mw(http.HandlerFunc(h.RemoveAttachment)))
-	return &attEnv{env: e, mux: mux, scanner: scanner, dir: dir, files: files}
+	return &attEnv{env: e, h: h, mux: mux, scanner: scanner, dir: dir, files: files}
 }
 
 func pngFile(t *testing.T) []byte {
@@ -448,6 +451,8 @@ func TestTheRecordedFileCannotBeSwappedAndALinkIsSetOnce(t *testing.T) {
 
 func TestConcurrentUploadsCannotExceedThePendingCap(t *testing.T) {
 	a := newAttEnv(t)
+	a.h.SetUploadSlots(32)                   // the cap must hold by itself, not because the upload budget happens to be smaller
+	a.scanner.delay = 150 * time.Millisecond // every request passes the count before any of them inserts, unless the count is serialised
 	const n = 12
 	codes := make(chan int, n)
 	for i := 0; i < n; i++ {

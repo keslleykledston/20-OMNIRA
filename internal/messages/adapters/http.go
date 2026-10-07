@@ -35,6 +35,13 @@ func (h *SendHandler) WithAttachments(att *application.Attachments, store ports.
 	return h
 }
 
+// SetUploadSlots changes how many uploads are handled at once (default 4). Each slot can hold ~40 MiB: size it against the memory limit.
+func (h *SendHandler) SetUploadSlots(n int) {
+	if n > 0 {
+		h.slots = make(chan struct{}, n)
+	}
+}
+
 type sendRequest struct {
 	Text string `json:"text"`
 	// AttachmentID, when present, sends the previously uploaded file; Text is then its optional caption.
