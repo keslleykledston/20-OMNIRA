@@ -5,7 +5,7 @@ import "github.com/omnira/omnira/internal/flows/domain"
 var generalCats = []string{"GENERAL", "CUSTOMER_SERVICE"}
 
 func starterTemplates() []*Template {
-	return []*Template{tUnknownContact(), tCustomerContext(), tExistingTicket(), tHumanHandoff(), tAfterHours(), tCSAT(), tSmartReception()}
+	return []*Template{tUnknownContact(), tCustomerContext(), tExistingTicket(), tHumanHandoff(), tAfterHours(), tCSAT(), tSmartReceptionV1(), tSmartReception()}
 }
 
 // unknown-contact: an unclassified contact is NOT a new customer. The bot only asks who they are; it never creates a company
@@ -114,6 +114,49 @@ func tSmartReception() *Template {
 		From("who", "unknown").Sub("unk", "unknown-contact").Connect("unk", "next", "menu").
 		From("menu", "tech").Sub("exist", "existing-ticket").
 		Condition("related", "related", "eq", "sim").
+		From("related", "true").Say("say_exist", "Vi que você já tem um chamado em andamento. Vou chamar um atendente para falar sobre ele. Aguarde um instante, por favor.").
+		Handoff("h_exist", "queue.technical", "Cliente {{contact.name}} fala de um chamado que já existe: {{tickets.first_subject}}.").
+		From("related", "false").Ticket("ticket", "Suporte - {{contact.name}}", "medium").
+		Say("say_tech", "Anotei o seu pedido de suporte e vou chamar um atendente. Aguarde um instante, por favor.").
+		Handoff("h_tech", "queue.technical", "Suporte técnico. Cliente: {{contact.name}} {{customer.name}}. Empresa informada: {{empresa_informada}}.").
+		From("menu", "fin").Say("say_fin", "Certo! Vou chamar um atendente do financeiro. Aguarde um instante, por favor.").Handoff("h_fin", "queue.finance", "Financeiro. Cliente: {{contact.name}} {{customer.name}}.").
+		From("menu", "com").Say("say_com", "Certo! Vou chamar um atendente do comercial. Aguarde um instante, por favor.").Handoff("h_com", "queue.commercial", "Comercial. Contato: {{contact.name}} (empresa informada: {{empresa_informada}}).").
+		From("menu", "outro").Say("say_fb", "Certo! Vou chamar um atendente para ajudar você. Aguarde um instante, por favor.").Handoff("h_fb", "queue.fallback", "Outro assunto. Contato: {{contact.name}}.").
+		Connect("menu", "timeout", "say_fb").
+		Var("assunto", "string", "Assunto escolhido no menu").Var("related", "string", "Definido pelo subflow existing-ticket").
+		Var("nome", "string", "Definido pelo subflow unknown-contact").Var("empresa_informada", "string", "Definido pelo subflow unknown-contact")
+	return mk("smart-reception", 2, "Recepção inteligente", "Recepção padrão: identifica o contato, resolve a empresa, evita chamado duplicado e encaminha pelo menu.",
+		domain.FlowTypeInbound, generalCats, Settings{Priority: 999, IsDefault: true}, b, []TestCase{
+			{Name: "cliente com uma empresa pede suporte e abre chamado", Scenario: Scenario{ContactKind: "customer", Companies: []string{"ACME"}, Events: Msg("oi", "1")},
+				Expect: Expect{Status: "waiting_human", Say: []string{"Olá Contato Teste", "Como podemos ajudar?", "1) Suporte técnico"}, Effects: []string{"company_validated", "ticket", "handoff"}, Priority: "medium", Reaches: []string{"h_tech"}}},
+			{Name: "cliente com chamado aberto não duplica", Scenario: Scenario{ContactKind: "customer", Companies: []string{"ACME"}, OpenTickets: 1, Events: Msg("oi", "1", "1")},
+				Expect: Expect{Status: "waiting_human", Reaches: []string{"h_exist"}, NotReaches: []string{"ticket"}, Effects: []string{"company_validated", "handoff"}}},
+			{Name: "contato desconhecido é apresentado e vai ao comercial", Scenario: Scenario{ContactKind: "unclassified", Events: Msg("oi", "João", "Acme", "3")},
+				Expect: Expect{Status: "waiting_human", Reaches: []string{"unk", "h_com"}, NotReaches: []string{"ctx"}, Vars: map[string]string{"nome": "João"}, Effects: []string{"handoff"}}},
+			{Name: "várias empresas: pergunta a empresa e depois o assunto", Scenario: Scenario{ContactKind: "customer", Companies: []string{"ACME", "Beta"}, Events: Msg("oi", "2", "2")},
+				Expect: Expect{Status: "waiting_human", Reaches: []string{"h_fin"}, Effects: []string{"company_validated", "handoff"}}},
+			{Name: "resposta fora do menu cai no assunto livre", Scenario: Scenario{ContactKind: "customer", Companies: []string{"ACME"}, Events: Msg("oi", "4")},
+				Expect: Expect{Status: "waiting_human", Reaches: []string{"h_fb"}}},
+			{Name: "sem resposta no menu vai para a triagem humana", Scenario: Scenario{ContactKind: "customer", Companies: []string{"ACME"}, Events: []Event{{Text: "oi"}, {Timeout: true}}},
+				Expect: Expect{Status: "waiting_human", Reaches: []string{"h_fb"}}},
+			{Name: "janela da Meta fechada não envia texto livre", Scenario: Scenario{Provider: "meta_cloud", WindowOpen: boolp(false), ContactKind: "customer", Events: Msg("oi")},
+				Expect: Expect{Status: "failed", NoMessages: true}},
+		}, recommended("general", "isp", "msp"))
+}
+
+var _ = domain.FlowTypeInbound
+
+// tSmartReceptionV1 is kept byte-for-byte: a published template version is immutable (see the golden hash test).
+func tSmartReceptionV1() *Template {
+	b := NewBuilder().Start().
+		Say("hello", "Olá {{contact.name}}! Bem-vindo ao atendimento.").
+		Contact("who").
+		From("who", "known").Sub("ctx", "customer-context").
+		Choice("menu", "Como podemos ajudar?", "assunto",
+			Opt{"tech", "Suporte técnico", ""}, Opt{"fin", "Financeiro", ""}, Opt{"com", "Comercial", ""}, Opt{"outro", "Outro assunto", ""}).
+		From("who", "unknown").Sub("unk", "unknown-contact").Connect("unk", "next", "menu").
+		From("menu", "tech").Sub("exist", "existing-ticket").
+		Condition("related", "related", "eq", "sim").
 		From("related", "true").Handoff("h_exist", "queue.technical", "Cliente {{contact.name}} fala de um chamado que já existe: {{tickets.first_subject}}.").
 		From("related", "false").Ticket("ticket", "Suporte - {{contact.name}}", "medium").
 		Handoff("h_tech", "queue.technical", "Suporte técnico. Cliente: {{contact.name}} {{customer.name}}. Empresa informada: {{empresa_informada}}.").
@@ -141,5 +184,3 @@ func tSmartReception() *Template {
 				Expect: Expect{Status: "failed", NoMessages: true}},
 		}, recommended("general", "isp", "msp"))
 }
-
-var _ = domain.FlowTypeInbound

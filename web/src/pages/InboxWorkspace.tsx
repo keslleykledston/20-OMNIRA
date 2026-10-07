@@ -173,7 +173,7 @@ export default function InboxWorkspace() {
   const hasSelection = !!selectedConversationId;
   return (
     <div className="inbox-workspace">
-      <div className="grid grid-cols-1 lg:grid-cols-4 h-[calc(100vh-theme(spacing.16))]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-4">
         {/* ConversationList: full width on mobile when nothing selected; own column on desktop */}
         <div
           className={clsx(

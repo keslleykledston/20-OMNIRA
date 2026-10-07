@@ -2,6 +2,7 @@
   "pack:isp-noc@1": "e2e9784f09ec91b6c4fc54c5dece5ab04045caae06e1641c5d6ab3269c666d37",
   "pack:k3g-support@1": "dd4b937b75ec0e6d2fd9b97764c037820465908a2a2f42bc3bd8c6ef16d9c300",
   "pack:omnira-starter@1": "16f239ca5b4d0336fbd5105c0a03de9ac9b9934345cefa205621f6af1fa292fb",
+  "pack:omnira-starter@2": "57846ef27e63fde48ddb3e44df0f6a7d03f02ce9ffc714e208072a59c48d85a6",
   "template:after-hours@1": "faf281e34a93341e28dbe8e453ca52dc907f284f4f400f2091c31561c03bfc7c",
   "template:csat@1": "22a9c4ba7406d1e982683e7e7586f53b0e91ca758da12b0f7cc91262e8dee0d4",
   "template:customer-context@1": "8d4a7393a39e200466da4785bdc803987339a1e23adf1c7a68c9e15657995500",
@@ -25,5 +26,6 @@
   "template:k3g-general-triage@1": "60bf1a29a0f5886e14a038f31a2749e916dfff816b489fa993e422f4088b026f",
   "template:k3g-vpn-support@1": "76f25dd06020e034a2e3405314d927cd14201ac39c1ff87307526605ff5bb558",
   "template:smart-reception@1": "4dfb10697f1a990e317bd2d1b854fc4ad65b74be0902398adf3dec95550e341c",
+  "template:smart-reception@2": "6945708e541eeb4a5ea704405546805399b737fb486a28add5bee5c183697ab6",
   "template:unknown-contact@1": "d6ec01a202734e8f7a274569ac05c5bbe7c1068de3b471ad229b9b5176875ddd"
 }

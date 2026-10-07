@@ -58,3 +58,11 @@ input, textarea, select {
   background-image: radial-gradient(circle, color-mix(in srgb, var(--color-text-tertiary) 28%, transparent) 1px, transparent 1px);
   background-size: 20px 20px;
 }
+
+/* Authenticated shell: one screen tall, scrolls inside its panes (see Layout.tsx). */
+html.app-shell-lock,
+html.app-shell-lock body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
