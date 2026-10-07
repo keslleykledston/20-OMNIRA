@@ -47,8 +47,8 @@ func (p *Provider) Metadata() ports.ProviderMetadata {
 }
 
 func capabilities() []domain.Capability {
-	// Templates and outbound media are not offered yet: free text inside the 24 h window, inbound media, delivery status.
-	return []domain.Capability{domain.CapabilityText, domain.CapabilityMedia, domain.CapabilityDeliveryStatus, domain.CapabilityHealth}
+	// Free text inside the 24 h window, approved templates any time, inbound media, delivery status. Outbound media is not offered yet.
+	return []domain.Capability{domain.CapabilityText, domain.CapabilityTemplate, domain.CapabilityMedia, domain.CapabilityDeliveryStatus, domain.CapabilityHealth}
 }
 
 var ErrInvalidConnection = errors.New("meta: invalid channel connection")
@@ -213,8 +213,43 @@ func (p *Provider) SendMedia(context.Context, domain.ChannelConnection, domain.O
 	return nil, ports.ErrCapabilityNotSupported
 }
 
-func (p *Provider) SendTemplate(context.Context, domain.ChannelConnection, domain.OutboundTemplateMessage) (*domain.SendResult, error) {
-	return nil, ports.ErrCapabilityNotSupported
+// SendTemplate sends an approved template (allowed any time, which is how a conversation starts outside the 24 h
+// window). Same delivery guarantees as SendText: an ambiguous failure is ports.ErrOutcomeUnknown, never retried.
+func (p *Provider) SendTemplate(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundTemplateMessage) (*domain.SendResult, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	to := strings.TrimPrefix(strings.TrimSpace(msg.ToE164), "+")
+	if msg.TemplateName == "" || msg.LanguageCode == "" || !digitsPattern.MatchString(to) {
+		return nil, fmt.Errorf("%w: recipient, template name and language are required", ports.ErrPermanent)
+	}
+	c, err := p.credential(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	id, err := p.client.SendTemplate(ctx, c.Fields[FieldAccessToken], conn.ExternalNumberID, to, msg.TemplateName, msg.LanguageCode, msg.Params)
+	p.count(ctx, "send_template", err)
+	if err != nil {
+		if errors.Is(err, ports.ErrOutcomeUnknown) {
+			log.Printf("meta: template send outcome unknown connection_id=%s", conn.ID)
+		}
+		return nil, err
+	}
+	return &domain.SendResult{ProviderMessageID: id, State: domain.DeliveryStateSent}, nil
+}
+
+// ListTemplates reads the WhatsApp Business Account's templates with this connection's own token.
+func (p *Provider) ListTemplates(ctx context.Context, conn domain.ChannelConnection) ([]Template, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	c, err := p.credential(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	out, err := p.client.ListTemplates(ctx, c.Fields[FieldAccessToken], conn.ExternalAccountID)
+	p.count(ctx, "list_templates", err)
+	return out, err
 }
 
 // NewMessageID: Meta assigns the id in the send answer; there is nothing to reserve ahead of time.

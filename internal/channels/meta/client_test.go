@@ -2,6 +2,7 @@ package meta_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -132,5 +133,49 @@ func TestHandlerPerConnectionSecretAndChallenge(t *testing.T) {
 	}
 	if get("omn-good") != 200 || get("nope") != 403 {
 		t.Fatal("challenge must pass only for a valid per-connection token")
+	}
+}
+
+func TestListTemplatesParsesBodyVariablesAndFlagsWhatWeCannotFill(t *testing.T) {
+	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v21.0/109876543210987/message_templates" || r.Header.Get("Authorization") != "Bearer tok" {
+			t.Errorf("path=%s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"data":[
+		 {"id":"1","name":"boas_vindas","language":"pt_BR","category":"UTILITY","status":"APPROVED","components":[{"type":"BODY","text":"Olá {{1}}, seu chamado {{2}} foi aberto."}]},
+		 {"id":"2","name":"com_imagem","language":"pt_BR","category":"MARKETING","status":"APPROVED","components":[{"type":"HEADER","format":"IMAGE"},{"type":"BODY","text":"Promo"}]},
+		 {"id":"3","name":"com_link","language":"pt_BR","category":"UTILITY","status":"PENDING","components":[{"type":"BODY","text":"Veja"},{"type":"BUTTONS","buttons":[{"type":"URL","url":"https://x.com/{{1}}"}]}]}
+		]}`))
+	})
+	got, err := c.ListTemplates(context.Background(), "tok", "109876543210987")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("%v %v", got, err)
+	}
+	if got[0].VariableCount != 2 || got[0].UnsupportedReason != "" || got[0].Body == "" {
+		t.Fatalf("plain template: %+v", got[0])
+	}
+	if got[1].UnsupportedReason == "" || got[2].UnsupportedReason == "" {
+		t.Fatalf("header media and dynamic url must be flagged: %+v %+v", got[1], got[2])
+	}
+}
+
+func TestSendTemplateBuildsBodyParametersAndClassifiesLikeText(t *testing.T) {
+	var sent map[string]any
+	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		_, _ = w.Write([]byte(`{"messages":[{"id":"wamid.T"}]}`))
+	})
+	id, err := c.SendTemplate(context.Background(), "tok", "12345678", "5592984517378", "boas_vindas", "pt_BR", []string{"Ana", "123"})
+	if err != nil || id != "wamid.T" {
+		t.Fatalf("%q %v", id, err)
+	}
+	tpl := sent["template"].(map[string]any)
+	comp := tpl["components"].([]any)[0].(map[string]any)
+	if sent["type"] != "template" || tpl["name"] != "boas_vindas" || comp["type"] != "body" || len(comp["parameters"].([]any)) != 2 {
+		t.Fatalf("payload: %v", sent)
+	}
+	c2, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) })
+	if _, err := c2.SendTemplate(context.Background(), "tok", "12345678", "5592984517378", "boas_vindas", "pt_BR", nil); !errors.Is(err, ports.ErrOutcomeUnknown) {
+		t.Fatalf("a 5xx on a template send is an unknown outcome, got %v", err)
 	}
 }

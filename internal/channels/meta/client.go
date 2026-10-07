@@ -203,6 +203,167 @@ func (c *Client) PhoneInfo(ctx context.Context, token, phoneNumberID string) (Ph
 	return out, nil
 }
 
+// Template is one message template of the WhatsApp Business Account as Meta reports it.
+type Template struct {
+	ID       string
+	Name     string
+	Language string
+	Category string
+	Status   string
+	// Body is the BODY component text with {{1}}, {{2}} placeholders.
+	Body          string
+	VariableCount int
+	// UnsupportedReason is non-empty when sending needs something this version cannot provide (header media or
+	// variables, dynamic URL buttons). The template is still listed so the operator knows why it is not offered.
+	UnsupportedReason string
+}
+
+var placeholderPattern = regexp.MustCompile(`\{\{([0-9]{1,2})\}\}`)
+
+// countPlaceholders returns the highest {{n}} index, which is how many body parameters Meta expects.
+func countPlaceholders(text string) int {
+	max := 0
+	for _, m := range placeholderPattern.FindAllStringSubmatch(text, -1) {
+		n := 0
+		for _, c := range m[1] {
+			n = n*10 + int(c-'0')
+		}
+		if n > max {
+			max = n
+		}
+	}
+	return max
+}
+
+type templateComponent struct {
+	Type    string `json:"type"`
+	Format  string `json:"format"`
+	Text    string `json:"text"`
+	Buttons []struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	} `json:"buttons"`
+}
+
+func toTemplate(raw struct {
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Language   string              `json:"language"`
+	Category   string              `json:"category"`
+	Status     string              `json:"status"`
+	Components []templateComponent `json:"components"`
+}) Template {
+	t := Template{ID: raw.ID, Name: raw.Name, Language: raw.Language, Category: raw.Category, Status: raw.Status}
+	for _, c := range raw.Components {
+		switch strings.ToUpper(c.Type) {
+		case "BODY":
+			t.Body = c.Text
+			t.VariableCount = countPlaceholders(c.Text)
+		case "HEADER":
+			if f := strings.ToUpper(c.Format); f != "" && f != "TEXT" {
+				t.UnsupportedReason = "cabeçalho com mídia (" + strings.ToLower(f) + ")"
+			} else if countPlaceholders(c.Text) > 0 {
+				t.UnsupportedReason = "cabeçalho com variável"
+			}
+		case "BUTTONS":
+			for _, b := range c.Buttons {
+				if strings.ToUpper(b.Type) == "URL" && countPlaceholders(b.URL) > 0 {
+					t.UnsupportedReason = "botão com link dinâmico"
+				}
+			}
+		}
+	}
+	return t
+}
+
+// ListTemplates reads the account's message templates (read-only), following Meta's paging up to a sane bound.
+func (c *Client) ListTemplates(ctx context.Context, token, wabaID string) ([]Template, error) {
+	if !digitsPattern.MatchString(wabaID) || token == "" {
+		return nil, fmt.Errorf("%w: waba id and token are required", ports.ErrPermanent)
+	}
+	var out []Template
+	path := "/" + wabaID + "/message_templates?fields=id,name,language,category,status,components&limit=100"
+	for page := 0; page < 10; page++ {
+		status, data, err := c.do(ctx, http.MethodGet, path, token, nil)
+		if err != nil {
+			return nil, err
+		}
+		if status < 200 || status > 299 {
+			return nil, classify(status, data)
+		}
+		var body struct {
+			Data []struct {
+				ID         string              `json:"id"`
+				Name       string              `json:"name"`
+				Language   string              `json:"language"`
+				Category   string              `json:"category"`
+				Status     string              `json:"status"`
+				Components []templateComponent `json:"components"`
+			} `json:"data"`
+			Paging struct {
+				Next string `json:"next"`
+			} `json:"paging"`
+		}
+		if json.Unmarshal(data, &body) != nil {
+			return nil, fmt.Errorf("%w: unexpected templates answer", ports.ErrUnknown)
+		}
+		for _, raw := range body.Data {
+			out = append(out, toTemplate(raw))
+		}
+		if body.Paging.Next == "" {
+			return out, nil
+		}
+		// The next page is a full Graph URL; only its path and query are trusted, re-based on our own validated base.
+		u, err := url.Parse(body.Paging.Next)
+		if err != nil || u.Path == "" {
+			return out, nil
+		}
+		path = strings.TrimPrefix(u.Path, "/"+c.version)
+		if u.RawQuery != "" {
+			path += "?" + u.RawQuery
+		}
+	}
+	return out, nil
+}
+
+// SendTemplate sends an approved template with its body variables, any time (inside or outside the 24 h window).
+// Like SendText it has no idempotency key, so an ambiguous failure is ports.ErrOutcomeUnknown and is never retried.
+func (c *Client) SendTemplate(ctx context.Context, token, phoneNumberID, toDigits, name, language string, params []string) (string, error) {
+	if !digitsPattern.MatchString(phoneNumberID) || !digitsPattern.MatchString(toDigits) || name == "" || language == "" || token == "" {
+		return "", fmt.Errorf("%w: recipient, template and credentials are required", ports.ErrPermanent)
+	}
+	template := map[string]any{"name": name, "language": map[string]any{"code": language}}
+	if len(params) > 0 {
+		parameters := make([]map[string]any, len(params))
+		for i, p := range params {
+			parameters[i] = map[string]any{"type": "text", "text": p}
+		}
+		template["components"] = []map[string]any{{"type": "body", "parameters": parameters}}
+	}
+	status, data, err := c.do(ctx, http.MethodPost, "/"+phoneNumberID+"/messages", token, map[string]any{
+		"messaging_product": "whatsapp",
+		"recipient_type":    "individual",
+		"to":                toDigits,
+		"type":              "template",
+		"template":          template,
+	})
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status > 299 {
+		return "", classify(status, data)
+	}
+	var ok struct {
+		Messages []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(data, &ok) != nil || len(ok.Messages) == 0 || ok.Messages[0].ID == "" {
+		return "", fmt.Errorf("%w: accepted without a message id", ports.ErrOutcomeUnknown)
+	}
+	return ok.Messages[0].ID, nil
+}
+
 // WebhookSubscribed reports whether at least one app is subscribed to the WhatsApp Business Account's webhooks
 // (read-only). It cannot tell WHICH app: it is a hint that the "messages" subscription step was done.
 func (c *Client) WebhookSubscribed(ctx context.Context, token, wabaID string) (bool, error) {
