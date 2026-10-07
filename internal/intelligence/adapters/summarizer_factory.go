@@ -26,7 +26,7 @@ func NewModelRouterFromConfig(cfg *config.Config) *application.ModelRouter {
 		if model == "" {
 			model = cfg.AIModel
 		}
-		gen, err := aiadapters.NewOpenAIGenerator(aiadapters.OpenAIConfig{APIKey: cfg.AIAPIKey, Model: model, Timeout: timeout})
+		gen, err := aiadapters.NewTextGenerator(cfg.AIProvider, cfg.AIAPIKey, model, timeout)
 		if err != nil {
 			return
 		}

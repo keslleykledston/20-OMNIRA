@@ -131,13 +131,13 @@ func (h *SummaryHandler) Summarize(w http.ResponseWriter, r *http.Request) {
 		// success
 	case errors.Is(err, application.ErrEmptyTranscript):
 		outcome, category, status, responseErr = auditdomain.OutcomeFailure, "empty_transcript", http.StatusUnprocessableEntity, "no summarizable content in this conversation"
-	case errors.Is(err, ErrOpenAIUnauthorized):
+	case errors.Is(err, ErrProviderUnauthorized):
 		outcome, category, status, responseErr = auditdomain.OutcomeFailure, "provider_error", http.StatusBadGateway, "ai summary is not available"
-	case errors.Is(err, ErrOpenAIRateLimited):
+	case errors.Is(err, ErrProviderRateLimited):
 		outcome, category, status, responseErr = auditdomain.OutcomeFailure, "rate_limited", http.StatusTooManyRequests, "ai provider is rate-limited, try again shortly"
-	case errors.Is(err, ErrOpenAITimeout):
+	case errors.Is(err, ErrProviderTimeout):
 		outcome, category, status, responseErr = auditdomain.OutcomeFailure, "timeout", http.StatusGatewayTimeout, "ai summary timed out, try again"
-	case errors.Is(err, ErrOpenAIUnavailable):
+	case errors.Is(err, ErrProviderUnavailable):
 		outcome, category, status, responseErr = auditdomain.OutcomeFailure, "provider_error", http.StatusBadGateway, "ai provider unavailable, try again shortly"
 	default:
 		outcome, category, status, responseErr = auditdomain.OutcomeFailure, "provider_error", http.StatusBadGateway, "ai summary failed"

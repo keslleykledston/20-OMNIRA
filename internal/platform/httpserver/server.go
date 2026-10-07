@@ -553,11 +553,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// else this function registers.
 	var aiGenerator aiports.TextGenerator
 	if cfg.AIReady() {
-		if gen, err := aiadapters.NewOpenAIGenerator(aiadapters.OpenAIConfig{
-			APIKey:  cfg.AIAPIKey,
-			Model:   cfg.AIModel,
-			Timeout: time.Duration(cfg.AITimeoutSeconds) * time.Second,
-		}); err == nil {
+		if gen, err := aiadapters.NewTextGenerator(cfg.AIProvider, cfg.AIAPIKey, cfg.AIModel, time.Duration(cfg.AITimeoutSeconds)*time.Second); err == nil {
 			aiGenerator = gen
 		}
 	}

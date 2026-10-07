@@ -88,7 +88,9 @@ func (c *Config) AIReady() bool {
 	if !c.AIEnabled {
 		return false
 	}
-	if c.AIProvider != "openai" {
+	switch c.AIProvider {
+	case "openai", "gemini":
+	default:
 		return false
 	}
 	return strings.TrimSpace(c.AIModel) != "" && strings.TrimSpace(c.AIAPIKey) != ""
@@ -148,11 +150,23 @@ func Load() *Config {
 		SessionIdleTimeout: getEnvInt("OMNIRA_SESSION_IDLE_TIMEOUT", 7200), // padrão: 2h
 
 		AIEnabled:        getEnv("OMNIRA_AI_ENABLED", "false") == "true",
-		AIProvider:       getEnv("OMNIRA_AI_PROVIDER", "openai"),
+		AIProvider:       strings.ToLower(strings.TrimSpace(getEnv("OMNIRA_AI_PROVIDER", "openai"))),
 		AIModel:          os.Getenv("OMNIRA_AI_MODEL"),
-		AIAPIKey:         os.Getenv("OMNIRA_AI_API_KEY"),
+		AIAPIKey:         aiAPIKeyFromEnv(),
 		AITimeoutSeconds: getEnvInt("OMNIRA_AI_TIMEOUT_SECONDS", 15),
 	}
+}
+
+// aiAPIKeyFromEnv: OMNIRA_AI_API_KEY is the platform AI key for whichever provider is selected. For Gemini the
+// provider-named OMNIRA_GEMINI_API_KEY is accepted too, so an operator can name the key after what it is.
+func aiAPIKeyFromEnv() string {
+	if k := strings.TrimSpace(os.Getenv("OMNIRA_AI_API_KEY")); k != "" {
+		return k
+	}
+	if strings.EqualFold(strings.TrimSpace(getEnv("OMNIRA_AI_PROVIDER", "openai")), "gemini") {
+		return strings.TrimSpace(os.Getenv("OMNIRA_GEMINI_API_KEY"))
+	}
+	return ""
 }
 
 func getEnv(key, defaultVal string) string {

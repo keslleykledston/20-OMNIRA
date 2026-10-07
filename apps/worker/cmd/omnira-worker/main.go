@@ -454,7 +454,7 @@ func main() {
 		// AI nodes (ADR-0019): only with OMNIRA_FLOWS_AI_ENABLED=true AND a ready platform model; otherwise they take their error port.
 		var flowAI flowsports.AIGateway
 		if cfg.FlowsAIEnabled && cfg.AIReady() {
-			gen, gerr := aiadapters.NewOpenAIGenerator(aiadapters.OpenAIConfig{APIKey: cfg.AIAPIKey, Model: cfg.AIModel, Timeout: time.Duration(cfg.AITimeoutSeconds) * time.Second})
+			gen, gerr := aiadapters.NewTextGenerator(cfg.AIProvider, cfg.AIAPIKey, cfg.AIModel, time.Duration(cfg.AITimeoutSeconds)*time.Second)
 			if gerr != nil {
 				log.Printf("Flow AI nodes disabled: %v\n", gerr)
 			} else {
