@@ -33,7 +33,7 @@ func NewTemplatesHandler(pool *pgxpool.Pool, conns ports.ChannelConnectionReposi
 }
 
 var (
-	templateNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,512}$`)
+	templateNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,255}$`)
 	templateLangPattern = regexp.MustCompile(`^[a-z]{2,3}(_[A-Za-z]{2,4})?$`)
 )
 

@@ -2402,6 +2402,42 @@ paths:
                         can_send_text: { type: boolean }
                         window_required: { type: boolean }
         '401': { $ref: '#/components/responses/Text401' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/template:
+    post:
+      operationId: sendTemplateMessage
+      tags: [Messages]
+      summary: Queue an approved WhatsApp template message (Meta Cloud lines only)
+      description: |
+        Allowed inside or outside the 24 h window. Same permission and assignment rules as `sendMessage`
+        (`conversation.claim` and being the assignee, or `conversation.manage`). `params` are the template's body
+        variables in order; each must be non-empty, without line breaks or tabs, at most 1024 characters. The inbox shows
+        the rendered text. Idempotent per (tenant, sender, `Idempotency-Key`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [template_id]
+              properties:
+                template_id: { type: string, format: uuid }
+                params: { type: array, items: { type: string } }
+      responses:
+        '202': { description: Queued }
+        '200': { description: Idempotent replay of an earlier request }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Conversation not assigned, finalized or its channel unavailable }
+        '422': { description: Template not approved or not supported, not from this line, or invalid variables }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/channel:
     get:
       operationId: getConversationChannel

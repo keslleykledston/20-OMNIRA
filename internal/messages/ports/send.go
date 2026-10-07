@@ -51,6 +51,29 @@ type OutboundStore interface {
 	// the sender — closing the window between LoadSendContext and the insert (reassign/unassign/channel
 	// change). When the state changed it returns ErrConversationChanged and inserts nothing.
 	InsertQueued(ctx context.Context, sender uuid.UUID, in SendContext, body, idempotencyKey, requestHash string, requireAssignee bool) (msg *QueuedMessage, replayed bool, err error)
+	// LoadTemplate reads a template that belongs to the given connection (nil when it is not that connection's).
+	LoadTemplate(ctx context.Context, connectionID, templateID uuid.UUID) (*Template, error)
+	// InsertQueuedTemplate is InsertQueued plus the template record, in the same transaction. body is the rendered text
+	// shown in the inbox; tpl is what the provider receives.
+	InsertQueuedTemplate(ctx context.Context, sender uuid.UUID, in SendContext, body, idempotencyKey, requestHash string, requireAssignee bool, tpl TemplateSend) (msg *QueuedMessage, replayed bool, err error)
+}
+
+// Template is an approved WhatsApp Cloud API template of a connection, as the send use case needs it.
+type Template struct {
+	ID            uuid.UUID
+	Name          string
+	Language      string
+	Body          string
+	Status        string
+	VariableCount int
+	Sendable      bool
+}
+
+// TemplateSend is what a queued template message carries for the provider: the body variables in order.
+type TemplateSend struct {
+	Name     string
+	Language string
+	Params   []string
 }
 
 // PermissionChecker resolves role permissions of a user in the TenantContext tenant.

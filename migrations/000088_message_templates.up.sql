@@ -6,7 +6,7 @@ CREATE TABLE channel_message_templates (
   tenant_id            UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   connection_id        UUID NOT NULL,
   provider_template_id TEXT NOT NULL DEFAULT '',
-  name                 TEXT NOT NULL CHECK (name ~ '^[a-z0-9_]{1,512}$'),
+  name                 TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 512 AND name ~ '^[a-z0-9_]+$'),
   language             TEXT NOT NULL CHECK (language ~ '^[a-z]{2,3}(_[A-Za-z]{2,4})?$'),
   category             TEXT NOT NULL DEFAULT '',
   status               TEXT NOT NULL DEFAULT '',
@@ -33,7 +33,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON channel_message_templates TO omnira_app;
 CREATE TABLE message_template_sends (
   tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   message_id    UUID NOT NULL,
-  template_name TEXT NOT NULL CHECK (template_name ~ '^[a-z0-9_]{1,512}$'),
+  template_name TEXT NOT NULL CHECK (char_length(template_name) BETWEEN 1 AND 512 AND template_name ~ '^[a-z0-9_]+$'),
   language      TEXT NOT NULL CHECK (language ~ '^[a-z]{2,3}(_[A-Za-z]{2,4})?$'),
   -- body variables in order ({{1}}, {{2}}, ...). Written once when the message is queued, never changed.
   params        JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(params) = 'array'),

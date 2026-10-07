@@ -516,6 +516,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		channeladapters.NewPostgresPermissionChecker(dbPool),
 	))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.Send))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/template", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.SendTemplate))))
 	linesHandler := inboxadapters.NewChannelLinesHandler(dbPool, channeladapters.NewPostgresPermissionChecker(dbPool))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/channel", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Channel))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/open", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Open))))

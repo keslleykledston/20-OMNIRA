@@ -61,8 +61,46 @@ func (h *SendHandler) Send(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type templateRequest struct {
+	TemplateID uuid.UUID `json:"template_id"`
+	Params     []string  `json:"params"`
+}
+
+// SendTemplate serves POST /inbox/conversations/{id}/template.
+func (h *SendHandler) SendTemplate(w http.ResponseWriter, r *http.Request) {
+	conversationID, err := uuid.Parse(r.PathValue("conversation_id"))
+	if err != nil {
+		http.Error(w, "invalid conversation_id", http.StatusBadRequest)
+		return
+	}
+	var req templateRequest
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<10))
+	if err != nil || json.Unmarshal(body, &req) != nil || req.TemplateID == uuid.Nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	res, err := h.svc.SendTemplate(r.Context(), conversationID, req.TemplateID, req.Params, r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	status := http.StatusAccepted
+	if res.Replayed {
+		status = http.StatusOK
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(sendResponse{
+		ID: res.Message.ID, ConversationID: res.Message.ConversationID, Direction: "outbound",
+		Body: res.Message.Body, Status: res.Message.Status, CreatedAt: res.Message.CreatedAt.UTC().Format(time.RFC3339),
+	})
+}
+
 func fail(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, application.ErrTemplateUnsupported), errors.Is(err, application.ErrTemplateNotAllowed), errors.Is(err, application.ErrTemplateParams):
+		http.Error(w, err.Error()[len("messages: "):], http.StatusUnprocessableEntity)
 	case errors.Is(err, application.ErrForbidden), errors.Is(err, application.ErrNotAssignedToYou):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, application.ErrNotFound):

@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -62,6 +63,48 @@ func (s *PostgresOutboundStore) LoadSendContext(ctx context.Context, conversatio
 		out.ToE164 = *phone
 	}
 	return &out, nil
+}
+
+// LoadTemplate reads a template only if it belongs to that connection: a template id from another line or tenant is nil.
+func (s *PostgresOutboundStore) LoadTemplate(ctx context.Context, connectionID, templateID uuid.UUID) (*ports.Template, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t := &ports.Template{}
+	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
+		SELECT id, name, language, body_text, status, variable_count, sendable
+		FROM channel_message_templates WHERE tenant_id = $1 AND connection_id = $2 AND id = $3`, tenantID, connectionID, templateID).
+		Scan(&t.ID, &t.Name, &t.Language, &t.Body, &t.Status, &t.VariableCount, &t.Sendable)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("messages: load template: %w", err)
+	}
+	return t, nil
+}
+
+func (s *PostgresOutboundStore) InsertQueuedTemplate(ctx context.Context, sender uuid.UUID, in ports.SendContext, body, key, hash string, requireAssignee bool, tpl ports.TemplateSend) (*ports.QueuedMessage, bool, error) {
+	msg, replayed, err := s.InsertQueued(ctx, sender, in, body, key, hash, requireAssignee)
+	if err != nil || replayed {
+		return msg, replayed, err
+	}
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	params, err := json.Marshal(tpl.Params)
+	if err != nil {
+		return nil, false, fmt.Errorf("messages: encode template params: %w", err)
+	}
+	// Same request transaction as the message and its job: either all three exist or none does.
+	if _, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx,
+		`INSERT INTO message_template_sends (tenant_id, message_id, template_name, language, params) VALUES ($1,$2,$3,$4,$5)`,
+		tenantID, msg.ID, tpl.Name, tpl.Language, params); err != nil {
+		return nil, false, fmt.Errorf("messages: record template send: %w", err)
+	}
+	return msg, false, nil
 }
 
 func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UUID, in ports.SendContext, body, key, hash string, requireAssignee bool) (*ports.QueuedMessage, bool, error) {

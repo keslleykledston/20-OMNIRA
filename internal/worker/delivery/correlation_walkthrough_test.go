@@ -22,6 +22,13 @@ func (f *fakeSendStore) LoadSendContext(context.Context, uuid.UUID) (*messagespo
 	return f.sc, nil
 }
 
+func (f *fakeSendStore) LoadTemplate(context.Context, uuid.UUID, uuid.UUID) (*messagesports.Template, error) {
+	return nil, nil
+}
+func (f *fakeSendStore) InsertQueuedTemplate(ctx context.Context, sender uuid.UUID, in messagesports.SendContext, body, key, hash string, req bool, _ messagesports.TemplateSend) (*messagesports.QueuedMessage, bool, error) {
+	return f.InsertQueued(ctx, sender, in, body, key, hash, req)
+}
+
 func (f *fakeSendStore) InsertQueued(_ context.Context, _ uuid.UUID, in messagesports.SendContext, body, _, requestHash string, _ bool) (*messagesports.QueuedMessage, bool, error) {
 	return &messagesports.QueuedMessage{ID: uuid.New(), ConversationID: in.ConversationID, Body: body, Status: "queued", RequestHash: requestHash}, false, nil
 }

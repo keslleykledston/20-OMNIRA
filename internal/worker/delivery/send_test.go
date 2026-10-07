@@ -104,9 +104,10 @@ type fakeSender struct {
 	conn  uuid.UUID
 	err   error
 
-	newIDCalls int
-	newIDTotal int
-	newIDErr   error
+	templateGot *domain.OutboundTemplateMessage
+	newIDCalls  int
+	newIDTotal  int
+	newIDErr    error
 }
 
 func (s *fakeSender) SendText(_ context.Context, conn uuid.UUID, msg domain.OutboundTextMessage) (*domain.SendResult, error) {
@@ -119,6 +120,18 @@ func (s *fakeSender) SendText(_ context.Context, conn uuid.UUID, msg domain.Outb
 		return nil, s.err
 	}
 	return &domain.SendResult{ProviderMessageID: fmt.Sprintf("prov-%s-%d", conn, s.total), State: domain.DeliveryStateSent}, nil
+}
+
+func (s *fakeSender) SendTemplate(_ context.Context, conn uuid.UUID, msg domain.OutboundTemplateMessage) (*domain.SendResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.total++
+	s.templateGot = &msg
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &domain.SendResult{ProviderMessageID: fmt.Sprintf("tpl-%s-%d", conn, s.total), State: domain.DeliveryStateSent}, nil
 }
 
 func (s *fakeSender) NewMessageID(_ context.Context, conn uuid.UUID) (string, error) {
@@ -661,5 +674,21 @@ func TestOutcomeUnknownIsUncertainWithoutRetry(t *testing.T) {
 	}
 	if err := h.Handle(context.Background(), raw, 2); err != nil || sender.calls != 1 {
 		t.Fatalf("calls=%d err=%v, want exactly 1 call", sender.calls, err)
+	}
+}
+
+// A queued template message goes to SendTemplate with its name, language and variables; SendText is not called.
+func TestTemplateJobIsSentAsATemplateNotAsText(t *testing.T) {
+	h, store, sender, raw := setup(t)
+	store.job.Template = &delivery.TemplateJob{Name: "boas_vindas", Language: "pt_BR", Params: []string{"Ana", "123"}}
+	store.job.Text = "Olá Ana, seu chamado 123 foi aberto."
+	if err := h.Handle(context.Background(), raw, 1); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.Status != "sent" || sender.templateGot == nil || sender.got.Text != "" {
+		t.Fatalf("status=%s template=%v text=%q", store.job.Status, sender.templateGot, sender.got.Text)
+	}
+	if g := sender.templateGot; g.TemplateName != "boas_vindas" || g.LanguageCode != "pt_BR" || len(g.Params) != 2 || g.Params[0] != "Ana" {
+		t.Fatalf("template payload: %+v", g)
 	}
 }

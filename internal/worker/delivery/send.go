@@ -44,6 +44,16 @@ type OutboundJob struct {
 	// response (MarkSent) — this semantic is unchanged by PILOT.4A1.
 	ProviderMessageID string
 	ConnectionActive  bool
+	// Template is set when this message is an approved-template send (WhatsApp Cloud API); Text then only holds the
+	// rendered preview shown in the inbox and is NOT what the provider receives.
+	Template *TemplateJob
+}
+
+// TemplateJob is what the provider needs to send an approved template.
+type TemplateJob struct {
+	Name     string
+	Language string
+	Params   []string
 }
 
 // OutboundStore is the persistence boundary of the worker. Every method after
@@ -83,6 +93,8 @@ type TextSender interface {
 	// delivery side effect. Returns ports.ErrCapabilityNotSupported if the
 	// provider behind connectionID does not offer this.
 	NewMessageID(ctx context.Context, connectionID uuid.UUID) (string, error)
+	// SendTemplate sends an approved template with its body variables (Meta Cloud API).
+	SendTemplate(ctx context.Context, connectionID uuid.UUID, msg domain.OutboundTemplateMessage) (*domain.SendResult, error)
 }
 
 type Handler struct {
@@ -238,9 +250,17 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 			h.count(scoped, "channel_inactive")
 			return h.store.MarkFailed(scoped, messageID, "channel_not_active")
 		}
-		result, sendErr := h.sender.SendText(scoped, out.ConnectionID, domain.OutboundTextMessage{
-			ToE164: out.ToE164, ProviderChatID: out.ProviderChatID, Text: out.Text, IdempotencyKey: reservedID,
-		})
+		var result *domain.SendResult
+		var sendErr error
+		if out.Template != nil {
+			result, sendErr = h.sender.SendTemplate(scoped, out.ConnectionID, domain.OutboundTemplateMessage{
+				ToE164: out.ToE164, TemplateName: out.Template.Name, LanguageCode: out.Template.Language, Params: out.Template.Params, IdempotencyKey: reservedID,
+			})
+		} else {
+			result, sendErr = h.sender.SendText(scoped, out.ConnectionID, domain.OutboundTextMessage{
+				ToE164: out.ToE164, ProviderChatID: out.ProviderChatID, Text: out.Text, IdempotencyKey: reservedID,
+			})
+		}
 		switch {
 		case sendErr == nil:
 			h.count(scoped, "sent")
