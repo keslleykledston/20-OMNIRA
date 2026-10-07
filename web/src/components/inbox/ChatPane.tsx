@@ -10,6 +10,7 @@ import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
 import { useThreadScroll } from '../../hooks/useThreadScroll';
 import MessageBubble from './MessageBubble';
 import MessageComposer from './MessageComposer';
+import { uploadAttachment, removeAttachment, describeAttachmentError } from '../../lib/attachments';
 import { Icon } from '../primitives';
 import { dayLabel, sortChronological } from '../../lib/inboxModel';
 import { useChannelLines, useConversationChannel } from '../../lib/channelLines';
@@ -35,7 +36,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   // timeout re-sends the same key, so the backend (required header, 8-128 chars
   // of [A-Za-z0-9._:-] per contracts/openapi/omnira-v1.yaml) never queues a
   // duplicate for the same attempt.
-  const pendingSend = useRef<{ text: string; key: string } | null>(null);
+  const pendingSend = useRef<{ text: string; attachmentId?: string; key: string } | null>(null);
 
   const lines = useChannelLines();
   const channel = useConversationChannel(conversationId);
@@ -151,23 +152,24 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       ? ownerName ? `${ownerName} (você)` : 'Você'
       : ownerName || 'Outro atendente';
 
-  const handleSendMessage = async (text: string): Promise<boolean> => {
-    if (!text.trim()) return false;
+  const handleSendMessage = async (text: string, attachmentId?: string): Promise<boolean> => {
+    // a file may go without a caption; plain text still needs text
+    if (!text.trim() && !attachmentId) return false;
 
     setSending(true);
     setSendError(null);
 
     // Reuse the key on a retry of the exact same text; a different text is a
     // new attempt and gets its own key.
-    if (pendingSend.current?.text !== text) {
-      pendingSend.current = { text, key: crypto.randomUUID() };
+    if (pendingSend.current?.text !== text || pendingSend.current?.attachmentId !== attachmentId) {
+      pendingSend.current = { text, attachmentId, key: crypto.randomUUID() };
     }
     const idempotencyKey = pendingSend.current.key;
 
     try {
       await axios.post(
         `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
-        { text },
+        attachmentId ? { text, attachment_id: attachmentId } : { text },
         { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } }
       );
       pendingSend.current = null;
@@ -176,7 +178,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       return true;
     } catch (err: any) {
       if (isUnauthorized(err)) { handleUnauthorized(); return false; }
-      setSendError(describeSendError(err));
+      setSendError(attachmentId ? describeAttachmentError(err) : describeSendError(err));
       return false;
     } finally {
       setSending(false);
@@ -375,6 +377,9 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         <MessageComposer
           draftKey={`${tenantId}:${conversationId}`}
           onSend={handleSendMessage}
+          onAttach={cs?.can_send_media ? (file) => uploadAttachment(tenantId, conversationId, file) : undefined}
+          onRemoveAttachment={(id) => void removeAttachment(tenantId, conversationId, id)}
+          describeError={describeAttachmentError}
           label={`Responder ao contato${line ? ` · ${line.label}` : ''}`}
           labelRight={conversation?.contact_name}
           disabled={sending || windowClosed || channelDown}

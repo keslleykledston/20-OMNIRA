@@ -43,6 +43,8 @@ x-omnira-runtime: &omnira-runtime
   # files); clamd is the clamav service. Both fail closed: no antivirus, nothing is published.
   OMNIRA_MEDIA_DIR: ${OMNIRA_MEDIA_DIR-/var/lib/omnira/media}
   OMNIRA_CLAMAV_ADDR: ${OMNIRA_CLAMAV_ADDR-clamav:3310}
+  # ADR-0024: files operators send to customers. Off until the live smoke passes (docs/ops/OUTBOUND-MEDIA.md). Needs the antivirus above.
+  OMNIRA_OUTBOUND_MEDIA_ENABLED: ${OMNIRA_OUTBOUND_MEDIA_ENABLED-}
   # ADR-0016 M2: local speech-to-text (systemd unit omnira-whisper on the host, GPU). Reached through the docker0
   # gateway; the host firewall only lets the OMNIRA compose network in. Empty disables transcription.
   OMNIRA_WHISPER_URL: ${OMNIRA_WHISPER_URL-http://172.17.0.1:18181}
@@ -357,6 +359,9 @@ services:
     volumes:
       # read-only: the API only ever opens files the antivirus cleared
       - ${OMNIRA_MEDIA_HOST_PATH:-media_data}:/var/lib/omnira/media:ro
+      # ADR-0024: the ONLY writable area of the API - operator uploads after the antivirus cleared them. Nested over the read-only inbound
+      # mount, so the API still cannot write into clean/ or quarantine/. Point OMNIRA_OUTBOUND_MEDIA_HOST_PATH at <media host path>/outbound.
+      - ${OMNIRA_OUTBOUND_MEDIA_HOST_PATH:-media_outbound}:/var/lib/omnira/media/outbound
     healthcheck:
       # Runtime image is alpine: wget (busybox) exists, curl does not.
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz || exit 1"]
@@ -388,6 +393,7 @@ services:
       <<: *omnira-runtime
     volumes:
       - ${OMNIRA_MEDIA_HOST_PATH:-media_data}:/var/lib/omnira/media
+      - ${OMNIRA_OUTBOUND_MEDIA_HOST_PATH:-media_outbound}:/var/lib/omnira/media/outbound
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/healthz || exit 1"]
       interval: 10s
@@ -474,6 +480,9 @@ volumes:
   # Inbound media files (worker writes, API reads cleared ones). Override OMNIRA_MEDIA_HOST_PATH with an
   # absolute path to keep them on a roomier partition.
   media_data:
+    driver: local
+  # Operator uploads waiting to be sent, and sent files within retention (ADR-0024).
+  media_outbound:
     driver: local
   clamav_db:
     driver: local

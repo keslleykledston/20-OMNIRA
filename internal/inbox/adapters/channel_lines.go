@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	mediadomain "github.com/omnira/omnira/internal/media/domain"
 	"io"
 	"net/http"
 	"regexp"
@@ -28,6 +29,14 @@ type PermissionChecker interface {
 type ChannelLinesHandler struct {
 	pool  *pgxpool.Pool
 	perms PermissionChecker
+	// mediaSend: outbound media (ADR-0024) is enabled on this server.
+	mediaSend bool
+}
+
+// WithOutboundMedia reports to clients whether operators may attach files (the feature flag); the provider still decides per conversation.
+func (h *ChannelLinesHandler) WithOutboundMedia(enabled bool) *ChannelLinesHandler {
+	h.mediaSend = enabled
+	return h
 }
 
 func NewChannelLinesHandler(pool *pgxpool.Pool, perms PermissionChecker) *ChannelLinesHandler {
@@ -38,6 +47,8 @@ type conversationChannel struct {
 	ChannelConnectionID *uuid.UUID `json:"channel_connection_id,omitempty"`
 	Provider            string     `json:"provider,omitempty"`
 	CanSendText         bool       `json:"can_send_text"`
+	// CanSendMedia: the server has outbound media on AND this conversation's provider can deliver files (ADR-0024).
+	CanSendMedia bool `json:"can_send_media"`
 	// WindowRequired: the provider only accepts free text within 24 h of the customer's last message.
 	WindowRequired bool `json:"window_required"`
 	// WindowOpen is true whenever free text may be sent right now (always true when no window is required).
@@ -82,6 +93,7 @@ func (h *ChannelLinesHandler) Channel(w http.ResponseWriter, r *http.Request) {
 		out.Provider = *provider
 	}
 	out.CanSendText = ready != nil && *ready
+	out.CanSendMedia = h.mediaSend && out.CanSendText && mediadomain.OutboundMediaSupported(out.Provider)
 	out.WindowRequired, out.WindowOpen = messagesapp.SessionWindow(out.Provider, last, time.Now())
 	if last != nil {
 		s := last.UTC().Format(time.RFC3339)

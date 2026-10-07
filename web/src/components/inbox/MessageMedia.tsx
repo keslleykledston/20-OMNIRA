@@ -35,7 +35,7 @@ export default function MessageMedia({ message, tenantId }: MessageMediaProps) {
       {kind === 'image' && (
         <img
           src={url}
-          alt="Imagem recebida"
+          alt={message.direction === 'outbound' ? 'Imagem enviada' : 'Imagem recebida'}
           className="h-auto max-w-full rounded"
           loading="lazy"
           onError={() => setError(true)}
