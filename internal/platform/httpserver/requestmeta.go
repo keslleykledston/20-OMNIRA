@@ -79,6 +79,7 @@ func RequestMeta(next http.Handler) http.Handler {
 			id = uuid.NewString()
 		}
 		w.Header().Set(requestIDHeader, id)
+		w.Header().Add("Vary", "Accept") // error bodies differ by Accept (text/plain vs the v1 envelope): shared caches must key on it
 		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
 		if !strings.Contains(strings.ToLower(r.Header.Get("Accept")), MediaTypeV1) {
 			next.ServeHTTP(w, r)
@@ -116,6 +117,10 @@ func (w *envelopeWriter) Flush() {
 
 func (w *envelopeWriter) WriteHeader(code int) {
 	if w.sent || w.capturing {
+		return
+	}
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		w.ResponseWriter.WriteHeader(code) // interim (1xx, e.g. 103) is not the final status
 		return
 	}
 	if code >= 400 && strings.HasPrefix(strings.ToLower(w.Header().Get("Content-Type")), "text/plain") {

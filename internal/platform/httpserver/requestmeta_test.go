@@ -208,3 +208,27 @@ func TestEnvelopeSurvivesAHandlerThatWritesTheHeaderTwiceOrAfterTheBody(t *testi
 		t.Fatalf("%d %q (%v)", rr.Code, rr.Body.String(), err)
 	}
 }
+
+func TestInterimResponsesAreNotTheFinalStatusAndCachesKeyOnAccept(t *testing.T) {
+	early := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", "</a.css>; rel=preload")
+		w.WriteHeader(http.StatusEarlyHints)
+		http.Error(w, "gone", http.StatusNotFound)
+	})
+	srv := httptest.NewServer(RequestMeta(early))
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL, nil)
+	req.Header.Set("Accept", MediaTypeV1)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var env errorEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil || resp.StatusCode != 404 || env.Error.Code != "NOT_FOUND" {
+		t.Fatalf("a 1xx must not swallow the final error: %d %+v (%v)", resp.StatusCode, env, err)
+	}
+	if v := resp.Header.Values("Vary"); len(v) == 0 || !strings.Contains(strings.Join(v, ","), "Accept") {
+		t.Fatalf("Vary: Accept missing: %v", v)
+	}
+}
