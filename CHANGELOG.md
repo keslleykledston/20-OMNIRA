@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (MOBILE.READINESS — preparar o Core para clientes Android/iOS; nenhum app é construído)
+- `X-Request-ID` em toda resposta da API e **envelope de erro estável opt-in** (`Accept: application/vnd.omnira.v1+json` → `{"error":{"code","message","request_id"}}`); sem esse cabeçalho nada muda para o Web. Documentado em `omnira-v1.yaml`.
+- Eventos em tempo real (SSE/NATS) com `event_id` e `v` (aditivos; também o campo SSE `id:`); `contracts/asyncapi/omnira-v1.yaml` atualizado. O Web ignora o `id:` (teste do parser real).
+- Teste de superfície de segurança: toda operação documentada sob `/tenants/…` e `/me` (omnira, attendance, flows) recusa chamadas sem credencial, Bearer inválido e tenant/usuário "forjados" por cabeçalho (401, sem pânico).
+- Documentação: `docs/architecture/mobile-readiness.md` (mapa, matriz de capacidades, achados P0–P3, roteiro MOBILE.0–16), ADR-0021 (arquitetura do cliente, segurança do app, offline), ADR-0022 (autenticação Web × Mobile — **proposta**, depende de decisões do dono), ADR-0023 (eventos e notificações). Sem migration, sem dependência, sem rota nova, sem flag ligada.
+
 ### Added (IA da plataforma com Gemini)
 - `OMNIRA_AI_PROVIDER=gemini`: `GeminiGenerator` na porta `TextGenerator` (chave só no cabeçalho, sem redirecionamento nem retentativa, resposta limitada, bloqueio do provedor tratado). `NewTextGenerator` passa a ser o único construtor (resumo, roteador de modelos e nós de IA dos fluxos). `OMNIRA_GEMINI_API_KEY` vale como chave quando o provedor é Gemini. Guia: `docs/ai/PLATFORM-AI-PROVIDERS.md`.
 
