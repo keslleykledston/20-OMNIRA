@@ -200,3 +200,35 @@ func TestObfuscatedPDFNamesAreNoLongerAWayAround(t *testing.T) {
 		t.Errorf("an innocent '#' must not block a PDF: %v", err)
 	}
 }
+
+func TestMetadataBetweenProgressiveScansIsDroppedAndTrailingDataCut(t *testing.T) {
+	seg := func(marker byte, payload []byte) []byte {
+		l := make([]byte, 2)
+		binary.BigEndian.PutUint16(l, uint16(len(payload)+2))
+		return append(append([]byte{0xff, marker}, l...), payload...)
+	}
+	// scan 1 entropy (with a stuffed FF00 and a restart marker), an EXIF-bearing APP1 and a DHT whose payload contains FF D9 (it is NOT an EOI),
+	// then scan 2 and the real EOI, then a script that must not survive
+	entropy1 := []byte{0x12, 0xff, 0x00, 0x34, 0xff, 0xd0, 0x56}
+	var scans []byte
+	scans = append(scans, entropy1...)
+	scans = append(scans, seg(0xe1, []byte("Exif\x00\x00GPS=1,2"))...)
+	scans = append(scans, seg(0xc4, []byte{0x00, 0xff, 0xd9, 0x01})...)
+	scans = append(scans, seg(0xda, []byte{0x01, 0x02, 0x03})...)
+	scans = append(scans, 0x77, 0x88, 0xff, 0x00, 0x99)
+	scans = append(scans, 0xff, 0xd9)
+	scans = append(scans, []byte("<script>x</script>")...)
+	got, ok := copyScans(nil, scans, 0)
+	if !ok {
+		t.Fatal("a well-formed progressive stream was refused")
+	}
+	if bytes.Contains(got, []byte("GPS=1,2")) || bytes.Contains(got, []byte("<script>")) {
+		t.Fatalf("metadata or trailing data survived: %q", got)
+	}
+	if !bytes.Contains(got, []byte{0x00, 0xff, 0xd9, 0x01}) || !bytes.HasSuffix(got, []byte{0xff, 0xd9}) || !bytes.Contains(got, entropy1) {
+		t.Fatalf("image data lost or cut at a fake EOI inside a DHT payload: %x", got)
+	}
+	if _, ok := copyScans(nil, scans[:len(scans)-20], 0); ok {
+		t.Fatal("a stream without its EOI must be refused")
+	}
+}

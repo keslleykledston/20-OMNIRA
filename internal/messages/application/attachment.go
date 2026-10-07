@@ -33,7 +33,21 @@ var (
 	ErrTooManyAttachments    = errors.New("messages: too many unsent attachments in this conversation")
 	ErrAttachmentInfected    = errors.New("messages: the file was blocked by the antivirus")
 	ErrScannerUnavailable    = errors.New("messages: the antivirus is unavailable, the file was not accepted")
+	ErrAttachmentQuota       = errors.New("messages: the attachment storage quota was reached")
+	ErrAttachmentRate        = errors.New("messages: too many uploads, wait a moment")
 )
+
+const (
+	// MaxPendingBytes bounds the unsent uploads of one operator (5 files of 16 MiB at most would be 80 MiB).
+	MaxPendingBytes = 64 << 20
+	// MaxTenantBytes bounds the files a tenant keeps (unsent, plus sent ones inside the 60-day retention).
+	MaxTenantBytes = 2 << 30
+	// MaxUploadsPerMinute is the durable (database-counted, so it holds across replicas) per-operator upload rate.
+	MaxUploadsPerMinute = 30
+)
+
+// decodeSlots bounds the full image decodes running at once: a 12-megapixel decode allocates ~50 MiB.
+var decodeSlots = make(chan struct{}, 2)
 
 // AttachmentRejected carries the stable reason of a refused file (media/domain Reason* constants).
 type AttachmentRejected struct{ Reason string }
@@ -59,6 +73,10 @@ type AttachmentTarget struct {
 	Provider                          string
 }
 
+func (s *Sender) mediaSupported(provider string) bool {
+	return mediadomain.OutboundMediaSupported(provider) && (s.mediaReady == nil || s.mediaReady(provider))
+}
+
 // authorizeUpload runs the checks of a send (permission, assignment, open conversation, active channel, 24 h window) without an
 // idempotency key: there is no point accepting a file the operator could not send.
 func (s *Sender) authorizeUpload(ctx context.Context, conversationID uuid.UUID) (*AttachmentTarget, error) {
@@ -66,7 +84,7 @@ func (s *Sender) authorizeUpload(ctx context.Context, conversationID uuid.UUID) 
 	if err != nil {
 		return nil, err
 	}
-	if !mediadomain.OutboundMediaSupported(p.sc.Provider) {
+	if !s.mediaSupported(p.sc.Provider) {
 		return nil, ErrMediaUnsupported
 	}
 	if _, open := SessionWindow(p.sc.Provider, p.sc.LastInboundAt, s.clock()); !open {
@@ -81,12 +99,17 @@ func (a *Attachments) Upload(ctx context.Context, conversationID uuid.UUID, decl
 	if err != nil {
 		return nil, err
 	}
-	pending, err := a.store.CountPendingAttachments(ctx, conversationID, target.ActorID)
+	usage, err := a.store.AttachmentUsage(ctx, conversationID, target.ActorID)
 	if err != nil {
 		return nil, err
 	}
-	if pending >= MaxPendingAttachments {
+	switch {
+	case usage.PendingFiles >= MaxPendingAttachments:
 		return nil, ErrTooManyAttachments
+	case usage.UploadsLastMinute >= MaxUploadsPerMinute:
+		return nil, ErrAttachmentRate
+	case usage.PendingBytes+int64(len(data)) > MaxPendingBytes || usage.TenantBytes+int64(len(data)) > MaxTenantBytes:
+		return nil, ErrAttachmentQuota
 	}
 	res, err := mediadomain.ClassifyOutbound(data, declaredMime, target.Provider)
 	if err != nil {
@@ -108,7 +131,14 @@ func (a *Attachments) Upload(ctx context.Context, conversationID uuid.UUID, decl
 			return nil, &AttachmentRejected{Reason: mediadomain.ReasonImageUnreadable}
 		}
 	}
-	if err := mediadomain.ValidateStructure(clean, res.Mime); err != nil {
+	select {
+	case decodeSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	structureErr := mediadomain.ValidateStructure(clean, res.Mime)
+	<-decodeSlots
+	if err := structureErr; err != nil {
 		if reason, ok := mediadomain.IsRejection(err); ok {
 			return nil, &AttachmentRejected{Reason: reason}
 		}
@@ -182,7 +212,7 @@ func (s *Sender) SendMedia(ctx context.Context, store ports.AttachmentStore, con
 		return SendResult{}, err
 	}
 	tc, sc, manage := p.tc, p.sc, p.manage
-	if !mediadomain.OutboundMediaSupported(sc.Provider) {
+	if !s.mediaSupported(sc.Provider) {
 		return SendResult{}, ErrMediaUnsupported
 	}
 	if _, open := SessionWindow(sc.Provider, sc.LastInboundAt, s.clock()); !open {

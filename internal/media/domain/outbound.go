@@ -190,14 +190,14 @@ func stripJPEG(data []byte) ([]byte, error) {
 			return nil, reject(ReasonImageUnreadable)
 		}
 		segment := data[i : i+length]
-		if marker == 0xda { // SOS: the scans follow; copy them up to the first genuine EOI and keep nothing after it
-			end, ok := scansEnd(data, i+length)
+		if marker == 0xda { // SOS: the scans follow; keep them up to the first genuine EOI and nothing after it
+			out = append(out, 0xff, marker)
+			out = append(out, data[i:i+length]...)
+			res, ok := copyScans(out, data, i+length)
 			if !ok {
 				return nil, reject(ReasonImageUnreadable) // truncated: no EOI
 			}
-			out = append(out, 0xff, marker)
-			out = append(out, data[i:end]...)
-			return out, nil
+			return res, nil
 		}
 		// drop APP1 (EXIF, XMP), APP13 (Photoshop/IPTC) and comments; keep JFIF (APP0), ICC colour profile (APP2) and the codec segments
 		if marker != 0xe1 && marker != 0xed && marker != 0xfe {
@@ -209,10 +209,11 @@ func stripJPEG(data []byte) ([]byte, error) {
 	return nil, reject(ReasonImageUnreadable)
 }
 
-// scansEnd walks the entropy-coded scans that start at pos (progressive JPEGs have several, separated by DHT/SOS segments whose payloads
-// may contain any byte) and returns the offset just past the genuine EOI marker. In entropy data every 0xFF is followed by 0x00 (stuffing)
-// or a restart marker, so any other 0xFF xx is a real marker.
-func scansEnd(data []byte, pos int) (int, bool) {
+// copyScans copies the scans that start at pos (progressive JPEGs have several, separated by DHT/SOS segments whose payloads may contain
+// any byte) up to and including the genuine EOI, dropping metadata segments (APP1/APP13/COM) found between scans, and returns the
+// extended output. In entropy data every 0xFF is followed by 0x00 (stuffing) or a restart marker, so any other 0xFF xx is a real marker.
+func copyScans(out, data []byte, pos int) ([]byte, bool) {
+	from := pos
 	for pos+1 < len(data) {
 		if data[pos] != 0xff {
 			pos++
@@ -220,25 +221,28 @@ func scansEnd(data []byte, pos int) (int, bool) {
 		}
 		m := data[pos+1]
 		switch {
-		case m == 0x00 || (m >= 0xd0 && m <= 0xd7) || m == 0xff:
+		case m == 0x00 || (m >= 0xd0 && m <= 0xd7):
+			pos += 2
+		case m == 0xff:
 			pos++
-			if m != 0xff {
-				pos++
-			}
 		case m == 0xd9:
-			return pos + 2, true
-		default: // another segment (DHT, SOS, DNL, ...): skip its declared length
+			return append(out, data[from:pos+2]...), true
+		default: // another segment (DHT, SOS, DNL, APPn, ...): skip its declared length
 			if pos+4 > len(data) {
-				return 0, false
+				return nil, false
 			}
 			l := int(binary.BigEndian.Uint16(data[pos+2 : pos+4]))
-			if l < 2 {
-				return 0, false
+			if l < 2 || pos+2+l > len(data) {
+				return nil, false
+			}
+			if m == 0xe1 || m == 0xed || m == 0xfe { // metadata between scans: leave it out
+				out = append(out, data[from:pos]...)
+				from = pos + 2 + l
 			}
 			pos += 2 + l
 		}
 	}
-	return 0, false
+	return nil, false
 }
 
 func stripPNG(data []byte) ([]byte, error) {

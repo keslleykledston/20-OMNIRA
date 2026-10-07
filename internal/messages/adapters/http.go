@@ -145,6 +145,10 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "attachment is not available (expired, already sent or not yours)", http.StatusUnprocessableEntity)
 	case errors.Is(err, application.ErrTooManyAttachments):
 		http.Error(w, "too many unsent attachments in this conversation", http.StatusConflict)
+	case errors.Is(err, application.ErrAttachmentQuota):
+		http.Error(w, "the attachment storage quota was reached: send or remove pending files", http.StatusConflict)
+	case errors.Is(err, application.ErrAttachmentRate):
+		http.Error(w, "too many uploads, wait a moment", http.StatusTooManyRequests)
 	case errors.Is(err, application.ErrAttachmentInfected):
 		http.Error(w, "the file was blocked by the antivirus", http.StatusUnprocessableEntity)
 	case errors.Is(err, application.ErrScannerUnavailable):

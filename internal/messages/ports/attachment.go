@@ -36,8 +36,9 @@ func (a OutboundAttachment) Usable(conversation, actor uuid.UUID, now time.Time)
 // request's tenant session (RLS + explicit tenant filter) and never opens its own transaction.
 type AttachmentStore interface {
 	InsertAttachment(ctx context.Context, a OutboundAttachment) error
-	// CountPendingAttachments counts the actor's unsent, unexpired uploads in a conversation.
-	CountPendingAttachments(ctx context.Context, conversationID, actor uuid.UUID) (int, error)
+	// AttachmentUsage takes the actor's per-conversation lock (held until the request's transaction ends, so concurrent uploads are serialised)
+	// and reports what the actor and the tenant already hold, to enforce the caps atomically with the insert.
+	AttachmentUsage(ctx context.Context, conversationID, actor uuid.UUID) (AttachmentUsage, error)
 	// LoadAttachment returns nil when the id does not exist for the tenant (RLS hides other tenants' rows).
 	LoadAttachment(ctx context.Context, id uuid.UUID) (*OutboundAttachment, error)
 	// ExpireAttachment ends an unsent upload of the actor (the operator removed it): the worker deletes file and row.
@@ -45,6 +46,14 @@ type AttachmentStore interface {
 	// InsertQueuedMedia is InsertQueued for a media message: the message (type = the attachment's kind, body = the caption), its delivery
 	// job and the attachment's link to the message commit together, and the link only happens if the upload is still the actor's unsent one.
 	InsertQueuedMedia(ctx context.Context, sender uuid.UUID, in SendContext, att OutboundAttachment, caption, idempotencyKey, requestHash string, requireAssignee bool) (msg *QueuedMessage, replayed bool, err error)
+}
+
+// AttachmentUsage is what quota decisions need, counted in the database (so it holds across API replicas).
+type AttachmentUsage struct {
+	PendingFiles      int   // the actor's unsent, unexpired uploads in this conversation
+	PendingBytes      int64 // the actor's unsent, unexpired bytes in the tenant
+	UploadsLastMinute int   // the actor's uploads in the last minute
+	TenantBytes       int64 // bytes of files the tenant still keeps on disk
 }
 
 // AttachmentFiles keeps the bytes of uploads outside the database.

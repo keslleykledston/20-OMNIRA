@@ -1,6 +1,7 @@
 package waha
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -107,6 +108,11 @@ func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error)
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second, CheckRedirect: noRedirect}
+	}
+	if httpClient.CheckRedirect == nil {
+		hc := *httpClient // never mutate the caller's client
+		hc.CheckRedirect = noRedirect
+		httpClient = &hc
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: httpClient}, nil
 }
@@ -222,6 +228,14 @@ func (c *Client) SendMedia(ctx context.Context, name, chatID, endpoint, mimetype
 	default:
 		return "", fmt.Errorf("%w: unsupported media endpoint", ErrPermanent)
 	}
+	ctx, cancel := context.WithTimeout(ctx, mediaTimeout)
+	defer cancel()
+	select {
+	case mediaSlots <- struct{}{}:
+		defer func() { <-mediaSlots }()
+	case <-ctx.Done():
+		return "", fmt.Errorf("%w: %w: waiting for a media slot", ErrProviderUnavailable, ErrTransient)
+	}
 	req := sendMediaRequest{Session: name, ChatID: chatID, Caption: caption,
 		File: mediaFile{Mimetype: mimetype, Filename: filename, Data: base64.StdEncoding.EncodeToString(data)}}
 	if endpoint == "sendVoice" {
@@ -231,21 +245,13 @@ func (c *Client) SendMedia(ctx context.Context, name, chatID, endpoint, mimetype
 	if err != nil {
 		return "", ErrConfiguration
 	}
-	ctx, cancel := context.WithTimeout(ctx, mediaTimeout)
-	defer cancel()
-	select {
-	case mediaSlots <- struct{}{}:
-		defer func() { <-mediaSlots }()
-	case <-ctx.Done():
-		return "", fmt.Errorf("%w: %w: waiting for a media slot", ErrProviderUnavailable, ErrTransient)
-	}
 	long := *c
 	hc := *c.httpClient
 	hc.Timeout = mediaTimeout
 	hc.CheckRedirect = noRedirect
 	long.httpClient = &hc
 	var response sendTextResponse
-	if _, err = long.do(ctx, http.MethodPost, "/api/"+endpoint, strings.NewReader(string(body)), &response); err != nil {
+	if _, err = long.do(ctx, http.MethodPost, "/api/"+endpoint, bytes.NewReader(body), &response); err != nil {
 		return "", err
 	}
 	if response.ID == "" {

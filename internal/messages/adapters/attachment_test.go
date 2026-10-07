@@ -447,6 +447,12 @@ func TestTheRecordedFileCannotBeSwappedAndALinkIsSetOnce(t *testing.T) {
 	if _, err := a.seed.Exec(context.Background(), `UPDATE message_outbound_media SET message_id=NULL WHERE id=$1`, id); err == nil {
 		t.Error("an attached record was detached from its message")
 	}
+	if _, err := a.seed.Exec(context.Background(), `UPDATE message_outbound_media SET expires_at = expires_at + interval '30 days' WHERE id=$1`, id); err == nil {
+		t.Error("an upload's expiry was extended")
+	}
+	if _, err := a.seed.Exec(context.Background(), `UPDATE message_outbound_media SET file_purged_at = now() WHERE id=$1`, id); err == nil {
+		t.Error("a session that is not the worker marked a file as purged")
+	}
 }
 
 func TestConcurrentUploadsCannotExceedThePendingCap(t *testing.T) {
@@ -551,5 +557,69 @@ func TestSweeperNeverPurgesAFileWhoseMessageIsStillQueuedAndCollectsOrphans(t *t
 		if wantGone != (err != nil) {
 			t.Errorf("%s: gone=%v, want %v", name, err != nil, wantGone)
 		}
+	}
+}
+
+func (a *attEnv) seedUpload(user uuid.UUID, size int64, ageSQL string) string {
+	a.t.Helper()
+	id := uuid.New()
+	a.exec(`INSERT INTO message_outbound_media (id, tenant_id, conversation_id, uploaded_by, kind, mime, size_bytes, sha256, file_name)
+	        VALUES ($1,$2,$3,$4,'document','application/pdf',$5,repeat('b',64),'seed.pdf')`, id, a.tenantA, a.convA, user, size)
+	if ageSQL != "" {
+		a.exec(`ALTER TABLE message_outbound_media DISABLE TRIGGER message_outbound_media_guard`)
+		a.exec(`UPDATE message_outbound_media SET created_at = now() - interval '`+ageSQL+`' WHERE id=$1`, id)
+		a.exec(`ALTER TABLE message_outbound_media ENABLE TRIGGER message_outbound_media_guard`)
+	}
+	return id.String()
+}
+
+func TestStorageAndRateQuotasAreCountedInTheDatabase(t *testing.T) {
+	pdf := []byte("%PDF-1.4\n%%EOF")
+	// per-operator unsent bytes
+	a := newAttEnv(t)
+	a.seedUpload(a.agent1, messagesapplication.MaxPendingBytes-20, "")
+	if r := a.upload(a.agent1, a.tenantA, a.convA, "a.pdf", "application/pdf", pdf); r.code != 201 {
+		t.Fatalf("just under the pending-bytes cap: %d %s", r.code, r.body)
+	}
+	if r := a.upload(a.agent1, a.tenantA, a.convA, "b.pdf", "application/pdf", pdf); r.code != 409 || !strings.Contains(r.body, "quota") {
+		t.Fatalf("over the pending-bytes cap: %d %s", r.code, r.body)
+	}
+	// per-tenant bytes still on disk (another operator's files count)
+	b := newAttEnv(t)
+	b.seedUpload(b.agent2, messagesapplication.MaxTenantBytes-5, "2 days")
+	if r := b.upload(b.agent1, b.tenantA, b.convA, "a.pdf", "application/pdf", pdf); r.code != 409 || !strings.Contains(r.body, "quota") {
+		t.Fatalf("tenant storage cap: %d %s", r.code, r.body)
+	}
+	// uploads per minute, counted in the database (so it holds across replicas)
+	c := newAttEnv(t)
+	for i := 0; i < messagesapplication.MaxUploadsPerMinute; i++ {
+		c.seedUpload(c.agent1, 10, "")
+		c.exec(`UPDATE message_outbound_media SET expires_at = now() WHERE uploaded_by=$1 AND expires_at > now()`, c.agent1) // not pending: only the rate counts
+	}
+	if r := c.upload(c.agent1, c.tenantA, c.convA, "a.pdf", "application/pdf", pdf); r.code != 429 {
+		t.Fatalf("durable per-minute rate: %d %s", r.code, r.body)
+	}
+}
+
+func TestAProviderThisDeploymentCannotDeliverThroughIsRefusedUpFront(t *testing.T) {
+	a := newAttEnv(t)
+	store := messagesadapters.NewPostgresOutboundStore(a.app)
+	sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(a.app)).WithMediaProviders(func(string) bool { return false })
+	h := messagesadapters.NewSendHandler(sender).WithAttachments(messagesapplication.NewAttachments(sender, store, a.files, a.scanner), store)
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(a.app), tenancyadapters.NewPostgresTenantRepository(a.app))
+	mw := tenancyadapters.AuthorizationMiddleware(a.app, authz)
+	mux := http.NewServeMux()
+	base := "/api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}"
+	mux.Handle("POST "+base+"/attachments", h.BufferUpload(mw(http.HandlerFunc(h.Upload))))
+	mux.Handle("POST "+base+"/messages", mw(http.HandlerFunc(h.Send)))
+	a.mux = mux
+	if r := a.upload(a.agent1, a.tenantA, a.convA, "a.pdf", "application/pdf", []byte("%PDF-1.4\n%%EOF")); r.code != 422 || !strings.Contains(r.body, "cannot send media") {
+		t.Fatalf("upload: %d %s", r.code, r.body)
+	}
+	// an upload made while the provider was ready cannot be sent once it is not
+	a.exec(`INSERT INTO message_outbound_media (id, tenant_id, conversation_id, uploaded_by, kind, mime, size_bytes, sha256, file_name)
+	        VALUES ('11111111-1111-4111-8111-111111111111',$1,$2,$3,'document','application/pdf',10,repeat('b',64),'seed.pdf')`, a.tenantA, a.convA, a.agent1)
+	if r := a.sendReq(a.agent1, a.tenantA, a.convA, "notready-key-1", `{"attachment_id":"11111111-1111-4111-8111-111111111111"}`); r.code != 422 {
+		t.Fatalf("send: %d %s", r.code, r.body)
 	}
 }

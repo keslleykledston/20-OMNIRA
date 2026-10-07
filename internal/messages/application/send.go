@@ -53,6 +53,15 @@ type Sender struct {
 	store ports.OutboundStore
 	perms ports.PermissionChecker
 	now   func() time.Time
+	// mediaReady reports whether delivery of files is configured for a provider (nil: every supported provider). The API checks it at upload and
+	// at send, so a conversation on a provider this deployment cannot deliver through is refused up front instead of failing later.
+	mediaReady func(provider string) bool
+}
+
+// WithMediaProviders installs the delivery-readiness check for outbound files.
+func (s *Sender) WithMediaProviders(ready func(provider string) bool) *Sender {
+	s.mediaReady = ready
+	return s
 }
 
 func NewSender(store ports.OutboundStore, perms ports.PermissionChecker) *Sender {

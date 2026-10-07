@@ -264,8 +264,7 @@ func main() {
 				log.Printf("outbound media delivery disabled: %v", ferr)
 			} else {
 				deliveryHandler.WithMediaFiles(outFiles)
-				go mediaadapters.NewOutboundSweeper(dbPool, outFiles, 60*24*time.Hour).Run(workerCtx, 15*time.Minute)
-				log.Printf("Outbound media delivery and sweeper started (dir=%s/outbound)\n", cfg.MediaDir)
+				log.Printf("Outbound media delivery enabled (dir=%s/outbound)\n", cfg.MediaDir)
 			}
 		}
 		deliveryConsumer, err := delivery.StartConsumer(workerCtx, js, deliveryHandler)
@@ -293,6 +292,15 @@ func main() {
 		}
 	} else {
 		log.Printf("Outbound delivery disabled (OMNIRA_WAHA_ENABLED != true)\n")
+	}
+
+	// Outbound media housekeeping (ADR-0024): independent of which providers deliver, so uploads expire and files are purged either way.
+	if cfg.MediaDir != "" {
+		if outFiles, ferr := mediaadapters.NewOutboundFiles(cfg.MediaDir); ferr != nil {
+			log.Printf("outbound media sweeper disabled: %v", ferr)
+		} else {
+			go mediaadapters.NewOutboundSweeper(dbPool, outFiles, 60*24*time.Hour).Run(workerCtx, 15*time.Minute)
+		}
 	}
 
 	// Inbound media (ADR-0016 M1): fetch from WAHA right away (it deletes its copy within minutes), check the real

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"sync"
@@ -82,16 +83,19 @@ func (h *SendHandler) BufferUpload(next http.Handler) http.Handler {
 			http.Error(w, "too many uploads, wait a moment", http.StatusTooManyRequests)
 			return
 		}
+		slots := h.slots // captured: SetUploadSlots must not change the channel this request releases
 		select {
-		case h.slots <- struct{}{}:
-			defer func() { <-h.slots }()
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
 		default:
 			w.Header().Set("Retry-After", "3")
 			http.Error(w, "the server is busy with other uploads, try again in a moment", http.StatusServiceUnavailable)
 			return
 		}
 		rc := http.NewResponseController(w)
-		_ = rc.SetReadDeadline(time.Now().Add(uploadReadTimeout))
+		if err := rc.SetReadDeadline(time.Now().Add(uploadReadTimeout)); err != nil {
+			log.Printf("messages: upload read deadline not applied (the server's own read timeout governs): %v", err)
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, mediadomain.MaxOutboundBytes+(1<<20))
 		mr, err := r.MultipartReader()
 		if err != nil {

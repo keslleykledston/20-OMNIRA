@@ -50,6 +50,13 @@ BEGIN
   IF OLD.message_id IS NOT NULL AND NEW.message_id IS DISTINCT FROM OLD.message_id THEN
     RAISE EXCEPTION 'message_outbound_media: already attached to a message' USING ERRCODE = 'integrity_constraint_violation';
   END IF;
+  -- an operator can end an upload early, never extend it; only the worker (system) marks a file as purged
+  IF NEW.expires_at > OLD.expires_at THEN
+    RAISE EXCEPTION 'message_outbound_media: an upload cannot be extended' USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF NEW.file_purged_at IS DISTINCT FROM OLD.file_purged_at AND NOT is_system_admin() THEN
+    RAISE EXCEPTION 'message_outbound_media: only the worker purges files' USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER message_outbound_media_guard BEFORE UPDATE ON message_outbound_media FOR EACH ROW EXECUTE FUNCTION message_outbound_media_guard();

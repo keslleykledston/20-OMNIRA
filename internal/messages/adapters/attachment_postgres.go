@@ -28,23 +28,30 @@ func (s *PostgresOutboundStore) InsertAttachment(ctx context.Context, a ports.Ou
 	return nil
 }
 
-func (s *PostgresOutboundStore) CountPendingAttachments(ctx context.Context, conversationID, actor uuid.UUID) (int, error) {
+func (s *PostgresOutboundStore) AttachmentUsage(ctx context.Context, conversationID, actor uuid.UUID) (ports.AttachmentUsage, error) {
+	var u ports.AttachmentUsage
 	tenantID, err := tenantOf(ctx)
 	if err != nil {
-		return 0, err
+		return u, err
 	}
 	q := platformdb.QuerierFromContext(ctx, s.pool)
-	// Serialise this operator's uploads in this conversation until the request's transaction ends, so two concurrent uploads cannot both
-	// see "4 pending" and both insert the 5th and 6th.
+	// Serialise this operator's uploads in this conversation until the request's transaction ends, so two concurrent uploads (even on two API
+	// replicas) cannot both see "4 pending" and both insert.
 	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('outbound_media:' || $1::text || ':' || $2::text, 0))`, conversationID.String(), actor.String()); err != nil {
-		return 0, fmt.Errorf("messages: lock pending attachments: %w", err)
+		return u, fmt.Errorf("messages: lock pending attachments: %w", err)
 	}
-	var n int
 	err = q.QueryRow(ctx, `
-		SELECT count(*) FROM message_outbound_media
-		WHERE tenant_id=$1 AND conversation_id=$2 AND uploaded_by=$3 AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now()`,
-		tenantID, conversationID, actor).Scan(&n)
-	return n, err
+		SELECT
+		  count(*) FILTER (WHERE conversation_id = $2 AND uploaded_by = $3 AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now()),
+		  COALESCE(sum(size_bytes) FILTER (WHERE uploaded_by = $3 AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now()), 0),
+		  count(*) FILTER (WHERE uploaded_by = $3 AND created_at > now() - interval '1 minute'),
+		  COALESCE(sum(size_bytes) FILTER (WHERE file_purged_at IS NULL), 0)
+		FROM message_outbound_media WHERE tenant_id = $1`, tenantID, conversationID, actor).
+		Scan(&u.PendingFiles, &u.PendingBytes, &u.UploadsLastMinute, &u.TenantBytes)
+	if err != nil {
+		return u, fmt.Errorf("messages: attachment usage: %w", err)
+	}
+	return u, nil
 }
 
 func (s *PostgresOutboundStore) LoadAttachment(ctx context.Context, id uuid.UUID) (*ports.OutboundAttachment, error) {

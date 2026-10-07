@@ -102,7 +102,7 @@ func (s *OutboundSweeper) Orphans(ctx context.Context) (int, error) {
 	return s.files.Orphans(s.orphanAge, 200, func(tenantID, id uuid.UUID) (bool, error) {
 		var exists bool
 		err := s.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
-			return q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM message_outbound_media WHERE tenant_id=$1 AND id=$2)`, tenantID, id).Scan(&exists)
+			return q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM message_outbound_media WHERE tenant_id=$1 AND id=$2 AND file_purged_at IS NULL)`, tenantID, id).Scan(&exists)
 		})
 		return exists, err
 	})

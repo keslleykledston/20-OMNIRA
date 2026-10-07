@@ -60,6 +60,11 @@ func NewClient(base, version string, hc *http.Client) (*Client, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
+	if hc.CheckRedirect == nil {
+		cp := *hc // never mutate the caller's client
+		cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		hc = &cp
+	}
 	return &Client{http: hc, base: u.Scheme + "://" + u.Host, version: version}, nil
 }
 
