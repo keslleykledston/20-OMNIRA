@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Button, Icon, Input, Modal } from '../../../components/primitives'
+import { syncTemplates } from '../../../lib/templates'
 import {
   integrationErrorMessage,
   integrationsAPI,
@@ -76,6 +77,26 @@ export function CredentialsConnectDialog({ open, provider, connection, onClose, 
     onError: (e) => setError(integrationErrorMessage(e, 'Não foi possível salvar a conexão.')),
   })
 
+  const sync = useMutation({
+    mutationFn: (id: string) => syncTemplates(id),
+    onSuccess: (r) => {
+      setError(null)
+      setNote(
+        r.synced === 0
+          ? 'Nenhum template encontrado nesta conta. Crie e aprove templates no Gerenciador do WhatsApp (Meta) e sincronize de novo.'
+          : `${r.synced} template(s) sincronizado(s); ${r.sendable} pronto(s) para enviar.`,
+      )
+    },
+    onError: (e) => {
+      setNote(null)
+      setError(
+        (e as { response?: { status?: number } })?.response?.status === 422
+          ? 'A Meta recusou o token. Teste a conexão e confira o token.'
+          : integrationErrorMessage(e, 'Não foi possível sincronizar os templates.'),
+      )
+    },
+  })
+
   const test = useMutation({
     mutationFn: (id: string) => integrationsAPI.test(id),
     onSuccess: (c) => {
@@ -120,6 +141,9 @@ export function CredentialsConnectDialog({ open, provider, connection, onClose, 
           <>
             <Button variant="secondary" onClick={close}>
               Fechar
+            </Button>
+            <Button variant="secondary" onClick={() => sync.mutate(active.id)} disabled={sync.isPending}>
+              {sync.isPending ? 'Sincronizando…' : 'Sincronizar templates'}
             </Button>
             <Button variant="primary" onClick={() => test.mutate(active.id)} disabled={test.isPending}>
               {test.isPending ? 'Testando…' : 'Testar conexão'}

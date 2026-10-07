@@ -14,6 +14,7 @@ import { Icon } from '../primitives';
 import { dayLabel, sortChronological } from '../../lib/inboxModel';
 import { useChannelLines, useConversationChannel } from '../../lib/channelLines';
 import { ChannelBadge } from './ChannelBadge';
+import { TemplateSendDialog } from './TemplateSendDialog';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -117,6 +118,8 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   });
 
   const [claiming, setClaiming] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const metaLine = !!cs && cs.window_required;
   const claim = async () => {
     setClaiming(true);
     setSendError(null);
@@ -314,12 +317,16 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         )}
         {windowClosed && (
           <div role="status" className="mb-2 rounded-control bg-status-warning-soft p-2 text-xs text-status-warning">
-            Janela de 24 h fechada: a Meta só aceita mensagem de template neste número até o cliente escrever de novo. O envio de templates chega na próxima etapa.
+            Janela de 24 h fechada: neste número a Meta só aceita mensagem de template até o cliente escrever de novo.{' '}
+            <button type="button" onClick={() => setShowTemplates(true)} className="font-semibold underline">
+              Enviar template
+            </button>
           </div>
         )}
         {cs?.window_required && cs.window_open && cs.window_expires_at && (
-          <div className="mb-2 text-[11px] text-text-tertiary">
-            Resposta livre permitida até {new Date(cs.window_expires_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.
+          <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-text-tertiary">
+            <span>Resposta livre permitida até {new Date(cs.window_expires_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.</span>
+            <button type="button" onClick={() => setShowTemplates(true)} className="font-medium text-accent-primary hover:underline">Enviar template</button>
           </div>
         )}
         <MessageComposer
@@ -330,6 +337,15 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           placeholder="Escreva uma resposta..."
         />
       </div>
+      )}
+      {metaLine && (
+        <TemplateSendDialog
+          open={showTemplates}
+          conversationId={conversationId}
+          connectionId={conversation?.channel_connection_id}
+          contactName={conversation?.contact_name}
+          onClose={() => setShowTemplates(false)}
+        />
       )}
     </div>
   );
