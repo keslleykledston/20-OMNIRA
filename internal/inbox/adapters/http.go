@@ -55,9 +55,11 @@ type ConversationItem struct {
 	Status                      string     `json:"status"`
 	Title                       string     `json:"title"`
 	AssignedToUserID            *uuid.UUID `json:"assigned_to_user_id,omitempty"`
-	QueueID                     *uuid.UUID `json:"queue_id,omitempty"`
-	ContactName                 string     `json:"contact_name"`
-	ContactPhone                string     `json:"contact_phone"`
+	// AssignedToName is the owner's display name (single-conversation read only), so the UI can say who has the attendance.
+	AssignedToName string     `json:"assigned_to_name,omitempty"`
+	QueueID        *uuid.UUID `json:"queue_id,omitempty"`
+	ContactName    string     `json:"contact_name"`
+	ContactPhone   string     `json:"contact_phone"`
 	// ContactWhatsAppName is the name the person declared on WhatsApp; the UI shows it smaller below ContactName (the
 	// principal name: the team\'s alias when there is one) when they differ.
 	ContactWhatsAppName string `json:"contact_whatsapp_name,omitempty"`
@@ -305,6 +307,14 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 	item.MessageCount = &messageCount
+	if item.AssignedToUserID != nil {
+		// A name is a convenience: if it cannot be read the UI falls back to a generic label.
+		var name string
+		if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
+			`SELECT COALESCE(NULLIF(btrim(display_name),''), email, '') FROM users WHERE id=$1`, *item.AssignedToUserID).Scan(&name); err == nil {
+			item.AssignedToName = name
+		}
+	}
 	writeJSON(w, item)
 }
 

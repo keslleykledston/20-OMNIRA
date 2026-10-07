@@ -2,7 +2,13 @@ import React, { useRef, useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { Icon } from '../primitives';
 
+// Drafts live in memory per conversation: switching to another attendance must never carry the text over (it could go to the
+// wrong person) nor lose what was typed for the previous one.
+const drafts = new Map<string, string>();
+
 interface MessageComposerProps {
+  /** Identifies whose draft this is (tenant + conversation). */
+  draftKey?: string;
   // Returns whether the send actually succeeded — the composer only clears the
   // draft on a confirmed success, never optimistically (a 409 "must be
   // assigned first" must not silently drop what the operator typed).
@@ -15,6 +21,7 @@ interface MessageComposerProps {
 }
 
 export default function MessageComposer({
+  draftKey = '',
   onSend,
   disabled = false,
   placeholder = 'Escreva uma mensagem...',
@@ -22,7 +29,18 @@ export default function MessageComposer({
   labelRight,
 }: MessageComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [text, setText] = useState('');
+  const [text, setTextState] = useState(() => drafts.get(draftKey) ?? '');
+  const keyRef = useRef(draftKey);
+  const setText = (value: string, key = keyRef.current) => {
+    setTextState(value);
+    if (value === '') drafts.delete(key);
+    else drafts.set(key, value);
+  };
+  // another conversation: show ITS draft (the previous one stays saved under its own key)
+  useEffect(() => {
+    keyRef.current = draftKey;
+    setTextState(drafts.get(draftKey) ?? '');
+  }, [draftKey]);
 
   // Auto-grow textarea
   useEffect(() => {
@@ -42,8 +60,13 @@ export default function MessageComposer({
 
   const handleSend = async () => {
     if (text.trim() && !disabled) {
+      const sentFrom = keyRef.current;
       const sent = await onSend(text);
-      if (sent) setText('');
+      // clear the draft of the conversation it was sent from, even if the person already switched away
+      if (sent) {
+        drafts.delete(sentFrom);
+        if (keyRef.current === sentFrom) setTextState('');
+      }
     }
   };
 

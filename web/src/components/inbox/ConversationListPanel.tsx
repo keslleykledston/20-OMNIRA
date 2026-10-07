@@ -36,6 +36,13 @@ const SEGMENTS: { id: InboxSegment; label: string }[] = [
   { id: 'spam', label: 'Spam' },
 ];
 
+const SCOPES: { id: 'active' | 'closed'; label: string }[] = [
+  { id: 'active', label: 'Em andamento' },
+  { id: 'closed', label: 'Encerradas' },
+];
+// segments reached through "Mais…" (the three primary ones are the segmented control)
+const MORE_IDS: InboxSegment[] = ['unclassified', 'internal', 'spam'];
+
 const WAIT_STYLE: Record<WaitTone, string> = {
   muted: 'bg-surface-muted text-text-secondary',
   warning: 'bg-status-warning-soft text-status-warning',
@@ -98,41 +105,26 @@ export default function ConversationListPanel({
           </div>
           <Icon name="conversations" size={20} className="mt-1 flex-shrink-0 text-text-tertiary" />
         </div>
-        <div className="flex flex-col gap-1.5" role="tablist" aria-label="Filtro de conversas">
-          <div className="grid grid-cols-3 rounded-control bg-surface-muted p-1">
-            {SEGMENTS.slice(0, 3).map((s) => (
+        {/* Scope: what is being attended now, or what was finalized. */}
+        <div className="grid grid-cols-2 gap-1" role="tablist" aria-label="Escopo das conversas">
+          {SCOPES.map((sc) => {
+            const active = sc.id === 'closed' ? segment === 'closed' : segment !== 'closed';
+            return (
               <button
-                key={s.id}
+                key={sc.id}
                 type="button"
                 role="tab"
-                aria-selected={segment === s.id}
-                onClick={() => onSegmentChange(s.id)}
+                aria-selected={active}
+                onClick={() => onSegmentChange(sc.id === 'closed' ? 'closed' : segment === 'closed' ? 'all' : segment)}
                 className={clsx(
-                  'h-7 rounded-control px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
-                  segment === s.id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary'
+                  'h-8 rounded-control px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
+                  active ? 'bg-surface-secondary text-text-primary' : 'text-text-secondary hover:bg-surface-muted'
                 )}
               >
-                {s.label}
+                {sc.label}
               </button>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {SEGMENTS.slice(3).map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                role="tab"
-                aria-selected={segment === s.id}
-                onClick={() => onSegmentChange(s.id)}
-                className={clsx(
-                  'rounded-pill px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
-                  segment === s.id ? 'bg-accent-primary text-white' : 'bg-surface-muted text-text-secondary hover:bg-surface-tertiary'
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
         {multiChannel && onChannelFilterChange && (
           <label className="block">
@@ -166,24 +158,72 @@ export default function ConversationListPanel({
             )}
           />
         </label>
+        {segment !== 'closed' && (
+          <div className="flex items-center gap-1.5">
+            <div className="grid flex-1 grid-cols-3 rounded-control bg-surface-muted p-1" role="tablist" aria-label="Filtro de conversas">
+              {SEGMENTS.slice(0, 3).map((x) => (
+                <button
+                  key={x.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={segment === x.id}
+                  onClick={() => onSegmentChange(x.id)}
+                  className={clsx(
+                    'h-7 rounded-control px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
+                    segment === x.id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary'
+                  )}
+                >
+                  {x.label}
+                </button>
+              ))}
+            </div>
+            <label className="flex-shrink-0">
+              <span className="sr-only">Mais filtros</span>
+              <select
+                value={MORE_IDS.includes(segment) ? segment : ''}
+                onChange={(e) => e.target.value && onSegmentChange(e.target.value as InboxSegment)}
+                className={clsx(
+                  'h-9 w-[5.5rem] rounded-control border px-1.5 text-[11px] focus:outline-none focus:ring-2 focus:ring-accent-primary',
+                  MORE_IDS.includes(segment) ? 'border-accent-primary bg-accent-primary-soft text-accent-primary' : 'border-transparent bg-surface-muted text-text-secondary'
+                )}
+              >
+                <option value="">Mais…</option>
+                {SEGMENTS.slice(3).filter((x) => x.id !== 'closed').map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
       </div>
 
       <div ref={scrollRef} onScroll={maybeLoadMore} className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="p-4 text-center text-text-secondary text-sm">Carregando...</div>
         ) : conversations.length === 0 ? (
-          <div className="p-4 text-center text-text-tertiary text-sm">
-            {search.trim()
-              ? 'Nenhuma conversa encontrada'
-              : segment === 'all'
-                ? 'Nenhuma conversa'
-                : segment === 'spam'
-                  ? 'Nenhum spam. Aqui ficam os contatos marcados como spam: abra um e use "Não é spam" para restaurar.'
-                  : segment === 'unclassified'
-                    ? 'Nenhuma conversa sem classificação. Quando alguém novo escrever, ela aparece aqui até você dizer se é cliente ou outro contato.'
-                    : segment === 'internal'
-                      ? 'Nenhuma conversa interna. Conversas com a sua equipe aparecem aqui quando o número delas é verificado.'
-                      : 'Nada por aqui'}
+          <div className="px-4 py-10 text-center">
+            <Icon name="conversations" size={24} className="mx-auto mb-2 text-text-tertiary" />
+            <p className="text-sm font-medium text-text-primary">Nenhuma conversa</p>
+            <p className="mt-1 text-xs text-text-tertiary">
+              {search.trim()
+                ? 'Nada encontrado para esta busca.'
+                : segment === 'closed'
+                  ? 'Aqui ficam os atendimentos finalizados.'
+                  : segment === 'spam'
+                    ? 'Contatos marcados como spam aparecem aqui; abra um e use "Não é spam" para restaurar.'
+                    : segment === 'unclassified'
+                      ? 'Quando alguém novo escrever, a conversa aparece aqui até você dizer se é cliente ou outro contato.'
+                      : segment === 'internal'
+                        ? 'Conversas com a sua equipe aparecem aqui quando o número delas é verificado.'
+                        : 'Quando um cliente escrever, a conversa aparece aqui.'}
+            </p>
+            {search.trim() && (
+              <button type="button" onClick={() => onSearchChange('')} className="mt-2 text-xs font-medium text-accent-primary hover:underline">
+                Limpar busca
+              </button>
+            )}
           </div>
         ) : (
           <ul>

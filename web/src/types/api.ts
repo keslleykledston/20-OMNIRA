@@ -18,6 +18,8 @@ export interface ConversationItem {
   created_at?: string;
   updated_at: string;
   assigned_to_user_id?: string;
+  // Owner's display name (single-conversation read only).
+  assigned_to_name?: string;
   // Single-conversation read only (absent in list items).
   message_count?: number;
   // List only: last real message, for ordering/preview, and when the customer started waiting.
@@ -30,6 +32,8 @@ export interface ConversationItem {
   crm_contact_id?: string;
   contact_id?: string;
   channel_connection_id?: string;
+  ticket_status?: string;
+  ticket_priority?: string;
   // Classification of the conversation's contact (ADR-0014).
   contact_kind?: 'unclassified' | 'customer' | 'other' | 'spam' | '';
   // ADR-0018: what the conversation is, derived from who takes part. There is no "mixed" kind.

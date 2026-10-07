@@ -273,7 +273,7 @@ describe('InboxWorkspace — list paging, search and filters', () => {
     mockGets(mockDefaultList());
     renderAt(<InboxWorkspace />, '/inbox');
     await screen.findByRole('tab', { name: 'Todas' });
-    await user.click(screen.getByRole('tab', { name: 'Spam' }));
+    await user.selectOptions(screen.getByLabelText('Mais filtros'), 'spam');
     await waitFor(() => expect(listCalls().some((p) => p.kind === 'spam')).toBe(true));
     const others = listCalls().filter((p) => p.kind !== 'spam');
     expect(others.length).toBeGreaterThan(0);
@@ -287,9 +287,9 @@ describe('InboxWorkspace — list paging, search and filters', () => {
     mockGets(mockDefaultList());
     renderAt(<InboxWorkspace />, '/inbox');
     await screen.findByRole('tab', { name: 'Todas' });
-    await user.click(screen.getByRole('tab', { name: 'Não classif.' }));
+    await user.selectOptions(screen.getByLabelText('Mais filtros'), 'unclassified');
     await waitFor(() => expect(listCalls().some((p) => p.conversation_kind === 'unclassified')).toBe(true));
-    await user.click(screen.getByRole('tab', { name: 'Internas' }));
+    await user.selectOptions(screen.getByLabelText('Mais filtros'), 'internal');
     await waitFor(() => expect(listCalls().some((p) => p.conversation_kind === 'internal')).toBe(true));
     // the plain tabs never send it, so the server keeps staff conversations out of attendance
     expect(listCalls().filter((p) => p.conversation_kind === undefined).every((p) => p.kind === undefined || p.kind === 'spam')).toBe(true);

@@ -15,6 +15,9 @@ import { dayLabel, sortChronological } from '../../lib/inboxModel';
 import { useChannelLines, useConversationChannel } from '../../lib/channelLines';
 import { ChannelBadge } from './ChannelBadge';
 import { TemplateSendDialog } from './TemplateSendDialog';
+import FinalizeDialog from './FinalizeDialog';
+import { emitInboxNotice, useInboxNotice } from '../../lib/inboxNotice';
+import { useAccess } from '../../lib/useAccess';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -119,6 +122,9 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
 
   const [claiming, setClaiming] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showFinalize, setShowFinalize] = useState(false);
+  const [notice, clearNotice] = useInboxNotice(conversationId);
+  const { can } = useAccess();
   const metaLine = !!cs && cs.window_required;
   const claim = async () => {
     setClaiming(true);
@@ -128,6 +134,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
       await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
       void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+      emitInboxNotice(conversationId, 'Atendimento assumido por você.');
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
       else setSendError(err?.response?.status === 409 ? 'Este atendimento acabou de ser assumido por outro operador.' : 'Não foi possível assumir o atendimento.');
@@ -136,7 +143,13 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     }
   };
   const unassigned = !!conversation && conversation.status !== 'closed' && !conversation.assigned_to_user_id && conversation.conversation_kind !== 'internal';
-  const owner = !conversation?.assigned_to_user_id ? 'Sem responsável' : conversation.assigned_to_user_id === currentUserId() ? 'Você' : 'Outro atendente';
+  const mine = !!conversation?.assigned_to_user_id && conversation.assigned_to_user_id === currentUserId();
+  const ownerName = conversation?.assigned_to_name?.trim() || '';
+  const owner = !conversation?.assigned_to_user_id
+    ? 'Sem responsável'
+    : mine
+      ? ownerName ? `${ownerName} (você)` : 'Você'
+      : ownerName || 'Outro atendente';
 
   const handleSendMessage = async (text: string): Promise<boolean> => {
     if (!text.trim()) return false;
@@ -178,13 +191,13 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           {onBack && (
             <button
               onClick={onBack}
-              className="lg:hidden p-1 hover:bg-surface-muted rounded-control"
+              className="md:hidden p-1 hover:bg-surface-muted rounded-control"
               title="Voltar"
             >
               <Icon name="arrow-left" />
             </button>
           )}
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-text-secondary">
+          <span className="hidden h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-text-secondary sm:flex">
             {(conversation?.contact_name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?'}
           </span>
           <div className="min-w-0">
@@ -192,8 +205,10 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
               {conversation?.contact_name}
             </h3>
             <WhatsAppName principal={conversation?.contact_name} whatsapp={conversation?.contact_whatsapp_name} />
-            <p className="flex items-center gap-1.5 text-xs text-text-secondary">
-              {conversation?.contact_phone}
+            <p className="flex items-center gap-1.5 truncate text-[11px] text-text-secondary">
+              <span className="truncate">
+                {line ? (line.provider_kind === 'official' ? 'WhatsApp oficial' : 'WhatsApp') : 'Canal não informado'} · {conversation?.contact_phone}
+              </span>
               {(lines.data ?? []).length > 1 && <ChannelBadge line={line} />}
             </p>
           </div>
@@ -205,17 +220,12 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             <button
               onClick={onToggleContext}
               className="p-2 hover:bg-surface-muted rounded-control"
-              title="Contexto"
+              title="Detalhes do atendimento"
+              aria-label="Abrir detalhes do atendimento"
             >
               <Icon name="info" />
             </button>
           )}
-          <button
-            className="p-2 hover:bg-surface-muted rounded-control"
-            title="Menu"
-          >
-            <Icon name="more" />
-          </button>
         </div>
       </div>
 
@@ -229,12 +239,26 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           >
             {conversation.status === 'closed' ? 'Finalizado' : 'Em atendimento'}
           </span>
-          <span className="text-text-secondary">{owner}</span>
+          <span className="inline-flex items-center gap-1 text-text-secondary">
+            <Icon name="contacts" size={12} />
+            {owner}
+          </span>
           {unassigned && (
             <button type="button" onClick={() => void claim()} disabled={claiming} className="ml-auto font-medium text-accent-primary hover:underline disabled:opacity-60">
               {claiming ? 'Assumindo…' : 'Assumir atendimento'}
             </button>
           )}
+          {mine && conversation.status !== 'closed' && conversation.conversation_kind !== 'internal' && (
+            <button type="button" onClick={() => setShowFinalize(true)} className="ml-auto rounded-control px-1.5 py-0.5 font-medium text-text-secondary hover:bg-surface-muted hover:text-text-primary">
+              Finalizar
+            </button>
+          )}
+        </div>
+      )}
+      {notice && (
+        <div role="status" className="flex items-center justify-between gap-2 border-b border-border-subtle bg-status-info-soft px-4 py-2 text-xs text-status-info">
+          <span>{notice}</span>
+          <button type="button" onClick={clearNotice} aria-label="Fechar aviso" className="text-status-info/70 hover:text-status-info">×</button>
         </div>
       )}
 
@@ -253,8 +277,14 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                 {isFetchingNextPage ? 'Carregando mensagens anteriores...' : 'Carregar mensagens anteriores'}
               </button>
             )}
+            {!hasNextPage && conversation?.created_at && (
+              <p className="mb-1 flex items-center justify-center gap-1.5 text-[10px] text-text-tertiary">
+                <Icon name="clock" size={12} />
+                Início do atendimento · {new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            )}
             {messages.length === 0 ? (
-              <div className="flex items-center justify-center py-10 text-text-tertiary text-sm">Nenhuma mensagem</div>
+              <div className="flex items-center justify-center py-10 text-text-tertiary text-sm">Nenhuma mensagem neste atendimento.</div>
             ) : (
               messages.map((msg, idx) => {
                 const prev = idx > 0 ? messages[idx - 1] : null;
@@ -266,14 +296,21 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                 return (
                   <div key={msg.id} className={turn ? 'mt-1' : undefined}>
                     {showDay && (
-                      <div className="my-1.5 flex justify-center">
-                        <span className="rounded-pill bg-surface-muted px-3 py-0.5 text-[11px] text-text-secondary">{label}</span>
+                      <div className="my-2 flex items-center gap-3 text-[10px] text-text-tertiary">
+                        <span className="h-px flex-1 bg-border-subtle" />
+                        <span>{label}</span>
+                        <span className="h-px flex-1 bg-border-subtle" />
                       </div>
                     )}
                     <MessageBubble message={msg} sender={firstOfRun ? (msg.direction === 'outbound' ? 'Equipe' : conversation?.contact_name) : undefined} />
                   </div>
                 );
               })
+            )}
+            {conversation?.status === 'closed' && (
+              <p className="mt-2 rounded-control bg-surface-muted px-3 py-1.5 text-center text-[11px] text-text-secondary">
+                Atendimento encerrado · histórico disponível para consulta
+              </p>
             )}
           </div>
         </div>
@@ -292,7 +329,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       {/* Composer. Replying to a spam contact is switched off (ADR-0014): restore it first. */}
       {conversation?.status === 'closed' ? (
         <div role="status" className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
-          Atendimento finalizado. Se o contato escrever de novo, abre-se um atendimento novo.
+          Este atendimento está encerrado. O envio está indisponível. Se o contato escrever de novo, abre-se um atendimento novo.
         </div>
       ) : unassigned && conversation?.contact_kind !== 'spam' ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs">
@@ -300,6 +337,10 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           <button type="button" onClick={() => void claim()} disabled={claiming} className="rounded-control bg-accent-primary px-3 py-1.5 font-medium text-white hover:bg-accent-primary-hover disabled:opacity-60">
             {claiming ? 'Assumindo…' : 'Assumir'}
           </button>
+        </div>
+      ) : !!conversation?.assigned_to_user_id && !mine && !can('conversation.manage') && conversation.contact_kind !== 'spam' ? (
+        <div role="status" className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
+          Atendimento com {ownerName || 'outro atendente'}. Resposta indisponível.
         </div>
       ) : conversation?.contact_kind === 'spam' ? (
         <div className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
@@ -332,6 +373,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           </div>
         )}
         <MessageComposer
+          draftKey={`${tenantId}:${conversationId}`}
           onSend={handleSendMessage}
           label={`Responder ao contato${line ? ` · ${line.label}` : ''}`}
           labelRight={conversation?.contact_name}
@@ -340,6 +382,13 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         />
       </div>
       )}
+      <FinalizeDialog
+        open={showFinalize}
+        conversationId={conversationId}
+        contactName={conversation?.contact_name}
+        onClose={() => setShowFinalize(false)}
+        onFinalized={() => emitInboxNotice(conversationId, 'Atendimento encerrado. O histórico foi preservado.')}
+      />
       {metaLine && (
         <TemplateSendDialog
           open={showTemplates}

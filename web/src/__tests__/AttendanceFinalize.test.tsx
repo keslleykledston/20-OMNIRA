@@ -97,7 +97,7 @@ describe('Finalizar atendimento (ADR-0020)', () => {
   it('disables the composer of a finalized conversation and explains why', async () => {
     serve({ conversation: { status: 'closed' } })
     renderAt(<ChatPane conversationId={CONV} />)
-    expect(await screen.findByText(/Atendimento finalizado\. Se o contato escrever de novo/)).toBeInTheDocument()
+    expect(await screen.findByText(/Este atendimento está encerrado/)).toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Escreva uma resposta...')).toBeNull()
   })
 })
@@ -106,6 +106,7 @@ describe('Histórico e pendências do contato', () => {
   it('shows what is pending (overdue first) and the previous attendances with their summary', async () => {
     serve({ history })
     renderAt(<ContextPane conversationId={CONV} />)
+    await userEvent.setup().click(await screen.findByRole('tab', { name: 'Histórico' }))
     const section = await screen.findByRole('region', { name: 'Histórico do contato' })
     expect(within(section).getByText('Pendências do contato')).toBeInTheDocument()
     expect(within(section).getByText('Ligar com o resultado da visita')).toBeInTheDocument()
@@ -127,6 +128,7 @@ describe('Histórico e pendências do contato', () => {
     vi.mocked(axios.post).mockResolvedValueOnce({ data: {} }).mockRejectedValueOnce({ response: { status: 409, data: { error: 'already_resolved' } } })
     const user = userEvent.setup()
     renderAt(<ContextPane conversationId={CONV} />)
+    await user.click(await screen.findByRole('tab', { name: 'Histórico' }))
     await user.click(await screen.findByRole('button', { name: 'Concluir: Ligar com o resultado da visita' }))
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1))
     expect(vi.mocked(axios.post).mock.calls[0][0]).toMatch(/\/follow-ups\/f-1\/resolve$/)
@@ -150,6 +152,7 @@ describe('Busca no histórico do contato', () => {
     const user = userEvent.setup()
     renderAt(<ContextPane conversationId={CONV} />)
     await screen.findByText('Maria Silva')
+    await user.click(screen.getByRole('tab', { name: 'Histórico' }))
     expect(get.mock.calls.some((c) => String(c[0]).endsWith('/history-search'))).toBe(false) // nothing on open
     const section = screen.getByRole('region', { name: 'Buscar no histórico' })
     const input = within(section).getByLabelText('Buscar no histórico do contato')
@@ -180,6 +183,7 @@ describe('Busca no histórico do contato', () => {
     const user = userEvent.setup()
     renderAt(<ContextPane conversationId={CONV} />)
     await screen.findByText('Maria Silva')
+    await user.click(screen.getByRole('tab', { name: 'Histórico' }))
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       if (String(url).endsWith('/history-search')) return Promise.reject({ response: { status: 400, data: { error: 'invalid', detail: 'attendance: invalid input: query looks like it contains a credential' } } })
       return { data: { ...base } }

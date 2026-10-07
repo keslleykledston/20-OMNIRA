@@ -53,4 +53,6 @@ export function mockGets(routes: Record<string, unknown>) {
 export function setSession() {
   localStorage.setItem('tenantId', TENANT);
   localStorage.setItem('token', 'tok');
+  // the signed-in user (login stores the user object); fixtures that are "assigned to me" use this id
+  localStorage.setItem('user', JSON.stringify({ id: 'u-1', name: 'Operador Teste', email: 'operador@example.com' }));
 }

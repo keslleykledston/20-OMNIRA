@@ -92,10 +92,10 @@ describe('ConversationListPanel — compact rows', () => {
     const { unmount } = render(
       <ConversationListPanel conversations={[]} selectedId={null} onSelect={vi.fn()} segment="all" onSegmentChange={vi.fn()} search="zzz" onSearchChange={vi.fn()} isLoading={false} />
     );
-    expect(screen.getByText('Nenhuma conversa encontrada')).toBeInTheDocument();
+    expect(screen.getByText('Nada encontrado para esta busca.')).toBeInTheDocument();
     unmount();
     renderPanel([], { segment: 'waiting' });
-    expect(screen.getByText('Nada por aqui')).toBeInTheDocument();
+    expect(screen.getByText('Quando um cliente escrever, a conversa aparece aqui.')).toBeInTheDocument();
   });
 
   it('reports typing in the search box and tab changes', async () => {
@@ -143,9 +143,11 @@ describe('ConversationListPanel — no cap on the list', () => {
 });
 
 describe('ConversationListPanel — Spam inbox', () => {
-  it('offers the filters, Spam last', () => {
+  it('offers the scope (in progress / finalized), the three primary filters and the rest under "Mais…", Spam last', () => {
     renderPanel([conv('a')]);
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Todas', 'Aguardando', 'Minhas', 'Não classif.', 'Internas', 'Encerradas', 'Spam']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Em andamento', 'Encerradas', 'Todas', 'Aguardando', 'Minhas']);
+    const more = screen.getByLabelText('Mais filtros') as HTMLSelectElement;
+    expect(Array.from(more.options).map((o) => o.textContent)).toEqual(['Mais…', 'Não classif.', 'Internas', 'Spam']);
   });
 
   it('in Spam nobody is "waiting" and nothing is "unassigned": those signals are for conversations to attend', () => {
@@ -166,7 +168,7 @@ describe('ConversationListPanel — Spam inbox', () => {
 
   it('explains how to restore when the Spam inbox is empty', () => {
     renderPanel([], { segment: 'spam' });
-    expect(screen.getByText(/Nenhum spam/)).toBeInTheDocument();
+    expect(screen.getByText(/Contatos marcados como spam/)).toBeInTheDocument();
     expect(screen.getByText(/Não é spam/)).toBeInTheDocument();
   });
 });
@@ -203,8 +205,8 @@ describe('ConversationListPanel — what a conversation is (ADR-0018)', () => {
   it('switching to the new filters reports the segment, and each has its own empty state', async () => {
     const user = userEvent.setup();
     const props = renderPanel([], { segment: 'unclassified' });
-    expect(screen.getByText(/Nenhuma conversa sem classificação/)).toBeInTheDocument();
-    await user.click(screen.getByRole('tab', { name: 'Internas' }));
+    expect(screen.getByText(/Quando alguém novo escrever/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Mais filtros'), 'internal');
     expect(props.onSegmentChange).toHaveBeenCalledWith('internal');
   });
 });

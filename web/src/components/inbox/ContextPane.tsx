@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import clsx from 'clsx';
@@ -35,6 +35,8 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
   const [assignError, setAssignError] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showFinalize, setShowFinalize] = useState(false);
+  const [tab, setTab] = useState<'details' | 'history'>('details');
+  const tabsId = useId();
 
   const handleAssign = async () => {
     setAssignLoading(true);
@@ -125,6 +127,11 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
   const line = (channelLines.data ?? []).find((l) => l.id === conversation?.channel_connection_id);
   const mine = !!conversation?.assigned_to_user_id && conversation.assigned_to_user_id === currentUserId();
   const closed = conversation?.status === 'closed';
+  const ownerLabel = !conversation?.assigned_to_user_id
+    ? 'Sem responsável'
+    : mine
+      ? conversation.assigned_to_name ? `${conversation.assigned_to_name} (você)` : 'Você'
+      : conversation.assigned_to_name || 'Outro atendente';
   const internal = conversation?.conversation_kind === 'internal';
   const canAct = conversation?.contact_kind !== 'spam' && !closed;
   const [copied, setCopied] = useState(false);
@@ -150,6 +157,70 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
         <p className="mt-0.5 text-[11px] text-text-tertiary">Contato e contexto em um só lugar</p>
       </header>
 
+      <div role="tablist" aria-label="Contexto do atendimento" className="grid h-10 flex-shrink-0 grid-cols-2 border-b border-border-subtle bg-surface px-4">
+        {([['details', 'Detalhes'], ['history', 'Histórico']] as const).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            id={`${tabsId}-tab-${value}`}
+            aria-selected={tab === value}
+            aria-controls={`${tabsId}-panel-${value}`}
+            tabIndex={tab === value ? 0 : -1}
+            onClick={() => setTab(value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+              e.preventDefault();
+              const next = tab === 'details' ? 'history' : 'details';
+              setTab(next);
+              document.getElementById(`${tabsId}-tab-${next}`)?.focus();
+            }}
+            className={clsx(
+              'border-b-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-primary',
+              tab === value ? 'border-accent-primary text-accent-primary' : 'border-transparent text-text-secondary hover:text-text-primary'
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'history' && (
+        <div role="tabpanel" id={`${tabsId}-panel-history`} aria-labelledby={`${tabsId}-tab-history`} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto focus-visible:outline-none">
+          <div className="p-4">
+            <h3 className="mb-3 text-[10px] font-semibold uppercase text-text-tertiary">Histórico deste atendimento</h3>
+            <ol className="m-0 list-none space-y-4 border-l border-border-subtle pl-4">
+              <li>
+                <p className="text-sm font-medium text-text-primary">Conversa iniciada</p>
+                <p className="mt-0.5 text-xs text-text-secondary">
+                  {conversation?.created_at ? new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Horário não informado'}
+                </p>
+              </li>
+              <li>
+                <p className="text-sm font-medium text-text-primary">Responsável atual</p>
+                <p className="mt-0.5 text-xs text-text-secondary">{ownerLabel}</p>
+              </li>
+              {conversation?.ticket_status && (
+                <li>
+                  <p className="text-sm font-medium text-text-primary">Chamado aberto</p>
+                  <p className="mt-0.5 text-xs text-text-secondary">Situação: {conversation.ticket_status}</p>
+                </li>
+              )}
+              {closed && (
+                <li>
+                  <p className="text-sm font-medium text-text-primary">Atendimento encerrado</p>
+                  <p className="mt-0.5 text-xs text-text-secondary">O histórico foi preservado.</p>
+                </li>
+              )}
+            </ol>
+          </div>
+          {/* ADR-0020: what happened before with this contact, and what was left pending or promised */}
+          {!internal && <AttendanceMemoryPanel conversationId={conversationId} />}
+          {!internal && <HistorySearch conversationId={conversationId} />}
+        </div>
+      )}
+
+      <div role="tabpanel" id={`${tabsId}-panel-details`} aria-labelledby={`${tabsId}-tab-details`} hidden={tab !== 'details'} className={clsx(tab === 'details' && 'min-h-0 flex-1')}>
       <CollapsibleSection id="attendance" title="Atendimento" icon="conversations" defaultOpen>
         <div className="space-y-2 px-4 pb-4 text-sm">
           <div className="flex items-center justify-between gap-3">
@@ -166,7 +237,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
           <div className="flex items-center justify-between gap-3">
             <span className="text-text-secondary">Responsável</span>
             <span className="text-right font-medium text-text-primary">
-              {!conversation?.assigned_to_user_id ? 'Sem responsável' : mine ? 'Você' : 'Outro atendente'}
+              {ownerLabel}
             </span>
           </div>
           {line && (
@@ -302,10 +373,6 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
         </CollapsibleSection>
       )}
 
-      {/* ADR-0020: o que aconteceu antes com este contato e o que ficou pendente ou prometido */}
-      {!internal && <AttendanceMemoryPanel conversationId={conversationId} />}
-      {!internal && <HistorySearch conversationId={conversationId} />}
-
       {conversation?.contact_id && (
         <CollapsibleSection id="notes" title="Anotações internas" icon="tickets">
           <ContactNotes contactId={conversation.contact_id} />
@@ -329,6 +396,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
           conversationUnassigned={Boolean(conversation) && !conversation?.assigned_to_user_id}
         />
       </CollapsibleSection>
+      </div>
 
       <FinalizeDialog
         open={showFinalize}

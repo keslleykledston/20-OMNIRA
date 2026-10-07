@@ -12,6 +12,8 @@ import ContextPane from '../components/inbox/ContextPane';
 import { InboxSegment } from '../lib/inboxModel';
 import { useInboxSettings } from '../hooks/useInboxSettings';
 import { useDebounced } from '../hooks/useDebounced';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { Drawer } from '../components/primitives';
 import type { ConversationItem } from '../types/api';
 import { useChannelLines } from '../lib/channelLines';
 
@@ -39,6 +41,10 @@ export default function InboxWorkspace() {
   const debouncedSearch = useDebounced(search.trim(), 300);
   const { thresholds: waitThresholds } = useInboxSettings();
   const [showContext, setShowContext] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Three panes only when the space left AFTER the app sidebar can hold them (the sidebar takes ~224px): below 1440px the
+  // details open in a drawer instead of squeezing the conversation.
+  const wide = useMediaQuery('(min-width: 1440px)', true);
   const [channelFilter, setChannelFilter] = useState('');
   const channelLines = useChannelLines();
 
@@ -173,11 +179,18 @@ export default function InboxWorkspace() {
   const hasSelection = !!selectedConversationId;
   return (
     <div className="inbox-workspace">
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-4">
+      <div
+        className={clsx(
+          'grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] md:grid-cols-[300px_minmax(0,1fr)]',
+          showContext && selectedConversationId
+            ? 'min-[1440px]:grid-cols-[300px_minmax(0,1fr)_320px] min-[1700px]:grid-cols-[340px_minmax(0,1fr)_340px]'
+            : 'min-[1440px]:grid-cols-[300px_minmax(0,1fr)] min-[1700px]:grid-cols-[340px_minmax(0,1fr)]'
+        )}
+      >
         {/* ConversationList: full width on mobile when nothing selected; own column on desktop */}
         <div
           className={clsx(
-            'lg:col-span-1 lg:border-r lg:border-border-subtle lg:flex lg:flex-col overflow-hidden',
+            'min-h-0 min-w-0 md:border-r md:border-border-subtle md:flex md:flex-col overflow-hidden',
             hasSelection ? 'hidden' : 'flex flex-col'
           )}
         >
@@ -202,12 +215,12 @@ export default function InboxWorkspace() {
 
         {/* ChatPane column: full width on mobile when selected; own column on desktop
             (placeholder in the same cell when nothing is selected, never a second grid item) */}
-        <div className={clsx('lg:col-span-2 lg:flex lg:flex-col', hasSelection ? 'flex flex-col' : 'hidden lg:flex')}>
+        <div className={clsx('min-h-0 min-w-0 md:flex md:flex-col', hasSelection ? 'flex flex-col' : 'hidden md:flex')}>
           {selectedConversationId ? (
             <ChatPane
               conversationId={selectedConversationId}
               onBack={() => setSelectedConversationId(null)}
-              onToggleContext={() => setShowContext(!showContext)}
+              onToggleContext={() => (wide ? setShowContext(!showContext) : setDrawerOpen(true))}
             />
           ) : deepLinkState === 'resolving' ? (
             <div className="flex-1 flex items-center justify-center text-text-secondary">
@@ -224,13 +237,27 @@ export default function InboxWorkspace() {
           )}
         </div>
 
-        {/* ContextPane: desktop only for now (mobile/tablet sheet is a follow-up slice) */}
-        {showContext && selectedConversationId && (
-          <div className="hidden lg:flex lg:col-span-1 border-l border-border-subtle overflow-hidden flex-col">
+        {/* Details: a third column when there is room, otherwise a drawer opened from the conversation header */}
+        {wide && showContext && selectedConversationId && (
+          <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-border-subtle">
             <ContextPane conversationId={selectedConversationId} onOpenConversation={setSelectedConversationId} />
           </div>
         )}
       </div>
+
+      {!wide && (
+        <Drawer open={drawerOpen && !!selectedConversationId} title="Detalhes do atendimento" onClose={() => setDrawerOpen(false)}>
+          {selectedConversationId && (
+            <ContextPane
+              conversationId={selectedConversationId}
+              onOpenConversation={(id) => {
+                setSelectedConversationId(id);
+                setDrawerOpen(false);
+              }}
+            />
+          )}
+        </Drawer>
+      )}
 
       <style>{`
         .inbox-workspace {

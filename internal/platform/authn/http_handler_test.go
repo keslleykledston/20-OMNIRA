@@ -18,7 +18,7 @@ func TestDevLogin_CookieIsOpaqueNotJWT(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := newTestSessionStore()
-	handler := NewAuthHandler(privateKey, store, false)
+	handler := NewAuthHandler(privateKey, store, 0, false)
 
 	body, _ := json.Marshal(MockLoginRequest{Email: "test@omnira.local"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/dev/login", bytes.NewReader(body))
@@ -70,7 +70,7 @@ func TestDevLogin_CookieSecurityAttributes(t *testing.T) {
 		{"production/https", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := NewAuthHandler(privateKey, store, tc.secureCookie)
+			handler := NewAuthHandler(privateKey, store, 0, tc.secureCookie)
 			body, _ := json.Marshal(MockLoginRequest{Email: "test@omnira.local"})
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/dev/login", bytes.NewReader(body))
 			rec := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestDevLogout_RevokesSessionAndExpiresCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := newTestSessionStore()
-	handler := NewAuthHandler(privateKey, store, false)
+	handler := NewAuthHandler(privateKey, store, 0, false)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/dev/login", bytes.NewReader(mustJSON(t, MockLoginRequest{Email: "test@omnira.local"})))
 	loginRec := httptest.NewRecorder()
