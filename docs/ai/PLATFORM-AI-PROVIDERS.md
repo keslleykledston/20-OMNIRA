@@ -52,4 +52,10 @@ nunca meio configurada. Todas essas variáveis são repassadas pelo `docker-comp
 ## Trocar de provedor / desligar
 
 Edite `OMNIRA_AI_PROVIDER`/`OMNIRA_AI_MODEL` (ou `OMNIRA_AI_ENABLED=false`) no `.env` e recrie `api` e `worker`
-(`docker compose up -d --no-deps --force-recreate api worker`). Nada de banco muda.
+(`docker compose up -d --no-deps --force-recreate api worker`) e **em seguida** recarregue o nginx do `web`
+(`docker exec omnira-web nginx -s reload`). Nada de banco muda.
+
+> **Armadilha (ocorreu em 2026-10-07):** o nginx do contêiner `web` resolve `api:8080` só ao iniciar. Recriar a `api` sem recriar/recarregar o
+> `web` deixa o IP antigo: `/webhooks/v1/whatsapp/meta` (Meta) passa a responder **502** e a mensagem não chega ao Inbox. O WAHA não é afetado
+> (fala direto pela rede do Docker). Sintoma: `docker logs omnira-web | grep "Connection refused"`. `scripts/deploy.sh` já recria o `web`
+> depois da `api`; o atalho `--no-deps ... api` não.
