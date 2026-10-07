@@ -5,7 +5,7 @@ import axios from 'axios';
 import clsx from 'clsx';
 import { MessageItem, ConversationItem } from '../../types/api';
 import { API_BASE } from '../../lib/config';
-import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
+import { authHeaders, currentUserId, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
 import { useThreadScroll } from '../../hooks/useThreadScroll';
 import MessageBubble from './MessageBubble';
@@ -116,6 +116,25 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     fetchMore: fetchNextPage,
   });
 
+  const [claiming, setClaiming] = useState(false);
+  const claim = async () => {
+    setClaiming(true);
+    setSendError(null);
+    try {
+      await axios.post(`${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/assign`, {}, { headers: authHeaders() });
+      await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+      await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+    } catch (err: any) {
+      if (isUnauthorized(err)) handleUnauthorized();
+      else setSendError(err?.response?.status === 409 ? 'Este atendimento acabou de ser assumido por outro operador.' : 'Não foi possível assumir o atendimento.');
+    } finally {
+      setClaiming(false);
+    }
+  };
+  const unassigned = !!conversation && conversation.status !== 'closed' && !conversation.assigned_to_user_id && conversation.conversation_kind !== 'internal';
+  const owner = !conversation?.assigned_to_user_id ? 'Sem responsável' : conversation.assigned_to_user_id === currentUserId() ? 'Você' : 'Outro atendente';
+
   const handleSendMessage = async (text: string): Promise<boolean> => {
     if (!text.trim()) return false;
 
@@ -194,6 +213,25 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         </div>
       </div>
 
+      {conversation && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border-subtle bg-surface px-4 py-1.5 text-[11px]">
+          <span
+            className={clsx(
+              'rounded-pill px-2 py-0.5 font-medium',
+              conversation.status === 'closed' ? 'bg-status-muted text-text-secondary' : 'bg-status-success-soft text-status-success',
+            )}
+          >
+            {conversation.status === 'closed' ? 'Finalizado' : 'Em atendimento'}
+          </span>
+          <span className="text-text-secondary">{owner}</span>
+          {unassigned && (
+            <button type="button" onClick={() => void claim()} disabled={claiming} className="ml-auto font-medium text-accent-primary hover:underline disabled:opacity-60">
+              {claiming ? 'Assumindo…' : 'Assumir atendimento'}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Timeline: oldest at the top, newest at the bottom next to the composer. A short thread
           sits at the bottom too (justify-end), like WhatsApp. */}
       <div className="relative flex-1 min-h-0">
@@ -247,6 +285,13 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       {conversation?.status === 'closed' ? (
         <div role="status" className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
           Atendimento finalizado. Se o contato escrever de novo, abre-se um atendimento novo.
+        </div>
+      ) : unassigned && conversation?.contact_kind !== 'spam' ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs">
+          <span role="status" className="text-text-secondary">Assuma o atendimento para responder.</span>
+          <button type="button" onClick={() => void claim()} disabled={claiming} className="rounded-control bg-accent-primary px-3 py-1.5 font-medium text-white hover:bg-accent-primary-hover disabled:opacity-60">
+            {claiming ? 'Assumindo…' : 'Assumir'}
+          </button>
         </div>
       ) : conversation?.contact_kind === 'spam' ? (
         <div className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">

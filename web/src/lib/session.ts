@@ -47,3 +47,13 @@ export function handleUnauthorized(): void {
 export function isUnauthorized(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 401;
 }
+
+/** The signed-in user's id as the login response stored it, or '' when unknown (never guessed). */
+export function currentUserId(): string {
+  try {
+    const u = JSON.parse(localStorage.getItem(USER_KEY) || 'null') as { id?: string; user_id?: string } | null
+    return u?.id || u?.user_id || ''
+  } catch {
+    return ''
+  }
+}

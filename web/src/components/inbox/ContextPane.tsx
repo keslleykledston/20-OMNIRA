@@ -18,6 +18,9 @@ import { ChannelSwitcher } from './ChannelSwitcher';
 import AttendanceMemoryPanel from './AttendanceMemoryPanel';
 import HistorySearch from './HistorySearch';
 import FinalizeDialog from './FinalizeDialog';
+import { CollapsibleSection } from './CollapsibleSection';
+import { useChannelLines } from '../../lib/channelLines';
+import { currentUserId } from '../../lib/session';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -118,203 +121,214 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
     enabled: !!tenantId && !!conversationId,
   });
 
+  const channelLines = useChannelLines();
+  const line = (channelLines.data ?? []).find((l) => l.id === conversation?.channel_connection_id);
+  const mine = !!conversation?.assigned_to_user_id && conversation.assigned_to_user_id === currentUserId();
+  const closed = conversation?.status === 'closed';
+  const internal = conversation?.conversation_kind === 'internal';
+  const canAct = conversation?.contact_kind !== 'spam' && !closed;
+  const [copied, setCopied] = useState(false);
+  const copyPhone = async () => {
+    try {
+      await navigator.clipboard.writeText(conversation?.contact_phone ?? '');
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* the number is selectable text; copying by hand still works */
+    }
+  };
+  const refreshAll = () => {
+    void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+    void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+    void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+  };
+
   return (
     <div className="flex flex-col h-full bg-surface-muted overflow-y-auto">
-      {/* Contact Card. PRODUCT.7B1C: the "Ver perfil 360°" link that used
-          to sit here was removed — it pointed crm_contact_id (a K3G
-          identity) at /contacts/:id (an OMNIRA-internal contact id), two
-          different identity domains, and the app uses BrowserRouter so
-          its #/contacts/... hash fragment never resolved to anything. */}
-      <div className="p-4 border-b border-border-subtle">
-        <h4 className="text-xs font-semibold text-text-tertiary mb-3 uppercase">Contato</h4>
-        <div className="flex gap-3 items-start">
-          <div className="w-12 h-12 rounded-full bg-accent-primary text-white flex items-center justify-center flex-shrink-0 font-semibold text-lg">
-            {conversation?.contact_name?.[0]?.toUpperCase() || '?'}
+      <header className="shrink-0 border-b border-border-subtle bg-surface px-4 py-3">
+        <h2 className="text-sm font-semibold text-text-primary">Detalhes do atendimento</h2>
+        <p className="mt-0.5 text-[11px] text-text-tertiary">Contato e contexto em um só lugar</p>
+      </header>
+
+      <CollapsibleSection id="attendance" title="Atendimento" icon="conversations" defaultOpen>
+        <div className="space-y-2 px-4 pb-4 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-text-secondary">Estado</span>
+            <span
+              className={clsx(
+                'rounded-pill px-2 py-0.5 text-xs font-medium',
+                closed ? 'bg-status-muted text-text-secondary' : 'bg-status-success-soft text-status-success',
+              )}
+            >
+              {closed ? 'Finalizado' : 'Em atendimento'}
+            </span>
           </div>
-          <div className="flex-1 min-w-0">
-            <h5 className="font-semibold text-text-primary truncate">
-              {conversation?.contact_name}
-            </h5>
-            <WhatsAppName principal={conversation?.contact_name} whatsapp={conversation?.contact_whatsapp_name} />
-            <p className="text-sm text-text-secondary break-words">
-              {conversation?.contact_phone}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-text-secondary">Responsável</span>
+            <span className="text-right font-medium text-text-primary">
+              {!conversation?.assigned_to_user_id ? 'Sem responsável' : mine ? 'Você' : 'Outro atendente'}
+            </span>
+          </div>
+          {line && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-text-secondary">Canal</span>
+              <span className="min-w-0 truncate text-right font-medium text-text-primary">{line.label}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-text-secondary">Mensagens</span>
+            <span className="font-medium text-text-primary">{conversation?.message_count ?? '—'}</span>
+          </div>
+          {conversation?.created_at && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-text-secondary">Iniciado em</span>
+              <span className="font-medium text-text-primary">
+                {new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+          )}
+          {closed && (
+            <p role="status" className="pt-1 text-xs text-text-secondary">
+              Atendimento finalizado.
             </p>
+          )}
+          {assignError && (
+            <div role="alert" className="rounded-control bg-status-danger-soft p-2 text-xs text-status-danger">
+              {assignError}
+            </div>
+          )}
+          {/* A spam contact's conversation is not for attending: restore it first (ADR-0014). */}
+          {canAct && (
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              {conversation?.assigned_to_user_id ? (
+                <button
+                  onClick={handleUnassign}
+                  disabled={assignLoading}
+                  className={clsx(
+                    'rounded-control border border-border-subtle bg-status-danger-soft px-3 py-2 text-sm font-medium text-status-danger hover:bg-status-danger-border',
+                    assignLoading && 'cursor-not-allowed opacity-50',
+                  )}
+                >
+                  Soltar
+                </button>
+              ) : (
+                <button
+                  onClick={handleAssign}
+                  disabled={assignLoading}
+                  className={clsx(
+                    'rounded-control border border-border-subtle bg-accent-primary px-3 py-2 text-sm font-medium text-white hover:bg-accent-primary-hover',
+                    assignLoading && 'cursor-not-allowed opacity-50',
+                  )}
+                >
+                  Assumir
+                </button>
+              )}
+              <button
+                onClick={handleTransfer}
+                disabled={assignLoading || !conversation?.assigned_to_user_id}
+                className={clsx(
+                  'rounded-control border border-border-subtle px-3 py-2 text-sm font-medium',
+                  conversation?.assigned_to_user_id ? 'bg-surface text-text-primary hover:bg-surface-muted' : 'cursor-not-allowed bg-surface-muted text-text-tertiary',
+                  assignLoading && 'opacity-50',
+                )}
+              >
+                Transferir
+              </button>
+              {!internal && (
+                <button
+                  onClick={() => setShowFinalize(true)}
+                  disabled={assignLoading}
+                  className={clsx(
+                    'col-span-2 rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm font-medium text-text-primary hover:bg-surface-muted',
+                    assignLoading && 'cursor-not-allowed opacity-50',
+                  )}
+                >
+                  Finalizar atendimento
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection id="contact" title="Contato" icon="contacts" defaultOpen>
+        {/* PRODUCT.7B1C: the "Ver perfil 360°" link was removed: it pointed crm_contact_id (a K3G identity) at /contacts/:id
+            (an OMNIRA-internal contact id), two different identity domains. */}
+        <div className="px-4 pb-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-accent-primary text-base font-semibold text-white">
+              {conversation?.contact_name?.[0]?.toUpperCase() || '?'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h5 className="truncate font-semibold text-text-primary">{conversation?.contact_name}</h5>
+              <WhatsAppName principal={conversation?.contact_name} whatsapp={conversation?.contact_whatsapp_name} />
+              <div className="flex items-center gap-1">
+                <p className="min-w-0 break-words text-sm text-text-secondary">{conversation?.contact_phone}</p>
+                {conversation?.contact_phone && (
+                  <button
+                    type="button"
+                    onClick={() => void copyPhone()}
+                    aria-label={copied ? 'Telefone copiado' : 'Copiar telefone'}
+                    title={copied ? 'Copiado' : 'Copiar telefone'}
+                    className="flex-shrink-0 rounded-control p-1 text-text-tertiary hover:bg-surface hover:text-text-primary"
+                  >
+                    <Icon name={copied ? 'check' : 'copy'} size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+        {conversation?.contact_id && <ContactDetailsEditor contactId={conversation.contact_id} onChanged={refreshAll} />}
+        {/* ADR-0014: who this contact is (customer / other / spam). Reclassifying changes which Inbox list the
+            contact's conversations belong to, so the lists and this pane are refreshed. */}
+        {conversation?.contact_id && (
+          <ContactKindControl
+            contactId={conversation.contact_id}
+            kind={conversation.contact_kind || 'unclassified'}
+            contactName={conversation.contact_name}
+            onChanged={refreshAll}
+          />
+        )}
+      </CollapsibleSection>
 
       {conversation?.contact_id && onOpenConversation && (
-        <ChannelSwitcher
-          contactId={conversation.contact_id}
-          currentChannelId={conversation.channel_connection_id}
-          onOpenConversation={onOpenConversation}
-        />
+        <CollapsibleSection id="channel" title="Canal" icon="channels" defaultOpen>
+          <ChannelSwitcher
+            contactId={conversation.contact_id}
+            currentChannelId={conversation.channel_connection_id}
+            onOpenConversation={onOpenConversation}
+          />
+        </CollapsibleSection>
       )}
-
-      {conversation?.contact_id && (
-        <ContactDetailsEditor
-          contactId={conversation.contact_id}
-          onChanged={() => {
-            void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
-            void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
-            void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
-          }}
-        />
-      )}
-
-      {/* ADR-0014: who this contact is (customer / other / spam). Reclassifying changes which Inbox
-          list the contact's conversations belong to, so the lists and this pane are refreshed. */}
-      {conversation?.contact_id && (
-        <ContactKindControl
-          contactId={conversation.contact_id}
-          kind={conversation.contact_kind || 'unclassified'}
-          contactName={conversation.contact_name}
-          onChanged={() => {
-            void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
-            void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
-            void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
-          }}
-        />
-      )}
-
-      {conversation?.contact_id && <ContactNotes contactId={conversation.contact_id} />}
-
-      {/* PRODUCT.7C1: on-demand, non-persisted AI conversation summary */}
-      <ConversationSummary conversationId={conversationId} />
-
-      <TopicsPanel conversationId={conversationId} />
-
-      {/* Conversation Stats */}
-      <div className="p-4 border-b border-border-subtle">
-        <h4 className="text-xs font-semibold text-text-tertiary mb-3 uppercase">Conversa</h4>
-        <div className="space-y-2 text-sm">
-          <div className="flex justify-between items-center">
-            <span className="text-text-secondary">Mensagens</span>
-            <span className="font-semibold text-text-primary">{conversation?.message_count ?? '—'}</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-text-secondary">Status</span>
-            <span className={clsx(
-              'text-xs font-medium px-2 py-0.5 rounded-pill',
-              conversation?.status === 'active' ? 'bg-status-success-soft text-status-success' :
-              conversation?.status === 'closed' ? 'bg-status-muted text-text-secondary' :
-              'bg-status-warning-soft text-status-warning'
-            )}>
-              {conversation?.status === 'active' ? 'Ativo' : conversation?.status === 'closed' ? 'Fechado' : 'Pendente'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Assignment */}
-      {conversation?.assigned_to_user_id && (
-        <div className="p-4 border-b border-border-subtle">
-          <h4 className="text-xs font-semibold text-text-tertiary mb-2 uppercase">Atendimento</h4>
-          <div className="text-sm">
-            <span className="inline-flex rounded-md bg-accent-primary-soft px-2 py-1 text-xs font-medium text-accent-primary">
-              Atribuído a você
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* PRODUCT.7B1C: a "Participantes" section used to render here from
-          conversation.participants, but the canonical Inbox conversation
-          read (internal/inbox/adapters/http.go GetConversation/
-          ListConversations) never selects or joins that field — it was
-          always undefined here, so the section could never actually
-          render. Removed rather than left as unreachable dead code.
-          External/group participant modeling is future scope. */}
 
       {/* ADR-0020: o que aconteceu antes com este contato e o que ficou pendente ou prometido */}
-      {conversation?.conversation_kind !== 'internal' && <AttendanceMemoryPanel conversationId={conversationId} />}
-      {conversation?.conversation_kind !== 'internal' && <HistorySearch conversationId={conversationId} />}
+      {!internal && <AttendanceMemoryPanel conversationId={conversationId} />}
+      {!internal && <HistorySearch conversationId={conversationId} />}
+
+      {conversation?.contact_id && (
+        <CollapsibleSection id="notes" title="Anotações internas" icon="tickets">
+          <ContactNotes contactId={conversation.contact_id} />
+        </CollapsibleSection>
+      )}
+
+      {/* PRODUCT.7C1: on-demand, non-persisted AI conversation summary */}
+      <CollapsibleSection id="summary" title="Resumo com IA" icon="sparkles">
+        <ConversationSummary conversationId={conversationId} />
+      </CollapsibleSection>
+
+      <CollapsibleSection id="topics" title="Assuntos" icon="conversations">
+        <TopicsPanel conversationId={conversationId} />
+      </CollapsibleSection>
 
       {/* Chamado + atividade CRM */}
-      <TicketPanel
-        conversationId={conversationId}
-        crmContactId={conversation?.crm_contact_id}
-        conversationUnassigned={Boolean(conversation) && !conversation?.assigned_to_user_id}
-      />
-
-      {/* Error */}
-      {assignError && (
-        <div className="p-4">
-          <div role="alert" className="p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
-            {assignError}
-          </div>
-        </div>
-      )}
-
-      {/* Finalized attendance (ADR-0020): nothing left to do here; the contact's next message opens a new one. */}
-      {conversation?.status === 'closed' && (
-        <div role="status" className="p-4 text-xs text-text-secondary">Atendimento finalizado.</div>
-      )}
-
-      {/* Actions. A spam contact's conversation is not for attending: restore it first (ADR-0014). */}
-      {conversation?.contact_kind !== 'spam' && conversation?.status !== 'closed' && (
-      <div className="p-4 space-y-2">
-        {conversation?.assigned_to_user_id ? (
-          <button
-            onClick={handleUnassign}
-            disabled={assignLoading}
-            className={clsx(
-              'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
-              'bg-status-danger-soft text-status-danger hover:bg-status-danger-border',
-              'border border-border-subtle',
-              assignLoading && 'opacity-50 cursor-not-allowed'
-            )}
-          >
-            <Icon name="check" className="w-4 h-4 mr-2" />
-            Soltar
-          </button>
-        ) : (
-          <button
-            onClick={handleAssign}
-            disabled={assignLoading}
-            className={clsx(
-              'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
-              'bg-accent-primary text-white hover:bg-accent-primary-hover',
-              'border border-border-subtle',
-              assignLoading && 'opacity-50 cursor-not-allowed'
-            )}
-          >
-            <Icon name="plus" className="w-4 h-4 mr-2" />
-            Assumir
-          </button>
-        )}
-        <button
-          onClick={handleTransfer}
-          disabled={assignLoading || !conversation?.assigned_to_user_id}
-          className={clsx(
-            'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
-            conversation?.assigned_to_user_id
-              ? 'bg-surface text-text-primary hover:bg-surface-muted'
-              : 'bg-surface-muted text-text-tertiary cursor-not-allowed',
-            'border border-border-subtle',
-            assignLoading && 'opacity-50 cursor-not-allowed'
-          )}
-        >
-          <Icon name="info" className="w-4 h-4 mr-2" />
-          Transferir
-        </button>
-        {conversation?.conversation_kind !== 'internal' && (
-          <button
-            onClick={() => setShowFinalize(true)}
-            disabled={assignLoading}
-            className={clsx(
-              'w-full px-3 py-2 text-sm font-medium rounded-control transition-colors',
-              'bg-surface text-text-primary hover:bg-surface-muted',
-              'border border-border-subtle',
-              assignLoading && 'opacity-50 cursor-not-allowed'
-            )}
-          >
-            <Icon name="check" className="w-4 h-4 mr-2" />
-            Finalizar atendimento
-          </button>
-        )}
-      </div>
-      )}
+      <CollapsibleSection id="ticket" title="Chamado" icon="tickets" defaultOpen>
+        <TicketPanel
+          conversationId={conversationId}
+          crmContactId={conversation?.crm_contact_id}
+          conversationUnassigned={Boolean(conversation) && !conversation?.assigned_to_user_id}
+        />
+      </CollapsibleSection>
 
       <FinalizeDialog
         open={showFinalize}

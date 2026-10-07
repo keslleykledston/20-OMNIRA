@@ -110,7 +110,7 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
       expect(
         url.endsWith(`/inbox/conversations/${CONV}`) || url.endsWith('/crm/companies') || url.endsWith('/ticket') ||
           url.endsWith(`/inbox/conversations/${CONV}/topics`) || url.endsWith(`/inbox/conversations/${CONV}/ambiguities`) || url.endsWith('/me/access') ||
-          url.endsWith(`/inbox/conversations/${CONV}/attendance-context`),
+          url.endsWith(`/inbox/conversations/${CONV}/attendance-context`) || url.endsWith('/channels/lines'),
       ).toBe(true);
     }
     expect(axios.post).not.toHaveBeenCalled();

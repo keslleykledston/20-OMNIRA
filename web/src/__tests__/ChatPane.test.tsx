@@ -29,11 +29,12 @@ const msg = (id: string, h: number, over: Partial<MessageItem> = {}): MessageIte
 
 // Backend: newest-first pages of the whole thread, cursor = how many were already served.
 let thread: MessageItem[] = [];
+let assignedTo: string | undefined = 'u-1';
 let pageSize = 100;
 function serve() {
   vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
     if ((url as string).endsWith(`/inbox/conversations/${CONV}`)) {
-      return { data: { id: CONV, contact_name: 'Maria', contact_phone: '+5511999990000', status: 'active' } };
+      return { data: { id: CONV, contact_name: 'Maria', contact_phone: '+5511999990000', status: 'active', assigned_to_user_id: assignedTo } };
     }
     if ((url as string).endsWith('/messages')) {
       const newestFirst = [...thread].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -55,6 +56,7 @@ beforeEach(() => {
   localStorage.clear();
   setSession();
   pageSize = 100;
+  assignedTo = 'u-1';
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 1000 });
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 400 });
 });
@@ -205,7 +207,7 @@ describe('ChatPane — spam contact (ADR-0014)', () => {
   function serveKind(kind: string) {
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       if ((url as string).endsWith(`/inbox/conversations/${CONV}`)) {
-        return { data: { id: CONV, contact_name: 'Golpe', contact_phone: '+5511999990000', status: 'active', contact_kind: kind } };
+        return { data: { id: CONV, contact_name: 'Golpe', contact_phone: '+5511999990000', status: 'active', contact_kind: kind, assigned_to_user_id: 'u-1' } };
       }
       if ((url as string).endsWith('/messages')) return { data: { items: [msg('a', 10)], has_more: false } };
       return Promise.reject({ response: { status: 404 } });
@@ -226,5 +228,20 @@ describe('ChatPane — spam contact (ADR-0014)', () => {
     await screen.findByText('texto a');
     expect(await screen.findByPlaceholderText('Escreva uma resposta...')).toBeInTheDocument();
     expect(screen.queryByText(/respostas ficam desativadas/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ChatPane — claim first (channel selector slice)', () => {
+  it('without an owner it asks to take the attendance instead of offering a composer that would be refused', async () => {
+    assignedTo = undefined;
+    thread = [msg('a', 9)];
+    serve();
+    vi.mocked(axios.post).mockResolvedValue({ data: {} });
+    renderAt(<ChatPane conversationId={CONV} />);
+    expect(await screen.findByText('Assuma o atendimento para responder.')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Escreva uma resposta...')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Assumir' }));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(String(vi.mocked(axios.post).mock.calls[0][0])).toMatch(/inbox\/conversations\/conv-1\/assign$/);
   });
 });
