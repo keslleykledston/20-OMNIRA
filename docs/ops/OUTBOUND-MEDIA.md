@@ -13,6 +13,9 @@ Desligado por padrão. Quando ligado, o operador vê o clipe no campo de respost
 Envie para um número seu: uma foto JPG com GPS (a foto recebida **não** deve ter localização), um PDF, um áudio OGG (chega como nota de voz no WAHA), um MP4; confirme na conversa e no celular;
 confirme que o EICAR (`X5O!P%@AP...`) é recusado com "antivírus"; pare o `clamav` e confirme `503`. Em linha Meta, repita com JPG e PDF. Registre o resultado aqui.
 
+## Memória
+Cada upload em andamento pode segurar até ~40 MiB (arquivo + cópia sem metadados) e a decodificação de uma imagem de 12 MP ~50 MiB. Há 4 uploads simultâneos e 2 decodificações simultâneas: dimensione o limite de memória do contêiner `api` com folga de ~250 MiB. O envio ao WAHA usa o dobro/triplo do tamanho (base64 + JSON), com 2 envios simultâneos por processo do worker.
+
 ## Operar
 - Métricas/logs: `messages: attachment accepted ...`, `messages: upload blocked by the antivirus ...`, `channel delivery: uncertain ...`, `outbound media: swept ...`.
 - `uncertain` de mídia: o arquivo **pode** ter chegado; confira no celular antes de reenviar (o sistema nunca reenvia sozinho).

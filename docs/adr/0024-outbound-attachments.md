@@ -19,10 +19,12 @@ entregar do texto.
      arquivos compactados, executáveis, conteúdo ativo, *polyglot*, PDF com JavaScript e tipo declarado que contradiz o real são recusados;
    - **o que o provedor consegue entregar**: JPEG, PNG, MP4, PDF, texto e áudio OGG/MP3/M4A/AMR em ambos; WebP só no WAHA; GIF/WebM/WAV/FLAC não saem como mídia. Resto: `422 unsupported_for_channel`;
    - **metadados de imagem removidos** (EXIF/GPS/dispositivo, XMP, IPTC, comentários, *text chunks*) **sem recodificar** os pixels; imagem malformada é recusada, não enviada pela metade;
+   - JPEG e PNG são **decodificados por inteiro** (truncado/corrompido = recusado), tudo depois do EOI/IEND é cortado, metadados entre *scans* de JPEG progressivo também saem, WebP confere o tamanho do contêiner e nomes PDF com `#xx` são normalizados antes de procurar JavaScript/Launch;
    - **ClamAV** sobre os bytes que serão enviados; vírus = `422`, antivírus fora = `503` (**fecha**: nada é aceito sem varredura);
    - nome mostrado ao cliente = nome do operador reduzido a letras/dígitos/separadores, sem caminho nem caracteres de controle ou bidirecionais, com a **extensão do tipo real**;
    - grava em `<media>/outbound/<tenant>/<id>` (só UUIDs no caminho) e registra em `message_outbound_media` (RLS forçada, `uploaded_by` obrigatório = quem fez o upload).
-   Limites: 5 envios pendentes por operador por conversa (`409`), 20 uploads/min por operador (`429`), validade de 24 h se não for enviado.
+   Limites (contados no banco, valem entre réplicas): 5 pendentes por operador por conversa, 64 MiB de bytes não enviados por operador, 2 GiB de arquivos guardados por tenant (`409`), 30 uploads/min por operador (`429`; mais 20/min em memória por processo), validade de 24 h se não for enviado.
+   **O corpo é lido antes da sessão do tenant** (`BufferUpload`): a sessão segura uma conexão do banco enquanto o handler roda, então um cliente lento não pode prender conexões; ele ocupa só um dos 4 *slots* de upload (memória) e vale um prazo de leitura de 60 s. A decodificação completa da imagem (até 12 MP, ~50 MiB) tem seu próprio limite de 2 simultâneas.
 2. `POST .../messages` com `attachment_id` (e `text` como legenda opcional, ≤ 1024 caracteres sem caracteres de controle). Uma instrução SQL **liga** o upload à mensagem **somente se** ele ainda é do
    operador, daquela conversa, sem mensagem, não expirado e não removido; só então cria a mensagem (tipo = `image|audio|video|document`, `mime_type`, `size_bytes`) e o job. Dois envios do mesmo
    upload: um perde (`422`). Idempotência por `Idempotency-Key` como no texto (repetição = `200` com a mesma mensagem). Um upload é de **um** operador: o supervisor não envia o de outro.
@@ -44,3 +46,7 @@ reconciliação de `uncertain` de mídia (hoje manual, como o texto da Meta).
 - Disco: até 16 MiB × (pendentes 24 h + enviados 60 dias).
 - Contratos: OpenAPI (`/attachments`, `attachment_id`, `can_send_media`); migration `000092`.
 - Não validado ao vivo com os provedores reais (envio a um cliente de verdade): por isso desligado. Os testes cobrem o contrato HTTP de cada provedor com servidores simulados.
+
+## Revisão independente (Codex, `read-only`, 2026-10-07)
+Duas passadas, 0 BLOCKER. Primeira (4 HIGH, 4 MEDIUM, 3 LOW): validação estrutural e *polyglot*, memória de uploads concorrentes, redirecionamentos nos clientes, corrida *sweeper*×envio, policy de UPDATE, cota atômica, retenção de mensagens pendentes, disponibilidade do provedor, *symlink*, órfãos: todos válidos e corrigidos (o `.changes/` do `AGENTS.md` não existe neste repositório, que usa `CHANGELOG.md`). Segunda (3 HIGH, 5 MEDIUM, 2 LOW): orçamento de memória da decodificação e do base64, provedor desabilitado barrado também no backend, cota durável em bytes e por minuto, metadados entre *scans* progressivos, `CheckRedirect` para clientes injetados, transições estritas na *trigger* (expiração só encurta, purga só do worker), órfãos de registros já purgados, *defer* do slot: corrigidos. Aceito e documentado: `O_NOFOLLOW` só no arquivo final servido (os diretórios-pai pertencem à aplicação; o volume não é gravável por operadores nem por clientes).
+O leitor do arquivo enviado (para o operador ver o que mandou) não confere o hash a cada leitura; só o worker confere antes de entregar.

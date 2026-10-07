@@ -2292,7 +2292,8 @@ paths:
         deliver are `422 file not accepted: <reason>`. Image metadata (EXIF/GPS, XMP, text chunks) is removed, the file is scanned by the
         antivirus (blocked = `422`, antivirus down = `503`: nothing is accepted without a scan), then stored. The upload belongs to the
         operator who made it, to that conversation, and expires after 24 h if not sent. At most 5 unsent uploads per operator per
-        conversation (`409`) and 20 uploads per minute per operator (`429`). Send it with `attachment_id` on the messages endpoint.
+        conversation, 64 MiB of unsent bytes per operator and 2 GiB stored per tenant (`409`), and 30 uploads per minute per operator (`429`). The body is read before
+        the tenant session; at most 4 uploads run at once (`503` with `Retry-After` when busy). Send it with `attachment_id` on the messages endpoint.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/ConversationId' }
