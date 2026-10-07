@@ -1,8 +1,8 @@
 # ADR-0022: Autenticação — Web (cookie de sessão) × Mobile (credencial por aparelho)
 
 ## Status
-**Accepted (2026-10-07)** pelo dono, "conforme proposto" (Opção A e as decisões 1–5 abaixo, nos valores propostos). **Ainda não há código**: a implementação é o MOBILE.1.
-O Web não muda. O cliente `omnira-mobile` no Keycloak (decisão 5) é criado no início do MOBILE.1, junto com o código que o usa; nada muda em produção até lá.
+**Accepted (2026-10-07)** pelo dono, "conforme proposto" (Opção A e as decisões 1–5 abaixo, nos valores propostos). **Implementada no Core (MOBILE.1, 2026-10-07)**, atrás de `OMNIRA_AUTH_MOBILE_ENABLED` (desligada). Contrato do app em `docs/auth/MOBILE-AUTH.md`.
+O Web não muda. O cliente `omnira-mobile` foi criado no Keycloak de produção em 2026-10-07 (público, PKCE S256, redirect `com.omnira.app:/oauth2redirect` provisório até o MOBILE.0 fixar o *application id*).
 
 ## Contexto (verificado no código)
 - **IdP:** Keycloak (OIDC). **Login Web:** Authorization Code + PKCE `S256` + `state` + `nonce`; o servidor troca o código (cliente confidencial), valida o
