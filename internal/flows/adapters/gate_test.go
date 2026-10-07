@@ -160,6 +160,35 @@ func TestGateOnInboundEnqueuesReferencesOnlyAndOnlyWhenRelevant(t *testing.T) {
 	}
 }
 
+// After the handoff the conversation waits in the queue (automation_mode=waiting_human). The contact can still end the
+// attendance there, so the engine must hear about those messages; once someone takes or closes it, nothing is enqueued.
+func TestGateOnInboundReachesTheEngineWhileTheContactWaitsForAHuman(t *testing.T) {
+	g := newGateEnv(t)
+	env := g.env
+	g.publish("reception", nil)
+	op := uuid.New()
+	g.exec(`INSERT INTO users(id, external_subject, email, status) VALUES($1,$2,$3,'active')`, op, op, op.String()+"@invalid")
+	t.Cleanup(func() { _, _ = env.Seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, op) })
+	for name, c := range map[string]struct {
+		set  string
+		want int
+	}{
+		"waiting in the queue": {``, 1},
+		"taken by a human":     {`assigned_to_user_id='` + op.String() + `'`, 0},
+		"closed":               {`status='closed'`, 0},
+	} {
+		conv, _ := env.SeedConversation(t, env.TenantA, "waiting_human")
+		if c.set != "" {
+			g.exec(`UPDATE conversations SET `+c.set+` WHERE id=$1`, conv)
+		}
+		m := env.SeedInbound(t, env.TenantA, conv, "encerrar")
+		g.sys(env.TenantA, func(ctx context.Context) { g.gate.OnInbound(ctx, conv, m, false) })
+		if n := g.count(`SELECT count(*) FROM outbox_events WHERE event_type=$1 AND aggregate_id=$2`, adapters.JobFlowInbound, conv.String()); n != c.want {
+			t.Errorf("%s: want %d job(s), got %d", name, c.want, n)
+		}
+	}
+}
+
 // A flow's active version must belong to THAT flow: the pointer is a composite FK on (tenant, flow, version).
 func TestActiveVersionMustBelongToItsOwnFlow(t *testing.T) {
 	g := newGateEnv(t)

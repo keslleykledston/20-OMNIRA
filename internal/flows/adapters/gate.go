@@ -61,7 +61,8 @@ func (g *Gate) Engage(ctx context.Context, conversationID uuid.UUID) (held bool)
 }
 
 // OnInbound enqueues the flow job for a persisted inbound message, in the same transaction as the message itself (so the
-// job exists exactly when the message does). Only conversations a flow can act on are enqueued: held by the bot, or open,
+// job exists exactly when the message does). Only conversations a flow can act on are enqueued: held by the bot, waiting in
+// the queue for a human nobody has taken yet (the contact may still end the attendance, see CustomerExit), or open,
 // unassigned external conversations when some published INBOUND flow restarts on every message (the cheap part of
 // Startable; an identity conflict is left to the engine, so this filter may over-enqueue but never misses a start).
 func (g *Gate) OnInbound(ctx context.Context, conversationID, messageID uuid.UUID, newConversation bool) bool {
@@ -74,6 +75,8 @@ func (g *Gate) OnInbound(ctx context.Context, conversationID, messageID uuid.UUI
 			INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
 			SELECT $1, $2, $3, 'conversation', $4, $5, jsonb_build_object('message_id', $6::text, 'new_conversation', $7::boolean)
 			WHERE EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $2 AND id = $8 AND automation_mode = 'bot')
+			   OR EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $2 AND id = $8 AND automation_mode = 'waiting_human'
+			              AND status = 'open' AND assigned_to_user_id IS NULL)
 			   OR (EXISTS (SELECT 1 FROM flows WHERE tenant_id = $2 AND status = 'published' AND flow_type = 'INBOUND' AND restart_policy = 'always')
 			       AND EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $2 AND id = $8 AND status = 'open' AND assigned_to_user_id IS NULL
 			                   AND contact_id IS NOT NULL AND conversation_kind IN ('customer_service','unclassified')))`,

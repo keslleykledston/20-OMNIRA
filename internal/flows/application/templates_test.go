@@ -81,9 +81,13 @@ func TestInstallStarterPackCreatesOnlyTenantOwnedDrafts(t *testing.T) {
 	if n := x.count(`SELECT count(*) FROM flow_versions WHERE tenant_id=$1`, env.TenantA); n != 0 {
 		t.Fatalf("an install must never publish: %d versions", n)
 	}
-	// provenance is recorded as metadata only
-	if n := x.count(`SELECT count(*) FROM flows WHERE tenant_id=$1 AND source_template_slug IS NOT NULL AND source_template_version=1 AND template_installed_at IS NOT NULL`, env.TenantA); n != 5 {
+	// provenance is recorded as metadata only; the reception template has grown (v2: tells the contact a person is coming,
+	// v3: the contact can end the attendance), the other four are still at v1
+	if n := x.count(`SELECT count(*) FROM flows WHERE tenant_id=$1 AND source_template_slug IS NOT NULL AND source_template_version=1 AND template_installed_at IS NOT NULL`, env.TenantA); n != 4 {
 		t.Fatalf("provenance missing: %d", n)
+	}
+	if n := x.count(`SELECT count(*) FROM flows WHERE tenant_id=$1 AND slug='smart-reception' AND source_template_version=3 AND template_installed_at IS NOT NULL`, env.TenantA); n != 1 {
+		t.Fatalf("the reception flow must come from template v3: %d", n)
 	}
 	if x.count(`SELECT count(*) FROM flow_pack_installations WHERE tenant_id=$1`, env.TenantA) != 1 || x.count(`SELECT count(*) FROM flow_template_installations WHERE tenant_id=$1 AND pack_installation_id IS NOT NULL`, env.TenantA) != 5 {
 		t.Fatal("installation history missing")
