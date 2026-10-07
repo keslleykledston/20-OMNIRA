@@ -1,6 +1,6 @@
 # Finalizar atendimento e memória do contato (ADR-0020)
 
-Estado: **implementado em `main`, NÃO implantado.** Decisão e justificativas: `docs/adr/0020-attendance-finalization-and-contact-memory.md`.
+Estado: **implantado em 2026-10-06 20:29 -0400** (migrations 086 e 087 aplicadas ao `omnira_dev`; `api` `20-omnira-api:1b04d65` e `web` `20-omnira-web:1b04d65`; rollback: tags `rollback-pre-adr0020-20261006`). Flags de IA desligadas. Decisão e justificativas: `docs/adr/0020-attendance-finalization-and-contact-memory.md`.
 
 ## O que o atendente vê
 - **Finalizar atendimento** (painel de contexto do Inbox): motivo, resumo, e o que ficou **pendente**, foi **prometido** ou vale **lembrar** (com prazo opcional).

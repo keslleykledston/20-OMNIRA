@@ -2,12 +2,11 @@
 
 Atualize este arquivo ao concluir trabalho substancial. Git e testes executáveis vencem este resumo quando divergirem. Não fazer push/tag sem ordem explícita; não declarar produção pronta sem evidência de deploy e gate.
 
-## ATENDIMENTO: FINALIZAR + MEMÓRIA DO CONTATO (ADR-0020) — 2026-10-06 (implementado em `main`, NÃO implantado)
+## ATENDIMENTO: FINALIZAR + MEMÓRIA DO CONTATO (ADR-0020) — 2026-10-06 (IMPLANTADO)
 
-Estado: ondas W0–W3c e W4 prontas e testadas; **nada implantado** (api/web em execução são anteriores; migration `000086` não aplicada ao `omnira_dev`).
+Estado: ondas W0–W3c e W4 prontas, testadas e **implantadas em 2026-10-06 20:29 -0400**: migrations `000086` (tabelas) e `000087` (append-only: `REVOKE UPDATE/DELETE` do `omnira_app` e gatilho nos fechamentos), `api` e `web` reconstruídas (`:1b04d65`; rollback `:rollback-pre-adr0020-20261006`); worker não mudou. Flags de IA desligadas. A 087 corrigiu uma lacuna: a migration `000006` concede DML completo a toda tabela nova, então os GRANTs mínimos da 082/086 nunca restringiam nada. Pendência observada: `ai_usage` está documentada como append-only (`docs/architecture/DATA-MODEL.md`) mas o `omnira_app` tem `UPDATE/DELETE` nela (não é deste trabalho).
 Leia `docs/attendance/README.md` (guia, flags, implantação, reversão) e o ADR-0020. Achado que motivou tudo: nenhuma conversa podia ser fechada
-(156 abertas, nenhuma fechada), então roteamento e bot só atuavam na primeira conversa de cada contato. Para implantar: backup + migration 086,
-reconstruir `api` e `web` (worker não muda). As flags de IA continuam desligadas. Adiado de propósito: resolução de tópicos por evento,
+(156 abertas, nenhuma fechada), então roteamento e bot só atuavam na primeira conversa de cada contato. As flags de IA continuam desligadas (ligar é decisão do dono). Adiado de propósito: resolução de tópicos por evento,
 fechamento em lote das conversas legadas, finalização por inatividade, nó `fechar conversa`. Conversas fechadas por SQL em 2026-10-06 para um teste: duas (ids no scratchpad da sessão).
 
 ## FLOW BUILDER (ADR-0019) — 2026-10-06 (LEIA ANTES DE TOCAR EM `internal/flows`, `web/src/components/flows` OU NA FLAG `OMNIRA_FLOWS_ENABLED`)

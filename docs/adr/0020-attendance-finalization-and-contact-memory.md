@@ -1,7 +1,7 @@
 # ADR-0020: Finalizar atendimento e memória do contato entre atendimentos
 
 ## Status
-**Aceito e implementado em `main` (2026-10-06), ainda NÃO implantado.** Ondas W0 a W3c concluídas (ver "Plano"). O núcleo (finalizar, histórico,
+**Aceito, implementado e implantado (2026-10-06, migrations 086 e 087, `api` e `web`).** Flags de IA desligadas. Ondas W0 a W3c concluídas (ver "Plano"). O núcleo (finalizar, histórico,
 pendências) é aditivo e guiado por permissões existentes; as partes de IA (sugestão de resumo e memória no copiloto) nascem **desligadas** por
 flag. **Adiado, com motivo:** a resolução automática de tópicos por evento (seção 5), o fechamento em lote das conversas legadas, a
 finalização por inatividade e o nó `fechar conversa` do Flow Builder.
