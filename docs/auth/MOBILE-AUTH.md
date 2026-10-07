@@ -38,4 +38,4 @@ Tokens só no Keychain (iOS) / Keystore (Android). Nunca em log, URL, preferênc
 ## Operação
 Ligar: `OMNIRA_AUTH_MODE=oidc`, `OMNIRA_AUTH_MOBILE_ENABLED=true`, `OMNIRA_AUTH_MOBILE_REDIRECT_URIS=<uri1>,<uri2>` (sem curinga; `http` só em loopback) e o cliente
 `omnira-mobile` no Keycloak (público, PKCE S256, sem *direct grants*, sem *implicit*). Revogar tudo de um usuário: `UPDATE auth_devices SET revoked_at=now()` + famílias
-(ou a API de aparelhos). Migration `000090` (reversível: `down` remove as 4 tabelas).
+(ou a API de aparelhos). Migration `000091` (reversível: `down` remove as 4 tabelas).

@@ -33,7 +33,7 @@ const (
 	deviceLastSeenSlack = time.Minute
 )
 
-// Revocation reasons (stored; keep in sync with the CHECK in migration 000090).
+// Revocation reasons (stored; keep in sync with the CHECK in migration 000091).
 const (
 	RevokedLogout   = "logout"
 	RevokedUser     = "user"

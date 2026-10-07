@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added (MOBILE.1 — credenciais de apps nativos, ADR-0022; desligado por flag)
-- Migration `000090`: `auth_devices`, `auth_families`, `auth_refresh_tokens`, `auth_access_tokens` (só *digests* SHA-256). `POST /auth/mobile/{token,refresh,logout}`, `GET /me/devices`, `DELETE /me/devices/{device_id}`; token de acesso opaco de 15 min, *refresh* de uso único (30 d deslizante, 90 d absoluto), reuso revoga o aparelho, trava de família serializa refresh × revogação. `OMNIRA_AUTH_MOBILE_ENABLED/CLIENT_ID/REDIRECT_URIS`. Contrato em `docs/auth/MOBILE-AUTH.md`.
+- Migration `000091`: `auth_devices`, `auth_families`, `auth_refresh_tokens`, `auth_access_tokens` (só *digests* SHA-256). `POST /auth/mobile/{token,refresh,logout}`, `GET /me/devices`, `DELETE /me/devices/{device_id}`; token de acesso opaco de 15 min, *refresh* de uso único (30 d deslizante, 90 d absoluto), reuso revoga o aparelho, trava de família serializa refresh × revogação. `OMNIRA_AUTH_MOBILE_ENABLED/CLIENT_ID/REDIRECT_URIS`. Contrato em `docs/auth/MOBILE-AUTH.md`.
 - R-3: o SSE reverifica a sessão (cookie ou aparelho), não só a membership.
 - R-2: cotas por tenant e por usuário aplicadas **depois** da membership verificada (`OMNIRA_RATELIMIT_USER_PER_MIN=1200`, `OMNIRA_RATELIMIT_TENANT_PER_MIN=6000`).
 
