@@ -72,11 +72,13 @@ export function Modal({ open, title, description, onClose, children, footer, siz
         aria-modal="true"
         aria-label={title}
         className={clsx(
-          'w-full overflow-hidden rounded-sheet bg-surface shadow-lg',
+          // never taller than the screen: header and footer stay put and only the body scrolls, so a long list can
+          // never push the confirm/close buttons out of reach
+          'flex max-h-[calc(100dvh-2rem)] w-full flex-col overflow-hidden rounded-sheet bg-surface shadow-lg',
           size === 'sm' ? 'max-w-md' : 'max-w-lg',
         )}
       >
-        <header className="flex items-start justify-between gap-4 border-b border-border-subtle px-6 py-5">
+        <header className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-border-subtle px-6 py-5">
           <div className="min-w-0">
             <h2 className="text-section-md font-semibold text-text-primary">{title}</h2>
             {description && <p className="mt-1 text-body-sm text-text-secondary">{description}</p>}
@@ -91,10 +93,10 @@ export function Modal({ open, title, description, onClose, children, footer, siz
           </button>
         </header>
 
-        {children && <div className="px-6 py-5">{children}</div>}
+        {children && <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>}
 
         {footer && (
-          <footer className="flex justify-end gap-2 border-t border-border-subtle bg-surface-muted px-6 py-4">
+          <footer className="flex flex-shrink-0 justify-end gap-2 border-t border-border-subtle bg-surface-muted px-6 py-4">
             {footer}
           </footer>
         )}
