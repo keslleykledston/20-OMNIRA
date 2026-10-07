@@ -160,3 +160,51 @@ func TestRequestIDIsAvailableToHandlers(t *testing.T) {
 		t.Fatal("no id outside RequestMeta")
 	}
 }
+
+// The mobile client will send the vendor Accept on EVERY request, media downloads included. Range (audio seeking), 304 and HEAD must
+// behave exactly as without the wrapper.
+func TestEnvelopeKeepsRangeConditionalAndHeadResponsesIntact(t *testing.T) {
+	content := strings.Repeat("0123456789", 100)
+	modTime := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	media := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/ogg")
+		w.Header().Set("ETag", `"v1"`)
+		http.ServeContent(w, r, "a.ogg", modTime, strings.NewReader(content))
+	})
+	do := func(method string, hdr map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/media", nil)
+		req.Header.Set("Accept", MediaTypeV1)
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		rr := httptest.NewRecorder()
+		RequestMeta(media).ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := do("GET", map[string]string{"Range": "bytes=10-19"}); rr.Code != 206 || rr.Body.String() != "0123456789" || rr.Header().Get("Content-Range") != "bytes 10-19/1000" {
+		t.Fatalf("range: %d %q %q", rr.Code, rr.Body.String(), rr.Header().Get("Content-Range"))
+	}
+	if rr := do("GET", map[string]string{"If-None-Match": `"v1"`}); rr.Code != 304 || rr.Body.Len() != 0 {
+		t.Fatalf("conditional: %d %q", rr.Code, rr.Body.String())
+	}
+	if rr := do("HEAD", nil); rr.Code != 200 || rr.Body.Len() != 0 || rr.Header().Get("Content-Length") != "1000" {
+		t.Fatalf("head: %d len=%d cl=%q", rr.Code, rr.Body.Len(), rr.Header().Get("Content-Length"))
+	}
+	// an unsatisfiable range is an ERROR written by ServeContent as text/plain: it becomes the envelope, with its status kept
+	if rr := do("GET", map[string]string{"Range": "bytes=5000-6000"}); rr.Code != 416 || !strings.Contains(rr.Body.String(), `"code":"REJECTED"`) {
+		t.Fatalf("416: %d %q", rr.Code, rr.Body.String())
+	}
+}
+
+func TestEnvelopeSurvivesAHandlerThatWritesTheHeaderTwiceOrAfterTheBody(t *testing.T) {
+	twice := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "first", 404)
+		w.WriteHeader(500) // superfluous, must not corrupt the already captured error
+		_, _ = w.Write([]byte("late"))
+	})
+	rr := serve(t, twice, MediaTypeV1, "")
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil || rr.Code != 404 || env.Error.Code != "NOT_FOUND" {
+		t.Fatalf("%d %q (%v)", rr.Code, rr.Body.String(), err)
+	}
+}

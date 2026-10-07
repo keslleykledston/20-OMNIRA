@@ -19,6 +19,17 @@ describe('readEvents (SSE parser)', () => {
     expect(got).toEqual(['{"a":1}', 'line1\nline2']);
   });
 
+  it('ignores the SSE id: field and keeps event_id / v inside the JSON (additive event envelope)', async () => {
+    const got: string[] = [];
+    await readEvents(
+      stream(['id: 6f1c2d3e-0000-4000-8000-00000000abcd\ndata: {"event_id":"6f1c2d3e-0000-4000-8000-00000000abcd","v":1,"type":"message_received","id":"c1"}\n\n', 'data: {"type":"conversation_updated","id":"c1"}\n\n']),
+      (d) => got.push(d),
+    );
+    expect(got.map((d) => JSON.parse(d).type)).toEqual(['message_received', 'conversation_updated']);
+    expect(JSON.parse(got[0]).event_id).toBe('6f1c2d3e-0000-4000-8000-00000000abcd');
+    expect(JSON.parse(got[1]).event_id).toBeUndefined();
+  });
+
   it('accepts CRLF frames', async () => {
     const got: string[] = [];
     await readEvents(stream(['data: x\r\n\r\n']), (d) => got.push(d));
