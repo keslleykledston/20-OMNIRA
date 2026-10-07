@@ -295,6 +295,28 @@ type mobileAuthHTTPHandler interface {
 	DeleteDevice(http.ResponseWriter, *http.Request)
 }
 
+// deviceAdminHTTPHandler is the administrator view of other users' app installations.
+type deviceAdminHTTPHandler interface {
+	List(http.ResponseWriter, *http.Request)
+	Revoke(http.ResponseWriter, *http.Request)
+}
+
+// RegisterDeviceAdminHandlers installs the tenant-scoped administration of app installations. The handler authorizes membership.manage in
+// the path tenant AND in every tenant of the target (see tenancyadapters.DeviceAdminHandler). Needs the tenant session like any tenant route.
+func (s *Server) RegisterDeviceAdminHandlers(dbPool *pgxpool.Pool, handler deviceAdminHTTPHandler) {
+	if s.authenticator == nil || handler == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/team/{membership_id}/devices", authnMiddleware(tenantSession(http.HandlerFunc(handler.List))))
+	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/team/{membership_id}/devices/{device_id}", authnMiddleware(tenantSession(http.HandlerFunc(handler.Revoke))))
+}
+
 // SetSessionChecker installs the credential re-check used by SSE streams.
 func (s *Server) SetSessionChecker(c authn.SessionChecker) { s.sessionChecker = c }
 

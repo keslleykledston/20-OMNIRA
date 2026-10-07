@@ -243,6 +243,52 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/team/{membership_id}/devices:
+    get:
+      operationId: listTeamMemberDevices
+      tags: [Auth]
+      summary: List another member's app installations (administrator)
+      description: |
+        ADR-0022. Only served when native credentials are enabled. Needs `membership.manage` in this tenant AND in every tenant where the
+        target is an active member (an installation spans all of the user's tenants); otherwise `403`. Own installations: use `/me/devices` (`422`).
+      security:
+        - deviceAuth: []
+        - cookieAuth: []
+      parameters:
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: membership_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Installations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/DeviceInfo' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/team/{membership_id}/devices/{device_id}:
+    delete:
+      operationId: revokeTeamMemberDevice
+      tags: [Auth]
+      summary: Revoke another member's app installation (administrator, audited as device.revoked_by_admin)
+      security:
+        - deviceAuth: []
+        - cookieAuth: []
+      parameters:
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: membership_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: device_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Revoked; its tokens stop working at once and open streams close }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants:
     get:
       operationId: listMyTenants

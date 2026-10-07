@@ -160,6 +160,9 @@ func main() {
 	}
 	invitationDeliveryAvailable := cfg.DevAuthActive() || invitationSender != nil
 	srv.RegisterTenancyHandlers(dbPool, invitationDeliveryAvailable)
+	if cfg.MobileAuthEnabled {
+		srv.RegisterDeviceAdminHandlers(dbPool, tenancyadapters.NewDeviceAdminHandler(dbPool, authn.NewPostgresDeviceStore(dbPool), auditadapters.NewPostgresAuditEventRepository(dbPool)))
+	}
 	srv.RegisterPresenceHandlers(dbPool)
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)

@@ -25,7 +25,8 @@ desligada as rotas `/auth/mobile/*` e `/me/devices` respondem 404 e nada muda pa
 4. Antes de expirar (ou ao receber 401), `POST /api/v1/auth/mobile/refresh` `{refresh_token}` devolve **um par novo**; o anterior morre. O app deve **gravar o par novo
    antes de descartar o antigo**. Reapresentar um refresh já usado revoga o aparelho inteiro (o app refaz o login). Toda falha é o mesmo `401`.
 5. `POST /api/v1/auth/mobile/logout` (Bearer, ou `{refresh_token}` se o acesso já expirou) → `204`, efeito imediato (inclusive fecha o SSE aberto). Se responder `401` (por exemplo porque uma renovação acabou de rodar), repita com o `refresh_token` no corpo; em qualquer caso apague os tokens locais. Não rode renovação e logout ao mesmo tempo.
-6. `GET /api/v1/me/devices` lista as instalações do usuário; `DELETE /api/v1/me/devices/{device_id}` revoga uma (de outro usuário responde `404`).
+6. Administrador: `GET /tenants/{tenant_id}/team/{membership_id}/devices` e `DELETE .../devices/{device_id}` (auditado como `device.revoked_by_admin`). Exige `membership.manage` neste tenant **e em todos os tenants onde o alvo é membro ativo** (o aparelho vale para todos); senão `403` e a ferramenta é desativar/revogar a membership no próprio tenant. Os próprios aparelhos: `/me/devices` (`422` na rota de administração).
+7. `GET /api/v1/me/devices` lista as instalações do usuário; `DELETE /api/v1/me/devices/{device_id}` revoga uma (de outro usuário responde `404`).
 
 ## Armazenamento no aparelho (regras duras)
 Tokens só no Keychain (iOS) / Keystore (Android). Nunca em log, URL, preferências em claro, analytics ou backup. Nada de WebView para login.
