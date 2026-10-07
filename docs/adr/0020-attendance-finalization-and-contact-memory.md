@@ -47,7 +47,7 @@ Em **uma única transação** com a mesma trava de linha que o motor de fluxos u
 A atribuição (`assigned_to_user_id`) é mantida como histórico; a capacidade do atendente é liberada porque só conversas abertas contam.
 
 ### 2. Registro de fechamento e pendências são dados próprios (migration `000086`, aditiva)
-- `conversation_closures` (1 por conversa; **imutável**: sem UPDATE/DELETE para `omnira_app`): motivo (`resolved`, `no_response`,
+- `conversation_closures` (1 por conversa; **imutável**: sem UPDATE/DELETE para `omnira_app` e com gatilho contra `UPDATE`, ambos pela migration `000087`, porque a `000006` concede DML a toda tabela nova por privilégio padrão): motivo (`resolved`, `no_response`,
   `duplicate`, `spam`, `transferred`, `other`), nota, **resumo do atendimento** com nível de verdade (`agent_confirmed` ou
   `ai_inferred`, mesma escala do ADR-0017), contagem de tickets locais fechados e de externos mantidos, quem fechou e a origem
   (`agent`, `supervisor`, `system`).
@@ -127,7 +127,7 @@ cliente, e uma conversa nova com mensagem do cliente abre janela nova.
 
 ## Compatibilidade retroativa
 Tabelas e rotas existentes não mudam de significado. `tickets.conversation_id`, o ingest e o roteamento permanecem. Migration
-`000086` só adiciona tabelas (reversível). Sem permissão nova, portanto a matriz fixa de papéis (`internal/iam3`) não muda.
+`000086` só adiciona tabelas e a `000087` restringe privilégios das tabelas append-only (ambas reversíveis). Sem permissão nova, portanto a matriz fixa de papéis (`internal/iam3`) não muda.
 
 ## Plano
 | Onda | Entrega | Verificação |

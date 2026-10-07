@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/flows/adapters"
@@ -225,5 +226,26 @@ func TestGateReleaseGivesBackABotHeldConversation(t *testing.T) {
 	g.sys(env.TenantA, func(ctx context.Context) { g.gate.Engage(ctx, conv); ok = g.gate.OnInbound(ctx, conv, m, true) })
 	if !ok {
 		t.Fatal("a successful enqueue must report true")
+	}
+}
+
+// Migration 000087: the tables documented as append-only really are, for the application role (000006 grants everything by default).
+func TestAppendOnlyFlowTablesRefuseUpdateAndDeleteToTheAppRole(t *testing.T) {
+	g := newGateEnv(t)
+	for _, table := range []string{"flow_versions", "flow_node_executions", "flow_pack_installations", "flow_template_installations"} {
+		for _, stmt := range []string{`UPDATE ` + table + ` SET tenant_id = tenant_id WHERE false`, `DELETE FROM ` + table + ` WHERE false`} {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err := g.env.App.Acquire(ctx)
+			if err != nil {
+				cancel()
+				t.Fatal(err)
+			}
+			_, err = conn.Exec(ctx, stmt)
+			conn.Release()
+			cancel()
+			if err == nil || !strings.Contains(err.Error(), "permission denied") {
+				t.Errorf("%s must be denied to the application role: %v", stmt, err)
+			}
+		}
 	}
 }

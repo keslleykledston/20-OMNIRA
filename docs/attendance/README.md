@@ -30,13 +30,13 @@ Também: `GET …/inbox/conversations?status=open|closed|all` (padrão `open`).
 A IA só propõe: nada que ela escreve vale como fato até uma pessoa confirmar; falha da IA nunca impede finalizar à mão.
 
 ## Implantação
-1. Backup (`scripts/backup-omnira-db.sh`) e migration `000086` (`docker compose run --rm migrate`). Aditiva: duas tabelas (`conversation_closures`, `follow_up_items`).
+1. Backup (`scripts/backup-omnira-db.sh`) e migrations `000086` e `000087` (`docker compose run --rm migrate`). Aditiva: duas tabelas (`conversation_closures`, `follow_up_items`).
 2. Reconstruir e recriar `api` e `web` (o `worker` não muda). Sem flag para o núcleo: o botão aparece a quem tem as permissões acima.
 3. Decidir depois as flags de IA.
 
 ## Reversão
-- Migration: `migrations/000086_attendance.down.sql` (apaga os dois registros; as conversas ficam fechadas).
-- Reabrir uma conversa por engano (não há tela): `UPDATE conversations SET status='open', closed_at=NULL WHERE id='…' AND status='closed';` e, se quiser, apagar o fechamento (`conversation_closures` é imutável para a aplicação; só o dono do banco apaga).
+- Migrations: `000087_append_only_tables.down.sql` e depois `000086_attendance.down.sql` (apagam os dois registros; as conversas ficam fechadas). A 087 também revoga `UPDATE/DELETE` do `omnira_app` nas tabelas append-only do Flow Builder.
+- Reabrir uma conversa por engano (não há tela): `UPDATE conversations SET status='open', closed_at=NULL WHERE id='…' AND status='closed';` e, se quiser, apagar o fechamento (`conversation_closures` é imutável: a aplicação não atualiza nem apaga, e um gatilho impede `UPDATE` até do dono; o dono do banco ainda pode apagar manualmente, e a cascata de conversa/tenant funciona).
 - Voltar a imagem anterior: tags `rollback-*` das imagens `20-omnira-api` e `20-omnira-web`.
 
 ## Legado e pendências

@@ -502,3 +502,43 @@ func TestSearchHistoryIsScopedToTheContact(t *testing.T) {
 		}
 	})
 }
+
+// The closure is a record, not a form: the application role can neither update nor delete it, and not even the owner can rewrite it.
+func TestClosureRecordsAreAppendOnly(t *testing.T) {
+	s := newStack(t)
+	conv, _ := s.conversation(&s.env.UserA)
+	var res application.FinalizeResult
+	s.as(s.env.UserA, s.env.TenantA, func(ctx context.Context) { res, _ = s.svc.Finalize(ctx, finalizeInput(conv)) })
+	if res.Closure == nil {
+		t.Fatal("setup: finalize failed")
+	}
+	deniedToTheApp := func(sql string) {
+		t.Helper()
+		var err error
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, cerr := s.env.App.Acquire(ctx)
+		if cerr != nil {
+			t.Fatal(cerr)
+		}
+		defer conn.Release()
+		_, err = conn.Exec(ctx, sql, res.Closure.ID)
+		if err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("%s must be denied to the application role: %v", sql, err)
+		}
+	}
+	deniedToTheApp(`UPDATE conversation_closures SET note='reescrito' WHERE id=$1`)
+	deniedToTheApp(`DELETE FROM conversation_closures WHERE id=$1`)
+	// the owner is bound by the trigger too
+	if _, err := s.env.Seed.Exec(context.Background(), `UPDATE conversation_closures SET note='reescrito' WHERE id=$1`, res.Closure.ID); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("not even the owner can rewrite a closure: %v", err)
+	}
+	if s.count(`SELECT count(*) FROM conversation_closures WHERE id=$1 AND note<>'reescrito'`, res.Closure.ID) != 1 {
+		t.Fatal("the closure is unchanged")
+	}
+	// a cascade from the parent still works (deleting the conversation takes its closure and items with it)
+	s.exec(`DELETE FROM conversations WHERE id=$1`, conv)
+	if s.count(`SELECT count(*) FROM conversation_closures WHERE conversation_id=$1`, conv) != 0 || s.count(`SELECT count(*) FROM follow_up_items WHERE conversation_id=$1`, conv) != 0 {
+		t.Fatal("cascades must keep working")
+	}
+}
