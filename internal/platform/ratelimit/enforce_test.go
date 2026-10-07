@@ -83,3 +83,31 @@ func TestEnforceAllowsWhenNoLimiterIsInstalled(t *testing.T) {
 		t.Fatal("must allow without a limiter in the context")
 	}
 }
+
+// A user already over their own quota must not keep draining the tenant's shared bucket.
+func TestAnOverQuotaUserDoesNotDrainTheTenantBucket(t *testing.T) {
+	l := NewLimiter()
+	l.SetQuota(QuotaTypeUser, 2, time.Minute)
+	l.SetQuota(QuotaTypeTenant, 5, time.Minute)
+	tenant, noisy, quiet := uuid.New(), uuid.New(), uuid.New()
+	handler := Middleware(l)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !EnforceTenantUser(w, r, tenant, uuid.MustParse(r.Header.Get("X-Test-User"))) {
+			return
+		}
+	}))
+	hit := func(u uuid.UUID) int {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/x", nil)
+		req.Header.Set("X-Test-User", u.String())
+		handler.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	for i := 0; i < 50; i++ {
+		hit(noisy) // 2 pass, 48 are refused by the USER quota
+	}
+	for i := 0; i < 2; i++ {
+		if hit(quiet) != 200 {
+			t.Fatalf("quiet user's request %d was throttled by the noisy user", i)
+		}
+	}
+}

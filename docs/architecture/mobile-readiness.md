@@ -241,3 +241,20 @@ Executada sem o sandbox do Codex (indisponível no host: AppArmor restringe user
 Do primeiro job do Codex (somente material colado) já tinham sido tratados `Vary: Accept` e respostas 1xx (commit `4356a12`).
 
 **Segunda passada (read-only, após as correções): 0 BLOCKER, 3 HIGH, 6 MEDIUM, todos VÁLIDOS e corrigidos nesta branch:** ADR-0022 (expiração/limite absoluto do refresh, serialização refresh×revogação por trava de família, escopo da revogação administrativa, comparação de `state`, identidade do aparelho), `Accept` em várias linhas, `Hijack` com falha, media type do OpenAPI (`application/json`) e nota de que o envelope vale para todo erro `text/plain`.
+
+## Revisão independente do MOBILE.1 (Codex, `read-only`, 2026-10-07)
+0 BLOCKER, 2 HIGH, 6 MEDIUM, 3 LOW. Todos os VÁLIDOS de severidade HIGH/MEDIUM corrigidos e cobertos por teste (mutação confirmada):
+
+| # | Sev. | Achado | Classificação |
+|---|---|---|---|
+| 1 | HIGH | Login nativo usava `ProvisionIdentity` (criava usuário/aceitava inativo) | VÁLIDO, corrigido: `ResolveIdentity` (existente e ativo), 401 genérico, nada é criado |
+| 2 | HIGH | PKCE `S256` não garantido pelo código | VÁLIDO como requisito operacional: o cliente Keycloak `omnira-mobile` tem `pkce.code.challenge.method=S256` (verificado no cliente real); o servidor valida o formato do verifier |
+| 3 | MED | Cliente HTTP do IdP segue redirecionamentos | VÁLIDO, corrigido (a troca de código nunca segue redirecionamento; teste) |
+| 4 | MED | Logout por access token × refresh concorrente | VÁLIDO, baixo impacto (o app que renova e sai ao mesmo tempo): o logout responde 401 e o app repete com o `refresh_token`; documentado em `MOBILE-AUTH.md` |
+| 5 | MED | Usuário acima da cota drenava a cota do tenant | VÁLIDO, corrigido (usuário é checado primeiro; teste) |
+| 6 | MED | Rate limit só por IP | VÁLIDO, corrigido (segundo balde por `previous_device_id` e por *digest* do refresh; teste) |
+| 7 | MED | Possível deadlock entre logins concorrentes | VÁLIDO, corrigido (trava consultiva por usuário; teste concorrente) |
+| 8 | MED | Comparação de token não é de tempo constante | REJEITADO com justificativa (busca por *digest* de 256 bits; registrado na ADR) |
+| 9 | LOW | Tabelas sem RLS e grants amplos | ADIADO: iguais a `auth_sessions` (user-owned); reduzir grants via funções `SECURITY DEFINER` fica como endurecimento futuro |
+| 10 | LOW | Migration não idempotente | N/A: o runner é a autoridade, como nas demais migrations |
+| 11 | LOW | Validação sintática do redirect permissiva | PARCIAL: HTTPS agora exige host; a comparação em runtime já é exata |

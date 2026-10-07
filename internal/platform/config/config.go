@@ -259,7 +259,7 @@ func (c *Config) Validate() error {
 		}
 		for _, raw := range c.MobileRedirectURIs {
 			u, err := url.Parse(raw)
-			if err != nil || u.Scheme == "" || u.Fragment != "" || strings.Contains(raw, "*") || (u.Scheme == "http" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost") {
+			if err != nil || u.Scheme == "" || u.Fragment != "" || (u.Scheme == "https" && u.Host == "") || strings.Contains(raw, "*") || (u.Scheme == "http" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost") {
 				return fmt.Errorf("OMNIRA_AUTH_MOBILE_REDIRECT_URIS contém uma URI inválida (sem curinga/fragmento; http só em loopback): %q", raw)
 			}
 		}

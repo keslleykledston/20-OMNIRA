@@ -30,14 +30,15 @@ func EnforceTenantUser(w http.ResponseWriter, r *http.Request, tenantID, actorID
 	if l == nil {
 		return true
 	}
-	tenantAllowed, tenantRemaining, tenantReset := l.Allow(r.Context(), QuotaTypeTenant, tenantID.String())
-	if !tenantAllowed {
-		writeRateLimitExceeded(w, tenantRemaining, tenantReset)
-		return false
-	}
+	// The user bucket is checked FIRST: a user already over their own quota must not keep draining the tenant's shared bucket.
 	userAllowed, userRemaining, userReset := l.Allow(r.Context(), QuotaTypeUser, actorID.String())
 	if !userAllowed {
 		writeRateLimitExceeded(w, userRemaining, userReset)
+		return false
+	}
+	tenantAllowed, tenantRemaining, tenantReset := l.Allow(r.Context(), QuotaTypeTenant, tenantID.String())
+	if !tenantAllowed {
+		writeRateLimitExceeded(w, tenantRemaining, tenantReset)
 		return false
 	}
 	return true

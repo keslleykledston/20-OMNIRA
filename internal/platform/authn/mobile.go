@@ -112,11 +112,14 @@ type MobileHandler struct {
 	issuer    string
 	tokenRL   *ipLimiter
 	refreshRL *ipLimiter
+	// keyRL is a second, independent bucket keyed by something the caller names (previous_device_id at login, the refresh token's digest at
+	// refresh). It is never trusted as authority; it only stops one identifier from being hammered from many addresses.
+	keyRL *ipLimiter
 }
 
 func NewMobileHandler(auth *OIDCAuthenticator, discovery OIDCDiscovery, resolver OIDCIdentityResolver, devices DeviceStore, issuer string, cfg MobileConfig) *MobileHandler {
 	return &MobileHandler{auth: auth, discovery: discovery, resolver: resolver, devices: devices, cfg: cfg, issuer: issuer,
-		tokenRL: newIPLimiter(20, time.Minute), refreshRL: newIPLimiter(60, time.Minute)}
+		tokenRL: newIPLimiter(20, time.Minute), refreshRL: newIPLimiter(60, time.Minute), keyRL: newIPLimiter(30, time.Minute)}
 }
 
 var (
@@ -186,6 +189,10 @@ func (h *MobileHandler) Token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		previous = &id
+		if !h.keyRL.allow("device:" + id.String()) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
 	}
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {req.Code}, "redirect_uri": {req.RedirectURI},
 		"client_id": {h.cfg.ClientID}, "code_verifier": {req.CodeVerifier}}
@@ -195,7 +202,7 @@ func (h *MobileHandler) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hreq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := h.auth.client.Do(hreq)
+	resp, err := h.idpClient().Do(hreq)
 	if err != nil {
 		http.Error(w, "identity provider unavailable", http.StatusBadGateway)
 		return
@@ -217,12 +224,10 @@ func (h *MobileHandler) Token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
-	displayName := claims.Name
-	if displayName == "" && claims.GivenName != "" {
-		displayName = strings.TrimSpace(claims.GivenName + " " + claims.FamilyName)
-	}
-	userID, err := h.resolver.ProvisionIdentity(r.Context(), h.issuer, claims.Subject, claims.Email, displayName, claims.emailVerified())
-	if err != nil {
+	// ADR-0022: the identity must ALREADY exist and its user must be active (the web callback may provision a first login; a native app
+	// never creates users). Unknown or inactive => the same generic 401, and no session is created.
+	userID, err := h.resolver.ResolveIdentity(r.Context(), h.issuer, claims.Subject)
+	if err != nil || userID == uuid.Nil {
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
 		return
 	}
@@ -233,6 +238,14 @@ func (h *MobileHandler) Token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tokenResponse(pair))
+}
+
+// idpClient is the IdP HTTP client for the code exchange: same transport and timeout as the verifier's, but it NEVER follows a redirect, so
+// the authorization code and the PKCE verifier cannot be forwarded to another host by a (mis)configured or compromised endpoint.
+func (h *MobileHandler) idpClient() *http.Client {
+	c := *h.auth.client
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &c
 }
 
 func tokenResponse(p TokenPair) map[string]any {
@@ -259,6 +272,10 @@ func (h *MobileHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	var req refreshRequest
 	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.RefreshToken != "" && !h.keyRL.allow("refresh:"+digestHex(tokenDigest(req.RefreshToken))) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 	pair, err := h.devices.Refresh(r.Context(), req.RefreshToken)

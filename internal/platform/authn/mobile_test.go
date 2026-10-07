@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 const (
@@ -25,14 +28,15 @@ const (
 )
 
 type fakeIdP struct {
-	srv       *httptest.Server
-	key       *rsa.PrivateKey
-	aud, azp  string
-	nonce     string
-	status    int // token endpoint status override (0 = 200)
-	lastForm  map[string][]string
-	issuer    string
-	callCount int
+	srv        *httptest.Server
+	key        *rsa.PrivateKey
+	aud, azp   string
+	nonce      string
+	status     int // token endpoint status override (0 = 200)
+	lastForm   map[string][]string
+	issuer     string
+	callCount  int
+	redirectTo string // when set, the token endpoint answers 307 to this URL
 }
 
 func newFakeIdP(t *testing.T) *fakeIdP {
@@ -54,6 +58,10 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 			f.callCount++
 			_ = r.ParseForm()
 			f.lastForm = r.Form
+			if f.redirectTo != "" {
+				http.Redirect(w, r, f.redirectTo, http.StatusTemporaryRedirect)
+				return
+			}
 			if f.status != 0 {
 				w.WriteHeader(f.status)
 				return
@@ -85,10 +93,19 @@ type mobileRig struct {
 
 func newMobileRig(t *testing.T) *mobileRig {
 	t.Helper()
+	return newMobileRigWith(t, nil)
+}
+
+// newMobileRigWith lets a test swap the identity resolver (nil = a fake that knows the subject "idp-user-1").
+func newMobileRigWith(t *testing.T, resolverFor func(user uuid.UUID) OIDCIdentityResolver) *mobileRig {
+	t.Helper()
 	store, _, newUser := deviceStoreForTest(t)
 	user := newUser()
 	idp := newFakeIdP(t)
-	resolver := fakeOIDCResolver{userID: user}
+	var resolver OIDCIdentityResolver = fakeOIDCResolver{userID: user}
+	if resolverFor != nil {
+		resolver = resolverFor(user)
+	}
 	auth, discovery, err := NewOIDCAuthenticator(context.Background(), idp.issuer, testMobileClient, idp.srv.Client(), resolver)
 	if err != nil {
 		t.Fatal(err)
@@ -388,5 +405,133 @@ func TestSessionCheckerEndsStreamsOfRevokedCredentials(t *testing.T) {
 	}
 	if err := checker.StillValid(ctx, &Principal{SessionKind: "weird", SessionKey: "x"}); err == nil {
 		t.Fatal("an unknown credential kind must fail closed")
+	}
+}
+
+// ADR-0022: a native login never creates a user and never admits an inactive one (the web callback may provision; the app may not).
+func TestMobileLoginRequiresAnExistingActiveIdentity(t *testing.T) {
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
+	ctx := context.Background()
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	real := NewPostgresIdentityResolver(app)
+	m := newMobileRigWith(t, func(uuid.UUID) OIDCIdentityResolver { return real })
+	issuer := m.idp.issuer
+	countUsers := func() (n int) {
+		_ = seed.QueryRow(ctx, `SELECT count(*) FROM user_identities WHERE issuer=$1`, issuer).Scan(&n)
+		return
+	}
+	t.Cleanup(func() {
+		_, _ = seed.Exec(ctx, `DELETE FROM users WHERE id IN (SELECT user_id FROM user_identities WHERE issuer=$1)`, issuer)
+	})
+
+	// 1) unknown identity: 401 and NOTHING is created.
+	if rr := m.do("POST", "/token", "", goodTokenRequest()); rr.Code != 401 {
+		t.Fatalf("unknown identity: %d %q", rr.Code, rr.Body.String())
+	}
+	if countUsers() != 0 {
+		t.Fatal("a native login provisioned a user")
+	}
+
+	// 2) known identity of an inactive user: 401, no installation.
+	uid, err := real.ProvisionIdentity(ctx, issuer, "idp-user-1", "m@test.local", "M", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(ctx, `UPDATE users SET status='inactive' WHERE id=$1`, uid); err != nil {
+		t.Fatal(err)
+	}
+	if rr := m.do("POST", "/token", "", goodTokenRequest()); rr.Code != 401 {
+		t.Fatalf("inactive user: %d %q", rr.Code, rr.Body.String())
+	}
+	if devices, _ := m.store.ListDevices(ctx, uid, uuid.Nil); len(devices) != 0 {
+		t.Fatal("an inactive user got an installation")
+	}
+
+	// 3) active again: the login works.
+	if _, err := seed.Exec(ctx, `UPDATE users SET status='active' WHERE id=$1`, uid); err != nil {
+		t.Fatal(err)
+	}
+	if rr := m.do("POST", "/token", "", goodTokenRequest()); rr.Code != 200 {
+		t.Fatalf("active user: %d %q", rr.Code, rr.Body.String())
+	}
+}
+
+// The authorization code and the PKCE verifier must never follow a redirect from the IdP endpoint.
+func TestMobileCodeExchangeNeverFollowsRedirects(t *testing.T) {
+	m := newMobileRig(t)
+	var leaked int
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked++ }))
+	defer evil.Close()
+	m.idp.redirectTo = evil.URL
+	if rr := m.do("POST", "/token", "", goodTokenRequest()); rr.Code == 200 {
+		t.Fatalf("a redirected exchange produced a session: %q", rr.Body.String())
+	}
+	if leaked != 0 {
+		t.Fatal("the code exchange followed a redirect to another host")
+	}
+}
+
+func TestConcurrentLoginsOfOneUserWithDifferentPreviousDevicesDoNotDeadlock(t *testing.T) {
+	store, _, newUser := deviceStoreForTest(t)
+	ctx := context.Background()
+	user := newUser()
+	var prev []uuid.UUID
+	for i := 0; i < 4; i++ {
+		p, err := store.IssueForLogin(ctx, user, "", "android", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prev = append(prev, p.DeviceID)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for round := 0; round < 4; round++ {
+		for i := range prev {
+			wg.Add(1)
+			go func(id uuid.UUID) {
+				defer wg.Done()
+				if _, err := store.IssueForLogin(ctx, user, "", "android", &id); err != nil {
+					errs <- err
+				}
+			}(prev[i])
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent login failed: %v", err)
+	}
+}
+
+func TestMobileRateLimitAlsoKeysOnTheNamedDeviceAndTheRefreshToken(t *testing.T) {
+	m := newMobileRig(t)
+	m.handler.keyRL = newIPLimiter(2, time.Minute)
+	m.handler.tokenRL = newIPLimiter(1000, time.Minute)
+	m.handler.refreshRL = newIPLimiter(1000, time.Minute)
+	prev := uuid.NewString()
+	good := goodTokenRequest()
+	good["previous_device_id"] = prev
+	for i := 0; i < 2; i++ {
+		if rr := m.do("POST", "/token", "", good); rr.Code != 200 {
+			t.Fatalf("login %d: %d", i, rr.Code)
+		}
+	}
+	if rr := m.do("POST", "/token", "", good); rr.Code != 429 {
+		t.Fatalf("hammering one previous_device_id from many requests: %d, want 429", rr.Code)
+	}
+	for i := 0; i < 2; i++ {
+		m.do("POST", "/refresh", "", map[string]string{"refresh_token": "omn_rt_" + strings.Repeat("A", 43)})
+	}
+	if rr := m.do("POST", "/refresh", "", map[string]string{"refresh_token": "omn_rt_" + strings.Repeat("A", 43)}); rr.Code != 429 {
+		t.Fatalf("hammering one refresh token: %d, want 429", rr.Code)
 	}
 }

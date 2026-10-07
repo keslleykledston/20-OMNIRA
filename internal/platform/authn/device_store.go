@@ -144,6 +144,11 @@ func (s *PostgresDeviceStore) IssueForLogin(ctx context.Context, userID uuid.UUI
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Logins of one user are serialised (a single advisory lock, released at commit): two concurrent logins that lock several families in
+	// different orders could otherwise deadlock. Refresh and revocation lock ONE family row each, so they cannot form a cycle with this.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('auth_devices:' || $1::text, 0))`, userID.String()); err != nil {
+		return TokenPair{}, err
+	}
 	if previousDeviceID != nil {
 		if err := revokeDeviceTx(ctx, tx, userID, *previousDeviceID, RevokedReplaced, now); err != nil && !errors.Is(err, ErrDeviceNotFound) {
 			return TokenPair{}, err

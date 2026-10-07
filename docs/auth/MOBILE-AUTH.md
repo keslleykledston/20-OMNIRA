@@ -6,6 +6,7 @@ desligada as rotas `/auth/mobile/*` e `/me/devices` respondem 404 e nada muda pa
 ## Visão geral
 - O app é um cliente OIDC **público** (`omnira-mobile`, Code + PKCE `S256`, sem segredo) no mesmo Keycloak do Web. Entrada no navegador do sistema
   (`ASWebAuthenticationSession` / Custom Tabs), nunca em WebView.
+- O login nativo exige identidade **já existente e usuário ativo** (o app nunca cria usuário; o primeiro acesso de um convidado é pelo Web).
 - O **servidor** troca o `code` com o Keycloak e valida o ID Token (assinatura RS256, `iss`, `aud` = `omnira-mobile`, `azp` = `omnira-mobile`, expiração, `nonce`,
   identidade provisionada). O ID Token **não** chega ao app. O app recebe uma **sessão de aparelho** opaca:
   - `access_token` (`omn_at_…`): 15 minutos, vai em `Authorization: Bearer` em **todas** as rotas já existentes;
@@ -23,7 +24,7 @@ desligada as rotas `/auth/mobile/*` e `/me/devices` respondem 404 e nada muda pa
 3. Resposta: `{token_type, access_token, access_expires_at, expires_in, refresh_token, refresh_expires_at, device_id}`.
 4. Antes de expirar (ou ao receber 401), `POST /api/v1/auth/mobile/refresh` `{refresh_token}` devolve **um par novo**; o anterior morre. O app deve **gravar o par novo
    antes de descartar o antigo**. Reapresentar um refresh já usado revoga o aparelho inteiro (o app refaz o login). Toda falha é o mesmo `401`.
-5. `POST /api/v1/auth/mobile/logout` (Bearer, ou `{refresh_token}` se o acesso já expirou) → `204`, efeito imediato (inclusive fecha o SSE aberto).
+5. `POST /api/v1/auth/mobile/logout` (Bearer, ou `{refresh_token}` se o acesso já expirou) → `204`, efeito imediato (inclusive fecha o SSE aberto). Se responder `401` (por exemplo porque uma renovação acabou de rodar), repita com o `refresh_token` no corpo; em qualquer caso apague os tokens locais. Não rode renovação e logout ao mesmo tempo.
 6. `GET /api/v1/me/devices` lista as instalações do usuário; `DELETE /api/v1/me/devices/{device_id}` revoga uma (de outro usuário responde `404`).
 
 ## Armazenamento no aparelho (regras duras)
