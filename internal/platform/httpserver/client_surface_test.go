@@ -21,7 +21,7 @@ func protectedOps(t *testing.T) []op {
 	var out []op
 	for _, o := range specOps(t) {
 		p := strings.TrimPrefix(o.path, "/api/v1")
-		if strings.HasPrefix(p, "/tenants/") || p == "/tenants" || p == "/me" {
+		if strings.HasPrefix(p, "/tenants/") || p == "/tenants" || p == "/me" || strings.HasPrefix(p, "/me/") {
 			out = append(out, o)
 		}
 	}

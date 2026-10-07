@@ -161,9 +161,9 @@ Sem migration, sem dependência nova, sem rota nova, sem flag ligada.
 
 | ID | Classe | Descrição | Quando / como |
 |---|---|---|---|
-| R-1 | P1 de fase | Sem credencial nativa (cliente OIDC próprio, audiência, renovação, aparelho) | MOBILE.1, ADR-0022 — **decisões do dono aprovadas em 2026-10-07**; falta implementar |
-| R-2 | P2 | `ratelimit.Middleware` lê `context.Value("tenant_context")` (chave string) mas o contexto do tenant só nasce depois (camada interna) e com `domain.TenantContextKey`: na prática todo tráfego cai no balde `anonymous` (10 000/min por processo, em memória), webhooks inclusos. **Verificado** com teste descartável: cota de tenant = 1/min, 3 requisições com o contexto injetado como o servidor injeta passaram e todas foram contadas no balde `global:anonymous`. Um cliente barulhento pode gerar 429 para todos | Antes do MOBILE.3: aplicar o limite por (tenant, usuário) *depois* do `AuthorizationMiddleware` e isentar `/webhooks/*` do balde global. **Cuidado:** ao ativar, os padrões (100/min/usuário, 1 000/min/tenant) são baixos para o Inbox e estrangulariam o Web; recalibrar com medição antes |
-| R-3 | P2 | SSE só reverifica *membership* (30 s); sessão/token revogado mantém o fluxo até 30 min | MOBILE.11 (revogação por aparelho): reverificar a sessão no `recheck` |
+| R-1 | P1 de fase | Sem credencial nativa (cliente OIDC próprio, audiência, renovação, aparelho) | **RESOLVIDO no Core** (MOBILE.1): ADR-0022 implementada, `docs/auth/MOBILE-AUTH.md`; desligado por flag até o app existir |
+| R-2 | P2 | **RESOLVIDO**: cotas por tenant/usuário agora valem depois da membership (`EnforceTenantUser`, padrões 6000/1200 por minuto, `OMNIRA_RATELIMIT_*`); o balde global continua como rede de segurança. Descrição original: `ratelimit.Middleware` lê `context.Value("tenant_context")` (chave string) mas o contexto do tenant só nasce depois (camada interna) e com `domain.TenantContextKey`: na prática todo tráfego cai no balde `anonymous` (10 000/min por processo, em memória), webhooks inclusos. **Verificado** com teste descartável: cota de tenant = 1/min, 3 requisições com o contexto injetado como o servidor injeta passaram e todas foram contadas no balde `global:anonymous`. Um cliente barulhento pode gerar 429 para todos | Antes do MOBILE.3: aplicar o limite por (tenant, usuário) *depois* do `AuthorizationMiddleware` e isentar `/webhooks/*` do balde global. **Cuidado:** ao ativar, os padrões (100/min/usuário, 1 000/min/tenant) são baixos para o Inbox e estrangulariam o Web; recalibrar com medição antes |
+| R-3 | P2 | **RESOLVIDO**: o SSE reverifica a sessão (cookie ou aparelho) além da membership a cada 30 s | `SessionRecheck` em `sse.go` + `authn.SessionChecker` |
 | R-4 | P2 | Falta upload de anexo de saída | MOBILE.6 (multipart + URL assinada, mesmo pipeline de antivírus) |
 | R-5 | P2 | Presença por aba; app em segundo plano parece offline e sai do roteamento | ADR-0023: estado "disponível no celular" explícito + push, não *heartbeat* |
 | R-6 | P3 | Sem CI versionado; sem cliente/tipos gerados da OpenAPI; CSRF só por `SameSite=Lax` (Bearer não usa cookie) | MOBILE.0 (gerar tipos) |
@@ -241,3 +241,23 @@ Executada sem o sandbox do Codex (indisponível no host: AppArmor restringe user
 Do primeiro job do Codex (somente material colado) já tinham sido tratados `Vary: Accept` e respostas 1xx (commit `4356a12`).
 
 **Segunda passada (read-only, após as correções): 0 BLOCKER, 3 HIGH, 6 MEDIUM, todos VÁLIDOS e corrigidos nesta branch:** ADR-0022 (expiração/limite absoluto do refresh, serialização refresh×revogação por trava de família, escopo da revogação administrativa, comparação de `state`, identidade do aparelho), `Accept` em várias linhas, `Hijack` com falha, media type do OpenAPI (`application/json`) e nota de que o envelope vale para todo erro `text/plain`.
+
+## Revisão independente do MOBILE.1 (Codex, `read-only`, 2026-10-07)
+0 BLOCKER, 2 HIGH, 6 MEDIUM, 3 LOW. Todos os VÁLIDOS de severidade HIGH/MEDIUM corrigidos e cobertos por teste (mutação confirmada):
+
+| # | Sev. | Achado | Classificação |
+|---|---|---|---|
+| 1 | HIGH | Login nativo usava `ProvisionIdentity` (criava usuário/aceitava inativo) | VÁLIDO, corrigido: `ResolveIdentity` (existente e ativo), 401 genérico, nada é criado |
+| 2 | HIGH | PKCE `S256` não garantido pelo código | VÁLIDO como requisito operacional: o cliente Keycloak `omnira-mobile` tem `pkce.code.challenge.method=S256` (verificado no cliente real); o servidor valida o formato do verifier |
+| 3 | MED | Cliente HTTP do IdP segue redirecionamentos | VÁLIDO, corrigido (a troca de código nunca segue redirecionamento; teste) |
+| 4 | MED | Logout por access token × refresh concorrente | VÁLIDO, baixo impacto (o app que renova e sai ao mesmo tempo): o logout responde 401 e o app repete com o `refresh_token`; documentado em `MOBILE-AUTH.md` |
+| 5 | MED | Usuário acima da cota drenava a cota do tenant | VÁLIDO, corrigido (usuário é checado primeiro; teste) |
+| 6 | MED | Rate limit só por IP | VÁLIDO, corrigido (segundo balde por `previous_device_id` e por *digest* do refresh; teste) |
+| 7 | MED | Possível deadlock entre logins concorrentes | VÁLIDO, corrigido (trava consultiva por usuário; teste concorrente) |
+| 8 | MED | Comparação de token não é de tempo constante | REJEITADO com justificativa (busca por *digest* de 256 bits; registrado na ADR) |
+| 9 | LOW | Tabelas sem RLS e grants amplos | ADIADO: iguais a `auth_sessions` (user-owned); reduzir grants via funções `SECURITY DEFINER` fica como endurecimento futuro |
+| 10 | LOW | Migration não idempotente | N/A: o runner é a autoridade, como nas demais migrations |
+| 11 | LOW | Validação sintática do redirect permissiva | PARCIAL: HTTPS agora exige host; a comparação em runtime já é exata |
+
+## Revisão independente da administração de aparelhos (Codex, `read-only`, 2026-10-07)
+0 BLOCKER, 0 HIGH, 2 MEDIUM, 1 LOW. Auditoria que falha agora é registrada em log (antes era descartada em silêncio); a janela entre a checagem de todos os tenants e a revogação foi **aceita e documentada** no código (revogar só nega acesso, nunca concede; pior caso: um aparelho deslogado); cobertura ampliada (membership inativa em outro tenant não bloqueia, membership de outro tenant na URL = 404, `DELETE` do próprio aparelho = 422, ator/recurso/metadata da auditoria sem segredos).

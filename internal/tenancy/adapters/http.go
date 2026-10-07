@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/platform/authn"
+	"github.com/omnira/omnira/internal/platform/ratelimit"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/tenancy/application"
 	"github.com/omnira/omnira/internal/tenancy/domain"
@@ -74,6 +75,11 @@ func AuthorizationMiddleware(pool *pgxpool.Pool, authzSvc *application.Authoriza
 				tenantContext, err := authzSvc.AuthorizeAccessToTenant(ctx, tenantUUID, principal.UserID)
 				if err != nil {
 					writeAuthorizationError(tw, err)
+					return errHandled
+				}
+
+				// Quotas por tenant e por usuário só valem depois da membership verificada (R-2).
+				if !ratelimit.EnforceTenantUser(tw, r, tenantContext.TenantID, tenantContext.ActorID) {
 					return errHandled
 				}
 

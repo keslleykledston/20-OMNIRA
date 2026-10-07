@@ -42,6 +42,7 @@ const (
 	ActionMembershipDeactivated    AuditAction = "membership.deactivated"
 	ActionMembershipReactivated    AuditAction = "membership.reactivated"
 	ActionMembershipRoleChanged    AuditAction = "membership.role_changed"
+	ActionDeviceRevokedByAdmin     AuditAction = "device.revoked_by_admin"
 	ActionInvitationCreated        AuditAction = "membership.invitation.created"
 	ActionInvitationRevoked        AuditAction = "membership.invitation.revoked"
 	ActionInvitationResent         AuditAction = "membership.invitation.resent"
@@ -90,6 +91,7 @@ type ResourceType string
 const (
 	ResourceTenant            ResourceType = "tenant"
 	ResourceMembership        ResourceType = "membership"
+	ResourceDevice            ResourceType = "device"
 	ResourceRole              ResourceType = "role"
 	ResourceConversation      ResourceType = "conversation"
 	ResourceChannelConnection ResourceType = "channel_connection"

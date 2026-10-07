@@ -1,8 +1,8 @@
 # ADR-0022: Autenticação — Web (cookie de sessão) × Mobile (credencial por aparelho)
 
 ## Status
-**Accepted (2026-10-07)** pelo dono, "conforme proposto" (Opção A e as decisões 1–5 abaixo, nos valores propostos). **Ainda não há código**: a implementação é o MOBILE.1.
-O Web não muda. O cliente `omnira-mobile` no Keycloak (decisão 5) é criado no início do MOBILE.1, junto com o código que o usa; nada muda em produção até lá.
+**Accepted (2026-10-07)** pelo dono, "conforme proposto" (Opção A e as decisões 1–5 abaixo, nos valores propostos). **Implementada no Core (MOBILE.1, 2026-10-07)**, atrás de `OMNIRA_AUTH_MOBILE_ENABLED` (desligada). Contrato do app em `docs/auth/MOBILE-AUTH.md`.
+O Web não muda. O cliente `omnira-mobile` foi criado no Keycloak de produção em 2026-10-07 (público, PKCE S256, redirect `com.omnira.app:/oauth2redirect` provisório até o MOBILE.0 fixar o *application id*).
 
 ## Contexto (verificado no código)
 - **IdP:** Keycloak (OIDC). **Login Web:** Authorization Code + PKCE `S256` + `state` + `nonce`; o servidor troca o código (cliente confidencial), valida o
@@ -48,11 +48,12 @@ Incorporada após a revisão do Codex; o MOBILE.1 não é aceito sem estes ponto
 - PKCE `S256` obrigatório (`plain` recusado). `state` e `nonce` gerados no app; o servidor exige `nonce` na requisição e compara com a claim `nonce` do ID Token.
 - Validação completa antes de criar sessão, como no Web: assinatura RS256, `iss`, `aud` contendo `omnira-mobile`, `azp == omnira-mobile`, `exp`, `nonce`, e identidade
   `issuer+sub` **já provisionada** (desconhecida falha fechada). Falha ⇒ 401 genérico, sem detalhar o motivo, sem registrar o código nem o *verifier*.
-- *Rate limit* próprio por IP e por `device_id` no endpoint (R-2 precisa estar resolvido antes).
+- *Rate limit* próprio por origem e, em um segundo balde independente, pelo identificador que o chamador nomeia (`previous_device_id` no login, *digest* do *refresh* na renovação); esse valor nunca é autoridade.
+- **Identidade já provisionada e usuário ativo** (`ResolveIdentity`): o app nunca cria usuário (o callback do Web pode provisionar o primeiro login; o app não). O cliente HTTP da troca de código **não segue redirecionamentos**.
 
 **Armazenamento (tabela `auth_devices` + colunas em `auth_sessions`; migration só no MOBILE.1)**
 - `auth_devices(device_id uuid PK gerado pelo servidor, user_id, label, platform, created_at, last_seen_at, revoked_at)`; o `device_id` **nunca** é aceito do cliente na criação.
-- Token de acesso e *refresh* são aleatórios de 32 bytes (CSPRNG); só o **SHA-256** é guardado (alta entropia dispensa *salt*/*pepper*); comparação em tempo constante;
+- Token de acesso e *refresh* são aleatórios de 32 bytes (CSPRNG); só o **SHA-256** é guardado (alta entropia dispensa *salt*/*pepper*); a busca é por igualdade do *digest* SHA-256 (indexada): como o atacante não controla o valor guardado e precisaria de uma pré-imagem de 256 bits, comparação em tempo constante não agrega proteção (decisão registrada na revisão do MOBILE.1);
   o valor em claro aparece uma única vez na resposta. Índice único no hash.
 - `auth_sessions` ganha `device_id` e `family_id`; um aparelho tem no máximo uma família ativa por usuário; novo login no mesmo aparelho revoga a família anterior.
 - Retenção: sessões/famílias revogadas ou expiradas guardadas 30 dias para auditoria e depois removidas; nunca guardar o valor em claro.

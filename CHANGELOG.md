@@ -7,6 +7,13 @@
 - Só decisão humana (`source=manual`, permissão `contact.classify`), papel obrigatório (422/400), auditoria com `internal_role_from/to`; a tela diz o que a escolha desliga antes de salvar. `PUT …/kind` recusa `internal`.
 - Inbox: o filtro **Internas** inclui esses contatos (e `kind=internal`); a lista mostra o selo do subtipo; a visão "Internos" do diretório de pessoas traz Users (com `membership.read`) mais contatos internos. Contrato `omnira-v1.yaml` atualizado. Detalhes e adiados (vincular a User, sugestão por telefone): ADR-0018, adendo de 2026-10-07.
 
+### Added (MOBILE.1 — credenciais de apps nativos, ADR-0022; desligado por flag)
+- Migration `000091`: `auth_devices`, `auth_families`, `auth_refresh_tokens`, `auth_access_tokens` (só *digests* SHA-256). `POST /auth/mobile/{token,refresh,logout}`, `GET /me/devices`, `DELETE /me/devices/{device_id}`; token de acesso opaco de 15 min, *refresh* de uso único (30 d deslizante, 90 d absoluto), reuso revoga o aparelho, trava de família serializa refresh × revogação. `OMNIRA_AUTH_MOBILE_ENABLED/CLIENT_ID/REDIRECT_URIS`. Contrato em `docs/auth/MOBILE-AUTH.md`.
+- **Implantado em 2026-10-07** (só a `api`; migration `000091` aplicada depois de backup verificado; `OMNIRA_AUTH_MOBILE_ENABLED` continua **desligada** em produção até existir um app). Rollback da imagem: `20-omnira-api:rollback-pre-mobilecore-20261007-1018` (a migration é aditiva e o `down` a remove). Validado ao vivo contra o Keycloak real (cliente `omnira-mobile` criado: público, PKCE S256 obrigatório, sem direct grants): login com Code+PKCE, troca de código, refresh, reuso, logout, SSE fechando na revogação, e regressão do login por cookie do Web.
+- Administração de aparelhos de outro usuário (`GET/DELETE /tenants/{tenant_id}/team/{membership_id}/devices[/{device_id}]`, só com a flag): `membership.manage` em todos os tenants do alvo, auditado.
+- R-3: o SSE reverifica a sessão (cookie ou aparelho), não só a membership.
+- R-2: cotas por tenant e por usuário aplicadas **depois** da membership verificada (`OMNIRA_RATELIMIT_USER_PER_MIN=1200`, `OMNIRA_RATELIMIT_TENANT_PER_MIN=6000`).
+
 ### Added (MOBILE.READINESS — preparar o Core para clientes Android/iOS; nenhum app é construído)
 - `X-Request-ID` em toda resposta da API e **envelope de erro estável opt-in** (`Accept: application/vnd.omnira.v1+json` → `{"error":{"code","message","request_id"}}`); sem esse cabeçalho nada muda para o Web. Documentado em `omnira-v1.yaml`.
 - Eventos em tempo real (SSE/NATS) com `event_id` e `v` (aditivos; também o campo SSE `id:`); `contracts/asyncapi/omnira-v1.yaml` atualizado. O Web ignora o `id:` (teste do parser real).
