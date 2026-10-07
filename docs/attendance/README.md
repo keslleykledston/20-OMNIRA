@@ -27,6 +27,8 @@ Também: `GET …/inbox/conversations?status=open|closed|all` (padrão `open`).
 | `OMNIRA_AI_TOOL_GATEWAY_ENABLED` | libera o gateway; ferramentas de leitura `contact.recent_attendances`, `contact.open_followups`, `contact.search_history` (contato derivado do assunto, nunca por argumento) |
 | `OMNIRA_COPILOT_ENABLED` + `OMNIRA_AI_MODEL_CLOSING_SUGGEST` | habilita "Sugerir com IA" (se a variável do modelo faltar, usa o modelo padrão) |
 
+**Estado em 2026-10-06 (noite):** `OMNIRA_COPILOT_CONTACT_MEMORY_ENABLED=true` no `.env` e na `api`, **mas sem efeito ainda**: o copiloto (`OMNIRA_COPILOT_ENABLED`) e o provedor de IA (`OMNIRA_AI_ENABLED`, provedor e chave) não estão configurados. A memória passa a valer sozinha quando o copiloto for ligado. Testado em produção: finalizar (fechamento, chamado local encerrado, auditoria).
+
 A IA só propõe: nada que ela escreve vale como fato até uma pessoa confirmar; falha da IA nunca impede finalizar à mão.
 
 ## Implantação
