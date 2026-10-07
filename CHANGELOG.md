@@ -5,6 +5,9 @@
 ### Added (IA da plataforma com Gemini)
 - `OMNIRA_AI_PROVIDER=gemini`: `GeminiGenerator` na porta `TextGenerator` (chave só no cabeçalho, sem redirecionamento nem retentativa, resposta limitada, bloqueio do provedor tratado). `NewTextGenerator` passa a ser o único construtor (resumo, roteador de modelos e nós de IA dos fluxos). `OMNIRA_GEMINI_API_KEY` vale como chave quando o provedor é Gemini. Guia: `docs/ai/PLATFORM-AI-PROVIDERS.md`.
 
+### Fixed (webhook da Meta com 502 após recriar a api)
+- `web/nginx.conf` resolvia `api:8080` só no início do nginx; recriar a `api` (IP novo) deixava o webhook oficial da Meta respondendo 502 (mensagem não chegava ao Inbox). Agora usa `resolver 127.0.0.11 valid=5s` e `proxy_pass` por variável. Teste de regressão `scripts/test-web-nginx-resolver.sh` (falha com a configuração antiga).
+
 ### Fixed (IA da plataforma)
 - `docker-compose.yml` não repassava `OMNIRA_AI_*`, `OMNIRA_COPILOT_ENABLED`, `OMNIRA_AI_TOOL_GATEWAY_ENABLED` nem os demais interruptores do Conversation Intelligence aos contêineres: nenhum valor do `.env` chegava à api/worker. Agora são repassados (vazio = padrão do código).
 

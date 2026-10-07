@@ -52,10 +52,12 @@ nunca meio configurada. Todas essas variáveis são repassadas pelo `docker-comp
 ## Trocar de provedor / desligar
 
 Edite `OMNIRA_AI_PROVIDER`/`OMNIRA_AI_MODEL` (ou `OMNIRA_AI_ENABLED=false`) no `.env` e recrie `api` e `worker`
-(`docker compose up -d --no-deps --force-recreate api worker`) e **em seguida** recarregue o nginx do `web`
-(`docker exec omnira-web nginx -s reload`). Nada de banco muda.
+(`docker compose up -d --no-deps --force-recreate api worker`). Nada de banco muda e **não é preciso mexer no `web`**.
 
-> **Armadilha (ocorreu em 2026-10-07):** o nginx do contêiner `web` resolve `api:8080` só ao iniciar. Recriar a `api` sem recriar/recarregar o
-> `web` deixa o IP antigo: `/webhooks/v1/whatsapp/meta` (Meta) passa a responder **502** e a mensagem não chega ao Inbox. O WAHA não é afetado
-> (fala direto pela rede do Docker). Sintoma: `docker logs omnira-web | grep "Connection refused"`. `scripts/deploy.sh` já recria o `web`
-> depois da `api`; o atalho `--no-deps ... api` não.
+> **Incidente de 2026-10-07 (corrigido):** o nginx do contêiner `web` resolvia `api:8080` só ao iniciar. Recriar a `api` (novo IP) sem recriar o `web`
+> fazia `/webhooks/v1/whatsapp/meta` (Meta) responder **502** e a mensagem não chegar ao Inbox (o WAHA não era afetado). A correção está em
+> `web/nginx.conf`: `resolver 127.0.0.11 valid=5s` e `proxy_pass` por variável (`$api_upstream`), de modo que o nginx consulta o DNS do Docker de novo
+> a cada poucos segundos. O teste `scripts/test-web-nginx-resolver.sh` troca o contêiner da api numa rede descartável e exige que `/api/`, o webhook da
+> Meta (com a query `hub.*`) e o SSE continuem funcionando sem reload; contra a configuração antiga ele falha com 502. Como o `nginx.conf` vai
+> **dentro da imagem** do `web`, uma mudança nele exige `docker compose build web` e recriar o `web`.
+
