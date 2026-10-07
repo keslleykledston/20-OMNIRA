@@ -62,6 +62,9 @@ type RealtimeOptions struct {
 	MaxLifetime time.Duration // a stream is closed after this long; clients reconnect (default 30m)
 	MaxPerUser  int           // concurrent streams per user (default 10)
 	MaxTotal    int           // concurrent streams per process (default 2000)
+	// SessionRecheck re-validates the credential the stream was opened with (cookie session or device token); an error ends the stream.
+	// nil skips it (a Bearer ID token has nothing server-side to revoke).
+	SessionRecheck func(ctx context.Context, p *authn.Principal) error
 }
 
 // RealtimeHandler serves SSE from NATS. Authorization happens once (StreamMiddleware) and is
@@ -244,6 +247,13 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 			fmt.Fprint(w, ": keepalive\n\n")
 			flusher.Flush()
 		case <-recheck.C:
+			// A logged-out / revoked session or device ends the stream (R-3), then membership is re-authorized in a short transaction.
+			if h.opts.SessionRecheck != nil {
+				if err := h.opts.SessionRecheck(r.Context(), principal); err != nil && !errors.Is(err, context.Canceled) {
+					log.Printf("inbox realtime: closing stream, session revoked or expired")
+					return
+				}
+			}
 			// Re-authorize in a short transaction; revoked membership / inactive tenant ends the stream.
 			if _, err := h.auth.Authorize(r.Context(), principal.UserID, tc.TenantID); err != nil {
 				if !errors.Is(err, context.Canceled) {

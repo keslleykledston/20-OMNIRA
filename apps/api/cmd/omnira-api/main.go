@@ -107,6 +107,7 @@ func main() {
 			srv.SetupPresence(valkeyClient)
 		}
 	}
+	srv.ConfigureRateLimits(cfg.RateLimitUserPerMin, cfg.RateLimitTenantPerMin)
 	srv.SetupRateLimiting()
 	srv.SetupRequestMeta() // outermost: request id on every response, opt-in error envelope (see httpserver/requestmeta.go)
 	srv.RegisterHealthHandlers()
@@ -119,10 +120,30 @@ func main() {
 		if oidcErr != nil {
 			log.Fatalf("OIDC configuration error: %v", oidcErr)
 		}
-		srv.RegisterOIDCAuthHandlers(oidcAuth, sessionStore, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
+		var apiAuthenticator authn.Authenticator = oidcAuth
+		var mobile *authn.MobileHandler
+		var devices authn.DeviceStore
+		if cfg.MobileAuthEnabled {
+			// ADR-0022: native apps are a second OIDC client (own audience, public, Code+PKCE); the app gets an opaque, revocable device session.
+			devices = authn.NewPostgresDeviceStore(dbPool)
+			mobileAuth, _, mobileErr := authn.NewOIDCAuthenticator(context.Background(), cfg.AuthIssuer, cfg.MobileClientID, nil, resolver)
+			if mobileErr != nil {
+				log.Fatalf("OIDC (mobile) configuration error: %v", mobileErr)
+			}
+			mobile = authn.NewMobileHandler(mobileAuth, discovery, resolver, devices, cfg.AuthIssuer,
+				authn.MobileConfig{ClientID: cfg.MobileClientID, RedirectURIs: cfg.MobileRedirectURIs})
+			apiAuthenticator = authn.NewDeviceAuthenticator(oidcAuth, devices)
+			log.Printf("Native app credentials enabled (client %s, %d redirect URI(s))", cfg.MobileClientID, len(cfg.MobileRedirectURIs))
+		}
+		srv.RegisterOIDCAuthHandlers(apiAuthenticator, sessionStore, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
 			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
+		srv.SetSessionChecker(authn.NewSessionChecker(sessionStore, devices))
+		if mobile != nil {
+			srv.RegisterMobileAuthHandlers(mobile)
+		}
 	} else {
 		srv.RegisterAuthHandlers(dbPool, cfg.DevAuthActive(), sessionStore, cfg.SessionIdleTimeout, cfg.AuthCookieSecure)
+		srv.SetSessionChecker(authn.NewSessionChecker(sessionStore, nil))
 	}
 	// Convites por e-mail: com OMNIRA_SMTP_HOST há um sender SMTP real; sem ele a capability
 	// de entrega é só o dev auth (o admin copia o link). Ver InvitationsHandler.deliveryAvailable.

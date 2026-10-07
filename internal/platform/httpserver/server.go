@@ -69,8 +69,10 @@ type Server struct {
 	// contactClassification is wired to the company directory by main once the ticketing runtime exists.
 	contactClassification *contactsadapters.ClassificationHandler
 	sessionStore          authn.SessionStore
-	natsConn              *nats.Conn
-	valkeyClient          *redis.Client
+	// sessionChecker lets long-lived streams (SSE) re-validate the credential they were opened with (R-3). Optional.
+	sessionChecker authn.SessionChecker
+	natsConn       *nats.Conn
+	valkeyClient   *redis.Client
 }
 
 // SetupPresence wires the Valkey client used by presence heartbeats
@@ -96,6 +98,17 @@ func New(addr string) *Server {
 		IdleTimeout:  60 * time.Second,
 	}
 	return s
+}
+
+// ConfigureRateLimits sets the per-user and per-tenant quotas (requests per minute) enforced after tenant authorization (R-2). Values <= 0 keep
+// the limiter defaults. Calibrate against real Web traffic before lowering them: a burst of one active operator must never be throttled.
+func (s *Server) ConfigureRateLimits(userPerMinute, tenantPerMinute int) {
+	if userPerMinute > 0 {
+		s.rateLimiter.SetQuota(ratelimit.QuotaTypeUser, userPerMinute, time.Minute)
+	}
+	if tenantPerMinute > 0 {
+		s.rateLimiter.SetQuota(ratelimit.QuotaTypeTenant, tenantPerMinute, time.Minute)
+	}
 }
 
 // SetupRateLimiting — ativa rate limiting no mux.
@@ -273,6 +286,33 @@ func (s *Server) RegisterOIDCAuthHandlers(authenticator authn.Authenticator, ses
 	}
 }
 
+// mobileAuthHTTPHandler is the native-client credential surface (ADR-0022, MOBILE.1).
+type mobileAuthHTTPHandler interface {
+	Token(http.ResponseWriter, *http.Request)
+	Refresh(http.ResponseWriter, *http.Request)
+	Logout(http.ResponseWriter, *http.Request)
+	ListDevices(http.ResponseWriter, *http.Request)
+	DeleteDevice(http.ResponseWriter, *http.Request)
+}
+
+// SetSessionChecker installs the credential re-check used by SSE streams.
+func (s *Server) SetSessionChecker(c authn.SessionChecker) { s.sessionChecker = c }
+
+// RegisterMobileAuthHandlers installs the native credential endpoints. The authenticator handed to RegisterOIDCAuthHandlers must already
+// recognise device access tokens (authn.NewDeviceAuthenticator), so every authenticated route accepts them without further wiring.
+// token/refresh/logout carry their own proof (code+PKCE, refresh token, access token); /me/devices go through the normal boundary.
+func (s *Server) RegisterMobileAuthHandlers(handler mobileAuthHTTPHandler) {
+	if s.authenticator == nil || handler == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	s.mux.HandleFunc("POST /api/v1/auth/mobile/token", handler.Token)
+	s.mux.HandleFunc("POST /api/v1/auth/mobile/refresh", handler.Refresh)
+	s.mux.HandleFunc("POST /api/v1/auth/mobile/logout", handler.Logout)
+	s.mux.Handle("GET /api/v1/me/devices", authnMiddleware(http.HandlerFunc(handler.ListDevices)))
+	s.mux.Handle("DELETE /api/v1/me/devices/{device_id}", authnMiddleware(http.HandlerFunc(handler.DeleteDevice)))
+}
+
 // RegisterTenancyHandlers — registra as rotas REST do M01/R0.1 Tenant
 // Management: GET /api/v1/me, GET /api/v1/tenants, GET/PATCH
 // /api/v1/tenants/{tenant_id}, membros e auditoria. Requer que
@@ -419,7 +459,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// SSE: authorize once + periodically in short transactions; never hold a tx while streaming.
 	streamAuth := sessionStreamAuthorizer{pool: dbPool, authz: authzSvc}
 	streamSession := inboxadapters.StreamMiddleware(streamAuth)
-	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn, streamAuth, inboxadapters.RealtimeOptions{})
+	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn, streamAuth, inboxadapters.RealtimeOptions{SessionRecheck: s.streamCredentialRecheck()})
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetConversation))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
@@ -882,4 +922,12 @@ func (a sessionStreamAuthorizer) ConversationVisible(ctx context.Context, userID
 			`SELECT EXISTS(SELECT 1 FROM conversations WHERE tenant_id=$1 AND id=$2)`, tenantID, conversationID).Scan(&visible)
 	})
 	return visible, err
+}
+
+// streamCredentialRecheck adapts the optional session checker to the SSE options (nil when none is installed).
+func (s *Server) streamCredentialRecheck() func(context.Context, *authn.Principal) error {
+	if s.sessionChecker == nil {
+		return nil
+	}
+	return s.sessionChecker.StillValid
 }

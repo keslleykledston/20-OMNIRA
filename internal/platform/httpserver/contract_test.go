@@ -81,6 +81,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterHealthHandlers()
 	s.RegisterAuthHandlers(nil, false, nil, 0) // generates the RSA keys the other registrations need
 	s.RegisterOIDCAuthHandlers(s.authenticator, nil, contractOIDCHandler{})
+	s.RegisterMobileAuthHandlers(contractMobileHandler{})
 	s.RegisterTenancyHandlers(nil, false)
 	s.RegisterInboxHandlers(nil, &config.Config{MediaDir: t.TempDir()})
 	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
@@ -170,3 +171,12 @@ func TestNoRoleEditingOrLegacyMembersRoutes(t *testing.T) {
 		}
 	}
 }
+
+// contractMobileHandler stands in for authn.MobileHandler (the contract test only needs the routes to exist).
+type contractMobileHandler struct{}
+
+func (contractMobileHandler) Token(http.ResponseWriter, *http.Request)       {}
+func (contractMobileHandler) Refresh(http.ResponseWriter, *http.Request)     {}
+func (contractMobileHandler) Logout(http.ResponseWriter, *http.Request)      {}
+func (contractMobileHandler) ListDevices(http.ResponseWriter, *http.Request) {}
+func (contractMobileHandler) DeleteDevice(http.ResponseWriter, *http.Request) {}

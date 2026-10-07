@@ -31,6 +31,13 @@ type Config struct {
 	AuthRedirectURL   string
 	AuthPostLoginURL  string
 	AuthCookieSecure  bool
+	// Native (Android/iOS) credential endpoints, ADR-0022. Off by default; needs OIDC.
+	MobileAuthEnabled  bool
+	MobileClientID     string
+	MobileRedirectURIs []string
+	// Per-minute quotas enforced after tenant authorization (R-2). Generous on purpose: they stop a runaway client, not a busy operator.
+	RateLimitUserPerMin   int
+	RateLimitTenantPerMin int
 	DevAuthEnabled    bool
 	CredentialsKey    []byte
 	credentialsKeyErr error
@@ -123,6 +130,11 @@ func Load() *Config {
 		AuthRedirectURL:   os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
 		AuthPostLoginURL:  getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
 		AuthCookieSecure:  getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
+		MobileAuthEnabled:  getEnv("OMNIRA_AUTH_MOBILE_ENABLED", "false") == "true",
+		MobileClientID:     getEnv("OMNIRA_AUTH_MOBILE_CLIENT_ID", "omnira-mobile"),
+		MobileRedirectURIs: splitList(os.Getenv("OMNIRA_AUTH_MOBILE_REDIRECT_URIS")),
+		RateLimitUserPerMin:   getEnvInt("OMNIRA_RATELIMIT_USER_PER_MIN", 1200),
+		RateLimitTenantPerMin: getEnvInt("OMNIRA_RATELIMIT_TENANT_PER_MIN", 6000),
 		DevAuthEnabled:    getEnv("OMNIRA_DEV_AUTH_ENABLED", "false") == "true",
 		CredentialsKey:    key,
 		credentialsKeyErr: keyErr,
@@ -235,6 +247,23 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("OIDC em produção exige issuer e redirect URL HTTPS")
 		}
 	}
+	if c.MobileAuthEnabled {
+		if authMode != "oidc" {
+			return fmt.Errorf("OMNIRA_AUTH_MOBILE_ENABLED=true exige OMNIRA_AUTH_MODE=oidc")
+		}
+		if c.MobileClientID == "" || len(c.MobileRedirectURIs) == 0 {
+			return fmt.Errorf("OMNIRA_AUTH_MOBILE_ENABLED=true exige OMNIRA_AUTH_MOBILE_CLIENT_ID e OMNIRA_AUTH_MOBILE_REDIRECT_URIS")
+		}
+		if c.MobileClientID == c.AuthClientID {
+			return fmt.Errorf("OMNIRA_AUTH_MOBILE_CLIENT_ID deve ser diferente do cliente web (audiência própria do app)")
+		}
+		for _, raw := range c.MobileRedirectURIs {
+			u, err := url.Parse(raw)
+			if err != nil || u.Scheme == "" || u.Fragment != "" || strings.Contains(raw, "*") || (u.Scheme == "http" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost") {
+				return fmt.Errorf("OMNIRA_AUTH_MOBILE_REDIRECT_URIS contém uma URI inválida (sem curinga/fragmento; http só em loopback): %q", raw)
+			}
+		}
+	}
 	if c.SMTPHost != "" {
 		if c.SMTPFrom == "" {
 			return fmt.Errorf("SMTP habilitado exige OMNIRA_SMTP_FROM")
@@ -283,4 +312,15 @@ func DevAuthEnvAllowed(env string) bool {
 // não exista um caminho em que uma delas discorde das outras.
 func (c *Config) DevAuthActive() bool {
 	return c.DevAuthEnabled && DevAuthEnvAllowed(c.Env)
+}
+
+// splitList parses a comma-separated env value into trimmed, non-empty items.
+func splitList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

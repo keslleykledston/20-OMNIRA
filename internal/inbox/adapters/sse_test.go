@@ -261,3 +261,37 @@ func TestSSEConversationStreamRefusesUnknownOrForeignConversation(t *testing.T) 
 		t.Fatalf("visible conversation: %d", res.StatusCode)
 	}
 }
+
+// R-3: a logged-out session or a revoked device ends the stream even though the membership is untouched.
+func TestSSEClosesWhenOnlyTheSessionIsRevoked(t *testing.T) {
+	var revoked atomic.Bool
+	var checks atomic.Int32
+	f := newSSEWith(t, inboxadapters.RealtimeOptions{Recheck: 120 * time.Millisecond, Keepalive: 80 * time.Millisecond,
+		SessionRecheck: func(_ context.Context, p *authn.Principal) error {
+			checks.Add(1)
+			if revoked.Load() {
+				return errors.New("session revoked")
+			}
+			return nil
+		}})
+	_, r, _ := f.open(t, "/t/"+f.tenant.String()+"/events")
+	time.Sleep(300 * time.Millisecond)
+	if checks.Load() < 1 {
+		t.Fatalf("the session was never re-checked (checks=%d)", checks.Load())
+	}
+	revoked.Store(true) // membership stays valid: f.auth.revoke is never set
+	done := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := r.ReadString('\n'); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream stayed open after the session was revoked")
+	}
+}

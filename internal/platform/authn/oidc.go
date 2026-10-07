@@ -84,6 +84,8 @@ type oidcClaims struct {
 	// email_verified: bool no padrão OIDC, mas alguns IdPs enviam a string "true".
 	EmailVerified any `json:"email_verified,omitempty"`
 	Name        string `json:"name,omitempty"`
+	// Azp: authorized party (the OIDC client the token was issued to); the native flow requires it to be the mobile client.
+	Azp         string `json:"azp,omitempty"`
 	GivenName   string `json:"given_name,omitempty"`
 	FamilyName  string `json:"family_name,omitempty"`
 	jwt.RegisteredClaims

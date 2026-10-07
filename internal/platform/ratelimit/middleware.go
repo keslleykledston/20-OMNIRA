@@ -1,13 +1,47 @@
 package ratelimit
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/tenancy/domain"
 )
+
+// This middleware runs BEFORE authentication, so in production no tenant context exists yet: everything lands in the coarse global bucket
+// (a process-wide safety net). The per-tenant and per-user quotas are enforced AFTER the membership is verified, by EnforceTenantUser,
+// which the tenant authorization middleware calls (R-2). Counting by a tenant id taken from the URL before authorization would let a
+// stranger burn another tenant's quota, so it is never done that way.
+
+type enforcerKey struct{}
+
+// WithEnforcer makes the limiter reachable by the post-authorization hook through the request context.
+func WithEnforcer(ctx context.Context, l *Limiter) context.Context {
+	return context.WithValue(ctx, enforcerKey{}, l)
+}
+
+// EnforceTenantUser applies the tenant and user quotas to an already authorized request. It writes the 429 itself and returns false
+// when a quota is exceeded. Without a limiter in the context (tests, tools) it allows everything.
+func EnforceTenantUser(w http.ResponseWriter, r *http.Request, tenantID, actorID uuid.UUID) bool {
+	l, _ := r.Context().Value(enforcerKey{}).(*Limiter)
+	if l == nil {
+		return true
+	}
+	tenantAllowed, tenantRemaining, tenantReset := l.Allow(r.Context(), QuotaTypeTenant, tenantID.String())
+	if !tenantAllowed {
+		writeRateLimitExceeded(w, tenantRemaining, tenantReset)
+		return false
+	}
+	userAllowed, userRemaining, userReset := l.Allow(r.Context(), QuotaTypeUser, actorID.String())
+	if !userAllowed {
+		writeRateLimitExceeded(w, userRemaining, userReset)
+		return false
+	}
+	return true
+}
 
 // Middleware — HTTP middleware para rate limiting
 func Middleware(limiter *Limiter) func(http.Handler) http.Handler {
@@ -23,7 +57,7 @@ func Middleware(limiter *Limiter) func(http.Handler) http.Handler {
 					return
 				}
 				writeRateLimitHeaders(w, remaining, resetTime)
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(WithEnforcer(r.Context(), limiter)))
 				return
 			}
 

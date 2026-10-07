@@ -16,7 +16,18 @@ import (
 type Principal struct {
 	UserID  uuid.UUID
 	Subject string
+	// SessionKind/SessionKey identify the server-side credential this request authenticated with (cookie session or device access token),
+	// so a long-lived stream can ask later whether it is still valid. Empty for a Bearer ID token (nothing server-side to revoke).
+	SessionKind string
+	SessionKey  string
+	// DeviceID is set when the caller is a native app installation.
+	DeviceID uuid.UUID
 }
+
+const (
+	SessionKindCookie = "cookie"
+	SessionKindDevice = "device"
+)
 
 // Authenticator — interface para estratégias de autenticação.
 type Authenticator interface {
@@ -223,7 +234,7 @@ func WebMiddleware(auth Authenticator, store SessionStore) func(http.Handler) ht
 				http.Error(w, "invalid or expired session", http.StatusUnauthorized)
 				return
 			}
-			principal := &Principal{UserID: userID, Subject: userID.String()}
+			principal := &Principal{UserID: userID, Subject: userID.String(), SessionKind: SessionKindCookie, SessionKey: cookie.Value}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 		})
 	}
