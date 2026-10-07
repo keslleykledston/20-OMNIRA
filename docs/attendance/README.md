@@ -27,7 +27,7 @@ Também: `GET …/inbox/conversations?status=open|closed|all` (padrão `open`).
 | `OMNIRA_AI_TOOL_GATEWAY_ENABLED` | libera o gateway; ferramentas de leitura `contact.recent_attendances`, `contact.open_followups`, `contact.search_history` (contato derivado do assunto, nunca por argumento) |
 | `OMNIRA_COPILOT_ENABLED` + `OMNIRA_AI_MODEL_CLOSING_SUGGEST` | habilita "Sugerir com IA" (se a variável do modelo faltar, usa o modelo padrão) |
 
-**Estado em 2026-10-06 (noite):** `OMNIRA_COPILOT_CONTACT_MEMORY_ENABLED=true` no `.env` e na `api`, **mas sem efeito ainda**: o copiloto (`OMNIRA_COPILOT_ENABLED`) e o provedor de IA (`OMNIRA_AI_ENABLED`, provedor e chave) não estão configurados. A memória passa a valer sozinha quando o copiloto for ligado. Testado em produção: finalizar (fechamento, chamado local encerrado, auditoria).
+**Estado em 2026-10-07:** IA da plataforma ligada com **Gemini** (`OMNIRA_AI_ENABLED=true`, `OMNIRA_AI_PROVIDER=gemini`, `OMNIRA_AI_MODEL=gemini-3.5-flash-lite`) e `OMNIRA_COPILOT_ENABLED=true`, junto com `OMNIRA_COPILOT_CONTACT_MEMORY_ENABLED=true`, na `api` e no `worker`. Continuam **desligadas**: `OMNIRA_AI_TOOL_GATEWAY_ENABLED` (ferramentas de leitura) e `OMNIRA_FLOWS_AI_ENABLED`. Guia do provedor: `docs/ai/PLATFORM-AI-PROVIDERS.md`. Finalizar foi testado em produção; o copiloto e "Sugerir com IA" aguardam o primeiro uso real no Inbox.
 
 A IA só propõe: nada que ela escreve vale como fato até uma pessoa confirmar; falha da IA nunca impede finalizar à mão.
 
