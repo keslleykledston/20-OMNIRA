@@ -20,6 +20,8 @@ export interface ConversationChannel {
   channel_connection_id?: string
   provider?: string
   can_send_text: boolean
+  /** The server has outbound files on and this line's provider can deliver them (ADR-0024). */
+  can_send_media?: boolean
   window_required: boolean
   window_open: boolean
   last_inbound_at?: string

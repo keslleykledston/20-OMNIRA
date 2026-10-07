@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/platform/authn"
-	"github.com/omnira/omnira/internal/platform/ratelimit"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/ratelimit"
 	"github.com/omnira/omnira/internal/tenancy/application"
 	"github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -23,6 +23,9 @@ import (
 // middleware não pode tentar escrever outro http.Error por cima — isso
 // dispara "superfluous response.WriteHeader call" e corrompe a resposta já
 // enviada ao cliente.
+// Unwrap lets http.ResponseController reach the real writer (deadlines, flushing) through this wrapper.
+func (t *trackedResponseWriter) Unwrap() http.ResponseWriter { return t.ResponseWriter }
+
 type trackedResponseWriter struct {
 	http.ResponseWriter
 	wrote bool

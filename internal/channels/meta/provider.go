@@ -209,8 +209,35 @@ func (p *Provider) SendText(ctx context.Context, conn domain.ChannelConnection, 
 	return &domain.SendResult{ProviderMessageID: id, State: domain.DeliveryStateSent}, nil
 }
 
-func (p *Provider) SendMedia(context.Context, domain.ChannelConnection, domain.OutboundMediaMessage) (*domain.SendResult, error) {
-	return nil, ports.ErrCapabilityNotSupported
+// SendMedia uploads the operator's file to Meta and sends it inside the 24 h window (ADR-0024). The upload is repeatable; the message is
+// not (no idempotency key), so only the message step can end as ports.ErrOutcomeUnknown.
+func (p *Provider) SendMedia(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundMediaMessage) (*domain.SendResult, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	to := strings.TrimPrefix(strings.TrimSpace(msg.ToE164), "+")
+	if len(msg.Data) == 0 || msg.Mime == "" || !digitsPattern.MatchString(to) {
+		return nil, fmt.Errorf("%w: recipient and media are required", ports.ErrPermanent)
+	}
+	c, err := p.credential(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	token := c.Fields[FieldAccessToken]
+	mediaID, err := p.client.UploadMedia(ctx, token, conn.ExternalNumberID, msg.Mime, msg.FileName, msg.Data)
+	p.count(ctx, "upload_media", err)
+	if err != nil {
+		return nil, err
+	}
+	id, err := p.client.SendMedia(ctx, token, conn.ExternalNumberID, to, string(msg.Kind), mediaID, msg.Caption, msg.FileName)
+	p.count(ctx, "send_media", err)
+	if err != nil {
+		if errors.Is(err, ports.ErrOutcomeUnknown) {
+			log.Printf("meta: media send outcome unknown connection_id=%s", conn.ID)
+		}
+		return nil, err
+	}
+	return &domain.SendResult{ProviderMessageID: id, State: domain.DeliveryStateSent}, nil
 }
 
 // SendTemplate sends an approved template (allowed any time, which is how a conversation starts outside the 24 h

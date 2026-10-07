@@ -10,16 +10,42 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/messages/application"
+	"github.com/omnira/omnira/internal/messages/ports"
 )
 
 // SendHandler serves outbound text. Mount it behind authn + the tenant-session
 // middleware: tenant and sender come only from the TenantContext.
-type SendHandler struct{ svc *application.Sender }
+type SendHandler struct {
+	svc      *application.Sender
+	att      *application.Attachments // nil: outbound media is off
+	attStore ports.AttachmentStore
+	limiter  *uploadLimiter
+	// slots bounds the uploads handled at once: each holds up to 16 MiB in memory (plus the stripped copy), so the budget is
+	// maxConcurrentUploads * ~40 MiB however many operators click at the same time.
+	slots chan struct{}
+}
+
+const maxConcurrentUploads = 4
 
 func NewSendHandler(svc *application.Sender) *SendHandler { return &SendHandler{svc: svc} }
 
+// WithAttachments turns on outbound media (ADR-0024): the upload/remove endpoints and `attachment_id` on send.
+func (h *SendHandler) WithAttachments(att *application.Attachments, store ports.AttachmentStore) *SendHandler {
+	h.att, h.attStore, h.limiter, h.slots = att, store, newUploadLimiter(20, time.Minute), make(chan struct{}, maxConcurrentUploads)
+	return h
+}
+
+// SetUploadSlots changes how many uploads are handled at once (default 4). Each slot can hold ~40 MiB: size it against the memory limit.
+func (h *SendHandler) SetUploadSlots(n int) {
+	if n > 0 {
+		h.slots = make(chan struct{}, n)
+	}
+}
+
 type sendRequest struct {
 	Text string `json:"text"`
+	// AttachmentID, when present, sends the previously uploaded file; Text is then its optional caption.
+	AttachmentID *uuid.UUID `json:"attachment_id,omitempty"`
 }
 
 type sendResponse struct {
@@ -43,7 +69,16 @@ func (h *SendHandler) Send(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	res, err := h.svc.Send(r.Context(), conversationID, req.Text, r.Header.Get("Idempotency-Key"))
+	var res application.SendResult
+	if req.AttachmentID != nil {
+		if h.att == nil {
+			http.Error(w, "outbound media is not enabled", http.StatusNotImplemented)
+			return
+		}
+		res, err = h.svc.SendMedia(r.Context(), h.attStore, conversationID, *req.AttachmentID, req.Text, r.Header.Get("Idempotency-Key"))
+	} else {
+		res, err = h.svc.Send(r.Context(), conversationID, req.Text, r.Header.Get("Idempotency-Key"))
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -98,7 +133,26 @@ func (h *SendHandler) SendTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func fail(w http.ResponseWriter, err error) {
+	var rejected *application.AttachmentRejected
 	switch {
+	case errors.As(err, &rejected):
+		http.Error(w, "file not accepted: "+rejected.Reason, http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrMediaUnsupported):
+		http.Error(w, "this channel cannot send media", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrInvalidCaption):
+		http.Error(w, "caption is limited to 1024 characters of plain text", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrAttachmentUnavailable):
+		http.Error(w, "attachment is not available (expired, already sent or not yours)", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrTooManyAttachments):
+		http.Error(w, "too many unsent attachments in this conversation", http.StatusConflict)
+	case errors.Is(err, application.ErrAttachmentQuota):
+		http.Error(w, "the attachment storage quota was reached: send or remove pending files", http.StatusConflict)
+	case errors.Is(err, application.ErrAttachmentRate):
+		http.Error(w, "too many uploads, wait a moment", http.StatusTooManyRequests)
+	case errors.Is(err, application.ErrAttachmentInfected):
+		http.Error(w, "the file was blocked by the antivirus", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrScannerUnavailable):
+		http.Error(w, "the antivirus is unavailable, try again later", http.StatusServiceUnavailable)
 	case errors.Is(err, application.ErrTemplateUnsupported), errors.Is(err, application.ErrTemplateNotAllowed), errors.Is(err, application.ErrTemplateParams):
 		http.Error(w, err.Error()[len("messages: "):], http.StatusUnprocessableEntity)
 	case errors.Is(err, application.ErrForbidden), errors.Is(err, application.ErrNotAssignedToYou):

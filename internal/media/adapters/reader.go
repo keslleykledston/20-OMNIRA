@@ -35,7 +35,7 @@ func (r *Reader) Open(ctx context.Context, tenantID, messageID uuid.UUID) (*port
 		SELECT id, status, mime, size_bytes, sha256, file_purged_at IS NOT NULL
 		FROM message_media WHERE tenant_id=$1 AND message_id=$2`, tenantID, messageID).Scan(&id, &status, &mime, &size, &sha, &purged)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ports.ErrMediaNotFound
+		return r.openOutbound(ctx, tenantID, messageID)
 	}
 	if err != nil {
 		return nil, err
@@ -49,6 +49,39 @@ func (r *Reader) Open(ctx context.Context, tenantID, messageID uuid.UUID) (*port
 		return out, nil
 	}
 	f, err := r.store.OpenClean(tenantID.String(), id.String())
+	if errors.Is(err, fs.ErrNotExist) {
+		out.Status = string(ports.StatusSourceGone)
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out.File = f
+	return out, nil
+}
+
+// openOutbound serves back a file an operator sent (ADR-0024) to operators of the same tenant. Same rules as inbound: RLS decides which
+// rows exist, only the recorded file is opened, the HTTP layer applies the hostile-content headers.
+func (r *Reader) openOutbound(ctx context.Context, tenantID, messageID uuid.UUID) (*ports.ServedMedia, error) {
+	var id uuid.UUID
+	var mime, sha string
+	var size int64
+	var purged bool
+	err := platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx, `
+		SELECT id, mime, size_bytes, sha256, file_purged_at IS NOT NULL
+		FROM message_outbound_media WHERE tenant_id=$1 AND message_id=$2`, tenantID, messageID).Scan(&id, &mime, &size, &sha, &purged)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ports.ErrMediaNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := &ports.ServedMedia{Status: string(ports.StatusClean), Mime: mime, Size: size, SHA256: sha}
+	if purged {
+		out.Status = "purged"
+		return out, nil
+	}
+	f, err := r.store.OpenOutbound(tenantID, id)
 	if errors.Is(err, fs.ErrNotExist) {
 		out.Status = string(ports.StatusSourceGone)
 		return out, nil

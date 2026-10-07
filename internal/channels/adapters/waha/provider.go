@@ -277,8 +277,59 @@ func statusForError(err error) string {
 	}
 }
 
-func (p *WahaProvider) SendMedia(context.Context, domain.ChannelConnection, domain.OutboundMediaMessage) (*domain.SendResult, error) {
-	return nil, ports.ErrCapabilityNotSupported
+// SendMedia sends an operator's file (ADR-0024). WAHA has no idempotency id for media, so a failure that may have reached WhatsApp (timeout,
+// 5xx, reset, undecodable answer) is ports.ErrOutcomeUnknown and ends the message as "uncertain": a second attempt could deliver the file
+// twice to the customer. Only an explicit throttle (429) or a rejection (4xx) keeps its meaning.
+func (p *WahaProvider) SendMedia(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundMediaMessage) (*domain.SendResult, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	if len(msg.Data) == 0 || strings.TrimSpace(msg.Mime) == "" {
+		return nil, fmt.Errorf("%w: media bytes and type are required", ports.ErrPermanent)
+	}
+	name, err := p.SessionRef(conn)
+	if err != nil {
+		return nil, err
+	}
+	chatID, err := outboundChatID(msg.ProviderChatID, msg.ToE164)
+	if err != nil {
+		return nil, err
+	}
+	endpoint, mimetype := mediaEndpoint(msg.Kind, msg.Mime)
+	id, err := p.client.SendMedia(ctx, name, chatID, endpoint, mimetype, msg.FileName, msg.Data, msg.Caption)
+	p.operations.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_media"), attribute.String("status", statusForError(err))))
+	if err != nil {
+		p.errors.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", domain.ProviderWAHA), attribute.String("provider_type", string(domain.ProviderKindUnofficial)), attribute.String("operation", "send_media"), attribute.String("status", statusForError(err))))
+		return nil, ambiguousMediaFailure(err, conn.ID.String())
+	}
+	return &domain.SendResult{ProviderMessageID: id, State: domain.DeliveryStateSent}, nil
+}
+
+// mediaEndpoint picks WAHA's endpoint: voice notes (OGG/Opus) go as voice, everything else by kind.
+func mediaEndpoint(kind domain.MediaKind, mime string) (endpoint, mimetype string) {
+	switch kind {
+	case domain.MediaKindImage:
+		return "sendImage", mime
+	case domain.MediaKindVideo:
+		return "sendVideo", mime
+	case domain.MediaKindAudio:
+		if mime == "audio/ogg" {
+			return "sendVoice", "audio/ogg; codecs=opus"
+		}
+		return "sendFile", mime
+	}
+	return "sendFile", mime
+}
+
+// ambiguousMediaFailure maps every failure that may have reached the provider to ErrOutcomeUnknown (see SendMedia).
+func ambiguousMediaFailure(err error, connectionID string) error {
+	switch {
+	case errors.Is(err, ports.ErrAuthentication), errors.Is(err, ports.ErrSessionDisconnected), errors.Is(err, ports.ErrConfiguration),
+		errors.Is(err, ports.ErrRateLimited), errors.Is(err, ports.ErrPermanent):
+		return err // proven not sent, or a throttle before processing
+	}
+	log.Printf("waha: media send outcome unknown connection_id=%s", connectionID)
+	return fmt.Errorf("%w: %v", ports.ErrOutcomeUnknown, err)
 }
 
 func (p *WahaProvider) SendTemplate(context.Context, domain.ChannelConnection, domain.OutboundTemplateMessage) (*domain.SendResult, error) {

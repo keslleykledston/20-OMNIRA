@@ -31,6 +31,9 @@ type Config struct {
 	AuthRedirectURL   string
 	AuthPostLoginURL  string
 	AuthCookieSecure  bool
+	// OutboundMediaEnabled turns on operator file uploads and sending (ADR-0024). Needs OMNIRA_MEDIA_DIR (with a writable outbound/ area
+	// for the API) and OMNIRA_CLAMAV_ADDR: without the antivirus nothing is accepted.
+	OutboundMediaEnabled bool
 	// Native (Android/iOS) credential endpoints, ADR-0022. Off by default; needs OIDC.
 	MobileAuthEnabled  bool
 	MobileClientID     string
@@ -130,6 +133,7 @@ func Load() *Config {
 		AuthRedirectURL:   os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
 		AuthPostLoginURL:  getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
 		AuthCookieSecure:  getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
+		OutboundMediaEnabled: getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
 		MobileAuthEnabled:  getEnv("OMNIRA_AUTH_MOBILE_ENABLED", "false") == "true",
 		MobileClientID:     getEnv("OMNIRA_AUTH_MOBILE_CLIENT_ID", "omnira-mobile"),
 		MobileRedirectURIs: splitList(os.Getenv("OMNIRA_AUTH_MOBILE_REDIRECT_URIS")),
@@ -246,6 +250,9 @@ func (c *Config) Validate() error {
 		if c.Env == "production" && (issuerURL.Scheme != "https" || redirectURL.Scheme != "https") {
 			return fmt.Errorf("OIDC em produção exige issuer e redirect URL HTTPS")
 		}
+	}
+	if c.OutboundMediaEnabled && (c.MediaDir == "" || c.ClamAVAddr == "") {
+		return fmt.Errorf("OMNIRA_OUTBOUND_MEDIA_ENABLED=true exige OMNIRA_MEDIA_DIR e OMNIRA_CLAMAV_ADDR (sem antivírus nada é aceito)")
 	}
 	if c.MobileAuthEnabled {
 		if authMode != "oidc" {

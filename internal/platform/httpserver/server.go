@@ -579,7 +579,23 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.Send))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/template", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.SendTemplate))))
-	linesHandler := inboxadapters.NewChannelLinesHandler(dbPool, channeladapters.NewPostgresPermissionChecker(dbPool))
+	// ADR-0024: operator files to the customer, only through providers this deployment actually delivers with. Off by default; without the antivirus and a writable outbound area nothing is registered.
+	mediaProviderReady := func(provider string) bool {
+		return (provider == "waha" && cfg.WahaEnabled) || (provider == "meta_cloud" && cfg.MetaEnabled)
+	}
+	if cfg.OutboundMediaEnabled {
+		if files, err := mediaadapters.NewOutboundFiles(cfg.MediaDir); err != nil {
+			log.Printf("outbound media disabled: %v", err)
+		} else {
+			store := messagesadapters.NewPostgresOutboundStore(dbPool)
+			sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(dbPool)).WithMediaProviders(mediaProviderReady)
+			attachments := messagesapplication.NewAttachments(sender, store, files, mediaadapters.NewVirusScanner(cfg.ClamAVAddr))
+			sendHandler.WithAttachments(attachments, store)
+			s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments", authnMiddleware(sendHandler.BufferUpload(tenantSession(http.HandlerFunc(sendHandler.Upload)))))
+			s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments/{attachment_id}", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.RemoveAttachment))))
+		}
+	}
+	linesHandler := inboxadapters.NewChannelLinesHandler(dbPool, channeladapters.NewPostgresPermissionChecker(dbPool)).WithOutboundMedia(cfg.OutboundMediaEnabled, mediaProviderReady)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/channel", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Channel))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/open", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Open))))
 

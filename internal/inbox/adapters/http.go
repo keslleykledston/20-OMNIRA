@@ -350,11 +350,12 @@ func (h *InboxAPIHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
 		SELECT m.id,m.conversation_id,m.channel_connection_id,m.direction,m.message_type,m.body,m.media_ref,m.mime_type,m.size_bytes,m.status,m.created_at,
-		       COALESCE(mm.status,''),
+		       COALESCE(mm.status, CASE WHEN om.id IS NULL THEN '' WHEN om.file_purged_at IS NOT NULL THEN 'source_gone' ELSE 'clean' END),
 		       CASE WHEN ma.status='done' THEN ma.body ELSE '' END, COALESCE(ma.status,''), COALESCE(ma.suspicious,false),
 		       COALESCE(m.failure_reason,'')
 		FROM messages m
 		LEFT JOIN message_media mm ON mm.tenant_id=m.tenant_id AND mm.message_id=m.id
+		LEFT JOIN message_outbound_media om ON om.tenant_id=m.tenant_id AND om.message_id=m.id
 		LEFT JOIN message_media_analysis ma ON ma.tenant_id=m.tenant_id AND ma.message_id=m.id AND ma.kind='transcript'
 		WHERE `+where+` ORDER BY m.created_at DESC,m.id DESC LIMIT $`+strconv.Itoa(limitPos), args...)
 	if err != nil {

@@ -47,9 +47,27 @@ type OutboundJob struct {
 	// Template is set when this message is an approved-template send (WhatsApp Cloud API); Text then only holds the
 	// rendered preview shown in the inbox and is NOT what the provider receives.
 	Template *TemplateJob
+	// Media is set when the message carries a file an operator uploaded (ADR-0024); Text is then its caption.
+	Media *MediaJob
 	// Interactive is set when the bot's menu goes out as buttons/list; Text is then the numbered-text version of the SAME
 	// menu, used as the fallback on a provider without buttons.
 	Interactive *InteractiveJob
+}
+
+// MediaJob is the record of the file to deliver; the bytes are read from the outbound file store and must match Size and SHA256.
+type MediaJob struct {
+	AttachmentID uuid.UUID
+	TenantID     uuid.UUID
+	Kind         string
+	Mime         string
+	FileName     string
+	Size         int64
+	SHA256       string
+}
+
+// MediaFiles reads an outbound file back, verified against its record.
+type MediaFiles interface {
+	ReadVerified(tenantID, id uuid.UUID, size int64, sha256Hex string) ([]byte, error)
 }
 
 // InteractiveJob is what the provider needs to render a menu as buttons/list.
@@ -107,6 +125,8 @@ type TextSender interface {
 	SendTemplate(ctx context.Context, connectionID uuid.UUID, msg domain.OutboundTemplateMessage) (*domain.SendResult, error)
 	// SendInteractive sends buttons/list; ports.ErrCapabilityNotSupported when the provider has none (the caller sends text).
 	SendInteractive(ctx context.Context, connectionID uuid.UUID, msg domain.OutboundInteractiveMessage) (*domain.SendResult, error)
+	// SendMedia sends an operator's file. No provider deduplicates media by id, so an ambiguous failure is ports.ErrOutcomeUnknown.
+	SendMedia(ctx context.Context, connectionID uuid.UUID, msg domain.OutboundMediaMessage) (*domain.SendResult, error)
 }
 
 type Handler struct {
@@ -114,7 +134,11 @@ type Handler struct {
 	sender      TextSender
 	maxAttempts int
 	outcomes    metric.Int64Counter
+	files       MediaFiles // nil: a media message cannot be delivered and ends as failed
 }
+
+// WithMediaFiles enables delivery of operator files (ADR-0024).
+func (h *Handler) WithMediaFiles(f MediaFiles) *Handler { h.files = f; return h }
 
 // NewHandler builds the delivery handler. After maxAttempts deliveries of a
 // still-retryable failure the message is marked failed instead of retried.
@@ -223,6 +247,10 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 	// GUC to be set. What must never happen, and doesn't here, is holding the
 	// message row's FOR UPDATE lock while this network call is in flight.
 	reservedID := peek.ReservedProviderMessageID
+	if peek.Media != nil && reservedID == "" {
+		// No provider deduplicates a media send by id, so there is nothing to reserve; the message id is only a correlation key.
+		reservedID = messageID.String()
+	}
 	if reservedID == "" {
 		err = h.store.RunForMessage(ctx, messageID, func(scoped context.Context) error {
 			var genErr error
@@ -264,7 +292,14 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 		}
 		var result *domain.SendResult
 		var sendErr error
-		if out.Template != nil {
+		if out.Media != nil {
+			result, sendErr = h.sendMedia(scoped, out, reservedID)
+			if errors.Is(sendErr, errMediaUnreadable) {
+				h.count(scoped, "failed")
+				log.Printf("channel delivery: failed message_id=%s tenant_id=%s outcome=failed error_class=media_unavailable", messageID, tenantIDString(scoped))
+				return h.store.MarkFailed(scoped, messageID, "media_unavailable")
+			}
+		} else if out.Template != nil {
 			result, sendErr = h.sender.SendTemplate(scoped, out.ConnectionID, domain.OutboundTemplateMessage{
 				ToE164: out.ToE164, TemplateName: out.Template.Name, LanguageCode: out.Template.Language, Params: out.Template.Params, IdempotencyKey: reservedID,
 			})
@@ -326,6 +361,23 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 			log.Printf("channel delivery: failed message_id=%s tenant_id=%s outcome=failed error_class=%s", messageID, tenantIDString(scoped), Classify(sendErr))
 			return h.store.MarkFailed(scoped, messageID, Classify(sendErr))
 		}
+	})
+}
+
+// errMediaUnreadable: the file is gone, altered or the worker has no media store - a deterministic failure, nothing was sent.
+var errMediaUnreadable = errors.New("channel delivery: outbound media is unreadable")
+
+func (h *Handler) sendMedia(ctx context.Context, out *OutboundJob, correlationID string) (*domain.SendResult, error) {
+	if h.files == nil {
+		return nil, errMediaUnreadable
+	}
+	data, err := h.files.ReadVerified(out.Media.TenantID, out.Media.AttachmentID, out.Media.Size, out.Media.SHA256)
+	if err != nil {
+		return nil, errMediaUnreadable
+	}
+	return h.sender.SendMedia(ctx, out.ConnectionID, domain.OutboundMediaMessage{
+		ToE164: out.ToE164, ProviderChatID: out.ProviderChatID, Kind: domain.MediaKind(out.Media.Kind),
+		Mime: out.Media.Mime, FileName: out.Media.FileName, Data: data, Caption: out.Text, IdempotencyKey: correlationID,
 	})
 }
 

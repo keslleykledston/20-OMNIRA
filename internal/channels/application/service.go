@@ -197,6 +197,25 @@ func (s *ChannelService) SendInteractive(ctx context.Context, connID uuid.UUID, 
 	return is.SendInteractive(ctx, *conn, msg)
 }
 
+// SendMedia sends a file (already classified, cleaned and cleared by the antivirus) through the connection's provider.
+func (s *ChannelService) SendMedia(ctx context.Context, connID uuid.UUID, msg domain.OutboundMediaMessage) (*domain.SendResult, error) {
+	conn, err := s.connRepo.FindByID(ctx, connID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: falha ao buscar conexão: %w", err)
+	}
+	if conn == nil {
+		return nil, fmt.Errorf("channel: conexão %s não encontrada", connID)
+	}
+	provider, err := s.registry.Resolve(conn.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if !provider.IsConfigured(ctx, *conn) {
+		return nil, ports.ErrNotConfigured
+	}
+	return provider.SendMedia(ctx, *conn, msg)
+}
+
 // SendTemplate sends an approved template through the connection's provider (Meta Cloud API).
 func (s *ChannelService) SendTemplate(ctx context.Context, connID uuid.UUID, msg domain.OutboundTemplateMessage) (*domain.SendResult, error) {
 	conn, err := s.connRepo.FindByID(ctx, connID)

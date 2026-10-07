@@ -248,12 +248,47 @@ var pdfActive = [][]byte{[]byte("/JavaScript"), []byte("/JS"), []byte("/Launch")
 // hasPDFActiveContent refuses PDFs that can run code, launch programs or carry attachments. Name tokens can be
 // obfuscated with #xx escapes, so any escaped name token in the dangerous family also counts.
 func hasPDFActiveContent(data []byte) bool {
+	data = unescapePDFNames(data)
 	for _, token := range pdfActive {
 		if bytes.Contains(data, token) {
 			return true
 		}
 	}
 	return bytes.Contains(data, []byte("/J#")) || bytes.Contains(data, []byte("/Java#")) || bytes.Contains(data, []byte("/Launc#"))
+}
+
+// unescapePDFNames resolves #xx escapes (PDF 1.2 name syntax) so "/J#61vaScript" is seen as "/JavaScript". Applied to the whole file: the
+// worst case is a false positive on binary data that happens to contain "/JS" after unescaping, which is acceptable for a security filter.
+func unescapePDFNames(data []byte) []byte {
+	if !bytes.Contains(data, []byte("#")) {
+		return data
+	}
+	out := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		if data[i] == '#' && i+2 < len(data) {
+			if hi, ok1 := hexVal(data[i+1]); ok1 {
+				if lo, ok2 := hexVal(data[i+2]); ok2 {
+					out = append(out, hi<<4|lo)
+					i += 2
+					continue
+				}
+			}
+		}
+		out = append(out, data[i])
+	}
+	return out
+}
+
+func hexVal(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
 
 // checkImageDimensions refuses decompression bombs by reading only the header.

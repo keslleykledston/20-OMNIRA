@@ -58,3 +58,27 @@ func TestMobileRedirectListIsParsedFromTheEnvironment(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+func TestOutboundMediaNeedsTheAntivirusAndTheMediaDirectory(t *testing.T) {
+	c := oidcBase()
+	c.OutboundMediaEnabled = true
+	if err := c.Validate(); err == nil {
+		t.Fatal("outbound media accepted without an antivirus or a media directory")
+	}
+	c.MediaDir = "/var/lib/omnira/media"
+	if err := c.Validate(); err == nil {
+		t.Fatal("outbound media accepted without an antivirus")
+	}
+	c.ClamAVAddr = "clamav:3310"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid outbound media config rejected: %v", err)
+	}
+	t.Setenv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "true")
+	if !Load().OutboundMediaEnabled {
+		t.Fatal("flag not read from the environment")
+	}
+	t.Setenv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "")
+	if Load().OutboundMediaEnabled {
+		t.Fatal("must be off by default")
+	}
+}

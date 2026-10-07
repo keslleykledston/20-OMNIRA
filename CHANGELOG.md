@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added (R-4 — anexos de saída, ADR-0024; desligado por flag)
+- O operador anexa imagem, áudio, vídeo MP4, PDF ou texto à resposta (clipe no Inbox). Upload `POST .../attachments` (tipo pelo conteúdo, metadados de imagem removidos, ClamAV que **fecha** se estiver fora, nome saneado, 16 MiB, 5 pendentes/conversa, 24 h) e envio com `attachment_id` (legenda ≤ 1024). Entrega pelo WAHA (`sendImage/Video/Voice/File`) e pela Meta (upload de mídia + mensagem); falha ambígua termina `uncertain` e nunca é reenviada. Migration `000092`, `OMNIRA_OUTBOUND_MEDIA_ENABLED`, `docs/ops/OUTBOUND-MEDIA.md`. Falta o teste ao vivo com número de teste.
+
 ### Added (ADR-0018 adendo — contato "Interno": equipe, parceiro, fornecedor)
 - Nova classificação de pessoa **Interno** (ao lado de Cliente e Outros) com subtipo **Equipe / Parceiro / Fornecedor**. É declaração de um operador, não identidade verificada: só desliga a automação de cliente (bot, chamado automático, SLA, CSAT); a conversa segue na fila e atribuível (`conversation_kind` continua `external_other`). Migration `000090` (aditiva, reversível; o `down` devolve esses contatos a "Outros").
 - Só decisão humana (`source=manual`, permissão `contact.classify`), papel obrigatório (422/400), auditoria com `internal_role_from/to`; a tela diz o que a escolha desliga antes de salvar. `PUT …/kind` recusa `internal`.

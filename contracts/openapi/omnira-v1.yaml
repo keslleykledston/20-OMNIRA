@@ -2276,7 +2276,78 @@ paths:
         '403': { description: "Missing permission or conversation assigned to another agent", content: { text/plain: { schema: { type: string } } } }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "Conversation is unassigned, or has no active text channel", content: { text/plain: { schema: { type: string } } } }
-        '422': { description: "Blank/too long text (max 4096 characters) or key reused with a different request", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "Blank/too long text (max 4096 characters), a caption over 1024 characters, an attachment that is not available (expired, already sent or not yours) or key reused with a different request", content: { text/plain: { schema: { type: string } } } }
+        '501': { description: "attachment_id sent while outbound media is not enabled", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments:
+    post:
+      operationId: uploadAttachment
+      tags: [Messages]
+      summary: Upload a file to send to the customer (ADR-0024)
+      description: |
+        Only served when `OMNIRA_OUTBOUND_MEDIA_ENABLED=true` (`501` otherwise). `multipart/form-data` with one part named `file`
+        (limit 16 MiB; the body is streamed and never spooled to disk). Same authorization as sending (permission `conversation.claim`,
+        assignee or `conversation.manage`, open conversation, active channel, 24 h window on Meta). The server decides what the file IS
+        by its bytes, never by the declared type or name: images (JPEG, PNG; WebP on WAHA), audio (OGG, MP3, M4A, AMR), video (MP4),
+        PDF and plain text are accepted; archives, executables, active content, PDFs with scripts and anything the provider cannot
+        deliver are `422 file not accepted: <reason>`. Image metadata (EXIF/GPS, XMP, text chunks) is removed, the file is scanned by the
+        antivirus (blocked = `422`, antivirus down = `503`: nothing is accepted without a scan), then stored. The upload belongs to the
+        operator who made it, to that conversation, and expires after 24 h if not sent. At most 5 unsent uploads per operator per
+        conversation, 64 MiB of unsent bytes per operator and 2 GiB stored per tenant (`409`), and 30 uploads per minute per operator (`429`). The body is read before
+        the tenant session; at most 4 uploads run at once (`503` with `Retry-After` when busy). Send it with `attachment_id` on the messages endpoint.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Stored and cleared; use `id` as `attachment_id`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, kind, mime, size_bytes, file_name, expires_at]
+                properties:
+                  id: { type: string, format: uuid }
+                  kind: { type: string, enum: [image, audio, video, document] }
+                  mime: { type: string, description: 'From the real bytes' }
+                  size_bytes: { type: integer }
+                  file_name: { type: string, description: 'Sanitized name the customer will see' }
+                  expires_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Conversation unassigned/finalized, no active channel, window closed (Meta) or too many unsent uploads", content: { text/plain: { schema: { type: string } } } }
+        '413': { description: "File over 16 MiB", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "File not accepted (reason in the body) or blocked by the antivirus", content: { text/plain: { schema: { type: string } } } }
+        '429': { description: "Too many uploads", content: { text/plain: { schema: { type: string } } } }
+        '501': { description: "Outbound media is not enabled", content: { text/plain: { schema: { type: string } } } }
+        '503': { description: "The antivirus is unavailable; nothing was stored", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments/{attachment_id}:
+    delete:
+      operationId: removeAttachment
+      tags: [Messages]
+      summary: Take an unsent upload out of the composer
+      description: Only the operator who uploaded it, only while unsent. The file is deleted by the worker shortly after.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+        - { name: attachment_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Removed }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: "Not available (unknown, already sent, expired or not yours)", content: { text/plain: { schema: { type: string } } } }
+        '501': { description: "Outbound media is not enabled", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign:
     post:
       operationId: assignConversation
@@ -2624,6 +2695,7 @@ paths:
                   channel_connection_id: { type: string, format: uuid }
                   provider: { type: string }
                   can_send_text: { type: boolean }
+                  can_send_media: { type: boolean, description: 'Outbound files are enabled on the server and this conversation provider can deliver them (ADR-0024).' }
                   window_required: { type: boolean }
                   window_open: { type: boolean }
                   last_inbound_at: { type: string, format: date-time }
@@ -3886,9 +3958,12 @@ components:
         limit: { type: integer }
     SendMessageRequest:
       type: object
-      required: [text]
+      description: |
+        Plain text: `text` (1-4096). With `attachment_id` (ADR-0024, only when outbound media is enabled) the previously uploaded file is
+        sent and `text` becomes its optional caption (max 1024 characters of plain text).
       properties:
-        text: { type: string, minLength: 1, maxLength: 4096 }
+        text: { type: string, maxLength: 4096 }
+        attachment_id: { type: string, format: uuid }
     QueuedMessage:
       type: object
       required: [id, conversation_id, direction, body, status, created_at]

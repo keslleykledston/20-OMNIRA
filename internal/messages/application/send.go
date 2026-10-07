@@ -52,10 +52,27 @@ type SendResult struct {
 type Sender struct {
 	store ports.OutboundStore
 	perms ports.PermissionChecker
+	now   func() time.Time
+	// mediaReady reports whether delivery of files is configured for a provider (nil: every supported provider). The API checks it at upload and
+	// at send, so a conversation on a provider this deployment cannot deliver through is refused up front instead of failing later.
+	mediaReady func(provider string) bool
+}
+
+// WithMediaProviders installs the delivery-readiness check for outbound files.
+func (s *Sender) WithMediaProviders(ready func(provider string) bool) *Sender {
+	s.mediaReady = ready
+	return s
 }
 
 func NewSender(store ports.OutboundStore, perms ports.PermissionChecker) *Sender {
-	return &Sender{store: store, perms: perms}
+	return &Sender{store: store, perms: perms, now: time.Now}
+}
+
+func (s *Sender) clock() time.Time {
+	if s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 func (s *Sender) has(ctx context.Context, user uuid.UUID, permission string) (bool, error) {
@@ -75,12 +92,23 @@ func (s *Sender) authorize(ctx context.Context, conversationID uuid.UUID, idempo
 	if conversationID == uuid.Nil {
 		return nil, ErrNotFound
 	}
-	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil || tc.Source != tenancydomain.AccessSourceDirect {
+	if tc, err := tenancydomain.FromContext(ctx); err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil || tc.Source != tenancydomain.AccessSourceDirect {
 		return nil, ErrForbidden
 	}
 	if !keyPattern.MatchString(idempotencyKey) {
 		return nil, ErrInvalidKey
+	}
+	return s.authorizeConversation(ctx, conversationID)
+}
+
+// authorizeConversation is the part of authorize that does not depend on an idempotency key: who may send in which conversation.
+func (s *Sender) authorizeConversation(ctx context.Context, conversationID uuid.UUID) (*prepared, error) {
+	if conversationID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil || tc.Source != tenancydomain.AccessSourceDirect {
+		return nil, ErrForbidden
 	}
 	ok, err := s.has(ctx, tc.ActorID, PermissionClaim)
 	if err != nil {

@@ -1,7 +1,9 @@
 package waha
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -105,7 +107,12 @@ func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error)
 		return nil, ErrConfiguration
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{Timeout: 15 * time.Second, CheckRedirect: noRedirect}
+	}
+	if httpClient.CheckRedirect == nil {
+		hc := *httpClient // never mutate the caller's client
+		hc.CheckRedirect = noRedirect
+		httpClient = &hc
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: httpClient}, nil
 }
@@ -186,6 +193,69 @@ func (c *Client) SendText(ctx context.Context, name, chatID, text, messageID str
 	}
 	if response.ID == "" {
 		return "", fmt.Errorf("%w: sendText response missing message id", ErrUnknown)
+	}
+	return response.ID, nil
+}
+
+type mediaFile struct {
+	Mimetype string `json:"mimetype"`
+	Filename string `json:"filename,omitempty"`
+	Data     string `json:"data"`
+}
+
+type sendMediaRequest struct {
+	Session string    `json:"session"`
+	ChatID  string    `json:"chatId"`
+	File    mediaFile `json:"file"`
+	Caption string    `json:"caption,omitempty"`
+}
+
+// noRedirect: WAHA never legitimately redirects an API call, and a redirect would carry the API key (a custom header, which net/http does
+// not strip) and a file to another host.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// mediaSlots bounds the media bodies built at once (base64 + JSON triple a file's size in memory).
+var mediaSlots = make(chan struct{}, 2)
+
+// mediaTimeout: a base64 body of up to ~22 MB needs longer than a text send.
+const mediaTimeout = 90 * time.Second
+
+// SendMedia posts a file through WAHA's image/video/voice/file endpoints. Unlike SendText there is no reserved id to make a repeat safe, so
+// the CALLER (the provider) must treat any ambiguous failure as an unknown outcome and never retry it automatically.
+func (c *Client) SendMedia(ctx context.Context, name, chatID, endpoint, mimetype, filename string, data []byte, caption string) (string, error) {
+	switch endpoint {
+	case "sendImage", "sendVideo", "sendVoice", "sendFile":
+	default:
+		return "", fmt.Errorf("%w: unsupported media endpoint", ErrPermanent)
+	}
+	ctx, cancel := context.WithTimeout(ctx, mediaTimeout)
+	defer cancel()
+	select {
+	case mediaSlots <- struct{}{}:
+		defer func() { <-mediaSlots }()
+	case <-ctx.Done():
+		return "", fmt.Errorf("%w: %w: waiting for a media slot", ErrProviderUnavailable, ErrTransient)
+	}
+	req := sendMediaRequest{Session: name, ChatID: chatID, Caption: caption,
+		File: mediaFile{Mimetype: mimetype, Filename: filename, Data: base64.StdEncoding.EncodeToString(data)}}
+	if endpoint == "sendVoice" {
+		req.Caption = "" // voice notes carry no caption
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", ErrConfiguration
+	}
+	long := *c
+	hc := *c.httpClient
+	hc.Timeout = mediaTimeout
+	hc.CheckRedirect = noRedirect
+	long.httpClient = &hc
+	var response sendTextResponse
+	if _, err = long.do(ctx, http.MethodPost, "/api/"+endpoint, bytes.NewReader(body), &response); err != nil {
+		return "", err
+	}
+	if response.ID == "" {
+		return "", fmt.Errorf("%w: %s response missing message id", ErrUnknown, endpoint)
 	}
 	return response.ID, nil
 }
