@@ -57,6 +57,8 @@ export interface MessageItem {
   media_text?: string; // text derived from the attachment (audio transcript); untrusted, plain text only
   media_text_status?: 'pending' | 'done' | 'empty' | 'failed';
   media_text_suspicious?: boolean; // the text looks addressed to an AI model
+  // Why the message failed or is uncertain: a short class, or the provider's own code and title for a late failure.
+  failure_reason?: string;
   media_urls?: string[]; // DEPRECATED: use /api/v1/tenants/{id}/messages/{id}/media instead
 }
 

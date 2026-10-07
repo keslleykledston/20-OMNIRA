@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	channeldomain "github.com/omnira/omnira/internal/channels/domain"
@@ -366,5 +367,21 @@ func (s *InboundService) ApplyDeliveryStatus(ctx context.Context, connection cha
 	default:
 		return false, errors.New("inbox: unsupported delivery status")
 	}
-	return s.messages.ApplyDeliveryStatus(ctx, connection.ID, update.ProviderMessageID, status)
+	applied, err := s.messages.ApplyDeliveryStatus(ctx, connection.ID, update.ProviderMessageID, status)
+	if err == nil && applied && status == messagedomain.StatusFailed && strings.TrimSpace(update.Reason) != "" {
+		if rec, ok := s.messages.(failureReasonRecorder); ok {
+			reason := "provider:" + strings.TrimSpace(update.Reason)
+			if r := []rune(reason); len(r) > 200 {
+				reason = string(r[:200])
+			}
+			// best effort: the status is already applied; losing the explanation must not fail the webhook
+			_ = rec.RecordFailureReason(ctx, connection.ID, update.ProviderMessageID, reason)
+		}
+	}
+	return applied, err
+}
+
+// failureReasonRecorder is implemented by stores that can keep the provider's explanation of a late failure.
+type failureReasonRecorder interface {
+	RecordFailureReason(ctx context.Context, connectionID uuid.UUID, providerMessageID, reason string) error
 }

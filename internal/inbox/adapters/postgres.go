@@ -205,6 +205,21 @@ func (s *PostgresInboundStore) ApplyDeliveryStatus(ctx context.Context, connecti
 	return result.RowsAffected() == 1, nil
 }
 
+// RecordFailureReason keeps the reason a provider gave for a failure it reported AFTER accepting the message (Meta's
+// delivery status "failed" with an error code). It only fills an empty reason and never overwrites what the delivery
+// worker recorded.
+func (s *PostgresInboundStore) RecordFailureReason(ctx context.Context, connectionID uuid.UUID, providerMessageID, reason string) error {
+	tenantID, err := tenantID(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
+		UPDATE messages SET failure_reason=$4
+		WHERE tenant_id=$1 AND channel_connection_id=$2 AND direction='outbound' AND provider_message_id=$3
+		  AND status='failed' AND COALESCE(failure_reason,'')=''`, tenantID, connectionID, providerMessageID, reason)
+	return err
+}
+
 func (s *PostgresInboundStore) FindOpenByConversation(ctx context.Context, conversationID uuid.UUID) (*ticketdomain.Ticket, error) {
 	tenantID, err := tenantID(ctx)
 	if err != nil {

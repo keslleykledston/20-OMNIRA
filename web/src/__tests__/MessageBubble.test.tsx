@@ -40,3 +40,10 @@ describe('MessageBubble', () => {
     expect(screen.getByText('✓')).toBeInTheDocument();
   });
 });
+
+describe('MessageBubble — failed delivery', () => {
+  it('says why a message was not delivered when the provider gave a reason', () => {
+    render(<MessageBubble message={{ id: 'm', conversation_id: 'c', direction: 'outbound', status: 'failed', body: 'oi', created_at: '2026-10-07T06:43:00Z', failure_reason: 'provider:131026: Message undeliverable' }} />)
+    expect(screen.getByRole('status')).toHaveTextContent('Não foi entregue (131026: Message undeliverable).')
+  })
+})
