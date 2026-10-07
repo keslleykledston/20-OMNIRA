@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"strings"
@@ -158,6 +160,110 @@ func (c *Client) SendText(ctx context.Context, token, phoneNumberID, toDigits, t
 		"to":                toDigits,
 		"type":              "text",
 		"text":              map[string]any{"preview_url": false, "body": text},
+	})
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status > 299 {
+		return "", classify(status, data)
+	}
+	var ok struct {
+		Messages []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(data, &ok) != nil || len(ok.Messages) == 0 || ok.Messages[0].ID == "" {
+		return "", fmt.Errorf("%w: accepted without a message id", ports.ErrOutcomeUnknown)
+	}
+	return ok.Messages[0].ID, nil
+}
+
+// UploadMedia stores a file with Meta and returns its media id. An upload has no customer-visible effect, so a failure that would be
+// "outcome unknown" for a message is simply retryable here.
+func (c *Client) UploadMedia(ctx context.Context, token, phoneNumberID, mime, fileName string, data []byte) (string, error) {
+	if !digitsPattern.MatchString(phoneNumberID) || token == "" || mime == "" || len(data) == 0 || len(data) > maxMediaBytes {
+		return "", fmt.Errorf("%w: media, type and credentials are required", ports.ErrPermanent)
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("messaging_product", "whatsapp")
+	_ = mw.WriteField("type", mime)
+	hdr := make(textproto.MIMEHeader)
+	hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, strings.NewReplacer(`"`, "", "\r", "", "\n", "").Replace(fileName)))
+	hdr.Set("Content-Type", mime)
+	part, err := mw.CreatePart(hdr)
+	if err != nil {
+		return "", fmt.Errorf("%w: encode", ports.ErrPermanent)
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", fmt.Errorf("%w: encode", ports.ErrPermanent)
+	}
+	if err := mw.Close(); err != nil {
+		return "", fmt.Errorf("%w: encode", ports.ErrPermanent)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/"+c.version+"/"+phoneNumberID+"/media", &buf)
+	if err != nil {
+		return "", fmt.Errorf("%w: request", ports.ErrPermanent)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	hc := *c.http
+	hc.Timeout = 90 * time.Second
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", retryableUpload(transportError(err))
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONBytes))
+	if err != nil {
+		return "", retryableUpload(transportError(err))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", retryableUpload(classify(resp.StatusCode, body))
+	}
+	var ok struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(body, &ok) != nil || ok.ID == "" {
+		return "", fmt.Errorf("%w: upload accepted without a media id", ports.ErrTransient)
+	}
+	return ok.ID, nil
+}
+
+// retryableUpload: an ambiguous upload failure is safe to repeat (nothing was delivered to anyone).
+func retryableUpload(err error) error {
+	if errors.Is(err, ports.ErrOutcomeUnknown) {
+		return fmt.Errorf("%w: upload", ports.ErrTransient)
+	}
+	return err
+}
+
+// SendMedia sends a previously uploaded media id inside the 24 h window. Same guarantees as SendText: an ambiguous failure is
+// ports.ErrOutcomeUnknown, never retried automatically.
+func (c *Client) SendMedia(ctx context.Context, token, phoneNumberID, toDigits, kind, mediaID, caption, fileName string) (string, error) {
+	if !digitsPattern.MatchString(phoneNumberID) || !digitsPattern.MatchString(toDigits) || token == "" || mediaID == "" {
+		return "", fmt.Errorf("%w: recipient, media and credentials are required", ports.ErrPermanent)
+	}
+	media := map[string]any{"id": mediaID}
+	switch kind {
+	case "image", "video":
+		if caption != "" {
+			media["caption"] = caption
+		}
+	case "document":
+		if caption != "" {
+			media["caption"] = caption
+		}
+		if fileName != "" {
+			media["filename"] = fileName
+		}
+	case "audio":
+	default:
+		return "", fmt.Errorf("%w: unsupported media kind", ports.ErrPermanent)
+	}
+	status, data, err := c.do(ctx, http.MethodPost, "/"+phoneNumberID+"/messages", token, map[string]any{
+		"messaging_product": "whatsapp", "recipient_type": "individual", "to": toDigits, "type": kind, kind: media,
 	})
 	if err != nil {
 		return "", err

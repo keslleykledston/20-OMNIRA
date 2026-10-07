@@ -107,6 +107,8 @@ type fakeSender struct {
 	templateGot    *domain.OutboundTemplateMessage
 	interactiveGot *domain.OutboundInteractiveMessage
 	interactiveErr error
+	mediaGot       *domain.OutboundMediaMessage
+	mediaErr       error
 	newIDCalls     int
 	newIDTotal     int
 	newIDErr       error
@@ -146,6 +148,18 @@ func (s *fakeSender) SendInteractive(_ context.Context, conn uuid.UUID, msg doma
 		return nil, s.interactiveErr
 	}
 	return &domain.SendResult{ProviderMessageID: fmt.Sprintf("itx-%s-%d", conn, s.total), State: domain.DeliveryStateSent}, nil
+}
+
+func (s *fakeSender) SendMedia(_ context.Context, conn uuid.UUID, msg domain.OutboundMediaMessage) (*domain.SendResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.total++
+	s.mediaGot = &msg
+	if s.mediaErr != nil {
+		return nil, s.mediaErr
+	}
+	return &domain.SendResult{ProviderMessageID: fmt.Sprintf("media-%s-%d", conn, s.total), State: domain.DeliveryStateSent}, nil
 }
 
 func (s *fakeSender) NewMessageID(_ context.Context, conn uuid.UUID) (string, error) {

@@ -2,6 +2,7 @@ package waha
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -186,6 +187,55 @@ func (c *Client) SendText(ctx context.Context, name, chatID, text, messageID str
 	}
 	if response.ID == "" {
 		return "", fmt.Errorf("%w: sendText response missing message id", ErrUnknown)
+	}
+	return response.ID, nil
+}
+
+type mediaFile struct {
+	Mimetype string `json:"mimetype"`
+	Filename string `json:"filename,omitempty"`
+	Data     string `json:"data"`
+}
+
+type sendMediaRequest struct {
+	Session string    `json:"session"`
+	ChatID  string    `json:"chatId"`
+	File    mediaFile `json:"file"`
+	Caption string    `json:"caption,omitempty"`
+}
+
+// mediaTimeout: a base64 body of up to ~22 MB needs longer than a text send.
+const mediaTimeout = 90 * time.Second
+
+// SendMedia posts a file through WAHA's image/video/voice/file endpoints. Unlike SendText there is no reserved id to make a repeat safe, so
+// the CALLER (the provider) must treat any ambiguous failure as an unknown outcome and never retry it automatically.
+func (c *Client) SendMedia(ctx context.Context, name, chatID, endpoint, mimetype, filename string, data []byte, caption string) (string, error) {
+	switch endpoint {
+	case "sendImage", "sendVideo", "sendVoice", "sendFile":
+	default:
+		return "", fmt.Errorf("%w: unsupported media endpoint", ErrPermanent)
+	}
+	req := sendMediaRequest{Session: name, ChatID: chatID, Caption: caption,
+		File: mediaFile{Mimetype: mimetype, Filename: filename, Data: base64.StdEncoding.EncodeToString(data)}}
+	if endpoint == "sendVoice" {
+		req.Caption = "" // voice notes carry no caption
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", ErrConfiguration
+	}
+	ctx, cancel := context.WithTimeout(ctx, mediaTimeout)
+	defer cancel()
+	long := *c
+	hc := *c.httpClient
+	hc.Timeout = mediaTimeout
+	long.httpClient = &hc
+	var response sendTextResponse
+	if _, err = long.do(ctx, http.MethodPost, "/api/"+endpoint, strings.NewReader(string(body)), &response); err != nil {
+		return "", err
+	}
+	if response.ID == "" {
+		return "", fmt.Errorf("%w: %s response missing message id", ErrUnknown, endpoint)
 	}
 	return response.ID, nil
 }

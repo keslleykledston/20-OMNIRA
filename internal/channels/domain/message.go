@@ -113,10 +113,18 @@ type OutboundTextMessage struct {
 
 // OutboundMediaMessage — comando de envio de mídia.
 type OutboundMediaMessage struct {
-	ToE164         string
+	ToE164 string
+	// ProviderChatID endereça a conversa como o provedor a informou (ver OutboundTextMessage).
+	ProviderChatID string
 	Kind           MediaKind
 	MediaURL       string // URL já validada/hospedada pelo OMNIRA, nunca repassada sem checagem
-	Caption        string
+	// Mime, FileName e Data descrevem o arquivo enviado pelo operador (ADR-0024): bytes já classificados pelo conteúdo, sem metadados e
+	// liberados pelo antivírus. FileName é o rótulo higienizado que o cliente vê.
+	Mime     string
+	FileName string
+	Data     []byte
+	Caption  string
+	// IdempotencyKey: nenhum provedor deduplica mídia por id (ver ADR-0024); fica só para correlação e log.
 	IdempotencyKey string
 }
 

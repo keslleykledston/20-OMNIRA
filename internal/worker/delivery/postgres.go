@@ -61,20 +61,26 @@ func (s *PostgresOutboundStore) LockOutbound(ctx context.Context, messageID uuid
 	var tplParams []byte
 	var itxBody, itxLabel *string
 	var itxOptions []byte
+	var mediaID *uuid.UUID
+	var mediaKind, mediaMime, mediaName, mediaSHA *string
+	var mediaSize *int64
 	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
 		SELECT m.channel_connection_id, ct.phone_e164, c.provider_chat_id, m.body, m.status,
 		       m.reserved_provider_message_id, m.provider_message_id, (cc.status = 'active'),
-		       ts.template_name, ts.language, ts.params, isn.body, isn.list_label, isn.options
+		       ts.template_name, ts.language, ts.params, isn.body, isn.list_label, isn.options,
+		       om.id, om.kind, om.mime, om.file_name, om.sha256, om.size_bytes
 		FROM messages m
 		JOIN conversations c ON c.tenant_id = m.tenant_id AND c.id = m.conversation_id
 		JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
 		LEFT JOIN channel_connections cc ON cc.tenant_id = m.tenant_id AND cc.id = m.channel_connection_id
 		LEFT JOIN message_template_sends ts ON ts.tenant_id = m.tenant_id AND ts.message_id = m.id
 		LEFT JOIN message_interactive_sends isn ON isn.tenant_id = m.tenant_id AND isn.message_id = m.id
+		LEFT JOIN message_outbound_media om ON om.tenant_id = m.tenant_id AND om.message_id = m.id
 		WHERE m.tenant_id = $1 AND m.id = $2 AND m.direction = 'outbound'
 		FOR UPDATE OF m`, tenantID, messageID).
 		Scan(&connection, &phone, &job.ProviderChatID, &job.Text, &job.Status, &job.ReservedProviderMessageID, &job.ProviderMessageID, &active,
-			&tplName, &tplLang, &tplParams, &itxBody, &itxLabel, &itxOptions)
+			&tplName, &tplLang, &tplParams, &itxBody, &itxLabel, &itxOptions,
+			&mediaID, &mediaKind, &mediaMime, &mediaName, &mediaSHA, &mediaSize)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -94,6 +100,13 @@ func (s *PostgresOutboundStore) LockOutbound(ctx context.Context, messageID uuid
 			return nil, fmt.Errorf("%w: malformed template params", ErrPermanent)
 		}
 		job.Template = t
+	}
+	if mediaID != nil && mediaKind != nil && mediaMime != nil && mediaSHA != nil && mediaSize != nil {
+		j := &MediaJob{AttachmentID: *mediaID, TenantID: tenantID, Kind: *mediaKind, Mime: *mediaMime, SHA256: *mediaSHA, Size: *mediaSize}
+		if mediaName != nil {
+			j.FileName = *mediaName
+		}
+		job.Media = j
 	}
 	if itxBody != nil && len(itxOptions) > 0 {
 		var raw []struct {

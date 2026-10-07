@@ -89,6 +89,11 @@ func (s *FileStore) OpenClean(tenantID, id string) (*os.File, error) {
 	return os.Open(filepath.Join(s.root, "clean", tenantID, id))
 }
 
+// OpenOutbound opens a file an operator sent (ADR-0024); the API only ever reads this area to show the operators their own sent files.
+func (s *FileStore) OpenOutbound(tenantID, id uuid.UUID) (*os.File, error) {
+	return os.Open(filepath.Join(s.root, "outbound", tenantID.String(), id.String()))
+}
+
 // ReadClean returns the bytes of a cleared file, refusing anything larger than maxBytes. It never reads quarantine.
 func (s *FileStore) ReadClean(tenantID, mediaID uuid.UUID, maxBytes int64) ([]byte, error) {
 	f, err := s.OpenClean(tenantID.String(), mediaID.String())

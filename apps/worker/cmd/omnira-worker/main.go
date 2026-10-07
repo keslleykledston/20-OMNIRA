@@ -258,6 +258,16 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to configure delivery worker: %v", err)
 		}
+		// ADR-0024: operator files. The worker reads them back verified against their recorded size and SHA-256.
+		if cfg.MediaDir != "" {
+			if outFiles, ferr := mediaadapters.NewOutboundFiles(cfg.MediaDir); ferr != nil {
+				log.Printf("outbound media delivery disabled: %v", ferr)
+			} else {
+				deliveryHandler.WithMediaFiles(outFiles)
+				go mediaadapters.NewOutboundSweeper(dbPool, outFiles, 60*24*time.Hour).Run(workerCtx, 15*time.Minute)
+				log.Printf("Outbound media delivery and sweeper started (dir=%s/outbound)\n", cfg.MediaDir)
+			}
+		}
 		deliveryConsumer, err := delivery.StartConsumer(workerCtx, js, deliveryHandler)
 		if err != nil {
 			log.Fatalf("failed to start delivery consumer: %v", err)
