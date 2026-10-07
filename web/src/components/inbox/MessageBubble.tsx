@@ -7,9 +7,11 @@ import { getTenantId } from '../../lib/session';
 
 interface MessageBubbleProps {
   message: MessageItem;
+  /** Who is speaking, shown small above the text (the contact's name, or "Equipe" for our side). */
+  sender?: string;
 }
 
-export default function MessageBubble({ message }: MessageBubbleProps) {
+export default function MessageBubble({ message, sender }: MessageBubbleProps) {
   const tenantId = getTenantId();
   const isOutbound = message.direction === 'outbound';
 
@@ -42,11 +44,12 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
     )}>
       {/* Message Bubble */}
       <div className={clsx(
-        'max-w-[75%] rounded-lg px-3 py-1.5 text-sm leading-snug',
+        'max-w-[85%] rounded-lg border px-3 py-2 text-sm leading-snug sm:max-w-[75%]',
         isOutbound
-          ? 'bg-accent-primary text-white rounded-br-none'
-          : 'bg-surface-muted text-text-primary rounded-bl-none'
+          ? 'border-accent-primary/10 bg-accent-primary-soft text-text-primary'
+          : 'border-border-subtle bg-surface text-text-primary'
       )}>
+        {sender && <p className="mb-1 text-[10px] font-medium text-text-tertiary">{sender}</p>}
         {message.body && <p className="break-words">{message.body}</p>}
 
         {/* Media content */}
@@ -55,7 +58,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
         {/* Timestamp inside bubble */}
         <footer className={clsx(
           'mt-0.5 text-[11px] flex items-center justify-end gap-1',
-          isOutbound ? 'text-white/75' : 'text-text-secondary'
+          'text-text-tertiary'
         )}>
           <time>{new Date(message.created_at).toLocaleTimeString('pt-BR', {
             hour: '2-digit',

@@ -9,12 +9,17 @@ interface MessageComposerProps {
   onSend: (text: string) => Promise<boolean> | boolean;
   disabled?: boolean;
   placeholder?: string;
+  /** Small line above the box, e.g. "Responder ao contato · WhatsApp oficial". */
+  label?: string;
+  labelRight?: string;
 }
 
 export default function MessageComposer({
   onSend,
   disabled = false,
-  placeholder = 'Escreva uma mensagem...'
+  placeholder = 'Escreva uma mensagem...',
+  label,
+  labelRight,
 }: MessageComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState('');
@@ -42,41 +47,45 @@ export default function MessageComposer({
     }
   };
 
+  const canSend = !!text.trim() && !disabled;
   return (
-    <div className="flex gap-2 items-end">
-      {/* Textarea */}
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        disabled={disabled}
-        placeholder={placeholder}
-        className={clsx(
-          'flex-1 px-3 py-2 text-sm rounded-control resize-none',
-          'bg-surface-muted text-text-primary placeholder:text-text-tertiary',
-          'focus:outline-none focus:ring-2 focus:ring-accent-primary',
-          'border border-transparent',
-          'min-h-10 max-h-30',
-          disabled && 'opacity-50 cursor-not-allowed'
-        )}
-      />
-
-      {/* Send Button */}
-      <button
-        onClick={handleSend}
-        disabled={!text.trim() || disabled}
-        className={clsx(
-          'px-3 py-2 rounded-control font-medium transition-colors',
-          'flex items-center gap-2 text-sm',
-          !text.trim() || disabled
-            ? 'bg-surface-muted text-text-tertiary cursor-not-allowed'
-            : 'bg-accent-primary text-white hover:bg-accent-primary-hover'
-        )}
-      >
-        <Icon name="arrow-up" className="w-4 h-4" />
-        <span className="hidden sm:inline">Enviar</span>
-      </button>
+    <div className="space-y-1.5">
+      {label && (
+        <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-text-tertiary">
+          <span className="flex items-center gap-1.5">
+            <Icon name="conversations" size={12} />
+            {label}
+          </span>
+          {labelRight && <span className="truncate">{labelRight}</span>}
+        </div>
+      )}
+      <div className="flex items-end gap-2 rounded-lg border border-border-subtle bg-surface p-2 focus-within:ring-2 focus-within:ring-accent-primary">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={disabled}
+          placeholder={placeholder}
+          className={clsx(
+            'flex-1 resize-none bg-transparent px-1 py-1.5 text-sm text-text-primary placeholder:text-text-tertiary',
+            'focus:outline-none min-h-10 max-h-30',
+            disabled && 'opacity-50 cursor-not-allowed'
+          )}
+        />
+        <button
+          onClick={handleSend}
+          disabled={!canSend}
+          aria-label="Enviar mensagem"
+          title="Enviar mensagem"
+          className={clsx(
+            'flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-control transition-colors',
+            canSend ? 'bg-accent-primary text-white hover:bg-accent-primary-hover' : 'cursor-not-allowed bg-surface-muted text-text-tertiary'
+          )}
+        >
+          <Icon name="arrow-up" className="w-4 h-4" />
+        </button>
+      </div>
     </div>
   );
 }

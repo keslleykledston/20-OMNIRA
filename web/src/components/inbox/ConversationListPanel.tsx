@@ -88,25 +88,51 @@ export default function ConversationListPanel({
 
   return (
     <div className="flex flex-col h-full bg-surface">
-      <div className="px-3 pt-3 pb-2 flex flex-col gap-2 border-b border-border-subtle">
-        <div className="flex gap-1.5" role="tablist" aria-label="Filtro de conversas">
-          {SEGMENTS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              role="tab"
-              aria-selected={segment === s.id}
-              onClick={() => onSegmentChange(s.id)}
-              className={clsx(
-                'px-2.5 py-1 text-xs font-medium rounded-pill transition-colors',
-                segment === s.id
-                  ? 'bg-accent-primary text-white'
-                  : 'bg-surface-muted text-text-secondary hover:bg-surface-tertiary'
-              )}
-            >
-              {s.label}
-            </button>
-          ))}
+      <div className="px-4 pt-4 pb-3 flex flex-col gap-3 border-b border-border-subtle">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold leading-tight text-text-primary">Conversas</h1>
+            <p className="mt-0.5 text-[11px] text-text-tertiary">
+              {isLoading ? 'Carregando…' : `${conversations.length}${hasMore ? '+' : ''} ${segment === 'closed' ? 'encerradas' : 'em andamento'}`}
+            </p>
+          </div>
+          <Icon name="conversations" size={20} className="mt-1 flex-shrink-0 text-text-tertiary" />
+        </div>
+        <div className="flex flex-col gap-1.5" role="tablist" aria-label="Filtro de conversas">
+          <div className="grid grid-cols-3 rounded-control bg-surface-muted p-1">
+            {SEGMENTS.slice(0, 3).map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                role="tab"
+                aria-selected={segment === s.id}
+                onClick={() => onSegmentChange(s.id)}
+                className={clsx(
+                  'h-7 rounded-control px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
+                  segment === s.id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary'
+                )}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {SEGMENTS.slice(3).map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                role="tab"
+                aria-selected={segment === s.id}
+                onClick={() => onSegmentChange(s.id)}
+                className={clsx(
+                  'rounded-pill px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
+                  segment === s.id ? 'bg-accent-primary text-white' : 'bg-surface-muted text-text-secondary hover:bg-surface-tertiary'
+                )}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
         </div>
         {multiChannel && onChannelFilterChange && (
           <label className="block">
@@ -220,6 +246,7 @@ function ConversationRow({
   const internal = conv.conversation_kind === 'internal';
   const wait = inSpam || internal ? null : waitInfo(conv.waiting_since, now, thresholds);
   const unassigned = !inSpam && !internal && !conv.assigned_to_user_id && conv.status !== 'closed';
+  const state = conv.status === 'closed' ? 'Finalizada' : unassigned ? 'Sem atendente' : internal ? 'Interna' : 'Em atendimento';
   return (
     <li>
       <button
@@ -227,13 +254,13 @@ function ConversationRow({
         onClick={() => onSelect(conv.id)}
         aria-current={selected ? 'true' : undefined}
         className={clsx(
-          'flex w-full items-center gap-2.5 px-3 py-2 text-left border-b border-border-subtle transition-colors',
-          selected ? 'bg-accent-primary-soft' : 'hover:bg-surface-muted'
+          'flex w-full items-start gap-3 px-3 py-3 text-left border-b border-border-subtle border-l-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-primary',
+          selected ? 'border-l-accent-primary bg-accent-primary-soft' : 'border-l-transparent hover:bg-surface-muted'
         )}
       >
         <span className="relative flex-shrink-0">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-primary text-sm font-semibold text-white">
-            {name?.[0]?.toUpperCase() || '?'}
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-text-secondary">
+            {initials(name)}
           </span>
           {unassigned && (
             <span
@@ -243,12 +270,9 @@ function ConversationRow({
             />
           )}
         </span>
-        <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex items-baseline justify-between gap-2">
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold text-text-primary">{name}</span>
-              <WhatsAppName principal={name} whatsapp={conv.contact_whatsapp_name} />
-            </span>
+            <span className="min-w-0 truncate text-sm font-semibold text-text-primary">{name}</span>
             <time
               dateTime={conv.last_message_at ?? conv.updated_at}
               className={clsx('flex-shrink-0 text-[11px] tabular-nums', wait ? 'text-accent-primary' : 'text-text-tertiary')}
@@ -256,6 +280,8 @@ function ConversationRow({
               {inboxTimeLabel(conv.last_message_at ?? conv.updated_at, now)}
             </time>
           </span>
+          <WhatsAppName principal={name} whatsapp={conv.contact_whatsapp_name} />
+          {conv.contact_phone && conv.contact_phone !== name && <span className="truncate text-[11px] text-text-tertiary">{conv.contact_phone}</span>}
           <span className="flex items-center justify-between gap-2">
             <span className="truncate text-xs text-text-secondary">{previewText(conv)}</span>
             {wait && (
@@ -270,16 +296,26 @@ function ConversationRow({
                 {wait.label}
               </span>
             )}
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-text-tertiary">
             <ChannelBadge line={line} />
+            <span className={clsx(unassigned && 'font-medium text-status-warning')}>{state}</span>
             {kindBadge(conv)}
-            {conv.status === 'closed' && (
-              <span className="flex-shrink-0 rounded-pill bg-status-muted px-1.5 text-[10px] font-medium leading-4 text-text-secondary">
-                Fechada
-              </span>
-            )}
           </span>
         </span>
       </button>
     </li>
+  );
+}
+
+function initials(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0])
+      .join('')
+      .toUpperCase() || '?'
   );
 }

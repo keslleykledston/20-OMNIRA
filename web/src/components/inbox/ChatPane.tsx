@@ -181,6 +181,9 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
               <Icon name="arrow-left" />
             </button>
           )}
+          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-text-secondary">
+            {(conversation?.contact_name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase() || '?'}
+          </span>
           <div className="min-w-0">
             <h3 className="font-semibold text-text-primary truncate">
               {conversation?.contact_name}
@@ -262,7 +265,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                         <span className="rounded-pill bg-surface-muted px-3 py-0.5 text-[11px] text-text-secondary">{label}</span>
                       </div>
                     )}
-                    <MessageBubble message={msg} />
+                    <MessageBubble message={msg} sender={msg.direction === 'outbound' ? 'Equipe' : conversation?.contact_name} />
                   </div>
                 );
               })
@@ -321,6 +324,8 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         )}
         <MessageComposer
           onSend={handleSendMessage}
+          label={`Responder ao contato${line ? ` · ${line.label}` : ''}`}
+          labelRight={conversation?.contact_name}
           disabled={sending || windowClosed || channelDown}
           placeholder="Escreva uma resposta..."
         />
