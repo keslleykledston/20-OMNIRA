@@ -14,8 +14,13 @@ info:
     that tenant. The tenant and the actor are derived from the token + membership, never trusted from a body.
     A tenant the caller cannot see and a nonexistent tenant/resource are indistinguishable: **404** (no enumeration).
 
-    **Errors.** Errors are currently `text/plain` bodies with the HTTP status (no RFC 7807 Problem Details yet —
-    tracked in docs/delivery/ROADMAP-TO-GOAL.md). The login endpoint answers JSON `{error, message}`.
+    **Errors.** By default errors are `text/plain` bodies with the HTTP status (the web depends on that). A client that sends
+    `Accept: application/vnd.omnira.v1+json` gets, for those same error responses, the stable envelope
+    `{"error":{"code","message","request_id"}}` (`ErrorEnvelope`); `code` is derived from the status and is the stable part
+    (`INVALID_REQUEST` 400, `UNAUTHENTICATED` 401, `FORBIDDEN` 403, `NOT_FOUND` 404, `METHOD_NOT_ALLOWED` 405, `CONFLICT` 409,
+    `PAYLOAD_TOO_LARGE` 413, `UNPROCESSABLE` 422, `RATE_LIMITED` 429, `UNAVAILABLE` 502/503/504, `INTERNAL` other 5xx,
+    `REJECTED` other 4xx); `message` is human text and may change. Every response carries `X-Request-ID` (the client's own id when it
+    is 8-64 characters of `[A-Za-z0-9._-]`, otherwise generated). The login endpoint answers JSON `{error, message}`.
 
     **Authentication.** Production uses OIDC Authorization Code + PKCE and an HttpOnly session cookie. The fixed-user
     mock login remains available only when `OMNIRA_AUTH_MODE=mock` outside production.
@@ -2898,6 +2903,18 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    ErrorEnvelope:
+      type: object
+      description: 'Error body when the request opted in with `Accept: application/vnd.omnira.v1+json`.'
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code: { type: string, description: 'Stable, derived from the HTTP status (see info.description).' }
+            message: { type: string, description: 'Human text, not stable.' }
+            request_id: { type: string, description: 'Same value as the X-Request-ID response header.' }
     AccountRef:
       type: object
       additionalProperties: false

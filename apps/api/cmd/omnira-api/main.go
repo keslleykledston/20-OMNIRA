@@ -108,6 +108,7 @@ func main() {
 		}
 	}
 	srv.SetupRateLimiting()
+	srv.SetupRequestMeta() // outermost: request id on every response, opt-in error envelope (see httpserver/requestmeta.go)
 	srv.RegisterHealthHandlers()
 	// omnira_session sempre carrega um session id opaco (auth_sessions),
 	// nunca um JWT/ID Token — dev e OIDC usam o mesmo SessionStore.
