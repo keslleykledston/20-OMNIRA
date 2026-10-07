@@ -4,6 +4,7 @@ import { Badge, Button, Card, CardBody, CardHeader, Input } from '../primitives'
 import {
   aiErrorMessage,
   aiIntegrationAPI,
+  normalizeAPIKey,
   validateAPIKey,
   validateBudget,
   type AIIntegration,
@@ -25,6 +26,8 @@ export default function AIIntegrationCard() {
   })
 
   const [apiKey, setApiKey] = useState('')
+  const [keyTouched, setKeyTouched] = useState(false)
+  const [showKey, setShowKey] = useState(false)
   const [model, setModel] = useState<string | null>(null)
   const [budget, setBudget] = useState<string | null>(null)
   const [accept, setAccept] = useState(false)
@@ -34,6 +37,8 @@ export default function AIIntegrationCard() {
   const apply = (next: AIIntegration, text: string) => {
     queryClient.setQueryData(['ai-integration', tenantId], next)
     setApiKey('')
+    setKeyTouched(false)
+    setShowKey(false)
     setModel(null)
     setBudget(null)
     setMessage({ kind: 'ok', text })
@@ -70,7 +75,8 @@ export default function AIIntegrationCard() {
   }
 
   const busy = update.isPending || removeKey.isPending || runTest.isPending
-  const keyError = apiKey ? validateAPIKey(apiKey) : null
+  const keyError = apiKey ? validateAPIKey(apiKey, keyTouched) : null
+  const keyInvalid = apiKey ? validateAPIKey(apiKey) !== null : false
   const shownModel = model ?? data.model
   const shownBudget = budget ?? String(data.monthly_budget_usd).replace('.', ',')
   const budgetError = validateBudget(shownBudget)
@@ -107,8 +113,8 @@ export default function AIIntegrationCard() {
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                if (!apiKey || keyError || busy) return
-                update.mutate({ api_key: apiKey.trim() }, { onSuccess: (n) => apply(n, 'Chave salva.') })
+                if (!apiKey || keyInvalid || busy) return
+                update.mutate({ api_key: normalizeAPIKey(apiKey) }, { onSuccess: (n) => apply(n, 'Chave salva.') })
               }}
               className="flex flex-col gap-3 sm:flex-row sm:items-end"
             >
@@ -116,17 +122,27 @@ export default function AIIntegrationCard() {
                 <Input
                   id="ai-api-key"
                   label={data.key_configured ? 'Substituir chave' : 'Chave da API do Gemini'}
-                  type="password"
+                  type={showKey ? 'text' : 'password'}
                   autoComplete="new-password"
                   autoCorrect="off"
                   spellCheck={false}
                   value={apiKey}
                   disabled={busy}
                   error={keyError ?? undefined}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => setApiKey(normalizeAPIKey(e.target.value))}
+                  onBlur={() => setKeyTouched(true)}
+                  helperText={keyError ? undefined : apiKey ? `${apiKey.length} caracteres` : 'Cole a chave exatamente como foi gerada. Espaços e aspas são removidos.'}
                 />
+                <button
+                  type="button"
+                  className="mt-1 text-xs text-accent-primary hover:underline"
+                  aria-pressed={showKey}
+                  onClick={() => setShowKey((v) => !v)}
+                >
+                  {showKey ? 'Ocultar chave' : 'Mostrar chave'}
+                </button>
               </div>
-              <Button type="submit" disabled={!apiKey || keyError !== null || busy} isLoading={update.isPending && !!apiKey}>
+              <Button type="submit" disabled={!apiKey || keyInvalid || busy} isLoading={update.isPending && !!apiKey}>
                 Salvar chave
               </Button>
             </form>

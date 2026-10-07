@@ -53,10 +53,23 @@ export const aiIntegrationAPI = {
   test: () => call<AITest>(() => axios.post(base() + '/test', null, { headers: authHeaders() })),
 }
 
+// What a paste usually drags along with a key: spaces or line breaks (also invisible ones), wrapping quotes, or a
+// "key=" / "Bearer " / "x-goog-api-key:" prefix copied from a snippet. The API only accepts the bare key.
+export function normalizeAPIKey(raw: string): string {
+  let k = raw.replace(/[\s\u200B-\u200D\uFEFF]+/g, '')
+  k = k.replace(/^(x-goog-api-key:|authorization:|bearer|key=)/i, '')
+  return k.replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
+}
+
 // Same shape the API enforces for the key, so the form can say what is wrong before sending. Null = valid.
-export function validateAPIKey(key: string): string | null {
-  const k = key.trim()
-  if (!/^[A-Za-z0-9_-]{20,200}$/.test(k)) return 'A chave tem formato inválido (letras, números, "-" e "_"; ao menos 20 caracteres).'
+// `short` is false while the person is still typing, so a half-typed key is not flagged yet.
+export function validateAPIKey(key: string, short = true): string | null {
+  const k = normalizeAPIKey(key)
+  if (!/^[A-Za-z0-9_-]*$/.test(k)) {
+    return 'A chave tem caracteres não permitidos (só letras, números, "-" e "_"). Cole apenas a chave, sem outros textos.'
+  }
+  if (k.length > 200) return 'A chave está longa demais (máximo de 200 caracteres). Confira se copiou só a chave.'
+  if (k.length < 20) return short ? `A chave está curta (${k.length} caracteres; ela costuma ter cerca de 39). Confira se copiou inteira.` : null
   return null
 }
 

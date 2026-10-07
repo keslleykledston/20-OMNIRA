@@ -81,14 +81,35 @@ describe('AIIntegrationCard', () => {
     expect(document.body.innerHTML).not.toContain('TESTKEY')
   })
 
-  it('refuses a malformed key before sending it', async () => {
+  it('refuses a malformed key before sending it, saying what is wrong', async () => {
     server({ permissions: ADMIN })
     renderAt(<SettingsPage />)
     const field = await screen.findByLabelText(/Chave da API do Gemini/)
     await userEvent.type(field, 'curta')
-    expect(await screen.findByText(/formato inválido/)).toBeInTheDocument()
+    expect(screen.queryByText(/está curta/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Salvar chave' })).toBeDisabled()
+    await userEvent.tab()
+    expect(await screen.findByText(/está curta \(5 caracteres/)).toBeInTheDocument()
+    await userEvent.clear(field)
+    await userEvent.type(field, 'abc!defghijklmnopqrstuvwxyz')
+    expect(await screen.findByText(/caracteres não permitidos/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Salvar chave' })).toBeDisabled()
     expect(vi.mocked(axios.put)).not.toHaveBeenCalled()
+  })
+
+  it('cleans what a paste drags along (spaces, line breaks, quotes, key= prefix) and can show the key', async () => {
+    server({ permissions: ADMIN })
+    renderAt(<SettingsPage />)
+    const field = (await screen.findByLabelText(/Chave da API do Gemini/)) as HTMLInputElement
+    await userEvent.click(field)
+    await userEvent.paste(`  key="${KEY.slice(0, 10)} \n${KEY.slice(10)}"  `)
+    expect(field.value).toBe(KEY)
+    expect(field.type).toBe('password')
+    await userEvent.click(screen.getByRole('button', { name: 'Mostrar chave' }))
+    expect(field.type).toBe('text')
+    await userEvent.click(screen.getByRole('button', { name: 'Salvar chave' }))
+    await screen.findByText(/Chave configurada em/)
+    expect(vi.mocked(axios.put).mock.calls[0][1]).toEqual({ api_key: KEY })
   })
 
   it('needs the key and the accepted term before it can be switched on, and sends the acceptance', async () => {
