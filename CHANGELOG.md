@@ -7,6 +7,7 @@
 - Eventos em tempo real (SSE/NATS) com `event_id` e `v` (aditivos; também o campo SSE `id:`); `contracts/asyncapi/omnira-v1.yaml` atualizado. O Web ignora o `id:` (teste do parser real).
 - Teste de superfície de segurança: toda operação documentada sob `/tenants/…` e `/me` (omnira, attendance, flows) recusa chamadas sem credencial, Bearer inválido e tenant/usuário "forjados" por cabeçalho (401, sem pânico).
 - Documentação: `docs/architecture/mobile-readiness.md` (mapa, matriz de capacidades, achados P0–P3, roteiro MOBILE.0–16), ADR-0021 (arquitetura do cliente, segurança do app, offline), ADR-0022 (autenticação Web × Mobile — **aceita** pelo dono em 2026-10-07, valores propostos; implementação no MOBILE.1), ADR-0023 (eventos e notificações). Sem migration, sem dependência, sem rota nova, sem flag ligada.
+- **Implantado em 2026-10-07** (api e worker recriados; web inalterado; sem migration). Rollback: imagens `20-omnira-api` e `20-omnira-worker` com a tag `rollback-pre-mobilereadiness-20261007-0936`. Revisão independente do Codex (2 passadas) registrada em `docs/architecture/mobile-readiness.md`.
 
 ### Added (IA da plataforma com Gemini)
 - `OMNIRA_AI_PROVIDER=gemini`: `GeminiGenerator` na porta `TextGenerator` (chave só no cabeçalho, sem redirecionamento nem retentativa, resposta limitada, bloqueio do provedor tratado). `NewTextGenerator` passa a ser o único construtor (resumo, roteador de modelos e nós de IA dos fluxos). `OMNIRA_GEMINI_API_KEY` vale como chave quando o provedor é Gemini. Guia: `docs/ai/PLATFORM-AI-PROVIDERS.md`.
