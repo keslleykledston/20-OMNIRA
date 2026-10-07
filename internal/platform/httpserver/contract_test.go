@@ -79,12 +79,13 @@ func specOps(t *testing.T) []op {
 func newRoutedServer(t *testing.T) *Server {
 	s := New("127.0.0.1:0")
 	s.RegisterHealthHandlers()
-	s.RegisterAuthHandlers(false, nil) // generates the RSA keys the other registrations need
+	s.RegisterAuthHandlers(nil, false, nil, 0) // generates the RSA keys the other registrations need
 	s.RegisterOIDCAuthHandlers(s.authenticator, nil, contractOIDCHandler{})
 	s.RegisterTenancyHandlers(nil, false)
 	s.RegisterInboxHandlers(nil, &config.Config{MediaDir: t.TempDir()})
 	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
 	s.RegisterChannelDirectory(nil, channeladapters.NewDirectoryHandler(nil, nil))
+	s.RegisterChannelTemplates(nil, channeladapters.NewTemplatesHandler(nil, nil, nil, nil))
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))
 	s.RegisterWahaWebhook(http.NotFoundHandler())
 	s.RegisterGroupHandlers(nil, groupsadapters.NewHandler(nil, nil, nil))

@@ -768,6 +768,21 @@ func (s *Server) RegisterChannelDirectory(dbPool *pgxpool.Pool, h *channeladapte
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/channels/lines", authnMiddleware(tenantSession(http.HandlerFunc(h.List))))
 }
 
+// RegisterChannelTemplates exposes syncing (channel.manage) and listing (any member) of WhatsApp Cloud API templates.
+func (s *Server) RegisterChannelTemplates(dbPool *pgxpool.Pool, h *channeladapters.TemplatesHandler) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/channels/connections/{connection_id}/templates/sync", authnMiddleware(tenantSession(http.HandlerFunc(h.Sync))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/channels/lines/{connection_id}/templates", authnMiddleware(tenantSession(http.HandlerFunc(h.List))))
+}
+
 // RegisterChannelManagementHandlers exposes the provider-neutral catalog and
 // connection routes introduced in I0. Provider-specific paths remain aliases.
 func (s *Server) RegisterChannelManagementHandlers(dbPool *pgxpool.Pool, h *channeladapters.ManagementHandler) {

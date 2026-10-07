@@ -13,7 +13,7 @@ import (
 func devLoginStatus(t *testing.T, devAuthEnabled bool) (int, string) {
 	t.Helper()
 	s := New("127.0.0.1:0")
-	s.RegisterAuthHandlers(devAuthEnabled, nil)
+	s.RegisterAuthHandlers(nil, devAuthEnabled, nil, 0)
 
 	rec := httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/dev/login", nil))
@@ -67,7 +67,7 @@ func TestDevLoginRouteRegisteredWhenEnabled(t *testing.T) {
 func TestLegacyLoginRouteIsGone(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		s := New("127.0.0.1:0")
-		s.RegisterAuthHandlers(enabled, nil)
+		s.RegisterAuthHandlers(nil, enabled, nil, 0)
 		rec := httptest.NewRecorder()
 		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil))
 		if rec.Code != http.StatusNotFound {

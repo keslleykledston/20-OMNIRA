@@ -162,6 +162,11 @@ func main() {
 		if metaErr != nil {
 			log.Fatalf("Meta client config error: %v", metaErr)
 		}
+		metaProvider, metaProviderErr := metachannel.NewProvider(metaClient, erpCredentials)
+		if metaProviderErr != nil {
+			log.Fatalf("Meta provider config error: %v", metaProviderErr)
+		}
+		srv.RegisterChannelTemplates(dbPool, channeladapters.NewTemplatesHandler(dbPool, erpConnections, metaProvider, permissions))
 		management.Register(metaDescriptor.ID, channelapplication.NewMetaConnectionService(
 			metaDescriptor, erpConnections, erpCredentials, permissions, erpAudit, metachannel.NewAccountProbe(metaClient), cfg.WebBaseURL))
 	}

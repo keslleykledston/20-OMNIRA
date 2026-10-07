@@ -2315,6 +2315,63 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '503': { description: "Realtime unavailable (no NATS)", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/channels/connections/{connection_id}/templates/sync:
+    post:
+      operationId: syncChannelTemplates
+      tags: [Channels]
+      summary: Sync the WhatsApp Cloud API message templates of a connection (`channel.manage`)
+      description: Reads the templates from Meta (read-only there) and makes the stored set equal to it. Only Meta Cloud connections.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: connection_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Synced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  synced: { type: integer }
+                  sendable: { type: integer }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Meta rejected the connection's token }
+        '502': { description: Meta unavailable }
+  /tenants/{tenant_id}/channels/lines/{connection_id}/templates:
+    get:
+      operationId: listLineTemplates
+      tags: [Channels]
+      summary: Approved templates of a Meta line (any tenant member)
+      description: Templates with `sendable=false` need something this version cannot fill (header media/variables, dynamic URL buttons); `unsupported_reason` says what.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: connection_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        language: { type: string }
+                        category: { type: string }
+                        status: { type: string }
+                        body: { type: string }
+                        variable_count: { type: integer }
+                        sendable: { type: boolean }
+                        unsupported_reason: { type: string }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/channels/lines:
     get:
       operationId: listChannelLines
