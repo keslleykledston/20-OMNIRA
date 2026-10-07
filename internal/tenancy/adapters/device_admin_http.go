@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -72,6 +73,9 @@ func (h *DeviceAdminHandler) resolveTarget(r *http.Request) (tc *domain.TenantCo
 
 // actorManagesEveryTenantOf is evaluated in system mode on purpose: under the actor's own RLS session the target's memberships in tenants the
 // actor does not belong to would be invisible, which is exactly the case that must be refused.
+//
+// Known and accepted window: the check and the revocation are separate transactions. If the target joins another tenant (or the actor loses the
+// permission) in those milliseconds, the worst outcome is a logout of one installation - revocation only ever denies access, it cannot grant it.
 func (h *DeviceAdminHandler) actorManagesEveryTenantOf(ctx context.Context, actor, target uuid.UUID) error {
 	var missing int
 	err := platformdb.WithTenantSession(ctx, h.pool, uuid.Nil, true, func(scoped context.Context) error {
@@ -143,12 +147,16 @@ func (h *DeviceAdminHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.audit != nil {
-		_ = h.audit.Store(r.Context(), &auditdomain.AuditEvent{
+		// The revocation above is already committed (and is the safe direction: it only denies access). A failure to record it is logged
+		// loudly rather than silently dropped; making both one transaction would need the audit store to join the device store's.
+		if err := h.audit.Store(r.Context(), &auditdomain.AuditEvent{
 			ID: uuid.New(), TenantID: tc.TenantID, ActorID: tc.ActorID, Action: auditdomain.ActionDeviceRevokedByAdmin,
 			ResourceType: auditdomain.ResourceDevice, ResourceID: deviceID,
 			Outcome: auditdomain.OutcomeSuccess, CorrelationID: uuid.New(), CausationID: uuid.New(),
 			Metadata: map[string]interface{}{"target_user_id": target.String()}, CreatedAt: time.Now().UTC(),
-		})
+		}); err != nil {
+			log.Printf("tenancy: device %s revoked by admin %s but the audit event could not be stored: %v", deviceID, tc.ActorID, err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

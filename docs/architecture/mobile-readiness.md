@@ -258,3 +258,6 @@ Do primeiro job do Codex (somente material colado) já tinham sido tratados `Var
 | 9 | LOW | Tabelas sem RLS e grants amplos | ADIADO: iguais a `auth_sessions` (user-owned); reduzir grants via funções `SECURITY DEFINER` fica como endurecimento futuro |
 | 10 | LOW | Migration não idempotente | N/A: o runner é a autoridade, como nas demais migrations |
 | 11 | LOW | Validação sintática do redirect permissiva | PARCIAL: HTTPS agora exige host; a comparação em runtime já é exata |
+
+## Revisão independente da administração de aparelhos (Codex, `read-only`, 2026-10-07)
+0 BLOCKER, 0 HIGH, 2 MEDIUM, 1 LOW. Auditoria que falha agora é registrada em log (antes era descartada em silêncio); a janela entre a checagem de todos os tenants e a revogação foi **aceita e documentada** no código (revogar só nega acesso, nunca concede; pior caso: um aparelho deslogado); cobertura ampliada (membership inativa em outro tenant não bloqueia, membership de outro tenant na URL = 404, `DELETE` do próprio aparelho = 422, ator/recurso/metadata da auditoria sem segredos).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,10 +149,38 @@ func TestAdminRevokesAnotherUsersDeviceOnlyWithAuthorityOverEveryTenantOfTheTarg
 	if rr := do("GET", base+selfMembership.String()+"/devices", adminABToken); rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("self: %d", rr.Code)
 	}
-	// Both revocations were audited with the actor.
+	// Both revocations were audited with the right tenant, actor and resource - and nothing secret.
 	var audited int
 	_ = seed.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND action='device.revoked_by_admin'`, tenantA).Scan(&audited)
 	if audited != 2 {
 		t.Fatalf("audited admin revocations = %d, want 2", audited)
+	}
+	var actor, resource uuid.UUID
+	var meta string
+	if err := seed.QueryRow(ctx, `SELECT actor_id, resource_id, metadata::text FROM audit_events WHERE tenant_id=$1 AND action='device.revoked_by_admin' AND resource_id=$2`,
+		tenantA, both.DeviceID).Scan(&actor, &resource, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if actor != adminAB || resource != both.DeviceID || !strings.Contains(meta, bothAB.String()) || strings.Contains(meta, "omn_") {
+		t.Fatalf("audit event: actor=%s resource=%s meta=%s", actor, resource, meta)
+	}
+	// Deleting one's own installation through the administration route is refused (422), also for DELETE.
+	own := tokenOf(adminAB)
+	if rr := do("DELETE", base+selfMembership.String()+"/devices/"+own.DeviceID.String(), adminABToken); rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("self delete: %d", rr.Code)
+	}
+	// A target whose membership in ANOTHER tenant is not active does not block the administrator of the path tenant.
+	inactiveInB := newUser()
+	exec(`INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'inactive')`, tenantB, inactiveInB, agent)
+	mid := member(tenantA, inactiveInB, agent)
+	inactiveToken := tokenOf(inactiveInB)
+	if rr := do("DELETE", base+mid.String()+"/devices/"+inactiveToken.DeviceID.String(), adminAToken); rr.Code != http.StatusNoContent {
+		t.Fatalf("an inactive membership elsewhere must not block: %d %q", rr.Code, rr.Body.String())
+	}
+	// A membership id that belongs to ANOTHER tenant is not found through this tenant's URL.
+	var foreignMembership uuid.UUID
+	_ = seed.QueryRow(ctx, `SELECT id FROM memberships WHERE tenant_id=$1 AND user_id=$2`, tenantB, adminAB).Scan(&foreignMembership)
+	if rr := do("GET", base+foreignMembership.String()+"/devices", adminABToken); rr.Code != http.StatusNotFound {
+		t.Fatalf("membership of another tenant through this URL: %d", rr.Code)
 	}
 }
