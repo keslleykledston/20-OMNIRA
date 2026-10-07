@@ -4,6 +4,9 @@ import (
 	"context"
 	"flag"
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
+	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
+	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
+	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"log"
 	"net/http"
@@ -16,24 +19,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
-	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
-	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
-	flowsapplication "github.com/omnira/omnira/internal/flows/application"
-	flowsports "github.com/omnira/omnira/internal/flows/ports"
-	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
-	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapp "github.com/omnira/omnira/internal/channels/application"
 	"github.com/omnira/omnira/internal/channels/domain"
+	metachannel "github.com/omnira/omnira/internal/channels/meta"
+	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
+	flowsapplication "github.com/omnira/omnira/internal/flows/application"
+	flowsports "github.com/omnira/omnira/internal/flows/ports"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	intelligenceapp "github.com/omnira/omnira/internal/intelligence/application"
 	intelligencedomain "github.com/omnira/omnira/internal/intelligence/domain"
-	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
-	mediaports "github.com/omnira/omnira/internal/media/ports"
 	mediaapp "github.com/omnira/omnira/internal/media/application"
+	mediaports "github.com/omnira/omnira/internal/media/ports"
+	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/outbox/adapters"
 	"github.com/omnira/omnira/internal/outbox/application"
 	"github.com/omnira/omnira/internal/platform/config"
@@ -45,11 +48,11 @@ import (
 	routingapp "github.com/omnira/omnira/internal/routing/application"
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
+	flowsworker "github.com/omnira/omnira/internal/worker/flows"
 	intelligenceworker "github.com/omnira/omnira/internal/worker/intelligence"
 	"github.com/omnira/omnira/internal/worker/jobsstream"
 	"github.com/omnira/omnira/internal/worker/publisher"
 	"github.com/omnira/omnira/internal/worker/realtime"
-	flowsworker "github.com/omnira/omnira/internal/worker/flows"
 	routingworker "github.com/omnira/omnira/internal/worker/routing"
 	"github.com/redis/go-redis/v9"
 )
@@ -441,7 +444,10 @@ func main() {
 	// timeouts, stranded conversations and runs of closed conversations.
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
-		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool)))
+		// The contact's "end this attendance" command closes through the same use case as an agent's finalize (source "system").
+		attendanceForFlows := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
+			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
+		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows)
 		flowCounters := flowsapplication.NewCounters()
 		prevMetrics := hc.ExtraMetrics
 		hc.ExtraMetrics = func() string {

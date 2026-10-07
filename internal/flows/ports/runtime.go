@@ -92,6 +92,24 @@ type Effects interface {
 	SendText(ctx context.Context, conversationID uuid.UUID, text, idempotencyKey string) (SendStatus, error)
 }
 
+// CustomerCloser is an optional Effects capability: close the attendance because the CONTACT asked for it (the system is
+// the actor). It must be idempotent, close the local tickets like an agent's finalize and record source "system".
+type CustomerCloser interface {
+	CloseByCustomer(ctx context.Context, conversationID uuid.UUID, command string) error
+}
+
+// ChoiceOption is one tappable option of a menu sent as buttons/list.
+type ChoiceOption struct {
+	ID    string
+	Title string
+}
+
+// ChoiceSender is an optional Effects capability: send a menu as buttons/list where the channel supports it (it falls back
+// to the numbered text itself otherwise). text is the numbered text menu, question the sentence above the options.
+type ChoiceSender interface {
+	SendChoice(ctx context.Context, conversationID uuid.UUID, text, question string, options []ChoiceOption, idempotencyKey string) (SendStatus, error)
+}
+
 // AIClassification is a SUGGESTION: the executor decides what to do with it (route or fall back).
 type AIClassification struct {
 	IntentID   string

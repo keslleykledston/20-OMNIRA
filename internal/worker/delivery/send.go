@@ -47,6 +47,16 @@ type OutboundJob struct {
 	// Template is set when this message is an approved-template send (WhatsApp Cloud API); Text then only holds the
 	// rendered preview shown in the inbox and is NOT what the provider receives.
 	Template *TemplateJob
+	// Interactive is set when the bot's menu goes out as buttons/list; Text is then the numbered-text version of the SAME
+	// menu, used as the fallback on a provider without buttons.
+	Interactive *InteractiveJob
+}
+
+// InteractiveJob is what the provider needs to render a menu as buttons/list.
+type InteractiveJob struct {
+	Body      string
+	ListLabel string
+	Options   []domain.InteractiveOption
 }
 
 // TemplateJob is what the provider needs to send an approved template.
@@ -95,6 +105,8 @@ type TextSender interface {
 	NewMessageID(ctx context.Context, connectionID uuid.UUID) (string, error)
 	// SendTemplate sends an approved template with its body variables (Meta Cloud API).
 	SendTemplate(ctx context.Context, connectionID uuid.UUID, msg domain.OutboundTemplateMessage) (*domain.SendResult, error)
+	// SendInteractive sends buttons/list; ports.ErrCapabilityNotSupported when the provider has none (the caller sends text).
+	SendInteractive(ctx context.Context, connectionID uuid.UUID, msg domain.OutboundInteractiveMessage) (*domain.SendResult, error)
 }
 
 type Handler struct {
@@ -257,9 +269,22 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 				ToE164: out.ToE164, TemplateName: out.Template.Name, LanguageCode: out.Template.Language, Params: out.Template.Params, IdempotencyKey: reservedID,
 			})
 		} else {
-			result, sendErr = h.sender.SendText(scoped, out.ConnectionID, domain.OutboundTextMessage{
-				ToE164: out.ToE164, ProviderChatID: out.ProviderChatID, Text: out.Text, IdempotencyKey: reservedID,
-			})
+			sendPlain := func() (*domain.SendResult, error) {
+				return h.sender.SendText(scoped, out.ConnectionID, domain.OutboundTextMessage{
+					ToE164: out.ToE164, ProviderChatID: out.ProviderChatID, Text: out.Text, IdempotencyKey: reservedID,
+				})
+			}
+			if out.Interactive != nil {
+				result, sendErr = h.sender.SendInteractive(scoped, out.ConnectionID, domain.OutboundInteractiveMessage{
+					ToE164: out.ToE164, Body: out.Interactive.Body, ListLabel: out.Interactive.ListLabel, Options: out.Interactive.Options,
+				})
+				if errors.Is(sendErr, ports.ErrCapabilityNotSupported) {
+					// no buttons on this provider: the very same menu as numbered text (nothing was sent yet)
+					result, sendErr = sendPlain()
+				}
+			} else {
+				result, sendErr = sendPlain()
+			}
 		}
 		switch {
 		case sendErr == nil:

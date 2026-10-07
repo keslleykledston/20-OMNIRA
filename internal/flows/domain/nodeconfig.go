@@ -47,6 +47,9 @@ type ChoiceConfig struct {
 	Options        []ChoiceOption `json:"options"`
 	TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
 	MaxAttempts    int            `json:"max_attempts,omitempty"`
+	// Style: "" or "auto" sends buttons/list on channels that support them (WhatsApp oficial) and numbered text elsewhere;
+	// "text" always sends the numbered text.
+	Style string `json:"style,omitempty"`
 }
 
 type ConditionConfig struct {

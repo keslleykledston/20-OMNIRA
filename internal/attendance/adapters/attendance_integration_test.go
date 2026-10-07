@@ -542,3 +542,42 @@ func TestClosureRecordsAreAppendOnly(t *testing.T) {
 		t.Fatal("cascades must keep working")
 	}
 }
+
+// The contact ended the attendance (a flow command): the system closes it like an agent would, recorded as source "system".
+func TestFinalizeBySystemClosesLikeAnAgentAndIsRecordedAsTheSystem(t *testing.T) {
+	s := newStack(t)
+	conv, _ := s.conversation(nil)
+	local := s.ticket(conv, false, false)
+	s.exec(`UPDATE conversations SET automation_mode='waiting_human' WHERE id=$1`, conv)
+
+	var err error
+	s.env.AsSystem(t, s.env.TenantA, func(ctx context.Context) { err = s.svc.CloseForCustomer(ctx, conv, "Encerrado pelo cliente por comando (confirmed).") })
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	var status, mode, source, note string
+	var by *uuid.UUID
+	if err := s.env.Seed.QueryRow(context.Background(), `SELECT c.status, c.automation_mode, k.source, k.note, k.closed_by_user_id
+		FROM conversations c JOIN conversation_closures k ON k.conversation_id=c.id WHERE c.id=$1`, conv).Scan(&status, &mode, &source, &note, &by); err != nil {
+		t.Fatal(err)
+	}
+	if status != "closed" || mode != "none" || source != "system" || by != nil || !strings.Contains(note, "comando") {
+		t.Fatalf("closure: status=%s mode=%s source=%s by=%v note=%q", status, mode, source, by, note)
+	}
+	var tk string
+	_ = s.env.Seed.QueryRow(context.Background(), `SELECT status FROM tickets WHERE id=$1`, local).Scan(&tk)
+	if tk != "closed" {
+		t.Fatalf("the local ticket must be closed: %s", tk)
+	}
+	// again: idempotent, still one closure
+	s.env.AsSystem(t, s.env.TenantA, func(ctx context.Context) { err = s.svc.CloseForCustomer(ctx, conv, "again") })
+	if err != nil || s.count(`SELECT count(*) FROM conversation_closures WHERE conversation_id=$1`, conv) != 1 {
+		t.Fatalf("idempotency: err=%v", err)
+	}
+	// a human tenant context can NOT use the system path (agents go through Finalize and its permission checks)
+	conv2, _ := s.conversation(nil)
+	s.as(s.agent, s.env.TenantA, func(ctx context.Context) { err = s.svc.CloseForCustomer(ctx, conv2, "x") })
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("only the system may close for the customer: %v", err)
+	}
+}

@@ -5,7 +5,7 @@ import "github.com/omnira/omnira/internal/flows/domain"
 var generalCats = []string{"GENERAL", "CUSTOMER_SERVICE"}
 
 func starterTemplates() []*Template {
-	return []*Template{tUnknownContact(), tCustomerContext(), tExistingTicket(), tHumanHandoff(), tAfterHours(), tCSAT(), tSmartReceptionV1(), tSmartReception()}
+	return []*Template{tUnknownContact(), tCustomerContext(), tExistingTicket(), tHumanHandoff(), tAfterHours(), tCSAT(), tSmartReceptionV1(), tSmartReceptionV2(), tSmartReception()}
 }
 
 // unknown-contact: an unclassified contact is NOT a new customer. The bot only asks who they are; it never creates a company
@@ -104,7 +104,9 @@ func tCSAT() *Template {
 		}, recommended("general", "isp", "msp"))
 }
 
-func tSmartReception() *Template {
+// smartReception builds versions 2 and 3 (3 adds the contact's "end the attendance" command). Published versions are
+// immutable: v2 must stay byte-identical, so the exit settings are only added for v3.
+func smartReception(version int, customerExit bool) *Template {
 	b := NewBuilder().Start().
 		Say("hello", "Olá {{contact.name}}! Bem-vindo ao atendimento.").
 		Contact("who").
@@ -125,7 +127,10 @@ func tSmartReception() *Template {
 		Connect("menu", "timeout", "say_fb").
 		Var("assunto", "string", "Assunto escolhido no menu").Var("related", "string", "Definido pelo subflow existing-ticket").
 		Var("nome", "string", "Definido pelo subflow unknown-contact").Var("empresa_informada", "string", "Definido pelo subflow unknown-contact")
-	return mk("smart-reception", 2, "Recepção inteligente", "Recepção padrão: identifica o contato, resolve a empresa, evita chamado duplicado e encaminha pelo menu.",
+	if customerExit {
+		b.Settings(domain.Settings{CustomerExit: &domain.CustomerExit{Enabled: true}})
+	}
+	return mk("smart-reception", version, "Recepção inteligente", "Recepção padrão: identifica o contato, resolve a empresa, evita chamado duplicado e encaminha pelo menu.",
 		domain.FlowTypeInbound, generalCats, Settings{Priority: 999, IsDefault: true}, b, []TestCase{
 			{Name: "cliente com uma empresa pede suporte e abre chamado", Scenario: Scenario{ContactKind: "customer", Companies: []string{"ACME"}, Events: Msg("oi", "1")},
 				Expect: Expect{Status: "waiting_human", Say: []string{"Olá Contato Teste", "Como podemos ajudar?", "1) Suporte técnico"}, Effects: []string{"company_validated", "ticket", "handoff"}, Priority: "medium", Reaches: []string{"h_tech"}}},
@@ -143,6 +148,10 @@ func tSmartReception() *Template {
 				Expect: Expect{Status: "failed", NoMessages: true}},
 		}, recommended("general", "isp", "msp"))
 }
+
+func tSmartReceptionV2() *Template { return smartReception(2, false) }
+
+func tSmartReception() *Template { return smartReception(3, true) }
 
 var _ = domain.FlowTypeInbound
 

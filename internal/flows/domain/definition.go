@@ -49,6 +49,8 @@ type Variable struct {
 type Settings struct {
 	MaxNodeExecutions   int `json:"max_node_executions,omitempty"`
 	InputTimeoutSeconds int `json:"input_timeout_seconds,omitempty"`
+	// CustomerExit: the contact may end the attendance by typing a command (see customer_exit.go).
+	CustomerExit *CustomerExit `json:"customer_exit,omitempty"`
 }
 
 func (s Settings) EffectiveMaxExecutions() int {

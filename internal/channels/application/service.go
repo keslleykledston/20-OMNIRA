@@ -173,6 +173,30 @@ func (s *ChannelService) SendText(ctx context.Context, connID uuid.UUID, msg dom
 	return provider.SendText(ctx, *conn, msg)
 }
 
+// SendInteractive sends buttons/list when the connection's provider supports them; otherwise ports.ErrCapabilityNotSupported
+// so the caller can fall back to plain text.
+func (s *ChannelService) SendInteractive(ctx context.Context, connID uuid.UUID, msg domain.OutboundInteractiveMessage) (*domain.SendResult, error) {
+	conn, err := s.connRepo.FindByID(ctx, connID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: falha ao buscar conexão: %w", err)
+	}
+	if conn == nil {
+		return nil, fmt.Errorf("channel: conexão %s não encontrada", connID)
+	}
+	provider, err := s.registry.Resolve(conn.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if !provider.IsConfigured(ctx, *conn) {
+		return nil, ports.ErrNotConfigured
+	}
+	is, ok := provider.(ports.InteractiveSender)
+	if !ok {
+		return nil, ports.ErrCapabilityNotSupported
+	}
+	return is.SendInteractive(ctx, *conn, msg)
+}
+
 // SendTemplate sends an approved template through the connection's provider (Meta Cloud API).
 func (s *ChannelService) SendTemplate(ctx context.Context, connID uuid.UUID, msg domain.OutboundTemplateMessage) (*domain.SendResult, error) {
 	conn, err := s.connRepo.FindByID(ctx, connID)

@@ -39,6 +39,22 @@ Voltar atrás: **Versões → Ativar**. Só as próximas conversas usam a versã
 - **Janela de 24 h do WhatsApp oficial:** fora dela o bot **não envia texto livre**; o nó segue a saída "janela de 24h fechada".
 - **Nada de mudança em equipamento.** Os modelos de firewall e mudança só **registram** a solicitação.
 
+## Botões e lista no WhatsApp oficial
+
+O nó **Menu de opções** envia **botões** (até 3 opções) ou uma **lista** (4 a 10 opções, abre pelo botão "Ver opções") no WhatsApp oficial, desde que cada texto caiba: até **20 caracteres** com botões e **24** na lista. Se algum texto for maior, ou o canal for a WAHA (não oficial), o menu sai como **texto numerado** (`1) …`). O que o cliente toca volta como o texto da opção, então o fluxo segue igual. Em **Como mostrar o menu** dá para forçar "Sempre texto numerado".
+
+## O cliente encerra o atendimento
+
+Em **Detalhes** (sem nenhum nó selecionado) do fluxo de entrada, marque **Cliente encerra o atendimento**. O cliente digita um comando (padrão: `encerrar`, `encerrar atendimento`, `sair`, `#sair`) e o bot **pergunta se quer mesmo encerrar**; só um **"Sim"** encerra (mesmo caminho do "Finalizar atendimento", registrado como `system`, com despedida). Para evitar encerramento por engano:
+
+- vale só se a **mensagem inteira** for o comando (maiúsculas, acentos e pontuação nas pontas são ignorados); "quero encerrar meu contrato" não conta;
+- comando tem **no máximo 3 palavras** e não pode ser número, "sim" ou "não";
+- uma **opção do menu atual** com o mesmo texto tem prioridade sobre o comando;
+- a **confirmação é obrigatória** (não há como desligá-la); qualquer resposta que não seja sim/não mantém o atendimento e é tratada como resposta normal; a confirmação vale por 10 minutos;
+- funciona enquanto o bot conversa e enquanto o cliente espera na fila sem ninguém ter assumido; depois que uma pessoa assume, o comando deixa de ser interceptado.
+
+O pack **OMNIRA Starter v3** já vem com isso ligado. O simulador ainda não reproduz o comando.
+
 ## Execuções
 
 **Automação → Execuções** lista o que aconteceu, com o passo a passo de cada conversa e o resumo entregue ao atendente. Os

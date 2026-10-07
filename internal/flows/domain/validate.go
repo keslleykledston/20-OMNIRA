@@ -45,6 +45,12 @@ func Validate(def *Definition, opts ValidateOptions) []Issue {
 		add(Issue{Severity: SeverityError, Code: "invalid_settings", Message: "input_timeout_seconds must be between 0 and 30 days"})
 	}
 
+	if def.Settings.CustomerExit != nil {
+		if err := def.Settings.CustomerExit.Validate(); err != nil {
+			add(Issue{Severity: SeverityError, Code: "invalid_settings", Message: "customer_exit: " + err.Error()})
+		}
+	}
+
 	// Variables declared by the author.
 	defined := map[string]bool{}
 	for _, v := range def.Variables {

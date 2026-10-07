@@ -104,10 +104,12 @@ type fakeSender struct {
 	conn  uuid.UUID
 	err   error
 
-	templateGot *domain.OutboundTemplateMessage
-	newIDCalls  int
-	newIDTotal  int
-	newIDErr    error
+	templateGot    *domain.OutboundTemplateMessage
+	interactiveGot *domain.OutboundInteractiveMessage
+	interactiveErr error
+	newIDCalls     int
+	newIDTotal     int
+	newIDErr       error
 }
 
 func (s *fakeSender) SendText(_ context.Context, conn uuid.UUID, msg domain.OutboundTextMessage) (*domain.SendResult, error) {
@@ -132,6 +134,18 @@ func (s *fakeSender) SendTemplate(_ context.Context, conn uuid.UUID, msg domain.
 		return nil, s.err
 	}
 	return &domain.SendResult{ProviderMessageID: fmt.Sprintf("tpl-%s-%d", conn, s.total), State: domain.DeliveryStateSent}, nil
+}
+
+func (s *fakeSender) SendInteractive(_ context.Context, conn uuid.UUID, msg domain.OutboundInteractiveMessage) (*domain.SendResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.total++
+	s.interactiveGot = &msg
+	if s.interactiveErr != nil {
+		return nil, s.interactiveErr
+	}
+	return &domain.SendResult{ProviderMessageID: fmt.Sprintf("itx-%s-%d", conn, s.total), State: domain.DeliveryStateSent}, nil
 }
 
 func (s *fakeSender) NewMessageID(_ context.Context, conn uuid.UUID) (string, error) {
@@ -690,5 +704,30 @@ func TestTemplateJobIsSentAsATemplateNotAsText(t *testing.T) {
 	}
 	if g := sender.templateGot; g.TemplateName != "boas_vindas" || g.LanguageCode != "pt_BR" || len(g.Params) != 2 || g.Params[0] != "Ana" {
 		t.Fatalf("template payload: %+v", g)
+	}
+}
+
+// A bot menu goes out as buttons; on a provider without buttons the SAME menu is sent as numbered text, once.
+func TestInteractiveJobIsSentAsButtonsAndFallsBackToTextWhenUnsupported(t *testing.T) {
+	job := &delivery.InteractiveJob{Body: "Como ajudar?", ListLabel: "Ver opções", Options: []domain.InteractiveOption{{ID: "tech", Title: "Suporte"}, {ID: "fin", Title: "Financeiro"}}}
+	h, store, sender, raw := setup(t)
+	store.job.Interactive = job
+	store.job.Text = "Como ajudar?\n1) Suporte\n2) Financeiro"
+	if err := h.Handle(context.Background(), raw, 1); err != nil {
+		t.Fatal(err)
+	}
+	if store.job.Status != "sent" || sender.interactiveGot == nil || sender.got.Text != "" || len(sender.interactiveGot.Options) != 2 {
+		t.Fatalf("buttons expected: status=%s itx=%v text=%q", store.job.Status, sender.interactiveGot, sender.got.Text)
+	}
+
+	h2, store2, sender2, raw2 := setup(t)
+	store2.job.Interactive = job
+	store2.job.Text = "Como ajudar?\n1) Suporte\n2) Financeiro"
+	sender2.interactiveErr = ports.ErrCapabilityNotSupported
+	if err := h2.Handle(context.Background(), raw2, 1); err != nil {
+		t.Fatal(err)
+	}
+	if store2.job.Status != "sent" || sender2.got.Text != "Como ajudar?\n1) Suporte\n2) Financeiro" {
+		t.Fatalf("fallback to the numbered text expected: status=%s text=%q", store2.job.Status, sender2.got.Text)
 	}
 }

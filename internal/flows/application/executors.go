@@ -38,6 +38,36 @@ func say(in StepInput, text string) (port string, err error) {
 	}
 }
 
+// sayChoice sends the menu as buttons/list when the effects support it and the node allows it; otherwise as text.
+func sayChoice(in StepInput, menu, question string, c domain.ChoiceConfig) (port string, err error) {
+	cs, ok := in.Effects.(ports.ChoiceSender)
+	if !ok || strings.EqualFold(strings.TrimSpace(c.Style), "text") {
+		return say(in, menu)
+	}
+	opts := make([]ports.ChoiceOption, len(c.Options))
+	for i, o := range c.Options {
+		opts[i] = ports.ChoiceOption{ID: o.ID, Title: o.Label}
+	}
+	status, err := cs.SendChoice(in.Ctx, in.Facts.ID, menu, question, opts, sendKey(in))
+	if err != nil {
+		return "", err
+	}
+	switch status {
+	case ports.SendQueued, ports.SendReplayed:
+		return "", nil
+	case ports.SendWindowClosed:
+		if hasEdge(in, "window_closed") {
+			return "window_closed", nil
+		}
+		return "", fmt.Errorf("the 24h customer-service window is closed and node %q has no window_closed destination", in.Node.ID)
+	default:
+		if hasEdge(in, "error") {
+			return "error", nil
+		}
+		return "", fmt.Errorf("the conversation has no usable text channel")
+	}
+}
+
 func attempts(state map[string]any) int {
 	if n, ok := state["attempts"].(float64); ok {
 		return int(n)
@@ -244,9 +274,9 @@ func (choiceExec) Execute(in StepInput) (StepResult, error) {
 	wait := in.Def.Settings.EffectiveInputTimeout(c.TimeoutSeconds)
 	menu := menuText(domain.Interpolate(c.Text, in.Vars), c.Options)
 	if !in.Resuming {
-		// Every channel gets the numbered text menu: interactive buttons/lists are a capability layer for later; the
-		// text form works on WAHA and Meta alike and is what the contact's reply is matched against.
-		if port, err := say(in, menu); err != nil {
+		// Buttons/list where the channel has them, the numbered text menu everywhere else. Either way the contact's answer
+		// comes back as the option's label or number, which is what MatchOption understands.
+		if port, err := sayChoice(in, menu, domain.Interpolate(c.Text, in.Vars), c); err != nil {
 			return StepResult{}, err
 		} else if port != "" {
 			return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil

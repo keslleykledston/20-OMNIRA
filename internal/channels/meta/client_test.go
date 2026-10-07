@@ -179,3 +179,38 @@ func TestSendTemplateBuildsBodyParametersAndClassifiesLikeText(t *testing.T) {
 		t.Fatalf("a 5xx on a template send is an unknown outcome, got %v", err)
 	}
 }
+
+func TestSendInteractiveBuildsButtonsOrAListAndRefusesWhatDoesNotFit(t *testing.T) {
+	var sent map[string]any
+	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		_, _ = w.Write([]byte(`{"messages":[{"id":"wamid.I"}]}`))
+	})
+	opts := func(titles ...string) []domain.InteractiveOption {
+		var o []domain.InteractiveOption
+		for i, t := range titles {
+			o = append(o, domain.InteractiveOption{ID: "o" + string(rune('a'+i)), Title: t})
+		}
+		return o
+	}
+	msg := domain.OutboundInteractiveMessage{Body: "Como ajudar?", Options: opts("Suporte", "Financeiro")}
+	if id, err := c.SendInteractive(context.Background(), "tok", "12345678", "5592984517378", msg); err != nil || id != "wamid.I" {
+		t.Fatalf("%q %v", id, err)
+	}
+	it := sent["interactive"].(map[string]any)
+	if sent["type"] != "interactive" || it["type"] != "button" || len(it["action"].(map[string]any)["buttons"].([]any)) != 2 {
+		t.Fatalf("2 options must be reply buttons: %v", sent)
+	}
+	msg.Options = opts("Suporte", "Financeiro", "Comercial", "Outro assunto")
+	if _, err := c.SendInteractive(context.Background(), "tok", "12345678", "5592984517378", msg); err != nil {
+		t.Fatal(err)
+	}
+	it = sent["interactive"].(map[string]any)
+	if it["type"] != "list" || len(it["action"].(map[string]any)["sections"].([]any)[0].(map[string]any)["rows"].([]any)) != 4 {
+		t.Fatalf("4 options must be a list: %v", sent)
+	}
+	msg.Options = opts("Um título bem grande demais", "B")
+	if _, err := c.SendInteractive(context.Background(), "tok", "12345678", "5592984517378", msg); !errors.Is(err, ports.ErrPermanent) {
+		t.Fatalf("a title over 20 characters must be refused, not truncated: %v", err)
+	}
+}

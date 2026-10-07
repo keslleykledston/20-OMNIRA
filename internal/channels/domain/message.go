@@ -130,6 +130,55 @@ type OutboundTemplateMessage struct {
 	IdempotencyKey string
 }
 
+// InteractiveOption is one button or list row. ID is what the provider echoes back when the person taps it.
+type InteractiveOption struct {
+	ID    string
+	Title string
+}
+
+// OutboundInteractiveMessage — reply buttons (up to 3) or a list (up to 10 rows) shown as tappable options.
+type OutboundInteractiveMessage struct {
+	ToE164 string
+	// Body is the question shown above the options.
+	Body string
+	// ListLabel is the label of the button that opens the list (used only when there are more than 3 options).
+	ListLabel string
+	Options   []InteractiveOption
+}
+
+// WhatsApp Cloud API limits for interactive messages.
+const (
+	MaxInteractiveButtons     = 3
+	MaxInteractiveRows        = 10
+	MaxInteractiveBody        = 1024
+	MaxInteractiveButtonTitle = 20
+	MaxInteractiveRowTitle    = 24
+	MaxInteractiveListLabel   = 20
+)
+
+// InteractiveFits reports whether a menu can be sent as buttons/list without cutting anything. Titles are never
+// truncated: the person's tap comes back as the title text and must still match the option, so a menu that does not fit
+// stays a numbered text menu.
+func InteractiveFits(body string, options []InteractiveOption) bool {
+	n := len(options)
+	if n < 1 || n > MaxInteractiveRows || len([]rune(body)) == 0 || len([]rune(body)) > MaxInteractiveBody {
+		return false
+	}
+	limit := MaxInteractiveRowTitle
+	if n <= MaxInteractiveButtons {
+		limit = MaxInteractiveButtonTitle
+	}
+	seen := map[string]bool{}
+	for _, o := range options {
+		t := len([]rune(o.Title))
+		if o.ID == "" || len(o.ID) > 200 || t == 0 || t > limit || seen[o.Title] {
+			return false
+		}
+		seen[o.Title] = true
+	}
+	return true
+}
+
 // SendResult — resultado normalizado de um envio.
 type SendResult struct {
 	ProviderMessageID string

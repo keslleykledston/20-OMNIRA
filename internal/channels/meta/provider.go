@@ -238,6 +238,32 @@ func (p *Provider) SendTemplate(ctx context.Context, conn domain.ChannelConnecti
 	return &domain.SendResult{ProviderMessageID: id, State: domain.DeliveryStateSent}, nil
 }
 
+// SendInteractive implements ports.InteractiveSender: reply buttons or a list, inside the 24 h window.
+func (p *Provider) SendInteractive(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundInteractiveMessage) (*domain.SendResult, error) {
+	if err := validateConnection(conn); err != nil {
+		return nil, err
+	}
+	to := strings.TrimPrefix(strings.TrimSpace(msg.ToE164), "+")
+	if !digitsPattern.MatchString(to) {
+		return nil, fmt.Errorf("%w: recipient is required", ports.ErrPermanent)
+	}
+	c, err := p.credential(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	id, err := p.client.SendInteractive(ctx, c.Fields[FieldAccessToken], conn.ExternalNumberID, to, msg)
+	p.count(ctx, "send_interactive", err)
+	if err != nil {
+		if errors.Is(err, ports.ErrOutcomeUnknown) {
+			log.Printf("meta: interactive send outcome unknown connection_id=%s", conn.ID)
+		}
+		return nil, err
+	}
+	return &domain.SendResult{ProviderMessageID: id, State: domain.DeliveryStateSent}, nil
+}
+
+var _ ports.InteractiveSender = (*Provider)(nil)
+
 // ListTemplates reads the WhatsApp Business Account's templates with this connection's own token.
 func (p *Provider) ListTemplates(ctx context.Context, conn domain.ChannelConnection) ([]Template, error) {
 	if err := validateConnection(conn); err != nil {

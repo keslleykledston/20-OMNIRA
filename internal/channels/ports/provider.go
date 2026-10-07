@@ -226,3 +226,9 @@ type ChannelProvider interface {
 	// para o formato canônico.
 	HandleDeliveryStatus(ctx context.Context, conn domain.ChannelConnection, payload []byte) (*domain.DeliveryStatusUpdate, error)
 }
+
+// InteractiveSender is an optional provider capability: reply buttons and lists. A provider without it (WAHA) is not an
+// error for the caller: the same menu is sent as numbered text.
+type InteractiveSender interface {
+	SendInteractive(ctx context.Context, conn domain.ChannelConnection, msg domain.OutboundInteractiveMessage) (*domain.SendResult, error)
+}

@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -71,4 +72,36 @@ func (s *PostgresOutboundStore) InsertQueuedSystem(ctx context.Context, in ports
 		return nil, false, fmt.Errorf("messages: load idempotent system message: %w", err)
 	}
 	return existing, true, nil
+}
+
+var _ ports.SystemInteractiveStore = (*PostgresOutboundStore)(nil)
+
+// InsertQueuedSystemInteractive is InsertQueuedSystem plus the interactive record, in the same transaction.
+func (s *PostgresOutboundStore) InsertQueuedSystemInteractive(ctx context.Context, in ports.SendContext, text, key, hash string, itx ports.InteractiveSend) (*ports.QueuedMessage, bool, error) {
+	msg, replayed, err := s.InsertQueuedSystem(ctx, in, text, key, hash)
+	if err != nil || replayed {
+		return msg, replayed, err
+	}
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	type opt struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	opts := make([]opt, len(itx.Options))
+	for i, o := range itx.Options {
+		opts[i] = opt{ID: o.ID, Title: o.Title}
+	}
+	raw, err := json.Marshal(opts)
+	if err != nil {
+		return nil, false, fmt.Errorf("messages: encode interactive options: %w", err)
+	}
+	if _, err := platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx,
+		`INSERT INTO message_interactive_sends (tenant_id, message_id, body, list_label, options) VALUES ($1,$2,$3,$4,$5)`,
+		tenantID, msg.ID, itx.Body, itx.ListLabel, raw); err != nil {
+		return nil, false, fmt.Errorf("messages: record interactive send: %w", err)
+	}
+	return msg, false, nil
 }

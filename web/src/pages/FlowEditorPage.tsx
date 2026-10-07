@@ -5,6 +5,7 @@ import { Badge, Button, ConfirmDialog, ErrorState, LoadingState, PermissionState
 import FlowCanvas, { type PendingConnection } from '../components/flows/FlowCanvas'
 import NodePalette from '../components/flows/NodePalette'
 import NodeInspector from '../components/flows/NodeInspector'
+import CustomerExitSettings from '../components/flows/CustomerExitSettings'
 import IssuesPanel from '../components/flows/IssuesPanel'
 import SimulatorPanel from '../components/flows/SimulatorPanel'
 import VersionsPanel from '../components/flows/VersionsPanel'
@@ -320,7 +321,16 @@ export default function FlowEditorPage() {
                 onDelete={() => { edit((d) => removeNode(d, selected.id)); setSelectedId(null) }}
               />
             ) : (
-              <p className="text-sm text-text-secondary">Selecione um nó no canvas para editar suas propriedades. Para ligar dois nós, clique no círculo de uma saída e depois no círculo de entrada do destino.</p>
+              <>
+                <p className="text-sm text-text-secondary">Selecione um nó no canvas para editar suas propriedades. Para ligar dois nós, clique no círculo de uma saída e depois no círculo de entrada do destino.</p>
+                {def && flow.type === 'INBOUND' && (
+                  <CustomerExitSettings
+                    value={def.settings?.customer_exit}
+                    readOnly={readOnly}
+                    onChange={(next) => edit((d) => ({ ...d, settings: { ...d.settings, customer_exit: next } }))}
+                  />
+                )}
+              </>
             ))}
             {tab === 'issues' && <IssuesPanel issues={issues} checking={checking} onSelectNode={(id) => { setSelectedId(id); setTab('props') }} />}
             {tab === 'simulate' && <SimulatorPanel disabled={!canTest} running={simulate.isPending} result={sim} error={simError} hasAI={hasAI} onRun={(s) => simulate.mutate(s)} />}

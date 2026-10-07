@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
 )
 
@@ -346,6 +347,51 @@ func (c *Client) SendTemplate(ctx context.Context, token, phoneNumberID, toDigit
 		"to":                toDigits,
 		"type":              "template",
 		"template":          template,
+	})
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status > 299 {
+		return "", classify(status, data)
+	}
+	var ok struct {
+		Messages []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(data, &ok) != nil || len(ok.Messages) == 0 || ok.Messages[0].ID == "" {
+		return "", fmt.Errorf("%w: accepted without a message id", ports.ErrOutcomeUnknown)
+	}
+	return ok.Messages[0].ID, nil
+}
+
+// SendInteractive sends reply buttons (1 to 3 options) or a list (4 to 10), inside the 24 h window. Same delivery
+// guarantees as SendText: no idempotency key, so an ambiguous failure is ports.ErrOutcomeUnknown and is never retried.
+func (c *Client) SendInteractive(ctx context.Context, token, phoneNumberID, toDigits string, msg domain.OutboundInteractiveMessage) (string, error) {
+	if !digitsPattern.MatchString(phoneNumberID) || !digitsPattern.MatchString(toDigits) || token == "" || !domain.InteractiveFits(msg.Body, msg.Options) {
+		return "", fmt.Errorf("%w: recipient, credentials and a menu that fits are required", ports.ErrPermanent)
+	}
+	var interactive map[string]any
+	if len(msg.Options) <= domain.MaxInteractiveButtons {
+		buttons := make([]map[string]any, len(msg.Options))
+		for i, o := range msg.Options {
+			buttons[i] = map[string]any{"type": "reply", "reply": map[string]any{"id": o.ID, "title": o.Title}}
+		}
+		interactive = map[string]any{"type": "button", "body": map[string]any{"text": msg.Body}, "action": map[string]any{"buttons": buttons}}
+	} else {
+		label := strings.TrimSpace(msg.ListLabel)
+		if label == "" || len([]rune(label)) > domain.MaxInteractiveListLabel {
+			label = "Ver opções"
+		}
+		rows := make([]map[string]any, len(msg.Options))
+		for i, o := range msg.Options {
+			rows[i] = map[string]any{"id": o.ID, "title": o.Title}
+		}
+		interactive = map[string]any{"type": "list", "body": map[string]any{"text": msg.Body},
+			"action": map[string]any{"button": label, "sections": []map[string]any{{"title": "Opções", "rows": rows}}}}
+	}
+	status, data, err := c.do(ctx, http.MethodPost, "/"+phoneNumberID+"/messages", token, map[string]any{
+		"messaging_product": "whatsapp", "recipient_type": "individual", "to": toDigits, "type": "interactive", "interactive": interactive,
 	})
 	if err != nil {
 		return "", err

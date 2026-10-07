@@ -55,12 +55,21 @@ export interface FlowVariable {
   description?: string
 }
 
+/** The contact may end the attendance by typing a command; the bot always asks for a yes first. */
+export interface CustomerExit {
+  enabled: boolean
+  commands?: string[]
+  farewell?: string
+}
+
+export const DEFAULT_EXIT_COMMANDS = ['encerrar', 'encerrar atendimento', 'sair', '#sair']
+
 export interface FlowDefinition {
   schema_version: 1
   nodes: FlowNode[]
   edges: FlowEdge[]
   variables: FlowVariable[]
-  settings: { max_node_executions?: number; input_timeout_seconds?: number }
+  settings: { max_node_executions?: number; input_timeout_seconds?: number; customer_exit?: CustomerExit }
   metadata?: Record<string, unknown>
 }
 

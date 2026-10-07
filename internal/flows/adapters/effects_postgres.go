@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/flows/ports"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
+	messagesports "github.com/omnira/omnira/internal/messages/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
@@ -25,9 +26,30 @@ type SystemSender interface {
 type PostgresEffects struct {
 	pool   *pgxpool.Pool
 	sender SystemSender
+	closer AttendanceCloser
 }
 
 var _ ports.Effects = (*PostgresEffects)(nil)
+
+// AttendanceCloser closes an attendance on the contact's behalf (attendance.Service.FinalizeBySystem satisfies it).
+type AttendanceCloser interface {
+	CloseForCustomer(ctx context.Context, conversationID uuid.UUID, note string) error
+}
+
+// WithCloser enables the contact's "end the attendance" command.
+func (e *PostgresEffects) WithCloser(c AttendanceCloser) *PostgresEffects {
+	e.closer = c
+	return e
+}
+
+var _ ports.CustomerCloser = (*PostgresEffects)(nil)
+
+func (e *PostgresEffects) CloseByCustomer(ctx context.Context, conversationID uuid.UUID, command string) error {
+	if e.closer == nil {
+		return errors.New("flows: no attendance closer configured")
+	}
+	return e.closer.CloseForCustomer(ctx, conversationID, "Encerrado pelo cliente por comando ("+command+").")
+}
 
 func NewPostgresEffects(pool *pgxpool.Pool, sender SystemSender) *PostgresEffects {
 	return &PostgresEffects{pool: pool, sender: sender}
@@ -42,6 +64,35 @@ func (e *PostgresEffects) SendText(ctx context.Context, conversationID uuid.UUID
 		return "", errors.New("flows: no system sender configured")
 	}
 	st, err := e.sender.Send(ctx, conversationID, text, key)
+	if err != nil {
+		return "", err
+	}
+	switch st {
+	case messagesapplication.SystemQueued:
+		return ports.SendQueued, nil
+	case messagesapplication.SystemReplayed:
+		return ports.SendReplayed, nil
+	case messagesapplication.SystemWindowClosed:
+		return ports.SendWindowClosed, nil
+	}
+	return ports.SendNoChannel, nil
+}
+
+var _ ports.ChoiceSender = (*PostgresEffects)(nil)
+
+// SendChoice sends a menu as buttons/list when the system sender can, else as the numbered text (same statuses).
+func (e *PostgresEffects) SendChoice(ctx context.Context, conversationID uuid.UUID, text, question string, options []ports.ChoiceOption, key string) (ports.SendStatus, error) {
+	cs, ok := e.sender.(interface {
+		SendChoice(ctx context.Context, conversationID uuid.UUID, text, question string, options []messagesports.InteractiveOption, key string) (messagesapplication.SystemSendStatus, error)
+	})
+	if !ok {
+		return e.SendText(ctx, conversationID, text, key)
+	}
+	opts := make([]messagesports.InteractiveOption, len(options))
+	for i, o := range options {
+		opts[i] = messagesports.InteractiveOption{ID: o.ID, Title: o.Title}
+	}
+	st, err := cs.SendChoice(ctx, conversationID, text, question, opts, key)
 	if err != nil {
 		return "", err
 	}

@@ -125,6 +125,10 @@ export default function NodeInspector({ node, queues, subflows, variables, readO
         <>
           <TextArea label="Pergunta do menu" value={str(cfg, 'text')} disabled={ro} rows={3} onChange={(e) => set({ text: e.target.value })} />
           <Input label="Salvar a escolha na variável" value={str(cfg, 'variable')} disabled={ro} onChange={(e) => set({ variable: e.target.value })} />
+          <Select label="Como mostrar o menu" value={str(cfg, 'style') || 'auto'} disabled={ro} hint="Automático: botões (até 3 opções) ou lista (até 10) no WhatsApp oficial, quando os textos cabem (20 e 24 caracteres); texto numerado nos demais canais." onChange={(v) => set({ style: v === 'auto' ? undefined : v })}>
+            <option value="auto">Automático (botões/lista quando possível)</option>
+            <option value="text">Sempre texto numerado</option>
+          </Select>
           <ListEditor<{ id: string; label: string; value?: string }>
             title="Opções" items={arr(cfg, 'options')} min={2} max={10} disabled={ro} addLabel="Adicionar opção"
             blank={() => ({ id: `opcao_${arr(cfg, 'options').length + 1}`, label: '' })}

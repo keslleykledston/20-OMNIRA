@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/channels/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -58,19 +59,22 @@ func (s *PostgresOutboundStore) LockOutbound(ctx context.Context, messageID uuid
 	var phone *string
 	var tplName, tplLang *string
 	var tplParams []byte
+	var itxBody, itxLabel *string
+	var itxOptions []byte
 	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
 		SELECT m.channel_connection_id, ct.phone_e164, c.provider_chat_id, m.body, m.status,
 		       m.reserved_provider_message_id, m.provider_message_id, (cc.status = 'active'),
-		       ts.template_name, ts.language, ts.params
+		       ts.template_name, ts.language, ts.params, isn.body, isn.list_label, isn.options
 		FROM messages m
 		JOIN conversations c ON c.tenant_id = m.tenant_id AND c.id = m.conversation_id
 		JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
 		LEFT JOIN channel_connections cc ON cc.tenant_id = m.tenant_id AND cc.id = m.channel_connection_id
 		LEFT JOIN message_template_sends ts ON ts.tenant_id = m.tenant_id AND ts.message_id = m.id
+		LEFT JOIN message_interactive_sends isn ON isn.tenant_id = m.tenant_id AND isn.message_id = m.id
 		WHERE m.tenant_id = $1 AND m.id = $2 AND m.direction = 'outbound'
 		FOR UPDATE OF m`, tenantID, messageID).
 		Scan(&connection, &phone, &job.ProviderChatID, &job.Text, &job.Status, &job.ReservedProviderMessageID, &job.ProviderMessageID, &active,
-			&tplName, &tplLang, &tplParams)
+			&tplName, &tplLang, &tplParams, &itxBody, &itxLabel, &itxOptions)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -90,6 +94,23 @@ func (s *PostgresOutboundStore) LockOutbound(ctx context.Context, messageID uuid
 			return nil, fmt.Errorf("%w: malformed template params", ErrPermanent)
 		}
 		job.Template = t
+	}
+	if itxBody != nil && len(itxOptions) > 0 {
+		var raw []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		}
+		if err := json.Unmarshal(itxOptions, &raw); err != nil {
+			return nil, fmt.Errorf("%w: malformed interactive options", ErrPermanent)
+		}
+		j := &InteractiveJob{Body: *itxBody}
+		if itxLabel != nil {
+			j.ListLabel = *itxLabel
+		}
+		for _, o := range raw {
+			j.Options = append(j.Options, domain.InteractiveOption{ID: o.ID, Title: o.Title})
+		}
+		job.Interactive = j
 	}
 	return job, nil
 }

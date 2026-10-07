@@ -167,6 +167,17 @@ func (e *Engine) OnInbound(ctx context.Context, ev InboundEvent) (Outcome, error
 			return OutcomeDuplicate, nil
 		}
 		if run.Status == domain.RunWaitingHuman {
+			// Still waiting in the queue (nobody took it): the contact may end the attendance. Otherwise the bot stays out.
+			if facts.Status == "open" && facts.AssignedTo == nil {
+				msg, err := e.runs.LoadInboundMessage(ctx, ev.ConversationID, ev.MessageID)
+				if err != nil {
+					return OutcomeIgnored, err
+				}
+				handled, err := e.maybeCustomerExit(ctx, facts, run, msg, eventID)
+				if err != nil || handled {
+					return OutcomeResumed, err
+				}
+			}
 			return OutcomeIgnored, nil
 		}
 		if !controls(facts) {
@@ -176,6 +187,9 @@ func (e *Engine) OnInbound(ctx context.Context, ev InboundEvent) (Outcome, error
 		msg, err := e.runs.LoadInboundMessage(ctx, ev.ConversationID, ev.MessageID)
 		if err != nil {
 			return OutcomeIgnored, err
+		}
+		if handled, err := e.maybeCustomerExit(ctx, facts, run, msg, eventID); err != nil || handled {
+			return OutcomeResumed, err
 		}
 		return OutcomeResumed, e.resume(ctx, facts, run, msg, false, eventID)
 	case !errors.Is(err, domain.ErrNotFound):

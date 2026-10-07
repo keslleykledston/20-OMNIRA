@@ -202,6 +202,54 @@ func (s *Service) Finalize(ctx context.Context, raw domain.FinalizeInput) (Final
 	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true}, nil
 }
 
+// FinalizeBySystem ends the attendance because the CONTACT asked for it (the flow engine is the actor, with a system
+// TenantContext). Same effects as an agent's finalize (conversation closed, local tickets closed, ERP and topic tickets left
+// alone) but recorded with source "system", no author, reason "other" and the command in the note. Idempotent: an already
+// closed conversation returns its existing closure.
+func (s *Service) FinalizeBySystem(ctx context.Context, conversationID uuid.UUID, note string) (FinalizeResult, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil || tc.Source != tenancydomain.AccessSourceSystem {
+		return FinalizeResult{}, domain.ErrForbidden
+	}
+	in, err := domain.FinalizeInput{ConversationID: conversationID, Reason: domain.ReasonOther, Note: note, SummaryTruth: domain.TruthAgentConfirmed}.Normalize()
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	facts, err := s.repo.LockConversation(ctx, conversationID)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	if facts.ContactID == nil || facts.Kind == "internal" {
+		return FinalizeResult{}, domain.ErrNotAContact
+	}
+	if facts.Status == "closed" {
+		existing, err := s.repo.ClosureByConversation(ctx, conversationID)
+		return FinalizeResult{Closure: existing}, err
+	}
+	closed, kept, err := s.repo.CloseLocalTickets(ctx, conversationID)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	if err := s.repo.MarkClosed(ctx, conversationID); err != nil {
+		return FinalizeResult{}, err
+	}
+	closure := &domain.Closure{
+		ID: uuid.New(), TenantID: tc.TenantID, ConversationID: conversationID, ContactID: *facts.ContactID, ClosedBy: nil,
+		Source: domain.SourceSystem, Reason: in.Reason, Note: in.Note, SummaryTruth: in.SummaryTruth,
+		LocalTicketsClosed: closed, TicketsKept: kept, CreatedAt: s.now(),
+	}
+	if err := s.repo.InsertClosure(ctx, closure); err != nil {
+		return FinalizeResult{}, err
+	}
+	return FinalizeResult{Closure: closure, Changed: true}, nil
+}
+
+// CloseForCustomer is FinalizeBySystem without the result, for callers that only need the closing (the flow engine).
+func (s *Service) CloseForCustomer(ctx context.Context, conversationID uuid.UUID, note string) error {
+	_, err := s.FinalizeBySystem(ctx, conversationID, note)
+	return err
+}
+
 // ClosureView is a closure with its follow-ups, for the history panel.
 type ClosureView struct {
 	Closure   domain.Closure
