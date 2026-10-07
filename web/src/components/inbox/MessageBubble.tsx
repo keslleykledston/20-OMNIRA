@@ -4,6 +4,7 @@ import { MessageItem } from '../../types/api';
 import { Icon } from '../primitives';
 import MessageMedia from './MessageMedia';
 import { getTenantId } from '../../lib/session';
+import { explainFailure } from '../../lib/providerErrors';
 
 interface MessageBubbleProps {
   message: MessageItem;
@@ -33,7 +34,8 @@ export default function MessageBubble({ message, sender }: MessageBubbleProps) {
 
   // PILOT.4A2: 'uncertain' means OMNIRA could not prove the provider outcome
   // — never say "failed" for it, and never suggest an automatic resend.
-  const reason = (message.failure_reason ?? '').replace(/^provider:/, '');
+  const explained = explainFailure(message.failure_reason);
+  const reason = explained ? `${explained.text}${explained.code ? ` (código ${explained.code})` : ''}` : '';
   const statusTitle =
     message.status === 'uncertain' ? 'A entrega não pôde ser confirmada' :
     message.status === 'failed' && reason ? `Falha: ${reason}` :
@@ -70,7 +72,7 @@ export default function MessageBubble({ message, sender }: MessageBubbleProps) {
         </footer>
         {isOutbound && message.status === 'failed' && (
           <p role="status" className="mt-1 text-[11px] font-medium text-status-danger">
-            Não foi entregue{reason ? ` (${reason})` : ''}.
+            Não foi entregue{reason ? `: ${reason}` : '.'}
           </p>
         )}
       </div>

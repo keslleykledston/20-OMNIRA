@@ -44,6 +44,19 @@ describe('MessageBubble', () => {
 describe('MessageBubble — failed delivery', () => {
   it('says why a message was not delivered when the provider gave a reason', () => {
     render(<MessageBubble message={{ id: 'm', conversation_id: 'c', direction: 'outbound', status: 'failed', body: 'oi', created_at: '2026-10-07T06:43:00Z', failure_reason: 'provider:131026: Message undeliverable' }} />)
-    expect(screen.getByRole('status')).toHaveTextContent('Não foi entregue (131026: Message undeliverable).')
+    expect(screen.getByRole('status')).toHaveTextContent('Não foi entregue: Mensagem não entregável')
+  })
+})
+
+describe('explainFailure', () => {
+  it('explains the payment problem in Portuguese and keeps the code; unknown codes keep the provider title', async () => {
+    const { explainFailure } = await import('../lib/providerErrors')
+    expect(explainFailure('provider:131042: Business eligibility payment issue')).toEqual({
+      code: '131042',
+      text: expect.stringContaining('forma de pagamento'),
+    })
+    expect(explainFailure('provider:139999: Something new')).toEqual({ code: '139999', text: 'Recusada pela Meta: Something new.' })
+    expect(explainFailure('rejected')?.text).toBe('A Meta recusou a mensagem.')
+    expect(explainFailure('')).toBeNull()
   })
 })
