@@ -133,7 +133,9 @@ const (
 )
 
 var (
-	apiKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_\-]{20,200}$`)
+	// "." is allowed: Google's newer Gemini keys carry a dot after a short prefix. The key only ever travels in a
+	// header (never a URL), so the character is inert there.
+	apiKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_.\-]{20,200}$`)
 	modelPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 )
 

@@ -65,8 +65,8 @@ export function normalizeAPIKey(raw: string): string {
 // `short` is false while the person is still typing, so a half-typed key is not flagged yet.
 export function validateAPIKey(key: string, short = true): string | null {
   const k = normalizeAPIKey(key)
-  if (!/^[A-Za-z0-9_-]*$/.test(k)) {
-    return 'A chave tem caracteres não permitidos (só letras, números, "-" e "_"). Cole apenas a chave, sem outros textos.'
+  if (!/^[A-Za-z0-9_.-]*$/.test(k)) {
+    return 'A chave tem caracteres não permitidos (só letras, números, ".", "-" e "_"). Cole apenas a chave, sem outros textos.'
   }
   if (k.length > 200) return 'A chave está longa demais (máximo de 200 caracteres). Confira se copiou só a chave.'
   if (k.length < 20) return short ? `A chave está curta (${k.length} caracteres; ela costuma ter cerca de 39). Confira se copiou inteira.` : null

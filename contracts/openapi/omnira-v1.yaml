@@ -3784,7 +3784,7 @@ components:
         enabled: { type: boolean }
         model: { type: string, pattern: '^[A-Za-z0-9._-]{1,100}$' }
         monthly_budget_usd: { type: number, minimum: 0, maximum: 10000 }
-        api_key: { type: string, writeOnly: true, minLength: 20, maxLength: 200 }
+        api_key: { type: string, writeOnly: true, minLength: 20, maxLength: 200, pattern: '^[A-Za-z0-9_.-]{20,200}$' }
         accept_external_ai: { type: boolean }
     AIIntegrationTest:
       type: object

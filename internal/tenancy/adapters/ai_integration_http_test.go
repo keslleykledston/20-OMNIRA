@@ -136,6 +136,10 @@ func TestAIKeyIsWriteOnlyEncryptedAndNeverLeaks(t *testing.T) {
 			t.Errorf("bad key %q: %d %s", bad, rec.Code, rec.Body.String())
 		}
 	}
+	// A key with a dot (newer Google format) is accepted.
+	if rec := callAI(t, app, h.Put, a.tenantID, admin, http.MethodPut, `{"api_key":"AQ.TESTKEYwithadot0123456789abcdefghijkl"}`); rec.Code != http.StatusOK {
+		t.Errorf("key with a dot = %d %s", rec.Code, rec.Body.String())
+	}
 	// Unknown fields are refused (no way to smuggle a column).
 	if rec := callAI(t, app, h.Put, a.tenantID, admin, http.MethodPut, `{"secret_ciphertext":"x"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown field = %d, want 400", rec.Code)
