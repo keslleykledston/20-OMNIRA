@@ -39,6 +39,34 @@ Opção A. Endpoints futuros (não criados):
 - Web **não muda**: cookie HttpOnly continua sendo o único mecanismo do navegador; nada de `localStorage` para credencial sensível;
 - `Authorization: Bearer` do IdP continua aceito como hoje (compatibilidade), sem ampliar audiências.
 
+## Especificação de segurança obrigatória do MOBILE.1 (revisão independente, 2026-10-07)
+Incorporada após a revisão do Codex; o MOBILE.1 não é aceito sem estes pontos e os testes correspondentes.
+
+**Troca de código (`POST /auth/mobile/token`)**
+- Cliente fixo `omnira-mobile` (público, sem segredo). O servidor envia ao Keycloak o `client_id` **fixo** e a `redirect_uri` **exata** de uma *allowlist* de configuração
+  (esquema próprio/App Link/Universal Link); valores vindos do app só são aceitos se idênticos a um item da lista.
+- PKCE `S256` obrigatório (`plain` recusado). `state` e `nonce` gerados no app; o servidor exige `nonce` na requisição e compara com a claim `nonce` do ID Token.
+- Validação completa antes de criar sessão, como no Web: assinatura RS256, `iss`, `aud` contendo `omnira-mobile`, `azp == omnira-mobile`, `exp`, `nonce`, e identidade
+  `issuer+sub` **já provisionada** (desconhecida falha fechada). Falha ⇒ 401 genérico, sem detalhar o motivo, sem registrar o código nem o *verifier*.
+- *Rate limit* próprio por IP e por `device_id` no endpoint (R-2 precisa estar resolvido antes).
+
+**Armazenamento (tabela `auth_devices` + colunas em `auth_sessions`; migration só no MOBILE.1)**
+- `auth_devices(device_id uuid PK gerado pelo servidor, user_id, label, platform, created_at, last_seen_at, revoked_at)`; o `device_id` **nunca** é aceito do cliente na criação.
+- Token de acesso e *refresh* são aleatórios de 32 bytes (CSPRNG); só o **SHA-256** é guardado (alta entropia dispensa *salt*/*pepper*); comparação em tempo constante;
+  o valor em claro aparece uma única vez na resposta. Índice único no hash.
+- `auth_sessions` ganha `device_id` e `family_id`; um aparelho tem no máximo uma família ativa por usuário; novo login no mesmo aparelho revoga a família anterior.
+- Retenção: sessões/famílias revogadas ou expiradas guardadas 30 dias para auditoria e depois removidas; nunca guardar o valor em claro.
+
+**Rotação do *refresh* (atômica)**
+- Uma transação: `SELECT ... FROM auth_refresh_tokens WHERE token_hash=$1 FOR UPDATE`; se `used_at IS NOT NULL` **ou** a família está revogada ⇒ revoga a família inteira (todas as
+  sessões do aparelho) e responde 401; senão marca `used_at=now()`, emite o sucessor (mesma `family_id`, `parent_id`) e confirma. Duas requisições concorrentes com o mesmo
+  *refresh*: a segunda espera o lock, vê `used_at` e dispara a revogação (comportamento seguro, o app refaz o login). Há teste de corrida (N goroutines, exatamente 1 sucesso).
+- Janela de tolerância para rede instável **não** existe na v1 (simplicidade e segurança); o app guarda o sucessor antes de descartar o anterior.
+
+**Revogação e SSE**
+- Logout, revogação pelo usuário (`DELETE /me/devices/{id}`) ou por `membership.manage` ⇒ `revoked_at` no aparelho, na família e nas sessões, imediatamente.
+- O SSE guarda o identificador da sessão que o abriu e, no `recheck` (30 s), chama `ResolveSession`; sessão revogada/expirada fecha o fluxo (resolve R-3 para Web e mobile).
+
 ## Decisões do dono (aprovadas em 2026-10-07, valores propostos)
 1. Opção A confirmada (B fica só como atalho de desenvolvimento).
 2. TTLs: acesso 15 min; *refresh* 30 dias deslizante, 90 absoluto.

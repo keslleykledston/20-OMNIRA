@@ -2887,11 +2887,11 @@ components:
             properties:
               error: { type: string }
               message: { type: string }
-    Text400: { description: "Malformed identifier, pagination or body", content: { text/plain: { schema: { type: string } } } }
-    Text401: { description: "Missing/invalid/expired JWT", content: { text/plain: { schema: { type: string } } } }
-    Text403: { description: "Missing permission (e.g. `channel.manage` / `conversation.*`)", content: { text/plain: { schema: { type: string } } } }
-    Text404: { description: "Tenant, membership or resource not visible to the caller (no enumeration oracle)", content: { text/plain: { schema: { type: string } } } }
-    Text502: { description: "WhatsApp gateway (WAHA) unavailable or rejected the request", content: { text/plain: { schema: { type: string } } } }
+    Text400: { description: "Malformed identifier, pagination or body", content: { text/plain: { schema: { type: string } }, application/vnd.omnira.v1+json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    Text401: { description: "Missing/invalid/expired JWT", content: { text/plain: { schema: { type: string } }, application/vnd.omnira.v1+json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    Text403: { description: "Missing permission (e.g. `channel.manage` / `conversation.*`)", content: { text/plain: { schema: { type: string } }, application/vnd.omnira.v1+json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    Text404: { description: "Tenant, membership or resource not visible to the caller (no enumeration oracle)", content: { text/plain: { schema: { type: string } }, application/vnd.omnira.v1+json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+    Text502: { description: "WhatsApp gateway (WAHA) unavailable or rejected the request", content: { text/plain: { schema: { type: string } }, application/vnd.omnira.v1+json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
     AssignResult:
       description: Resulting assignee; `changed:false` for an idempotent no-op
       content:

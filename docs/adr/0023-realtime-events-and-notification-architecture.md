@@ -60,3 +60,8 @@ e **push como mecanismo de acordar**; o roteamento passa a considerar "disponív
 ## Consequências
 Contrato de evento estável para dois clientes sem nova infraestrutura (continua NATS/SSE). Push e preferências ficam como projeto separado, sem tabela especulativa. O limite conhecido:
 sem replay, o app precisa de *refetch* na reconexão (por isso o `event_id` serve a deduplicação, não à recuperação).
+
+## Nota da revisão independente (2026-10-07)
+O `event_id` é gerado no *bridge* a cada encaminhamento: ele identifica a **entrega**, não o fato de negócio. Serve para ignorar duplicatas dentro de uma conexão e para
+correlacionar suporte. O NATS usado aqui é *core* (sem redelivery) e o `NOTIFY` não carrega id de origem; se o MOBILE.9 exigir deduplicação entre reconexões, o id deve nascer
+no evento persistido (trigger/outbox) e ser preservado até o SSE. Até lá, o cliente trata o evento como dica e **refaz a consulta** (regra já documentada).

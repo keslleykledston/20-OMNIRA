@@ -1,11 +1,15 @@
 package httpserver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -37,6 +41,31 @@ func RequestIDFromContext(ctx context.Context) string {
 
 // A client-supplied id is echoed only when it cannot carry anything but an identifier (no log injection, bounded size).
 var clientRequestIDRE = regexp.MustCompile(`^[A-Za-z0-9._-]{8,64}$`)
+
+// acceptsV1 reports whether an Accept header lists the v1 media type itself (exact token, not a substring) with a non-zero q.
+func acceptsV1(accept string) bool {
+	for _, part := range strings.Split(accept, ",") {
+		fields := strings.Split(part, ";")
+		if !strings.EqualFold(strings.TrimSpace(fields[0]), MediaTypeV1) {
+			continue
+		}
+		q := 1.0
+		for _, f := range fields[1:] {
+			k, v, ok := strings.Cut(strings.TrimSpace(f), "=")
+			if ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					q = parsed
+				} else {
+					q = 0
+				}
+			}
+		}
+		if q > 0 {
+			return true
+		}
+	}
+	return false
+}
 
 // StableErrorCode maps an HTTP status to the stable machine-readable code of the error envelope.
 func StableErrorCode(status int) string {
@@ -81,7 +110,7 @@ func RequestMeta(next http.Handler) http.Handler {
 		w.Header().Set(requestIDHeader, id)
 		w.Header().Add("Vary", "Accept") // error bodies differ by Accept (text/plain vs the v1 envelope): shared caches must key on it
 		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
-		if !strings.Contains(strings.ToLower(r.Header.Get("Accept")), MediaTypeV1) {
+		if !acceptsV1(r.Header.Get("Accept")) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -105,6 +134,16 @@ type envelopeWriter struct {
 const maxEnvelopeBody = 4 << 10
 
 func (w *envelopeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// Hijack keeps connection upgrades working for handlers that assert http.Hijacker directly.
+func (w *envelopeWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("httpserver: the underlying ResponseWriter does not support hijacking")
+	}
+	w.sent = true
+	return h.Hijack()
+}
 
 func (w *envelopeWriter) Flush() {
 	if w.capturing {

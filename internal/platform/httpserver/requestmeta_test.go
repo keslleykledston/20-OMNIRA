@@ -232,3 +232,20 @@ func TestInterimResponsesAreNotTheFinalStatusAndCachesKeyOnAccept(t *testing.T) 
 		t.Fatalf("Vary: Accept missing: %v", v)
 	}
 }
+
+func TestOptInNeedsTheExactMediaTypeWithANonZeroQ(t *testing.T) {
+	for accept, want := range map[string]bool{
+		MediaTypeV1: true,
+		"application/json, " + MediaTypeV1 + ";q=0.9": true,
+		"APPLICATION/VND.OMNIRA.V1+JSON":              true,
+		MediaTypeV1 + ";q=0":                          false,
+		MediaTypeV1 + "-extra":                        false,
+		"application/vnd.omnira.v1+jsonx":             false,
+		"application/json, text/plain, */*":           false,
+		"":                                            false,
+	} {
+		if got := acceptsV1(accept); got != want {
+			t.Errorf("acceptsV1(%q) = %v, want %v", accept, got, want)
+		}
+	}
+}

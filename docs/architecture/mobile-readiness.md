@@ -221,3 +221,21 @@ Dependências entre fases: MOBILE.0 → 1 → 2 → (3, 4, 5) → (6, 7, 8) → 
 | MOBILE.14 | iOS TestFlight | 13 | *entitlements*, ATS | build no TestFlight |
 | MOBILE.15 | Conformidade das lojas (privacidade, LGPD, política de dados) | 13, 14 | revisão jurídica | formulários aprovados |
 | MOBILE.16 | Lançamento Google Play / App Store | 15 | *staged rollout* | publicado |
+
+## Revisão independente (Codex, 2026-10-07)
+Executada sem o sandbox do Codex (indisponível no host: AppArmor restringe user namespaces) e sobre uma cópia da branch, sem escrita. 0 BLOCKER, 4 HIGH, 4 MEDIUM, 2 LOW.
+
+| # | Sev. | Achado | Classificação | Destino |
+|---|---|---|---|---|
+| 1 | HIGH | SSE não reverifica a sessão (só membership) | VÁLIDO, anterior a esta branch (R-3), afeta também o Web | ADIADO: especificado na ADR-0022 (SSE guarda a sessão e chama `ResolveSession` no recheck), entra no MOBILE.1 |
+| 2 | HIGH | `client_surface_test` só usa chamadas anônimas | PARCIAL: é uma rede de segurança anônima por desenho; o isolamento entre tenants autenticados é coberto por testes de integração de tenancy/inbox com PostgreSQL real | ADIADO: teste com identidade válida fica no MOBILE.1 (precisa do emissor de sessão) |
+| 3 | HIGH | ADR-0022 sem rotação atômica do refresh | VÁLIDO | CORRIGIDO na ADR (transação, `FOR UPDATE`, família, teste de corrida) |
+| 4 | HIGH | ADR-0022 sem binding OIDC nativo (client_id, redirect, nonce, azp) | VÁLIDO | CORRIGIDO na ADR |
+| 5 | MED | Rate limiter global | VÁLIDO = R-2 | ADIADO (recalibrar antes de ativar cotas) |
+| 6 | MED | `event_id` muda em redelivery | VÁLIDO como limite; NATS core não redelivera | DOCUMENTADO (ADR-0023) |
+| 7 | MED | Opt-in por `Accept` usa substring e ignora `q=0` | VÁLIDO | CORRIGIDO (parser exato + teste) |
+| 8 | MED | ADR-0022 sem schema/ciclo de vida de tokens e aparelhos | VÁLIDO | CORRIGIDO na ADR |
+| 9 | LOW | Wrapper sem `Hijacker`/`ReaderFrom` | VÁLIDO (nenhum handler usa hoje) | `Hijacker` CORRIGIDO; `ReaderFrom` é só otimização, não implementado |
+| 10 | LOW | OpenAPI não referencia `ErrorEnvelope` nas respostas | VÁLIDO | CORRIGIDO (`Text400/401/403/404/502`) |
+
+Do primeiro job do Codex (somente material colado) já tinham sido tratados `Vary: Accept` e respostas 1xx (commit `4356a12`).
