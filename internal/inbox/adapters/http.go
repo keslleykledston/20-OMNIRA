@@ -63,13 +63,15 @@ type ConversationItem struct {
 	// ContactWhatsAppName is the name the person declared on WhatsApp; the UI shows it smaller below ContactName (the
 	// principal name: the team\'s alias when there is one) when they differ.
 	ContactWhatsAppName string `json:"contact_whatsapp_name,omitempty"`
-	// ContactKind is the contact's classification (ADR-0014/0018): unclassified | customer | other | spam; empty for an internal conversation.
-	ContactKind    string     `json:"contact_kind"`
-	TicketStatus   *string    `json:"ticket_status,omitempty"`
-	TicketPriority *string    `json:"ticket_priority,omitempty"`
-	CRMContactID   *uuid.UUID `json:"crm_contact_id,omitempty"`
-	CreatedAt      string     `json:"created_at"`
-	UpdatedAt      string     `json:"updated_at"`
+	// ContactKind is the contact's classification (ADR-0014/0018): unclassified | customer | internal | other | spam; empty for a
+	// conversation with staff. ContactInternalRole (team | partner | supplier) accompanies contact_kind internal.
+	ContactKind         string     `json:"contact_kind"`
+	ContactInternalRole string     `json:"contact_internal_role,omitempty"`
+	TicketStatus        *string    `json:"ticket_status,omitempty"`
+	TicketPriority      *string    `json:"ticket_priority,omitempty"`
+	CRMContactID        *uuid.UUID `json:"crm_contact_id,omitempty"`
+	CreatedAt           string     `json:"created_at"`
+	UpdatedAt           string     `json:"updated_at"`
 	// MessageCount is filled only by GET /conversations/{id} (one extra count, not
 	// worth paying on every row of the list); omitted elsewhere rather than sent as a false 0.
 	MessageCount *int `json:"message_count,omitempty"`
@@ -158,7 +160,7 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	switch kind := r.URL.Query().Get("kind"); kind {
 	case "":
 		where += " AND (co.kind IS NULL OR co.kind <> 'spam')"
-	case "unclassified", "customer", "other", "spam":
+	case "unclassified", "customer", "internal", "other", "spam":
 		where += " AND co.kind=" + arg(kind)
 	default:
 		http.Error(w, "invalid kind filter", http.StatusBadRequest)
@@ -169,7 +171,11 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	switch ck := r.URL.Query().Get("conversation_kind"); ck {
 	case "":
 		where += " AND c.conversation_kind <> 'internal'"
-	case "internal", "customer_service", "external_other", "unclassified":
+	case "internal":
+		// the Internas view: conversations with verified staff AND with contacts an operator declared internal (team on a
+		// personal number, partners, suppliers). The second kind stays external_other, so the default list keeps showing it.
+		where += " AND (c.conversation_kind='internal' OR co.kind='internal')"
+	case "customer_service", "external_other", "unclassified":
 		where += " AND c.conversation_kind=" + arg(ck)
 	default:
 		http.Error(w, "invalid conversation_kind filter", http.StatusBadRequest)
@@ -207,7 +213,7 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
 		       `+displayNameSQL+`,coalesce(co.phone_e164,''),t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at,
 		       `+activity+`,lm.created_at,coalesce(lm.direction,''),coalesce(lm.message_type,''),left(coalesce(lm.body,''),160),w.since,coalesce(co.kind,''),
-		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,'')
+		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,''),coalesce(co.internal_role,'')
 		FROM conversations c LEFT JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN users iu ON iu.id=c.internal_user_id
 		LEFT JOIN LATERAL (SELECT tk.status,tk.priority FROM tickets tk
@@ -286,7 +292,7 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 	item, err := scanConversationItem(platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
 		       `+displayNameSQL+`,coalesce(co.phone_e164,''),t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at,coalesce(co.kind,''),
-		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,'')
+		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,''),coalesce(co.internal_role,'')
 		FROM conversations c LEFT JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN users iu ON iu.id=c.internal_user_id
 		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
@@ -385,7 +391,7 @@ func scanConversationItem(row rowScanner) (ConversationItem, error) {
 	var ticketStatus, ticketPriority *string
 	var created, updated time.Time
 	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated, &item.ContactKind,
-		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName)
+		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName, &item.ContactInternalRole)
 	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
 	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
 	return item, err
@@ -399,7 +405,7 @@ func scanConversationListItem(row rowScanner) (ConversationItem, time.Time, erro
 	var lastAt, waitingSince *time.Time
 	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated,
 		&activity, &lastAt, &item.LastMessageDirection, &item.LastMessageType, &item.LastMessagePreview, &waitingSince, &item.ContactKind,
-		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName)
+		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName, &item.ContactInternalRole)
 	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
 	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
 	if lastAt != nil {

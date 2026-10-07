@@ -18,11 +18,12 @@ const (
 	KindUnclassified = "unclassified"
 	KindCustomer     = "customer"
 	KindOther        = "other"
+	KindInternal     = "internal"
 	KindSpam         = "spam"
 )
 
 func validContactKind(k string) bool {
-	return k == KindUnclassified || k == KindCustomer || k == KindOther || k == KindSpam
+	return k == KindUnclassified || k == KindCustomer || k == KindOther || k == KindInternal || k == KindSpam
 }
 
 // escapeLike makes user text literal inside a LIKE/ILIKE pattern.
@@ -100,6 +101,10 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := *req.Kind
+	if next == KindInternal { // needs its role (team, partner, supplier): that arrives with the classification API
+		http.Error(w, "an internal contact needs a role: use the classification endpoint", http.StatusBadRequest)
+		return
+	}
 
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 	// Customer needs an account link: that arrives with the edit API (kind + companies in one call). Here the kind

@@ -46,3 +46,22 @@ Estado verificado em 2026-10-05 (HEAD `3bbb879`, schema `000072`):
 
 ## Ondas
 0 ADR → 1 contas de cliente → 2 classificação + vínculos → 3 API/UI de edição → 4 identidades internas → 5 resolvedor + `conversation_kind` → 6 evidência CRM → 7 ticket → 8 assunto (`topic_account_links`) → 9 diretório de pessoas e filtros → 10 métricas/documentação. Um commit local por onda verde; nada vai a produção sem autorização.
+
+## Adendo 2026-10-07 — contato declarado "Interno" (equipe, parceiro, fornecedor)
+
+**Pedido do dono:** a classificação de pessoa (Cliente, Outros) ganha **Interno**, para separar a comunicação interna — equipe e parceiros/fornecedores — de cliente.
+
+**O que já existia e continua valendo.** `conversation_kind = internal` é a conversa 1:1 com um **User verificado** (`internal_user_id`, sem Contact); a decisão 7 e a 9 não mudam. Quem escreve de um número pessoal sem identidade verificada é um **Contact**, e parceiro/fornecedor é externo de fato: nenhum dos dois é "interno" no sentido de segurança do ADR.
+
+**Decisão (opção C).**
+1. Novo valor **`contacts.kind = 'internal'`** (migration `000090`, aditiva e reversível) e coluna **`contacts.internal_role`** (`team | partner | supplier`), com CHECK `(kind = 'internal') = (internal_role IS NOT NULL)`. O papel existe exatamente enquanto o tipo é `internal`; sair de `internal` o apaga.
+2. **É declaração de um operador, não identidade.** Não concede permissão nem confiança (decisão 7 intacta). O único efeito é **desligar a automação de cliente** (decisão 13: bot, chamado automático, SLA, CSAT).
+3. **A conversa continua `external_other`.** `contact_kind_to_conversation_kind` e a regra de grupo já mapeiam todo tipo que não é `customer` nem `unclassified` para "outros"; a restrição `conversations_internal_kind_chk` (`internal` ⇔ `internal_user_id`) **não é relaxada**. Em consequência a conversa segue na fila, pode ser atribuída e aparece em "Todas".
+4. **O filtro "Internas" do Inbox** (`conversation_kind=internal`) passa a devolver a união: conversas com equipe verificada **e** conversas de contatos declarados internos. Cada conversa traz `contact_internal_role`; a lista mostra o selo "Equipe", "Parceiro" ou "Fornecedor" no lugar de "Outros". A visão "Internos" do diretório de pessoas (`view=internal`) traz Users (precisa de `membership.read`) **mais** esses contatos; sem a permissão volta só a parte de contatos (200, nunca a equipe).
+5. **Proteção contra marcar cliente como interno** (ele perderia bot, chamado e SLA em silêncio): só quem tem `contact.classify`; **somente `source = manual`** (regra, importação, CRM, fluxo e sugestão de IA são recusados com 400); o papel é obrigatório (422 sem ele, 400 em tipo que não é `internal`); a tela mostra o que a escolha desliga antes de salvar; auditoria `contact.classified/reclassified` com `internal_role_from/to`.
+6. `PUT /contacts/{id}/kind` (endpoint simples) **recusa** `internal` (400): só a API de classificação, que carrega o papel, o aceita.
+
+**Rejeitado:** (a) reaproveitar `conversation_kind = internal` para contatos — quebraria a invariante "interno = verificado", faria conversas de fornecedor sumirem de "Todas" e as tiraria da fila; (b) tipo novo de conversa — muita superfície para o mesmo efeito; (c) deixar IA/regra classificar como interno — falha silenciosa para cliente.
+
+**Adiado (não implementado):** vincular um contato "Equipe" a um User (converter em conversa interna verificada, o que exige migrar o histórico entre `contact_id` e `internal_user_id`) e a sugestão automática quando o telefone bater com um User; restringir por permissão quem vê conversas internas.
+

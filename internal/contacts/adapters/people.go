@@ -67,7 +67,9 @@ func parsePeopleView(v string) (peopleView, bool) {
 	case "spam":
 		return peopleView{contacts: true, contactKinds: []string{"spam"}}, true
 	case "internal":
-		return peopleView{internal: true}, true
+		// staff (Users, needs membership.read) AND the contacts an operator declared internal (team on a personal number,
+		// partners, suppliers). Without membership.read only the contacts part is returned.
+		return peopleView{contacts: true, internal: true, contactKinds: []string{"internal"}}, true
 	}
 	return peopleView{}, false
 }

@@ -468,7 +468,7 @@ func TestSQLKindRulesEqualTheGoRules(t *testing.T) {
 			}
 		}
 	}
-	for _, k := range []string{"unclassified", "customer", "other", "spam"} {
+	for _, k := range []string{"unclassified", "customer", "other", "internal", "spam"} {
 		if got := e.str(`SELECT contact_kind_to_conversation_kind($1)`, k); got != string(conversationsdomain.KindFromContactKind(k)) {
 			t.Errorf("contact kind %s: SQL=%s Go=%s", k, got, conversationsdomain.KindFromContactKind(k))
 		}
@@ -570,5 +570,58 @@ func TestInboxListShowsAliasFirstAndSearchesBothNames(t *testing.T) {
 	}
 	if items := list("naoexiste"); len(items) != 0 {
 		t.Fatalf("no match expected: %v", items)
+	}
+}
+
+// A contact an operator declared internal (team on a personal number, partner, supplier) is NOT a staff conversation: it
+// stays in the default list (somebody still has to answer a supplier) and also shows up in the Internas view, with its role.
+func TestInboxShowsDeclaredInternalContactsInBothViews(t *testing.T) {
+	e := newKindEnv(t)
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin")
+	conn := e.connection(a)
+	svc := e.service(svcOpts{resolver: true, kind: true})
+	customerSide := e.ingest(svc, conn, "+5592999990401", "Cliente Novo", "").Conversation.ID
+	supplier := e.ingest(svc, conn, "+5592999990402", "Fornecedor X", "").Conversation.ID
+	e.exec(`UPDATE contacts SET kind='internal', internal_role='supplier' WHERE tenant_id=$1 AND phone_e164='+5592999990402'`, a)
+	e.exec(`SELECT recompute_contact_conversation_kinds($1, (SELECT id FROM contacts WHERE tenant_id=$1 AND phone_e164='+5592999990402'))`, a) // what Classify does in the same transaction
+
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(e.app), tenancyadapters.NewPostgresTenantRepository(e.app))
+	h := inboxadapters.NewInboxAPIHandler(e.app)
+	mux := http.NewServeMux()
+	mw := tenancyadapters.AuthorizationMiddleware(e.app, authz)
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", mw(http.HandlerFunc(h.ListConversations)))
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", mw(http.HandlerFunc(h.GetConversation)))
+	list := func(query string) map[string]map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/"+a.String()+"/inbox/conversations"+query, nil)
+		req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: admin, Subject: admin.String()}))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s = %d %s", query, rec.Code, rec.Body.String())
+		}
+		var page struct{ Items []map[string]any }
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]map[string]any{}
+		for _, it := range page.Items {
+			out[it["id"].(string)] = it
+		}
+		return out
+	}
+	if items := list(""); len(items) != 2 || items[supplier.String()] == nil || items[customerSide.String()] == nil {
+		t.Fatalf("the default list keeps the supplier (somebody has to answer): %v", items)
+	}
+	items := list("?conversation_kind=internal")
+	it := items[supplier.String()]
+	if len(items) != 1 || it == nil || it["contact_kind"] != "internal" || it["contact_internal_role"] != "supplier" || it["conversation_kind"] != "external_other" {
+		t.Fatalf("Internas view = %v", items)
+	}
+	if items := list("?kind=internal"); len(items) != 1 || items[supplier.String()] == nil {
+		t.Fatalf("kind=internal filter = %v", items)
+	}
+	if items := list("?kind=customer"); items[supplier.String()] != nil {
+		t.Fatalf("a customer filter must not include the supplier: %v", items)
 	}
 }

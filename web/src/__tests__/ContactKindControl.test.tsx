@@ -31,7 +31,7 @@ function setup(kind: ContactKind, over: { name?: string } = {}) {
   return { onChanged }
 }
 
-const putBody = () => vi.mocked(axios.put).mock.calls.at(-1)?.[1] as { kind: string; accounts?: Record<string, unknown>[] } | undefined
+const putBody = () => vi.mocked(axios.put).mock.calls.at(-1)?.[1] as { kind: string; accounts?: Record<string, unknown>[]; internal_role?: string } | undefined
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -51,9 +51,9 @@ beforeEach(() => {
 })
 
 describe('ContactKindControl — Outros and unclassified', () => {
-  it('offers only Cliente and Outros; no agent kind exists (staff are Users)', () => {
+  it('offers Cliente, Interno and Outros; no agent kind exists (staff are Users)', () => {
     setup('unclassified')
-    expect(screen.getAllByRole('button').slice(0, 2).map((b) => b.textContent)).toEqual(['Cliente', 'Outros'])
+    expect(screen.getAllByRole('button').slice(0, 3).map((b) => b.textContent)).toEqual(['Cliente', 'Interno', 'Outros'])
     expect(screen.queryByRole('button', { name: 'Agente' })).not.toBeInTheDocument()
     expect(screen.getByText(/Ainda não classificado/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cliente' })).toHaveAttribute('aria-pressed', 'false')
@@ -320,5 +320,82 @@ describe('ContactKindControl — spam', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Não foi possível salvar')
     expect(onChanged).not.toHaveBeenCalled()
     expect(screen.queryByText('Marcar como spam?')).not.toBeInTheDocument()
+  })
+})
+
+
+describe('ContactKindControl — Interno (team, partner, supplier)', () => {
+  it('Interno asks for the role first, says what it switches off, and sends nothing until confirmed', async () => {
+    const user = userEvent.setup()
+    setup('unclassified')
+    await user.click(screen.getByRole('button', { name: 'Interno' }))
+    const panel = await screen.findByRole('group', { name: 'Contato interno' })
+    expect(within(panel).getByText(/não recebem bot, chamado automático, SLA/)).toBeInTheDocument()
+    expect(within(panel).getByText(/continuam na fila/)).toBeInTheDocument()
+    expect(axios.put).not.toHaveBeenCalled()
+    expect(within(panel).getByRole('button', { name: 'Marcar como interno' })).toBeDisabled()
+  })
+
+  it('saves kind and role together, through the classification API', async () => {
+    const user = userEvent.setup()
+    const { onChanged } = setup('other', { name: 'Fornecedor X' })
+    await user.click(screen.getByRole('button', { name: 'Interno' }))
+    await user.click(await screen.findByLabelText('Fornecedor'))
+    await user.click(screen.getByRole('button', { name: 'Marcar como interno' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith('internal'))
+    expect(vi.mocked(axios.put).mock.calls[0][0]).toMatch(new RegExp(`/contacts/${CONTACT}/classification$`))
+    expect(putBody()).toEqual({ kind: 'internal', internal_role: 'supplier' })
+  })
+
+  it('Cancelar closes the panel and changes nothing', async () => {
+    const user = userEvent.setup()
+    setup('customer')
+    await user.click(screen.getByRole('button', { name: 'Interno' }))
+    await user.click(await screen.findByRole('button', { name: 'Cancelar' }))
+    expect(screen.queryByRole('group', { name: 'Contato interno' })).not.toBeInTheDocument()
+    expect(axios.put).not.toHaveBeenCalled()
+  })
+
+  it('an internal contact shows its role and changing it is one request with the same kind', async () => {
+    const user = userEvent.setup()
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/classification')) return { data: { kind: 'internal', internal_role: 'partner', classification_source: 'manual', classified_at: null, accounts: [] } }
+      return { data: { items: [] } }
+    })
+    const { onChanged } = setup('internal')
+    const group = await screen.findByRole('group', { name: 'Tipo de contato interno' })
+    await waitFor(() => expect(within(group).getByRole('button', { name: 'Parceiro' })).toHaveAttribute('aria-pressed', 'true'))
+    expect(screen.getByRole('button', { name: 'Interno' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/continuam na fila e podem ser atribuídas/)).toBeInTheDocument()
+    await user.click(within(group).getByRole('button', { name: 'Equipe' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith('internal'))
+    expect(putBody()).toEqual({ kind: 'internal', internal_role: 'team' })
+    // clicking the role that is already set sends nothing
+    vi.mocked(axios.put).mockClear()
+    await user.click(within(group).getByRole('button', { name: 'Equipe' }))
+    expect(axios.put).not.toHaveBeenCalled()
+  })
+
+  it('leaving Interno for Outros sends no role', async () => {
+    const user = userEvent.setup()
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/classification')) return { data: { kind: 'internal', internal_role: 'team', classification_source: 'manual', classified_at: null, accounts: [] } }
+      return { data: { items: [] } }
+    })
+    const { onChanged } = setup('internal')
+    await user.click(screen.getByRole('button', { name: 'Outros' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith('other'))
+    expect(putBody()).toEqual({ kind: 'other' })
+  })
+
+  it('shows the server reason when the role is refused', async () => {
+    const user = userEvent.setup()
+    vi.mocked(axios.put).mockRejectedValue({ response: { status: 422 } })
+    const { onChanged } = setup('other')
+    await user.click(screen.getByRole('button', { name: 'Interno' }))
+    await user.click(await screen.findByLabelText('Equipe'))
+    await user.click(screen.getByRole('button', { name: 'Marcar como interno' }))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(onChanged).not.toHaveBeenCalled()
   })
 })

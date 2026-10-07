@@ -189,7 +189,7 @@ paths:
         Staff are listed only for callers with `membership.read`: `view=internal` is 403 without it and `view=all` then
         returns the contacts part only. Keyset-paginated across both types by activity.
       parameters:
-        - { name: view, in: query, required: false, schema: { type: string, enum: [all, customers, others, unclassified, spam, internal], default: all } }
+        - { name: view, in: query, required: false, schema: { type: string, enum: [all, customers, others, unclassified, spam, internal], default: all, description: '`internal` = staff Users (needs membership.read) plus contacts declared internal' } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 100 } }
         - { name: status, in: query, required: false, description: 'active|blocked|archived are contact states; active|inactive are membership states.', schema: { type: string, enum: [active, blocked, archived, inactive] } }
         - { name: limit, in: query, required: false, schema: { type: integer } }
@@ -280,7 +280,7 @@ paths:
     patch:
       operationId: setContactKind
       tags: [Contacts]
-      summary: Classify a contact as unclassified, customer, other or spam (staff are Users, never contacts; ADR-0018). `customer` needs a linked company (422 otherwise)
+      summary: Classify a contact as unclassified, customer, internal, other or spam (staff are Users, never contacts; ADR-0018). `customer` needs a linked company and `internal` needs an `internal_role` (422 otherwise)
       description: |
         Requires `conversation.claim` (every attending role): spam arrives unassigned and whoever spots it must be able
         to flag it and to undo a false positive. Idempotent: the same kind answers `200` without a new audit event.
@@ -667,10 +667,10 @@ paths:
         - name: kind
           in: query
           description: 'Contact classification (ADR-0014). Omitted = every classification except spam (kept, but out of the default view); `spam` lists the spam conversations.'
-          schema: { type: string, enum: [unclassified, customer, other, spam] }
+          schema: { type: string, enum: [unclassified, customer, internal, other, spam] }
         - name: conversation_kind
           in: query
-          description: 'ADR-0018. Omitted = every kind except `internal` (conversations with staff are kept but are not attendance); ask for `internal` explicitly.'
+          description: 'ADR-0018. Omitted = every kind except `internal` (conversations with staff are kept but are not attendance); ask for `internal` explicitly. `internal` also returns the conversations of contacts declared internal (team on a personal number, partners, suppliers), which otherwise stay in the default list.'
           schema: { type: string, enum: [internal, customer_service, external_other, unclassified] }
       responses:
         '200':
@@ -1176,7 +1176,8 @@ paths:
               required: [kind]
               additionalProperties: false
               properties:
-                kind: { type: string, enum: [unclassified, customer, other, spam] }
+                kind: { type: string, enum: [unclassified, customer, internal, other, spam] }
+                internal_role: { type: string, enum: [team, partner, supplier], description: 'Required when kind is internal (422 otherwise), refused for any other kind. Only a person can mark a contact internal: it switches customer automation off.' }
                 accounts: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/AccountRef' } }
                 end_links: { type: boolean, description: 'End every active link when the contact stops being a customer (default: kept).' }
       responses:
@@ -2955,7 +2956,8 @@ components:
       type: object
       required: [kind, accounts]
       properties:
-        kind: { type: string, enum: [unclassified, customer, other, spam] }
+        kind: { type: string, enum: [unclassified, customer, internal, other, spam] }
+        internal_role: { type: string, nullable: true, enum: [team, partner, supplier], description: 'Which kind of internal contact (ADR-0018 addendum); present exactly while kind is internal.' }
         classification_source: { type: string, nullable: true, description: 'manual | import | trusted_crm | ticket_flow | rule | ai_suggestion_confirmed | migration | backfill' }
         classified_at: { type: string, format: date-time, nullable: true }
         accounts: { type: array, items: { $ref: '#/components/schemas/ContactAccountLink' } }
@@ -3241,7 +3243,8 @@ components:
         phone_e164: { type: string, description: E.164 }
         email: { type: string }
         status: { type: string, enum: [active, blocked, archived] }
-        kind: { type: string, enum: [unclassified, customer, other, spam], description: 'Who the contact is for the business (ADR-0014); distinct from status' }
+        kind: { type: string, enum: [unclassified, customer, internal, other, spam], description: 'Who the contact is for the business (ADR-0014); distinct from status' }
+        internal_role: { type: string, nullable: true, enum: [team, partner, supplier], description: 'Which kind of internal contact (ADR-0018 addendum); present exactly while kind is internal.' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         last_interaction_at: { type: string, format: date-time, nullable: true, description: 'Newest message across the contact''s conversations; null when it has none (CONTACT.360-A)' }
@@ -3469,7 +3472,8 @@ components:
         contact_phone: { type: string, description: E.164 }
         ticket_status: { type: string }
         ticket_priority: { type: string }
-        contact_kind: { type: string, enum: [unclassified, customer, other, spam], description: 'Classification of the conversation''s contact (ADR-0014)' }
+        contact_kind: { type: string, enum: [unclassified, customer, internal, other, spam], description: 'Classification of the conversation''s contact (ADR-0014)' }
+        contact_internal_role: { type: string, enum: [team, partner, supplier], description: 'Present when contact_kind is internal' }
         last_message_at: { type: string, format: date-time, description: 'List only' }
         last_message_direction: { type: string, enum: [inbound, outbound], description: 'List only' }
         last_message_type: { type: string, description: 'List only' }

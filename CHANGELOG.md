@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added (ADR-0018 adendo — contato "Interno": equipe, parceiro, fornecedor)
+- Nova classificação de pessoa **Interno** (ao lado de Cliente e Outros) com subtipo **Equipe / Parceiro / Fornecedor**. É declaração de um operador, não identidade verificada: só desliga a automação de cliente (bot, chamado automático, SLA, CSAT); a conversa segue na fila e atribuível (`conversation_kind` continua `external_other`). Migration `000090` (aditiva, reversível; o `down` devolve esses contatos a "Outros").
+- Só decisão humana (`source=manual`, permissão `contact.classify`), papel obrigatório (422/400), auditoria com `internal_role_from/to`; a tela diz o que a escolha desliga antes de salvar. `PUT …/kind` recusa `internal`.
+- Inbox: o filtro **Internas** inclui esses contatos (e `kind=internal`); a lista mostra o selo do subtipo; a visão "Internos" do diretório de pessoas traz Users (com `membership.read`) mais contatos internos. Contrato `omnira-v1.yaml` atualizado. Detalhes e adiados (vincular a User, sugestão por telefone): ADR-0018, adendo de 2026-10-07.
+
 ### Added (MOBILE.READINESS — preparar o Core para clientes Android/iOS; nenhum app é construído)
 - `X-Request-ID` em toda resposta da API e **envelope de erro estável opt-in** (`Accept: application/vnd.omnira.v1+json` → `{"error":{"code","message","request_id"}}`); sem esse cabeçalho nada muda para o Web. Documentado em `omnira-v1.yaml`.
 - Eventos em tempo real (SSE/NATS) com `event_id` e `v` (aditivos; também o campo SSE `id:`); `contracts/asyncapi/omnira-v1.yaml` atualizado. O Web ignora o `id:` (teste do parser real).

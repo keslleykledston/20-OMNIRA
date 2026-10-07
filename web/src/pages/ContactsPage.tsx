@@ -22,7 +22,7 @@ import { ChannelChips } from '../components/contacts/ChannelChips'
 import { WhatsAppName } from '../components/contacts/WhatsAppName'
 import { formatInteraction } from '../lib/contactFormat'
 import {
-  CONTACT_KIND_LABEL,
+  contactKindLabel,
   contactErrorMessage,
   peopleAPI,
   type Contact,
@@ -46,6 +46,7 @@ const STATUS_LABELS: Record<Contact['status'], { label: string; tone: 'success' 
 const KIND_TONE: Record<ContactKind, 'success' | 'danger' | 'default'> = {
   unclassified: 'default',
   customer: 'success',
+  internal: 'default',
   other: 'default',
   spam: 'danger',
 }
@@ -306,7 +307,7 @@ function ContactRow({ c, onOpen }: { c: PersonContact; onOpen: () => void }) {
       <TableCell className="font-medium tabular-nums text-text-primary">{c.open_conversation_count}</TableCell>
       <TableCell>
         <StatusBadge status={KIND_TONE[c.kind]} size="sm">
-          {CONTACT_KIND_LABEL[c.kind]}
+          {contactKindLabel(c.kind, c.internal_role)}
         </StatusBadge>
       </TableCell>
       <TableCell>
@@ -369,7 +370,7 @@ function ContactCard({ c, onOpen }: { c: PersonContact; onOpen: () => void }) {
         </div>
         <div className="flex flex-col items-end gap-1">
           <StatusBadge status={KIND_TONE[c.kind]} size="sm">
-            {CONTACT_KIND_LABEL[c.kind]}
+            {contactKindLabel(c.kind, c.internal_role)}
           </StatusBadge>
           <StatusBadge status={STATUS_LABELS[c.status].tone} size="sm">
             {STATUS_LABELS[c.status].label}

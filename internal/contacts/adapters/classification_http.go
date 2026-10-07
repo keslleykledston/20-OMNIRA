@@ -149,6 +149,7 @@ func toLinkDTO(l Link) linkDTO {
 
 type classificationView struct {
 	Kind                 string    `json:"kind"`
+	InternalRole         *string   `json:"internal_role"`
 	ClassificationSource *string   `json:"classification_source"`
 	ClassifiedAt         *string   `json:"classified_at"`
 	Accounts             []linkDTO `json:"accounts"`
@@ -157,8 +158,8 @@ type classificationView struct {
 func (h *ClassificationHandler) view(ctx context.Context, tenantID, contactID uuid.UUID) (classificationView, error) {
 	var v classificationView
 	var at *time.Time
-	if err := platformdb.QuerierFromContext(ctx, h.pool).QueryRow(ctx, `SELECT kind, classification_source, classified_at FROM contacts WHERE tenant_id=$1 AND id=$2`, tenantID, contactID).
-		Scan(&v.Kind, &v.ClassificationSource, &at); err != nil {
+	if err := platformdb.QuerierFromContext(ctx, h.pool).QueryRow(ctx, `SELECT kind, internal_role, classification_source, classified_at FROM contacts WHERE tenant_id=$1 AND id=$2`, tenantID, contactID).
+		Scan(&v.Kind, &v.InternalRole, &v.ClassificationSource, &at); err != nil {
 		return v, err
 	}
 	if at != nil {
@@ -204,6 +205,8 @@ func failDomain(w http.ResponseWriter, err error) {
 		http.Error(w, "account not found or archived", http.StatusUnprocessableEntity)
 	case errors.Is(err, domain.ErrCustomerNeedsAccount):
 		http.Error(w, "a customer needs at least one linked company", http.StatusUnprocessableEntity)
+	case errors.Is(err, domain.ErrInternalNeedsRole):
+		http.Error(w, "an internal contact needs a role: team, partner or supplier", http.StatusUnprocessableEntity)
 	case errors.Is(err, domain.ErrLastLink):
 		http.Error(w, "this is the customer's last company: reclassify the contact in the same request", http.StatusConflict)
 	case errors.Is(err, domain.ErrInvalidInput):
@@ -426,6 +429,8 @@ func (h *ClassificationHandler) GetClassification(w http.ResponseWriter, r *http
 type putClassificationRequest struct {
 	Kind     string          `json:"kind"`
 	Accounts []accountRefDTO `json:"accounts"`
+	// InternalRole: team | partner | supplier, required when kind is internal and refused for any other kind.
+	InternalRole string `json:"internal_role"`
 	// EndLinks ends every active company link when the contact stops being a customer (default: links are kept).
 	EndLinks bool `json:"end_links"`
 }
@@ -443,7 +448,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 	}
 	kind := domain.ContactKind(req.Kind)
 	if !kind.Valid() {
-		http.Error(w, "kind must be unclassified, customer, other or spam", http.StatusBadRequest)
+		http.Error(w, "kind must be unclassified, customer, internal, other or spam", http.StatusBadRequest)
 		return
 	}
 	var change Change
@@ -452,7 +457,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 		if err != nil {
 			return err
 		}
-		change, err = h.repo.Classify(ctx, tc.TenantID, tc.ActorID, contactID, kind, domain.SourceManual, inputs, req.EndLinks)
+		change, err = h.repo.ClassifyWithRole(ctx, tc.TenantID, tc.ActorID, contactID, kind, domain.SourceManual, inputs, req.EndLinks, domain.InternalRole(req.InternalRole))
 		return err
 	})
 	if err != nil {
@@ -470,7 +475,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 		if change.PreviousKind == domain.KindUnclassified {
 			action = auditdomain.ActionContactClassified
 		}
-		h.record(r, tc, action, contactID, map[string]any{"kind_from": string(change.PreviousKind), "kind_to": string(kind), "classification_source": string(domain.SourceManual), "accounts": len(req.Accounts)})
+		h.record(r, tc, action, contactID, map[string]any{"kind_from": string(change.PreviousKind), "kind_to": string(kind), "internal_role_from": string(change.PreviousRole), "internal_role_to": string(change.Role), "classification_source": string(domain.SourceManual), "accounts": len(req.Accounts)})
 		h.recordKindRecompute(r, tc, contactID, change)
 	} else if len(req.Accounts) > 0 {
 		h.record(r, tc, auditdomain.ActionContactAccountLinked, contactID, map[string]any{"accounts": len(req.Accounts), "classification_source": string(domain.SourceManual)})

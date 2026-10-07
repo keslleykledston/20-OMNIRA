@@ -33,9 +33,11 @@ type ContactItem struct {
 	Status       string  `json:"status"`
 	// Kind is who the contact is for the business (ADR-0014): customer | other | spam.
 	// Distinct from Status, which is the record's lifecycle.
-	Kind      string    `json:"kind"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Kind string `json:"kind"`
+	// InternalRole is team | partner | supplier while Kind is internal (ADR-0018 addendum), else null.
+	InternalRole *string   `json:"internal_role"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 
 	// Derived, read-only facts (CONTACT.360-A). Computed from the contact's own
 	// conversations/messages inside the same tenant-scoped RLS session; nothing
@@ -72,7 +74,8 @@ const contactSelect = `SELECT c.id, c.display_name, c.alias, c.whatsapp_name, c.
 	   JOIN channel_connections cc ON cc.id = cv.channel_connection_id AND cc.tenant_id = cv.tenant_id
 	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id), '{}') AS channels,
 	(SELECT count(*) FROM conversations cv
-	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id AND cv.status = 'open') AS open_conversation_count
+	  WHERE cv.tenant_id = c.tenant_id AND cv.contact_id = c.id AND cv.status = 'open') AS open_conversation_count,
+	c.internal_role
 	FROM contacts c`
 
 // ListContacts returns one page of the TenantContext tenant's contacts, newest
@@ -217,7 +220,7 @@ type contactRowScanner interface {
 func scanContactItem(row contactRowScanner) (ContactItem, error) {
 	var item ContactItem
 	err := row.Scan(&item.ID, &item.DisplayName, &item.Alias, &item.WhatsAppName, &item.PhoneE164, &item.Email, &item.Status, &item.Kind, &item.CreatedAt, &item.UpdatedAt,
-		&item.LastInteractionAt, &item.Channels, &item.OpenConversationCount)
+		&item.LastInteractionAt, &item.Channels, &item.OpenConversationCount, &item.InternalRole)
 	if item.Channels == nil {
 		item.Channels = []string{}
 	}

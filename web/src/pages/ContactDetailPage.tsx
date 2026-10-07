@@ -22,7 +22,7 @@ import { ContactKindControl } from '../components/contacts/ContactKindControl'
 import { WhatsAppName } from '../components/contacts/WhatsAppName'
 import { conversationPreview, formatInteraction, messageCountLabel } from '../lib/contactFormat'
 import {
-  CONTACT_KIND_LABEL,
+  contactKindLabel,
   classificationAPI,
   contactErrorMessage,
   contactsAPI,
@@ -65,6 +65,7 @@ const ACTIVE_TICKET = new Set<ContactTicket['status']>(['open', 'in_progress', '
 const KIND_TONE: Record<ContactKind, 'success' | 'danger' | 'default'> = {
   unclassified: 'default',
   customer: 'success',
+  internal: 'default',
   other: 'default',
   spam: 'danger',
 }
@@ -159,7 +160,7 @@ function ContactOverview({ contact }: { contact: Contact }) {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-section-lg font-semibold text-text-primary truncate">{contact.display_name}</h1>
             <StatusBadge status={status.tone}>{status.label}</StatusBadge>
-            <StatusBadge status={KIND_TONE[contact.kind]}>{CONTACT_KIND_LABEL[contact.kind]}</StatusBadge>
+            <StatusBadge status={KIND_TONE[contact.kind]}>{contactKindLabel(contact.kind, contact.internal_role)}</StatusBadge>
           </div>
           <WhatsAppName principal={contact.display_name} whatsapp={contact.whatsapp_name} className="text-xs" />
           <p className="text-text-secondary tabular-nums">{formatPhone(contact.phone_e164)}</p>
@@ -238,6 +239,7 @@ function ContactOverview({ contact }: { contact: Contact }) {
             <ContactKindControl
               contactId={contact.id}
               kind={contact.kind}
+              internalRole={contact.internal_role}
               contactName={contact.display_name}
               onChanged={() => {
                 void queryClient.invalidateQueries({ queryKey: ['contact', tenantId, contact.id] })

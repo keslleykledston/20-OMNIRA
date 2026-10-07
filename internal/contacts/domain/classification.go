@@ -13,13 +13,28 @@ const (
 	KindUnclassified ContactKind = "unclassified"
 	KindCustomer     ContactKind = "customer"
 	KindOther        ContactKind = "other"
+	// KindInternal is an external person an operator declared internal: the team on a personal number, a partner or a
+	// supplier (ADR-0018 addendum). It is NOT the verified staff identity (a User): it only switches customer automation
+	// off, it never grants anything. It always carries an InternalRole.
+	KindInternal ContactKind = "internal"
 	// KindSpam is a safety state, orthogonal to the customer/other question.
 	KindSpam ContactKind = "spam"
 )
 
 func (k ContactKind) Valid() bool {
-	return k == KindUnclassified || k == KindCustomer || k == KindOther || k == KindSpam
+	return k == KindUnclassified || k == KindCustomer || k == KindOther || k == KindInternal || k == KindSpam
 }
+
+// InternalRole says which kind of internal contact it is. It exists exactly while the kind is internal.
+type InternalRole string
+
+const (
+	RoleTeam     InternalRole = "team"
+	RolePartner  InternalRole = "partner"
+	RoleSupplier InternalRole = "supplier"
+)
+
+func (r InternalRole) Valid() bool { return r == RoleTeam || r == RolePartner || r == RoleSupplier }
 
 // ClassificationSource says who decided. An AI suggestion only counts as a source after a human confirmed it.
 type ClassificationSource string
@@ -67,7 +82,9 @@ func (r RelationshipType) Valid() bool {
 var (
 	ErrContactNotFound = errors.New("contacts: contact not found")
 	ErrAccountMissing  = errors.New("contacts: account not found or archived")
-	ErrInvalidInput    = errors.New("contacts: invalid classification input")
+	// ErrInternalNeedsRole: an internal contact must say whether it is team, partner or supplier.
+	ErrInternalNeedsRole = errors.New("contacts: an internal contact needs a role (team, partner or supplier)")
+	ErrInvalidInput      = errors.New("contacts: invalid classification input")
 	// ErrCustomerNeedsAccount: customer needs >= 1 active account link (atomic with the transition).
 	ErrCustomerNeedsAccount = errors.New("contacts: a customer needs at least one active account link")
 	// ErrLastLink: removing the last active link of a customer without reclassifying in the same transaction.

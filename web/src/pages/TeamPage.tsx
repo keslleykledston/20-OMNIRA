@@ -272,6 +272,29 @@ export default function TeamPage() {
       }
     >
       <div className="space-y-6">
+      {/* Guia Visual de Fluxo */}
+      <Card className="bg-gradient-to-r from-accent-primary-soft to-accent-primary/5 border-accent-primary/20">
+        <div className="p-6">
+          <h3 className="font-semibold text-text-primary mb-4">Como adicionar e gerenciar agentes</h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {[
+              { num: 1, title: 'Convidar', desc: 'Envie convite por email' },
+              { num: 2, title: 'Aceitar', desc: 'Membro aceita + muda senha' },
+              { num: 3, title: 'Ativar Agente', desc: 'Admin ativa em "Agentes"' },
+              { num: 4, title: 'Adicionar Filas', desc: 'Associe às filas de atendimento' },
+            ].map((step, i) => (
+              <div key={i} className="flex flex-col items-center text-center">
+                <div className="w-10 h-10 rounded-full bg-accent-primary text-white flex items-center justify-center font-bold mb-2">
+                  {step.num}
+                </div>
+                <p className="font-medium text-sm text-text-primary">{step.title}</p>
+                <p className="text-xs text-text-secondary mt-1">{step.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+
       {notice && (
         <div
           role="status"
@@ -289,6 +312,37 @@ export default function TeamPage() {
 
       {tab === 'users' && (
         <>
+      {/* Informações sobre Funções */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="border-l-4 border-l-accent-primary">
+          <div className="p-4">
+            <h4 className="font-semibold text-text-primary flex items-center gap-2">
+              <Icon name="settings" size={18} className="text-accent-primary" />
+              Admin
+            </h4>
+            <p className="text-xs text-text-secondary mt-2">Acesso total: convida usuários, gerencia permissões, ativa agentes, adiciona filas.</p>
+          </div>
+        </Card>
+        <Card className="border-l-4 border-l-accent-secondary">
+          <div className="p-4">
+            <h4 className="font-semibold text-text-primary flex items-center gap-2">
+              <Icon name="supervisor" size={18} className="text-accent-secondary" />
+              Supervisor
+            </h4>
+            <p className="text-xs text-text-secondary mt-2">Gerencia agentes: ativa, desativa, adiciona/remove de filas, monitora presença.</p>
+          </div>
+        </Card>
+        <Card className="border-l-4 border-l-accent-tertiary">
+          <div className="p-4">
+            <h4 className="font-semibold text-text-primary flex items-center gap-2">
+              <Icon name="conversations" size={18} className="text-accent-tertiary" />
+              Agente
+            </h4>
+            <p className="text-xs text-text-secondary mt-2">Operacional: recebe atendimentos, responde conversas, gerencia sua presença.</p>
+          </div>
+        </Card>
+      </div>
+
       {!team.isLoading && !team.isError && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <SummaryCard icon="contacts" label="Usuários ativos" value={summary.total} />

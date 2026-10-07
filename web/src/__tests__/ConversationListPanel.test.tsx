@@ -226,3 +226,25 @@ describe('ConversationListPanel — alias first, WhatsApp name below', () => {
     expect(rows[2]).not.toHaveTextContent('WhatsApp:');
   });
 });
+
+
+describe('ConversationListPanel — declared internal contacts', () => {
+  it('says which kind of internal contact it is instead of "Outros", and keeps the wait signal (somebody must answer)', () => {
+    renderPanel([
+      conv('forn', { conversation_kind: 'external_other', contact_kind: 'internal', contact_internal_role: 'supplier', last_message_at: minutesAgo(40), last_message_direction: 'inbound', waiting_since: minutesAgo(40) }),
+      conv('eq', { conversation_kind: 'external_other', contact_kind: 'internal', contact_internal_role: 'team' }),
+      conv('outro', { conversation_kind: 'external_other', contact_kind: 'other' }),
+    ])
+    const rows = screen.getAllByRole('listitem')
+    expect(rows[0]).toHaveTextContent('Fornecedor')
+    expect(rows[0]).not.toHaveTextContent('Outros')
+    expect(rows[0]).toHaveTextContent('40 min')
+    expect(rows[1]).toHaveTextContent('Equipe')
+    expect(rows[2]).toHaveTextContent('Outros')
+  })
+
+  it('a verified staff conversation keeps its own "Interna" badge', () => {
+    renderPanel([conv('staff', { conversation_kind: 'internal', contact_kind: '' })])
+    expect(screen.getByRole('listitem')).toHaveTextContent('Interna')
+  })
+})

@@ -5,6 +5,7 @@ import { Icon } from '../primitives';
 import { WhatsAppName } from '../contacts/WhatsAppName';
 import { ChannelBadge } from './ChannelBadge';
 import type { ChannelLine } from '../../lib/channelLines';
+import { INTERNAL_ROLE_LABEL } from '../../lib/contacts';
 import { DEFAULT_WAIT_THRESHOLDS, InboxSegment, inboxTimeLabel, previewText, waitInfo, WaitThresholds, WaitTone } from '../../lib/inboxModel';
 
 interface ConversationListPanelProps {
@@ -251,6 +252,11 @@ export default function ConversationListPanel({
 // the normal case. "Não classificado" tells the attendant to say who this is before treating it as a customer.
 function kindBadge(conv: ConversationItem) {
   const base = 'flex-shrink-0 rounded-pill px-1.5 text-[10px] font-medium leading-4'
+  // a contact an operator declared internal (team on a personal number, partner, supplier): say which, instead of "Outros"
+  if (conv.contact_kind === 'internal' && conv.conversation_kind !== 'internal') {
+    const role = conv.contact_internal_role
+    return <span className={clsx(base, 'bg-accent-primary-soft text-accent-primary')}>{role ? INTERNAL_ROLE_LABEL[role] : 'Interno'}</span>
+  }
   switch (conv.conversation_kind) {
     case 'internal':
       return <span className={clsx(base, 'bg-surface-muted text-text-secondary')}>Interna</span>

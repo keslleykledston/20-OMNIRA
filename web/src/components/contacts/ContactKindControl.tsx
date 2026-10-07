@@ -3,6 +3,8 @@ import clsx from 'clsx'
 import { Button, ConfirmDialog } from '../primitives'
 import {
   CONTACT_KIND_LABEL,
+  INTERNAL_ROLES,
+  INTERNAL_ROLE_LABEL,
   RELATIONSHIP_LABEL,
   accountDirectoryAPI,
   classificationAPI,
@@ -13,18 +15,26 @@ import {
   type ContactKind,
   type CustomerAccount,
   type DirectoryCompany,
+  type InternalRole,
   type RelationshipType,
 } from '../../lib/contacts'
 
 interface Props {
   contactId: string
   kind: ContactKind
+  /** The role of an internal contact; when absent it is read from the classification endpoint. */
+  internalRole?: InternalRole | null
   contactName?: string
   /** Called after the API accepted the change, so the parent can refresh what depends on it. */
   onChanged: (kind: ContactKind) => void
 }
 
 type Option = { key: string; label: string; detail?: string; ref: AccountRef }
+
+// What "Interno" changes, said every time it is chosen: a customer marked internal by mistake would silently lose the bot,
+// the automatic ticket and the SLA, so the person deciding must know.
+const INTERNAL_NOTICE =
+  'Conversas internas não recebem bot, chamado automático, SLA nem pesquisa de satisfação, mas continuam na fila e podem ser atribuídas.'
 
 const FIELD =
   'w-full rounded-control border border-border-subtle bg-surface px-2 py-1.5 text-xs text-text-primary ' +
@@ -33,7 +43,7 @@ const FIELD =
 // Lets whoever attends say who this contact is (ADR-0018). "Cliente" needs at least one company: it is chosen from the
 // tenant's company directory (the server revalidates it) or from existing accounts, and the contact may belong to several.
 // Spam asks first; it is never deleted, it has its own Inbox, and "Não é spam" there undoes a false positive.
-export function ContactKindControl({ contactId, kind, contactName, onChanged }: Props) {
+export function ContactKindControl({ contactId, kind, internalRole, contactName, onChanged }: Props) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmSpam, setConfirmSpam] = useState(false)
@@ -41,21 +51,31 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
   // 'become': choose the company that makes this contact a customer; 'add': link one more company to a customer or to an "other" contact
   const [picking, setPicking] = useState<'become' | 'add' | null>(null)
   const [removing, setRemoving] = useState<ContactAccountLink | null>(null)
+  // "Interno" needs its role (team, partner, supplier): chosen in a small panel before anything is saved
+  const [pickingInternal, setPickingInternal] = useState(false)
+  const [role, setRole] = useState<InternalRole | null>(internalRole ?? null)
 
   const loadLinks = useCallback(async () => {
     try {
       const c = await classificationAPI.get(contactId)
       setLinks(c.accounts ?? [])
+      setRole(c.kind === 'internal' ? (c.internal_role ?? null) : null)
     } catch {
       setLinks([])
     }
   }, [contactId])
 
   useEffect(() => {
-    if (kind === 'customer' || kind === 'other') void loadLinks()
+    if (kind === 'customer' || kind === 'other' || kind === 'internal') void loadLinks()
     else setLinks([])
+    if (kind !== 'internal') setRole(null)
     setPicking(null)
+    setPickingInternal(false)
   }, [kind, contactId, loadLinks])
+
+  useEffect(() => {
+    if (internalRole) setRole(internalRole)
+  }, [internalRole])
 
   const run = async (action: () => Promise<unknown>, next?: ContactKind) => {
     if (pending) return
@@ -65,6 +85,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
       await action()
       setConfirmSpam(false)
       setPicking(null)
+      setPickingInternal(false)
       setRemoving(null)
       if (next) onChanged(next)
       else {
@@ -85,11 +106,21 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
       setPicking('become')
       return
     }
+    if (next === 'internal') {
+      setPickingInternal(true)
+      return
+    }
     void run(() => classificationAPI.put(contactId, { kind: next }), next)
   }
 
   const becomeCustomer = (ref: AccountRef) =>
     run(() => classificationAPI.put(contactId, { kind: 'customer', accounts: [ref] }), 'customer')
+  // Same kind, other role (or first time internal): one request, the server audits who decided and when.
+  const saveInternal = (next: InternalRole) =>
+    run(async () => {
+      await classificationAPI.put(contactId, { kind: 'internal', internal_role: next })
+      setRole(next)
+    }, 'internal')
   const addCompany = (ref: AccountRef) => run(() => classificationAPI.linkAccount(contactId, ref))
 
   const remove = (link: ContactAccountLink, reclassifyTo?: 'other' | 'unclassified') =>
@@ -117,7 +148,7 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
       ) : (
         <>
           <div className="flex gap-1.5">
-            {(['customer', 'other'] as const).map((k) => (
+            {(['customer', 'internal', 'other'] as const).map((k) => (
               <button
                 key={k}
                 type="button"
@@ -135,8 +166,30 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
           </div>
           {kind === 'unclassified' && (
             <p className="mt-2 text-xs text-text-tertiary">
-              Ainda não classificado: o atendimento é limitado até você dizer se é cliente ou outro contato.
+              Ainda não classificado: o atendimento é limitado até você dizer se é cliente, interno ou outro contato.
             </p>
+          )}
+          {kind === 'internal' && (
+            <div className="mt-3" role="group" aria-label="Tipo de contato interno">
+              <div className="flex gap-1.5">
+                {INTERNAL_ROLES.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    aria-pressed={role === r}
+                    disabled={pending}
+                    onClick={() => role !== r && void saveInternal(r)}
+                    className={clsx(
+                      'px-2.5 py-0.5 text-xs font-medium rounded-pill border transition-colors disabled:opacity-60',
+                      role === r ? 'border-accent-primary bg-accent-primary-soft text-accent-primary' : 'border-border-subtle text-text-secondary hover:bg-surface-muted',
+                    )}
+                  >
+                    {INTERNAL_ROLE_LABEL[r]}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-text-tertiary">{INTERNAL_NOTICE}</p>
+            </div>
           )}
           <button
             type="button"
@@ -149,13 +202,23 @@ export function ContactKindControl({ contactId, kind, contactName, onChanged }: 
         </>
       )}
 
-      {(kind === 'customer' || kind === 'other') && (
+      {(kind === 'customer' || kind === 'other' || kind === 'internal') && (
         <CompanyList
           links={links}
           pending={pending}
           onAdd={() => setPicking('add')}
           onPrimary={(l) => void run(() => classificationAPI.setPrimary(contactId, l.id))}
           onRemove={(l) => setRemoving(l)}
+        />
+      )}
+
+      {pickingInternal && (
+        <InternalPicker
+          pending={pending}
+          initial={role}
+          contactName={contactName}
+          onCancel={() => setPickingInternal(false)}
+          onConfirm={(r) => void saveInternal(r)}
         />
       )}
 
@@ -385,6 +448,46 @@ function CompanyPicker({
       <div className="flex gap-2 pt-1">
         <Button size="sm" disabled={!picked || pending} onClick={() => picked && onConfirm({ ...picked.ref, relationship_type: relationship, primary })}>
           Confirmar
+        </Button>
+        <Button size="sm" variant="tertiary" disabled={pending} onClick={onCancel}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+
+// Chooses WHAT KIND of internal contact this is, and says what the choice switches off, before anything is saved.
+function InternalPicker({
+  pending,
+  initial,
+  contactName,
+  onCancel,
+  onConfirm,
+}: {
+  pending: boolean
+  initial: InternalRole | null
+  contactName?: string
+  onCancel: () => void
+  onConfirm: (role: InternalRole) => void
+}) {
+  const [chosen, setChosen] = useState<InternalRole | null>(initial)
+  return (
+    <div role="group" aria-label="Contato interno" className="mt-3 rounded-control border border-border-subtle bg-surface-muted p-3 space-y-2">
+      <p className="text-xs font-semibold text-text-primary">{contactName ? `${contactName} é…` : 'Este contato é…'}</p>
+      <div className="space-y-1">
+        {INTERNAL_ROLES.map((r) => (
+          <label key={r} className="flex items-center gap-2 text-xs text-text-primary">
+            <input type="radio" name="internal-role" checked={chosen === r} onChange={() => setChosen(r)} />
+            {INTERNAL_ROLE_LABEL[r]}
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-text-secondary">{INTERNAL_NOTICE}</p>
+      <div className="flex gap-2 pt-1">
+        <Button size="sm" disabled={!chosen || pending} onClick={() => chosen && onConfirm(chosen)}>
+          Marcar como interno
         </Button>
         <Button size="sm" variant="tertiary" disabled={pending} onClick={onCancel}>
           Cancelar

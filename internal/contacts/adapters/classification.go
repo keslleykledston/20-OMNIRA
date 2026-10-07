@@ -47,6 +47,9 @@ type Link struct {
 type Change struct {
 	PreviousKind domain.ContactKind
 	Kind         domain.ContactKind
+	// PreviousRole / Role: the internal subtype (empty unless the kind is internal).
+	PreviousRole domain.InternalRole
+	Role         domain.InternalRole
 	Changed      bool
 	// ConversationsRecomputed / GroupsRecomputed: how many conversation_kind values the reclassification changed or
 	// re-derived (ADR-0018), so the caller can audit it.
@@ -65,12 +68,21 @@ func (r *ClassificationRepository) recomputeKinds(ctx context.Context, tenantID,
 
 // lockContact reads the kind under FOR UPDATE so concurrent reclassifications serialise.
 func (r *ClassificationRepository) lockContact(ctx context.Context, tenantID, contactID uuid.UUID) (domain.ContactKind, error) {
+	k, _, err := r.lockContactFull(ctx, tenantID, contactID)
+	return k, err
+}
+
+func (r *ClassificationRepository) lockContactFull(ctx context.Context, tenantID, contactID uuid.UUID) (domain.ContactKind, domain.InternalRole, error) {
 	var k string
-	err := r.q(ctx).QueryRow(ctx, `SELECT kind FROM contacts WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, contactID).Scan(&k)
+	var role *string
+	err := r.q(ctx).QueryRow(ctx, `SELECT kind, internal_role FROM contacts WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, contactID).Scan(&k, &role)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", domain.ErrContactNotFound
+		return "", "", domain.ErrContactNotFound
 	}
-	return domain.ContactKind(k), err
+	if role == nil {
+		return domain.ContactKind(k), "", err
+	}
+	return domain.ContactKind(k), domain.InternalRole(*role), err
 }
 
 func (r *ClassificationRepository) activeLinks(ctx context.Context, tenantID, contactID uuid.UUID) (int, error) {
@@ -83,10 +95,28 @@ func (r *ClassificationRepository) activeLinks(ctx context.Context, tenantID, co
 // one account link in the same call or already hold an active one: the transition and the link are one transaction.
 // Reclassifying away from customer keeps the links (history is never erased) unless endLinks is true.
 func (r *ClassificationRepository) Classify(ctx context.Context, tenantID, actorID, contactID uuid.UUID, kind domain.ContactKind, source domain.ClassificationSource, links []domain.AccountLinkInput, endLinks bool) (Change, error) {
+	return r.ClassifyWithRole(ctx, tenantID, actorID, contactID, kind, source, links, endLinks, "")
+}
+
+// ClassifyWithRole is Classify for every kind, including internal, which needs its role (team, partner or supplier) and
+// can only be decided by a person (source manual): automation, imports and AI suggestions never mark anyone internal,
+// because an internal contact gets no bot, ticket or SLA and a customer mislabeled that way would be silently ignored.
+// The role is meaningless for any other kind and is refused there.
+func (r *ClassificationRepository) ClassifyWithRole(ctx context.Context, tenantID, actorID, contactID uuid.UUID, kind domain.ContactKind, source domain.ClassificationSource, links []domain.AccountLinkInput, endLinks bool, role domain.InternalRole) (Change, error) {
 	if !kind.Valid() || !source.Valid() {
 		return Change{}, domain.ErrInvalidInput
 	}
-	prev, err := r.lockContact(ctx, tenantID, contactID)
+	if kind == domain.KindInternal {
+		if !role.Valid() {
+			return Change{}, domain.ErrInternalNeedsRole
+		}
+		if source != domain.SourceManual {
+			return Change{}, domain.ErrInvalidInput
+		}
+	} else if role != "" {
+		return Change{}, domain.ErrInvalidInput
+	}
+	prev, prevRole, err := r.lockContactFull(ctx, tenantID, contactID)
 	if err != nil {
 		return Change{}, err
 	}
@@ -109,14 +139,22 @@ func (r *ClassificationRepository) Classify(ctx context.Context, tenantID, actor
 			return Change{}, err
 		}
 	}
-	ch := Change{PreviousKind: prev, Kind: kind, Changed: prev != kind}
+	ch := Change{PreviousKind: prev, Kind: kind, PreviousRole: prevRole, Role: role, Changed: prev != kind || prevRole != role}
 	if ch.Changed {
-		if _, err := r.q(ctx).Exec(ctx, `UPDATE contacts SET kind=$3, classification_source=$4, classified_at=now(), classified_by_user_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`,
-			tenantID, contactID, string(kind), string(source), nullableUUID(actorID)); err != nil {
+		var roleArg *string
+		if role != "" {
+			v := string(role)
+			roleArg = &v
+		}
+		if _, err := r.q(ctx).Exec(ctx, `UPDATE contacts SET kind=$3, internal_role=$6, classification_source=$4, classified_at=now(), classified_by_user_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`,
+			tenantID, contactID, string(kind), string(source), nullableUUID(actorID), roleArg); err != nil {
 			return Change{}, mapPG(err)
 		}
-		if err := r.recomputeKinds(ctx, tenantID, contactID, &ch); err != nil {
-			return Change{}, err
+		// the role alone never changes a conversation's kind: only a kind change needs the derived kinds re-derived
+		if prev != kind {
+			if err := r.recomputeKinds(ctx, tenantID, contactID, &ch); err != nil {
+				return Change{}, err
+			}
 		}
 	}
 	return ch, nil
@@ -257,7 +295,7 @@ func (r *ClassificationRepository) EndLink(ctx context.Context, tenantID, actorI
 			return Change{}, err
 		}
 		if n == 0 {
-			if reclassifyTo == nil || kindAfter == domain.KindCustomer || !kindAfter.Valid() {
+			if reclassifyTo == nil || kindAfter == domain.KindCustomer || kindAfter == domain.KindInternal || !kindAfter.Valid() {
 				return Change{}, domain.ErrLastLink
 			}
 			if _, err := r.q(ctx).Exec(ctx, `UPDATE contacts SET kind=$3, classification_source=$4, classified_at=now(), classified_by_user_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`,

@@ -357,6 +357,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
           <ContactKindControl
             contactId={conversation.contact_id}
             kind={conversation.contact_kind || 'unclassified'}
+            internalRole={conversation.contact_internal_role}
             contactName={conversation.contact_name}
             onChanged={refreshAll}
           />

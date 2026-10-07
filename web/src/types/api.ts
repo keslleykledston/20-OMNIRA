@@ -35,7 +35,9 @@ export interface ConversationItem {
   ticket_status?: string;
   ticket_priority?: string;
   // Classification of the conversation's contact (ADR-0014).
-  contact_kind?: 'unclassified' | 'customer' | 'other' | 'spam' | '';
+  contact_kind?: 'unclassified' | 'customer' | 'internal' | 'other' | 'spam' | '';
+  // team | partner | supplier, present when contact_kind is internal (ADR-0018 addendum).
+  contact_internal_role?: 'team' | 'partner' | 'supplier';
   // ADR-0018: what the conversation is, derived from who takes part. There is no "mixed" kind.
   conversation_kind?: 'internal' | 'customer_service' | 'external_other' | 'unclassified';
   has_unclassified_participants?: boolean;

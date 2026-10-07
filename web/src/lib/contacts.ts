@@ -6,14 +6,33 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 // deliberately omits tenant_id: the session already establishes the tenant.
 // Who the contact is for the business (ADR-0014); distinct from `status`, the record lifecycle.
 // ADR-0018: K3G staff are Users, never contacts — there is no "agent" kind. A new contact is "unclassified".
-export type ContactKind = 'unclassified' | 'customer' | 'other' | 'spam';
+export type ContactKind = 'unclassified' | 'customer' | 'internal' | 'other' | 'spam';
 
 export const CONTACT_KIND_LABEL: Record<ContactKind, string> = {
   unclassified: 'Não classificado',
   customer: 'Cliente',
+  internal: 'Interno',
   other: 'Outros',
   spam: 'Spam',
 };
+
+// "Interno" is an external person an operator declared internal (ADR-0018 addendum): the team on a personal number, a partner
+// or a supplier. It is NOT a staff user and grants nothing: it only switches customer automation (bot, ticket, SLA) off.
+export type InternalRole = 'team' | 'partner' | 'supplier';
+
+export const INTERNAL_ROLE_LABEL: Record<InternalRole, string> = {
+  team: 'Equipe',
+  partner: 'Parceiro',
+  supplier: 'Fornecedor',
+};
+
+export const INTERNAL_ROLES: InternalRole[] = ['team', 'partner', 'supplier'];
+
+/** "Interno · Fornecedor" for an internal contact, the plain label for every other kind. */
+export function contactKindLabel(kind: ContactKind, role?: InternalRole | null): string {
+  if (kind === 'internal' && role) return `${CONTACT_KIND_LABEL.internal} · ${INTERNAL_ROLE_LABEL[role]}`;
+  return CONTACT_KIND_LABEL[kind];
+}
 
 export type RelationshipType =
   | 'employee'
@@ -51,6 +70,7 @@ export interface ContactAccountLink {
 
 export interface ContactClassification {
   kind: ContactKind;
+  internal_role?: InternalRole | null;
   classification_source: string | null;
   classified_at: string | null;
   accounts: ContactAccountLink[];
@@ -112,6 +132,8 @@ export interface Contact {
   email: string;
   status: 'active' | 'blocked' | 'archived';
   kind: ContactKind;
+  // Present while kind is internal (team | partner | supplier), else null.
+  internal_role?: InternalRole | null;
   created_at: string;
   updated_at: string;
   // Derived read-only facts (CONTACT.360-A), always present in API responses.
@@ -308,8 +330,9 @@ export const classificationAPI = {
     call<{ items: CompanySuggestion[] }>(() => axios.get(`${contactsBase()}/${id}/company-suggestions`, { headers: authHeaders() })),
   get: (id: string) =>
     call<ContactClassification>(() => axios.get(`${contactsBase()}/${id}/classification`, { headers: authHeaders() })),
-  // Kind and companies change in ONE transaction on the server. `customer` needs at least one company.
-  put: (id: string, body: { kind: ContactKind; accounts?: AccountRef[]; end_links?: boolean }) =>
+  // Kind and companies change in ONE transaction on the server. `customer` needs at least one company and `internal` needs
+  // its `internal_role`.
+  put: (id: string, body: { kind: ContactKind; accounts?: AccountRef[]; end_links?: boolean; internal_role?: InternalRole }) =>
     call<ContactClassification>(() => axios.put(`${contactsBase()}/${id}/classification`, body, { headers: authHeaders() })),
   linkAccount: (id: string, ref: AccountRef) =>
     call<ContactAccountLink>(() => axios.post(`${contactsBase()}/${id}/accounts`, ref, { headers: authHeaders() })),

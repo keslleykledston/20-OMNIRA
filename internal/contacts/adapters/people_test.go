@@ -162,8 +162,20 @@ func TestPeopleDirectoryKeepsContactsAndStaffApartAndStaffBehindMembershipRead(t
 	if code, rows, _ := peopleCall(t, e, a, agent, ""); code != 200 || !sameSet(names(rows), "Cliente Novo", "Cliente Ouro", "Fornecedor", "Bloqueado") {
 		t.Errorf("agent all = %d %v: a role without membership.read must not learn who the staff is", code, names(rows))
 	}
-	if code, _, _ := peopleCall(t, e, a, agent, "view=internal"); code != http.StatusForbidden {
-		t.Errorf("agent internal = %d, want 403", code)
+	// the Internos view = staff (membership.read) + contacts an operator declared internal; without membership.read only
+	// the second part comes back, so the staff stays hidden and nothing is refused
+	if code, rows, _ := peopleCall(t, e, a, agent, "view=internal"); code != 200 || len(rows) != 0 {
+		t.Errorf("agent internal (no internal contact yet) = %d %v, want an empty page", code, names(rows))
+	}
+	e.exec2(`UPDATE contacts SET kind='internal', internal_role='supplier' WHERE tenant_id=$1 AND display_name='Fornecedor'`, a)
+	if code, rows, _ := peopleCall(t, e, a, agent, "view=internal"); code != 200 || !sameSet(names(rows), "Fornecedor") {
+		t.Errorf("agent internal = %d %v: only the declared-internal contact, never staff", code, names(rows))
+	}
+	if code, rows, _ := peopleCall(t, e, a, admin, "view=internal"); code != 200 || !containsAll(names(rows), "Ana Admin", "Fornecedor") {
+		t.Errorf("admin internal = %d %v: staff and the declared-internal contact", code, names(rows))
+	}
+	if _, rows, _ := peopleCall(t, e, a, admin, "view=others"); containsAll(names(rows), "Fornecedor") {
+		t.Errorf("a declared-internal contact is not in Outros: %v", names(rows))
 	}
 	if _, rows, _ := peopleCall(t, e, a, agent, "q=ana"); len(rows) != 0 {
 		t.Errorf("a staff name must not leak through search: %v", names(rows))
@@ -257,4 +269,17 @@ func TestPeopleSearchFindsBothNamesAndTheAliasIsThePrincipalName(t *testing.T) {
 			t.Fatalf("principal=alias, whatsapp beside it: %v", rows[0])
 		}
 	}
+}
+
+func containsAll(have []string, want ...string) bool {
+	set := map[string]bool{}
+	for _, h := range have {
+		set[h] = true
+	}
+	for _, w := range want {
+		if !set[w] {
+			return false
+		}
+	}
+	return true
 }
