@@ -223,7 +223,7 @@ Dependências entre fases: MOBILE.0 → 1 → 2 → (3, 4, 5) → (6, 7, 8) → 
 | MOBILE.16 | Lançamento Google Play / App Store | 15 | *staged rollout* | publicado |
 
 ## Revisão independente (Codex, 2026-10-07)
-Executada sem o sandbox do Codex (indisponível no host: AppArmor restringe user namespaces) e sobre uma cópia da branch, sem escrita. 0 BLOCKER, 4 HIGH, 4 MEDIUM, 2 LOW.
+Executada sem o sandbox do Codex (indisponível no host: AppArmor restringe user namespaces; depois corrigido com perfil do AppArmor) e sobre uma cópia da branch, sem escrita. Primeira passada: 0 BLOCKER, 4 HIGH, 4 MEDIUM, 2 LOW.
 
 | # | Sev. | Achado | Classificação | Destino |
 |---|---|---|---|---|
@@ -239,3 +239,5 @@ Executada sem o sandbox do Codex (indisponível no host: AppArmor restringe user
 | 10 | LOW | OpenAPI não referencia `ErrorEnvelope` nas respostas | VÁLIDO | CORRIGIDO (`Text400/401/403/404/502`) |
 
 Do primeiro job do Codex (somente material colado) já tinham sido tratados `Vary: Accept` e respostas 1xx (commit `4356a12`).
+
+**Segunda passada (read-only, após as correções): 0 BLOCKER, 3 HIGH, 6 MEDIUM, todos VÁLIDOS e corrigidos nesta branch:** ADR-0022 (expiração/limite absoluto do refresh, serialização refresh×revogação por trava de família, escopo da revogação administrativa, comparação de `state`, identidade do aparelho), `Accept` em várias linhas, `Hijack` com falha, media type do OpenAPI (`application/json`) e nota de que o envelope vale para todo erro `text/plain`.

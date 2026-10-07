@@ -58,19 +58,35 @@ Incorporada após a revisão do Codex; o MOBILE.1 não é aceito sem estes ponto
 - Retenção: sessões/famílias revogadas ou expiradas guardadas 30 dias para auditoria e depois removidas; nunca guardar o valor em claro.
 
 **Rotação do *refresh* (atômica)**
-- Uma transação: `SELECT ... FROM auth_refresh_tokens WHERE token_hash=$1 FOR UPDATE`; se `used_at IS NOT NULL` **ou** a família está revogada ⇒ revoga a família inteira (todas as
-  sessões do aparelho) e responde 401; senão marca `used_at=now()`, emite o sucessor (mesma `family_id`, `parent_id`) e confirma. Duas requisições concorrentes com o mesmo
-  *refresh*: a segunda espera o lock, vê `used_at` e dispara a revogação (comportamento seguro, o app refaz o login). Há teste de corrida (N goroutines, exatamente 1 sucesso).
-- Janela de tolerância para rede instável **não** existe na v1 (simplicidade e segurança); o app guarda o sucessor antes de descartar o anterior.
+- Uma transação que **primeiro trava a família** (`SELECT ... FROM auth_families WHERE family_id=$f FOR UPDATE`, com `family_id` obtido pelo hash do *refresh*) e depois o token. A revogação (logout, usuário, administrador)
+  trava a **mesma linha de família** antes de gravar `revoked_at`; assim refresh e revogação se serializam e nenhum sucessor nasce ativo depois de uma revogação confirmada.
+- Rejeita (401) se: `revoked_at` da família; `used_at` do token já preenchido (**reuso ⇒ revoga a família inteira**); `expires_at` do token vencido (30 dias deslizante); ou `now() > absolute_expires_at` da
+  família (90 dias, fixo na criação e **nunca** estendido pela rotação). Só então marca `used_at`, emite o sucessor (mesma família, `parent_id`) e renova o `expires_at` deslizante limitado ao absoluto.
+- Duas requisições concorrentes com o mesmo *refresh*: a segunda espera o lock, vê `used_at` e dispara a revogação (comportamento seguro; o app refaz o login). Testes obrigatórios: corrida de N goroutines
+  (exatamente 1 sucesso), refresh × revogação concorrentes (nenhum sucessor ativo após a revogação), token expirado, limite absoluto e reuso.
+- Não há janela de tolerância na v1; o app persiste o sucessor antes de descartar o anterior.
+
+**Identidade do aparelho**
+- "Aparelho" = **instalação do app**, não hardware: não há prova criptográfica de hardware na v1. O `device_id` é emitido pelo servidor e guardado no Keychain/Keystore. Todo login cria um aparelho novo.
+  O app pode enviar o `device_id` anterior (informativo); o servidor só revoga a família antiga se esse `device_id` pertencer ao **mesmo usuário já autenticado** (verificado depois da validação OIDC), nunca por confiança no valor.
+  Aparelhos antigos sem uso expiram sozinhos (90 dias) e o usuário os vê/revoga em `GET/DELETE /me/devices`.
+- Atestação (Play Integrity / App Attest) é melhoria futura (MOBILE.12) e não é requisito da v1.
+
+**`state` e retorno do navegador**
+- O app guarda `state` e `nonce` antes de abrir o navegador do sistema e **só envia o `code` ao servidor se o `state` retornado for igual (comparação em tempo constante)**; senão descarta. Teste negativo
+  obrigatório no app (state trocado, ausente, repetido) e no servidor (nonce divergente ⇒ 401).
 
 **Revogação e SSE**
-- Logout, revogação pelo usuário (`DELETE /me/devices/{id}`) ou por `membership.manage` ⇒ `revoked_at` no aparelho, na família e nas sessões, imediatamente.
+- Logout ou revogação pelo próprio usuário (`DELETE /me/devices/{id}`) ⇒ `revoked_at` no aparelho, na família e nas sessões, imediatamente.
+- **Escopo da revogação administrativa:** o aparelho é do usuário e vale para todos os seus tenants, e `membership.manage` é uma permissão **de um tenant**. Portanto um administrador só pode revogar o aparelho de outro usuário
+  quando tem `membership.manage` em **todos** os tenants em que esse usuário é membro ativo; caso contrário, a ferramenta dele é remover/suspender a *membership* no seu tenant (já efetiva na requisição seguinte, ADR-0010).
+  Revogação global de qualquer aparelho é só do próprio usuário ou de um papel de plataforma (futuro). Cada revogação administrativa gera auditoria.
 - O SSE guarda o identificador da sessão que o abriu e, no `recheck` (30 s), chama `ResolveSession`; sessão revogada/expirada fecha o fluxo (resolve R-3 para Web e mobile).
 
 ## Decisões do dono (aprovadas em 2026-10-07, valores propostos)
 1. Opção A confirmada (B fica só como atalho de desenvolvimento).
 2. TTLs: acesso 15 min; *refresh* 30 dias deslizante, 90 absoluto.
-3. Revogar aparelho de outro usuário: permissão `membership.manage`.
+3. Revogar aparelho de outro usuário: permissão `membership.manage`, restrita a quem a tem em todos os tenants do alvo (refinamento de segurança da revisão independente; o caso comum de um único tenant não muda).
 4. Um aparelho pode ter vários tenants: sim, o mesmo usuário; a troca é no cliente e revalidada no servidor.
 5. Criar o cliente `omnira-mobile` (público, sem segredo, Code+PKCE) no Keycloak de produção: autorizado, executado no MOBILE.1 (mudança de infraestrutura de identidade).
 

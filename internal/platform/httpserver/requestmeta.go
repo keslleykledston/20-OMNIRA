@@ -110,7 +110,7 @@ func RequestMeta(next http.Handler) http.Handler {
 		w.Header().Set(requestIDHeader, id)
 		w.Header().Add("Vary", "Accept") // error bodies differ by Accept (text/plain vs the v1 envelope): shared caches must key on it
 		r = r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
-		if !acceptsV1(r.Header.Get("Accept")) {
+		if !acceptsV1(strings.Join(r.Header.Values("Accept"), ",")) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -141,8 +141,11 @@ func (w *envelopeWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if !ok {
 		return nil, nil, errors.New("httpserver: the underlying ResponseWriter does not support hijacking")
 	}
-	w.sent = true
-	return h.Hijack()
+	conn, rw, err := h.Hijack()
+	if err == nil {
+		w.sent = true // only a successful hijack takes the response away from finish()
+	}
+	return conn, rw, err
 }
 
 func (w *envelopeWriter) Flush() {

@@ -249,3 +249,29 @@ func TestOptInNeedsTheExactMediaTypeWithANonZeroQ(t *testing.T) {
 		}
 	}
 }
+
+func TestOptInIsFoundInAnyAcceptHeaderLine(t *testing.T) {
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Add("Accept", "application/json")
+	req.Header.Add("Accept", MediaTypeV1)
+	rr := httptest.NewRecorder()
+	RequestMeta(errHandler).ServeHTTP(rr, req)
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil || env.Error.Code != "NOT_FOUND" {
+		t.Fatalf("second Accept line ignored: %d %q (%v)", rr.Code, rr.Body.String(), err)
+	}
+}
+
+func TestFailedHijackStillAnswersTheCapturedError(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+		if hj, ok := w.(http.Hijacker); ok {
+			_, _, _ = hj.Hijack() // the recorder cannot hijack: this fails
+		}
+	})
+	rr := serve(t, h, MediaTypeV1, "")
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil || rr.Code != 403 || env.Error.Code != "FORBIDDEN" {
+		t.Fatalf("captured error lost after a failed hijack: %d %q (%v)", rr.Code, rr.Body.String(), err)
+	}
+}
