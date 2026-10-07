@@ -20,13 +20,18 @@ type SendHandler struct {
 	att      *application.Attachments // nil: outbound media is off
 	attStore ports.AttachmentStore
 	limiter  *uploadLimiter
+	// slots bounds the uploads handled at once: each holds up to 16 MiB in memory (plus the stripped copy), so the budget is
+	// maxConcurrentUploads * ~40 MiB however many operators click at the same time.
+	slots chan struct{}
 }
+
+const maxConcurrentUploads = 4
 
 func NewSendHandler(svc *application.Sender) *SendHandler { return &SendHandler{svc: svc} }
 
 // WithAttachments turns on outbound media (ADR-0024): the upload/remove endpoints and `attachment_id` on send.
 func (h *SendHandler) WithAttachments(att *application.Attachments, store ports.AttachmentStore) *SendHandler {
-	h.att, h.attStore, h.limiter = att, store, newUploadLimiter(20, time.Minute)
+	h.att, h.attStore, h.limiter, h.slots = att, store, newUploadLimiter(20, time.Minute), make(chan struct{}, maxConcurrentUploads)
 	return h
 }
 

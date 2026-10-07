@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,7 +74,7 @@ func newAttEnv(t *testing.T) *attEnv {
 	mux := http.NewServeMux()
 	base := "/api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}"
 	mux.Handle("POST "+base+"/messages", mw(http.HandlerFunc(h.Send)))
-	mux.Handle("POST "+base+"/attachments", mw(http.HandlerFunc(h.Upload)))
+	mux.Handle("POST "+base+"/attachments", h.BufferUpload(mw(http.HandlerFunc(h.Upload))))
 	mux.Handle("DELETE "+base+"/attachments/{attachment_id}", mw(http.HandlerFunc(h.RemoveAttachment)))
 	return &attEnv{env: e, mux: mux, scanner: scanner, dir: dir, files: files}
 }
@@ -140,6 +142,15 @@ func (a *attEnv) del(user, tenant, conv uuid.UUID, id string) int {
 	rec := httptest.NewRecorder()
 	a.mux.ServeHTTP(rec, req)
 	return rec.Code
+}
+
+// ageUpload moves an upload's creation back in time. The guard trigger forbids it for every session (even the owner), so a test that
+// needs old rows lifts it for the statement only.
+func (a *attEnv) ageUpload(id string, by string) {
+	a.t.Helper()
+	a.exec(`ALTER TABLE message_outbound_media DISABLE TRIGGER message_outbound_media_guard`)
+	a.exec(`UPDATE message_outbound_media SET created_at = now() - interval '`+by+`' WHERE id=$1`, id)
+	a.exec(`ALTER TABLE message_outbound_media ENABLE TRIGGER message_outbound_media_guard`)
 }
 
 func (a *attEnv) fileOnDisk(tenant uuid.UUID, id string) ([]byte, error) {
@@ -392,7 +403,8 @@ func TestRetentionPurgesSentFilesButKeepsTheRecord(t *testing.T) {
 	if d, p, err := sweeper.Once(context.Background()); err != nil || d != 0 || p != 0 {
 		t.Fatalf("a fresh sent file must stay: deleted=%d purged=%d err=%v", d, p, err)
 	}
-	a.exec(`UPDATE message_outbound_media SET created_at = now() - interval '2 hours' WHERE id=$1`, id)
+	a.exec(`UPDATE messages SET status='sent' WHERE tenant_id=$1 AND id=(SELECT message_id FROM message_outbound_media WHERE id=$2)`, a.tenantA, id) // delivered
+	a.ageUpload(id, "2 hours")
 	if d, p, err := sweeper.Once(context.Background()); err != nil || d != 0 || p != 1 {
 		t.Fatalf("retention: deleted=%d purged=%d err=%v", d, p, err)
 	}
@@ -406,3 +418,133 @@ func TestRetentionPurgesSentFilesButKeepsTheRecord(t *testing.T) {
 }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+func TestTheRecordedFileCannotBeSwappedAndALinkIsSetOnce(t *testing.T) {
+	a := newAttEnv(t)
+	up := a.upload(a.agent1, a.tenantA, a.convA, "boleto.pdf", "application/pdf", []byte("%PDF-1.4\n%%EOF"))
+	id := up.m["id"].(string)
+	for name, stmt := range map[string]string{
+		"hash":     `UPDATE message_outbound_media SET sha256 = repeat('a',64) WHERE id=$1`,
+		"owner":    `UPDATE message_outbound_media SET uploaded_by = '` + a.agent2.String() + `' WHERE id=$1`,
+		"mime":     `UPDATE message_outbound_media SET mime = 'text/plain' WHERE id=$1`,
+		"size":     `UPDATE message_outbound_media SET size_bytes = 1 WHERE id=$1`,
+		"filename": `UPDATE message_outbound_media SET file_name = 'x.exe' WHERE id=$1`,
+	} {
+		if _, err := a.seed.Exec(context.Background(), stmt, id); err == nil {
+			t.Errorf("%s of a recorded file was allowed (even for the table owner)", name)
+		}
+	}
+	s := a.sendReq(a.agent1, a.tenantA, a.convA, "swap-key-0001", `{"attachment_id":"`+id+`"}`)
+	if s.code != 202 {
+		t.Fatalf("send: %d %s", s.code, s.body)
+	}
+	// re-pointing an attached record at another message is refused
+	var other uuid.UUID
+	_ = a.seed.QueryRow(context.Background(), `SELECT id FROM messages WHERE tenant_id=$1 AND id<>$2 LIMIT 1`, a.tenantA, s.m["id"]).Scan(&other)
+	if _, err := a.seed.Exec(context.Background(), `UPDATE message_outbound_media SET message_id=NULL WHERE id=$1`, id); err == nil {
+		t.Error("an attached record was detached from its message")
+	}
+}
+
+func TestConcurrentUploadsCannotExceedThePendingCap(t *testing.T) {
+	a := newAttEnv(t)
+	const n = 12
+	codes := make(chan int, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			codes <- a.upload(a.agent1, a.tenantA, a.convA, "f.pdf", "application/pdf", append([]byte("%PDF-1.4\n"), byte(i), byte(i>>8))).code
+		}(i)
+	}
+	created := 0
+	for i := 0; i < n; i++ {
+		if <-codes == 201 {
+			created++
+		}
+	}
+	var rows int
+	_ = a.seed.QueryRow(context.Background(), `SELECT count(*) FROM message_outbound_media WHERE tenant_id=$1 AND uploaded_by=$2 AND message_id IS NULL`, a.tenantA, a.agent1).Scan(&rows)
+	if created > messagesapplication.MaxPendingAttachments || rows > messagesapplication.MaxPendingAttachments {
+		t.Fatalf("created=%d rows=%d, the cap is %d", created, rows, messagesapplication.MaxPendingAttachments)
+	}
+}
+
+func TestUploadsBeyondTheConcurrencyBudgetAreTurnedAwayNotQueuedInMemory(t *testing.T) {
+	a := newAttEnv(t)
+	pipes := make([]*io.PipeWriter, 0, 4)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		pr, pw := io.Pipe()
+		pipes = append(pipes, pw)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/"+a.tenantA.String()+"/inbox/conversations/"+a.convA.String()+"/attachments", pr)
+			req.Header.Set("Content-Type", "multipart/form-data; boundary=zz")
+			req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: a.agent1, Subject: a.agent1.String()}))
+			a.mux.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	// wait until the four are inside the handler (reading the blocked body), then the fifth must be refused at once
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		// not a multipart body: answered 400 when a slot is free, 503 when the budget is spent; a different caller each time keeps the per-user limiter out of it
+		r := a.rawUpload(uuid.New(), a.tenantA, a.convA, "application/json", bytes.NewBufferString("{}"))
+		if r.code == 503 && strings.Contains(r.body, "busy") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the fifth concurrent upload was never refused (last: %d %s)", r.code, r.body)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	for _, pw := range pipes {
+		_ = pw.CloseWithError(errors.New("done"))
+	}
+	wg.Wait()
+}
+
+func TestSweeperNeverPurgesAFileWhoseMessageIsStillQueuedAndCollectsOrphans(t *testing.T) {
+	a := newAttEnv(t)
+	up := a.upload(a.agent1, a.tenantA, a.convA, "boleto.pdf", "application/pdf", []byte("%PDF-1.4\n%%EOF"))
+	id := up.m["id"].(string)
+	if s := a.sendReq(a.agent1, a.tenantA, a.convA, "q-key-0000001", `{"attachment_id":"`+id+`"}`); s.code != 202 {
+		t.Fatalf("send: %d", s.code)
+	}
+	a.ageUpload(id, "90 days")
+	sweeper := mediaadapters.NewOutboundSweeper(a.app, a.files, time.Hour)
+	// the message is still 'queued': the worker has not delivered the file yet
+	if d, p, err := sweeper.Once(context.Background()); err != nil || d != 0 || p != 0 {
+		t.Fatalf("a queued message's file was swept: deleted=%d purged=%d err=%v", d, p, err)
+	}
+	if _, err := a.fileOnDisk(a.tenantA, id); err != nil {
+		t.Fatalf("file gone: %v", err)
+	}
+	a.exec(`UPDATE messages SET status='sent' WHERE tenant_id=$1 AND id=(SELECT message_id FROM message_outbound_media WHERE id=$2)`, a.tenantA, id)
+	if _, p, err := sweeper.Once(context.Background()); err != nil || p != 1 {
+		t.Fatalf("a delivered file past retention must be purged: purged=%d err=%v", p, err)
+	}
+
+	// orphans: an old file nobody owns and a stale temporary go; a fresh one and an owned one stay
+	dir := filepath.Join(a.dir, "outbound", a.tenantA.String())
+	old := time.Now().Add(-72 * time.Hour)
+	orphan, part, fresh := uuid.NewString(), uuid.NewString()+".part", uuid.NewString()
+	for name, mtime := range map[string]time.Time{orphan: old, part: old, fresh: time.Now()} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Chtimes(filepath.Join(dir, name), mtime, mtime)
+	}
+	pending := a.upload(a.agent1, a.tenantA, a.convA, "p.pdf", "application/pdf", []byte("%PDF-1.4\n%%EOF\n"))
+	oldPending := filepath.Join(dir, pending.m["id"].(string))
+	_ = os.Chtimes(oldPending, old, old)
+	n, err := sweeper.Orphans(context.Background())
+	if err != nil || n != 2 {
+		t.Fatalf("orphans removed=%d err=%v, want 2", n, err)
+	}
+	for name, wantGone := range map[string]bool{orphan: true, part: true, fresh: false, pending.m["id"].(string): false} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		if wantGone != (err != nil) {
+			t.Errorf("%s: gone=%v, want %v", name, err != nil, wantGone)
+		}
+	}
+}

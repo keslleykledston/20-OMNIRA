@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/google/uuid"
 
@@ -91,7 +92,8 @@ func (s *FileStore) OpenClean(tenantID, id string) (*os.File, error) {
 
 // OpenOutbound opens a file an operator sent (ADR-0024); the API only ever reads this area to show the operators their own sent files.
 func (s *FileStore) OpenOutbound(tenantID, id uuid.UUID) (*os.File, error) {
-	return os.Open(filepath.Join(s.root, "outbound", tenantID.String(), id.String()))
+	// O_NOFOLLOW: the area is written by the API, so a planted symlink must not turn this into a read of another file.
+	return os.OpenFile(filepath.Join(s.root, "outbound", tenantID.String(), id.String()), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 }
 
 // ReadClean returns the bytes of a cleared file, refusing anything larger than maxBytes. It never reads quarantine.

@@ -108,6 +108,12 @@ func (a *Attachments) Upload(ctx context.Context, conversationID uuid.UUID, decl
 			return nil, &AttachmentRejected{Reason: mediadomain.ReasonImageUnreadable}
 		}
 	}
+	if err := mediadomain.ValidateStructure(clean, res.Mime); err != nil {
+		if reason, ok := mediadomain.IsRejection(err); ok {
+			return nil, &AttachmentRejected{Reason: reason}
+		}
+		return nil, err
+	}
 	verdict, err := a.scanner.Scan(ctx, clean)
 	if err != nil {
 		log.Printf("messages: antivirus unavailable for an upload tenant_id=%s: %v", target.TenantID, err)

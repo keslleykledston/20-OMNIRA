@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/omnira/omnira/internal/channels/ports"
@@ -111,5 +112,17 @@ func TestSendMediaBuildsTheMessagePerKindAndKeepsTheNoRetryRuleForAmbiguity(t *t
 	}
 	if _, err := c.SendMedia(context.Background(), "tok", "12345678", "5592984517378", "sticker", "MEDIA1", "", ""); !errors.Is(err, ports.ErrPermanent) {
 		t.Errorf("unsupported kind: %v", err)
+	}
+}
+
+func TestUploadMediaNeverFollowsARedirect(t *testing.T) {
+	var leaked int
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked++ }))
+	defer evil.Close()
+	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, evil.URL, http.StatusTemporaryRedirect)
+	})
+	if _, err := c.UploadMedia(context.Background(), "tok", "12345678", "image/png", "a.png", []byte("x")); err == nil || leaked != 0 {
+		t.Fatalf("err=%v leaked=%d", err, leaked)
 	}
 }

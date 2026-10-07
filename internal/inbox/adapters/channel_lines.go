@@ -31,11 +31,13 @@ type ChannelLinesHandler struct {
 	perms PermissionChecker
 	// mediaSend: outbound media (ADR-0024) is enabled on this server.
 	mediaSend bool
+	// providerReady: this server's delivery is configured for that provider (the worker reads the same settings).
+	providerReady func(provider string) bool
 }
 
-// WithOutboundMedia reports to clients whether operators may attach files (the feature flag); the provider still decides per conversation.
-func (h *ChannelLinesHandler) WithOutboundMedia(enabled bool) *ChannelLinesHandler {
-	h.mediaSend = enabled
+// WithOutboundMedia reports to clients whether operators may attach files: the feature flag AND a delivery path for the provider.
+func (h *ChannelLinesHandler) WithOutboundMedia(enabled bool, providerReady func(string) bool) *ChannelLinesHandler {
+	h.mediaSend, h.providerReady = enabled, providerReady
 	return h
 }
 
@@ -93,7 +95,7 @@ func (h *ChannelLinesHandler) Channel(w http.ResponseWriter, r *http.Request) {
 		out.Provider = *provider
 	}
 	out.CanSendText = ready != nil && *ready
-	out.CanSendMedia = h.mediaSend && out.CanSendText && mediadomain.OutboundMediaSupported(out.Provider)
+	out.CanSendMedia = h.mediaSend && out.CanSendText && mediadomain.OutboundMediaSupported(out.Provider) && h.providerReady != nil && h.providerReady(out.Provider)
 	out.WindowRequired, out.WindowOpen = messagesapp.SessionWindow(out.Provider, last, time.Now())
 	if last != nil {
 		s := last.UTC().Format(time.RFC3339)

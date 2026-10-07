@@ -137,3 +137,66 @@ func TestStripMetadataRemovesExifWithoutTouchingThePixels(t *testing.T) {
 		t.Fatal("a truncated JPEG must be refused")
 	}
 }
+
+func TestStructureIsValidatedAndNothingRidesAfterTheImage(t *testing.T) {
+	j := outJPEG(t)
+	// a script appended after EOI is cut off, not sent
+	withTail := append(append([]byte{}, j...), []byte("<script>alert(1)</script>")...)
+	got, err := StripMetadata(withTail, "image/jpeg")
+	if err != nil || bytes.Contains(got, []byte("<script>")) || !bytes.HasSuffix(got, []byte{0xff, 0xd9}) {
+		t.Fatalf("trailing data after EOI survived: %v", err)
+	}
+	if err := ValidateStructure(got, "image/jpeg"); err != nil {
+		t.Fatalf("a clean JPEG must validate: %v", err)
+	}
+	// truncated: no EOI
+	if _, err := StripMetadata(j[:len(j)-4], "image/jpeg"); err == nil {
+		t.Fatal("a JPEG without EOI must be refused")
+	}
+	// corrupt entropy data passes the header checks but not the full decode
+	broken := append([]byte{}, j...)
+	for i := len(broken) / 2; i < len(broken)-2; i++ {
+		broken[i] = 0xa5
+	}
+	if err := ValidateStructure(broken, "image/jpeg"); err == nil {
+		t.Fatal("a corrupt JPEG body must fail the full decode")
+	}
+	p := outPNG(t)
+	tailed := append(append([]byte{}, p...), []byte("<?php system($_GET['c']); ?>")...)
+	gp, err := StripMetadata(tailed, "image/png")
+	if err != nil || bytes.Contains(gp, []byte("<?php")) {
+		t.Fatalf("data after IEND survived: %v", err)
+	}
+	if _, err := StripMetadata(p[:len(p)-12], "image/png"); err == nil {
+		t.Fatal("a PNG without IEND must be refused")
+	}
+	if _, err := StripMetadata(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 20)...), "image/png"); err == nil {
+		t.Fatal("a PNG that does not start with IHDR must be refused")
+	}
+	// WebP with bytes after the container
+	webp := append([]byte("RIFF"), 0, 0, 0, 0)
+	webp = append(webp, []byte("WEBPVP8X")...)
+	webp = append(webp, make([]byte, 10)...)
+	binary.LittleEndian.PutUint32(webp[4:8], uint32(len(webp)-8))
+	if err := ValidateStructure(webp, "image/webp"); err != nil {
+		t.Fatalf("a consistent container must pass: %v", err)
+	}
+	if err := ValidateStructure(append(webp, []byte("<html>")...), "image/webp"); err == nil {
+		t.Fatal("bytes after the RIFF container must be refused")
+	}
+}
+
+func TestObfuscatedPDFNamesAreNoLongerAWayAround(t *testing.T) {
+	for name, body := range map[string]string{
+		"escaped JavaScript": "%PDF-1.4\n1 0 obj<</S/J#61vaScript/JS(app.alert(1))>>endobj",
+		"escaped Launch":     "%PDF-1.4\n1 0 obj<</S/Launc#68>>endobj",
+		"escaped embedded":   "%PDF-1.4\n1 0 obj<</Type/#45mbeddedFile>>endobj",
+	} {
+		if _, err := ClassifyOutbound([]byte(body), "", "waha"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := ClassifyOutbound([]byte("%PDF-1.4\n1 0 obj<</Title(#boleto)>>endobj\n%%EOF"), "", "waha"); err != nil {
+		t.Errorf("an innocent '#' must not block a PDF: %v", err)
+	}
+}

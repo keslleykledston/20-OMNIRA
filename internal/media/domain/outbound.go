@@ -3,6 +3,8 @@ package domain
 import (
 	"bytes"
 	"encoding/binary"
+	"image/jpeg"
+	"image/png"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -44,6 +46,26 @@ func ClassifyOutbound(data []byte, declaredMime, provider string) (Result, error
 		return Result{}, reject(ReasonUnsupportedForChannel)
 	}
 	return res, nil
+}
+
+// ValidateStructure fully decodes what it can decode (JPEG, PNG: the whole image, so a truncated or malformed file is refused, not
+// "mostly valid") and checks the length declared by a WebP container. The pixel ceiling was already enforced from the header.
+func ValidateStructure(data []byte, mime string) error {
+	switch mime {
+	case "image/jpeg":
+		if _, err := jpeg.Decode(bytes.NewReader(data)); err != nil {
+			return reject(ReasonImageUnreadable)
+		}
+	case "image/png":
+		if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+			return reject(ReasonImageUnreadable)
+		}
+	case "image/webp":
+		if len(data) < 12 || int(binary.LittleEndian.Uint32(data[4:8]))+8 != len(data) {
+			return reject(ReasonImageUnreadable) // trailing bytes or a truncated container
+		}
+	}
+	return nil
 }
 
 // OutboundMimeAllowed re-checks a stored attachment's type against the provider of the conversation's CURRENT connection.
@@ -168,9 +190,13 @@ func stripJPEG(data []byte) ([]byte, error) {
 			return nil, reject(ReasonImageUnreadable)
 		}
 		segment := data[i : i+length]
-		if marker == 0xda { // SOS: the entropy-coded image data follows to the end; keep everything from here
+		if marker == 0xda { // SOS: the scans follow; copy them up to the first genuine EOI and keep nothing after it
+			end, ok := scansEnd(data, i+length)
+			if !ok {
+				return nil, reject(ReasonImageUnreadable) // truncated: no EOI
+			}
 			out = append(out, 0xff, marker)
-			out = append(out, data[i:]...)
+			out = append(out, data[i:end]...)
 			return out, nil
 		}
 		// drop APP1 (EXIF, XMP), APP13 (Photoshop/IPTC) and comments; keep JFIF (APP0), ICC colour profile (APP2) and the codec segments
@@ -183,6 +209,38 @@ func stripJPEG(data []byte) ([]byte, error) {
 	return nil, reject(ReasonImageUnreadable)
 }
 
+// scansEnd walks the entropy-coded scans that start at pos (progressive JPEGs have several, separated by DHT/SOS segments whose payloads
+// may contain any byte) and returns the offset just past the genuine EOI marker. In entropy data every 0xFF is followed by 0x00 (stuffing)
+// or a restart marker, so any other 0xFF xx is a real marker.
+func scansEnd(data []byte, pos int) (int, bool) {
+	for pos+1 < len(data) {
+		if data[pos] != 0xff {
+			pos++
+			continue
+		}
+		m := data[pos+1]
+		switch {
+		case m == 0x00 || (m >= 0xd0 && m <= 0xd7) || m == 0xff:
+			pos++
+			if m != 0xff {
+				pos++
+			}
+		case m == 0xd9:
+			return pos + 2, true
+		default: // another segment (DHT, SOS, DNL, ...): skip its declared length
+			if pos+4 > len(data) {
+				return 0, false
+			}
+			l := int(binary.BigEndian.Uint16(data[pos+2 : pos+4]))
+			if l < 2 {
+				return 0, false
+			}
+			pos += 2 + l
+		}
+	}
+	return 0, false
+}
+
 func stripPNG(data []byte) ([]byte, error) {
 	sig := []byte("\x89PNG\r\n\x1a\n")
 	if !bytes.HasPrefix(data, sig) {
@@ -190,6 +248,7 @@ func stripPNG(data []byte) ([]byte, error) {
 	}
 	out := append(make([]byte, 0, len(data)), sig...)
 	i := len(sig)
+	first := true
 	for i < len(data) {
 		if i+8 > len(data) {
 			return nil, reject(ReasonImageUnreadable)
@@ -199,12 +258,20 @@ func stripPNG(data []byte) ([]byte, error) {
 		if length < 0 || end > len(data) || end < i {
 			return nil, reject(ReasonImageUnreadable)
 		}
-		switch string(data[i+4 : i+8]) {
+		kind := string(data[i+4 : i+8])
+		if first && kind != "IHDR" {
+			return nil, reject(ReasonImageUnreadable)
+		}
+		first = false
+		switch kind {
 		case "eXIf", "tEXt", "zTXt", "iTXt", "tIME": // metadata chunks
 		default:
 			out = append(out, data[i:end]...)
 		}
 		i = end
+		if kind == "IEND" { // nothing after IEND is kept
+			return out, nil
+		}
 	}
-	return out, nil
+	return nil, reject(ReasonImageUnreadable) // no IEND: truncated
 }

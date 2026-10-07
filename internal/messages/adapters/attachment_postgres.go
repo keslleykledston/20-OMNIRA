@@ -33,8 +33,14 @@ func (s *PostgresOutboundStore) CountPendingAttachments(ctx context.Context, con
 	if err != nil {
 		return 0, err
 	}
+	q := platformdb.QuerierFromContext(ctx, s.pool)
+	// Serialise this operator's uploads in this conversation until the request's transaction ends, so two concurrent uploads cannot both
+	// see "4 pending" and both insert the 5th and 6th.
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('outbound_media:' || $1::text || ':' || $2::text, 0))`, conversationID.String(), actor.String()); err != nil {
+		return 0, fmt.Errorf("messages: lock pending attachments: %w", err)
+	}
 	var n int
-	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT count(*) FROM message_outbound_media
 		WHERE tenant_id=$1 AND conversation_id=$2 AND uploaded_by=$3 AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now()`,
 		tenantID, conversationID, actor).Scan(&n)

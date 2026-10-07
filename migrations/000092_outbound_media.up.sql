@@ -37,3 +37,19 @@ CREATE POLICY message_outbound_media_attach_tenant ON message_outbound_media
 CREATE POLICY message_outbound_media_delete_system ON message_outbound_media
   FOR DELETE USING (is_system_admin());
 GRANT SELECT, INSERT, UPDATE, DELETE ON message_outbound_media TO omnira_app;
+
+-- The recorded file never changes and a message link is set once: whatever the policies allow, a session cannot swap the file, the hash or
+-- the owner behind a record (RLS policies cannot compare OLD and NEW, a trigger can).
+CREATE FUNCTION message_outbound_media_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.id <> OLD.id OR NEW.tenant_id <> OLD.tenant_id OR NEW.conversation_id <> OLD.conversation_id OR NEW.uploaded_by <> OLD.uploaded_by
+     OR NEW.kind <> OLD.kind OR NEW.mime <> OLD.mime OR NEW.size_bytes <> OLD.size_bytes OR NEW.sha256 <> OLD.sha256
+     OR NEW.file_name <> OLD.file_name OR NEW.created_at <> OLD.created_at THEN
+    RAISE EXCEPTION 'message_outbound_media: the recorded file cannot change' USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF OLD.message_id IS NOT NULL AND NEW.message_id IS DISTINCT FROM OLD.message_id THEN
+    RAISE EXCEPTION 'message_outbound_media: already attached to a message' USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER message_outbound_media_guard BEFORE UPDATE ON message_outbound_media FOR EACH ROW EXECUTE FUNCTION message_outbound_media_guard();

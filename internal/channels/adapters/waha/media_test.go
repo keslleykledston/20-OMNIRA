@@ -108,3 +108,16 @@ func TestSendMediaAmbiguousFailuresAreOutcomeUnknownAndNeverRetryable(t *testing
 		t.Errorf("empty media: %v", err)
 	}
 }
+
+func TestSendMediaNeverFollowsARedirect(t *testing.T) {
+	var leaked int
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { leaked++ }))
+	defer evil.Close()
+	p, conn := mediaProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, evil.URL, http.StatusTemporaryRedirect)
+	})
+	_, err := p.SendMedia(context.Background(), conn, domain.OutboundMediaMessage{ToE164: "+5511999990000", Kind: domain.MediaKindImage, Mime: "image/png", Data: []byte("x")})
+	if err == nil || leaked != 0 {
+		t.Fatalf("err=%v leaked=%d: a redirected media send must not reach another host", err, leaked)
+	}
+}

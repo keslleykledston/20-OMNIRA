@@ -58,7 +58,7 @@ func NewClient(base, version string, hc *http.Client) (*Client, error) {
 		return nil, fmt.Errorf("%w: invalid Graph API version", ports.ErrConfiguration)
 	}
 	if hc == nil {
-		hc = &http.Client{Timeout: 20 * time.Second}
+		hc = &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	return &Client{http: hc, base: u.Scheme + "://" + u.Host, version: version}, nil
 }
@@ -178,11 +178,20 @@ func (c *Client) SendText(ctx context.Context, token, phoneNumberID, toDigits, t
 	return ok.Messages[0].ID, nil
 }
 
+// uploadSlots bounds the multipart bodies built at once (each is a copy of up to 16 MiB).
+var uploadSlots = make(chan struct{}, 2)
+
 // UploadMedia stores a file with Meta and returns its media id. An upload has no customer-visible effect, so a failure that would be
 // "outcome unknown" for a message is simply retryable here.
 func (c *Client) UploadMedia(ctx context.Context, token, phoneNumberID, mime, fileName string, data []byte) (string, error) {
 	if !digitsPattern.MatchString(phoneNumberID) || token == "" || mime == "" || len(data) == 0 || len(data) > maxMediaBytes {
 		return "", fmt.Errorf("%w: media, type and credentials are required", ports.ErrPermanent)
+	}
+	select {
+	case uploadSlots <- struct{}{}:
+		defer func() { <-uploadSlots }()
+	case <-ctx.Done():
+		return "", fmt.Errorf("%w: waiting for an upload slot", ports.ErrTransient)
 	}
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -210,6 +219,7 @@ func (c *Client) UploadMedia(ctx context.Context, token, phoneNumberID, mime, fi
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	hc := *c.http
 	hc.Timeout = 90 * time.Second
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := hc.Do(req)
 	if err != nil {
 		return "", retryableUpload(transportError(err))

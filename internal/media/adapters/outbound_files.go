@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	messagesports "github.com/omnira/omnira/internal/messages/ports"
@@ -89,6 +91,56 @@ func (o *OutboundFiles) ReadVerified(tenantID, id uuid.UUID, size int64, sha256H
 		return nil, errors.New("outbound media: the stored file does not match its record")
 	}
 	return data, nil
+}
+
+// Orphans removes files older than minAge whose id has no record (exists reports that) and stale ".part" temporaries. At most limit
+// removals per call. Names that are not UUIDs are left alone.
+func (o *OutboundFiles) Orphans(minAge time.Duration, limit int, exists func(tenantID, id uuid.UUID) (bool, error)) (int, error) {
+	tenants, err := os.ReadDir(o.dir)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	cutoff := time.Now().Add(-minAge)
+	for _, td := range tenants {
+		tenantID, err := uuid.Parse(td.Name())
+		if err != nil || !td.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(o.dir, td.Name()))
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if removed >= limit {
+				return removed, nil
+			}
+			info, err := f.Info()
+			if err != nil || !info.Mode().IsRegular() || info.ModTime().After(cutoff) {
+				continue
+			}
+			name := f.Name()
+			full := filepath.Join(o.dir, td.Name(), name)
+			if strings.HasSuffix(name, ".part") {
+				if os.Remove(full) == nil {
+					removed++
+				}
+				continue
+			}
+			id, err := uuid.Parse(name)
+			if err != nil {
+				continue
+			}
+			has, err := exists(tenantID, id)
+			if err != nil {
+				return removed, err
+			}
+			if !has && os.Remove(full) == nil {
+				removed++
+			}
+		}
+	}
+	return removed, nil
 }
 
 // Open returns the file for serving it back to the operator that sent it.

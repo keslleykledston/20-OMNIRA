@@ -106,7 +106,7 @@ func NewClient(baseURL, apiKey string, httpClient *http.Client) (*Client, error)
 		return nil, ErrConfiguration
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{Timeout: 15 * time.Second, CheckRedirect: noRedirect}
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: httpClient}, nil
 }
@@ -204,6 +204,13 @@ type sendMediaRequest struct {
 	Caption string    `json:"caption,omitempty"`
 }
 
+// noRedirect: WAHA never legitimately redirects an API call, and a redirect would carry the API key (a custom header, which net/http does
+// not strip) and a file to another host.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// mediaSlots bounds the media bodies built at once (base64 + JSON triple a file's size in memory).
+var mediaSlots = make(chan struct{}, 2)
+
 // mediaTimeout: a base64 body of up to ~22 MB needs longer than a text send.
 const mediaTimeout = 90 * time.Second
 
@@ -226,9 +233,16 @@ func (c *Client) SendMedia(ctx context.Context, name, chatID, endpoint, mimetype
 	}
 	ctx, cancel := context.WithTimeout(ctx, mediaTimeout)
 	defer cancel()
+	select {
+	case mediaSlots <- struct{}{}:
+		defer func() { <-mediaSlots }()
+	case <-ctx.Done():
+		return "", fmt.Errorf("%w: %w: waiting for a media slot", ErrProviderUnavailable, ErrTransient)
+	}
 	long := *c
 	hc := *c.httpClient
 	hc.Timeout = mediaTimeout
+	hc.CheckRedirect = noRedirect
 	long.httpClient = &hc
 	var response sendTextResponse
 	if _, err = long.do(ctx, http.MethodPost, "/api/"+endpoint, strings.NewReader(string(body)), &response); err != nil {
