@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import axios from 'axios'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button, Input, Modal, TextArea } from '../primitives'
 import {
@@ -10,7 +11,10 @@ import {
   type FollowUpInput,
   type FollowUpKind,
 } from '../../lib/attendance'
-import { getTenantId } from '../../lib/session'
+import { API_BASE } from '../../lib/config'
+import { authHeaders, getTenantId } from '../../lib/session'
+import { useConversationChannel } from '../../lib/channelLines'
+import type { ConversationItem } from '../../types/api'
 
 interface Props {
   open: boolean
@@ -28,6 +32,8 @@ interface DraftItem {
   ai?: boolean // sugerido pela IA: a pessoa confere e pode editar ou remover
 }
 
+const DEFAULT_FAREWELL = 'Seu atendimento foi encerrado. Se precisar de algo, é só nos escrever por aqui. Obrigado!'
+
 const selectClass = 'w-full rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary'
 
 // Finalizar atendimento (ADR-0020): encerra o episódio, não o chat. O que ficou pendente ou foi prometido é listado aqui e
@@ -42,9 +48,34 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   const [error, setError] = useState<string | null>(null)
   const [aiDraft, setAiDraft] = useState<string | null>(null) // o texto exato que a IA sugeriu para o resumo
   const [aiNote, setAiNote] = useState<string | null>(null)
+  // Closing message to the customer. Offered only when free text can actually go out right now: the attendance must have an
+  // owner (sending requires it) and, on the official line, the 24 h window must be open.
+  const channel = useConversationChannel(open ? conversationId : null)
+  const cached = qc.getQueryData<ConversationItem>(['inbox-context', tenantId, conversationId])
+  const hasOwner = !!cached?.assigned_to_user_id
+  const windowClosed = !!channel.data && channel.data.window_required && !channel.data.window_open
+  const canNotify = hasOwner && !windowClosed && channel.data?.can_send_text !== false
+  const [notify, setNotify] = useState(true)
+  const [farewell, setFarewell] = useState(DEFAULT_FAREWELL)
+  // One Idempotency-Key per dialog and one send per attendance: a retry after a failed finalize must not message twice.
+  const farewellSent = useRef(false)
+  const farewellKey = useRef(crypto.randomUUID())
 
   const finalize = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      if (canNotify && notify && farewell.trim() && !farewellSent.current) {
+        try {
+          await axios.post(
+            `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
+            { text: farewell.trim() },
+            { headers: { ...authHeaders(), 'Idempotency-Key': farewellKey.current } },
+          )
+          farewellSent.current = true
+        } catch {
+          // nothing was finalized: the person decides whether to finalize without notifying
+          throw new Error('farewell_failed')
+        }
+      }
       const follow_ups: FollowUpInput[] = items
         .filter((i) => i.text.trim() !== '')
         .map((i) => ({ kind: i.kind, text: i.text.trim(), due_at: i.due ? new Date(`${i.due}T12:00:00`).toISOString() : null }))
@@ -66,7 +97,12 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       onFinalized?.()
       onClose()
     },
-    onError: (err) => setError(attendanceErrorMessage(err)),
+    onError: (err) =>
+      setError(
+        err instanceof Error && err.message === 'farewell_failed'
+          ? 'Não foi possível avisar o cliente (a janela pode ter fechado ou outra pessoa assumiu). Desmarque "Avisar o cliente" para finalizar mesmo assim.'
+          : attendanceErrorMessage(err),
+      ),
   })
 
   const suggest = useMutation({
@@ -140,6 +176,25 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
           ))}
           {items.length < 20 && <Button variant="secondary" size="sm" onClick={add}>Adicionar item</Button>}
         </fieldset>
+        {canNotify ? (
+          <fieldset className="space-y-2 rounded-control border border-border-subtle p-3">
+            <label className="flex items-center gap-2 text-sm font-medium text-text-primary">
+              <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+              Avisar o cliente que o atendimento foi encerrado
+            </label>
+            {notify && (
+              <TextArea aria-label="Mensagem de encerramento" rows={2} maxLength={1000} value={farewell} onChange={(e) => setFarewell(e.target.value)} />
+            )}
+          </fieldset>
+        ) : (
+          <p className="text-xs text-text-tertiary">
+            {!hasOwner
+              ? 'Para avisar o cliente do encerramento, assuma o atendimento antes de finalizar.'
+              : windowClosed
+                ? 'A janela de 24 h do WhatsApp oficial fechou: não é possível enviar texto livre ao cliente.'
+                : 'O canal desta conversa não está disponível para enviar o aviso.'}
+          </p>
+        )}
         <Input label="Observação interna (opcional)" maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
         <p className="text-xs text-text-secondary">
           Chamados locais desta conversa serão encerrados. Chamados ligados ao ERP não são alterados. Não cole senhas ou chaves nos textos.

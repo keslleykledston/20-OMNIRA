@@ -56,8 +56,8 @@ describe('Finalizar atendimento (ADR-0020)', () => {
     await user.selectOptions(within(dialog).getByLabelText('Tipo do item 1'), 'promise')
     await user.type(within(dialog).getByLabelText('Texto do item 1'), 'Ligar amanhã')
     await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
-    await waitFor(() => expect(axios.post).toHaveBeenCalled())
-    const [url, body] = vi.mocked(axios.post).mock.calls[0] as [string, any]
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
+    const [url, body] = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize')) as [string, any]
     expect(url).toMatch(new RegExp(`/inbox/conversations/${CONV}/finalize$`))
     expect(body).toMatchObject({ reason: 'no_response', summary: 'Cliente não retornou', follow_ups: [{ kind: 'promise', text: 'Ligar amanhã', due_at: null }] })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -71,9 +71,11 @@ describe('Finalizar atendimento (ADR-0020)', () => {
     await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Adicionar item' })) // left blank
+    const notifyBox = within(dialog).queryByRole('checkbox', { name: /Avisar o cliente/ })
+    if (notifyBox) await user.click(notifyBox) // the backend refusal is what is under test here
     await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(/responsável pela conversa/)
-    expect((vi.mocked(axios.post).mock.calls[0] as any)[1].follow_ups).toEqual([])
+    expect((vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize')) as any)[1].follow_ups).toEqual([])
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
@@ -241,8 +243,8 @@ describe('Sugestão da IA ao finalizar (ADR-0020)', () => {
     const dialog = await openDialog(user)
     await user.type(within(dialog).getByLabelText('Resumo do atendimento'), 'Resolvido por telefone')
     await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
-    await waitFor(() => expect(axios.post).toHaveBeenCalled())
-    expect((vi.mocked(axios.post).mock.calls[0][1] as any).summary_truth).toBe('agent_confirmed')
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
+    expect((vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize'))![1] as any).summary_truth).toBe('agent_confirmed')
   })
 
   it('explains when the AI is off or unavailable and keeps finalizing by hand possible', async () => {
@@ -254,5 +256,30 @@ describe('Sugestão da IA ao finalizar (ADR-0020)', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Sugerir com IA' }))
     await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent(/não está disponível agora/))
     expect(within(dialog).getByRole('button', { name: 'Finalizar atendimento' })).toBeEnabled()
+  })
+})
+
+describe('Finalize — closing message to the customer', () => {
+  it('sends the closing message first, then finalizes; and a failed message stops the finalize with an explanation', async () => {
+    const user = userEvent.setup()
+    serve()
+    renderAt(<ContextPane conversationId={CONV} />)
+    vi.mocked(axios.post).mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/messages')) return { data: { id: 'm1' } }
+      return { data: { changed: true } }
+    })
+    const dialog = await (async () => {
+      await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
+      return screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    })()
+    expect(within(dialog).getByRole('checkbox', { name: /Avisar o cliente/ })).toBeChecked()
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
+    const order = vi.mocked(axios.post).mock.calls.map((c) => String(c[0]).split('/').pop())
+    expect(order.indexOf('messages')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('messages')).toBeLessThan(order.indexOf('finalize'))
+    const sent = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/messages'))!
+    expect((sent[1] as any).text).toMatch(/atendimento foi encerrado/)
+    expect((sent[2] as any).headers['Idempotency-Key']).toBeTruthy()
   })
 })

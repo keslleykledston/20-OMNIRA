@@ -41,37 +41,47 @@ export default function MessageBubble({ message, sender }: MessageBubbleProps) {
     message.status === 'failed' && reason ? `Falha: ${reason}` :
     undefined;
 
+  // Time (and delivery mark) sit at the end of the text, WhatsApp style, so a one-line message is one line tall. With text
+  // they are positioned in the bubble's bottom-right corner over an empty spacer that ends the last line; without text
+  // they take their own line under the attachment.
+  const timeMark = (extra: string) => (
+    <span className={clsx('inline-flex items-center gap-0.5 text-[10px] leading-none text-text-tertiary', extra)}>
+      <time>{new Date(message.created_at).toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit'
+      })}</time>
+      {isOutbound && <span className={statusColor} title={statusTitle}>{deliverySymbol}</span>}
+    </span>
+  );
+
   return (
-    <div className={clsx(
-      'flex gap-2',
-      isOutbound ? 'flex-row-reverse' : 'flex-row'
-    )}>
+    <div className={clsx('flex', isOutbound ? 'flex-row-reverse' : 'flex-row')}>
       {/* Message Bubble */}
       <div className={clsx(
-        'max-w-[85%] rounded-lg border px-3 py-2 text-sm leading-snug sm:max-w-[75%]',
+        'relative max-w-[85%] rounded-lg border px-2.5 py-1 text-[13.5px] leading-[1.35] sm:max-w-[75%]',
         isOutbound
           ? 'border-accent-primary/10 bg-accent-primary-soft text-text-primary'
           : 'border-border-subtle bg-surface text-text-primary'
       )}>
-        {sender && <p className="mb-1 text-[10px] font-medium text-text-tertiary">{sender}</p>}
-        {message.body && <p className="break-words">{message.body}</p>}
+        {sender && <p className="mb-0.5 text-[10px] font-medium leading-tight text-text-tertiary">{sender}</p>}
+        {message.body && (
+          <>
+            <p className="whitespace-pre-wrap break-words">
+              {message.body}
+              <span aria-hidden="true" className={clsx('inline-block', isOutbound ? 'w-14' : 'w-10')} />
+            </p>
+            {timeMark('absolute bottom-1 right-2')}
+          </>
+        )}
 
         {/* Media content */}
         {tenantId && <MessageMedia message={message} tenantId={tenantId} />}
 
-        {/* Timestamp inside bubble */}
-        <footer className={clsx(
-          'mt-0.5 text-[11px] flex items-center justify-end gap-1',
-          'text-text-tertiary'
-        )}>
-          <time>{new Date(message.created_at).toLocaleTimeString('pt-BR', {
-            hour: '2-digit',
-            minute: '2-digit'
-          })}</time>
-          {isOutbound && <span className={statusColor} title={statusTitle}>{deliverySymbol}</span>}
-        </footer>
+        {/* Without text (media only) the time goes on its own line under the attachment */}
+        {!message.body && <div className="flex justify-end">{timeMark('')}</div>}
+
         {isOutbound && message.status === 'failed' && (
-          <p role="status" className="mt-1 text-[11px] font-medium text-status-danger">
+          <p role="status" className="mt-0.5 text-[11px] font-medium leading-tight text-status-danger">
             Não foi entregue{reason ? `: ${reason}` : '.'}
           </p>
         )}

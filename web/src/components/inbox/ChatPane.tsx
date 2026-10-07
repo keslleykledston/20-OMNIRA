@@ -242,7 +242,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           sits at the bottom too (justify-end), like WhatsApp. */}
       <div className="relative flex-1 min-h-0">
         <div ref={scrollRef} onScroll={onScroll} className="absolute inset-0 overflow-y-auto">
-          <div ref={contentRef} className="flex min-h-full flex-col justify-end gap-0.5 px-3 py-2">
+          <div ref={contentRef} className="flex min-h-full flex-col justify-end gap-px px-3 py-2">
             {hasNextPage && (
               <button
                 type="button"
@@ -261,14 +261,16 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                 const label = dayLabel(msg.created_at);
                 const showDay = !prev || dayLabel(prev.created_at) !== label;
                 const turn = prev && prev.direction !== msg.direction && !showDay;
+                // the speaker is named once, on the first bubble of a run from the same side
+                const firstOfRun = !prev || showDay || prev.direction !== msg.direction;
                 return (
-                  <div key={msg.id} className={turn ? 'mt-1.5' : undefined}>
+                  <div key={msg.id} className={turn ? 'mt-1' : undefined}>
                     {showDay && (
-                      <div className="my-2 flex justify-center">
+                      <div className="my-1.5 flex justify-center">
                         <span className="rounded-pill bg-surface-muted px-3 py-0.5 text-[11px] text-text-secondary">{label}</span>
                       </div>
                     )}
-                    <MessageBubble message={msg} sender={msg.direction === 'outbound' ? 'Equipe' : conversation?.contact_name} />
+                    <MessageBubble message={msg} sender={firstOfRun ? (msg.direction === 'outbound' ? 'Equipe' : conversation?.contact_name) : undefined} />
                   </div>
                 );
               })
