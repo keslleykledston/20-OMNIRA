@@ -601,6 +601,13 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 
 	// CRM ticket handlers
 	crmHandler := inboxadapters.NewCRMHandlers(dbPool)
+	// The customer is told, in the conversation, that the ticket was opened and its number. On by default; off with
+	// OMNIRA_TICKET_OPEN_NOTICE_ENABLED=false (the ticket flow itself is then untouched).
+	if cfg.TicketOpenNoticeEnabled {
+		noticeStore := messagesadapters.NewPostgresOutboundStore(dbPool)
+		crmHandler.SetTicketOpenNotifier(messagesapplication.NewTicketOpenedNotice(
+			messagesapplication.NewSender(noticeStore, channeladapters.NewPostgresPermissionChecker(dbPool)), noticeStore))
+	}
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetCurrentTicket))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateTicket))))
 	// PRODUCT.6-O1R: explicit provider projection refresh (a command, never

@@ -34,6 +34,9 @@ type Config struct {
 	// OutboundMediaEnabled turns on operator file uploads and sending (ADR-0024). Needs OMNIRA_MEDIA_DIR (with a writable outbound/ area
 	// for the API) and OMNIRA_CLAMAV_ADDR: without the antivirus nothing is accepted.
 	OutboundMediaEnabled bool
+	// TicketOpenNoticeEnabled sends the customer a message with the ticket number when an operator opens an external ticket
+	// (on by default; OMNIRA_TICKET_OPEN_NOTICE_ENABLED=false turns it off).
+	TicketOpenNoticeEnabled bool
 	// Native (Android/iOS) credential endpoints, ADR-0022. Off by default; needs OIDC.
 	MobileAuthEnabled  bool
 	MobileClientID     string
@@ -134,6 +137,7 @@ func Load() *Config {
 		AuthPostLoginURL:  getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
 		AuthCookieSecure:  getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
 		OutboundMediaEnabled: getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
+		TicketOpenNoticeEnabled: getEnv("OMNIRA_TICKET_OPEN_NOTICE_ENABLED", "true") != "false",
 		MobileAuthEnabled:  getEnv("OMNIRA_AUTH_MOBILE_ENABLED", "false") == "true",
 		MobileClientID:     getEnv("OMNIRA_AUTH_MOBILE_CLIENT_ID", "omnira-mobile"),
 		MobileRedirectURIs: splitList(os.Getenv("OMNIRA_AUTH_MOBILE_REDIRECT_URIS")),

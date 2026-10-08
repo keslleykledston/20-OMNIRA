@@ -167,3 +167,28 @@ func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UU
 	}
 	return existing, true, nil
 }
+
+// ContactName is the display name of the conversation's contact, read under the tenant's RLS. It is empty for a
+// conversation without a contact (internal staff chat) or a contact without a name.
+func (s *PostgresOutboundStore) ContactName(ctx context.Context, conversationID uuid.UUID) (string, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return "", err
+	}
+	var name *string
+	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
+		SELECT ct.display_name
+		FROM conversations c
+		JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
+		WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, conversationID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("messages: load contact name: %w", err)
+	}
+	if name == nil {
+		return "", nil
+	}
+	return *name, nil
+}

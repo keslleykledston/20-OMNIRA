@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	crmevidenceports "github.com/omnira/omnira/internal/crmevidence/ports"
 	"github.com/omnira/omnira/internal/platform/authn"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
 	ticketsports "github.com/omnira/omnira/internal/tickets/ports"
@@ -66,6 +67,9 @@ type CRMHandlers struct {
 	// canonical runtime composition root, never a handler-built service
 	// graph.
 	externalTicketService externalTicketCreator
+	// openNotice, when wired, tells the customer in the conversation that the ticket was opened and under which number.
+	// Nil is a valid state (feature off): the ticket flow is then exactly what it was.
+	openNotice ticketOpenNotifier
 	// readTicketService is the real, conversation-scoped, LOCAL-ONLY
 	// ticket read path (PRODUCT.6-O1). Nil until server.go wires it.
 	readTicketService conversationTicketReader
@@ -164,6 +168,17 @@ func (h *CRMHandlers) SetEvidenceStore(store crmevidenceports.EvidenceStore) {
 // may inject a fake satisfying externalTicketCreator.
 func (h *CRMHandlers) SetExternalTicketService(svc externalTicketCreator) {
 	h.externalTicketService = svc
+}
+
+// ticketOpenNotifier queues the "your ticket was opened" message for the customer. It must be safe to call twice for the
+// same ticket (the key is derived from localTicketID) and must never be able to change the ticket's own outcome.
+type ticketOpenNotifier interface {
+	NotifyTicketOpened(ctx context.Context, conversationID, localTicketID uuid.UUID, ticketNumber string) error
+}
+
+// SetTicketOpenNotifier wires the customer notice sent after an external ticket is opened. Nil turns it off.
+func (h *CRMHandlers) SetTicketOpenNotifier(n ticketOpenNotifier) {
+	h.openNotice = n
 }
 
 // SetReadTicketService wires the real, conversation-scoped ticket read
@@ -669,7 +684,30 @@ func (h *CRMHandlers) CreateTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordTicketSelectionEvidence(ctx, tid, cid, tc.ActorID, req.SelectedCustomerExternalID, result)
+	h.notifyTicketOpened(ctx, tid, cid, result)
 	writeExternalTicketResult(w, result)
+}
+
+// notifyTicketOpened tells the customer, in the conversation, that the ticket was opened and its number. Like the evidence
+// hook it is strictly best-effort: the external ticket is already a durable success, so a failure here (window closed,
+// channel down, no permission to reply) is only logged and NEVER changes the HTTP answer. It runs for a replay too, so a
+// notice that failed the first time gets another chance, and the notifier's key (per local ticket) keeps it from being
+// sent twice. A savepoint keeps a database failure in the notice from aborting the request transaction that holds the
+// ticket itself.
+func (h *CRMHandlers) notifyTicketOpened(ctx context.Context, tenantID, conversationID uuid.UUID, result *ticketsapplication.Result) {
+	if h.openNotice == nil || result == nil || result.ExternalTicketID == "" {
+		return
+	}
+	if result.Outcome != ticketsapplication.OutcomeCreated && result.Outcome != ticketsapplication.OutcomeReplaySuccess {
+		return
+	}
+	err := platformdb.WithSavepoint(ctx, h.dbPool, func(ctx context.Context) error {
+		return h.openNotice.NotifyTicketOpened(ctx, conversationID, result.LocalTicketID, result.ExternalTicketID)
+	})
+	if err != nil {
+		// identifiers only: no customer name, no message text
+		log.Printf("ticket opened notice not sent (tenant=%s conversation=%s local_ticket=%s): %v", tenantID, conversationID, result.LocalTicketID, err)
+	}
 }
 
 // recordTicketSelectionEvidence is the PRODUCT.7B2B post-success hook:
