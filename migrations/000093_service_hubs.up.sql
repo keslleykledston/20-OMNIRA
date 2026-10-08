@@ -10,6 +10,12 @@ CREATE TABLE service_hubs (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- System role for Hub agents (hub_admin already exists since 000002). It carries NO tenant-scoped
+-- permission: delegated tenant access comes only from effective_access_grants.
+INSERT INTO roles (tenant_id, key, name)
+SELECT NULL, 'hub_agent', 'Hub Agent'
+WHERE NOT EXISTS (SELECT 1 FROM roles WHERE tenant_id IS NULL AND key = 'hub_agent');
+
 -- Hub memberships: users who operate within a hub
 CREATE TABLE hub_memberships (
   id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -36,12 +42,17 @@ CREATE TABLE hub_tenant_service_contracts (
   valid_from        TIMESTAMPTZ NOT NULL DEFAULT now(),
   valid_until       TIMESTAMPTZ,
 
-  service_scope     JSONB DEFAULT '{}', -- queues, capabilities, business_hours, etc.
+  -- service_scope.queue_ids (optional JSON array of queue UUID strings): when the key is present
+  -- it is an ALLOWLIST (an empty array means no queue); when absent the contract covers every queue.
+  service_scope     JSONB NOT NULL DEFAULT '{}',
 
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  UNIQUE (hub_id, tenant_id)
+  UNIQUE (hub_id, tenant_id),
+  -- target of the composite FK that pins a grant to the contract's own hub and tenant
+  UNIQUE (id, hub_id, tenant_id),
+  CHECK (valid_until IS NULL OR valid_until > valid_from)
 );
 
 CREATE INDEX hub_tenant_service_contracts_tenant_idx ON hub_tenant_service_contracts(tenant_id);
@@ -56,7 +67,9 @@ CREATE TABLE work_pools (
   description       TEXT DEFAULT '' CHECK (char_length(description) <= 1000),
 
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  UNIQUE (id, hub_id)
 );
 
 CREATE INDEX work_pools_hub_idx ON work_pools(hub_id);
@@ -115,9 +128,8 @@ CREATE TABLE effective_access_grants (
   hub_id            UUID NOT NULL REFERENCES service_hubs(id) ON DELETE CASCADE,
   user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   tenant_id         UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  service_contract_id UUID NOT NULL REFERENCES hub_tenant_service_contracts(id) ON DELETE CASCADE,
-
-  work_pool_id      UUID REFERENCES work_pools(id) ON DELETE CASCADE,
+  service_contract_id UUID NOT NULL,
+  work_pool_id      UUID,
 
   -- grant validity (may differ from contract)
   status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'revoked')),
@@ -130,7 +142,16 @@ CREATE TABLE effective_access_grants (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  UNIQUE (hub_id, user_id, tenant_id, service_contract_id)
+  UNIQUE (hub_id, user_id, tenant_id, service_contract_id),
+  CHECK (valid_until IS NULL OR valid_until > valid_from),
+
+  -- a grant can only point at a contract of ITS OWN hub and ITS OWN tenant
+  FOREIGN KEY (service_contract_id, hub_id, tenant_id)
+    REFERENCES hub_tenant_service_contracts (id, hub_id, tenant_id) ON DELETE CASCADE,
+  -- the grantee must be a member of the grant's hub; leaving the hub deletes the grant
+  FOREIGN KEY (hub_id, user_id) REFERENCES hub_memberships (hub_id, user_id) ON DELETE CASCADE,
+  -- a work pool, when set, must belong to the same hub
+  FOREIGN KEY (work_pool_id, hub_id) REFERENCES work_pools (id, hub_id) ON DELETE SET NULL (work_pool_id)
 );
 
 CREATE INDEX effective_access_grants_user_tenant_idx ON effective_access_grants(user_id, tenant_id);
@@ -166,7 +187,11 @@ CREATE TABLE hub_inbox_items (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   -- tenant_id + conversation_id uniqueness (one inbox item per conversation per tenant)
-  UNIQUE (hub_id, tenant_id, conversation_id)
+  UNIQUE (hub_id, tenant_id, conversation_id),
+
+  -- same composite-FK pattern the rest of the schema uses: the item can only point at a conversation
+  -- of its OWN tenant, and disappears with it
+  FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id) ON DELETE CASCADE
 );
 
 CREATE INDEX hub_inbox_items_hub_tenant_idx ON hub_inbox_items(hub_id, tenant_id);

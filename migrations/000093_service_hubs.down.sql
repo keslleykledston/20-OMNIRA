@@ -37,3 +37,5 @@ DROP INDEX IF EXISTS hub_memberships_user_idx;
 DROP TABLE IF EXISTS hub_memberships;
 
 DROP TABLE IF EXISTS service_hubs;
+
+DELETE FROM roles WHERE tenant_id IS NULL AND key = 'hub_agent';
