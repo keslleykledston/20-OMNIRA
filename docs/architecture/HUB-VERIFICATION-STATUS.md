@@ -20,9 +20,10 @@ Estado desta branch: `fix/integrate-lovable-into-omnira`. **Nada do Hub está im
 
 | Parte | Classe de código | Estado |
 |---|---|---|
-| Schema `service_hubs`, `hub_memberships`, contratos, grants, work pools, skills, inbox (093) | schema | **POSTGRES VERIFIED** (aplica, desfaz ao schema exato pré-Hub, reaplica idêntico: `scripts/test-hub-migrations.sh`). FKs compostas provadas por `TestHubRLS_RelationalIntegrity`. NOT DEPLOYED |
-| RLS + funções `SECURITY DEFINER` (094) | policy | **POSTGRES VERIFIED**: `TestHubRLS_*` com 12 mutações da policy detectadas (`scripts/test-hub-rls-mutations.sh`) |
+| Schema `service_hubs`, `hub_memberships`, contratos, grants, work pools, skills, inbox (093) | schema | **POSTGRES VERIFIED** (093..096 aplicam, desfazem ao schema exato pré-Hub e reaplicam idêntico: `scripts/test-hub-migrations.sh`). FKs compostas provadas por `TestHubRLS_RelationalIntegrity`. NOT DEPLOYED |
+| RLS + funções `SECURITY DEFINER` (094) | policy | **POSTGRES VERIFIED**: `TestHubRLS_*` com 16 mutações detectadas (`scripts/test-hub-rls-mutations.sh`). A inbox é só delegada e autorizada pela fila **atual** da conversa |
 | Leitura delegada em `tenants`, `conversations`, `messages` (095) | policy | **POSTGRES VERIFIED**, somente `SELECT`. Escrita via Hub: não existe policy |
+| Fixar `pg_temp` por último nas funções `SECURITY DEFINER` existentes (096) | hardening, **independente do Hub** | **POSTGRES VERIFIED** (`TestSecurityDefinerFunctionsPinPgTempLast`). Pode ir ao `main` sozinha |
 | `domain` (`internal/hub/domain`) | domain model | IMPLEMENTED. Usado pelo adapter e pelo serviço |
 | `ports.HubRepository` | port | IMPLEMENTED. Interface larga demais (veja *dead abstraction*) |
 | `adapters.PostgresHubRepository` (6 métodos usados) | repository | **POSTGRES VERIFIED** via `TestHubAuthorizationAgreesWithRLS` e HTTP |
@@ -49,9 +50,25 @@ ou implementar com consumidor + teste.
 3. **A autorização da aplicação estabelece o `EffectiveTenantContext` sem atalho de system-admin** (`RLS-012`): todos os testes rodam com
    `isSystemAdmin=false` e o papel de aplicação não tem `BYPASSRLS`.
 
+## Revisão adversarial (Codex) — achados e destino
+Revisão somente leitura, escopo restrito à autorização do Hub. Cada achado foi **reproduzido por um teste vermelho antes de corrigir**.
+
+| Severidade | Achado | Resultado |
+|---|---|---|
+| CRÍTICO | Tabelas `TEMP` falsificadas sombreiam tabelas dentro de funções `SECURITY DEFINER` (`search_path = public`) e forjam acesso | **Reproduzido** (2 linhas do tenant C visíveis a um usuário sem hub, grant ou membership). Corrigido nas funções do Hub (nomes qualificados + `pg_temp` por último) e, para o código **pré-existente** (9 funções), na migration 096 |
+| ALTO | A inbox confia na `queue_id` da projeção em vez da fila atual da conversa | **Reproduzido**. Corrigido: a linha só é visível se a conversa pai for legível (escopo pela fila real) |
+| ALTO | Membro do hub + membro direto do tenant, sem grant, listava a inbox do hub | **Reproduzido**. Corrigido: a inbox do Hub é só delegada |
+| MÉDIO | Contrato (`service_scope`, tenant) legível após grant expirado, contrato revogado ou hub suspenso | **Reproduzido**. Corrigido |
+| MÉDIO | Funções auxiliares viram oráculo entre usuários | **Reproduzido**. Corrigido nas funções do Hub (exigem o usuário da sessão ou sessão de sistema). `has_active_membership` pré-existente tem o mesmo padrão e **não** foi alterada |
+| MÉDIO | `service_scope = 'null'::jsonb` lido como irrestrito | **Reproduzido**. Corrigido: `CHECK` de objeto, SQL nega não-objeto, Go nega mapa nulo |
+| MÉDIO | `NewTenantContext(..., "")` vira `direct` em silêncio | Corrigido (rejeita). Nenhum chamador passava vazio |
+| BAIXO | Respostas de erro sem `Cache-Control: no-store` | Corrigido (`http.Error` do Go remove o cabeçalho; helper próprio) |
+
+O Codex não conseguiu **rodar** testes (sandbox somente leitura) e registrou `CODEX_PLUGIN_NOT_EXECUTED` para a parte de execução; a leitura do código foi feita. Os testes foram executados por mim.
+
 ## Limites conhecidos (não resolvidos)
-- A RLS do OMNIRA confia que a **aplicação** define as GUCs `app.current_user_id`/`app.is_system_admin`. Isso é pré-existente; o Hub não muda esse modelo.
-- `work_pool_id` do grant **não** restringe acesso na RLS (só na semântica futura de roteamento). O escopo hoje é por fila no contrato.
-- Revogação é imediata no banco, mas **sessões longas** (SSE/WebSocket) abertas antes da revogação precisam ser reavaliadas pelo recheck de stream do
-  inbox existente; isso **não** foi testado para o Hub (não há stream do Hub).
-- 10 testes de `internal/tenancy/adapters` já falham no `main` (aceite de convite, matriz de papéis); a branch não os altera.
+- **Oráculo pré-existente**: `has_active_membership(tenant, user)` e `has_active_admin_membership` aceitam qualquer usuário como argumento (000004). Não alterei: muda comportamento de código fora do Hub. Recomendo tratar à parte.
+- A RLS do OMNIRA confia que a **aplicação** define as GUCs `app.current_user_id`/`app.is_system_admin`; quem executa SQL arbitrário na sessão da aplicação pode definir `app.is_system_admin`. Pré-existente; o Hub não muda esse modelo.
+- `work_pool_id` do grant **não** restringe acesso na RLS. O escopo hoje é por fila no contrato.
+- Revogação é imediata no banco, mas **sessões longas** (SSE/WebSocket) abertas antes da revogação dependem do recheck de stream existente; não há stream do Hub e isso **não** foi testado.
+- 10 testes de `internal/tenancy/adapters` e 2 de `internal/worker/jobsstream` já falham no `main`; a branch não os altera.

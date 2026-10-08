@@ -1,64 +1,73 @@
-# CORRECTIVE-INTEGRATION-REPORT
+# CORRECTIVE-INTEGRATION-REPORT — checkpoint 2026-10-08
 
-Estado: **Steps 1–4 concluídos.** Steps 5–16 pendentes (seção 7).
+Branch `fix/integrate-lovable-into-omnira` (9 commits à frente de `main`, **locais, sem push, nada implantado**). Backup do estado anterior:
+`backup/lovable-rebuild-attempt` (`8d3bf83`). Frontend (`web/`) **idêntico a `main`**, congelado.
 
-## 1. O que a tentativa anterior fez
-- Tratou o Hub como site separado: redirect nginx para um deploy público do Lovable e escrita em `/var/www/omnira-frontend` (diretório que a produção real não serve).
-- Adicionou um componente `HubWorkspace.tsx` sem rota nem contrato de dados.
-- Declarou "PRODUCTION READY", gate de segurança passado e E2E PASS sem executar nenhum desses passos. Documentou rotas HTTP do Hub que não existem.
+Vocabulário: IMPLEMENTED · NOT WIRED · UNIT / POSTGRES / HTTP / E2E VERIFIED · BLOCKED. `build` e `vet` são pré-requisito, não aceitação.
 
-## 2. O que era incompatível com o OMNIRA
-Ver `LOVABLE_REPLACEMENT_AUDIT.md`. Resumo: migration de seed de teste em `migrations/`, `go.mod` com dependência sem uso, binário de 34 MB versionado, scripts de deploy que ignoram a receita docker compose, confs nginx que conflitam com `00-omnira.conf`, componente órfão e dois "testes" que não compilam e não afirmam nada.
+## MIGRATIONS
+- Cadeia agora: `093_service_hubs`, `094_hub_rls_policies`, `095_hub_delegated_read`, `096_harden_security_definer_search_path`. A `096` antiga (gateway de integrações) e a `095` antiga (seed de teste) foram **retiradas**.
+- Prova do histórico antes de reutilizar 095/096: nenhum ref local (`main`, `origin/main`, `master`, branches de feature) nem banco local passa da `092`; os números só existiam na branch de backup.
+- **POSTGRES VERIFIED** no migrador de produção (`scripts/test-hub-migrations.sh`): baseline 092 → `up` → `down` em ordem inversa (schema **idêntico** ao pré-Hub) → `up` (schema idêntico ao primeiro). Também verifica RLS+FORCE+policy em toda tabela com `tenant_id`, nas 9 tabelas do Hub e que `omnira_app` não contorna RLS.
+- O original quebrava: `ERROR: infinite recursion detected in policy for relation "hub_memberships"` (reproduzido como `omnira_app`).
+- Banco vivo `omnira_dev`: continua em `092`. **Nenhuma migration aplicada em produção.**
 
-## 3. O que foi preservado
-Na branch `fix/integrate-lovable-into-omnira` (base `main` = `94250f4`):
-- Migrations `000093`, `000094`, `000096` (schema Hub, RLS, gateway de integrações).
-- `internal/hub/{domain,ports,adapters/postgres.go}`.
-- `internal/integrations/**` (gateway e adapters novos, sem consumidores).
-- `internal/tenancy/domain/context.go`: extensão aditiva do `TenantContext` + `NewHubTenantContext`.
-- `internal/ai/tools/authorization.go` (interface, sem uso).
-- Especificação: PRD, ADRS-ESSENTIAL, PHASE-0-AUDIT, acceptance.yaml, mission.yaml.
-- Seed de teste movido para `internal/hub/testdata/` (fora de `migrations/`).
+## RLS
+- **POSTGRES VERIFIED**: `internal/hub/adapters/rls_integration_test.go` (papel `omnira_app`, `WithTenantSession`, sempre `isSystemAdmin=false`). Cobre RLS-001..012: membro direto, delegação A/B/C, Bob, membership sem grant, grant expirado/futuro/revogado/suspenso, saída do hub, contrato revogado/suspenso/expirado, hub suspenso, escopo de fila (lista, vazia, malformada, fila de outro tenant), IDOR por UUID, somente leitura, credenciais/integrações invisíveis ao agente, integridade relacional (FKs compostas, CHECKs).
+- **Os testes falham quando a policy está errada**: `scripts/test-hub-rls-mutations.sh`, **16 mutantes, todos detectados** (13 na função de acesso, 1 policy de escrita, 2 na policy da inbox). Um mutante equivalente (só trocar `search_path`) foi identificado e substituído por uma mutação das duas camadas.
+- Acesso do Hub é **somente leitura** (`tenants`, `conversations`, `messages`, `hub_inbox_items`). Escrita via Hub: sem policy e todo caminho de escrita existente exige `Source==direct`.
 
-Backup completo do estado anterior: `backup/lovable-rebuild-attempt` (`8d3bf83`).
+## AUTHORIZATION
+- `application.HubAuthorizationService` + `EffectiveAccessResolver`: fonte (`direct`/`hub`) **obrigatória e explícita**, sem fallback em nenhuma direção; negação única e opaca (`ErrAccessDenied`) com motivo só para auditoria.
+- **UNIT VERIFIED** (22 negativas + resolver) e **POSTGRES VERIFIED**: serviço Go e RLS **concordam em 15 estados** (`TestHubAuthorizationAgreesWithRLS`).
+- `TenantContext`: `NewTenantContext` recusa `hub`, fonte desconhecida e fonte vazia; Hub só por `NewHubTenantContext` (carrega hub, contrato, grant, work pool, correlação).
+- Nenhum atalho de system-admin: nenhum teste do agente usa `is_system_admin()`.
 
-## 4. Código/padrões Lovable mantidos
-Nenhum código Lovable foi mantido. O que existe do Lovable é só o resultado visual (layout 3 painéis, hierarquia da lista, painel de contexto), que será usado como referência na matriz de integração UX (Step 6).
+## HUB
+`HUB-VERIFICATION-STATUS.md` classifica cada parte. Resumo: schema/RLS/autorização/API de leitura **verificados**; **projetor da inbox NOT WIRED**, provisionamento **NOT BUILT**, escrita via Hub **NOT BUILT**, UI **NOT BUILT**. API `GET /api/v1/hubs/{hub_id}/inbox[/{item_id}]` **HTTP VERIFIED**, atrás de `OMNIRA_HUB_API_ENABLED=false`, registrada no contrato OpenAPI e no guard de drift. Candidatos a remoção: ~24 métodos do repositório sem consumidor.
 
-## 5. Código Lovable rejeitado
-`HubWorkspace.tsx`, `hub-theme.css` (nunca integrado), o deploy público e o redirect nginx.
+## INTEGRATIONS
+`INTEGRATION_CONVERGENCE.md`: o OMNIRA já resolve idempotência (`ticket_external_create_attempts`), deduplicação de webhook (`channel_webhook_events` + `ON CONFLICT`), runtime de provedor (`TicketingConnector`/`K3GTicketingRuntimeResolver`), credencial por tenant (`channel_credentials`), ID externo e reconciliação. O gateway da missão (`internal/integrations`, tabelas `integration_*`) foi **retirado**: zero consumidores, duas tabelas sem RLS (reprova `TestRLSCompleteness`), dedupe com corrida e duplicação do que existe. Integração Hub→ERP: **inexistente**; credenciais e estado de integração são invisíveis ao agente do Hub (POSTGRES VERIFIED).
 
-## 6. Arquitetura OMNIRA preservada
-`web/` idêntico a `main` (`git diff main -- web` vazio). Router, auth, `TenantSwitcher`/`useMyTenants`, API client, tokens Tailwind e build intactos. Backend de `apps/`, outras partes de `internal/`, workers e compose intactos.
+## UX MAPPING
+`docs/ux/LOVABLE_INTEGRATION_MATRIX.md` (28 linhas KEEP/RESTYLE/EXTEND/ADAPT/REJECT), `COMPONENT_MAPPING.md`, `API_MAPPING.md`, `docs/adr/0036-frontend-evolution-strategy.md`, regra curta em `CLAUDE.md` e `AGENTS.md`. Limites: `omniflow-hub` no GitHub é privado e sem credencial/`gh` nesta máquina; a inspeção usou o MCP da Lovable, e vários componentes do protótipo **não foram lidos** (listados na matriz). `customer-space-central.lovable.app` = protótipo/mock ≠ produção; **não foi alterado**.
 
-## 7. Fatias restantes
-| Step | Descrição | Estado |
-|---|---|---|
-| 5 | Restaurar arquitetura frontend | feito por construção (nenhuma mudança em `web/`) |
-| 6–7 | Matriz de integração UX, Component Mapping, API Mapping | pendente. Requer inspecionar o `omniflow-hub` (não clonado localmente) |
-| 8 | ADR "Frontend Evolution Strategy" + regra em CLAUDE.md/AGENTS.md | pendente |
-| 9 | Tenant Context Bar no Conversation Cockpit existente | pendente |
-| 10 | Rodar testes de regressão existentes do frontend | pendente (baseline ainda não capturado) |
-| 11 | Hub Workspace aditivo (`/hub`, API `GET /hub/inbox`) | pendente. Backend não tem handlers HTTP |
-| 13 | Testes cross-tenant/RLS reais | pendente. Testes antigos eram esqueletos |
-| 14–15 | Revisão adversarial Codex | pendente |
-
-## 8. Status de segurança
-- **RLS do Hub: NÃO PROVADA.** Migrations nunca aplicadas em Postgres real; nenhum teste de isolamento existe.
-- Nenhuma rota do Hub está exposta (não existe handler), então não há superfície nova em produção.
-- Banco vivo `omnira_dev` permanece em `000092`, sem tabelas do Hub.
-
-## 9. Testes
+## TESTS
 | Verificação | Resultado |
 |---|---|
 | `go build ./...` | OK |
-| `go vet` (hub, integrations, tenancy/domain, ai/tools) | OK |
-| `go test ./internal/tenancy/domain/...` | OK |
-| Testes de integração com Postgres (migrations 093–096 + RLS) | não executados |
-| Regressão do frontend | não executada (`web/` sem mudanças) |
+| Unitários: `hub/application`, `tenancy/domain`, `platform/config`, `platform/httpserver` (inclui guard OpenAPI×rotas), `messages`, `flows`, `apps/api` | OK |
+| `scripts/test-hub-migrations.sh` | PASS (093..096) |
+| `scripts/test-hub-rls-mutations.sh` | PASS (16/16 mutantes mortos) |
+| Gate de integração completo (`scripts/test-integration.sh`, 29 pacotes) | **27 ok, 2 falham**, ambos **idênticos no `main` limpo**: `tenancy/adapters` (10 testes: aceite de convite, matriz de papéis) e `worker/jobsstream` (2 testes: `nats: API error 10047`). Regressões introduzidas pela branch: **0** |
+| `TestRLSCompleteness`, `hub/adapters`, `tickets/adapters`, `channels/adapters`, `inbox/adapters` | ok |
+| E2E com canal/navegador real | **não executado** |
 
-## 10. Baseline de commits
-- BASELINE_OMNIRA: `6d36f67`
-- main: `94250f4`
-- Backup: `backup/lovable-rebuild-attempt` = `8d3bf83`
-- Corretiva: `fix/integrate-lovable-into-omnira`, a partir de `main`
+## CODEX FINDINGS
+Revisão somente leitura, escopo restrito à autorização do Hub. 8 achados (1 crítico, 2 altos, 4 médios, 1 baixo). **Todos reproduzidos por teste vermelho antes de corrigir e corrigidos**; detalhes em `HUB-VERIFICATION-STATUS.md`. O crítico (tabela `TEMP` falsificada em função `SECURITY DEFINER`) existia também em 9 funções **pré-existentes** do `main`; corrigido de forma independente na migration 096. O Codex não conseguiu executar testes (sandbox somente leitura): `CODEX_PLUGIN_NOT_EXECUTED` para a execução; a leitura foi feita. Não foi pedida revisão de UX.
+
+## COMMITS (sobre `main`@`94250f4`)
+```
+c2e219c  re-aplica só o backend verificado; auditoria do desvio
+bc34177  migrations 093-095 reescritas + provas (roundtrip, RLS real, mutação)
+f8ee78e  remove gateway de integrações e interface de ferramenta duplicada
+7c7ca0d  resolução explícita direct/hub, sem fallback nem atalho de system-admin
+92a2180  API de leitura da inbox do Hub atrás de flag
+9aee984  ADR-0036, mapeamentos de UX, convergência, status de verificação
+b73f2ac  auditoria atualizada
+51d0dee  096: pg_temp por último nas funções SECURITY DEFINER (independente do Hub)
+96231b0  fecha os achados da revisão adversarial
+```
+
+## BLOCKERS / PENDÊNCIAS
+1. **`main` andou** (`aba7523`) desde o ponto de partida; rebasear antes de qualquer merge (sem colisão de migrations: `main` ainda termina em 092).
+2. 12 testes que falham no `main` (convites/papéis; JetStream `10047`): fora do escopo, mas bloqueiam um gate verde de verdade.
+3. Oráculo pré-existente `has_active_membership(tenant, user)`: não alterado (muda código fora do Hub).
+4. Projeto Lovable publicado com rota pública que serve um build (`/api/public/download/...`): decisão do dono (não alterado).
+5. Sem aprovação do dono para aplicar migrations em `omnira_dev`/produção, nem para ligar `OMNIRA_HUB_API_ENABLED`.
+
+## NEXT SLICE
+**Projetor da inbox** (conversa → `hub_inbox_items`, via worker em contexto de sistema derivado de estado persistido) com teste de reconciliação e de fila mudada; depois provisionamento mínimo (criar hub/contrato/grant por API de admin com auditoria). Só então a primeira superfície visual: faixa de contexto de tenant no cabeçalho do `ChatPane` (`LOVABLE_INTEGRATION_MATRIX.md`, linha 6).
+
+## REGRA DE SAÍDA (autorização para mexer em UI)
+As três afirmações exigidas estão provadas com evidência: (1) acesso delegado funciona no PostgreSQL real; (2) acesso cruzado indevido é bloqueado no PostgreSQL real; (3) a autorização da aplicação estabelece o `EffectiveTenantContext` sem system-admin. **A decisão de liberar o frontend é do dono**; até lá, `web/` permanece congelado.
