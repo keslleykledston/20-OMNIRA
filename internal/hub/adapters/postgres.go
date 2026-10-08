@@ -346,8 +346,8 @@ func scanInboxItem(row pgx.Row) (*domain.HubInboxItem, error) {
 // ErrInvalidCursor is returned for a cursor the server did not issue.
 var ErrInvalidCursor = errors.New("invalid cursor")
 
-func encodeInboxCursor(createdAt time.Time, id uuid.UUID) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(createdAt.UTC().Format(time.RFC3339Nano) + "|" + id.String()))
+func encodeInboxCursor(activityAt time.Time, id uuid.UUID) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(activityAt.UTC().Format(time.RFC3339Nano) + "|" + id.String()))
 }
 
 func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
@@ -370,7 +370,7 @@ func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
 	return t, id, nil
 }
 
-// ListHubInboxItems pages the hub's inbox newest-first with keyset pagination on (created_at, id).
+// ListHubInboxItems pages the hub's inbox by most recent activity with keyset pagination on (last_activity_at, id).
 // It runs inside the caller's database session, so RLS (not this query) decides which tenants' rows exist
 // for the caller; the hub_id filter only narrows within that.
 func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uuid.UUID, limit int, cursor string) ([]*domain.HubInboxItem, string, error) {
@@ -386,10 +386,10 @@ func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uui
 		if err != nil {
 			return nil, "", err
 		}
-		query += ` AND (created_at, id) < ($2, $3)`
+		query += ` AND (last_activity_at, id) < ($2, $3)`
 		args = append(args, ts, id)
 	}
-	query += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d`, len(args)+1)
+	query += fmt.Sprintf(` ORDER BY last_activity_at DESC, id DESC LIMIT $%d`, len(args)+1)
 	args = append(args, limit+1)
 
 	rows, err := q.Query(ctx, query, args...)
@@ -414,7 +414,7 @@ func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uui
 	if len(items) > limit {
 		items = items[:limit]
 		last := items[len(items)-1]
-		next = encodeInboxCursor(last.CreatedAt, last.ID)
+		next = encodeInboxCursor(*last.LastActivityAt, last.ID)
 	}
 	return items, next, nil
 }

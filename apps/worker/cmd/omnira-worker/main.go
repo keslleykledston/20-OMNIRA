@@ -49,6 +49,7 @@ import (
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	flowsworker "github.com/omnira/omnira/internal/worker/flows"
+	"github.com/omnira/omnira/internal/worker/hubprojector"
 	intelligenceworker "github.com/omnira/omnira/internal/worker/intelligence"
 	"github.com/omnira/omnira/internal/worker/jobsstream"
 	"github.com/omnira/omnira/internal/worker/publisher"
@@ -202,6 +203,13 @@ func main() {
 	// up — never assigns anything itself, and does not gate on presence
 	// (IAM4.2-B1 is separate and not implemented). Safety sweep is
 	// unconditional; the presence wakeup only needs NATS, already required.
+	// Service Hub inbox projection (read model), only when OMNIRA_HUB_PROJECTOR_ENABLED=true and the Hub migrations
+	// are applied. The (hub, tenant) pairs come from persisted contracts only; see internal/worker/hubprojector.
+	if cfg.HubProjectorEnabled {
+		interval := time.Duration(cfg.HubProjectorIntervalSeconds) * time.Second
+		go hubprojector.New(dbPool).Run(workerCtx, interval)
+		log.Printf("Hub inbox projector started (every %s)\n", interval)
+	}
 	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool)
 	go routingworker.NewSweep(livenessRepo).Run(workerCtx)
 	presenceWakeup := routingworker.NewPresenceWakeup(livenessRepo, nc)

@@ -3,6 +3,7 @@
 DROP INDEX IF EXISTS hub_inbox_items_sla_idx;
 DROP INDEX IF EXISTS hub_inbox_items_assigned_idx;
 DROP INDEX IF EXISTS hub_inbox_items_updated_at_idx;
+DROP INDEX IF EXISTS hub_inbox_items_activity_idx;
 DROP INDEX IF EXISTS hub_inbox_items_tenant_idx;
 DROP INDEX IF EXISTS hub_inbox_items_hub_tenant_idx;
 DROP TABLE IF EXISTS hub_inbox_items;

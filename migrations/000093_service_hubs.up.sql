@@ -176,7 +176,7 @@ CREATE TABLE hub_inbox_items (
   priority          TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
 
   sla_due_at        TIMESTAMPTZ,
-  last_activity_at  TIMESTAMPTZ,
+  last_activity_at  TIMESTAMPTZ NOT NULL DEFAULT now(), -- last message (or conversation start); the inbox sort key
   unread_count      INTEGER DEFAULT 0,
 
   metadata_json     JSONB DEFAULT '{}',
@@ -196,6 +196,7 @@ CREATE TABLE hub_inbox_items (
 
 CREATE INDEX hub_inbox_items_hub_tenant_idx ON hub_inbox_items(hub_id, tenant_id);
 CREATE INDEX hub_inbox_items_tenant_idx ON hub_inbox_items(tenant_id);
+CREATE INDEX hub_inbox_items_activity_idx ON hub_inbox_items(hub_id, last_activity_at DESC, id DESC);
 CREATE INDEX hub_inbox_items_updated_at_idx ON hub_inbox_items(updated_at DESC) WHERE status != 'closed';
 CREATE INDEX hub_inbox_items_assigned_idx ON hub_inbox_items(assigned_user_id) WHERE assigned_user_id IS NOT NULL;
 CREATE INDEX hub_inbox_items_sla_idx ON hub_inbox_items(sla_due_at) WHERE sla_due_at IS NOT NULL AND status != 'closed';
