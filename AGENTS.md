@@ -189,3 +189,9 @@ Cada tarefa deve retornar:
 - Um sub-agent não deve editar uma área fora de seu write-scope sem devolver uma proposta ao orquestrador.
 - Revisores não corrigem silenciosamente: registram findings; correções pertencem ao agente implementador.
 - O agente de segurança pode bloquear merge por falha de isolamento, autenticação, autorização, exposição de segredo ou auditoria insuficiente.
+
+## Protótipos de UI (Lovable e similares): referência, nunca a aplicação (ADR-0036)
+- O OMNIRA atual (`web/`, `omnira-api`) é a fonte de verdade. Protótipos gerados só inspiram UX; **não** copie app shell, rotas, auth, estado, chamadas de API ou dados falsos deles, e **não** publique/redirecione domínios para eles.
+- PRESERVE > EXTEND > REFACTOR LOCALLY > REPLACE. Mudança de frontend é aditiva, localizada e atrás de flag; o Hub convive com o workspace de tenant.
+- O frontend nunca é autoridade de tenant: o servidor resolve hub → contrato → grant → `EffectiveTenantContext` e a RLS é a segunda barreira.
+- Antes de uma fatia visual do Hub: ler `docs/ux/*` e `docs/architecture/HUB-VERIFICATION-STATUS.md`. Não use "pronto/produção/isolado/E2E passou" sem o gate executado; use IMPLEMENTED, NOT WIRED, UNIT/POSTGRES/HTTP/E2E VERIFIED, BLOCKED.
