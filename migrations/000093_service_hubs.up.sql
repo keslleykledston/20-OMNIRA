@@ -44,7 +44,7 @@ CREATE TABLE hub_tenant_service_contracts (
 
   -- service_scope.queue_ids (optional JSON array of queue UUID strings): when the key is present
   -- it is an ALLOWLIST (an empty array means no queue); when absent the contract covers every queue.
-  service_scope     JSONB NOT NULL DEFAULT '{}',
+  service_scope     JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(service_scope) = 'object'),
 
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),

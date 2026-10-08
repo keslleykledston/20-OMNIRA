@@ -133,6 +133,9 @@ func (s *HubAuthorizationService) ResolveHubAccess(ctx context.Context, req HubA
 // key is an allowlist (empty = none); a resource without a queue is not covered by a restricted contract;
 // a malformed value denies.
 func queueAllowed(scope map[string]interface{}, queue *uuid.UUID) bool {
+	if scope == nil { // JSON null, or a row that was not loaded: never read as "unrestricted"
+		return false
+	}
 	raw, present := scope["queue_ids"]
 	if !present {
 		return true

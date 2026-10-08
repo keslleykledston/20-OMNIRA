@@ -44,9 +44,6 @@ func NewTenantContext(tenantID, actorID uuid.UUID, source AccessSource) (*Tenant
 	if actorID == uuid.Nil && source != AccessSourceSystem {
 		return nil, errors.New("actor_id is required")
 	}
-	if source == "" {
-		source = AccessSourceDirect
-	}
 	// Hub access carries grant metadata and is built only by NewHubTenantContext; accepting it here
 	// would mint a "hub" context with no contract or grant behind it.
 	if source != AccessSourceDirect && source != AccessSourceSystem {

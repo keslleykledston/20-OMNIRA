@@ -187,6 +187,16 @@ func (w *world) expectFull(user uuid.UUID, tenantKey, why string) {
 	}
 }
 
+// expectFullDirect: a direct tenant member reads the tenant, its conversations and messages, but NOT the Hub's
+// aggregated projection (the Hub inbox is delegated-only; direct members use the tenant inbox).
+func (w *world) expectFullDirect(user uuid.UUID, tenantKey, why string) {
+	w.t.Helper()
+	r := w.reads(user, tenantKey)
+	if r.tenants != 1 || r.conversations == 0 || r.messages == 0 || r.inbox != 0 {
+		w.t.Errorf("%s: expected direct access without the hub projection to tenant %s, got %+v", why, tenantKey, r)
+	}
+}
+
 func (w *world) expectNone(user uuid.UUID, tenantKey, why string) {
 	w.t.Helper()
 	if r := w.reads(user, tenantKey); r != (resources{}) {
@@ -207,7 +217,7 @@ func TestHubRLS_DirectAndDelegatedMatrix(t *testing.T) {
 	stranger := w.user("stranger")
 
 	t.Run("RLS-001 direct tenant member reads own tenant", func(t *testing.T) {
-		w.expectFull(carol, "A", "carol")
+		w.expectFullDirect(carol, "A", "carol")
 	})
 	t.Run("RLS-002 direct member of A does not read B or C", func(t *testing.T) {
 		w.expectNone(carol, "B", "carol")
@@ -408,7 +418,7 @@ func TestHubRLS_RevocationAndValidity(t *testing.T) {
 		w.exec(`INSERT INTO hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, $3)`, w.hub, u, w.roleHubAgent)
 		g := w.grant(u, "A")
 		w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, g)
-		w.expectFull(u, "A", "direct membership must survive a revoked hub grant")
+		w.expectFullDirect(u, "A", "direct membership must survive a revoked hub grant")
 	})
 }
 
@@ -512,7 +522,178 @@ func TestHubRLS_RelationalIntegrity(t *testing.T) {
 	expectFail("a contract cannot end before it starts", "check constraint",
 		`INSERT INTO hub_tenant_service_contracts (hub_id, tenant_id, valid_from, valid_until) VALUES ($1,$2, now(), now() - interval '1 day')`,
 		w.hub, tenantD)
+	expectFail("a contract scope must be a JSON object (top-level null would read as unrestricted)", "check constraint",
+		`INSERT INTO hub_tenant_service_contracts (hub_id, tenant_id, service_scope) VALUES ($1,$2, 'null'::jsonb)`, w.hub, tenantD)
+	expectFail("a contract scope cannot be an array", "check constraint",
+		`INSERT INTO hub_tenant_service_contracts (hub_id, tenant_id, service_scope) VALUES ($1,$2, '[]'::jsonb)`, w.hub, tenantD)
 	expectFail("a grant cannot end before it starts", "check constraint",
 		`INSERT INTO effective_access_grants (hub_id, user_id, tenant_id, service_contract_id, valid_from, valid_until)
 		 VALUES ($1,$2,$3,$4, now(), now() - interval '1 day')`, w.hub, member, w.tenant["A"], w.contract["A"])
+}
+
+// --- regressions for the adversarial review ---------------------------------------------------------------------
+
+// A SECURITY DEFINER helper that resolves tables through search_path can be fooled by a same-named TEMP table
+// (pg_temp is searched first unless it is listed explicitly). Every helper must pin pg_catalog, public, pg_temp.
+func TestHubRLS_TempTableShadowingCannotForgeAccess(t *testing.T) {
+	w := newWorld(t)
+	attacker := w.user("attacker") // no hub, no grant, no membership anywhere
+	attempt := func() int {
+		var seen int
+		err := platformdb.WithTenantSession(w.ctx, w.app, attacker, false, func(c context.Context) error {
+			q := platformdb.QuerierFromContext(c, w.app)
+			for _, tbl := range []string{"effective_access_grants", "hub_tenant_service_contracts", "service_hubs", "hub_memberships", "memberships"} {
+				if _, err := q.Exec(c, `CREATE TEMP TABLE `+tbl+` (LIKE public.`+tbl+` INCLUDING DEFAULTS) ON COMMIT DROP`); err != nil {
+					return err
+				}
+			}
+			hub, contract := uuid.New(), uuid.New()
+			stmts := []struct {
+				sql  string
+				args []any
+			}{
+				{`INSERT INTO pg_temp.service_hubs (id, name, status) VALUES ($1, 'fake', 'active')`, []any{hub}},
+				{`INSERT INTO pg_temp.hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, $3)`, []any{hub, attacker, w.roleHubAgent}},
+				{`INSERT INTO pg_temp.hub_tenant_service_contracts (id, hub_id, tenant_id, status, valid_from) VALUES ($1, $2, $3, 'active', now() - interval '1 day')`, []any{contract, hub, w.tenant["C"]}},
+				{`INSERT INTO pg_temp.effective_access_grants (hub_id, user_id, tenant_id, service_contract_id, status, valid_from) VALUES ($1, $2, $3, $4, 'active', now() - interval '1 day')`, []any{hub, attacker, w.tenant["C"], contract}},
+				{`INSERT INTO pg_temp.memberships (tenant_id, user_id, role_id, status) VALUES ($1, $2, $3, 'active')`, []any{w.tenant["C"], attacker, w.roleTenantAgent}},
+			}
+			for _, st := range stmts {
+				if _, err := q.Exec(c, st.sql, st.args...); err != nil {
+					return err
+				}
+			}
+			return q.QueryRow(c, `SELECT (SELECT count(*) FROM conversations WHERE tenant_id = $1) + (SELECT count(*) FROM hub_inbox_items WHERE tenant_id = $1)`, w.tenant["C"]).Scan(&seen)
+		})
+		if err != nil {
+			t.Skipf("the application role cannot create TEMP tables here (%v); the shadowing vector does not exist", err)
+		}
+		return seen
+	}
+	if got := attempt(); got != 0 {
+		t.Fatalf("forged TEMP tables granted access to tenant C: %d row(s) visible", got)
+	}
+}
+
+func TestHubRLS_HelpersAreNotCrossUserOracles(t *testing.T) {
+	w := newWorld(t)
+	alice, bob := w.hubAgent("alice"), w.hubAgent("bob")
+	w.grant(alice, "A")
+	w.grant(bob, "B")
+	ask := func(as uuid.UUID, sql string, args ...any) bool {
+		w.t.Helper()
+		var v bool
+		w.must(platformdb.WithTenantSession(w.ctx, w.app, as, false, func(c context.Context) error {
+			return platformdb.QuerierFromContext(c, w.app).QueryRow(c, sql, args...).Scan(&v)
+		}))
+		return v
+	}
+	if !ask(alice, `SELECT has_active_hub_access($1, $2)`, alice, w.tenant["A"]) {
+		t.Fatal("control failed: alice must be able to ask about herself")
+	}
+	if ask(alice, `SELECT has_active_hub_access($1, $2)`, bob, w.tenant["B"]) {
+		t.Error("alice learned that bob has live access to tenant B")
+	}
+	if ask(alice, `SELECT is_hub_member($1, $2)`, w.hub, bob) {
+		t.Error("alice learned that bob is a hub member")
+	}
+	if ask(alice, `SELECT is_hub_admin($1, $2)`, w.hub, bob) {
+		t.Error("alice probed bob's hub_admin role")
+	}
+	if ask(alice, `SELECT has_active_grant_on_contract($1, $2)`, w.contract["B"], bob) {
+		t.Error("alice learned that bob holds a grant on contract B")
+	}
+}
+
+func TestHubRLS_ContractBookkeepingRequiresLiveAccess(t *testing.T) {
+	w := newWorld(t)
+	u := w.hubAgent("bookkeeping")
+	g := w.grant(u, "A")
+	contracts := func() int { return w.n(u, `SELECT count(*) FROM hub_tenant_service_contracts`) }
+	if contracts() != 1 {
+		t.Fatalf("control: an agent with a live grant sees its own contract, got %d", contracts())
+	}
+	steps := []struct{ name, set, undo string }{
+		{"grant expired", `UPDATE effective_access_grants SET valid_from = now() - interval '2 hours', valid_until = now() - interval '1 hour' WHERE id = '` + g.String() + `'`,
+			`UPDATE effective_access_grants SET valid_until = NULL WHERE id = '` + g.String() + `'`},
+		{"contract revoked", `UPDATE hub_tenant_service_contracts SET status = 'revoked' WHERE id = '` + w.contract["A"].String() + `'`,
+			`UPDATE hub_tenant_service_contracts SET status = 'active' WHERE id = '` + w.contract["A"].String() + `'`},
+		{"contract expired", `UPDATE hub_tenant_service_contracts SET valid_from = now() - interval '2 days', valid_until = now() - interval '1 day' WHERE id = '` + w.contract["A"].String() + `'`,
+			`UPDATE hub_tenant_service_contracts SET valid_until = NULL WHERE id = '` + w.contract["A"].String() + `'`},
+		{"hub suspended", `UPDATE service_hubs SET status = 'suspended' WHERE id = '` + w.hub.String() + `'`,
+			`UPDATE service_hubs SET status = 'active' WHERE id = '` + w.hub.String() + `'`},
+	}
+	for _, st := range steps {
+		w.exec(st.set)
+		if got := contracts(); got != 0 {
+			t.Errorf("%s: the agent still reads %d contract row(s) (service_scope and tenant ids)", st.name, got)
+		}
+		w.exec(st.undo)
+		if got := contracts(); got != 1 {
+			t.Errorf("%s: after restoring, expected 1 contract, got %d", st.name, got)
+		}
+	}
+}
+
+// The inbox row is a PROJECTION; its queue_id can be stale. Authorization must follow the conversation's real queue.
+func TestHubRLS_InboxFollowsTheConversationQueueNotTheProjection(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	u := w.hubAgent("scoped")
+	w.grant(u, "A")
+	w.exec(`UPDATE hub_tenant_service_contracts SET service_scope = $2::jsonb WHERE id = $1`, w.contract["A"], fmt.Sprintf(`{"queue_ids":["%s"]}`, w.queue1["A"]))
+	item := w.itemID("A")
+	if code, _ := api.open(u, w.hub, item); code != 200 {
+		t.Fatalf("control: item in the allowed queue must open, got %d", code)
+	}
+	// the conversation moves to q2; the (stale) projection still says q1
+	w.exec(`UPDATE conversations SET queue_id = $2 WHERE id = $1`, w.conv["A"], w.queue2["A"])
+	var projected uuid.UUID
+	w.must(w.owner.QueryRow(w.ctx, `SELECT queue_id FROM hub_inbox_items WHERE id = $1`, item).Scan(&projected))
+	if projected != w.queue1["A"] {
+		t.Fatal("test setup: the projection should still claim q1")
+	}
+	if got := w.n(u, `SELECT count(*) FROM hub_inbox_items WHERE conversation_id = $1`, w.conv["A"]); got != 0 {
+		t.Errorf("a stale projection queue leaked inbox metadata of a conversation now outside the scope (%d row)", got)
+	}
+	if _, lb := api.list(u, ""); len(lb.Items) != 0 {
+		t.Errorf("the list still returns %d item(s) of an out-of-scope conversation", len(lb.Items))
+	}
+}
+
+// A user who belongs to the hub AND directly to a tenant gets the tenant through the tenant inbox, not through the hub's
+// delegated projection: the Hub inbox must not fall back to direct membership.
+func TestHubRLS_HubInboxDoesNotFallBackToDirectMembership(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	u := w.hubAgent("both")
+	w.directMember(u, "A") // member of the hub (no grant) and of tenant A directly
+	if got := w.n(u, `SELECT count(*) FROM hub_inbox_items WHERE tenant_id = $1`, w.tenant["A"]); got != 0 {
+		t.Errorf("hub projection rows visible through direct membership: %d", got)
+	}
+	if code, lb := api.list(u, ""); code != 200 || len(lb.Items) != 0 {
+		t.Errorf("hub list returned status %d with %d item(s) without any grant", code, len(lb.Items))
+	}
+	if code, _ := api.open(u, w.hub, w.itemID("A")); code != 404 {
+		t.Errorf("opening a hub item without a grant returned %d, want 404", code)
+	}
+	if got := w.n(u, `SELECT count(*) FROM conversations WHERE tenant_id = $1`, w.tenant["A"]); got == 0 {
+		t.Error("direct membership lost its own access to the tenant's conversations")
+	}
+}
+
+func TestHubRLS_ErrorResponsesAreNotCacheable(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	u := w.user("nobody")
+	for name, path := range map[string]string{
+		"list denied":      fmt.Sprintf("/api/v1/hubs/%s/inbox", w.hub),
+		"open denied":      fmt.Sprintf("/api/v1/hubs/%s/inbox/%s", w.hub, w.itemID("A")),
+		"malformed hub id": "/api/v1/hubs/nope/inbox",
+	} {
+		_, _, hdr := api.do("GET", path, u, nil)
+		if got := hdr.Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s: Cache-Control = %q, want no-store", name, got)
+		}
+	}
 }

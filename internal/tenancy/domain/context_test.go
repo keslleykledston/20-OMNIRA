@@ -28,12 +28,11 @@ func TestNewTenantContext(t *testing.T) {
 			wantSrc:  AccessSourceDirect,
 		},
 		{
-			name:     "no source defaults to direct",
+			name:     "an empty source is rejected, never guessed as direct",
 			tenantID: tenantID,
 			actorID:  userID,
 			source:   "",
-			wantErr:  false,
-			wantSrc:  AccessSourceDirect,
+			wantErr:  true,
 		},
 		{
 			name:     "system access",

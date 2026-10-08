@@ -113,6 +113,7 @@ func TestResolveHubAccess_Denials(t *testing.T) {
 			s.repo.contract.ServiceScope = map[string]interface{}{"queue_ids": []interface{}{q.String()}}
 		}, nil},
 		{"malformed scope (string)", func(s *scenario) { s.repo.contract.ServiceScope = map[string]interface{}{"queue_ids": "all"} }, &q},
+		{"nil scope map (JSON null scanned from the database)", func(s *scenario) { s.repo.contract.ServiceScope = nil }, nil},
 		{"malformed scope (null)", func(s *scenario) { s.repo.contract.ServiceScope = map[string]interface{}{"queue_ids": nil} }, &q},
 		{"malformed scope (object)", func(s *scenario) {
 			s.repo.contract.ServiceScope = map[string]interface{}{"queue_ids": map[string]interface{}{}}

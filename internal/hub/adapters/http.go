@@ -3,6 +3,7 @@ package adapters
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -58,21 +59,32 @@ func toDTO(i *domain.HubInboxItem) inboxItemDTO {
 		Channel: i.Channel, Status: i.Status, Priority: i.Priority, SLADueAt: i.SLADueAt, LastActivityAt: i.LastActivityAt, UnreadCount: i.UnreadCount}
 }
 
+// httpError is http.Error that also marks the response non-cacheable. (net/http's own Error strips Cache-Control
+// on newer Go versions, so setting the header before calling it would not survive.)
+func httpError(w http.ResponseWriter, msg string, code int) {
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	_, _ = fmt.Fprintln(w, msg)
+}
+
 // requestScope extracts the caller and the hub, and refuses every client-side tenant selector.
 func requestScope(w http.ResponseWriter, r *http.Request) (actor, hub uuid.UUID, ok bool) {
 	principal, err := authn.FromContext(r.Context())
 	if err != nil || principal.UserID == uuid.Nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		httpError(w, "unauthorized", http.StatusUnauthorized)
 		return uuid.Nil, uuid.Nil, false
 	}
 	// A tenant chosen by the client is not an input of this API at all.
 	if r.URL.Query().Has("tenant_id") {
-		http.Error(w, "tenant selection is not accepted; access is derived from your grants", http.StatusBadRequest)
+		httpError(w, "tenant selection is not accepted; access is derived from your grants", http.StatusBadRequest)
 		return uuid.Nil, uuid.Nil, false
 	}
 	hubID, err := uuid.Parse(r.PathValue("hub_id"))
 	if err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		httpError(w, "invalid request", http.StatusBadRequest)
 		return uuid.Nil, uuid.Nil, false
 	}
 	return principal.UserID, hubID, true
@@ -83,11 +95,11 @@ func writeAccessError(w http.ResponseWriter, err error) {
 	case errors.Is(err, application.ErrAccessDenied):
 		// One answer for "no such hub", "not a member", "no grant", "revoked", "out of scope": no enumeration
 		// oracle, matching the API contract's Text404 ("not visible to the caller").
-		http.Error(w, "not found", http.StatusNotFound)
+		httpError(w, "not found", http.StatusNotFound)
 	case errors.Is(err, application.ErrInvalidRequest):
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		httpError(w, "invalid request", http.StatusBadRequest)
 	default:
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		httpError(w, "internal server error", http.StatusInternalServerError)
 	}
 }
 
@@ -111,17 +123,17 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 	opts := pagination.ParsePageOptionsFromQuery(r)
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err != nil || n < 1 {
-			http.Error(w, "invalid limit", http.StatusBadRequest)
+			httpError(w, "invalid limit", http.StatusBadRequest)
 			return
 		}
 	}
 	items, next, err := h.repo.ListHubInboxItems(r.Context(), hubID, opts.Limit, opts.Cursor)
 	if errors.Is(err, ErrInvalidCursor) {
-		http.Error(w, "invalid cursor", http.StatusBadRequest)
+		httpError(w, "invalid cursor", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		httpError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	out := make([]inboxItemDTO, 0, len(items))
@@ -150,7 +162,7 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 	}
 	itemID, err := uuid.Parse(r.PathValue("item_id"))
 	if err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		httpError(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
@@ -160,7 +172,7 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.repo.GetHubInboxItemByID(ctx, hubID, itemID)
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		httpError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	if item == nil { // missing, or hidden by RLS: indistinguishable on purpose
@@ -196,7 +208,7 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 	                           FROM messages WHERE conversation_id = $1 AND tenant_id = $2
 	                           ORDER BY created_at ASC, id ASC LIMIT 200`, item.ConversationID, tc.TenantID)
 	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		httpError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -204,7 +216,7 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m messageDTO
 		if err := rows.Scan(&m.ID, &m.Direction, &m.MessageType, &m.Body, &m.Status, &m.CreatedAt); err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
+			httpError(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		msgs = append(msgs, m)

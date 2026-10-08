@@ -6,21 +6,28 @@
 -- argument; callers pass current_user_id() (the session GUC set by the application), so nothing here
 -- depends on is_system_admin() for a Hub agent.
 
+-- Hardening applied to every helper below (found in adversarial review, reproduced by tests):
+--  * SET search_path = pg_catalog, public, pg_temp and schema-qualified relations/functions: with the
+--    usual "SET search_path = public" the session's pg_temp is searched FIRST for relations, so a TEMP table
+--    named like a real one would shadow it inside a SECURITY DEFINER function and forge access;
+--  * the p_user_id argument must be the session user (or a system session): otherwise any SQL-capable session
+--    could ask "does user X have access to tenant Y?" about somebody else.
+
 CREATE OR REPLACE FUNCTION is_hub_member(p_hub_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM hub_memberships WHERE hub_id = p_hub_id AND user_id = p_user_id
-  );
-$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = public;
+  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+     AND EXISTS (SELECT 1 FROM public.hub_memberships WHERE hub_id = p_hub_id AND user_id = p_user_id);
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
 CREATE OR REPLACE FUNCTION is_hub_admin(p_hub_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM hub_memberships hm
-    JOIN roles r ON r.id = hm.role_id
-    WHERE hm.hub_id = p_hub_id AND hm.user_id = p_user_id
-      AND r.tenant_id IS NULL AND r.key = 'hub_admin'
-  );
-$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = public;
+  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+     AND EXISTS (
+       SELECT 1
+       FROM public.hub_memberships hm
+       JOIN public.roles r ON r.id = hm.role_id
+       WHERE hm.hub_id = p_hub_id AND hm.user_id = p_user_id
+         AND r.tenant_id IS NULL AND r.key = 'hub_admin'
+     );
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
 -- The single definition of "this user may act on this tenant through a Hub".
 -- ALL of the following must hold at query time (now()):
@@ -28,21 +35,23 @@ $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = public;
 --   * the hub is active;
 --   * the grant is active and inside its validity window;
 --   * the service contract it points at is active and inside ITS validity window;
---   * if the contract declares service_scope.queue_ids, the resource's queue is on that allowlist
---     (a resource without a queue is NOT covered by a restricted contract; a malformed value denies).
+--   * the contract scope is a JSON object (anything else denies), and if it declares queue_ids the
+--     resource's queue is on that allowlist (a resource without a queue is NOT covered by a restricted
+--     contract; a malformed value denies).
 -- p_hub_id, when given, additionally pins the hub (used for rows that carry a hub_id).
 -- p_check_scope => false is for resources that are not bound to a queue (the tenant row itself, or a row whose
 -- queue is enforced through its parent): the grant and contract must still be live, only the queue
--- allowlist is skipped. Queue-bound resources (conversations, inbox items) always use the default (true).
+-- allowlist is skipped. Queue-bound resources (conversations) always use the default (true).
 CREATE OR REPLACE FUNCTION has_active_hub_access(
   p_user_id UUID, p_tenant_id UUID, p_queue_id UUID DEFAULT NULL, p_hub_id UUID DEFAULT NULL, p_check_scope BOOLEAN DEFAULT true
 ) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
+  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+     AND EXISTS (
     SELECT 1
-    FROM effective_access_grants g
-    JOIN hub_tenant_service_contracts c ON c.id = g.service_contract_id
-    JOIN service_hubs h ON h.id = g.hub_id
-    JOIN hub_memberships hm ON hm.hub_id = g.hub_id AND hm.user_id = g.user_id
+    FROM public.effective_access_grants g
+    JOIN public.hub_tenant_service_contracts c ON c.id = g.service_contract_id
+    JOIN public.service_hubs h ON h.id = g.hub_id
+    JOIN public.hub_memberships hm ON hm.hub_id = g.hub_id AND hm.user_id = g.user_id
     WHERE g.user_id = p_user_id
       AND g.tenant_id = p_tenant_id
       AND (p_hub_id IS NULL OR g.hub_id = p_hub_id)
@@ -50,21 +59,24 @@ CREATE OR REPLACE FUNCTION has_active_hub_access(
       AND g.status = 'active' AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())
       AND c.status = 'active' AND c.valid_from <= now() AND (c.valid_until IS NULL OR c.valid_until > now())
       AND CASE
+            WHEN jsonb_typeof(c.service_scope) IS DISTINCT FROM 'object' THEN false
             WHEN NOT p_check_scope THEN true
             WHEN c.service_scope -> 'queue_ids' IS NULL THEN true
             WHEN jsonb_typeof(c.service_scope -> 'queue_ids') <> 'array' THEN false
             ELSE p_queue_id IS NOT NULL AND (c.service_scope -> 'queue_ids') @> to_jsonb(p_queue_id::text)
           END
   );
-$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = public;
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
--- Lets an agent read the contract rows their own active grants point at (no other contract of the hub).
+-- Lets an agent read the contract row behind a LIVE grant (not an expired/revoked one, not a suspended hub).
 CREATE OR REPLACE FUNCTION has_active_grant_on_contract(p_contract_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM effective_access_grants
-    WHERE service_contract_id = p_contract_id AND user_id = p_user_id AND status = 'active'
-  );
-$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = public;
+  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+     AND EXISTS (
+       SELECT 1 FROM public.hub_tenant_service_contracts c
+       WHERE c.id = p_contract_id
+         AND public.has_active_hub_access(p_user_id, c.tenant_id, NULL, c.hub_id, false)
+     );
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
 REVOKE EXECUTE ON FUNCTION is_hub_member(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION is_hub_admin(UUID, UUID) FROM PUBLIC;
@@ -155,13 +167,18 @@ CREATE POLICY agent_skills_insert ON agent_skills FOR INSERT WITH CHECK (is_syst
 CREATE POLICY agent_skills_update ON agent_skills FOR UPDATE USING (is_system_admin()) WITH CHECK (is_system_admin());
 CREATE POLICY agent_skills_delete ON agent_skills FOR DELETE USING (is_system_admin());
 
--- hub_inbox_items (read model): a direct member of the tenant, or a Hub agent with live delegated access
--- to that tenant, that hub and that queue. Written only by the projector (system context).
+-- hub_inbox_items (read model, a PROJECTION that can be stale). Delegated only: a user who is a hub member and a
+-- direct tenant member but holds no live grant gets the tenant through the tenant inbox, not through the hub.
+-- The row is visible only if the caller holds live access (grant, contract, hub) AND can currently read the
+-- parent conversation: that read goes through conversations_read_hub_delegation, which scopes by the
+-- conversation's REAL queue, so a stale queue_id on the projection cannot widen access.
 CREATE POLICY hub_inbox_read ON hub_inbox_items FOR SELECT
   USING (
     is_system_admin()
-    OR has_active_membership(tenant_id, current_user_id())
-    OR has_active_hub_access(current_user_id(), tenant_id, queue_id, hub_id)
+    OR (
+      has_active_hub_access(current_user_id(), tenant_id, NULL, hub_id, false)
+      AND EXISTS (SELECT 1 FROM conversations c WHERE c.tenant_id = hub_inbox_items.tenant_id AND c.id = hub_inbox_items.conversation_id)
+    )
   );
 CREATE POLICY hub_inbox_insert ON hub_inbox_items FOR INSERT WITH CHECK (is_system_admin());
 CREATE POLICY hub_inbox_update ON hub_inbox_items FOR UPDATE USING (is_system_admin()) WITH CHECK (is_system_admin());
