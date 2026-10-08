@@ -2,8 +2,11 @@ package adapters
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -325,25 +328,68 @@ func (r *PostgresHubRepository) GetHubInboxItem(ctx context.Context, hubID, tena
 	return &i, nil
 }
 
+// inboxColumns is NULL-safe: the table declares DEFAULTs but not NOT NULL on the descriptive columns.
+const inboxColumns = `id, hub_id, tenant_id, conversation_id, queue_id, assigned_user_id,
+	COALESCE(customer_name, ''), COALESCE(channel, ''), COALESCE(status, 'open'), COALESCE(priority, 'normal'),
+	sla_due_at, last_activity_at, COALESCE(unread_count, 0), metadata_json, version, created_at, updated_at`
+
+func scanInboxItem(row pgx.Row) (*domain.HubInboxItem, error) {
+	var i domain.HubInboxItem
+	if err := row.Scan(&i.ID, &i.HubID, &i.TenantID, &i.ConversationID, &i.QueueID, &i.AssignedUserID,
+		&i.CustomerName, &i.Channel, &i.Status, &i.Priority, &i.SLADueAt, &i.LastActivityAt,
+		&i.UnreadCount, &i.MetadataJSON, &i.Version, &i.CreatedAt, &i.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &i, nil
+}
+
+// ErrInvalidCursor is returned for a cursor the server did not issue.
+var ErrInvalidCursor = errors.New("invalid cursor")
+
+func encodeInboxCursor(createdAt time.Time, id uuid.UUID) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(createdAt.UTC().Format(time.RFC3339Nano) + "|" + id.String()))
+}
+
+func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, uuid.Nil, ErrInvalidCursor
+	}
+	ts, idText, ok := strings.Cut(string(raw), "|")
+	if !ok {
+		return time.Time{}, uuid.Nil, ErrInvalidCursor
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return time.Time{}, uuid.Nil, ErrInvalidCursor
+	}
+	id, err := uuid.Parse(idText)
+	if err != nil {
+		return time.Time{}, uuid.Nil, ErrInvalidCursor
+	}
+	return t, id, nil
+}
+
+// ListHubInboxItems pages the hub's inbox newest-first with keyset pagination on (created_at, id).
+// It runs inside the caller's database session, so RLS (not this query) decides which tenants' rows exist
+// for the caller; the hub_id filter only narrows within that.
 func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uuid.UUID, limit int, cursor string) ([]*domain.HubInboxItem, string, error) {
 	q := platformdb.QuerierFromContext(ctx, r.pool)
-
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 
-	query := `SELECT id, hub_id, tenant_id, conversation_id, queue_id, assigned_user_id, customer_name, channel, status, priority, sla_due_at, last_activity_at, unread_count, metadata_json, version, created_at, updated_at
-		FROM hub_inbox_items
-		WHERE hub_id = $1`
-
+	query := `SELECT ` + inboxColumns + ` FROM hub_inbox_items WHERE hub_id = $1`
 	args := []interface{}{hubID}
-
 	if cursor != "" {
-		query += ` AND created_at < $2`
-		args = append(args, cursor)
+		ts, id, err := decodeInboxCursor(cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		query += ` AND (created_at, id) < ($2, $3)`
+		args = append(args, ts, id)
 	}
-
-	query += ` ORDER BY created_at DESC LIMIT $` + fmt.Sprintf("%d", len(args)+1)
+	query += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d`, len(args)+1)
 	args = append(args, limit+1)
 
 	rows, err := q.Query(ctx, query, args...)
@@ -353,34 +399,35 @@ func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uui
 	defer rows.Close()
 
 	var items []*domain.HubInboxItem
-	var lastCursor string
-
 	for rows.Next() {
-		if len(items) >= limit {
-			break
-		}
-		var i domain.HubInboxItem
-		if err := rows.Scan(&i.ID, &i.HubID, &i.TenantID, &i.ConversationID, &i.QueueID, &i.AssignedUserID,
-			&i.CustomerName, &i.Channel, &i.Status, &i.Priority, &i.SLADueAt, &i.LastActivityAt,
-			&i.UnreadCount, &i.MetadataJSON, &i.Version, &i.CreatedAt, &i.UpdatedAt); err != nil {
+		item, err := scanInboxItem(rows)
+		if err != nil {
 			return nil, "", err
 		}
-		items = append(items, &i)
-		lastCursor = i.CreatedAt.String()
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
 	}
 
-	// Check if there are more results
-	moreResults := len(items) > limit
-	if moreResults {
+	next := ""
+	if len(items) > limit {
 		items = items[:limit]
+		last := items[len(items)-1]
+		next = encodeInboxCursor(last.CreatedAt, last.ID)
 	}
+	return items, next, nil
+}
 
-	nextCursor := ""
-	if len(items) > 0 && moreResults {
-		nextCursor = lastCursor
+// GetHubInboxItemByID loads one item by its own id within a hub. The caller never supplies the tenant: it
+// is read from this persisted row (and only visible if RLS lets the caller see the row).
+func (r *PostgresHubRepository) GetHubInboxItemByID(ctx context.Context, hubID, itemID uuid.UUID) (*domain.HubInboxItem, error) {
+	q := platformdb.QuerierFromContext(ctx, r.pool)
+	item, err := scanInboxItem(q.QueryRow(ctx, `SELECT `+inboxColumns+` FROM hub_inbox_items WHERE hub_id = $1 AND id = $2`, hubID, itemID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-
-	return items, nextCursor, rows.Err()
+	return item, err
 }
 
 func (r *PostgresHubRepository) UpsertHubInboxItem(ctx context.Context, item *domain.HubInboxItem) error {

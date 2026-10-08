@@ -35,6 +35,7 @@ type HubRepository interface {
 
 	// HubInboxItem operations
 	GetHubInboxItem(ctx context.Context, hubID, tenantID, conversationID uuid.UUID) (*domain.HubInboxItem, error)
+	GetHubInboxItemByID(ctx context.Context, hubID, itemID uuid.UUID) (*domain.HubInboxItem, error)
 	ListHubInboxItems(ctx context.Context, hubID uuid.UUID, limit int, cursor string) ([]*domain.HubInboxItem, string, error)
 	UpsertHubInboxItem(ctx context.Context, item *domain.HubInboxItem) error
 	DeleteHubInboxItem(ctx context.Context, hubID, tenantID, conversationID uuid.UUID) error

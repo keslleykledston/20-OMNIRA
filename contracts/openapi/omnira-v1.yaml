@@ -28,6 +28,8 @@ servers:
   - url: /api/v1
     description: Same-origin (web nginx / vite proxy forward /api to the API)
 tags:
+  - name: Hub
+    description: Service Hub delegated access (read-only slice, feature-flagged)
   - { name: Identity, description: "Verified channel identities of internal users (ADR-0018)" }
   - { name: Accounts, description: "Customer accounts (organizations) the tenant serves (ADR-0018)" }
   - { name: Auth, description: Mock login (development only) }
@@ -797,6 +799,65 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "Default queue, or the queue still has conversations", content: { text/plain: { schema: { type: string } } } }
+  /hubs/{hub_id}/inbox:
+    get:
+      operationId: listHubInbox
+      tags: [Hub]
+      summary: The caller's authorized view of a Service Hub inbox (read-only, cursor pagination, newest first)
+      description: |
+        Behind the `OMNIRA_HUB_API_ENABLED` flag (off by default; unrouted otherwise). The caller must be an
+        active member of an active hub. Which tenants and queues appear is decided by the server from the
+        caller's live grants and service contracts (enforced again by PostgreSQL RLS); no tenant is ever
+        chosen by the client, and a `tenant_id` query parameter is rejected with 400.
+      parameters:
+        - name: hub_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: A page of inbox items
+          headers:
+            X-Pagination-Count: { $ref: '#/components/headers/XPaginationCount' }
+            X-Pagination-Limit: { $ref: '#/components/headers/XPaginationLimit' }
+            X-Pagination-HasMore: { $ref: '#/components/headers/XPaginationHasMore' }
+            X-Pagination-NextCursor: { $ref: '#/components/headers/XPaginationNextCursor' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HubInboxPage' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/inbox/{item_id}:
+    get:
+      operationId: openHubInboxItem
+      tags: [Hub]
+      summary: Open one Hub inbox item (conversation header and messages, read-only)
+      description: |
+        The item is addressed by its own id. The tenant and queue are read from the persisted item, then
+        authorized against the caller's grant, service contract and queue scope before the conversation is
+        loaded. A missing item, an item of a tenant the caller holds no live grant for, and a forged hub id are
+        all answered with the same 404.
+      parameters:
+        - name: hub_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: item_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The item with its conversation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HubInboxItemDetail' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -3138,6 +3199,62 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    HubInboxItem:
+      type: object
+      required: [id, tenant_id, conversation_id, customer_name, channel, status, priority, unread_count]
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        queue_id: { type: string, format: uuid }
+        customer_name: { type: string }
+        channel: { type: string }
+        status: { type: string }
+        priority: { type: string, enum: [low, normal, high, urgent] }
+        sla_due_at: { type: string, format: date-time }
+        last_activity_at: { type: string, format: date-time }
+        unread_count: { type: integer }
+    HubInboxPage:
+      type: object
+      required: [items, has_more, count, limit]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/HubInboxItem' }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+        count: { type: integer }
+        limit: { type: integer }
+    HubInboxItemDetail:
+      type: object
+      required: [item, tenant, access, conversation, messages]
+      properties:
+        item: { $ref: '#/components/schemas/HubInboxItem' }
+        tenant:
+          type: object
+          required: [id, name]
+          properties: { id: { type: string, format: uuid }, name: { type: string } }
+        access:
+          type: object
+          description: How the server authorized this read (always `hub` here).
+          required: [source]
+          properties: { source: { type: string, enum: [hub] }, hub_id: { type: string, format: uuid }, grant_id: { type: string, format: uuid } }
+        conversation:
+          type: object
+          required: [id, status, created_at]
+          properties: { id: { type: string, format: uuid }, status: { type: string }, title: { type: string }, created_at: { type: string, format: date-time } }
+        messages:
+          type: array
+          items:
+            type: object
+            required: [id, direction, message_type, body, status, created_at]
+            properties:
+              id: { type: string, format: uuid }
+              direction: { type: string, enum: [inbound, outbound] }
+              message_type: { type: string }
+              body: { type: string }
+              status: { type: string }
+              created_at: { type: string, format: date-time }
     MobileTokenRequest:
       type: object
       additionalProperties: false

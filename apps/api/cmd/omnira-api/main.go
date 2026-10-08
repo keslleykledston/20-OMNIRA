@@ -166,6 +166,9 @@ func main() {
 	srv.RegisterPresenceHandlers(dbPool)
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)
+	if cfg.HubAPIEnabled {
+		srv.RegisterHubHandlers(dbPool)
+	}
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions)

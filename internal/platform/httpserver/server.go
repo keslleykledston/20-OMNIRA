@@ -24,6 +24,7 @@ import (
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
 	identityapp "github.com/omnira/omnira/internal/identity/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -443,6 +444,20 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 // membership em lugar nenhum, e a AuthorizationMiddleware normal exigiria
 // isso. Por isso usa só authnMiddleware, e o handler resolve o tenant a
 // partir do próprio token.
+// RegisterHubHandlers mounts the read-only Hub API (feature-flagged by the caller). Every route runs behind
+// the authn middleware and UserSessionMiddleware: the caller's own RLS session, never system admin. Tenant
+// authority is never taken from the request; see hubadapters.HTTPHandler.
+func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool) {
+	if s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
+	h := hubadapters.NewHTTPHandler(dbPool)
+	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", authnMiddleware(userSession(http.HandlerFunc(h.ListInbox))))
+	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))
+}
+
 func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {
 	if s.authenticator == nil {
 		return
