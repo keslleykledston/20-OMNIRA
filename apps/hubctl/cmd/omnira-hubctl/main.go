@@ -34,6 +34,8 @@ const usage = `usage: omnira-hubctl --operator NAME <command> [flags]
   grant add        --hub ID --tenant ID (--user ID | --email E) [--valid-until RFC3339] [--reply]
                    (--reply lets the agent claim and answer; without it the grant is read-only, and renewing without it removes the capability)
   grant revoke     --hub ID --tenant ID (--user ID | --email E)
+  platform-operator add|revoke  (--user ID | --email E)   (who may create companies/Hubs and switch them on and off; ADR-0038)
+  platform-operator list
   show             --hub ID
   reconcile        (project every conversation into the Hub inbox once; the worker does this on a schedule when enabled)
 
@@ -110,9 +112,9 @@ func parse(args []string) (command, error) {
 		return u, nil
 	}
 	var err error
-	needHub := !(c.group == "hub" && c.action == "create") && c.group != "reconcile"
+	needHub := !(c.group == "hub" && c.action == "create") && c.group != "reconcile" && c.group != "platform-operator"
 	needTenant := (c.group == "contract") || (c.group == "grant")
-	needUser := (c.group == "member") || (c.group == "grant")
+	needUser := (c.group == "member") || (c.group == "grant") || (c.group == "platform-operator" && c.action != "list")
 	if c.hub, err = id("hub", hub, needHub); err != nil {
 		return c, err
 	}
@@ -142,7 +144,7 @@ func parse(args []string) (command, error) {
 		}
 	}
 	switch c.group + " " + c.action {
-	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "show ", "reconcile ":
+	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "show ", "reconcile ", "platform-operator add", "platform-operator revoke", "platform-operator list":
 	default:
 		return c, fmt.Errorf("%w: unknown command %q", errUsage, strings.TrimSpace(c.group+" "+c.action))
 	}
@@ -285,6 +287,25 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "grant revoked: user %s on tenant %s (hub %s)\n", user, c.tenant, c.hub)
+	case "platform-operator add":
+		if err := svc.AddPlatformOperator(ctx, user); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "user %s is a platform operator\n", user)
+	case "platform-operator revoke":
+		if err := svc.RevokePlatformOperator(ctx, user); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "user %s is no longer a platform operator\n", user)
+	case "platform-operator list":
+		ops, err := svc.ListPlatformOperators(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "platform operators (%d):\n", len(ops))
+		for _, o := range ops {
+			fmt.Fprintf(out, "  %-8s %s  %s  (granted by %s)\n", o.Status, o.UserID, o.Email, o.GrantedBy)
+		}
 	case "reconcile ":
 		res, err := hubprojector.New(pool).ReconcileAll(ctx)
 		if err != nil {

@@ -1,6 +1,6 @@
 # ADR-0038 — Gestão de empresas, integrações e atendentes pelo Hub (PROPOSTO)
 
-Status: **PROPOSTO — nada implementado.** Depende das decisões da seção 9.
+Status: **ACEITO (direção e decisões da §9); fase 0 IMPLEMENTADA e POSTGRES VERIFIED em 2026-10-08; fases 1–5 NOT WIRED.**
 Contexto anterior: ADR-0036 (Hub dentro do OMNIRA), ADR-0037 (assumir e responder pelo Hub).
 Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`) até o gate de cada fase passar.
 
@@ -96,12 +96,21 @@ Regra: nenhuma camada concede acesso; só escolhem entre quem já tem.
 | **5** | UX final, E2E no navegador com API real e canal real de teste | E2E real (hoje só mock) |
 Cada fase: revisão Codex real (read-only) antes de ligar flag em produção; sem declarar "pronto" sem gate.
 
-## 9. Decisões do dono (bloqueiam a fase 0)
+## 9. Decisões do dono — RESOLVIDAS em 2026-10-08 ("recomendado")
 1. **Quem é `platform_operator`?** Só você (`keslley@k3gsolutions.com.br`) ou um grupo?
 2. **Consentimento do cliente:** o `tenant_admin` da empresa precisa aprovar o contrato de gestão, ou o operador define sozinho? (Recomendado: o tenant vê e pode revogar; aprovação prévia só para clientes externos.)
 3. **Granularidade de gestão:** os cinco escopos da §5 estão bons, ou começamos só com `channels` + `integrations`?
 4. **Empresa nasce já com contrato para o Hub que a criou?** (Recomendado: sim, sem grants; o operador concede.)
 5. **Distribuição automática:** quer round-robin na fase 4 ou só atribuição manual por ora?
+
+Resposta do dono: adotar as recomendações. Valores adotados: (1) `platform_operator` = só `keslley@k3gsolutions.com.br` por ora, outros só via `hubctl`; (2) o `tenant_admin` vê e pode revogar o contrato de gestão, aprovação prévia só para clientes externos; (3) escopos de gestão começam em `channels` + `integrations` (os demais ficam no schema, desligados); (4) empresa criada pelo Hub nasce com contrato para ele e sem grants; (5) round-robin na fase 5, antes disso só atribuição manual.
+
+## 9.1 Fase 0 — o que foi feito (evidência)
+- **Migration 098** `has_active_hub_access` passa a exigir `tenants.status = 'active'`: empresa suspensa/inativa deixa de ser lida e respondida pelo Hub (políticas RLS delegadas, projeção, re-checagem na transação de escrita), sem apagar contrato/grant (reativar restaura).
+- **Migration 099** `platform_operators` (RLS + FORCE; leitura só da própria linha; escrita só por sessão de sistema) e `is_platform_operator(user)` (responde só para o usuário da sessão; não serve de oráculo).
+- **`omnira-hubctl platform-operator add|revoke|list`** (auditado; revogar mantém o registro). Sem rota HTTP: ninguém se autopromove.
+- Provas: testes em PostgreSQL real (`provisioning`: operadores e empresa suspensa; `adapters`: respostas/claims 404 com empresa suspensa/inativa, inbox some e volta); 24 mutantes mortos (`scripts/test-hub-reply-mutations.sh`, incl. 5 de SQL e 3 de operador); `scripts/test-hub-migrations.sh` PASS 093..099 (up/down/up idêntico; `platform_operators` com RLS+FORCE).
+- **Não feito / não implantado:** nada disto está no banco vivo (vivo em 097). Nenhum operador cadastrado ainda. Fases 1–5 pendentes. Sem revisão Codex desta fase.
 
 ## 10. Riscos
 - Gestão delegada é a parte mais sensível (credenciais de cliente): por isso fica na fase 3, depois de operador, criação e matriz estarem provados.

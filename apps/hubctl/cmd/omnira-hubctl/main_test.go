@@ -23,6 +23,10 @@ func TestParse(t *testing.T) {
 		{"grant add read-only by default", []string{"--operator", "ana", "grant", "add", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String()}, func(c command) bool { return !c.reply }},
 		{"grant add with reply", []string{"--operator", "ana", "grant", "add", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String(), "--reply"}, func(c command) bool { return c.reply }},
 		{"grant revoke", []string{"--operator", "ana", "grant", "revoke", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String()}, func(c command) bool { return c.action == "revoke" }},
+		{"platform operator add by e-mail", []string{"--operator", "ana", "platform-operator", "add", "--email", "a@b.c"}, func(c command) bool {
+			return c.group == "platform-operator" && c.action == "add" && c.email == "a@b.c" && c.hub == uuid.Nil
+		}},
+		{"platform operator list needs nothing", []string{"--operator", "ana", "platform-operator", "list"}, func(c command) bool { return c.action == "list" }},
 		{"show", []string{"--operator", "ana", "show", "--hub", hub.String()}, func(c command) bool { return c.group == "show" && c.hub == hub }},
 		{"reconcile needs no hub", []string{"--operator", "ana", "reconcile"}, func(c command) bool { return c.group == "reconcile" && c.hub == uuid.Nil }},
 	}
@@ -33,23 +37,25 @@ func TestParse(t *testing.T) {
 		}
 	}
 	bad := map[string][]string{
-		"no operator":             {"hub", "create", "--name", "x"},
-		"blank operator":          {"--operator", "  ", "hub", "create", "--name", "x"},
-		"no command":              {"--operator", "ana"},
-		"unknown command":         {"--operator", "ana", "hub", "explode"},
-		"unknown group":           {"--operator", "ana", "tenant", "create"},
-		"hub create without name": {"--operator", "ana", "hub", "create"},
-		"member without hub":      {"--operator", "ana", "member", "add", "--user", user.String()},
-		"member without user":     {"--operator", "ana", "member", "add", "--hub", hub.String()},
-		"both user and email":     {"--operator", "ana", "member", "add", "--hub", hub.String(), "--user", user.String(), "--email", "a@b.c"},
-		"grant without tenant":    {"--operator", "ana", "grant", "add", "--hub", hub.String(), "--user", user.String()},
-		"bad uuid":                {"--operator", "ana", "show", "--hub", "not-a-uuid"},
-		"nil uuid":                {"--operator", "ana", "show", "--hub", uuid.Nil.String()},
-		"bad date":                {"--operator", "ana", "grant", "add", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String(), "--valid-until", "tomorrow"},
-		"bad queue list":          {"--operator", "ana", "contract", "create", "--hub", hub.String(), "--tenant", tenant.String(), "--queues", "x,y"},
-		"status without value":    {"--operator", "ana", "contract", "status", "--hub", hub.String(), "--tenant", tenant.String()},
-		"stray argument":          {"--operator", "ana", "show", "--hub", hub.String(), "extra"},
-		"unknown flag":            {"--operator", "ana", "show", "--hub", hub.String(), "--force"},
+		"no operator":               {"hub", "create", "--name", "x"},
+		"blank operator":            {"--operator", "  ", "hub", "create", "--name", "x"},
+		"no command":                {"--operator", "ana"},
+		"unknown command":           {"--operator", "ana", "hub", "explode"},
+		"unknown group":             {"--operator", "ana", "tenant", "create"},
+		"hub create without name":   {"--operator", "ana", "hub", "create"},
+		"member without hub":        {"--operator", "ana", "member", "add", "--user", user.String()},
+		"member without user":       {"--operator", "ana", "member", "add", "--hub", hub.String()},
+		"both user and email":       {"--operator", "ana", "member", "add", "--hub", hub.String(), "--user", user.String(), "--email", "a@b.c"},
+		"grant without tenant":      {"--operator", "ana", "grant", "add", "--hub", hub.String(), "--user", user.String()},
+		"operator add without user": {"--operator", "ana", "platform-operator", "add"},
+		"operator unknown action":   {"--operator", "ana", "platform-operator", "promote", "--user", user.String()},
+		"bad uuid":                  {"--operator", "ana", "show", "--hub", "not-a-uuid"},
+		"nil uuid":                  {"--operator", "ana", "show", "--hub", uuid.Nil.String()},
+		"bad date":                  {"--operator", "ana", "grant", "add", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String(), "--valid-until", "tomorrow"},
+		"bad queue list":            {"--operator", "ana", "contract", "create", "--hub", hub.String(), "--tenant", tenant.String(), "--queues", "x,y"},
+		"status without value":      {"--operator", "ana", "contract", "status", "--hub", hub.String(), "--tenant", tenant.String()},
+		"stray argument":            {"--operator", "ana", "show", "--hub", hub.String(), "extra"},
+		"unknown flag":              {"--operator", "ana", "show", "--hub", hub.String(), "--force"},
 	}
 	for name, args := range bad {
 		if _, err := parse(args); !errors.Is(err, errUsage) {

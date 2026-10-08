@@ -84,3 +84,9 @@ O Codex não conseguiu **rodar** testes (sandbox somente leitura) e registrou `C
 - Provado no ambiente vivo: containers saudáveis, rota `/api/v1/hubs/{id}/inbox` → 401 sem auth, log "Hub inbox projector started", asset do web igual ao `web/dist`. **Não provado no vivo:** sessão real de agente do Hub, entrega real ao canal pelo Hub, navegador contra o API real.
 - Rollback: `docker tag` das imagens `rollback-pre-hub-*` para `:latest` + `up -d --no-deps --force-recreate`; desligar as flags no `.env` basta para desativar o Hub (as migrations 093..097 são aditivas e ficam).
 - Revisão Codex da fatia de resposta: tarefa `task-muze1tdt-h8zgaz` iniciada, resultado ainda não lido.
+
+## Fase 0 do ADR-0038 (migrations 098/099) — 2026-10-08, NÃO implantada
+- **POSTGRES VERIFIED:** empresa `suspended`/`inactive` não é lida nem respondida pelo Hub (assumir/responder → 404, inbox some, volta ao reativar); `platform_operators` invisível a terceiros, sem autopromoção, `is_platform_operator` não é oráculo; 24 mutantes mortos; migrations 093..099 up/down/up idênticos.
+- **IMPLEMENTED / NOT WIRED:** `hubctl platform-operator`. Nenhuma rota HTTP usa o papel ainda (fase 1).
+- **Lacuna fechada:** até a 097 (a versão implantada) suspender uma empresa NÃO impedia o atendimento pelo Hub.
+- **Pendente:** implantar 098/099 (backup + migrate + imagem com o novo hubctl), cadastrar o operador, revisão Codex.

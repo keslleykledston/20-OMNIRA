@@ -387,6 +387,12 @@ func TestHubReply_RevocationAndScopeAreHonoured(t *testing.T) {
 		{"hub suspended", func(w *world, _, _ uuid.UUID) {
 			w.exec(`UPDATE service_hubs SET status='suspended' WHERE id=$1`, w.hub)
 		}, 404},
+		{"company suspended (ADR-0038)", func(w *world, _, _ uuid.UUID) {
+			w.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, w.tenant["A"])
+		}, 404},
+		{"company inactive", func(w *world, _, _ uuid.UUID) {
+			w.exec(`UPDATE tenants SET status='inactive' WHERE id=$1`, w.tenant["A"])
+		}, 404},
 		{"agent removed from the hub", func(w *world, a, _ uuid.UUID) { w.exec(`DELETE FROM hub_memberships WHERE user_id=$1`, a) }, 404},
 		{"reply capability removed (still readable)", func(w *world, _, g uuid.UUID) {
 			w.exec(`UPDATE effective_access_grants SET can_reply=false WHERE id=$1`, g)
@@ -487,5 +493,30 @@ func TestHubReply_CapabilityRemovedBetweenAuthorizeAndWrite(t *testing.T) {
 	}
 	if w.outbound("A") != 0 {
 		t.Fatal("message queued without the reply capability")
+	}
+}
+
+// Suspending a company must also hide it from the READ side of the Hub and bring it back, untouched, when re-activated.
+func TestHub_SuspendedCompanyDisappearsFromTheInboxAndComesBack(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	alice := w.hubAgent("alice")
+	w.grant(alice, "A")
+	w.grant(alice, "B")
+	count := func() int { _, l := api.list(alice, ""); return len(l.Items) }
+	both := count()
+	if both < 2 {
+		t.Fatalf("baseline: %d items", both)
+	}
+	w.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, w.tenant["A"])
+	if got := count(); got >= both || got == 0 {
+		t.Fatalf("suspending A must hide only A: %d -> %d", both, got)
+	}
+	if code, _ := api.open(alice, w.hub, w.itemID("A")); code != 404 {
+		t.Errorf("opening an item of a suspended company: %d, want 404", code)
+	}
+	w.exec(`UPDATE tenants SET status='active' WHERE id=$1`, w.tenant["A"])
+	if got := count(); got != both {
+		t.Errorf("re-activated: %d items, want %d", got, both)
 	}
 }

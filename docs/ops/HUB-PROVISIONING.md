@@ -26,6 +26,7 @@ docker compose exec api /app/omnira-hubctl --operator <seu-nome> <comando> ...
 | `grant add --hub ID --tenant ID (--user ID \| --email E) [--valid-until RFC3339] [--reply]` | concede (ou renova) o acesso do usuário ao tenant. **Sem `--reply` o acesso é somente leitura**; com `--reply` o agente pode assumir e responder (ADR-0037). Renovar sem `--reply` remove a capacidade |
 | `grant revoke --hub ID --tenant ID (--user ID \| --email E)` | revoga |
 | `show --hub ID` | membros, contratos e grants do hub (somente leitura) |
+| `platform-operator add\|revoke (--user ID \| --email E)` / `platform-operator list` | quem pode (futuramente) criar empresas/Hubs e ligar/desligar empresas pelo Hub (ADR-0038; migration 099). Não há rota HTTP: só este comando concede ou retira |
 | `reconcile` | projeta uma vez as conversas na inbox do Hub (o worker faz isso no intervalo quando `OMNIRA_HUB_PROJECTOR_ENABLED=true`); útil logo após provisionar |
 
 ## Regras que a ferramenta impõe (testadas)

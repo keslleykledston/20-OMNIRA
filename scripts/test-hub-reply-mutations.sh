@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Mutation test for the Hub WRITE path (claim + reply): weakens the Go service, the delegated sender, the HTTP handler
+# Mutation test for the Hub WRITE path (claim + reply), the suspended-company rule (098) and platform operators (099): weakens the Go service, the delegated sender, the HTTP handler
 # and the SQL access function in several ways; the real-Postgres suite must go red every time and green on the
 # original. Throwaway database only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=omnira-hubreplymut-$$; DB=omnira_test_replymut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/hub/replying/service.go internal/messages/application/delegated_send.go internal/hub/application/authorization.go internal/hub/adapters/http.go"
+FILES="internal/hub/provisioning/operators.go internal/hub/replying/service.go internal/messages/application/delegated_send.go internal/hub/application/authorization.go internal/hub/adapters/http.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -26,10 +26,10 @@ run() {
   docker run --rm --network host -v "$PWD":/app -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false -e OMNIRA_INTEGRATION_TEST=1 \
     -e OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     -e OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    golang:1.25 go test -count=1 -run 'TestHubReply|TestDelegatedSender|TestResolveHubAccess' ./internal/hub/adapters ./internal/hub/application ./internal/messages/application 2>&1
+    golang:1.25 go test -count=1 -run 'TestHubReply|TestHub_Suspended|TestHubAccess|TestPlatformOperator|TestDelegatedSender|TestResolveHubAccess' ./internal/hub/adapters ./internal/hub/application ./internal/hub/provisioning ./internal/messages/application 2>&1
 }
 # NOTE: exit status of a pipeline ending in grep is grep's, so the verdict is read from the output.
-verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 3 ]; }
+verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 4 ]; }
 
 mkdb "$PWD/migrations"
 out=$(run || true); verdict_green "$out" || { echo "$out" | tail -20; echo "FAIL: baseline is red"; exit 1; }
@@ -76,17 +76,38 @@ mut "no-reply grant reported as not found"                 $H "case errors.Is(er
 		httpError(w, \"your access to this company is read-only\", http.StatusForbidden)" "case false:
 		httpError(w, \"your access to this company is read-only\", http.StatusForbidden)"
 
-# SQL layer: the same access function RLS uses, re-asked inside the writing transaction.
-cp migrations/*.sql "$WORK/mig/"
-python3 - "$WORK/mig/000094_hub_rls_policies.up.sql" <<'PY'
+O=internal/hub/provisioning/operators.go
+mut "a disabled user can become an operator"               $O "		if err := requireActiveUser(c, q, user); err != nil {
+			return err
+		}
+		var prev *string" "		var prev *string"
+mut "revoking leaves the operator active"                  $O "UPDATE platform_operators SET status = 'revoked', revoked_at = now(), updated_at = now() WHERE user_id = \$1" "UPDATE platform_operators SET updated_at = now() WHERE user_id = \$1"
+mut "granting an operator leaves no audit trail"           $O "return s.audit(c, q, nil, \"platform.operator.added\", \"platform_operator\", user, map[string]any{\"user_id\": user, \"reactivated\": prev != nil})" "return nil"
+
+# SQL layer: the same access function RLS uses (redefined by 098 on top of 094), re-asked inside the writing transaction,
+# plus the platform operator table, policies and function (099).
+sqlmut() { # sqlmut <name> <migration file> <from> <to>
+  rm -rf "$WORK/mig"; mkdir -p "$WORK/mig"; cp migrations/*.sql "$WORK/mig/"
+  python3 - "$WORK/mig/$2" "$3" "$4" <<'PY'
 import sys
-p=sys.argv[1]; s=open(p).read()
-f="      AND (NOT p_require_reply OR g.can_reply)\n"
-assert f in s
-open(p,'w').write(s.replace(f,"",1))
+p,f,t=sys.argv[1:4]; s=open(p).read()
+assert f in s, "SQL mutation target not found: "+f
+open(p,'w').write(s.replace(f,t,1))
 PY
-mkdb "$WORK/mig"
-killed "SQL access function ignores can_reply" "$(run || true)"
+  mkdb "$WORK/mig"
+  killed "$1" "$(run || true)"
+}
+sqlmut "SQL access function ignores can_reply"            000098_hub_access_requires_active_tenant.up.sql "      AND (NOT p_require_reply OR g.can_reply)
+" ""
+sqlmut "SQL access function ignores the company's status" 000098_hub_access_requires_active_tenant.up.sql "      AND t.status = 'active'
+" ""
+sqlmut "is_platform_operator answers for any user"        000099_platform_operators.up.sql "SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+     AND EXISTS (SELECT 1 FROM public.platform_operators" "SELECT true
+     AND EXISTS (SELECT 1 FROM public.platform_operators"
+sqlmut "anyone can read every operator row"               000099_platform_operators.up.sql "USING (is_system_admin() OR user_id = current_user_id());
+CREATE POLICY platform_operators_insert" "USING (true);
+CREATE POLICY platform_operators_insert"
+sqlmut "anyone can insert operator rows (self-promotion)" 000099_platform_operators.up.sql "FOR INSERT WITH CHECK (is_system_admin());" "FOR INSERT WITH CHECK (true);"
 mkdb "$PWD/migrations"
 out=$(run || true); verdict_green "$out" || { echo "FAIL: suite red after restore"; exit 1; }
-echo "PASS: every Hub write-path mutation was caught"
+echo "PASS: every Hub write-path, suspension and platform-operator mutation was caught"
