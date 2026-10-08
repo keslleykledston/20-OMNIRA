@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,7 @@ func NewHTTPHandler(pool *pgxpool.Pool) *HTTPHandler {
 type inboxItemDTO struct {
 	ID             uuid.UUID  `json:"id"`
 	TenantID       uuid.UUID  `json:"tenant_id"`
+	TenantName     string     `json:"tenant_name"`
 	ConversationID uuid.UUID  `json:"conversation_id"`
 	QueueID        *uuid.UUID `json:"queue_id,omitempty"`
 	CustomerName   string     `json:"customer_name"`
@@ -136,9 +138,12 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	names := h.tenantNames(r.Context(), items)
 	out := make([]inboxItemDTO, 0, len(items))
 	for _, it := range items {
-		out = append(out, toDTO(it))
+		dto := toDTO(it)
+		dto.TenantName = names[it.TenantID]
+		out = append(out, dto)
 	}
 	pagination.WritePaginationHeaders(w, &pagination.PageResult{Count: len(out), Limit: opts.Limit, HasMore: next != "", NextCursor: next})
 	writeJSON(w, map[string]any{"items": out, "has_more": next != "", "next_cursor": next, "count": len(out), "limit": opts.Limit})
@@ -221,11 +226,85 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 		}
 		msgs = append(msgs, m)
 	}
+	dto := toDTO(item)
+	dto.TenantName = tenantName
 	writeJSON(w, map[string]any{
-		"item":         toDTO(item),
+		"item":         dto,
 		"tenant":       map[string]any{"id": tc.TenantID, "name": tenantName},
 		"access":       map[string]any{"source": tc.Source, "hub_id": tc.HubID, "grant_id": tc.EffectiveGrantID},
 		"conversation": map[string]any{"id": item.ConversationID, "status": convStatus, "title": convTitle, "created_at": convCreated},
 		"messages":     msgs,
 	})
+}
+
+// tenantNames resolves display names for the tenants of the given rows, through the CALLER's session: a tenant the
+// caller holds no live grant for is simply not readable (RLS), so a name can never leak for an unauthorized tenant.
+func (h *HTTPHandler) tenantNames(ctx context.Context, items []*domain.HubInboxItem) map[uuid.UUID]string {
+	out := map[uuid.UUID]string{}
+	seen := map[uuid.UUID]bool{}
+	var ids []uuid.UUID
+	for _, it := range items {
+		if !seen[it.TenantID] {
+			seen[it.TenantID] = true
+			ids = append(ids, it.TenantID)
+		}
+	}
+	if len(ids) == 0 {
+		return out
+	}
+	rows, err := platformdb.QuerierFromContext(ctx, h.pool).Query(ctx, `SELECT id, COALESCE(NULLIF(trade_name, ''), legal_name) FROM tenants WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err == nil {
+			out[id] = name
+		}
+	}
+	return out
+}
+
+type hubDTO struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Role string    `json:"role"`
+}
+
+// ListMyHubs returns the active hubs the caller is a member of. Membership grants no tenant access by itself; this
+// only lets the UI know whether to offer the Hub workspace and which hub to open. Mount behind UserSessionMiddleware.
+func (h *HTTPHandler) ListMyHubs(w http.ResponseWriter, r *http.Request) {
+	principal, err := authn.FromContext(r.Context())
+	if err != nil || principal.UserID == uuid.Nil {
+		httpError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
+		SELECT h.id, h.name, r.key
+		FROM hub_memberships hm
+		JOIN service_hubs h ON h.id = hm.hub_id
+		JOIN roles r ON r.id = hm.role_id
+		WHERE hm.user_id = $1 AND h.status = 'active'
+		ORDER BY h.name, h.id`, principal.UserID)
+	if err != nil {
+		httpError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []hubDTO{}
+	for rows.Next() {
+		var d hubDTO
+		if err := rows.Scan(&d.ID, &d.Name, &d.Role); err != nil {
+			httpError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		httpError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"items": out})
 }

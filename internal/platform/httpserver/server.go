@@ -454,6 +454,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool) {
 	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
 	h := hubadapters.NewHTTPHandler(dbPool)
+	s.mux.Handle("GET /api/v1/hubs", authnMiddleware(userSession(http.HandlerFunc(h.ListMyHubs))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", authnMiddleware(userSession(http.HandlerFunc(h.ListInbox))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))
 }

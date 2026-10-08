@@ -799,6 +799,22 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "Default queue, or the queue still has conversations", content: { text/plain: { schema: { type: string } } } }
+  /hubs:
+    get:
+      operationId: listMyHubs
+      tags: [Hub]
+      summary: The active Service Hubs the caller is a member of (read-only)
+      description: |
+        Behind the `OMNIRA_HUB_API_ENABLED` flag (unrouted otherwise, so a client treats 404 as "Hub not available").
+        Membership grants no tenant access by itself; this only tells the UI whether to offer the Hub workspace and
+        which hub to open. Never includes hubs the caller does not belong to.
+      responses:
+        '200':
+          description: The caller's hubs (possibly empty)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HubList' }
+        '401': { $ref: '#/components/responses/Text401' }
   /hubs/{hub_id}/inbox:
     get:
       operationId: listHubInbox
@@ -3199,12 +3215,26 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    HubList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, name, role]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              role: { type: string, enum: [hub_agent, hub_admin] }
     HubInboxItem:
       type: object
-      required: [id, tenant_id, conversation_id, customer_name, channel, status, priority, unread_count]
+      required: [id, tenant_id, tenant_name, conversation_id, customer_name, channel, status, priority, unread_count]
       properties:
         id: { type: string, format: uuid }
         tenant_id: { type: string, format: uuid }
+        tenant_name: { type: string, description: Display name read through the caller own session, so only tenants they hold a live grant for }
         conversation_id: { type: string, format: uuid }
         queue_id: { type: string, format: uuid }
         customer_name: { type: string }

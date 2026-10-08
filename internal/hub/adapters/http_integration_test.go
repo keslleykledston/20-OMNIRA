@@ -43,6 +43,7 @@ func newHubAPI(t *testing.T, w *world) *hubAPI {
 	}
 	session := tenancyadapters.UserSessionMiddleware(w.app)
 	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/hubs", shim(session(http.HandlerFunc(h.ListMyHubs))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", shim(session(http.HandlerFunc(h.ListInbox))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", shim(session(http.HandlerFunc(h.OpenInboxItem))))
 	srv := httptest.NewServer(mux)
@@ -71,6 +72,7 @@ type listBody struct {
 	Items []struct {
 		ID             uuid.UUID  `json:"id"`
 		TenantID       uuid.UUID  `json:"tenant_id"`
+		TenantName     string     `json:"tenant_name"`
 		ConversationID uuid.UUID  `json:"conversation_id"`
 		QueueID        *uuid.UUID `json:"queue_id"`
 	} `json:"items"`
@@ -372,4 +374,134 @@ func TestHubAPI_Pagination(t *testing.T) {
 
 func contextWithPrincipal(r *http.Request, id uuid.UUID) context.Context {
 	return context.WithValue(r.Context(), authn.PrincipalKey, &authn.Principal{UserID: id})
+}
+
+type myHub struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Role string    `json:"role"`
+}
+
+func (a *hubAPI) myHubs(user uuid.UUID) (int, []myHub, string) {
+	a.w.t.Helper()
+	code, body, _ := a.do("GET", "/api/v1/hubs", user, nil)
+	var out struct {
+		Items []myHub `json:"items"`
+	}
+	if code == 200 {
+		a.w.must(json.Unmarshal([]byte(body), &out))
+	}
+	return code, out.Items, body
+}
+
+func TestHubAPI_ListMyHubs(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	agent := w.hubAgent("agent")
+	admin := w.user("admin")
+	w.exec(`INSERT INTO hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, $3)`, w.hub, admin, w.roleHubAdmin)
+	stranger := w.user("stranger")
+
+	t.Run("a member sees the hub and their role, nothing about others", func(t *testing.T) {
+		code, items, _ := api.myHubs(agent)
+		if code != 200 || len(items) != 1 || items[0].ID != w.hub || items[0].Role != "hub_agent" {
+			t.Fatalf("agent: %d %+v", code, items)
+		}
+		if _, items, _ := api.myHubs(admin); len(items) != 1 || items[0].Role != "hub_admin" {
+			t.Fatalf("admin: %+v", items)
+		}
+	})
+	t.Run("someone with no hub gets an empty list, not an error", func(t *testing.T) {
+		code, items, body := api.myHubs(stranger)
+		if code != 200 || len(items) != 0 || !strings.Contains(body, `"items":[]`) {
+			t.Fatalf("stranger: %d %q", code, body)
+		}
+	})
+	t.Run("a hub the caller is not in never appears", func(t *testing.T) {
+		other := uuid.New()
+		w.exec(`INSERT INTO service_hubs (id, name) VALUES ($1, 'Somebody else hub')`, other)
+		if _, items, _ := api.myHubs(agent); len(items) != 1 || items[0].ID == other {
+			t.Fatalf("leaked another hub: %+v", items)
+		}
+	})
+	t.Run("a member of two hubs gets both, ordered by name", func(t *testing.T) {
+		second := uuid.New()
+		w.exec(`INSERT INTO service_hubs (id, name) VALUES ($1, 'AAA first by name')`, second)
+		u := w.hubAgent("two")
+		w.exec(`INSERT INTO hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, $3)`, second, u, w.roleHubAgent)
+		_, items, _ := api.myHubs(u)
+		if len(items) != 2 || items[0].ID != second {
+			t.Fatalf("expected 2 hubs ordered by name, got %+v", items)
+		}
+	})
+	t.Run("a suspended hub is not offered, and leaving a hub removes it", func(t *testing.T) {
+		u := w.hubAgent("temp")
+		w.exec(`UPDATE service_hubs SET status = 'suspended' WHERE id = $1`, w.hub)
+		if _, items, _ := api.myHubs(u); len(items) != 0 {
+			t.Errorf("suspended hub still listed: %+v", items)
+		}
+		w.exec(`UPDATE service_hubs SET status = 'active' WHERE id = $1`, w.hub)
+		if _, items, _ := api.myHubs(u); len(items) != 1 {
+			t.Errorf("reactivated hub not listed: %+v", items)
+		}
+		w.exec(`DELETE FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, w.hub, u)
+		if _, items, _ := api.myHubs(u); len(items) != 0 {
+			t.Errorf("a removed member still sees the hub: %+v", items)
+		}
+	})
+	t.Run("unauthenticated is 401 and the endpoint is read-only", func(t *testing.T) {
+		if code, _, _ := api.myHubs(uuid.Nil); code != 401 {
+			t.Errorf("status %d", code)
+		}
+		for _, m := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+			if code, _, _ := api.do(m, "/api/v1/hubs", agent, nil); code != 405 {
+				t.Errorf("%s -> %d, want 405", m, code)
+			}
+		}
+	})
+}
+
+func TestHubAPI_TenantNamesComeOnlyFromGrantedTenants(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	w.exec(`UPDATE tenants SET trade_name = 'Nome Fantasia B' WHERE id = $1`, w.tenant["B"])
+	alice := w.hubAgent("alice")
+	w.grant(alice, "A")
+	w.grant(alice, "B")
+
+	_, lb := api.list(alice, "")
+	if len(lb.Items) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(lb.Items))
+	}
+	var nameC string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT legal_name FROM tenants WHERE id = $1`, w.tenant["C"]).Scan(&nameC))
+	_, raw, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox", w.hub), alice, nil)
+	if strings.Contains(raw, nameC) || strings.Contains(raw, w.tenant["C"].String()) {
+		t.Fatal("the response mentions the ungranted tenant C")
+	}
+	for _, it := range lb.Items {
+		switch it.TenantID {
+		case w.tenant["A"]:
+			if !strings.HasPrefix(it.TenantName, "Tenant A ") {
+				t.Errorf("tenant A name: %q", it.TenantName)
+			}
+		case w.tenant["B"]:
+			if it.TenantName != "Nome Fantasia B" {
+				t.Errorf("trade name must win over legal name, got %q", it.TenantName)
+			}
+		default:
+			t.Errorf("item of an unexpected tenant %s", it.TenantID)
+		}
+	}
+	// the same name travels with the opened item
+	code, body := api.open(alice, w.hub, w.itemID("B"))
+	if code != 200 || !strings.Contains(body, `"tenant_name":"Nome Fantasia B"`) {
+		t.Fatalf("open: %d %s", code, body)
+	}
+	// a grant that is no longer live gives no names (the rows are hidden too)
+	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, alice, w.tenant["B"])
+	_, raw, _ = api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox", w.hub), alice, nil)
+	if strings.Contains(raw, "Nome Fantasia B") {
+		t.Error("a revoked grant still reveals the tenant name")
+	}
 }
