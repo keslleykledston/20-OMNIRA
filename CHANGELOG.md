@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed (Flow Builder — chamado sem assunto)
+- `find_open_tickets` passa a nomear o chamado pelo assunto, ou por `nº <número do CRM/ERP>` quando o assunto local está vazio (chamado aberto no CRM pelo Inbox), ou por `sem assunto registrado`. Antes o cliente lia `chamado aberto: ""` e o resumo do atendente terminava em `existe: .` (smoke com telefone real, 2026-10-07).
+- **Implantado em 2026-10-08** (só o `worker`, que executa os fluxos; sem migration). Rollback: `20-omnira-worker:rollback-pre-ticketlabel-20261007-2054`.
+- O fluxo publicado "Recepção inteligente" (versão 2 do tenant, instalada antes do aviso ao cliente entrar no modelo) não avisa o cliente ao passar para um atendente. Um **rascunho NÃO publicado** (revisão 3) com os avisos de transferência (chamado existente, suporte, financeiro, comercial, outro assunto) foi salvo; a versão em uso não mudou. Falta o dono simular e publicar.
+
 ### Added (aviso de abertura de chamado ao cliente — ligado por padrão)
 - Quando o operador abre um chamado no CRM/ERP do tenant (`POST .../conversations/{id}/ticket`), o cliente recebe na própria conversa a mensagem "Prezado {nome}, Sua solicitação foi recebida com sucesso… Protocolo do chamado: {número}… Equipe de Suporte". O número é o `external_ticket_id` devolvido pelo CRM/ERP; o nome é o do contato (sem nome utilizável, "Prezado cliente"). Texto em `internal/messages/application/ticket_notice.go`.
 - É um texto de saída comum enfileirado pelo `Sender` (mesmas permissões, janela de 24 h e entrega de qualquer resposta, atribuído ao operador que abriu o chamado). A chave de idempotência é o chamado local: repetir ou reexecutar a criação nunca manda duas vezes, e um replay dá nova chance a um aviso que falhou. É **best-effort** dentro de um savepoint: janela fechada, canal fora ou conversa sem número só registram no log e **nunca** mudam a resposta do chamado. Só dispara para chamado realmente criado/replay confirmado (não para rejeição, vínculo existente ou desfecho incerto).
