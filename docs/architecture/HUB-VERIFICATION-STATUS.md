@@ -76,3 +76,11 @@ O Codex não conseguiu **rodar** testes (sandbox somente leitura) e registrou `C
 - 10 testes de `internal/tenancy/adapters`, 2 de `internal/worker/jobsstream` e, no frontend, 1 teste do `SettingsShell` + 1 spec Playwright capturada pelo vitest já falham no `main`; a branch não os altera.
 - O projetor é reconciliação periódica (intervalo configurável), não por evento: uma conversa nova aparece na inbox do Hub só no próximo ciclo.
 - `sla_due_at` não é projetado: a plataforma não tem fonte de SLA contratual (o inbox do tenant só tem limiares de exibição).
+
+## Implantação (LAB) — 2026-10-08
+
+- Código `074042c` implantado (api, worker, web). Migrations 093..097 aplicadas ao banco vivo (estava em 092) após `scripts/backup-omnira-db.sh` (dump `omnira_dev_20261008T102318Z`, cópia externa e na nuvem conferidas). Imagens de rollback: `20-omnira-{api,web,worker}:rollback-pre-hub-20261008-0623`.
+- Flags ligadas: `OMNIRA_HUB_API_ENABLED=true`, `OMNIRA_HUB_PROJECTOR_ENABLED=true`. **Nenhum Hub provisionado** (`service_hubs` vazio): as rotas respondem 401 sem sessão, o projetor roda sem trabalho. Nenhum usuário tem acesso delegado.
+- Provado no ambiente vivo: containers saudáveis, rota `/api/v1/hubs/{id}/inbox` → 401 sem auth, log "Hub inbox projector started", asset do web igual ao `web/dist`. **Não provado no vivo:** sessão real de agente do Hub, entrega real ao canal pelo Hub, navegador contra o API real.
+- Rollback: `docker tag` das imagens `rollback-pre-hub-*` para `:latest` + `up -d --no-deps --force-recreate`; desligar as flags no `.env` basta para desativar o Hub (as migrations 093..097 são aditivas e ficam).
+- Revisão Codex da fatia de resposta: tarefa `task-muze1tdt-h8zgaz` iniciada, resultado ainda não lido.
