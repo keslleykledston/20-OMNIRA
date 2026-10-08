@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -21,9 +22,10 @@ import (
 // noticeEnv runs the notice the way production does: inside the tenant session of a request made by the operator.
 type noticeEnv struct {
 	*env
-	mux  *http.ServeMux
-	errs chan error
+	mux *http.ServeMux
 }
+
+type noticeErrKey struct{}
 
 func newNoticeEnv(t *testing.T) *noticeEnv {
 	e := newEnv(t)
@@ -31,27 +33,26 @@ func newNoticeEnv(t *testing.T) *noticeEnv {
 	notice := messagesapplication.NewTicketOpenedNotice(messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(e.app)), store)
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(e.app), tenancyadapters.NewPostgresTenantRepository(e.app))
 	mw := tenancyadapters.AuthorizationMiddleware(e.app, authz)
-	n := &noticeEnv{env: e, mux: http.NewServeMux(), errs: make(chan error, 1)}
+	n := &noticeEnv{env: e, mux: http.NewServeMux()}
 	n.mux.Handle("POST /t/{tenant_id}/c/{conversation_id}/t/{ticket_id}/{number}", mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conv, _ := uuid.Parse(r.PathValue("conversation_id"))
 		ticket, _ := uuid.Parse(r.PathValue("ticket_id"))
-		n.errs <- notice.NotifyTicketOpened(r.Context(), conv, ticket, r.PathValue("number"))
+		*r.Context().Value(noticeErrKey{}).(*error) = notice.NotifyTicketOpened(r.Context(), conv, ticket, r.PathValue("number"))
+		w.WriteHeader(http.StatusNoContent)
 	})))
 	return n
 }
 
 func (n *noticeEnv) notify(user, tenant, conv, ticket uuid.UUID, number string) error {
 	req := httptest.NewRequest(http.MethodPost, "/t/"+tenant.String()+"/c/"+conv.String()+"/t/"+ticket.String()+"/"+url.PathEscape(number), nil)
-	req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: user, Subject: user.String()}))
+	var result error
+	req = req.WithContext(context.WithValue(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: user, Subject: user.String()}), noticeErrKey{}, &result))
 	rec := httptest.NewRecorder()
 	n.mux.ServeHTTP(rec, req)
-	select {
-	case err := <-n.errs:
-		return err
-	default:
-		n.t.Fatalf("handler did not run (status %d: %s)", rec.Code, rec.Body.String())
-		return nil
+	if rec.Code != http.StatusNoContent {
+		n.t.Errorf("handler did not run (status %d: %s)", rec.Code, rec.Body.String())
 	}
+	return result
 }
 
 func (n *noticeEnv) bodies(conv uuid.UUID) (out []string) {
@@ -157,5 +158,47 @@ func TestTicketOpenedNoticeSanitizesTheProfileName(t *testing.T) {
 	got := n.bodies(n.convA)
 	if len(got) != 1 || !strings.HasPrefix(got[0], "Prezado Joao Protocolo do chamado: 1,\n\n") || strings.Count(got[0], "\n\n") != 4 {
 		t.Fatalf("body: %q", got)
+	}
+}
+
+// The Sender deduplicates per operator, so the notice must not: after a transfer the new assignee repeating the
+// creation (a replay of the same ticket) must not message the customer again.
+func TestTicketOpenedNoticeIsNotRepeatedByAnotherOperator(t *testing.T) {
+	n := newNoticeEnv(t)
+	ticket := uuid.New()
+	if err := n.notify(n.agent1, n.tenantA, n.convA, ticket, "28180"); err != nil {
+		t.Fatal(err)
+	}
+	n.exec(`UPDATE conversations SET assigned_to_user_id=$1 WHERE id=$2`, n.agent2, n.convA)
+	if err := n.notify(n.agent2, n.tenantA, n.convA, ticket, "28180"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.notify(n.supervisor, n.tenantA, n.convA, ticket, "28180"); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.bodies(n.convA); len(got) != 1 {
+		t.Fatalf("the customer got %d messages for one ticket", len(got))
+	}
+}
+
+// Two operators announcing the same ticket at the same moment (the lock makes the second wait and see the first).
+func TestTicketOpenedNoticeIsSentOnceUnderConcurrency(t *testing.T) {
+	n := newNoticeEnv(t)
+	for round := 0; round < 5; round++ {
+		ticket := uuid.New()
+		var wg sync.WaitGroup
+		for _, who := range []uuid.UUID{n.agent1, n.supervisor, n.supervisor, n.agent1} {
+			wg.Add(1)
+			go func(who uuid.UUID) {
+				defer wg.Done()
+				if err := n.notify(who, n.tenantA, n.convA, ticket, "9"); err != nil {
+					t.Errorf("round %d: %v", round, err)
+				}
+			}(who)
+		}
+		wg.Wait()
+		if c := n.count(`SELECT count(*) FROM messages WHERE conversation_id=$1 AND idempotency_key=$2`, n.convA, "ticket-opened-"+ticket.String()); c != 1 {
+			t.Fatalf("round %d: %d messages for one ticket", round, c)
+		}
 	}
 }

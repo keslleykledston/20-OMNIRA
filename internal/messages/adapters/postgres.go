@@ -192,3 +192,24 @@ func (s *PostgresOutboundStore) ContactName(ctx context.Context, conversationID 
 	}
 	return *name, nil
 }
+
+// NoticeAlreadySent takes a transaction-scoped advisory lock on (tenant, key) and reports whether any operator already
+// queued a message with that key in the conversation. The lock is held until the request's transaction ends, so a
+// concurrent announcement of the same ticket waits and then sees the committed message instead of adding a second one.
+func (s *PostgresOutboundStore) NoticeAlreadySent(ctx context.Context, conversationID uuid.UUID, key string) (bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return false, err
+	}
+	q := platformdb.QuerierFromContext(ctx, s.pool)
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID.String()+"/"+key); err != nil {
+		return false, fmt.Errorf("messages: lock notice: %w", err)
+	}
+	var sent bool
+	if err := q.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND direction = 'outbound' AND idempotency_key = $3)`,
+		tenantID, conversationID, key).Scan(&sent); err != nil {
+		return false, fmt.Errorf("messages: check notice: %w", err)
+	}
+	return sent, nil
+}
