@@ -18,7 +18,7 @@ Foi **iniciada** (`task-muyxtuiu-n3c6zb`), mas **o relatório não foi lido**: `
 
 ### Limites desta fatia
 - Projetor é **reconciliação periódica**, não por evento; `sla_due_at` não é projetado (sem fonte de SLA).
-- Anyone who can exec in the API container já tem as credenciais do banco; a CLI não amplia esse limite, apenas o deixa auditável.
+- Quem consegue executar comandos no container do API já tem as credenciais do banco; a CLI não amplia esse limite, só o torna auditável.
 - Concorrência de dois workers projetando o mesmo par é segura (upsert idempotente), mas pode haver um deadlock raro; ele é registrado e a próxima rodada corrige.
 
 ---
