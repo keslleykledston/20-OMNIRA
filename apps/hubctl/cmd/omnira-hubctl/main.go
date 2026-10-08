@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osuser "os/user"
 	"strings"
 	"time"
 
@@ -167,6 +168,45 @@ func main() {
 	}
 }
 
+// osIdentity is the operating-system account and host that actually ran the tool. It is evidence, not proof: whoever
+// can run this tool already holds the database credentials. It is recorded NEXT TO the claimed --operator name so a
+// made-up name is at least visible in the audit trail.
+func osIdentity() (account, host string) {
+	if u, err := osuser.Current(); err == nil {
+		account = u.Username
+	}
+	host, _ = os.Hostname()
+	return account, host
+}
+
+// attributedOperator joins the claimed operator and the OS identity, keeping the whole string within the audit limit
+// (the claimed name is shortened first, never the OS evidence).
+func attributedOperator(claimed string, account, host string) string {
+	const limit = 100
+	clean := func(v string) string {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return "?"
+		}
+		return strings.Map(func(r rune) rune {
+			if r < 32 || r == 127 {
+				return -1
+			}
+			return r
+		}, v)
+	}
+	suffix := fmt.Sprintf(" [os %s@%s]", clean(account), clean(host))
+	room := limit - len([]rune(suffix))
+	name := []rune(strings.TrimSpace(claimed))
+	if room < 1 {
+		return string(name[:min(len(name), limit)])
+	}
+	if len(name) > room {
+		name = name[:room]
+	}
+	return string(name) + suffix
+}
+
 func execute(ctx context.Context, c command, out io.Writer) error {
 	url := os.Getenv("OMNIRA_DATABASE_URL")
 	if url == "" {
@@ -180,7 +220,8 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 	if err := platformdb.RequireUnprivilegedRole(ctx, pool); err != nil && os.Getenv("OMNIRA_ALLOW_PRIVILEGED_DB") != "true" {
 		return fmt.Errorf("%w (set OMNIRA_ALLOW_PRIVILEGED_DB=true only for a deliberate exception)", err)
 	}
-	svc, err := provisioning.New(pool, c.operator)
+	account, host := osIdentity()
+	svc, err := provisioning.New(pool, attributedOperator(c.operator, account, host))
 	if err != nil {
 		return err
 	}

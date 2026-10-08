@@ -31,9 +31,10 @@ Estado desta branch: `fix/integrate-lovable-into-omnira`. **Nada do Hub está im
 | `application.EffectiveAccessResolver` | authorization service | **UNIT VERIFIED**. Fonte obrigatória e explícita, sem fallback direct↔hub |
 | `domain.TenantContext` (Hub) | context | **UNIT VERIFIED**. `NewTenantContext` recusa `hub` e fontes desconhecidas |
 | `adapters.HTTPHandler` (`GET /hubs/{id}/inbox`, `.../{item}`) | HTTP slice | **HTTP VERIFIED** (negativos: IDOR, seletor forjado, revogação imediata, escopo de fila, paginação). Atrás de `OMNIRA_HUB_API_ENABLED=false` |
-| Projeção da inbox (`hub_inbox_items`) | projection | **NOT WIRED**: tabela e leitura existem; **não há projetor** que a preencha a partir das conversas |
-| Provisionamento (criar hub, contrato, grant) | service | **NOT BUILT**. Hoje só por SQL do dono |
-| UI do Hub | frontend | **NOT BUILT** (frontend congelado) |
+| Projetor da inbox (`internal/worker/hubprojector`) | projection | **POSTGRES VERIFIED** (espelha nome, canal, fila, atribuição, prioridade do chamado, não lidas; idempotente; remove ao revogar/expirar/suspender; ignora conversa interna; isola hub e tenant). 9 mutações do SQL detectadas (`scripts/test-hub-projector-mutations.sh`). Ligado ao worker atrás de `OMNIRA_HUB_PROJECTOR_ENABLED=false`. **NOT DEPLOYED**; gatilho por evento ainda não existe (reconciliação periódica) |
+| Provisionamento (hub, membro, contrato, grant) — `internal/hub/provisioning` + `omnira-hubctl` | service + CLI de operador | **POSTGRES VERIFIED** (validações no servidor, auditoria na mesma transação, o que o agente enxerga pela RLS após cada passo) e **CLI executada de ponta a ponta** contra Postgres. 8 mutações detectadas (`scripts/test-hub-provisioning-mutations.sh`). Imagem do API compila com a ferramenta. **Sem API HTTP**: o OMNIRA não tem "administrador de plataforma" humano. **NOT DEPLOYED** |
+| Faixa de contexto de tenant no `ChatPane` (`TenantContextBar`, `TenantBadge`, `--tenant-accent`) | frontend | **UNIT VERIFIED** (jsdom): aparece só com 2+ empresas e usa a empresa da sessão; testes falham se ignorar a sessão, aparecer com 1 empresa ou quebrar com empresa desconhecida. **Não** verificada em navegador real |
+| Rota/tela `/hub` | frontend | **NOT BUILT** |
 | Escrita via Hub (responder, atribuir) | service | **NOT BUILT**. Todos os caminhos de escrita existentes exigem `Source==direct`, então um contexto Hub é recusado por construção |
 
 ## Dead abstraction (candidatos a remoção no próximo corte)
@@ -59,7 +60,7 @@ Revisão somente leitura, escopo restrito à autorização do Hub. Cada achado f
 | ALTO | A inbox confia na `queue_id` da projeção em vez da fila atual da conversa | **Reproduzido**. Corrigido: a linha só é visível se a conversa pai for legível (escopo pela fila real) |
 | ALTO | Membro do hub + membro direto do tenant, sem grant, listava a inbox do hub | **Reproduzido**. Corrigido: a inbox do Hub é só delegada |
 | MÉDIO | Contrato (`service_scope`, tenant) legível após grant expirado, contrato revogado ou hub suspenso | **Reproduzido**. Corrigido |
-| MÉDIO | Funções auxiliares viram oráculo entre usuários | **Reproduzido**. Corrigido nas funções do Hub (exigem o usuário da sessão ou sessão de sistema). `has_active_membership` pré-existente tem o mesmo padrão e **não** foi alterada |
+| MÉDIO | Funções auxiliares viram oráculo entre usuários | **Reproduzido**. Corrigido nas funções do Hub e, com autorização do dono, também em `has_active_membership`/`has_active_admin_membership` (migration 097; vermelho sem ela, verde com ela) |
 | MÉDIO | `service_scope = 'null'::jsonb` lido como irrestrito | **Reproduzido**. Corrigido: `CHECK` de objeto, SQL nega não-objeto, Go nega mapa nulo |
 | MÉDIO | `NewTenantContext(..., "")` vira `direct` em silêncio | Corrigido (rejeita). Nenhum chamador passava vazio |
 | BAIXO | Respostas de erro sem `Cache-Control: no-store` | Corrigido (`http.Error` do Go remove o cabeçalho; helper próprio) |
@@ -67,8 +68,9 @@ Revisão somente leitura, escopo restrito à autorização do Hub. Cada achado f
 O Codex não conseguiu **rodar** testes (sandbox somente leitura) e registrou `CODEX_PLUGIN_NOT_EXECUTED` para a parte de execução; a leitura do código foi feita. Os testes foram executados por mim.
 
 ## Limites conhecidos (não resolvidos)
-- **Oráculo pré-existente**: `has_active_membership(tenant, user)` e `has_active_admin_membership` aceitam qualquer usuário como argumento (000004). Não alterei: muda comportamento de código fora do Hub. Recomendo tratar à parte.
 - A RLS do OMNIRA confia que a **aplicação** define as GUCs `app.current_user_id`/`app.is_system_admin`; quem executa SQL arbitrário na sessão da aplicação pode definir `app.is_system_admin`. Pré-existente; o Hub não muda esse modelo.
 - `work_pool_id` do grant **não** restringe acesso na RLS. O escopo hoje é por fila no contrato.
 - Revogação é imediata no banco, mas **sessões longas** (SSE/WebSocket) abertas antes da revogação dependem do recheck de stream existente; não há stream do Hub e isso **não** foi testado.
-- 10 testes de `internal/tenancy/adapters` e 2 de `internal/worker/jobsstream` já falham no `main`; a branch não os altera.
+- 10 testes de `internal/tenancy/adapters`, 2 de `internal/worker/jobsstream` e, no frontend, 1 teste do `SettingsShell` + 1 spec Playwright capturada pelo vitest já falham no `main`; a branch não os altera.
+- O projetor é reconciliação periódica (intervalo configurável), não por evento: uma conversa nova aparece na inbox do Hub só no próximo ciclo.
+- `sla_due_at` não é projetado: a plataforma não tem fonte de SLA contratual (o inbox do tenant só tem limiares de exibição).

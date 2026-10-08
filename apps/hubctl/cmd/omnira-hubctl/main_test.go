@@ -57,3 +57,26 @@ func TestParse(t *testing.T) {
 		t.Error("usage must mention the mandatory operator")
 	}
 }
+
+func TestAttributedOperator(t *testing.T) {
+	if got := attributedOperator("ana", "suporte", "srv1"); got != "ana [os suporte@srv1]" {
+		t.Errorf("got %q", got)
+	}
+	if got := attributedOperator("ana", "", " "); got != "ana [os ?@?]" {
+		t.Errorf("missing identity must be visible, got %q", got)
+	}
+	if got := attributedOperator("ana", "su\x00po\nrte", "srv1"); strings.ContainsAny(got, "\x00\n") {
+		t.Errorf("control characters must be stripped, got %q", got)
+	}
+	long := strings.Repeat("x", 300)
+	got := attributedOperator(long, "suporte", "srv1")
+	if n := len([]rune(got)); n > 100 {
+		t.Errorf("exceeds the audit limit: %d", n)
+	}
+	if !strings.HasSuffix(got, "[os suporte@srv1]") {
+		t.Errorf("the OS evidence must survive truncation, got %q", got)
+	}
+	if n := len([]rune(attributedOperator("a", strings.Repeat("u", 200), strings.Repeat("h", 200)))); n > 100 {
+		t.Errorf("an absurd OS identity must still fit: %d", n)
+	}
+}

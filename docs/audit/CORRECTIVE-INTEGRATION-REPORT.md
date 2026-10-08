@@ -1,6 +1,29 @@
 # CORRECTIVE-INTEGRATION-REPORT — checkpoint 2026-10-08
 
-Branch `fix/integrate-lovable-into-omnira` (9 commits à frente de `main`, **locais, sem push, nada implantado**). Backup do estado anterior:
+## ATUALIZAÇÃO — 2ª fatia (autorizada pelo dono: "pode tratar com a mesma proteção" e "siga")
+Tudo continua **local, sem push, nada implantado**; o banco vivo segue em `092`.
+
+| Entrega | Estado de verificação |
+|---|---|
+| `has_active_membership` / `has_active_admin_membership` só respondem pelo usuário da sessão ou sessão de sistema (migration 097) | **POSTGRES VERIFIED**: teste vermelho sem a 097, verde com ela. Nenhum chamador legítimo muda (todas as policies passam `current_user_id()`; nenhum código Go as chama) |
+| Projetor da inbox do Hub (`internal/worker/hubprojector`), no worker atrás de `OMNIRA_HUB_PROJECTOR_ENABLED=false` | **POSTGRES VERIFIED**; 9 mutações do SQL mortas; suíte hermética (3 execuções seguidas em banco sujo). Inbox ordenada por `last_activity_at` |
+| Provisionamento: serviço + `omnira-hubctl` (CLI de operador, auditada) + runbook `docs/ops/HUB-PROVISIONING.md` | **POSTGRES VERIFIED** + CLI executada de ponta a ponta; 8 mutações mortas; a imagem do API compila com a ferramenta. **Sem API HTTP** (o OMNIRA não tem "administrador de plataforma" humano) |
+| Faixa de contexto de tenant no `ChatPane` (`TenantContextBar`, `TenantBadge`, `--tenant-accent`) | **UNIT VERIFIED** (jsdom), 4 mutações mortas. **Não** verificada em navegador real |
+
+**Gate de integração completo (31 pacotes): 29 ok, 2 falham, ambos idênticos no `main` limpo** (10 testes de `tenancy/adapters`, 2 de `worker/jobsstream`). Regressões introduzidas: **0**.
+**Frontend:** `tsc` e build de produção ok; 697 de 698 testes passam; o único vermelho de teste (`SettingsShell`) e uma spec Playwright capturada pelo vitest **também falham no `main`**.
+
+### Revisão do Codex nº 2 (projetor, provisionamento, CLI, 097)
+Foi **iniciada** (`task-muyxtuiu-n3c6zb`), mas **o relatório não foi lido**: `/codex:status` e `/codex:result` são reservados ao usuário. Registro `CODEX_PLUGIN_NOT_EXECUTED` para esta rodada. **Pendente do dono:** rodar `/codex:result task-muyxtuiu-n3c6zb` e me passar os achados. Em substituição fiz revisão própria (não é independente): tenant/hub nunca vêm de payload, SQL parametrizado, validações no servidor, auditoria na mesma transação. Dela saiu uma melhoria: o `--operator` é texto livre, então a CLI agora grava **também o usuário e o host do sistema operacional** ao lado do nome informado (evidência, não prova).
+
+### Limites desta fatia
+- Projetor é **reconciliação periódica**, não por evento; `sla_due_at` não é projetado (sem fonte de SLA).
+- Anyone who can exec in the API container já tem as credenciais do banco; a CLI não amplia esse limite, apenas o deixa auditável.
+- Concorrência de dois workers projetando o mesmo par é segura (upsert idempotente), mas pode haver um deadlock raro; ele é registrado e a próxima rodada corrige.
+
+---
+
+Branch `fix/integrate-lovable-into-omnira` (**locais, sem push, nada implantado**). Backup do estado anterior:
 `backup/lovable-rebuild-attempt` (`8d3bf83`). Frontend (`web/`) **idêntico a `main`**, congelado.
 
 Vocabulário: IMPLEMENTED · NOT WIRED · UNIT / POSTGRES / HTTP / E2E VERIFIED · BLOCKED. `build` e `vet` são pré-requisito, não aceitação.
