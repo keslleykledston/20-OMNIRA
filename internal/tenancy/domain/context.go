@@ -11,9 +11,17 @@ import (
 // Construído APÓS autenticação + autorização, nunca antes.
 // Nenhuma parte do código aceita tenant_id do request como autoridade.
 type TenantContext struct {
-	TenantID uuid.UUID
-	ActorID  uuid.UUID // UserID humano; vazio somente quando Source=system
-	Source   AccessSource
+	TenantID          uuid.UUID
+	ActorID           uuid.UUID      // UserID humano; vazio somente quando Source=system
+	Source            AccessSource
+
+	// Hub delegation (populated only if Source=hub)
+	HubID             *uuid.UUID     // which hub (if hub access)
+	ServiceContractID *uuid.UUID     // which contract
+	EffectiveGrantID  *uuid.UUID     // which grant
+
+	// Audit trail
+	CorrelationID     string         // trace requests across system
 }
 
 // AccessSource — origin da requisição (direto, hub, etc).
@@ -43,6 +51,31 @@ func NewTenantContext(tenantID, actorID uuid.UUID, source AccessSource) (*Tenant
 		TenantID: tenantID,
 		ActorID:  actorID,
 		Source:   source,
+	}, nil
+}
+
+// NewHubTenantContext — extended factory for Hub-delegated access.
+// Constructs a TenantContext with Hub grant metadata.
+// All IDs must be pre-validated server-side (not from client).
+func NewHubTenantContext(
+	tenantID, actorID, hubID, contractID, grantID uuid.UUID,
+	correlationID string,
+) (*TenantContext, error) {
+	if tenantID == uuid.Nil || actorID == uuid.Nil || hubID == uuid.Nil {
+		return nil, errors.New("tenant_id, actor_id, hub_id required for hub access")
+	}
+	if contractID == uuid.Nil || grantID == uuid.Nil {
+		return nil, errors.New("contract_id, grant_id required for hub access")
+	}
+
+	return &TenantContext{
+		TenantID:          tenantID,
+		ActorID:           actorID,
+		Source:            AccessSourceHub,
+		HubID:             &hubID,
+		ServiceContractID: &contractID,
+		EffectiveGrantID:  &grantID,
+		CorrelationID:     correlationID,
 	}, nil
 }
 

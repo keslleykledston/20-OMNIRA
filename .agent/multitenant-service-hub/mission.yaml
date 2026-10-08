@@ -1,0 +1,279 @@
+mission:
+  name: "OMNIRA Multi-Tenant Service Hub Integration"
+  version: "1.0"
+  baseline_commit: "6d36f67"
+  branch: "feat/multitenant-service-hub"
+  status: "in_progress"
+  started: "2026-10-07"
+
+objectives:
+  - id: "obj-01"
+    title: "Hub Delegation Model"
+    description: "Enable Service Hubs to operate on behalf of multiple tenants via delegated access"
+    priority: "P0"
+    dependent_on: []
+
+  - id: "obj-02"
+    title: "EffectiveTenantContext v2"
+    description: "Extend authorization to support Hub→Tenant access alongside direct membership"
+    priority: "P0"
+    dependent_on: ["obj-01"]
+
+  - id: "obj-03"
+    title: "Hub Inbox Projection"
+    description: "Implement unified inbox for Hub agents (event-driven, bounded queries)"
+    priority: "P0"
+    dependent_on: ["obj-02"]
+
+  - id: "obj-04"
+    title: "Tenant Integration Gateway"
+    description: "Unify and isolate external integrations per tenant with capability-based access"
+    priority: "P0"
+    dependent_on: ["obj-02"]
+
+  - id: "obj-05"
+    title: "Weighted Routing Engine"
+    description: "Implement agent routing with capacity, skills, SLA, and continuity"
+    priority: "P1"
+    dependent_on: ["obj-03"]
+
+  - id: "obj-06"
+    title: "Agent Workspace UI (Lovable)"
+    description: "Build Hub Workspace, Inbox, Copilot, and Supervisor Dashboard"
+    priority: "P1"
+    dependent_on: ["obj-03"]
+
+phases:
+  - phase: 0
+    title: "Audit & Archaeology"
+    status: "completed"
+    deliverables:
+      - "Repository state map (internal structure, stack, schema)"
+      - "Tenancy & RLS audit"
+      - "Hub pre-existence check"
+      - "Integration inventory"
+      - "Frontend audit"
+      - "Test suite audit"
+      - "PHASE-0-AUDIT.md"
+
+  - phase: 1
+    title: "PRD + ADRs + Acceptance"
+    status: "in_progress"
+    deliverables:
+      - "PRD.md (consolidated product spec)"
+      - "ADRS-ESSENTIAL.md (9 core ADRs)"
+      - "acceptance.yaml (test criteria)"
+      - "mission.yaml (this document)"
+      - "backlog.md (phase-by-phase tasks)"
+
+  - phase: 2
+    title: "Hub Domain Model + RLS Hardening"
+    status: "pending"
+    deliverables:
+      - "Migration: service_hubs, hub_memberships, hub_tenant_service_contracts"
+      - "Migration: work_pools, work_pool_members, effective_access_grants"
+      - "Seed data (test fixtures)"
+      - "RLS policies for Hub tables"
+      - "Unit tests (domain)"
+      - "RLS tests (real PostgreSQL)"
+
+  - phase: 3
+    title: "EffectiveTenantContext v2 + Tests"
+    status: "pending"
+    deliverables:
+      - "Derive EffectiveTenantContext (direct | hub access)"
+      - "Service contract validation"
+      - "Grant validity checks"
+      - "Session variable setup"
+      - "Comprehensive test suite"
+      - "RLS + authorization integration tests"
+
+  - phase: 4
+    title: "Hub RLS + Authorization + Codex Review"
+    status: "pending"
+    deliverables:
+      - "RLS policies for all tenant-scoped tables"
+      - "Authorization enforcement"
+      - "Adversarial security tests"
+      - "Codex review findings resolved"
+      - "Audit logging"
+
+  - phase: 5
+    title: "Hub Inbox Projection"
+    status: "pending"
+    deliverables:
+      - "Migration: hub_inbox_items table"
+      - "Event stream integration (NATS)"
+      - "Projector worker"
+      - "Reconciliation mechanism"
+      - "API: GET /hubs/{hub_id}/inbox"
+      - "Cursor pagination tests"
+      - "Performance benchmarks"
+
+  - phase: 6
+    title: "Routing, Presence, Capacity"
+    status: "pending"
+    deliverables:
+      - "Agent presence (online/offline tracking)"
+      - "Weighted capacity model"
+      - "Skills library"
+      - "Routing score calculation"
+      - "Customer affinity (tenant-scoped)"
+      - "SLA urgency scoring"
+      - "Worker: assignment engine"
+
+  - phase: 7
+    title: "Tenant Integration Gateway"
+    status: "pending"
+    deliverables:
+      - "Migration: integration_instances, integration_capabilities"
+      - "Credential reference (secret manager)"
+      - "Execution context derivation"
+      - "Idempotency key deduplication"
+      - "External action receipt tracking"
+      - "Webhook isolation + dedupe"
+      - "Contract tests (per adapter)"
+
+  - phase: 8
+    title: "Migrate Existing Integrations"
+    status: "pending"
+    deliverables:
+      - "Audit existing adapters (WAHA, Meta, K3G, ticketing)"
+      - "Migrate to unified Gateway pattern"
+      - "Preserve existing behavior"
+      - "Capability-based enable/disable"
+      - "Backward compatibility tests"
+
+  - phase: 9
+    title: "UX/Frontend via Lovable"
+    status: "pending"
+    deliverables:
+      - "Hub Inbox UI"
+      - "Tenant Context Bar"
+      - "Conversation Cockpit"
+      - "Customer Brief"
+      - "Agent Copilot"
+      - "Safe Composer"
+      - "Supervisor Command Center"
+      - "Tenant Brand Settings"
+      - "E2E tests (Playwright/Cypress)"
+
+  - phase: 10
+    title: "AI / Tools / Knowledge Isolation"
+    status: "pending"
+    deliverables:
+      - "AI tool authorization (no tenant selection)"
+      - "Vector/search namespace per tenant"
+      - "Knowledge base isolation"
+      - "Copilot isolation tests"
+      - "Adversarial prompt injection tests"
+
+  - phase: 11
+    title: "Realtime / Cache / Storage Hardening"
+    status: "pending"
+    deliverables:
+      - "WebSocket tenant filtering"
+      - "SSE tenant filtering"
+      - "Cache key scoping (Valkey)"
+      - "Storage path isolation"
+      - "Signed URL authorization"
+      - "Cross-tenant attack tests"
+
+  - phase: 12
+    title: "Observability & Operations"
+    status: "pending"
+    deliverables:
+      - "Metrics (Hub Inbox lag, routing latency, integration latency)"
+      - "Logs (structured, audit trail, no secrets)"
+      - "Runbook (operator guide)"
+      - "Health checks"
+      - "Alert policies"
+
+  - phase: 13
+    title: "Security / Adversarial Gate"
+    status: "pending"
+    deliverables:
+      - "Codex independent review (all critical paths)"
+      - "Penetration test scenarios"
+      - "RLS bypass attempts"
+      - "Cross-tenant isolation tests"
+      - "AI tool injection tests"
+      - "Credential leakage tests"
+      - "Findings remediation"
+
+  - phase: 14
+    title: "E2E / Performance / Migration Proof"
+    status: "pending"
+    deliverables:
+      - "Migration on dev/staging environment"
+      - "Rollback validation"
+      - "Performance benchmarks (inbox, routing, integration latency)"
+      - "Query plans (EXPLAIN ANALYZE)"
+      - "Backward compatibility validation"
+      - "Pilot plan (K3G Hub)"
+
+  - phase: 15
+    title: "Cleanup & Documentation"
+    status: "pending"
+    deliverables:
+      - "Architecture docs updated"
+      - "Data model documentation"
+      - "Operator guide"
+      - "Agent guide (workspace UX)"
+      - "Security documentation"
+      - "Migration guide"
+      - "CHANGELOG updated"
+      - "FINAL-REPORT.md"
+
+success_criteria:
+  - "All 15 phases completed"
+  - "40 acceptance tests PASS (MT-AT-001..040)"
+  - "Zero P0 security findings"
+  - "Codex adversarial review PASS"
+  - "E2E migration successful"
+  - "Performance benchmarks within SLO"
+  - "Documentation complete"
+  - "Feature flags allow gradual rollout"
+
+risks:
+  - id: "risk-01"
+    severity: "P0"
+    title: "RLS bypass during Hub access"
+    mitigation: "Codex adversarial review mandatory before Phase 5"
+
+  - id: "risk-02"
+    severity: "P0"
+    title: "Hub agent gains system_admin accidentally"
+    mitigation: "No system_admin grant to hub_agent role; code review + tests"
+
+  - id: "risk-03"
+    severity: "P0"
+    title: "Projection stale, auth revoked, but item still visible"
+    mitigation: "RLS enforces revocation; reconciliation sweeps stale items"
+
+  - id: "risk-04"
+    severity: "P1"
+    title: "Hub Inbox O(n) query per tenant (performance cliff)"
+    mitigation: "Materialized view + cursor pagination; benchmark before deploy"
+
+  - id: "risk-05"
+    severity: "P1"
+    title: "External write double-creation on retry"
+    mitigation: "Idempotency key + deduplication; local attempt tracking"
+
+notes: |
+  - Branch: feat/multitenant-service-hub
+  - No changes to main until Phase 14+ readiness
+  - Feature flags gate all Hub functionality
+  - Codex review mandatory at Phases 4, 7, 13
+  - Lovable MCP used for frontend (Phase 9)
+  - LLM local used for context packs + summary
+  - Migration strategy: expand/contract (no big-bang)
+  - Preserve all existing single-tenant functionality
+
+metadata:
+  baseline_commit: "6d36f67"
+  branch: "feat/multitenant-service-hub"
+  owner: "Engineering"
+  created: "2026-10-07"
+  last_updated: "2026-10-07"

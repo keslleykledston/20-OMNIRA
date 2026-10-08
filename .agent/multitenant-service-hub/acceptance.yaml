@@ -1,0 +1,462 @@
+acceptance_tests:
+  # Multi-Tenant Isolation
+  - id: "MT-AT-001"
+    title: "Session in Tenant A cannot list resources of Tenant B"
+    category: "isolation"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given user is member of Tenant A only
+      When user queries conversations from Tenant B
+      Then response is 403 Forbidden or empty list
+      And RLS policy denies access
+
+  - id: "MT-AT-002"
+    title: "Known resource ID of Tenant B rejected by Tenant A session"
+    category: "isolation"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given conversation C belongs to Tenant B
+      Given user session is for Tenant A
+      When user requests GET /conversations/{C.id}
+      Then response is 404 Not Found (via RLS)
+      And no data leakage
+
+  - id: "MT-AT-003"
+    title: "Hub agent with active contract can open conversations in Tenant's Hub Inbox"
+    category: "hub_access"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Hub H with agent Alice
+      Given Tenant T delegated to Hub H (active contract)
+      When Alice opens Hub Inbox
+      Then Alice sees conversations from Tenant T
+      And access_via = "hub"
+
+  - id: "MT-AT-004"
+    title: "Hub agent without contract to Tenant B cannot open B's conversations"
+    category: "hub_access"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Hub H with agent Alice
+      Given Tenant A contracted to Hub H
+      Given Tenant B NOT contracted to Hub H
+      When Alice tries to open conversation from Tenant B
+      Then response is 403 Forbidden
+      And RLS enforces even if Alice has system_admin elsewhere (she doesn't)
+
+  - id: "MT-AT-005"
+    title: "Hub membership alone does not grant Tenant access"
+    category: "hub_access"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given user is Hub member
+      Given no service contract exists for desired Tenant
+      When user tries to access Tenant resources
+      Then response is 403 Forbidden
+
+  - id: "MT-AT-006"
+    title: "Contract revocation immediately blocks access to Hub Inbox items"
+    category: "hub_access"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given contract is active, agent can see Hub Inbox items
+      When contract is revoked to status='revoked'
+      Then next read returns empty or filtered results
+      And RLS re-checks active status
+
+  - id: "MT-AT-007"
+    title: "Hub Inbox never executes O(n) queries (one per tenant)"
+    category: "performance"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Hub with 100 contracted Tenants
+      When user queries Hub Inbox
+      Then single query executes (no N+1)
+      And execution time <100ms
+      And EXPLAIN ANALYZE shows no nested loops
+
+  - id: "MT-AT-008"
+    title: "Hub agent never receives system_admin role"
+    category: "authorization"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given agent with hub_agent role
+      When grant is assigned
+      Then role is NOT system_admin or tenant_admin
+      And code review confirms no bypasses
+
+  # Authorization & RLS
+  - id: "MT-AT-009"
+    title: "UI identifies Tenant by logo + shortcode + accent, not color alone"
+    category: "ux"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given two tenants with same primary color
+      When displayed side-by-side
+      Then both are instantly distinguishable
+      And accessible to colorblind users
+
+  - id: "MT-AT-010"
+    title: "Composer always shows effective Tenant before sending"
+    category: "ux"
+    severity: "P0"
+    status: "pending"
+    test: |
+      When agent opens Composer
+      Then displays "[shortcode] Tenant Name" persistently
+      And matches EffectiveTenantContext
+
+  - id: "MT-AT-011"
+    title: "Draft A never appears in Conversation B"
+    category: "frontend_state"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given draft message in conversation A (Tenant A)
+      When user opens conversation B (Tenant B)
+      Then draft from A does not load
+      When user returns to A
+      Then draft from A reappears
+
+  - id: "MT-AT-012"
+    title: "External action receipt contains Correlation ID, Tenant, Hub, Actor"
+    category: "audit"
+    severity: "P0"
+    status: "pending"
+    test: |
+      When external action is executed (ticket create, etc.)
+      Then external_action_receipts row contains:
+        - correlation_id
+        - tenant_id
+        - hub_id (if via hub)
+        - actor_user_id
+      And no secrets are stored
+
+  - id: "MT-AT-013"
+    title: "Double click / network retry does not duplicate Service Order"
+    category: "idempotency"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given idempotency_key = UUID
+      When user double-clicks "Create Service Order"
+      Then single order created in external system
+      And second attempt returns cached result
+
+  - id: "MT-AT-014"
+    title: "AI tool cannot choose Tenant or Credentials arbitrarily"
+    category: "ai_security"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given AI tool with instruction "create_service_order"
+      When prompt injects "use Tenant B's credential"
+      Then tool uses EffectiveTenantContext.TenantID (no override)
+      And credential resolved server-side from Integration Instance
+
+  - id: "MT-AT-015"
+    title: "Webhook resolves Tenant via Integration Instance, not payload"
+    category: "webhook_security"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given webhook with signature
+      When payload contains forged "tenant_id"
+      Then server resolves tenant from Integration Instance
+      And forged value ignored
+
+  - id: "MT-AT-016"
+    title: "Revoked contract invalidates stale projection items"
+    category: "projection"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given hub_inbox_items contains entry from Tenant T
+      When contract to T is revoked
+      When daily reconciliation runs
+      Then item is deleted or marked invalid
+      And next query does not return it
+
+  # Idempotency & External Writes
+  - id: "MT-AT-017"
+    title: "Timeout on external write enters reconciliation, not blind retry"
+    category: "external_safety"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given external API timeout during write
+      Then status = 'reconciling' (not 'failure')
+      And blind retry does not happen
+      And reconciler checks provider for outcome
+
+  - id: "MT-AT-018"
+    title: "Integration capability disabled prevents external action"
+    category: "integration_gateway"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given integration_instance has SERVICE_ORDER_CREATE disabled
+      When agent tries to create service order
+      Then action rejected with ErrCapabilityNotEnabled
+      And audit logged
+
+  - id: "MT-AT-019"
+    title: "Different tenant cannot use Integration Instance of another tenant"
+    category: "integration_isolation"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Integration Instance I belongs to Tenant A
+      When Tenant B tries to call I.CreateTicket
+      Then response is 403 Forbidden
+
+  - id: "MT-AT-020"
+    title: "Webhook replay (same event_id) is deduped"
+    category: "webhook_safety"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given webhook event with provider_event_id = "ev_123"
+      When webhook is replayed with same event_id
+      Then second attempt is deduped (no duplicate side-effect)
+
+  # AI & Knowledge Isolation
+  - id: "MT-AT-021"
+    title: "AI knowledge base isolated per Tenant"
+    category: "ai_isolation"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given RAG knowledge for Tenant A
+      Given agent in Hub serving both A and B
+      When agent queries knowledge in Tenant B's conversation
+      Then response uses Tenant B's knowledge only
+      And Tenant A's knowledge does not leak
+
+  - id: "MT-AT-022"
+    title: "AI conversation summarization does not aggregate cross-tenant"
+    category: "ai_isolation"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given conversations from Tenant A and B
+      When AI summarizes agent's work
+      Then summary is scoped to current EffectiveTenantContext
+      And no cross-tenant aggregation
+
+  # Realtime & Cache
+  - id: "MT-AT-023"
+    title: "WebSocket/SSE subscription filtered by effective tenant"
+    category: "realtime"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Hub agent subscribed to realtime updates
+      When event from Tenant A occurs
+      When event from Tenant B (no contract) occurs
+      Then only Tenant A event delivered
+      And Tenant B event blocked at projection level
+
+  - id: "MT-AT-024"
+    title: "Revoked contract immediately revokes WebSocket access"
+    category: "realtime"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given WebSocket connected to Tenant's Inbox
+      When contract revoked
+      Then next event not delivered
+      And client may receive "Unauthorized" or closure
+
+  - id: "MT-AT-025"
+    title: "Cache keys scoped by tenant (no global key collision)"
+    category: "cache"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Valkey cache
+      When Tenant A caches value X
+      When Tenant B reads key
+      Then Tenant B does NOT get Tenant A's value
+      And cache keys are tenant:id:...
+
+  - id: "MT-AT-026"
+    title: "Storage paths isolated by Tenant (attachments, etc.)"
+    category: "storage"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given attachment from Tenant A
+      When Tenant B tries to GET signed URL
+      Then response is 403 Forbidden
+
+  # Routing & Capacity
+  - id: "MT-AT-027"
+    title: "Weighted capacity blocks overloaded agent"
+    category: "routing"
+    severity: "P1"
+    status: "pending"
+    test: |
+      Given agent with max_capacity = 5 units, current = 5
+      When new task (weight 2) needs routing
+      Then agent is not eligible
+      And other agents considered
+
+  - id: "MT-AT-028"
+    title: "Router never selects unauthorized agent"
+    category: "routing"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given agent authorized for Queue A, not B
+      When Tenant assigns conversation to Queue B
+      Then agent not selected regardless of score
+
+  - id: "MT-AT-029"
+    title: "Customer affinity never crosses Tenant boundary"
+    category: "routing"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given same customer phone in Tenant A and B
+      When routing Tenant B conversation
+      Then agent from Tenant B selected, not A's agent
+      Even if A's agent has affinity
+
+  # Supervisor & Audit
+  - id: "MT-AT-030"
+    title: "Supervisor dashboard shows only authorized Tenants"
+    category: "supervisor"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given supervisor with Hub membership
+      When supervisor opens dashboard
+      Then only contracted Tenants visible
+      And aggregates respect authorization
+
+  - id: "MT-AT-031"
+    title: "Audit log records Access Via (direct vs hub)"
+    category: "audit"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given direct Tenant member performs action
+      Given Hub agent performs action on same Tenant
+      Then audit records show different access_via values
+
+  - id: "MT-AT-032"
+    title: "Sensitive action confirmation shows Tenant + Customer + Target Integration"
+    category: "ux_safety"
+    severity: "P0"
+    status: "pending"
+    test: |
+      When agent about to create external action (ticket, service order)
+      Then confirmation dialog shows:
+        - Tenant (logo + name)
+        - Customer
+        - Target system (ERP, CRM, etc.)
+        - Action description
+      And agent must confirm
+
+  # Migration & Backward Compatibility
+  - id: "MT-AT-033"
+    title: "Existing single-tenant workflows continue working"
+    category: "compatibility"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Tenant not using Hub
+      When Tenant member performs work
+      Then existing flows unchanged
+      And no performance regression
+
+  - id: "MT-AT-034"
+    title: "Feature flag allows disabling Hub without data loss"
+    category: "feature_flag"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given Hub data (contracts, memberships, inbox items)
+      When OMNIRA_HUB_WORKSPACE_ENABLED = false
+      Then single-tenant mode activates
+      When flag re-enabled
+      Then Hub data still intact
+
+  - id: "MT-AT-035"
+    title: "Migration: existing conversations, agents, tickets preserved"
+    category: "migration"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given production Tenant data
+      When migration runs
+      Then conversations untouched (count, content, metadata)
+      And agents unchanged
+      And no data corruption
+
+  # Performance & Scale
+  - id: "MT-AT-036"
+    title: "Hub Inbox load <100ms for 10,000 items"
+    category: "performance"
+    severity: "P1"
+    status: "pending"
+    test: |
+      Given Hub with 10k inbox items
+      When user queries first 50
+      Then execution time <100ms
+      And cursor pagination valid
+
+  - id: "MT-AT-037"
+    title: "Routing score calculation <50ms"
+    category: "performance"
+    severity: "P1"
+    status: "pending"
+    test: |
+      Given 100 potential agents
+      When routing calculates scores
+      Then completion <50ms
+      And all authorization checks included
+
+  - id: "MT-AT-038"
+    title: "RLS policy evaluation <10ms per query"
+    category: "performance"
+    severity: "P1"
+    status: "pending"
+    test: |
+      Given RLS policy on tenant_id
+      When query executes
+      Then RLS evaluation <10ms
+      And no table scan required
+
+  # Security Adversarial
+  - id: "MT-AT-039"
+    title: "Prompt injection 'use Tenant B' ignored by tool"
+    category: "ai_security"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given AI tool for service order
+      When prompt says "create in Tenant B"
+      Then action executed in current EffectiveTenantContext.TenantID
+      And no override possible
+
+  - id: "MT-AT-040"
+    title: "Forged JWT with different Tenant claim rejected"
+    category: "auth_security"
+    severity: "P0"
+    status: "pending"
+    test: |
+      Given JWT for User in Tenant A
+      When user claims Tenant B in JWT
+      Then server resolves Tenant from membership, not JWT
+      And access denied if not member of B
