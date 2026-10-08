@@ -4,6 +4,7 @@ import { Avatar, Icon } from './primitives'
 import type { IconName } from './primitives/Icon'
 import { useTenantDisplay } from '../lib/tenantContext'
 import { isDevSurface } from './UnavailableSurface'
+import { useMyHubs } from '../hooks/useMyHubs'
 
 // Only routes that exist in App.tsx. Spec items without a route (Automação, o
 // restante de Configurações) stay hidden rather than simulated —
@@ -40,7 +41,11 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
 export default function Sidebar() {
   const location = useLocation()
   const tenant = useTenantDisplay()
-  const visibleNavItems = navItems.filter((item) => !item.mockBacked || isDevSurface())
+  const hubs = useMyHubs()
+  // The Hub entry exists only for people who belong to a Service Hub (and only when the server has the Hub enabled).
+  const hubItem: (typeof navItems)[number] = { label: 'Hub', path: '/hub', icon: 'channels' }
+  const base = navItems.filter((item) => !item.mockBacked || isDevSurface())
+  const visibleNavItems = (hubs.data?.length ?? 0) > 0 ? [...base.slice(0, 2), hubItem, ...base.slice(2)] : base
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(path + '/')
