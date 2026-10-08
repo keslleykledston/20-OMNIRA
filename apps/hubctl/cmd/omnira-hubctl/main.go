@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/worker/hubprojector"
 )
 
 const usage = `usage: omnira-hubctl --operator NAME <command> [flags]
@@ -33,6 +34,7 @@ const usage = `usage: omnira-hubctl --operator NAME <command> [flags]
   grant add        --hub ID --tenant ID (--user ID | --email E) [--valid-until RFC3339]
   grant revoke     --hub ID --tenant ID (--user ID | --email E)
   show             --hub ID
+  reconcile        (project every conversation into the Hub inbox once; the worker does this on a schedule when enabled)
 
 Environment: OMNIRA_DATABASE_URL (application role).`
 
@@ -65,7 +67,7 @@ func parse(args []string) (command, error) {
 	}
 	c.group = rest[0]
 	rest = rest[1:]
-	if c.group != "show" {
+	if c.group != "show" && c.group != "reconcile" {
 		if len(rest) == 0 {
 			return c, fmt.Errorf("%w: %s needs an action", errUsage, c.group)
 		}
@@ -105,7 +107,7 @@ func parse(args []string) (command, error) {
 		return u, nil
 	}
 	var err error
-	needHub := !(c.group == "hub" && c.action == "create")
+	needHub := !(c.group == "hub" && c.action == "create") && c.group != "reconcile"
 	needTenant := (c.group == "contract") || (c.group == "grant")
 	needUser := (c.group == "member") || (c.group == "grant")
 	if c.hub, err = id("hub", hub, needHub); err != nil {
@@ -137,7 +139,7 @@ func parse(args []string) (command, error) {
 		}
 	}
 	switch c.group + " " + c.action {
-	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "show ":
+	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "show ", "reconcile ":
 	default:
 		return c, fmt.Errorf("%w: unknown command %q", errUsage, strings.TrimSpace(c.group+" "+c.action))
 	}
@@ -276,6 +278,12 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "grant revoked: user %s on tenant %s (hub %s)\n", user, c.tenant, c.hub)
+	case "reconcile ":
+		res, err := hubprojector.New(pool).ReconcileAll(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "projected: %d upserted, %d removed\n", res.Upserted, res.Removed)
 	case "show ":
 		s, err := svc.Describe(ctx, c.hub)
 		if err != nil {

@@ -22,6 +22,7 @@ func TestParse(t *testing.T) {
 			func(c command) bool { return len(c.queues) == 2 && c.validUntil != nil && c.tenant == tenant }},
 		{"grant revoke", []string{"--operator", "ana", "grant", "revoke", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String()}, func(c command) bool { return c.action == "revoke" }},
 		{"show", []string{"--operator", "ana", "show", "--hub", hub.String()}, func(c command) bool { return c.group == "show" && c.hub == hub }},
+		{"reconcile needs no hub", []string{"--operator", "ana", "reconcile"}, func(c command) bool { return c.group == "reconcile" && c.hub == uuid.Nil }},
 	}
 	for _, c := range ok {
 		got, err := parse(c.args)

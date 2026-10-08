@@ -26,6 +26,7 @@ docker compose exec api /app/omnira-hubctl --operator <seu-nome> <comando> ...
 | `grant add --hub ID --tenant ID (--user ID \| --email E) [--valid-until RFC3339]` | concede (ou renova) o acesso do usuário ao tenant |
 | `grant revoke --hub ID --tenant ID (--user ID \| --email E)` | revoga |
 | `show --hub ID` | membros, contratos e grants do hub (somente leitura) |
+| `reconcile` | projeta uma vez as conversas na inbox do Hub (o worker faz isso no intervalo quando `OMNIRA_HUB_PROJECTOR_ENABLED=true`); útil logo após provisionar |
 
 ## Regras que a ferramenta impõe (testadas)
 - O `contract_id` **nunca** é informado: é derivado de hub + tenant.
@@ -45,6 +46,9 @@ docker compose exec api /app/omnira-hubctl --operator ana grant    add    --hub 
 docker compose exec api /app/omnira-hubctl --operator ana show --hub $H
 ```
 Encerrar: `grant revoke` (uma pessoa), `contract status ... --status revoked` (o cliente inteiro), `hub status ... --status suspended` (o hub inteiro).
+
+## Verificar o conjunto com os binários reais (sem tocar em nada real)
+`scripts/e2e-hub-smoke.sh` sobe Postgres e NATS descartáveis, aplica as migrations, provisiona com a `omnira-hubctl`, projeta, sobe o `omnira-api` real com login de desenvolvimento e confere por HTTP (14 verificações, inclusive revogação e flag desligada). Não usa Keycloak nem canal real.
 
 ## Antes de usar em produção (pendências do dono)
 1. Aplicar as migrations 093–097 (com backup antes: `scripts/backup-omnira-db.sh`, depois `docker compose up migrate`).

@@ -1,5 +1,15 @@
 # CORRECTIVE-INTEGRATION-REPORT — checkpoint 2026-10-08
 
+## ATUALIZAÇÃO — 3ª fatia: tela `/hub` (autorizada: "siga")
+Continua **local, sem push, nada implantado**.
+- Backend: `GET /api/v1/hubs` (meus hubs) e `tenant_name` nas linhas, lidos pela sessão do próprio agente. **HTTP VERIFIED**, 5 mutantes mortos.
+- Frontend: página `/hub` (lista com o nome da empresa, conversa somente leitura, sem composer, sem mídia), entrada no Sidebar e na barra mobile só para membros de Hub com a flag ligada. 21 testes jsdom, 10 mutantes mortos, **Chromium real** (desktop e 390 px, API mockada, telas revisadas). Bug real encontrado pelos testes e corrigido: id de item vazando para outro Hub por um render. `MessageBubble` deliberadamente não reutilizado (mídia pela empresa da SESSÃO).
+- **E2E com binários reais** (`scripts/e2e-hub-smoke.sh`): `omnira-api` + `omnira-hubctl` + projetor + Postgres + NATS, **14/14**; falha quando a revogação ou a flag quebram. Nova ferramenta: `omnira-hubctl reconcile`.
+- Frontend completo: 715/716 testes (o vermelho é o `SettingsShell`, também no `main`); `tsc` e build ok. Specs de navegador mockadas: as 5 que falham (3 de `attendance`/`topics`, 2 de `flows` por `EACCES` em diretório root) **também falham no `main`**; as 3 novas do Hub passam.
+- **Não verificado:** navegador real contra o API real, Keycloak/OIDC real, canal real; escrita pelo Hub; painel de contexto do Hub.
+
+---
+
 ## ATUALIZAÇÃO — 2ª fatia (autorizada pelo dono: "pode tratar com a mesma proteção" e "siga")
 Tudo continua **local, sem push, nada implantado**; o banco vivo segue em `092`.
 
