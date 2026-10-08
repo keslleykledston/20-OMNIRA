@@ -40,6 +40,9 @@ type Config struct {
 	// HubProjectorIntervalSeconds. Off by default; needs the Hub migrations (093+).
 	HubProjectorEnabled         bool
 	HubProjectorIntervalSeconds int
+	// TicketOpenNoticeEnabled sends the customer a message with the ticket number when an operator opens an external ticket
+	// (on by default; OMNIRA_TICKET_OPEN_NOTICE_ENABLED=false turns it off).
+	TicketOpenNoticeEnabled bool
 	// Native (Android/iOS) credential endpoints, ADR-0022. Off by default; needs OIDC.
 	MobileAuthEnabled  bool
 	MobileClientID     string
@@ -143,6 +146,7 @@ func Load() *Config {
 		HubAPIEnabled: getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
 		HubProjectorEnabled: getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
 		HubProjectorIntervalSeconds: getEnvInt("OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS", 60),
+		TicketOpenNoticeEnabled: getEnv("OMNIRA_TICKET_OPEN_NOTICE_ENABLED", "true") != "false",
 		MobileAuthEnabled:  getEnv("OMNIRA_AUTH_MOBILE_ENABLED", "false") == "true",
 		MobileClientID:     getEnv("OMNIRA_AUTH_MOBILE_CLIENT_ID", "omnira-mobile"),
 		MobileRedirectURIs: splitList(os.Getenv("OMNIRA_AUTH_MOBILE_REDIRECT_URIS")),

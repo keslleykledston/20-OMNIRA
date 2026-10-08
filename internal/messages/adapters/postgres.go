@@ -167,3 +167,49 @@ func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UU
 	}
 	return existing, true, nil
 }
+
+// ContactName is the display name of the conversation's contact, read under the tenant's RLS. It is empty for a
+// conversation without a contact (internal staff chat) or a contact without a name.
+func (s *PostgresOutboundStore) ContactName(ctx context.Context, conversationID uuid.UUID) (string, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return "", err
+	}
+	var name *string
+	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
+		SELECT ct.display_name
+		FROM conversations c
+		JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
+		WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, conversationID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("messages: load contact name: %w", err)
+	}
+	if name == nil {
+		return "", nil
+	}
+	return *name, nil
+}
+
+// NoticeAlreadySent takes a transaction-scoped advisory lock on (tenant, key) and reports whether any operator already
+// queued a message with that key in the conversation. The lock is held until the request's transaction ends, so a
+// concurrent announcement of the same ticket waits and then sees the committed message instead of adding a second one.
+func (s *PostgresOutboundStore) NoticeAlreadySent(ctx context.Context, conversationID uuid.UUID, key string) (bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return false, err
+	}
+	q := platformdb.QuerierFromContext(ctx, s.pool)
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID.String()+"/"+key); err != nil {
+		return false, fmt.Errorf("messages: lock notice: %w", err)
+	}
+	var sent bool
+	if err := q.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM messages WHERE tenant_id = $1 AND conversation_id = $2 AND direction = 'outbound' AND idempotency_key = $3)`,
+		tenantID, conversationID, key).Scan(&sent); err != nil {
+		return false, fmt.Errorf("messages: check notice: %w", err)
+	}
+	return sent, nil
+}

@@ -301,3 +301,27 @@ func TestSystemSendRespectsTheMetaWindow(t *testing.T) {
 	}
 	_ = platformdb.QuerierFromContext
 }
+
+// A ticket opened in the CRM/ERP from the inbox is real (it has the ERP number) but can have an empty local subject: the flow
+// must name it by its number, never as an empty pair of quotes.
+func TestOpenTicketsNamesAnERPTicketWithoutSubjectByItsNumber(t *testing.T) {
+	f := newFx(t)
+	env := f.env
+	conv, _ := env.SeedConversation(t, env.TenantA, "bot")
+	f.exec(`INSERT INTO tickets(tenant_id, conversation_id, provider, external_ticket_id) VALUES($1,$2,'k3g','28276')`, env.TenantA, conv)
+	f.sys(env.TenantA, func(ctx context.Context) {
+		sum, err := f.effects.OpenTickets(ctx, &ports.ConversationFacts{ContactID: f.contactOf(conv)})
+		if err != nil || sum.Count != 1 || sum.FirstSubject != "nº 28276" {
+			t.Fatalf("open tickets: %+v %v", sum, err)
+		}
+	})
+	// With a subject, the subject wins; a blank one is not a subject.
+	conv2, _ := env.SeedConversation(t, env.TenantA, "bot")
+	f.exec(`INSERT INTO tickets(tenant_id, conversation_id, subject, provider, external_ticket_id) VALUES($1,$2,'  VPN caiu ','k3g','9')`, env.TenantA, conv2)
+	f.sys(env.TenantA, func(ctx context.Context) {
+		sum, err := f.effects.OpenTickets(ctx, &ports.ConversationFacts{ContactID: f.contactOf(conv2)})
+		if err != nil || sum.FirstSubject != "VPN caiu" {
+			t.Fatalf("subject: %+v %v", sum, err)
+		}
+	})
+}

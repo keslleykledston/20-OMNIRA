@@ -49,6 +49,7 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_HUB_API_ENABLED: ${OMNIRA_HUB_API_ENABLED-}
   OMNIRA_HUB_PROJECTOR_ENABLED: ${OMNIRA_HUB_PROJECTOR_ENABLED-}
   OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS: ${OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS-}
+  OMNIRA_TICKET_OPEN_NOTICE_ENABLED: ${OMNIRA_TICKET_OPEN_NOTICE_ENABLED-}
   # ADR-0016 M2: local speech-to-text (systemd unit omnira-whisper on the host, GPU). Reached through the docker0
   # gateway; the host firewall only lets the OMNIRA compose network in. Empty disables transcription.
   OMNIRA_WHISPER_URL: ${OMNIRA_WHISPER_URL-http://172.17.0.1:18181}
