@@ -198,8 +198,9 @@ describe('HubInboxPage — opening a conversation', () => {
     expect(header).toHaveTextContent('ISP Roraima');
     expect(await screen.findByText('Sem internet desde ontem')).toBeInTheDocument();
     expect(screen.getByText('Já vamos verificar')).toBeInTheDocument();
-    expect(screen.getByRole('note')).toHaveTextContent('Somente leitura');
+    expect(screen.getByRole('note')).toHaveTextContent('Somente leitura: seu acesso a ISP Roraima não permite responder.');
     expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Assumir' })).toBeNull();
     expect(screen.getByText('Imagem (não exibido no Hub)')).toBeInTheDocument();
     // media is fetched by the SESSION tenant elsewhere in the app; here it must never be requested at all
     expect(calls().filter((u) => u.includes('/media') || u.includes('/tenants/'))).toEqual([]);
@@ -310,5 +311,103 @@ describe('MobileNav — Hub entry', () => {
     await waitFor(() => expect(calls().some((u) => u.endsWith('/hubs'))).toBe(true));
     await new Promise((r) => setTimeout(r, 40));
     expect(links()).toEqual(['/inbox', '/contacts', '/channels']);
+  });
+});
+
+describe('HubInboxPage — claiming and replying (write path)', () => {
+  const a = item('a', { tenant_name: 'ISP Roraima' });
+  const open = async (assignment: 'none' | 'me' | 'other', over: { canReply?: boolean; status?: string } = {}) => {
+    pages = { 'hub-1': [{ items: [a], has_more: false }] };
+    const base = detail(a);
+    details = {
+      'hub-1/a': {
+        ...base,
+        access: { source: 'hub', can_reply: over.canReply ?? true },
+        conversation: { ...base.conversation, status: over.status ?? 'open', assignment },
+      },
+    };
+    serve();
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await user.click((await screen.findByText('Cliente a')).closest('button')!);
+    await screen.findByText('Sem internet desde ontem');
+    return user;
+  };
+  const posts = () => vi.mocked(axios.post).mock.calls;
+
+  it('a read-only grant offers neither claim nor composer', async () => {
+    await open('none', { canReply: false });
+    expect(screen.queryByRole('button', { name: 'Assumir' })).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('someone else holds it, or it is finalized: a sentence, no composer, no claim', async () => {
+    await open('other');
+    expect(screen.getByRole('note')).toHaveTextContent('com outro operador');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Assumir' })).toBeNull();
+  });
+
+  it('finalized attendance cannot be answered', async () => {
+    await open('me', { status: 'closed' });
+    expect(screen.getByRole('note')).toHaveTextContent('finalizado');
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
+  it('unclaimed: names the company, claims with the displayed company only, then the composer says who it answers as', async () => {
+    const user = await open('none');
+    expect(screen.getByText(/Assuma a conversa para responder como ISP Roraima/)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    vi.mocked(axios.post).mockImplementation(async () => {
+      const d = details['hub-1/a'] as HubItemDetail;
+      details['hub-1/a'] = { ...d, conversation: { ...d.conversation, assignment: 'me' } };
+      return { data: { item_id: 'a', conversation_id: a.conversation_id, changed: true, tenant: { id: a.tenant_id, name: 'ISP Roraima' } } };
+    });
+    await user.click(screen.getByRole('button', { name: 'Assumir' }));
+    expect(await screen.findByRole('textbox')).toBeInTheDocument();
+    expect(screen.getByText('Respondendo como ISP Roraima')).toBeInTheDocument();
+    expect(posts()).toHaveLength(1);
+    expect(String(posts()[0][0])).toMatch(/\/hubs\/hub-1\/inbox\/a\/claim$/);
+    expect(posts()[0][1]).toEqual({ expected_tenant_id: a.tenant_id });
+  });
+
+  it('sends text as the displayed company with an Idempotency-Key, and no tenant selector anywhere', async () => {
+    const user = await open('me');
+    vi.mocked(axios.post).mockResolvedValue({ data: { id: 'x', conversation_id: a.conversation_id, status: 'queued', tenant: { id: a.tenant_id, name: 'ISP Roraima' } } });
+    await user.type(await screen.findByRole('textbox'), 'Olá, já verificamos');
+    await user.click(screen.getByRole('button', { name: 'Enviar mensagem' }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    const [url, body, config] = posts()[0] as [string, any, any];
+    expect(url).toMatch(/\/hubs\/hub-1\/inbox\/a\/messages$/);
+    expect(body).toEqual({ expected_tenant_id: a.tenant_id, text: 'Olá, já verificamos' });
+    expect(config.headers['Idempotency-Key']).toMatch(/.{8,}/);
+    expect(url).not.toContain('tenant');
+  });
+
+  it('a failed send keeps the text, explains why, and a retry of the same text reuses the key (a new text gets a new one)', async () => {
+    const user = await open('me');
+    vi.mocked(axios.post).mockRejectedValueOnce({ response: { status: 409, data: 'conversation is assigned to another agent' } });
+    const box = await screen.findByRole('textbox');
+    await user.type(box, 'primeira');
+    await user.click(screen.getByRole('button', { name: 'Enviar mensagem' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Esta conversa já está com outro operador.');
+    expect(box).toHaveValue('primeira');
+    vi.mocked(axios.post).mockResolvedValue({ data: { id: 'x', conversation_id: a.conversation_id, status: 'queued', tenant: { id: a.tenant_id, name: 'ISP Roraima' } } });
+    await user.click(screen.getByRole('button', { name: 'Enviar mensagem' }));
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect((posts()[1][2] as any).headers['Idempotency-Key']).toBe((posts()[0][2] as any).headers['Idempotency-Key']);
+    await user.type(await screen.findByRole('textbox'), 'segunda');
+    await user.click(screen.getByRole('button', { name: 'Enviar mensagem' }));
+    await waitFor(() => expect(posts()).toHaveLength(3));
+    expect((posts()[2][2] as any).headers['Idempotency-Key']).not.toBe((posts()[0][2] as any).headers['Idempotency-Key']);
+  });
+
+  it('a 403 on send says the access is read-only and signs nobody out', async () => {
+    const user = await open('me');
+    vi.mocked(axios.post).mockRejectedValueOnce({ response: { status: 403, data: 'forbidden' } });
+    await user.type(await screen.findByRole('textbox'), 'oi');
+    await user.click(screen.getByRole('button', { name: 'Enviar mensagem' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('somente leitura');
+    expect(unauthorized).not.toHaveBeenCalled();
   });
 });

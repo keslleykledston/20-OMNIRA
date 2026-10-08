@@ -1,7 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import type { HubItemDetail, HubMessage } from '../../lib/hub';
+import { useQueryClient } from '@tanstack/react-query';
+import { describeHubWriteError, hubWriteAPI, type HubItemDetail, type HubMessage } from '../../lib/hub';
+import { handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { TenantBadge } from '../primitives/TenantBadge';
+import MessageComposer from '../inbox/MessageComposer';
 
 const TYPE_LABEL: Record<string, string> = { image: 'Imagem', video: 'Vídeo', audio: 'Áudio', document: 'Documento', sticker: 'Figurinha' };
 
@@ -30,8 +33,63 @@ function Bubble({ m }: { m: HubMessage }) {
   );
 }
 
-export default function HubItemView({ detail, onBack }: { detail: HubItemDetail; onBack?: () => void }) {
+// What the composer area shows, decided from what the SERVER said about this conversation and this grant.
+function composerMode(d: HubItemDetail): 'readonly' | 'closed' | 'claim' | 'other' | 'reply' {
+  if (!d.access.can_reply) return 'readonly';
+  if (d.conversation.status === 'closed') return 'closed';
+  if (d.conversation.assignment === 'me') return 'reply';
+  return d.conversation.assignment === 'other' ? 'other' : 'claim';
+}
+
+export default function HubItemView({ hubId, detail, onBack }: { hubId: string; detail: HubItemDetail; onBack?: () => void }) {
   const end = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // A retry of the SAME text keeps its key (no double send); a different text is a new attempt.
+  const pending = useRef<{ text: string; key: string } | null>(null);
+  const tenantName = detail.tenant.name || detail.item.tenant_name || 'Empresa não identificada';
+  const mode = composerMode(detail);
+  useEffect(() => {
+    setError(null);
+    pending.current = null;
+  }, [detail.item.id]);
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['hub-item', hubId, detail.item.id] });
+  const fail = (err: unknown) => {
+    if (isUnauthorized(err)) handleUnauthorized();
+    else setError(describeHubWriteError(err));
+    // the screen may be stale (someone else took it, access ended): show the truth
+    void refresh();
+  };
+  const claim = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await hubWriteAPI.claim(hubId, detail.item.id, detail.tenant.id);
+      await refresh();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const send = async (text: string): Promise<boolean> => {
+    if (!text.trim()) return false;
+    setBusy(true);
+    setError(null);
+    if (pending.current?.text !== text) pending.current = { text, key: crypto.randomUUID() };
+    try {
+      await hubWriteAPI.reply(hubId, detail.item.id, detail.tenant.id, text, pending.current.key);
+      pending.current = null;
+      await refresh();
+      return true;
+    } catch (err) {
+      fail(err);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
   useEffect(() => {
     end.current?.scrollIntoView?.({ block: 'end' });
   }, [detail.conversation.id, detail.messages.length]);
@@ -54,9 +112,6 @@ export default function HubItemView({ detail, onBack }: { detail: HubItemDetail;
           </div>
         </div>
       </header>
-      <p role="note" className="border-b border-border-subtle bg-status-info-soft px-4 py-1.5 text-[11px] text-text-secondary">
-        Somente leitura. Responder por aqui ainda não está disponível.
-      </p>
       <ol aria-label="Mensagens" className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
         {detail.messages.length === 0 && <li className="py-8 text-center text-sm text-text-secondary">Nenhuma mensagem nesta conversa.</li>}
         {detail.messages.map((m) => (
@@ -64,6 +119,35 @@ export default function HubItemView({ detail, onBack }: { detail: HubItemDetail;
         ))}
         <div ref={end} />
       </ol>
+      <footer className="border-t border-border-subtle px-4 py-3">
+        {error && (
+          <div role="alert" className="mb-2 rounded-control bg-status-danger-soft px-2 py-1.5 text-xs text-status-danger">
+            {error}
+          </div>
+        )}
+        {mode === 'readonly' && (
+          <p role="note" className="text-[12px] text-text-secondary">Somente leitura: seu acesso a {tenantName} não permite responder.</p>
+        )}
+        {mode === 'closed' && <p role="note" className="text-[12px] text-text-secondary">Atendimento finalizado.</p>}
+        {mode === 'other' && <p role="note" className="text-[12px] text-text-secondary">Esta conversa está com outro operador.</p>}
+        {mode === 'claim' && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[12px] text-text-secondary">Assuma a conversa para responder como {tenantName}.</p>
+            <button type="button" onClick={() => void claim()} disabled={busy} className="h-9 rounded-control bg-accent-primary px-3 text-sm font-medium text-white disabled:opacity-50">
+              Assumir
+            </button>
+          </div>
+        )}
+        {mode === 'reply' && (
+          <MessageComposer
+            draftKey={`hub:${detail.tenant.id}:${detail.conversation.id}`}
+            onSend={send}
+            disabled={busy}
+            label={`Respondendo como ${tenantName}`}
+            labelRight={detail.item.channel || undefined}
+          />
+        )}
+      </footer>
     </div>
   );
 }

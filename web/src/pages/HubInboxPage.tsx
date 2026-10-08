@@ -9,7 +9,7 @@ import HubInboxList from '../components/hub/HubInboxList';
 import HubItemView from '../components/hub/HubItemView';
 
 // The Hub workspace: ONE inbox across every company the signed-in operator is authorized to serve. What appears here is
-// decided by the server from their live grants; nothing in this page chooses a tenant. Read-only for now.
+// decided by the server from their live grants; nothing in this page chooses a tenant. Replying needs a reply-capable grant.
 export default function HubInboxPage() {
   const hubs = useMyHubs();
   const list = hubs.data ?? [];
@@ -109,7 +109,7 @@ export default function HubInboxPage() {
                 />
               </div>
             )}
-            {selected && detail.data && <HubItemView detail={detail.data} onBack={isMobile ? () => setSelected('') : undefined} />}
+            {selected && detail.data && <HubItemView hubId={hubId} detail={detail.data} onBack={isMobile ? () => setSelected('') : undefined} />}
           </section>
         )}
       </div>

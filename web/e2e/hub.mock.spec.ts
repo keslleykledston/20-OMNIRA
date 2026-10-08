@@ -1,6 +1,6 @@
 import { test, expect, Page, Route } from '@playwright/test';
 
-// Hub (inbox agregada, somente leitura) em um navegador real, com a API mockada. O backend do Hub é coberto por testes Go
+// Hub (inbox agregada; leitura, e assumir/responder só com permissão) em um navegador real, com a API mockada. O backend do Hub é coberto por testes Go
 // contra PostgreSQL real (RLS, HTTP, projetor); aqui se confere a tela: entrada no menu, lista com o nome da empresa, abertura
 // somente leitura, ausência de composer e de pedidos de mídia, e o comportamento no celular.
 
@@ -17,8 +17,9 @@ const ITEMS = [
   item(3, 'tenant-a', 'ISP Roraima', { status: 'closed' }),
 ];
 
-async function install(page: Page, opts: { hubs?: unknown } = {}) {
+async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; writes?: { path: string; body: any; key?: string }[] } = {}) {
   const seen: string[] = [];
+  let assignment: 'none' | 'me' = 'none';
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   await page.addInitScript(([t]) => {
     localStorage.setItem('token', 'mock-token');
@@ -33,13 +34,25 @@ async function install(page: Page, opts: { hubs?: unknown } = {}) {
     if (p.endsWith('/events') || p.includes('/presence')) return route.abort();
     if (p === '/hubs') return opts.hubs === 404 ? json(route, {}, 404) : json(route, { items: opts.hubs ?? [{ id: HUB, name: 'K3G Service Desk', role: 'hub_agent' }] });
     if (p === `/hubs/${HUB}/inbox`) return json(route, { items: ITEMS, has_more: false, count: ITEMS.length, limit: 30 });
+    const w = p.match(new RegExp(`^/hubs/${HUB}/inbox/([^/]+)/(claim|messages)$`));
+    if (w && route.request().method() === 'POST') {
+      const body = route.request().postDataJSON();
+      opts.writes?.push({ path: p, body, key: route.request().headers()['idempotency-key'] });
+      const it = ITEMS.find((i) => i.id === w[1]);
+      if (!it) return json(route, {}, 404);
+      if (w[2] === 'claim') {
+        assignment = 'me';
+        return json(route, { item_id: it.id, conversation_id: it.conversation_id, changed: true, tenant: { id: it.tenant_id, name: it.tenant_name } });
+      }
+      return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'out-1', conversation_id: it.conversation_id, status: 'queued', tenant: { id: it.tenant_id, name: it.tenant_name } }) });
+    }
     const m = p.match(new RegExp(`^/hubs/${HUB}/inbox/(.+)$`));
     if (m) {
       const it = ITEMS.find((i) => i.id === m[1]);
       if (!it) return json(route, {}, 404);
       return json(route, {
-        item: it, tenant: { id: it.tenant_id, name: it.tenant_name }, access: { source: 'hub' },
-        conversation: { id: it.conversation_id, status: it.status, created_at: now },
+        item: it, tenant: { id: it.tenant_id, name: it.tenant_name }, access: { source: 'hub', can_reply: !!opts.canReply },
+        conversation: { id: it.conversation_id, status: it.status, created_at: now, assignment },
         messages: [
           { id: 'm1', direction: 'inbound', message_type: 'text', body: 'Estou sem internet desde ontem à noite', status: 'received', created_at: now },
           { id: 'm2', direction: 'outbound', message_type: 'text', body: 'Já estamos verificando a sua conexão', status: 'sent', created_at: now },
@@ -105,4 +118,38 @@ test('no celular: lista, depois só a conversa, com voltar', async ({ page }, in
   await page.screenshot({ path: info.outputPath('hub-mobile-detail.png') });
   await page.getByRole('button', { name: 'Voltar para a lista' }).click();
   await expect(page.getByRole('list', { name: 'Conversas do Hub' })).toBeVisible();
+});
+
+test('com permissão de resposta: assumir, ver "Respondendo como" e enviar com a empresa da conversa', async ({ page }, info) => {
+  const writes: { path: string; body: any; key?: string }[] = [];
+  await install(page, { canReply: true, writes });
+  await page.goto('/hub');
+  const list = page.getByRole('list', { name: 'Conversas do Hub' });
+  await list.getByText('Maria Souza').click();
+  await expect(page.getByText('Assuma a conversa para responder como NorteNet.')).toBeVisible();
+  await expect(page.getByRole('textbox')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Assumir' }).click();
+  await expect(page.getByText('Respondendo como NorteNet')).toBeVisible();
+  await page.getByRole('textbox').fill('Olá Maria, já estamos verificando');
+  await page.getByRole('button', { name: 'Enviar mensagem' }).click();
+  await expect.poll(() => writes.length).toBe(2);
+  await page.screenshot({ path: info.outputPath('hub-reply.png') });
+
+  expect(writes[0].path).toMatch(/\/claim$/);
+  expect(writes[0].body).toEqual({ expected_tenant_id: 'tenant-b' });
+  expect(writes[1].path).toMatch(/\/messages$/);
+  expect(writes[1].body).toEqual({ expected_tenant_id: 'tenant-b', text: 'Olá Maria, já estamos verificando' });
+  expect(writes[1].key).toBeTruthy();
+});
+
+test('somente leitura: nenhum botão de assumir nem caixa de texto', async ({ page }) => {
+  const writes: { path: string; body: any }[] = [];
+  await install(page, { canReply: false, writes });
+  await page.goto('/hub');
+  await page.getByRole('list', { name: 'Conversas do Hub' }).getByText('Maria Souza').click();
+  await expect(page.getByRole('note')).toContainText('Somente leitura');
+  await expect(page.getByRole('button', { name: 'Assumir' })).toHaveCount(0);
+  await expect(page.getByRole('textbox')).toHaveCount(0);
+  expect(writes).toEqual([]);
 });
