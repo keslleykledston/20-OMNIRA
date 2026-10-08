@@ -165,23 +165,34 @@ func (e *PostgresEffects) OpenTickets(ctx context.Context, f *ports.Conversation
 	if f.ContactID == nil {
 		return sum, nil
 	}
-	var first, subject *string
+	var first, subject, external *string
 	err = e.q(ctx).QueryRow(ctx, `
-		SELECT count(*), (array_agg(t.id::text ORDER BY t.created_at DESC))[1], (array_agg(t.subject ORDER BY t.created_at DESC))[1]
+		SELECT count(*), (array_agg(t.id::text ORDER BY t.created_at DESC))[1], (array_agg(t.subject ORDER BY t.created_at DESC))[1],
+		       (array_agg(t.external_ticket_id ORDER BY t.created_at DESC))[1]
 		FROM tickets t JOIN conversations c ON c.tenant_id = t.tenant_id AND c.id = t.conversation_id
 		WHERE t.tenant_id = $1 AND c.contact_id = $2 AND t.status IN ('open','in_progress','waiting')
 		  AND `+ticketdomain.RealTicketSQL("t")+`
-		  AND ($3::uuid IS NULL OR t.customer_account_id = $3)`, tenantID, *f.ContactID, f.ActiveCustomerAccountID).Scan(&sum.Count, &first, &subject)
+		  AND ($3::uuid IS NULL OR t.customer_account_id = $3)`, tenantID, *f.ContactID, f.ActiveCustomerAccountID).Scan(&sum.Count, &first, &subject, &external)
 	if err != nil {
 		return sum, err
 	}
 	if first != nil {
 		sum.FirstID = *first
 	}
-	if subject != nil {
-		sum.FirstSubject = *subject
-	}
+	sum.FirstSubject = ticketLabel(subject, external)
 	return sum, nil
+}
+
+// ticketLabel is how a flow names a ticket to the customer and to the attendant. A ticket opened in the ERP/CRM from the inbox is
+// real because it carries the ERP number, but its local subject can be empty; saying `"" ` to a customer is worse than the number.
+func ticketLabel(subject, external *string) string {
+	if subject != nil && strings.TrimSpace(*subject) != "" {
+		return strings.TrimSpace(*subject)
+	}
+	if external != nil && strings.TrimSpace(*external) != "" {
+		return "nº " + strings.TrimSpace(*external)
+	}
+	return "sem assunto registrado"
 }
 
 // EnsureTicket makes the conversation's ticket real. It is idempotent: the conversation has at most one active ticket
