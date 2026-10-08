@@ -20,6 +20,7 @@ type TenantContext struct {
 	ServiceContractID *uuid.UUID // which contract
 	EffectiveGrantID  *uuid.UUID // which grant
 	WorkPoolID        *uuid.UUID // grant's work pool, when it has one
+	CanReply          bool       // hub access only: the grant allows claiming and replying, not just reading
 
 	// Audit trail
 	CorrelationID string // trace requests across system

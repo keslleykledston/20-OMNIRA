@@ -42,8 +42,11 @@ $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg
 -- p_check_scope => false is for resources that are not bound to a queue (the tenant row itself, or a row whose
 -- queue is enforced through its parent): the grant and contract must still be live, only the queue
 -- allowlist is skipped. Queue-bound resources (conversations) always use the default (true).
+-- p_require_reply => true additionally demands the grant's can_reply capability: used when the caller is about to WRITE
+-- (claim / reply) so the same single definition decides read and write, re-checked inside the writing transaction.
 CREATE OR REPLACE FUNCTION has_active_hub_access(
-  p_user_id UUID, p_tenant_id UUID, p_queue_id UUID DEFAULT NULL, p_hub_id UUID DEFAULT NULL, p_check_scope BOOLEAN DEFAULT true
+  p_user_id UUID, p_tenant_id UUID, p_queue_id UUID DEFAULT NULL, p_hub_id UUID DEFAULT NULL, p_check_scope BOOLEAN DEFAULT true,
+  p_require_reply BOOLEAN DEFAULT false
 ) RETURNS BOOLEAN AS $$
   SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
      AND EXISTS (
@@ -57,6 +60,7 @@ CREATE OR REPLACE FUNCTION has_active_hub_access(
       AND (p_hub_id IS NULL OR g.hub_id = p_hub_id)
       AND h.status = 'active'
       AND g.status = 'active' AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())
+      AND (NOT p_require_reply OR g.can_reply)
       AND c.status = 'active' AND c.valid_from <= now() AND (c.valid_until IS NULL OR c.valid_until > now())
       AND CASE
             WHEN jsonb_typeof(c.service_scope) IS DISTINCT FROM 'object' THEN false
@@ -80,11 +84,11 @@ $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg
 
 REVOKE EXECUTE ON FUNCTION is_hub_member(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION is_hub_admin(UUID, UUID) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION has_active_hub_access(UUID, UUID, UUID, UUID, BOOLEAN) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION has_active_hub_access(UUID, UUID, UUID, UUID, BOOLEAN, BOOLEAN) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION has_active_grant_on_contract(UUID, UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION is_hub_member(UUID, UUID) TO omnira_app;
 GRANT EXECUTE ON FUNCTION is_hub_admin(UUID, UUID) TO omnira_app;
-GRANT EXECUTE ON FUNCTION has_active_hub_access(UUID, UUID, UUID, UUID, BOOLEAN) TO omnira_app;
+GRANT EXECUTE ON FUNCTION has_active_hub_access(UUID, UUID, UUID, UUID, BOOLEAN, BOOLEAN) TO omnira_app;
 GRANT EXECUTE ON FUNCTION has_active_grant_on_contract(UUID, UUID) TO omnira_app;
 
 ALTER TABLE service_hubs ENABLE ROW LEVEL SECURITY;

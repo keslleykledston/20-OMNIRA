@@ -46,6 +46,8 @@ func newHubAPI(t *testing.T, w *world) *hubAPI {
 	mux.Handle("GET /api/v1/hubs", shim(session(http.HandlerFunc(h.ListMyHubs))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", shim(session(http.HandlerFunc(h.ListInbox))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", shim(session(http.HandlerFunc(h.OpenInboxItem))))
+	mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/claim", shim(session(http.HandlerFunc(h.ClaimItem))))
+	mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/messages", shim(session(http.HandlerFunc(h.ReplyItem))))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &hubAPI{w: w, srv: srv}

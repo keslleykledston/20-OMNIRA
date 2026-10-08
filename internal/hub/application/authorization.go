@@ -17,6 +17,9 @@ var (
 	ErrAccessDenied = errors.New("access denied")
 	// ErrInvalidRequest is a malformed request (nil ids, direct request carrying a hub id, ...).
 	ErrInvalidRequest = errors.New("invalid access request")
+	// ErrReplyNotAllowed: the caller may READ this tenant through the Hub but their grant does not allow replying.
+	// It is only returned after every read check passed, so it reveals nothing the caller could not already see.
+	ErrReplyNotAllowed = errors.New("hub grant does not allow replying")
 	// ErrAccessSourceRequired: the caller must say whether this is direct or hub access. It is never guessed.
 	ErrAccessSourceRequired = errors.New("access source is required (direct or hub)")
 )
@@ -64,6 +67,8 @@ type HubAccessRequest struct {
 	TenantID      uuid.UUID
 	QueueID       *uuid.UUID // queue of the resource being opened, when it has one
 	CorrelationID string
+	// RequireReply makes the call fail with ErrReplyNotAllowed unless the grant carries the reply capability.
+	RequireReply bool
 }
 
 // ResolveHubAccess validates hub status, hub membership, grant, contract and queue scope, and only then
@@ -126,6 +131,10 @@ func (s *HubAuthorizationService) ResolveHubAccess(ctx context.Context, req HubA
 		return nil, fmt.Errorf("build effective context: %w", err)
 	}
 	tc.WorkPoolID = grant.WorkPoolID
+	tc.CanReply = grant.CanReply
+	if req.RequireReply && !grant.CanReply {
+		return nil, ErrReplyNotAllowed
+	}
 	return tc, nil
 }
 

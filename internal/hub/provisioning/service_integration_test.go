@@ -371,3 +371,48 @@ func upper(s string) string {
 	}
 	return string(b)
 }
+
+func TestProvisioning_ReplyCapabilityIsExplicitAndAudited(t *testing.T) {
+	f := newFx(t)
+	a := f.tenant("A")
+	agent := f.user("agent")
+	hub, err := f.svc.CreateHub(f.ctx, "Hub", "")
+	f.must(err)
+	f.must(f.svc.AddMember(f.ctx, hub, agent, provisioning.RoleAgent))
+	_, err = f.svc.CreateContract(f.ctx, provisioning.ContractSpec{Hub: hub, Tenant: a.id})
+	f.must(err)
+	canReply := func() bool {
+		var v bool
+		f.must(f.owner.QueryRow(f.ctx, `SELECT can_reply FROM effective_access_grants WHERE hub_id = $1 AND user_id = $2`, hub, agent).Scan(&v))
+		return v
+	}
+	g, err := f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent})
+	f.must(err)
+	if canReply() {
+		t.Fatal("a grant must be read-only unless reply is asked for explicitly")
+	}
+	_, err = f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, CanReply: true})
+	f.must(err)
+	if !canReply() {
+		t.Fatal("the reply capability was not stored")
+	}
+	_, err = f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent})
+	f.must(err)
+	if canReply() {
+		t.Fatal("renewing without --reply must remove the capability (it is set exactly as given)")
+	}
+	var withReply int
+	f.must(f.owner.QueryRow(f.ctx, `SELECT count(*) FROM audit_events WHERE action = 'hub.grant.granted' AND resource_id = $1 AND (metadata->>'can_reply')::bool`, g).Scan(&withReply))
+	if withReply != 1 {
+		t.Errorf("exactly one grant event records can_reply=true, got %d", withReply)
+	}
+	sum, err := f.svc.Describe(f.ctx, hub)
+	f.must(err)
+	if len(sum.Grants) != 1 || sum.Grants[0].CanReply {
+		t.Errorf("Describe disagrees: %+v", sum.Grants)
+	}
+	// reading is unchanged by the capability
+	if got := f.reads(agent, a); got != 2 {
+		t.Errorf("a read-only grant must still read the tenant's conversations, got %d", got)
+	}
+}

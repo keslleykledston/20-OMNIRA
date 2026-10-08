@@ -457,6 +457,8 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool) {
 	s.mux.Handle("GET /api/v1/hubs", authnMiddleware(userSession(http.HandlerFunc(h.ListMyHubs))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", authnMiddleware(userSession(http.HandlerFunc(h.ListInbox))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))
+	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/claim", authnMiddleware(userSession(http.HandlerFunc(h.ClaimItem))))
+	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/messages", authnMiddleware(userSession(http.HandlerFunc(h.ReplyItem))))
 }
 
 func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {

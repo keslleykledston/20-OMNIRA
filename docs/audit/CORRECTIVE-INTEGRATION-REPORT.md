@@ -1,5 +1,17 @@
 # CORRECTIVE-INTEGRATION-REPORT — checkpoint 2026-10-08
 
+## ATUALIZAÇÃO — 4ª fatia: assumir e responder pelo Hub (autorizada: "siga"; ADR-0037)
+Continua **local, sem push, nada implantado**, tudo atrás de `OMNIRA_HUB_API_ENABLED=false`.
+- Decisão (ADR-0037): capacidade `can_reply` por grant (padrão somente leitura; `hubctl grant add --reply`); autoriza na sessão RLS do agente, grava em sessão de sistema com o tenant lido do item e **reconfere a delegação na mesma transação** com a mesma função SQL da RLS (`p_require_reply`). **Nenhuma policy de escrita foi adicionada**; a base continua recusando `UPDATE conversations` / `INSERT messages|outbox_events` diretos do agente (testado).
+- Rotas: `POST /hubs/{hub}/inbox/{item}/claim` e `.../messages` (Idempotency-Key). Assumir é explícito (responder sem assumir = 409); dois agentes simultâneos → um vence; `expected_tenant_id` (a empresa na tela) divergente do item = 409 sem gravar; campo/seletor de tenant = 400; sem grant/forjado = 404 uniforme; grant somente leitura = 403.
+- **POSTGRES + HTTP VERIFIED** (`reply_integration_test.go`, 21 casos): capacidade, happy path com mensagem/job/auditoria/histórico, replay e divergência de idempotência, IDOR, revogação de grant/contrato/hub/membro/capacidade/escopo de fila/mudança de fila, atendimento finalizado, revogação **entre autorizar e gravar** (grant e capacidade). **16 mutantes mortos** (`scripts/test-hub-reply-mutations.sh`, inclui a função SQL). Mutantes da RLS (16) e migrations up/down/up (093..097) continuam verdes.
+- **E2E com binários reais** (`scripts/e2e-hub-smoke.sh`): +9 verificações de escrita e checagem direta no banco (1 mensagem sob a empresa A com o agente como remetente, 1 job, conversa do agente, 2 eventos de auditoria, nada gravado em B/C).
+- UI: `MessageComposer` reutilizado ("Respondendo como {empresa}"), "Assumir", estados somente leitura/finalizado/outro operador; 7 testes jsdom novos; Chromium (build, `vite preview`) 5/5 estável. Frontend 725/726 (o vermelho é o `SettingsShell`, também no `main`); `tsc` e build ok.
+- Gate de integração completo: 29 pacotes ok, 2 falham com o **mesmo conjunto de 13 testes** da execução anterior (`tenancy/adapters`, `worker/jobsstream`; idênticos no `main` limpo). Regressões da fatia: 0.
+- **Não verificado:** navegador real contra o API real, Keycloak/OIDC real, entrega real ao canal, como as telas do tenant exibem um agente do Hub como atribuído, anexos/templates/notas/transferência pelo Hub, revisão Codex desta fatia (não solicitada; a nº 2 segue pendente de `/codex:result task-muyxtuiu-n3c6zb`).
+
+---
+
 ## ATUALIZAÇÃO — 3ª fatia: tela `/hub` (autorizada: "siga")
 Continua **local, sem push, nada implantado**.
 - Backend: `GET /api/v1/hubs` (meus hubs) e `tenant_name` nas linhas, lidos pela sessão do próprio agente. **HTTP VERIFIED**, 5 mutantes mortos.

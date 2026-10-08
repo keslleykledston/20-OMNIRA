@@ -47,6 +47,7 @@ type EffectiveAccessGrant struct {
 	TenantID          uuid.UUID
 	ServiceContractID uuid.UUID
 	WorkPoolID        *uuid.UUID
+	CanReply          bool   // may claim and reply, not only read
 	Status            string // active | suspended | revoked
 	ValidFrom         time.Time
 	ValidUntil        *time.Time

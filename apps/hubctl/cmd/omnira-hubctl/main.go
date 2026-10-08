@@ -31,7 +31,8 @@ const usage = `usage: omnira-hubctl --operator NAME <command> [flags]
   member remove    --hub ID (--user ID | --email E)
   contract create  --hub ID --tenant ID [--valid-until RFC3339] [--queues ID,ID,...]
   contract status  --hub ID --tenant ID --status active|suspended|revoked
-  grant add        --hub ID --tenant ID (--user ID | --email E) [--valid-until RFC3339]
+  grant add        --hub ID --tenant ID (--user ID | --email E) [--valid-until RFC3339] [--reply]
+                   (--reply lets the agent claim and answer; without it the grant is read-only, and renewing without it removes the capability)
   grant revoke     --hub ID --tenant ID (--user ID | --email E)
   show             --hub ID
   reconcile        (project every conversation into the Hub inbox once; the worker does this on a schedule when enabled)
@@ -45,6 +46,7 @@ type command struct {
 	email, name, description string
 	role, status             string
 	validUntil               *time.Time
+	reply                    bool
 	queues                   []uuid.UUID
 }
 
@@ -87,6 +89,7 @@ func parse(args []string) (command, error) {
 	sub.StringVar(&c.status, "status", "", "")
 	sub.StringVar(&valid, "valid-until", "", "")
 	sub.StringVar(&queues, "queues", "", "")
+	sub.BoolVar(&c.reply, "reply", false, "")
 	if err := sub.Parse(rest); err != nil {
 		return c, fmt.Errorf("%w: %v", errUsage, err)
 	}
@@ -268,11 +271,15 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 		}
 		fmt.Fprintf(out, "contract hub %s -> tenant %s is now %s\n", c.hub, c.tenant, c.status)
 	case "grant add":
-		id, err := svc.Grant(ctx, provisioning.GrantSpec{Hub: c.hub, Tenant: c.tenant, User: user, ValidUntil: c.validUntil})
+		id, err := svc.Grant(ctx, provisioning.GrantSpec{Hub: c.hub, Tenant: c.tenant, User: user, ValidUntil: c.validUntil, CanReply: c.reply})
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "grant %s: user %s may act on tenant %s through hub %s\n", id, user, c.tenant, c.hub)
+		mode := "READ-ONLY"
+		if c.reply {
+			mode = "can claim and REPLY"
+		}
+		fmt.Fprintf(out, "grant %s: user %s may act on tenant %s through hub %s (%s)\n", id, user, c.tenant, c.hub, mode)
 	case "grant revoke":
 		if err := svc.RevokeGrant(ctx, c.hub, c.tenant, user); err != nil {
 			return err
@@ -312,7 +319,11 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 			if g.ValidUntil != nil {
 				until = "until " + g.ValidUntil.UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(out, "  user %s -> tenant %s  %-9s %s\n", g.UserID, g.TenantID, g.Status, until)
+			mode := "read-only"
+			if g.CanReply {
+				mode = "reply"
+			}
+			fmt.Fprintf(out, "  user %s -> tenant %s  %-9s %-9s %s\n", g.UserID, g.TenantID, g.Status, mode, until)
 		}
 	}
 	return nil

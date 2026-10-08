@@ -218,11 +218,11 @@ func (r *PostgresHubRepository) GetEffectiveGrant(ctx context.Context, hubID, us
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	var g domain.EffectiveAccessGrant
 	err := q.QueryRow(ctx,
-		`SELECT id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, status, valid_from, valid_until, grant_version, created_at, updated_at
+		`SELECT id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, can_reply, status, valid_from, valid_until, grant_version, created_at, updated_at
 		 FROM effective_access_grants
 		 WHERE hub_id = $1 AND user_id = $2 AND tenant_id = $3 AND status = 'active'`,
 		hubID, userID, tenantID,
-	).Scan(&g.ID, &g.HubID, &g.UserID, &g.TenantID, &g.ServiceContractID, &g.WorkPoolID,
+	).Scan(&g.ID, &g.HubID, &g.UserID, &g.TenantID, &g.ServiceContractID, &g.WorkPoolID, &g.CanReply,
 		&g.Status, &g.ValidFrom, &g.ValidUntil, &g.GrantVersion, &g.CreatedAt, &g.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -236,7 +236,7 @@ func (r *PostgresHubRepository) GetEffectiveGrant(ctx context.Context, hubID, us
 func (r *PostgresHubRepository) ListEffectiveGrantsForUser(ctx context.Context, hubID, userID uuid.UUID) ([]*domain.EffectiveAccessGrant, error) {
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	rows, err := q.Query(ctx,
-		`SELECT id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, status, valid_from, valid_until, grant_version, created_at, updated_at
+		`SELECT id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, can_reply, status, valid_from, valid_until, grant_version, created_at, updated_at
 		 FROM effective_access_grants
 		 WHERE hub_id = $1 AND user_id = $2 AND status = 'active'
 		 ORDER BY created_at DESC`,
@@ -250,7 +250,7 @@ func (r *PostgresHubRepository) ListEffectiveGrantsForUser(ctx context.Context, 
 	var grants []*domain.EffectiveAccessGrant
 	for rows.Next() {
 		var g domain.EffectiveAccessGrant
-		if err := rows.Scan(&g.ID, &g.HubID, &g.UserID, &g.TenantID, &g.ServiceContractID, &g.WorkPoolID,
+		if err := rows.Scan(&g.ID, &g.HubID, &g.UserID, &g.TenantID, &g.ServiceContractID, &g.WorkPoolID, &g.CanReply,
 			&g.Status, &g.ValidFrom, &g.ValidUntil, &g.GrantVersion, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -262,7 +262,7 @@ func (r *PostgresHubRepository) ListEffectiveGrantsForUser(ctx context.Context, 
 func (r *PostgresHubRepository) ListEffectiveGrantsForTenant(ctx context.Context, hubID, tenantID uuid.UUID) ([]*domain.EffectiveAccessGrant, error) {
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	rows, err := q.Query(ctx,
-		`SELECT id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, status, valid_from, valid_until, grant_version, created_at, updated_at
+		`SELECT id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, can_reply, status, valid_from, valid_until, grant_version, created_at, updated_at
 		 FROM effective_access_grants
 		 WHERE hub_id = $1 AND tenant_id = $2 AND status = 'active'
 		 ORDER BY created_at DESC`,
@@ -276,7 +276,7 @@ func (r *PostgresHubRepository) ListEffectiveGrantsForTenant(ctx context.Context
 	var grants []*domain.EffectiveAccessGrant
 	for rows.Next() {
 		var g domain.EffectiveAccessGrant
-		if err := rows.Scan(&g.ID, &g.HubID, &g.UserID, &g.TenantID, &g.ServiceContractID, &g.WorkPoolID,
+		if err := rows.Scan(&g.ID, &g.HubID, &g.UserID, &g.TenantID, &g.ServiceContractID, &g.WorkPoolID, &g.CanReply,
 			&g.Status, &g.ValidFrom, &g.ValidUntil, &g.GrantVersion, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -288,9 +288,9 @@ func (r *PostgresHubRepository) ListEffectiveGrantsForTenant(ctx context.Context
 func (r *PostgresHubRepository) CreateEffectiveGrant(ctx context.Context, grant *domain.EffectiveAccessGrant) error {
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	_, err := q.Exec(ctx,
-		`INSERT INTO effective_access_grants (id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, status, valid_from, valid_until, grant_version, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		grant.ID, grant.HubID, grant.UserID, grant.TenantID, grant.ServiceContractID, grant.WorkPoolID,
+		`INSERT INTO effective_access_grants (id, hub_id, user_id, tenant_id, service_contract_id, work_pool_id, can_reply, status, valid_from, valid_until, grant_version, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		grant.ID, grant.HubID, grant.UserID, grant.TenantID, grant.ServiceContractID, grant.WorkPoolID, grant.CanReply,
 		grant.Status, grant.ValidFrom, grant.ValidUntil, grant.GrantVersion, grant.CreatedAt, grant.UpdatedAt,
 	)
 	return err

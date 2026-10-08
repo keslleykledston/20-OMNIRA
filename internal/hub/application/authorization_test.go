@@ -238,3 +238,49 @@ func TestEffectiveAccessResolver_NoImplicitFallback(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveHubAccess_ReplyCapability(t *testing.T) {
+	resolve := func(s scenario, require bool) (*tenancydomain.TenantContext, error) {
+		svc := NewHubAuthorizationService(s.repo)
+		svc.now = func() time.Time { return s.now }
+		return svc.ResolveHubAccess(context.Background(), HubAccessRequest{ActorID: s.actor, HubID: s.hub, TenantID: s.tenant, RequireReply: require})
+	}
+	t.Run("a read-only grant reads but is not marked as able to reply", func(t *testing.T) {
+		s := happy()
+		tc, err := resolve(s, false)
+		if err != nil || tc.CanReply {
+			t.Fatalf("ctx=%+v err=%v", tc, err)
+		}
+	})
+	t.Run("asking for reply with a read-only grant is ErrReplyNotAllowed, which is NOT an access denial", func(t *testing.T) {
+		s := happy()
+		tc, err := resolve(s, true)
+		if tc != nil || !errors.Is(err, ErrReplyNotAllowed) || errors.Is(err, ErrAccessDenied) {
+			t.Fatalf("ctx=%+v err=%v", tc, err)
+		}
+	})
+	t.Run("a grant with the capability is allowed and the context says so", func(t *testing.T) {
+		s := happy()
+		s.repo.grant.CanReply = true
+		tc, err := resolve(s, true)
+		if err != nil || !tc.CanReply {
+			t.Fatalf("ctx=%+v err=%v", tc, err)
+		}
+	})
+	t.Run("a read denial is never downgraded to 'cannot reply': nothing is revealed about a grant that is not live", func(t *testing.T) {
+		for name, mutate := range map[string]func(*scenario){
+			"revoked grant":    func(s *scenario) { s.repo.grant.Status = "revoked" },
+			"no grant":         func(s *scenario) { s.repo.grant = nil },
+			"contract revoked": func(s *scenario) { s.repo.contract.Status = "revoked" },
+			"hub suspended":    func(s *scenario) { s.repo.hub.Status = "suspended" },
+			"not a member":     func(s *scenario) { s.repo.membership = nil },
+		} {
+			s := happy()
+			s.repo.grant = &domain.EffectiveAccessGrant{ID: s.grant, HubID: s.hub, UserID: s.actor, TenantID: s.tenant, ServiceContractID: s.contract, Status: "active", ValidFrom: s.now.Add(-time.Hour), CanReply: false}
+			mutate(&s)
+			if _, err := resolve(s, true); !errors.Is(err, ErrAccessDenied) {
+				t.Errorf("%s: got %v, want ErrAccessDenied", name, err)
+			}
+		}
+	})
+}

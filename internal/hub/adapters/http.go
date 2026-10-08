@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,18 +14,24 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/application"
 	"github.com/omnira/omnira/internal/hub/domain"
+	"github.com/omnira/omnira/internal/hub/replying"
+	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapp "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// HTTPHandler is the first, deliberately small vertical slice of the Hub API (read-only):
+// HTTPHandler is the Hub API:
 //
-//	GET /api/v1/hubs/{hub_id}/inbox              the caller's authorized view of the hub's inbox
-//	GET /api/v1/hubs/{hub_id}/inbox/{item_id}    open one item: its conversation header and messages
+//	GET  /api/v1/hubs/{hub_id}/inbox                       the caller's authorized view of the hub's inbox
+//	GET  /api/v1/hubs/{hub_id}/inbox/{item_id}             open one item: its conversation header and messages
+//	POST /api/v1/hubs/{hub_id}/inbox/{item_id}/claim       take the conversation (reply-capable grant required)
+//	POST /api/v1/hubs/{hub_id}/inbox/{item_id}/messages    answer it (reply-capable grant, claimed, Idempotency-Key)
 //
-// Both MUST be mounted behind the authn middleware and tenancyadapters.UserSessionMiddleware, which opens
+// The reads are RLS-only; the writes authorize in the caller's session and execute through internal/hub/replying.
+// All routes MUST be mounted behind the authn middleware and tenancyadapters.UserSessionMiddleware, which opens
 // the caller's own RLS session (user id set, never system admin). Without that session every query below
 // sees zero rows: the slice fails closed.
 //
@@ -34,11 +41,14 @@ type HTTPHandler struct {
 	pool  *pgxpool.Pool
 	repo  *PostgresHubRepository
 	authz *application.HubAuthorizationService
+	reply *replying.Service
 }
 
 func NewHTTPHandler(pool *pgxpool.Pool) *HTTPHandler {
 	repo := NewPostgresHubRepository(pool)
-	return &HTTPHandler{pool: pool, repo: repo, authz: application.NewHubAuthorizationService(repo)}
+	authz := application.NewHubAuthorizationService(repo)
+	return &HTTPHandler{pool: pool, repo: repo, authz: authz,
+		reply: replying.New(pool, authz, repo, messagesadapters.NewPostgresOutboundStore(pool))}
 }
 
 type inboxItemDTO struct {
@@ -201,9 +211,10 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 	var tenantName string
 	var convStatus, convTitle string
 	var convCreated time.Time
-	err = q.QueryRow(ctx, `SELECT COALESCE(NULLIF(t.trade_name, ''), t.legal_name), c.status, COALESCE(c.title, ''), c.created_at
+	var assignee *uuid.UUID
+	err = q.QueryRow(ctx, `SELECT COALESCE(NULLIF(t.trade_name, ''), t.legal_name), c.status, COALESCE(c.title, ''), c.created_at, c.assigned_to_user_id
 	                       FROM conversations c JOIN tenants t ON t.id = c.tenant_id
-	                       WHERE c.id = $1 AND c.tenant_id = $2`, item.ConversationID, tc.TenantID).Scan(&tenantName, &convStatus, &convTitle, &convCreated)
+	                       WHERE c.id = $1 AND c.tenant_id = $2`, item.ConversationID, tc.TenantID).Scan(&tenantName, &convStatus, &convTitle, &convCreated, &assignee)
 	if err != nil {
 		// RLS hid it or it vanished: same uniform answer, never a 500 that confirms existence
 		writeAccessError(w, application.ErrAccessDenied)
@@ -228,11 +239,19 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := toDTO(item)
 	dto.TenantName = tenantName
+	// Who holds the conversation, WITHOUT naming anyone else: the composer only needs to know whether it is the caller.
+	assignment := "none"
+	if assignee != nil {
+		assignment = "other"
+		if *assignee == actor {
+			assignment = "me"
+		}
+	}
 	writeJSON(w, map[string]any{
 		"item":         dto,
 		"tenant":       map[string]any{"id": tc.TenantID, "name": tenantName},
-		"access":       map[string]any{"source": tc.Source, "hub_id": tc.HubID, "grant_id": tc.EffectiveGrantID},
-		"conversation": map[string]any{"id": item.ConversationID, "status": convStatus, "title": convTitle, "created_at": convCreated},
+		"access":       map[string]any{"source": tc.Source, "hub_id": tc.HubID, "grant_id": tc.EffectiveGrantID, "can_reply": tc.CanReply},
+		"conversation": map[string]any{"id": item.ConversationID, "status": convStatus, "title": convTitle, "created_at": convCreated, "assignment": assignment},
 		"messages":     msgs,
 	})
 }
@@ -307,4 +326,143 @@ func (h *HTTPHandler) ListMyHubs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"items": out})
+}
+
+// ---------------------------------------------------------------- write path (claim / reply)
+
+type replyScope struct {
+	actor, hub, item, expectedTenant uuid.UUID
+}
+
+type claimRequest struct {
+	ExpectedTenantID uuid.UUID `json:"expected_tenant_id"`
+}
+
+type replyRequest struct {
+	ExpectedTenantID uuid.UUID `json:"expected_tenant_id"`
+	Text             string    `json:"text"`
+}
+
+// decodeWrite reads the small JSON body of a write. The only tenant-ish field a write carries is expected_tenant_id:
+// the company the screen showed. It authorizes nothing; it only makes the server refuse when the screen and the
+// persisted item disagree ("answering as A while looking at B").
+func decodeWrite(w http.ResponseWriter, r *http.Request, into any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(into); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func writeReplyError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, application.ErrAccessDenied), errors.Is(err, messagesapp.ErrNotFound):
+		httpError(w, "not found", http.StatusNotFound)
+	case errors.Is(err, application.ErrReplyNotAllowed):
+		httpError(w, "your access to this company is read-only", http.StatusForbidden)
+	case errors.Is(err, replying.ErrTenantMismatch):
+		httpError(w, "the company on screen is not the company of this conversation; reload", http.StatusConflict)
+	case errors.Is(err, replying.ErrTaken), errors.Is(err, messagesapp.ErrNotAssignedToYou):
+		httpError(w, "conversation is assigned to another agent", http.StatusConflict)
+	case errors.Is(err, replying.ErrClosed), errors.Is(err, messagesapp.ErrConversationClosed):
+		httpError(w, "conversation is finalized: the contact's next message starts a new attendance", http.StatusConflict)
+	case errors.Is(err, messagesapp.ErrUnassigned):
+		httpError(w, "claim the conversation before replying", http.StatusConflict)
+	case errors.Is(err, messagesapp.ErrChannelUnavailable):
+		httpError(w, "conversation has no active text channel", http.StatusConflict)
+	case errors.Is(err, messagesapp.ErrWindowClosed):
+		httpError(w, "customer service window closed: free text is only accepted within 24 h of the customer's last message", http.StatusConflict)
+	case errors.Is(err, messagesapp.ErrConversationChanged):
+		httpError(w, "conversation changed, retry", http.StatusConflict)
+	case errors.Is(err, messagesapp.ErrInvalidKey):
+		httpError(w, "Idempotency-Key must be 8-128 chars of [A-Za-z0-9._:-]", http.StatusBadRequest)
+	case errors.Is(err, messagesapp.ErrInvalidText), errors.Is(err, messagesapp.ErrIdempotencyMismatch):
+		httpError(w, "invalid text or Idempotency-Key reused with a different request", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrInvalidRequest):
+		httpError(w, "invalid request", http.StatusBadRequest)
+	default:
+		log.Printf("hub write: %v", err)
+		httpError(w, "internal server error", http.StatusInternalServerError)
+	}
+}
+
+func (h *HTTPHandler) writeScope(w http.ResponseWriter, r *http.Request) (replyScope, bool) {
+	actor, hubID, ok := requestScope(w, r)
+	if !ok {
+		return replyScope{}, false
+	}
+	itemID, err := uuid.Parse(r.PathValue("item_id"))
+	if err != nil {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return replyScope{}, false
+	}
+	return replyScope{actor: actor, hub: hubID, item: itemID}, true
+}
+
+func correlationOf(r *http.Request) string {
+	if v := r.Header.Get("X-Request-Id"); v != "" {
+		return v
+	}
+	return uuid.NewString()
+}
+
+// ClaimItem serves POST /hubs/{hub_id}/inbox/{item_id}/claim: the agent takes the conversation. Needs a reply-capable grant.
+func (h *HTTPHandler) ClaimItem(w http.ResponseWriter, r *http.Request) {
+	sc, ok := h.writeScope(w, r)
+	if !ok {
+		return
+	}
+	var req claimRequest
+	if !decodeWrite(w, r, &req) {
+		return
+	}
+	t, err := h.reply.Authorize(r.Context(), sc.actor, sc.hub, sc.item, req.ExpectedTenantID, correlationOf(r))
+	if err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	changed, err := h.reply.Claim(r.Context(), sc.actor, t)
+	if err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item_id": t.Item.ID, "conversation_id": t.Item.ConversationID, "changed": changed,
+		"tenant": map[string]any{"id": t.Item.TenantID, "name": t.TenantName}})
+}
+
+// ReplyItem serves POST /hubs/{hub_id}/inbox/{item_id}/messages: the agent answers. Idempotency-Key is required.
+func (h *HTTPHandler) ReplyItem(w http.ResponseWriter, r *http.Request) {
+	sc, ok := h.writeScope(w, r)
+	if !ok {
+		return
+	}
+	var req replyRequest
+	if !decodeWrite(w, r, &req) {
+		return
+	}
+	t, err := h.reply.Authorize(r.Context(), sc.actor, sc.hub, sc.item, req.ExpectedTenantID, correlationOf(r))
+	if err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	res, err := h.reply.Send(r.Context(), sc.actor, t, req.Text, r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	status := http.StatusAccepted
+	if res.Replayed {
+		status = http.StatusOK
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id": res.Message.ID, "conversation_id": res.Message.ConversationID, "direction": "outbound", "body": res.Message.Body,
+		"status": res.Message.Status, "created_at": res.Message.CreatedAt.UTC().Format(time.RFC3339),
+		"tenant": map[string]any{"id": t.Item.TenantID, "name": t.TenantName},
+	})
 }

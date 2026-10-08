@@ -23,7 +23,7 @@ docker compose exec api /app/omnira-hubctl --operator <seu-nome> <comando> ...
 | `member remove --hub ID (--user ID \| --email E)` | remove; os grants dele saem junto |
 | `contract create --hub ID --tenant ID [--valid-until RFC3339] [--queues ID,ID]` | cria o contrato; `--queues` restringe às filas **desse tenant** |
 | `contract status --hub ID --tenant ID --status active\|suspended\|revoked` | muda o contrato (corta todos os grants atrás dele) |
-| `grant add --hub ID --tenant ID (--user ID \| --email E) [--valid-until RFC3339]` | concede (ou renova) o acesso do usuário ao tenant |
+| `grant add --hub ID --tenant ID (--user ID \| --email E) [--valid-until RFC3339] [--reply]` | concede (ou renova) o acesso do usuário ao tenant. **Sem `--reply` o acesso é somente leitura**; com `--reply` o agente pode assumir e responder (ADR-0037). Renovar sem `--reply` remove a capacidade |
 | `grant revoke --hub ID --tenant ID (--user ID \| --email E)` | revoga |
 | `show --hub ID` | membros, contratos e grants do hub (somente leitura) |
 | `reconcile` | projeta uma vez as conversas na inbox do Hub (o worker faz isso no intervalo quando `OMNIRA_HUB_PROJECTOR_ENABLED=true`); útil logo após provisionar |
@@ -42,7 +42,7 @@ docker compose exec api /app/omnira-hubctl --operator <seu-nome> <comando> ...
 H=$(docker compose exec -T api /app/omnira-hubctl --operator ana hub create --name "K3G Service Desk" | awk '{print $NF}')
 docker compose exec api /app/omnira-hubctl --operator ana member   add    --hub $H --email maria@k3g.example
 docker compose exec api /app/omnira-hubctl --operator ana contract create --hub $H --tenant <tenant-id> --valid-until 2027-01-01T00:00:00Z
-docker compose exec api /app/omnira-hubctl --operator ana grant    add    --hub $H --tenant <tenant-id> --email maria@k3g.example
+docker compose exec api /app/omnira-hubctl --operator ana grant    add    --hub $H --tenant <tenant-id> --email maria@k3g.example --reply   # sem --reply: somente leitura
 docker compose exec api /app/omnira-hubctl --operator ana show --hub $H
 ```
 Encerrar: `grant revoke` (uma pessoa), `contract status ... --status revoked` (o cliente inteiro), `hub status ... --status suspended` (o hub inteiro).

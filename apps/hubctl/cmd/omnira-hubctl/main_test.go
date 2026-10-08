@@ -20,6 +20,8 @@ func TestParse(t *testing.T) {
 		{"member add by e-mail", []string{"--operator", "ana", "member", "add", "--hub", hub.String(), "--email", "a@b.c", "--role", "hub_admin"}, func(c command) bool { return c.email == "a@b.c" && c.role == "hub_admin" }},
 		{"contract create with scope and end", []string{"--operator", "ana", "contract", "create", "--hub", hub.String(), "--tenant", tenant.String(), "--queues", q1.String() + "," + q2.String(), "--valid-until", "2030-01-02T03:04:05Z"},
 			func(c command) bool { return len(c.queues) == 2 && c.validUntil != nil && c.tenant == tenant }},
+		{"grant add read-only by default", []string{"--operator", "ana", "grant", "add", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String()}, func(c command) bool { return !c.reply }},
+		{"grant add with reply", []string{"--operator", "ana", "grant", "add", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String(), "--reply"}, func(c command) bool { return c.reply }},
 		{"grant revoke", []string{"--operator", "ana", "grant", "revoke", "--hub", hub.String(), "--tenant", tenant.String(), "--user", user.String()}, func(c command) bool { return c.action == "revoke" }},
 		{"show", []string{"--operator", "ana", "show", "--hub", hub.String()}, func(c command) bool { return c.group == "show" && c.hub == hub }},
 		{"reconcile needs no hub", []string{"--operator", "ana", "reconcile"}, func(c command) bool { return c.group == "reconcile" && c.hub == uuid.Nil }},

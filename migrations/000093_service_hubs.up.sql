@@ -131,6 +131,9 @@ CREATE TABLE effective_access_grants (
   service_contract_id UUID NOT NULL,
   work_pool_id      UUID,
 
+  -- capability: may this agent REPLY (claim and send) in the delegated tenant's conversations? Least privilege: read-only by default.
+  can_reply         BOOLEAN NOT NULL DEFAULT false,
+
   -- grant validity (may differ from contract)
   status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'revoked')),
   valid_from        TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -37,6 +37,8 @@ for t in "$TA:Jose Carlos:+5592911110001" "$TB:Maria Souza:+5592911110002" "$TC:
 INSERT INTO contacts (id, tenant_id, display_name, phone_e164) VALUES (gen_random_uuid(), '$ten', '$name', '$phone');
 INSERT INTO conversations (id, tenant_id, contact_id) SELECT gen_random_uuid(), '$ten', id FROM contacts WHERE tenant_id = '$ten';
 INSERT INTO messages (tenant_id, conversation_id, direction, body) SELECT '$ten', id, 'inbound', 'Mensagem de $name' FROM conversations WHERE tenant_id = '$ten';
+INSERT INTO channel_connections (id, tenant_id, channel, provider, provider_kind, external_number_id, status, capabilities) VALUES (gen_random_uuid(), '$ten', 'whatsapp', 'waha', 'unofficial', 'smoke-$phone', 'active', '["text"]');
+UPDATE conversations SET channel_connection_id = (SELECT id FROM channel_connections WHERE tenant_id = '$ten') WHERE tenant_id = '$ten';
 SQL
 done
 
@@ -55,7 +57,7 @@ ctl() { /out/bin/hubctl --operator e2e "$@"; }
 HUB=$(ctl hub create --name "K3G Service Desk" | awk "{print \$NF}")
 ctl member add --hub "$HUB" --email test@omnira.local >/dev/null
 for T in "$TA" "$TB" "$TC"; do ctl contract create --hub "$HUB" --tenant "$T" >/dev/null; done
-ctl grant add --hub "$HUB" --tenant "$TA" --email test@omnira.local >/dev/null
+ctl grant add --hub "$HUB" --tenant "$TA" --email test@omnira.local --reply >/dev/null
 ctl grant add --hub "$HUB" --tenant "$TB" --email test@omnira.local >/dev/null
 echo "$HUB" >/out/hub.id
 ctl reconcile | tee /out/reconcile.txt
@@ -88,8 +90,22 @@ ITEM_A=$(sed -n "s/.*\"id\":\"\([0-9a-f-]*\)\",\"tenant_id\":\"$TA\".*/\1/p" /ou
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A" /out/open_a.json) open item A"
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox/$ITEM_C" /out/open_c.json) open item C"
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox?tenant_id=$TC" /out/forged.json) forged tenant selector"
+# ---- write path: A is reply-capable, B is read-only, C has no grant
+ITEM_B=$(sed -n "s/.*\"id\":\"\([0-9a-f-]*\)\",\"tenant_id\":\"$TB\".*/\1/p" /out/inbox.json | head -1)
+post() { curl -s --max-time 15 -o "$4" -w "%{http_code}" -b "$1" -H "Content-Type: application/json" ${5:+-H "Idempotency-Key: $5"} -d "$3" "http://127.0.0.1:$APIPORT/api/v1$2"; }
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A/messages" "{\"expected_tenant_id\":\"$TA\",\"text\":\"antes de assumir\"}" /out/w1.json smoke-key-0001) reply before claim"
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A/claim" "{\"expected_tenant_id\":\"$TB\"}" /out/w2.json) claim with the wrong company on screen"
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A/claim" "{\"expected_tenant_id\":\"$TA\"}" /out/w3.json) claim A"
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A/messages" "{\"expected_tenant_id\":\"$TA\",\"text\":\"Olá, em que posso ajudar?\"}" /out/w4.json smoke-key-0002) reply A"
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A/messages" "{\"expected_tenant_id\":\"$TA\",\"text\":\"Olá, em que posso ajudar?\"}" /out/w5.json smoke-key-0002) reply A replay"
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_B/claim" "{\"expected_tenant_id\":\"$TB\"}" /out/w6.json) claim B (read-only grant)"
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_B/messages" "{\"expected_tenant_id\":\"$TB\",\"text\":\"x\"}" /out/w7.json smoke-key-0003) reply B (read-only grant)"
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_C/claim" "{\"expected_tenant_id\":\"$TC\"}" /out/w8.json) claim C (no grant)"
+echo "$(post /out/other.jar "/hubs/$HUB/inbox/$ITEM_A/claim" "{\"expected_tenant_id\":\"$TA\"}" /out/w9.json) claim A by a user outside the hub"
 ctl grant revoke --hub "$HUB" --tenant "$TB" --email test@omnira.local >/dev/null
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox" /out/inbox_after.json) inbox after revoking B"
+ctl grant revoke --hub "$HUB" --tenant "$TA" --email test@omnira.local >/dev/null
+echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A/messages" "{\"expected_tenant_id\":\"$TA\",\"text\":\"depois de revogar\"}" /out/w10.json smoke-key-0004) reply A after revoking A"
 stop_api
 
 start_api OMNIRA_HUB_API_ENABLED=false
@@ -129,7 +145,26 @@ ok(code('forged tenant selector')==400,"a client-supplied tenant_id is refused")
 after=load('inbox_after.json')
 ok(code('inbox after revoking B')==200 and {i['tenant_id'] for i in after['items']}=={ta},"revoking the grant on B removes B from the very next read")
 ok(code('/hubs when off')==404 and code('inbox when off')==404,"with OMNIRA_HUB_API_ENABLED=false the Hub routes do not exist (404)")
+ok(code('reply before claim')==409,"replying before claiming is refused (409)")
+ok(code('claim with the wrong company on screen')==409,"a claim whose expected company differs from the item's is refused (409)")
+ok(code('claim A')==200 and json.load(open(w+'/w3.json'))['changed'] is True,"claim on the reply-capable company succeeds")
+ok(code('reply A')==202 and load('w4.json')['tenant']['name']=='ISP Roraima' and load('w4.json')['status']=='queued',"reply is queued and the response names the company it answered as")
+ok(code('reply A replay')==200 and load('w5.json')['id']==load('w4.json')['id'],"the same Idempotency-Key replays the same message")
+ok(code('claim B (read-only grant)')==403 and code('reply B (read-only grant)')==403,"a read-only grant can neither claim nor reply (403)")
+ok(code('claim C (no grant)')==404,"no grant at all is the uniform 404")
+ok(code('claim A by a user outside the hub')==404,"a user outside the hub cannot claim")
+ok(code('reply A after revoking A')==404,"revoking the grant stops replying on the very next request")
 rec=open(w+'/phaseA.txt').read()
 ok('3 upserted' in rec,"hubctl reconcile projected the 3 conversations of the 3 contracted companies")
 PY
+
+echo "== database effects of the write path (read as the owner)"
+SENT=$(psql_o -c "SELECT count(*) FROM messages WHERE tenant_id = '$TA' AND direction = 'outbound' AND sent_by_user_id = '$AGENT' AND body = 'Olá, em que posso ajudar?'")
+JOBS=$(psql_o -c "SELECT count(*) FROM outbox_events WHERE tenant_id = '$TA' AND event_type = 'job.channel.send_text.v1'")
+HELD=$(psql_o -c "SELECT count(*) FROM conversations WHERE tenant_id = '$TA' AND assigned_to_user_id = '$AGENT'")
+AUD=$(psql_o -c "SELECT count(*) FROM audit_events WHERE tenant_id = '$TA' AND actor_id = '$AGENT' AND action IN ('hub.conversation.claimed','hub.message.sent')")
+UNTOUCHED=$(psql_o -c "SELECT count(*) FROM messages WHERE direction = 'outbound' AND tenant_id IN ('$TB','$TC')")
+[ "$SENT" = 1 ] && [ "$JOBS" = 1 ] && [ "$HELD" = 1 ] && [ "$AUD" = 2 ] && [ "$UNTOUCHED" = 0 ] \
+  || { echo "FAIL: write effects wrong: sent=$SENT jobs=$JOBS held=$HELD audit=$AUD other-companies-outbound=$UNTOUCHED"; exit 1; }
+echo "PASS: one message stored under company A as the agent, one delivery job, conversation held by the agent, 2 audit events, nothing written for B or C"
 echo "PASS: end-to-end Hub smoke with the real binaries"

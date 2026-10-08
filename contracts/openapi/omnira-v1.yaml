@@ -874,6 +874,92 @@ paths:
         '400': { $ref: '#/components/responses/Text400' }
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/inbox/{item_id}/claim:
+    post:
+      operationId: claimHubInboxItem
+      tags: [Hub]
+      summary: Take a Hub conversation (requires a reply-capable grant)
+      description: |
+        Authorized in the caller's own session (hub membership, live grant and contract, queue scope, `can_reply`), then
+        executed by the server for the item's persisted tenant, re-checking the delegation inside the writing
+        transaction. `expected_tenant_id` is the company the screen showed; it authorizes nothing and a mismatch is a 409.
+        Idempotent for the holder; a conversation held by another agent is a 409. A read-only grant is a 403; a missing
+        grant, forged hub or unknown item is the uniform 404.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: item_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_tenant_id]
+              properties: { expected_tenant_id: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The conversation is the caller's
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [item_id, conversation_id, changed, tenant]
+                properties:
+                  item_id: { type: string, format: uuid }
+                  conversation_id: { type: string, format: uuid }
+                  changed: { type: boolean }
+                  tenant:
+                    type: object
+                    required: [id, name]
+                    properties: { id: { type: string, format: uuid }, name: { type: string } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { description: The grant is read-only for this company }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Held by another agent, finalized, or the company on screen is not the item's company }
+  /hubs/{hub_id}/inbox/{item_id}/messages:
+    post:
+      operationId: replyHubInboxItem
+      tags: [Hub]
+      summary: Answer a Hub conversation as the company it belongs to (text only)
+      description: |
+        Same authorization as claim, and the conversation must already be the caller's (claim first). The message is
+        stored under the item's tenant with the caller as sender and queued through the normal delivery job; the 24 h
+        window, channel readiness and finalization rules are the tenant inbox's. `Idempotency-Key` is required.
+        The response names the company the server answered as.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: item_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128, pattern: '^[A-Za-z0-9._:-]{8,128}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_tenant_id, text]
+              properties:
+                expected_tenant_id: { type: string, format: uuid }
+                text: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        '200':
+          description: Idempotent replay of an earlier identical request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HubReplyResult' }
+        '202':
+          description: Queued for delivery
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HubReplyResult' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { description: The grant is read-only for this company }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Not claimed, held by another agent, finalized, 24 h window closed, no channel, or company mismatch }
+        '422': { description: Invalid text, or the Idempotency-Key was used with a different request }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -3255,6 +3341,20 @@ components:
         next_cursor: { type: string }
         count: { type: integer }
         limit: { type: integer }
+    HubReplyResult:
+      type: object
+      required: [id, conversation_id, direction, body, status, created_at, tenant]
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        direction: { type: string, enum: [outbound] }
+        body: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        tenant:
+          type: object
+          required: [id, name]
+          properties: { id: { type: string, format: uuid }, name: { type: string } }
     HubInboxItemDetail:
       type: object
       required: [item, tenant, access, conversation, messages]
@@ -3268,11 +3368,20 @@ components:
           type: object
           description: How the server authorized this read (always `hub` here).
           required: [source]
-          properties: { source: { type: string, enum: [hub] }, hub_id: { type: string, format: uuid }, grant_id: { type: string, format: uuid } }
+          properties:
+            source: { type: string, enum: [hub] }
+            hub_id: { type: string, format: uuid }
+            grant_id: { type: string, format: uuid }
+            can_reply: { type: boolean, description: Whether this grant lets the caller claim and answer here (otherwise read-only). }
         conversation:
           type: object
-          required: [id, status, created_at]
-          properties: { id: { type: string, format: uuid }, status: { type: string }, title: { type: string }, created_at: { type: string, format: date-time } }
+          required: [id, status, created_at, assignment]
+          properties:
+            id: { type: string, format: uuid }
+            status: { type: string }
+            title: { type: string }
+            created_at: { type: string, format: date-time }
+            assignment: { type: string, enum: [none, me, other], description: Who holds the conversation, relative to the caller (no other user is named). }
         messages:
           type: array
           items:

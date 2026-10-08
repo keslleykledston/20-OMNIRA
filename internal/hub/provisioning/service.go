@@ -296,6 +296,9 @@ func (s *Service) SetContractStatus(ctx context.Context, hub, tenant uuid.UUID, 
 type GrantSpec struct {
 	Hub, Tenant, User uuid.UUID
 	ValidUntil        *time.Time
+	// CanReply lets the agent claim and reply in the tenant's conversations. Default false: read-only (least privilege).
+	// Granting again sets it exactly as given, so renewing without it deliberately removes the capability.
+	CanReply bool
 }
 
 // Grant lets a hub member act on a tenant. The contract is derived from (hub, tenant), never supplied.
@@ -331,14 +334,15 @@ func (s *Service) Grant(ctx context.Context, spec GrantSpec) (uuid.UUID, error) 
 		if status != "active" || (until != nil && !until.After(s.now())) {
 			return invalid("the contract between hub %s and tenant %s is not active", spec.Hub, spec.Tenant)
 		}
-		if err := q.QueryRow(c, `INSERT INTO effective_access_grants (hub_id, user_id, tenant_id, service_contract_id, valid_until)
-		                         VALUES ($1, $2, $3, $4, $5)
+		if err := q.QueryRow(c, `INSERT INTO effective_access_grants (hub_id, user_id, tenant_id, service_contract_id, valid_until, can_reply)
+		                         VALUES ($1, $2, $3, $4, $5, $6)
 		                         ON CONFLICT (hub_id, user_id, tenant_id, service_contract_id) DO UPDATE SET
-		                           status = 'active', valid_until = EXCLUDED.valid_until, grant_version = effective_access_grants.grant_version + 1, updated_at = now()
-		                         RETURNING id`, spec.Hub, spec.User, spec.Tenant, contract, spec.ValidUntil).Scan(&id); err != nil {
+		                           status = 'active', valid_until = EXCLUDED.valid_until, can_reply = EXCLUDED.can_reply,
+		                           grant_version = effective_access_grants.grant_version + 1, updated_at = now()
+		                         RETURNING id`, spec.Hub, spec.User, spec.Tenant, contract, spec.ValidUntil, spec.CanReply).Scan(&id); err != nil {
 			return err
 		}
-		meta := map[string]any{"hub_id": spec.Hub, "user_id": spec.User, "contract_id": contract}
+		meta := map[string]any{"hub_id": spec.Hub, "user_id": spec.User, "contract_id": contract, "can_reply": spec.CanReply}
 		if spec.ValidUntil != nil {
 			meta["valid_until"] = spec.ValidUntil.UTC().Format(time.RFC3339)
 		}
@@ -396,6 +400,7 @@ type GrantInfo struct {
 	UserID, TenantID uuid.UUID
 	Status           string
 	ValidUntil       *time.Time
+	CanReply         bool
 }
 
 // Describe is read-only and is the operator's way to check what a hub can currently do.
@@ -447,14 +452,14 @@ func (s *Service) Describe(ctx context.Context, hub uuid.UUID) (Summary, error) 
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		rows, err = q.Query(c, `SELECT user_id, tenant_id, status, valid_until FROM effective_access_grants WHERE hub_id = $1 ORDER BY tenant_id, user_id`, hub)
+		rows, err = q.Query(c, `SELECT user_id, tenant_id, status, valid_until, can_reply FROM effective_access_grants WHERE hub_id = $1 ORDER BY tenant_id, user_id`, hub)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var g GrantInfo
-			if err := rows.Scan(&g.UserID, &g.TenantID, &g.Status, &g.ValidUntil); err != nil {
+			if err := rows.Scan(&g.UserID, &g.TenantID, &g.Status, &g.ValidUntil, &g.CanReply); err != nil {
 				return err
 			}
 			out.Grants = append(out.Grants, g)
