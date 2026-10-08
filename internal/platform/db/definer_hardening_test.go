@@ -76,3 +76,67 @@ func TestSecurityDefinerFunctionsPinPgTempLast(t *testing.T) {
 		t.Fatalf("a hardened definer function failed to evaluate: %v", err)
 	}
 }
+
+// has_active_membership / has_active_admin_membership answer only for the session user (or a system session):
+// they used to be a cross-user oracle for "does X belong to tenant T / administer it".
+func TestMembershipHelpersAnswerOnlyForTheSessionUser(t *testing.T) {
+	ownerURL, appURL := testhelpers.RequireIntegrationDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	owner, err := pgxpool.New(ctx, ownerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	tenant, alice, bob := uuid.New(), uuid.New(), uuid.New()
+	must := func(_ any, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(owner.Exec(ctx, `INSERT INTO tenants (id, legal_name, status) VALUES ($1, $2, 'active')`, tenant, "membership-oracle-"+tenant.String()))
+	must(owner.Exec(ctx, `INSERT INTO users (id, external_subject) VALUES ($1, $3), ($2, $4)`, alice, bob, "alice-"+alice.String(), "bob-"+bob.String()))
+	for _, u := range []uuid.UUID{alice, bob} {
+		must(owner.Exec(ctx, `INSERT INTO memberships (tenant_id, user_id, role_id)
+			SELECT $1, $2, id FROM roles WHERE tenant_id IS NULL AND key = 'tenant_admin' LIMIT 1`, tenant, u))
+	}
+	ask := func(system bool, as uuid.UUID, sql string, args ...any) bool {
+		t.Helper()
+		var v bool
+		if err := platformdb.WithTenantSession(ctx, app, as, system, func(c context.Context) error {
+			return platformdb.QuerierFromContext(c, app).QueryRow(c, sql, args...).Scan(&v)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	for _, fn := range []string{"has_active_membership", "has_active_admin_membership"} {
+		q := `SELECT ` + fn + `($1, $2)`
+		if !ask(false, alice, q, tenant, alice) {
+			t.Errorf("%s: alice must be able to ask about herself", fn)
+		}
+		if ask(false, alice, q, tenant, bob) {
+			t.Errorf("%s: alice learned that bob belongs to / administers the tenant", fn)
+		}
+		if !ask(true, uuid.New(), q, tenant, bob) {
+			t.Errorf("%s: a system session must still be able to ask about any user (workers, provisioning)", fn)
+		}
+	}
+	// the policies built on the helper behave exactly as before for the user themselves
+	var seen int
+	if err := platformdb.WithTenantSession(ctx, app, alice, false, func(c context.Context) error {
+		return platformdb.QuerierFromContext(c, app).QueryRow(c, `SELECT count(*) FROM tenants WHERE id = $1`, tenant).Scan(&seen)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != 1 {
+		t.Errorf("a member lost access to their own tenant row: %d", seen)
+	}
+}
