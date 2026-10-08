@@ -26,6 +26,7 @@ import (
 	"github.com/omnira/omnira/internal/channels/adapters/waha"
 	channelapplication "github.com/omnira/omnira/internal/channels/application"
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
+	"github.com/omnira/omnira/internal/entitlements"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	flowstemplates "github.com/omnira/omnira/internal/flows/templates"
@@ -167,11 +168,12 @@ func main() {
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)
 	if cfg.HubAPIEnabled {
-		srv.RegisterHubHandlers(dbPool)
+		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled)
 	}
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
-	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions)
+	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions).
+		WithEntitlements(entitlements.NewChecker(dbPool).Gate) // ADR-0038: per-company switches
 	metaDescriptor := metachannel.Descriptor(cfg.MetaEnabled, "A integração com o WhatsApp oficial (Meta) não está habilitada neste ambiente.")
 	if err := providerRegistry.RegisterDescriptor(metaDescriptor, nil); err != nil {
 		log.Fatalf("Meta provider descriptor error: %v", err)

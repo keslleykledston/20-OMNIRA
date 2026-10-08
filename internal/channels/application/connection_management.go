@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/channels/domain"
 	"github.com/omnira/omnira/internal/channels/ports"
+	"github.com/omnira/omnira/internal/entitlements"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -47,6 +49,16 @@ type ConnectionManagementService struct {
 	registry ProviderRegistry
 	perms    ports.PermissionChecker
 	managers map[string]ConnectionManager
+	gate     EntitlementGate
+}
+
+// EntitlementGate says whether the company may use a capability (ADR-0038). nil = no per-company switches.
+type EntitlementGate func(ctx context.Context, tenant uuid.UUID, capability string) error
+
+// WithEntitlements makes creating a connection depend on the company's switches (whatsapp_channel / erp_crm).
+func (s *ConnectionManagementService) WithEntitlements(g EntitlementGate) *ConnectionManagementService {
+	s.gate = g
+	return s
 }
 
 func NewConnectionManagementService(registry ProviderRegistry, perms ports.PermissionChecker) *ConnectionManagementService {
@@ -93,6 +105,9 @@ func (s *ConnectionManagementService) Create(ctx context.Context, req Connection
 	if !descriptor.Enabled {
 		return ConnectionView{}, fmt.Errorf("%w: %s", ErrProviderUnavailable, descriptor.UnavailableReason)
 	}
+	if err := s.entitled(ctx, descriptor.Channel); err != nil {
+		return ConnectionView{}, err
+	}
 	if err := validateProviderInputs(descriptor, req.Inputs); err != nil {
 		return ConnectionView{}, err
 	}
@@ -101,6 +116,22 @@ func (s *ConnectionManagementService) Create(ctx context.Context, req Connection
 		return ConnectionView{}, ErrProviderUnavailable
 	}
 	return manager.CreateConnection(ctx, req)
+}
+
+// entitled refuses a NEW connection when the company's operator has switched its channel family off.
+func (s *ConnectionManagementService) entitled(ctx context.Context, channel domain.Channel) error {
+	if s.gate == nil {
+		return nil
+	}
+	capability := entitlements.WhatsAppChannel
+	if channel == domain.ChannelERP {
+		capability = entitlements.ERPCRM
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil {
+		return ErrConnForbidden
+	}
+	return s.gate(ctx, tc.TenantID, capability)
 }
 
 func validateProviderInputs(descriptor ports.ProviderDescriptor, values map[string]string) error {

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Proves the Hub migrations (093..099) against a throwaway Postgres, using the PRODUCTION migrator
+# Proves the Hub migrations (093..100) against a throwaway Postgres, using the PRODUCTION migrator
 # (tools/migrate-sql.sh: one transaction per migration, ON_ERROR_STOP, schema_migrations ledger).
 #
 #   1. apply everything up to 092 only            -> dump A (pre-Hub schema)
-#   2. apply 093..099                             -> dump B
+#   2. apply 093..100                             -> dump B
 #   3. roll back 095, 094, 093 (reverse order)    -> dump C   must equal A  (down really undoes up)
-#   4. apply 093..099 again                       -> dump D   must equal B  (up is reproducible)
+#   4. apply 093..100 again                       -> dump D   must equal B  (up is reproducible)
 #   5. catalogue checks: every tenant_id table has RLS+FORCE+policy; omnira_app is not superuser/bypassrls
 #
 # Nothing here touches omnira_dev. Container is labeled like scripts/test-integration.sh.
@@ -46,7 +46,7 @@ echo "== 1. baseline (<= 092)"
 run "$WORK/pre" up | tail -1
 dump > "$WORK/A.sql"
 
-echo "== 2. up 093..099"
+echo "== 2. up 093..100"
 run "$PWD/migrations" up | grep -E "applying|up to date"
 dump > "$WORK/B.sql"
 [ "$(psql_q "SELECT max(version) FROM schema_migrations")" = "$(ls migrations/*.up.sql | sort | tail -1 | xargs basename | sed 's/.up.sql//')" ] \
@@ -81,7 +81,7 @@ bad=$(psql_q "SELECT string_agg(c.relname, ',') FROM pg_class c JOIN pg_namespac
          OR NOT EXISTS (SELECT 1 FROM pg_policies p WHERE p.tablename=c.relname))")
 [ -z "$bad" ] || { echo "FAIL: tenant_id tables without RLS+FORCE+policy: $bad"; exit 1; }
 hubbad=$(psql_q "SELECT string_agg(c.relname, ',') FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind='r'
-  AND c.relname IN ('service_hubs','hub_memberships','hub_tenant_service_contracts','work_pools','work_pool_members','skills','agent_skills','effective_access_grants','hub_inbox_items','platform_operators')
+  AND c.relname IN ('service_hubs','hub_memberships','hub_tenant_service_contracts','work_pools','work_pool_members','skills','agent_skills','effective_access_grants','hub_inbox_items','platform_operators','tenant_entitlements','company_creation_requests')
   AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)")
 [ -z "$hubbad" ] || { echo "FAIL: Hub tables without RLS+FORCE: $hubbad"; exit 1; }
 unpinned=$(psql_q "SELECT string_agg(p.proname, ',') FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
@@ -89,5 +89,5 @@ unpinned=$(psql_q "SELECT string_agg(p.proname, ',') FROM pg_proc p JOIN pg_name
 [ -z "$unpinned" ] || { echo "FAIL: SECURITY DEFINER functions without search_path pg_catalog, public, pg_temp: $unpinned"; exit 1; }
 role=$(psql_q "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname='omnira_app'")
 [ "$role" = "f" ] || { echo "FAIL: omnira_app can bypass RLS"; exit 1; }
-echo "   every tenant_id table has RLS+FORCE+policy; the 10 Hub tables (incl. platform_operators) have RLS+FORCE; every SECURITY DEFINER function pins pg_temp last; omnira_app cannot bypass RLS"
-echo "PASS: Hub migrations 093..099 apply, roll back to the exact pre-Hub schema, and re-apply identically"
+echo "   every tenant_id table has RLS+FORCE+policy; the 12 Hub and control-plane tables have RLS+FORCE; every SECURITY DEFINER function pins pg_temp last; omnira_app cannot bypass RLS"
+echo "PASS: Hub migrations 093..100 apply, roll back to the exact pre-Hub schema, and re-apply identically"

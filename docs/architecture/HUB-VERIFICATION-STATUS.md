@@ -90,3 +90,12 @@ O Codex não conseguiu **rodar** testes (sandbox somente leitura) e registrou `C
 - **IMPLEMENTED / NOT WIRED:** `hubctl platform-operator`. Nenhuma rota HTTP usa o papel ainda (fase 1).
 - **Lacuna fechada:** até a 097 (a versão implantada) suspender uma empresa NÃO impedia o atendimento pelo Hub.
 - **Pendente:** implantar 098/099 (backup + migrate + imagem com o novo hubctl), cadastrar o operador, revisão Codex.
+
+## Fase 1 do ADR-0038 (migration 100, API e tela de Empresas) — 2026-10-08
+- **POSTGRES / HTTP VERIFIED:** só operador ativo que administra o Hub gera resposta (todo o resto: 404 uniforme); criar empresa (tenant, fila padrão, contrato, sem acesso a ninguém, auditoria sob o operador, idempotência, rollback total em recusa); suspender/reativar (Hub deixa de servir e volta, grants intactos); capacidades por empresa (padrão ligado, uma empresa por vez, auditoria só da mudança real, membro lê mas não escreve); serviço recusa sozinho quem não é operador-admin.
+- **UNIT VERIFIED:** gate de canais (WhatsApp e ERP/CRM têm chaves próprias; provedor não é alcançado quando desligado).
+- **Navegador com API MOCKADA** (não é E2E real): `hub-companies.mock.spec.ts`.
+- **IMPLEMENTED, NOT TESTED beyond compilation:** gate de anexos e da rota WAHA legada no wiring do servidor.
+- **NOT WIRED / não existe:** matriz de atendentes (fase 2), gestão delegada de canais/ERP pelo Hub (fase 3), pools/distribuição (fase 4), E2E com API real (fase 5).
+- **HTTP VERIFIED com os binários reais** (`scripts/e2e-hub-smoke.sh`: omnira-api + omnira-hubctl + Postgres + NATS descartáveis, login de desenvolvimento): o operador passa a valer no pedido seguinte, sem reiniciar; criar/replay/chave com outro corpo; suspender tira a empresa do Hub e reativar a devolve; capacidade desligada fica gravada; 4 eventos de auditoria sob o operador; flag desligada = rotas inexistentes e tela não anunciada. Não usa Keycloak, navegador nem canal real.
+- **Gate de integração completo (sem argumentos):** 29 pacotes ok; os mesmos 2 vermelhos de antes (`tenancy/adapters`, `worker/jobsstream`; 12 testes, idênticos no `main`). Mutantes: 20 de plano de controle (`test-hub-admin-mutations.sh`) + 24 anteriores, todos mortos. Migrations 093..100 up/down/up idênticas.

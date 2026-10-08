@@ -1,6 +1,6 @@
 # ADR-0038 — Gestão de empresas, integrações e atendentes pelo Hub (PROPOSTO)
 
-Status: **ACEITO (direção e decisões da §9); fase 0 IMPLEMENTADA e POSTGRES VERIFIED em 2026-10-08; fases 1–5 NOT WIRED.**
+Status: **ACEITO (direção e decisões da §9); fase 0 IMPLEMENTADA e POSTGRES VERIFIED em 2026-10-08; fase 1 (criar empresa, suspender, capacidades) IMPLEMENTADA e POSTGRES/HTTP VERIFIED em 2026-10-08; fases 2–5 NOT WIRED.**
 Contexto anterior: ADR-0036 (Hub dentro do OMNIRA), ADR-0037 (assumir e responder pelo Hub).
 Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`) até o gate de cada fase passar.
 
@@ -111,6 +111,14 @@ Resposta do dono: adotar as recomendações. Valores adotados: (1) `platform_ope
 - **`omnira-hubctl platform-operator add|revoke|list`** (auditado; revogar mantém o registro). Sem rota HTTP: ninguém se autopromove.
 - Provas: testes em PostgreSQL real (`provisioning`: operadores e empresa suspensa; `adapters`: respostas/claims 404 com empresa suspensa/inativa, inbox some e volta); 24 mutantes mortos (`scripts/test-hub-reply-mutations.sh`, incl. 5 de SQL e 3 de operador); `scripts/test-hub-migrations.sh` PASS 093..099 (up/down/up idêntico; `platform_operators` com RLS+FORCE).
 - **Não feito / não implantado:** nada disto está no banco vivo (vivo em 097). Nenhum operador cadastrado ainda. Fases 1–5 pendentes. Sem revisão Codex desta fase.
+
+## 9.2 Fase 1 — o que foi feito (evidência)
+- **Migration 100:** `tenant_entitlements` (sem linha = ligado; escrita só por sessão de sistema; membro da empresa só lê a própria) e `company_creation_requests` (Idempotency-Key do "criar empresa").
+- **Capacidades aplicadas no servidor** (`internal/entitlements`, registro fechado): `whatsapp_channel` e `erp_crm` (criar NOVA conexão, pelo serviço de canais e pela rota WAHA legada), `outbound_attachments` (enviar/remover anexo). Desligar nega a operação nova com 403 e **não** apaga dados nem derruba o que já roda (uma sessão WhatsApp existente continua).
+- **API (flag `OMNIRA_HUB_ADMIN_API_ENABLED`, desligada por padrão):** `GET/POST /api/v1/hubs/{hub}/companies`, `PATCH /api/v1/hubs/{hub}/companies/{tenant}` (status e capacidades, atômico e auditado). Só passa quem é operador de plataforma ativo **e** `hub_admin` de um Hub ativo (checado na sessão do próprio usuário e de novo dentro da transação de sistema); qualquer outro caso é o mesmo 404. Empresa nova nasce com fila padrão, contrato com o Hub e **nenhum** acesso; primeiro administrador opcional (usuário existente, e-mail exato).
+- **Tela:** `/hub/empresas` (Empresas): lista, nova empresa (uma Idempotency-Key por tentativa), suspender com confirmação, reativar, chaves de capacidade. `GET /hubs` ganhou `can_manage_companies` (só para a tela oferecer o link; o servidor decide de novo).
+- **Provas:** testes em PostgreSQL real (HTTP + serviço direto + RLS), teste unitário do gate de canais, 11 testes vitest e 2 specs Playwright (API mockada); mutantes em `scripts/test-hub-admin-mutations.sh`.
+- **Limites conhecidos:** convidar pessoa nova como administrador não existe ainda (use a equipe da própria empresa); a suspensão não impede a entrada de webhooks nem encerra jobs em andamento; o gate de anexos e da rota WAHA legada está no wiring do servidor e **não** tem teste além da compilação; o botão de anexo na UI do tenant ainda aparece com a capacidade desligada (o servidor responde 403); gestão delegada dos canais pelo Hub (fase 3) não existe; a matriz de atendentes (fase 2) não existe.
 
 ## 10. Riscos
 - Gestão delegada é a parte mais sensível (credenciais de cliente): por isso fica na fase 3, depois de operador, criação e matriz estarem provados.

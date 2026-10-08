@@ -960,6 +960,95 @@ paths:
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: Not claimed, held by another agent, finalized, 24 h window closed, no channel, or company mismatch }
         '422': { description: Invalid text, or the Idempotency-Key was used with a different request }
+  /hubs/{hub_id}/companies:
+    get:
+      operationId: listHubCompanies
+      tags: [Hub]
+      summary: The companies of a Hub with their status and capability switches (platform operator)
+      description: |
+        Behind `OMNIRA_HUB_ADMIN_API_ENABLED` (unrouted otherwise). Only an active platform operator who administers this
+        hub gets an answer; everyone else, an unknown hub included, gets the uniform 404. Includes suspended companies.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Companies and the closed list of capability switches
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, capabilities]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/HubCompany' } }
+                  capabilities: { type: array, items: { $ref: '#/components/schemas/HubCapability' } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createHubCompany
+      tags: [Hub]
+      summary: Create a company inside the Hub (platform operator)
+      description: |
+        Creates the tenant, its default queue and a contract with this hub (no agent gets access: grants are issued
+        separately), and optionally its first administrator, who must already be an existing active user (exact e-mail).
+        `Idempotency-Key` is required: a retry returns the same company (200); the same key with another body is a 422.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [legal_name]
+              properties:
+                legal_name: { type: string, minLength: 2, maxLength: 200 }
+                trade_name: { type: string, maxLength: 200 }
+                tax_id: { type: string, maxLength: 32 }
+                initial_admin_email: { type: string, maxLength: 254 }
+      responses:
+        '200':
+          description: Idempotent replay
+          content: { application/json: { schema: { $ref: '#/components/schemas/HubCompany' } } }
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/HubCompany' } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Invalid input, unknown administrator, or the Idempotency-Key was used with a different request }
+  /hubs/{hub_id}/companies/{tenant_id}:
+    patch:
+      operationId: updateHubCompany
+      tags: [Hub]
+      summary: Suspend or reactivate a company and switch its capabilities (platform operator)
+      description: |
+        `status` (active|suspended) and/or `capabilities` (known keys only), applied atomically and audited. Suspending
+        stops the Hub and the company's own members from using it; nothing is deleted. The company must already have a
+        contract with this hub, otherwise the uniform 404.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                status: { type: string, enum: [active, suspended] }
+                capabilities: { type: object, additionalProperties: { type: boolean } }
+      responses:
+        '200':
+          description: The company after the change
+          content: { application/json: { schema: { $ref: '#/components/schemas/HubCompany' } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Unknown capability or status, or nothing to change }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -3309,11 +3398,38 @@ components:
           type: array
           items:
             type: object
-            required: [id, name, role]
+            required: [id, name, role, can_manage_companies]
             properties:
               id: { type: string, format: uuid }
               name: { type: string }
               role: { type: string, enum: [hub_agent, hub_admin] }
+              can_manage_companies:
+                type: boolean
+                description: Only whether to offer the company-management screen; the server decides every request again.
+    HubCapability:
+      type: object
+      required: [key, label, description, gates]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        description: { type: string }
+        gates: { type: string, description: What the server refuses when the switch is off }
+    HubCompany:
+      type: object
+      required: [id, legal_name, trade_name, display_name, status, contract_status, capabilities, channels, integrations, open_conversations, agents, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        legal_name: { type: string }
+        trade_name: { type: string }
+        display_name: { type: string }
+        status: { type: string }
+        contract_status: { type: string, enum: [active, suspended, revoked] }
+        capabilities: { type: object, additionalProperties: { type: boolean }, description: Effective value of every known switch (default on) }
+        channels: { type: integer }
+        integrations: { type: integer }
+        open_conversations: { type: integer }
+        agents: { type: integer }
+        created_at: { type: string, format: date-time }
     HubInboxItem:
       type: object
       required: [id, tenant_id, tenant_name, conversation_id, customer_name, channel, status, priority, unread_count]

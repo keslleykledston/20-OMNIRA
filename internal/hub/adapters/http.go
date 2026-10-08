@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/application"
 	"github.com/omnira/omnira/internal/hub/domain"
+	"github.com/omnira/omnira/internal/hub/provisioning"
 	"github.com/omnira/omnira/internal/hub/replying"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapp "github.com/omnira/omnira/internal/messages/application"
@@ -42,7 +43,12 @@ type HTTPHandler struct {
 	repo  *PostgresHubRepository
 	authz *application.HubAuthorizationService
 	reply *replying.Service
+	// adminEnabled mirrors OMNIRA_HUB_ADMIN_API_ENABLED so the hub list only advertises the screen when its API is mounted.
+	adminEnabled bool
 }
+
+// WithAdminAPI marks the company-management API as mounted (see ListMyHubs).
+func (h *HTTPHandler) WithAdminAPI(enabled bool) *HTTPHandler { h.adminEnabled = enabled; return h }
 
 func NewHTTPHandler(pool *pgxpool.Pool) *HTTPHandler {
 	repo := NewPostgresHubRepository(pool)
@@ -290,6 +296,9 @@ type hubDTO struct {
 	ID   uuid.UUID `json:"id"`
 	Name string    `json:"name"`
 	Role string    `json:"role"`
+	// CanManageCompanies only tells the UI whether to offer the company-management screen. The server re-decides every
+	// request (AdminHandler); a client that ignores or forges this gains nothing.
+	CanManageCompanies bool `json:"can_manage_companies"`
 }
 
 // ListMyHubs returns the active hubs the caller is a member of. Membership grants no tenant access by itself; this
@@ -324,6 +333,17 @@ func (h *HTTPHandler) ListMyHubs(w http.ResponseWriter, r *http.Request) {
 	if err := rows.Err(); err != nil {
 		httpError(w, "internal server error", http.StatusInternalServerError)
 		return
+	}
+	rows.Close()
+	if h.adminEnabled {
+		isOp, err := provisioning.IsPlatformOperator(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), principal.UserID)
+		if err != nil {
+			httpError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		for i := range out {
+			out[i].CanManageCompanies = isOp && out[i].Role == "hub_admin"
+		}
 	}
 	writeJSON(w, map[string]any{"items": out})
 }

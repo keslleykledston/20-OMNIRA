@@ -10,6 +10,7 @@ import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
 import InboxWorkspace from './pages/InboxWorkspace'
 import HubInboxPage from './pages/HubInboxPage'
+import HubCompaniesPage from './pages/HubCompaniesPage'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TeamPage from './pages/TeamPage'
@@ -48,6 +49,7 @@ function AppRoutes() {
         <Route path="/supervisor" element={<SupervisorDashboard />} />
         <Route path="/inbox" element={<InboxWorkspace />} />
         <Route path="/hub" element={<HubInboxPage />} />
+        <Route path="/hub/empresas" element={<HubCompaniesPage />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/flows" element={<FlowsPage />} />
         <Route path="/flows/:flowId" element={<FlowEditorPage />} />

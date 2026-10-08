@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { hubAPI, type HubInboxItem } from '../lib/hub';
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
@@ -81,6 +82,9 @@ export default function HubInboxPage() {
           </label>
         ) : (
           <span className="text-sm text-text-secondary">{hub.name}</span>
+        )}
+        {hub.can_manage_companies && (
+          <Link to="/hub/empresas" className="ml-auto text-sm font-medium text-accent-primary underline-offset-2 hover:underline">Empresas</Link>
         )}
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[360px_minmax(0,1fr)]">

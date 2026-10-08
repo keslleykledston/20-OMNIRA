@@ -22,6 +22,7 @@ import (
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
+	"github.com/omnira/omnira/internal/entitlements"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
@@ -447,18 +448,25 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 // RegisterHubHandlers mounts the read-only Hub API (feature-flagged by the caller). Every route runs behind
 // the authn middleware and UserSessionMiddleware: the caller's own RLS session, never system admin. Tenant
 // authority is never taken from the request; see hubadapters.HTTPHandler.
-func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool) {
+func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI bool) {
 	if s.authenticator == nil {
 		return
 	}
 	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
-	h := hubadapters.NewHTTPHandler(dbPool)
+	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI)
 	s.mux.Handle("GET /api/v1/hubs", authnMiddleware(userSession(http.HandlerFunc(h.ListMyHubs))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", authnMiddleware(userSession(http.HandlerFunc(h.ListInbox))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/claim", authnMiddleware(userSession(http.HandlerFunc(h.ClaimItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/messages", authnMiddleware(userSession(http.HandlerFunc(h.ReplyItem))))
+	if adminAPI {
+		// Control plane (ADR-0038 phase 1): only an active platform operator who administers the hub gets past the handler.
+		a := hubadapters.NewAdminHandler(dbPool)
+		s.mux.Handle("GET /api/v1/hubs/{hub_id}/companies", authnMiddleware(userSession(http.HandlerFunc(a.ListCompanies))))
+		s.mux.Handle("POST /api/v1/hubs/{hub_id}/companies", authnMiddleware(userSession(http.HandlerFunc(a.CreateCompany))))
+		s.mux.Handle("PATCH /api/v1/hubs/{hub_id}/companies/{tenant_id}", authnMiddleware(userSession(http.HandlerFunc(a.UpdateCompany))))
+	}
 }
 
 func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {
@@ -609,8 +617,9 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 			sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(dbPool)).WithMediaProviders(mediaProviderReady)
 			attachments := messagesapplication.NewAttachments(sender, store, files, mediaadapters.NewVirusScanner(cfg.ClamAVAddr))
 			sendHandler.WithAttachments(attachments, store)
-			s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments", authnMiddleware(sendHandler.BufferUpload(tenantSession(http.HandlerFunc(sendHandler.Upload)))))
-			s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments/{attachment_id}", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.RemoveAttachment))))
+			attachmentsOn := entitlements.NewChecker(dbPool).Require(entitlements.OutboundAttachments) // ADR-0038: per-company switch
+			s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments", authnMiddleware(sendHandler.BufferUpload(tenantSession(attachmentsOn(http.HandlerFunc(sendHandler.Upload))))))
+			s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments/{attachment_id}", authnMiddleware(tenantSession(attachmentsOn(http.HandlerFunc(sendHandler.RemoveAttachment)))))
 		}
 	}
 	linesHandler := inboxadapters.NewChannelLinesHandler(dbPool, channeladapters.NewPostgresPermissionChecker(dbPool)).WithOutboundMedia(cfg.OutboundMediaEnabled, mediaProviderReady)
@@ -849,7 +858,8 @@ func (s *Server) RegisterWahaConnectionHandlers(dbPool *pgxpool.Pool, h *channel
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	base := "/api/v1/tenants/{tenant_id}/channels/waha/connections"
 	wrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }
-	s.mux.Handle("POST "+base, wrap(h.Create))
+	whatsappOn := entitlements.NewChecker(dbPool).Require(entitlements.WhatsAppChannel) // ADR-0038: per-company switch
+	s.mux.Handle("POST "+base, authnMiddleware(tenantSession(whatsappOn(http.HandlerFunc(h.Create)))))
 	s.mux.Handle("GET "+base, wrap(h.List))
 	s.mux.Handle("GET "+base+"/{connection_id}", wrap(h.Get))
 	s.mux.Handle("POST "+base+"/{connection_id}/session/start", wrap(h.StartSession))

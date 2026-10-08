@@ -379,9 +379,10 @@ func contextWithPrincipal(r *http.Request, id uuid.UUID) context.Context {
 }
 
 type myHub struct {
-	ID   uuid.UUID `json:"id"`
-	Name string    `json:"name"`
-	Role string    `json:"role"`
+	ID                 uuid.UUID `json:"id"`
+	Name               string    `json:"name"`
+	Role               string    `json:"role"`
+	CanManageCompanies bool      `json:"can_manage_companies"`
 }
 
 func (a *hubAPI) myHubs(user uuid.UUID) (int, []myHub, string) {

@@ -9,6 +9,8 @@ export interface HubSummary {
   id: string
   name: string
   role: 'hub_agent' | 'hub_admin'
+  // Only whether to offer the company screen. The server decides every request again.
+  can_manage_companies?: boolean
 }
 
 export interface HubInboxItem {
@@ -129,6 +131,70 @@ export function describeHubWriteError(err: unknown): string {
     case 400:
     case 422:
       return body || 'Mensagem inválida.'
+    default:
+      return 'Não foi possível concluir a ação.'
+  }
+}
+
+// ---- Control plane (ADR-0038): companies of a Hub. Only an active platform operator who administers the hub is answered;
+// everyone else gets 404. The API is behind OMNIRA_HUB_ADMIN_API_ENABLED.
+
+export interface HubCapability {
+  key: string
+  label: string
+  description: string
+  gates: string
+}
+
+export interface HubCompany {
+  id: string
+  legal_name: string
+  trade_name: string
+  display_name: string
+  status: 'active' | 'suspended' | string
+  contract_status: string
+  capabilities: Record<string, boolean>
+  channels: number
+  integrations: number
+  open_conversations: number
+  agents: number
+  created_at: string
+}
+
+export interface HubCompanyList {
+  items: HubCompany[]
+  capabilities: HubCapability[]
+}
+
+export interface NewCompany {
+  legal_name: string
+  trade_name?: string
+  tax_id?: string
+  initial_admin_email?: string
+}
+
+export const hubAdminAPI = {
+  companies: (hubId: string): Promise<HubCompanyList> =>
+    axios.get<HubCompanyList>(`${API_BASE}/hubs/${enc(hubId)}/companies`, { headers: authHeaders() }).then((r) => r.data),
+  create: (hubId: string, body: NewCompany, idempotencyKey: string): Promise<HubCompany> =>
+    axios
+      .post<HubCompany>(`${API_BASE}/hubs/${enc(hubId)}/companies`, body, { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } })
+      .then((r) => r.data),
+  update: (hubId: string, tenantId: string, body: { status?: 'active' | 'suspended'; capabilities?: Record<string, boolean> }): Promise<HubCompany> =>
+    axios.patch<HubCompany>(`${API_BASE}/hubs/${enc(hubId)}/companies/${enc(tenantId)}`, body, { headers: authHeaders() }).then((r) => r.data),
+}
+
+export function describeHubAdminError(err: unknown): string {
+  const e = err as { response?: { status?: number; data?: unknown } }
+  const status = e?.response?.status
+  const body = typeof e?.response?.data === 'string' ? e.response.data.replace(/^companies: invalid request: /, '').trim() : ''
+  switch (status) {
+    case 404:
+      return 'Você não tem permissão para gerenciar empresas neste Hub (ou a empresa não é deste Hub).'
+    case 400:
+      return 'Pedido inválido. Recarregue a tela e tente de novo.'
+    case 422:
+      return body || 'Os dados informados não foram aceitos.'
     default:
       return 'Não foi possível concluir a ação.'
   }

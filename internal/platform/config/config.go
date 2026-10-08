@@ -39,6 +39,8 @@ type Config struct {
 	// HubProjectorEnabled makes the worker keep hub_inbox_items in step with the tenants' conversations every
 	// HubProjectorIntervalSeconds. Off by default; needs the Hub migrations (093+).
 	HubProjectorEnabled         bool
+	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
+	HubAdminAPIEnabled bool
 	HubProjectorIntervalSeconds int
 	// TicketOpenNoticeEnabled sends the customer a message with the ticket number when an operator opens an external ticket
 	// (on by default; OMNIRA_TICKET_OPEN_NOTICE_ENABLED=false turns it off).
@@ -145,6 +147,7 @@ func Load() *Config {
 		OutboundMediaEnabled: getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
 		HubAPIEnabled: getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
 		HubProjectorEnabled: getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
+		HubAdminAPIEnabled: getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
 		HubProjectorIntervalSeconds: getEnvInt("OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS", 60),
 		TicketOpenNoticeEnabled: getEnv("OMNIRA_TICKET_OPEN_NOTICE_ENABLED", "true") != "false",
 		MobileAuthEnabled:  getEnv("OMNIRA_AUTH_MOBILE_ENABLED", "false") == "true",

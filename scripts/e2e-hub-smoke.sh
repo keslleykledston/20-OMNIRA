@@ -55,7 +55,7 @@ go build -o /out/bin/hubctl ./apps/hubctl/cmd/omnira-hubctl
 export OMNIRA_DATABASE_URL="$APPDB"
 ctl() { /out/bin/hubctl --operator e2e "$@"; }
 HUB=$(ctl hub create --name "K3G Service Desk" | awk "{print \$NF}")
-ctl member add --hub "$HUB" --email test@omnira.local >/dev/null
+ctl member add --hub "$HUB" --email test@omnira.local --role hub_admin >/dev/null  # an admin of the hub, but NOT yet a platform operator
 for T in "$TA" "$TB" "$TC"; do ctl contract create --hub "$HUB" --tenant "$T" >/dev/null; done
 ctl grant add --hub "$HUB" --tenant "$TA" --email test@omnira.local --reply >/dev/null
 ctl grant add --hub "$HUB" --tenant "$TB" --email test@omnira.local >/dev/null
@@ -78,7 +78,7 @@ get() { curl -s --max-time 15 -o "$3" -w "%{http_code}" -b "$1" "http://127.0.0.
 login() { curl -s --max-time 15 -o /dev/null -w "%{http_code}" -c "$2" -H "Content-Type: application/json" -d "{\"email\":\"$1\"}" http://127.0.0.1:$APIPORT/api/v1/auth/dev/login; }
 ctl() { OMNIRA_DATABASE_URL="$APPDB" /out/bin/hubctl --operator e2e "$@"; }
 
-start_api OMNIRA_HUB_API_ENABLED=true
+start_api OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=true
 echo "$(login test@omnira.local /out/agent.jar) login agent"
 echo "$(get /out/agent.jar /hubs /out/hubs.json) /hubs"
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox" /out/inbox.json) inbox"
@@ -90,6 +90,24 @@ ITEM_A=$(sed -n "s/.*\"id\":\"\([0-9a-f-]*\)\",\"tenant_id\":\"$TA\".*/\1/p" /ou
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A" /out/open_a.json) open item A"
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox/$ITEM_C" /out/open_c.json) open item C"
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox?tenant_id=$TC" /out/forged.json) forged tenant selector"
+# ---- control plane (ADR-0038 phase 1): the agent is hub_admin; being an operator is a separate, database-held fact
+post() { curl -s --max-time 15 -o "$4" -w "%{http_code}" -b "$1" -H "Content-Type: application/json" ${5:+-H "Idempotency-Key: $5"} -d "$3" "http://127.0.0.1:$APIPORT/api/v1$2"; }
+patch() { curl -s --max-time 15 -o "$4" -w "%{http_code}" -b "$1" -X PATCH -H "Content-Type: application/json" -d "$3" "http://127.0.0.1:$APIPORT/api/v1$2"; }
+echo "$(get /out/agent.jar "/hubs/$HUB/companies" /out/cp1.json) companies as hub admin who is not an operator"
+echo "$(get /out/other.jar "/hubs/$HUB/companies" /out/cp2.json) companies as a user outside the hub"
+echo "$(get /out/agent.jar /hubs /out/hubs_before_op.json) hubs before operator"
+ctl platform-operator add --email test@omnira.local >/dev/null
+echo "$(get /out/agent.jar "/hubs/$HUB/companies" /out/cp3.json) companies as operator"
+echo "$(get /out/agent.jar /hubs /out/hubs_after_op.json) hubs after operator"
+echo "$(post /out/agent.jar "/hubs/$HUB/companies" "{\"legal_name\":\"Quarta Empresa Ltda\",\"trade_name\":\"Quarta\"}" /out/cp4.json smoke-company-0001) create company"
+echo "$(post /out/agent.jar "/hubs/$HUB/companies" "{\"legal_name\":\"Quarta Empresa Ltda\",\"trade_name\":\"Quarta\"}" /out/cp5.json smoke-company-0001) create company replay"
+echo "$(post /out/agent.jar "/hubs/$HUB/companies" "{\"legal_name\":\"Outra Ltda\"}" /out/cp6.json smoke-company-0001) create company same key other body"
+echo "$(patch /out/agent.jar "/hubs/$HUB/companies/$TA" "{\"status\":\"suspended\"}" /out/cp7.json) suspend A"
+echo "$(get /out/agent.jar "/hubs/$HUB/inbox" /out/cp8.json) inbox while A is suspended"
+echo "$(patch /out/agent.jar "/hubs/$HUB/companies/$TA" "{\"status\":\"active\",\"capabilities\":{\"whatsapp_channel\":false}}" /out/cp9.json) reactivate A and switch WhatsApp off"
+echo "$(get /out/agent.jar "/hubs/$HUB/inbox" /out/cp10.json) inbox after reactivating A"
+echo "$(patch /out/other.jar "/hubs/$HUB/companies/$TA" "{\"status\":\"suspended\"}" /out/cp11.json) suspend A by a user outside the hub"
+echo "$(patch /out/agent.jar "/hubs/$HUB/companies/$TA" "{\"capabilities\":{\"root_access\":true}}" /out/cp12.json) unknown capability"
 # ---- write path: A is reply-capable, B is read-only, C has no grant
 ITEM_B=$(sed -n "s/.*\"id\":\"\([0-9a-f-]*\)\",\"tenant_id\":\"$TB\".*/\1/p" /out/inbox.json | head -1)
 post() { curl -s --max-time 15 -o "$4" -w "%{http_code}" -b "$1" -H "Content-Type: application/json" ${5:+-H "Idempotency-Key: $5"} -d "$3" "http://127.0.0.1:$APIPORT/api/v1$2"; }
@@ -106,6 +124,12 @@ ctl grant revoke --hub "$HUB" --tenant "$TB" --email test@omnira.local >/dev/nul
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox" /out/inbox_after.json) inbox after revoking B"
 ctl grant revoke --hub "$HUB" --tenant "$TA" --email test@omnira.local >/dev/null
 echo "$(post /out/agent.jar "/hubs/$HUB/inbox/$ITEM_A/messages" "{\"expected_tenant_id\":\"$TA\",\"text\":\"depois de revogar\"}" /out/w10.json smoke-key-0004) reply A after revoking A"
+stop_api
+
+start_api OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=false
+echo "$(login test@omnira.local /out/agent3.jar) login agent third"
+echo "$(get /out/agent3.jar "/hubs/$HUB/companies" /out/cp_off.json) companies when the admin flag is off"
+echo "$(get /out/agent3.jar /hubs /out/hubs_admin_off.json) hubs when the admin flag is off"
 stop_api
 
 start_api OMNIRA_HUB_API_ENABLED=false
@@ -154,6 +178,22 @@ ok(code('claim B (read-only grant)')==403 and code('reply B (read-only grant)')=
 ok(code('claim C (no grant)')==404,"no grant at all is the uniform 404")
 ok(code('claim A by a user outside the hub')==404,"a user outside the hub cannot claim")
 ok(code('reply A after revoking A')==404,"revoking the grant stops replying on the very next request")
+ok(code('companies as hub admin who is not an operator')==404 and code('companies as a user outside the hub')==404,"being a hub admin is not enough: without platform-operator status the control plane is a uniform 404")
+ok(not load('hubs_before_op.json')['items'][0]['can_manage_companies'],"the hub list does not offer the companies screen to a non-operator")
+cp=load('cp3.json')
+ok(code('companies as operator')==200 and {c['id'] for c in cp['items']}=={ta,tb,tc} and len(cp['capabilities'])==3,"as soon as the operator is registered (no restart) the hub's companies and the capability catalog are served")
+ok(load('hubs_after_op.json')['items'][0]['can_manage_companies'],"the hub list now offers the screen")
+c4=load('cp4.json')
+ok(code('create company')==201 and c4['status']=='active' and c4['contract_status']=='active' and all(c4['capabilities'].values()),"creating a company: active, contracted with the hub, every capability on")
+ok(code('create company replay')==200 and load('cp5.json')['id']==c4['id'],"the same Idempotency-Key returns the same company")
+ok(code('create company same key other body')==422,"the same key with another body is refused")
+ok(code('suspend A')==200 and load('cp7.json')['status']=='suspended',"the operator suspends company A")
+ok(code('inbox while A is suspended')==200 and {i['tenant_id'] for i in load('cp8.json')['items']}=={tb},"while A is suspended the Hub no longer serves it (only B remains)")
+ok(code('reactivate A and switch WhatsApp off')==200 and load('cp9.json')['capabilities']['whatsapp_channel'] is False and load('cp9.json')['capabilities']['erp_crm'] is True,"reactivating and switching one capability off is one atomic change")
+ok({i['tenant_id'] for i in load('cp10.json')['items']}=={ta,tb},"after reactivation A is back, grants intact")
+ok(code('suspend A by a user outside the hub')==404,"a user outside the hub cannot suspend a company")
+ok(code('unknown capability')==422,"an unknown capability is refused")
+ok(code('companies when the admin flag is off')==404 and not load('hubs_admin_off.json')['items'][0]['can_manage_companies'],"with OMNIRA_HUB_ADMIN_API_ENABLED=false the control plane does not exist and is not advertised")
 rec=open(w+'/phaseA.txt').read()
 ok('3 upserted' in rec,"hubctl reconcile projected the 3 conversations of the 3 contracted companies")
 PY
@@ -167,4 +207,11 @@ UNTOUCHED=$(psql_o -c "SELECT count(*) FROM messages WHERE direction = 'outbound
 [ "$SENT" = 1 ] && [ "$JOBS" = 1 ] && [ "$HELD" = 1 ] && [ "$AUD" = 2 ] && [ "$UNTOUCHED" = 0 ] \
   || { echo "FAIL: write effects wrong: sent=$SENT jobs=$JOBS held=$HELD audit=$AUD other-companies-outbound=$UNTOUCHED"; exit 1; }
 echo "PASS: one message stored under company A as the agent, one delivery job, conversation held by the agent, 2 audit events, nothing written for B or C"
+AUDC=$(psql_o -c "SELECT count(*) FROM audit_events WHERE action IN ('platform.company.created','platform.company.status_changed','platform.company.capability_changed') AND actor_id = '$AGENT'")
+NEWQ=$(psql_o -c "SELECT count(*) FROM tenants t JOIN queues q ON q.tenant_id = t.id AND q.is_default WHERE t.legal_name = 'Quarta Empresa Ltda'")
+NEWG=$(psql_o -c "SELECT count(*) FROM effective_access_grants g JOIN tenants t ON t.id = g.tenant_id WHERE t.legal_name = 'Quarta Empresa Ltda'")
+ENT=$(psql_o -c "SELECT count(*) FROM tenant_entitlements WHERE tenant_id = '$TA' AND capability = 'whatsapp_channel' AND NOT enabled")
+[ "$AUDC" = 4 ] && [ "$NEWQ" = 1 ] && [ "$NEWG" = 0 ] && [ "$ENT" = 1 ] \
+  || { echo "FAIL: control-plane effects wrong: audit=$AUDC default-queue=$NEWQ grants-on-new-company=$NEWG switched-off=$ENT"; exit 1; }
+echo "PASS: control plane: 4 audit events under the operator (created, suspended, reactivated, capability), the new company has its default queue and no grant at all, the switch is stored"
 echo "PASS: end-to-end Hub smoke with the real binaries"

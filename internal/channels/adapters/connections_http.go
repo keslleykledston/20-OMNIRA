@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/channels/application"
 	"github.com/omnira/omnira/internal/channels/ports"
+	"github.com/omnira/omnira/internal/entitlements"
 )
 
 // ConnectionHandler serves WAHA connection/session management. Mount it
@@ -263,6 +264,8 @@ func failConnection(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, application.ErrConnForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
+	case errors.Is(err, entitlements.ErrDisabled):
+		http.Error(w, "this capability is disabled for your company", http.StatusForbidden)
 	case errors.Is(err, application.ErrConnNotFound):
 		http.Error(w, "connection not found", http.StatusNotFound)
 	case errors.Is(err, application.ErrRiskNotAcknowledged):

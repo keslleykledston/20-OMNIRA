@@ -56,3 +56,16 @@ Encerrar: `grant revoke` (uma pessoa), `contract status ... --status revoked` (o
 2. Reconstruir a imagem do API (o `omnira-hubctl` entra pelo `Dockerfile.api`).
 3. Ligar `OMNIRA_HUB_PROJECTOR_ENABLED=true` no worker (preenche a inbox do Hub) e `OMNIRA_HUB_API_ENABLED=true` no API.
 4. Nada disso foi feito; esta etapa só entregou e testou o código.
+
+
+## Gestão de empresas pelo Hub (ADR-0038 fase 1)
+Para criar e suspender empresas e ligar/desligar capacidades pela tela **Hub › Empresas**:
+1. Migrations 098–100 aplicadas (backup antes) e imagem do API/worker/web reconstruída.
+2. A pessoa precisa ser **operador de plataforma** e **hub_admin** do Hub:
+   ```bash
+   docker compose exec -T api /app/omnira-hubctl --operator ana platform-operator add --email pessoa@k3g.example
+   docker compose exec -T api /app/omnira-hubctl --operator ana member add --hub $H --email pessoa@k3g.example --role hub_admin
+   ```
+3. `OMNIRA_HUB_API_ENABLED=true` e `OMNIRA_HUB_ADMIN_API_ENABLED=true` no `.env`; recriar o `api`.
+4. Uma empresa criada pela tela nasce **sem acesso para ninguém**: conceda o acesso aos atendentes com `contract`/`grant` (a empresa já nasce com o contrato).
+Desligar tudo: `OMNIRA_HUB_ADMIN_API_ENABLED=false`. As capacidades já desligadas continuam valendo no servidor (é dado, não flag).
