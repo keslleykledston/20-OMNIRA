@@ -19,6 +19,7 @@ import { TemplateSendDialog } from './TemplateSendDialog';
 import FinalizeDialog from './FinalizeDialog';
 import { emitInboxNotice, useInboxNotice } from '../../lib/inboxNotice';
 import { useAccess } from '../../lib/useAccess';
+import TenantContextBar from './TenantContextBar';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -231,6 +232,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         </div>
       </div>
 
+      <TenantContextBar />
       {conversation && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border-subtle bg-surface px-4 py-1.5 text-[11px]">
           <span

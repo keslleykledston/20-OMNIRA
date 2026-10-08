@@ -55,3 +55,21 @@ export function switchTenant(id: string, go: (path: string) => void = (p) => win
   }
   go('/')
 }
+
+// Short code shown beside a company name so operators who serve several companies can tell them apart at a glance.
+// It is NOT unique and never replaces the name: always render it together with the full name.
+const CODE_STOPWORDS = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'ltda', 'me', 'eireli', 'epp', 'sa'])
+export function tenantCode(name: string): string {
+  const words = name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^A-Za-z0-9]+/)
+    .filter((w) => w && !CODE_STOPWORDS.has(w.toLowerCase()))
+  if (words.length === 0) return '?'
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase()
+  return words
+    .slice(0, 3)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase()
+}

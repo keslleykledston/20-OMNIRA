@@ -27,6 +27,10 @@
   --color-accent-primary-hover: #0D5FD7;
   --color-accent-secondary: #2E90FA;
 
+  /* Tenant context (a small, consistent identity layer; never recolours the app and never the only signal) */
+  --tenant-accent: var(--color-accent-primary);
+  --tenant-accent-muted: var(--color-accent-primary-soft);
+
   /* Color — Status (base / soft fill / border / hover) */
   --color-status-success: #12B76A;
   --color-status-success-soft: #ECFDF5;

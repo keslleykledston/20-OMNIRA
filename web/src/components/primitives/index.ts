@@ -14,6 +14,7 @@ export { Card, CardHeader, CardBody, CardFooter } from './Card';
 export { MetricCard, MetricCardSkeleton } from './MetricCard';
 export type { MetricTone } from './MetricCard';
 export { Badge, StatusBadge } from './Badge';
+export { TenantBadge } from './TenantBadge';
 export { Input, SearchField, TextArea } from './Input';
 export { Avatar, AvatarGroup } from './Avatar';
 export { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from './Table';
