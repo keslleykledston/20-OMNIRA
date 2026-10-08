@@ -175,6 +175,11 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, "user is already an active member", http.StatusConflict)
 		return
 	}
+	// ADR-0039: só o administrador do Hub coloca uma pessoa em mais de uma instância.
+	if h.worksElsewhere(r.Context(), q, tc.TenantID, email) {
+		http.Error(w, errOtherInstanceMessage, http.StatusConflict)
+		return
+	}
 
 	// Política de duplicidade: no máximo um pending por (tenant, email). Um
 	// novo convite substitui o anterior — revoga e insere na mesma
@@ -348,6 +353,20 @@ func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, 
 	return nil
 }
 
+// errOtherInstanceMessage is the answer (409) when a company administrator invites someone who already works in another
+// instance. The wording is stable: the web app recognises it.
+const errOtherInstanceMessage = "this person already works in another instance; only the Hub administrator can authorize them in more than one"
+
+// worksElsewhere asks the database (person_works_in_other_instance, migration 101) whether the invited e-mail belongs to a
+// person who already works in an instance other than this one. A failed question counts as "yes": fail closed.
+func (h *InvitationsHandler) worksElsewhere(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, email string) bool {
+	var yes bool
+	if err := q.QueryRow(ctx, `SELECT person_works_in_other_instance($1, $2)`, tenantID, email).Scan(&yes); err != nil {
+		return true
+	}
+	return yes
+}
+
 func (h *InvitationsHandler) isActiveMember(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, email string) bool {
 	var ok bool
 	_ = q.QueryRow(ctx, `
@@ -399,6 +418,10 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 	}
 	if h.isActiveMember(r.Context(), q, tc.TenantID, inv.Email) {
 		http.Error(w, "user is already an active member", http.StatusConflict)
+		return
+	}
+	if h.worksElsewhere(r.Context(), q, tc.TenantID, inv.Email) {
+		http.Error(w, errOtherInstanceMessage, http.StatusConflict)
 		return
 	}
 
@@ -636,6 +659,10 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		if !password.Verify(tempPasswordHash, req.Password) {
 			return errInvitationPasswordInvalid
 		}
+		// ADR-0039, de novo: o convite pode ter sido emitido antes de a pessoa passar a atuar em outra instância.
+		if h.worksElsewhere(ctx, q, tenantID, email) {
+			return errInvitationOtherInstance
+		}
 
 		// Hash a senha temporária para armazenar como password_hash inicial
 		passwordHash, err := password.Hash(req.Password)
@@ -693,6 +720,8 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, "email not verified by the identity provider", http.StatusForbidden)
 	case errors.Is(err, errInvitationPasswordInvalid):
 		http.Error(w, "invalid temporary password", http.StatusUnauthorized)
+	case errors.Is(err, errInvitationOtherInstance):
+		http.Error(w, errOtherInstanceMessage, http.StatusConflict)
 	case err != nil:
 		http.Error(w, "failed to accept invitation", http.StatusInternalServerError)
 	default:
@@ -703,6 +732,7 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 var (
 	errInvitationNotFound         = errors.New("invitation not found")
 	errInvitationAlreadyUsed      = errors.New("invitation already accepted")
+	errInvitationOtherInstance    = errors.New("person already works in another instance")
 	errInvitationRevoked          = errors.New("invitation revoked")
 	errInvitationExpired          = errors.New("invitation expired")
 	errInvitationEmailUnverified  = errors.New("invitation e-mail not verified by the identity provider")

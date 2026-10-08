@@ -272,20 +272,17 @@ func (s *Service) Create(ctx context.Context, operator, hub uuid.UUID, in Create
 		}
 		var adminID *uuid.UUID
 		if in.InitialAdminEmail != "" {
+			// unknown, ambiguous and inactive are one and the same answer: this must not be a probe for which e-mails exist (Codex L-01)
 			var id uuid.UUID
-			var status string
 			var n int
-			if err := q.QueryRow(c, `SELECT count(*) FROM users WHERE lower(email) = lower($1)`, in.InitialAdminEmail).Scan(&n); err != nil {
+			if err := q.QueryRow(c, `SELECT count(*) FROM users WHERE lower(email) = lower($1) AND status = 'active'`, in.InitialAdminEmail).Scan(&n); err != nil {
 				return err
 			}
 			if n != 1 {
-				return invalid("initial_admin_email must match exactly one existing user (invite new people from inside the company afterwards)")
+				return invalid("initial_admin_email has no eligible account (the person must already have an OMNIRA account; invite new people from inside the company afterwards)")
 			}
-			if err := q.QueryRow(c, `SELECT id, status FROM users WHERE lower(email) = lower($1)`, in.InitialAdminEmail).Scan(&id, &status); err != nil {
+			if err := q.QueryRow(c, `SELECT id FROM users WHERE lower(email) = lower($1) AND status = 'active'`, in.InitialAdminEmail).Scan(&id); err != nil {
 				return err
-			}
-			if status != "active" {
-				return invalid("the initial administrator's account is %s", status)
 			}
 			adminID = &id
 		}

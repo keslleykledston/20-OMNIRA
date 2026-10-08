@@ -8,9 +8,10 @@ import Tickets from './pages/Tickets'
 import TicketReconciliationPage from './pages/TicketReconciliationPage'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
-import InboxWorkspace from './pages/InboxWorkspace'
 import HubInboxPage from './pages/HubInboxPage'
 import HubCompaniesPage from './pages/HubCompaniesPage'
+import HubAccessPage from './pages/HubAccessPage'
+import ConversationsEntry from './pages/ConversationsEntry'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import TeamPage from './pages/TeamPage'
@@ -47,9 +48,10 @@ function AppRoutes() {
         <Route path="/ticket-reconciliation" element={<TicketReconciliationPage />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/supervisor" element={<SupervisorDashboard />} />
-        <Route path="/inbox" element={<InboxWorkspace />} />
+        <Route path="/inbox" element={<ConversationsEntry />} />
         <Route path="/hub" element={<HubInboxPage />} />
         <Route path="/hub/empresas" element={<HubCompaniesPage />} />
+        <Route path="/acessos" element={<HubAccessPage />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/flows" element={<FlowsPage />} />
         <Route path="/flows/:flowId" element={<FlowEditorPage />} />

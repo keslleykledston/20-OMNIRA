@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
 // IAM2C: e-mail delivery, resend, verified-email acceptance, no silent role change.
@@ -323,5 +324,114 @@ func TestAcceptRequiresAnIdPVerifiedEmailOutsideDev(t *testing.T) {
 	var st string
 	if err := seed.QueryRow(context.Background(), `SELECT status FROM memberships WHERE tenant_id=$1 AND user_id=$2`, f.tenantID, invitee).Scan(&st); err != nil || st != "active" {
 		t.Fatalf("membership not activated: %q %v", st, err)
+	}
+}
+
+// ADR-0039: a company administrator invites people into THEIR company; someone who already works in another instance is the
+// Hub administrator's to authorize.
+func TestInvitationRefusesSomeoneWhoAlreadyWorksInAnotherInstance(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a, b := seedTeamTenant(t, seed), seedTeamTenant(t, seed)
+	adminA := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	h := NewInvitationsHandler(app, nil, &fakeSender{}, false, webBase)
+	emailOf := func(u uuid.UUID) string {
+		var e string
+		if err := seed.QueryRow(context.Background(), `SELECT email FROM users WHERE id=$1`, u).Scan(&e); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+
+	// works (active) in B -> refused, and nothing was created
+	inB := seedTeamMember(t, seed, b.tenantID, "tenant_agent", "active")
+	before := func() int {
+		var n int
+		_ = seed.QueryRow(context.Background(), `SELECT count(*) FROM membership_invitations WHERE tenant_id=$1`, a.tenantID).Scan(&n)
+		return n
+	}
+	n0 := before()
+	if code, _ := postCreate(t, app, h, a, adminA, emailOf(inB), "tenant_agent"); code != http.StatusConflict {
+		t.Fatalf("inviting someone who works in another instance = %d, want 409", code)
+	}
+	if before() != n0 {
+		t.Fatalf("a refused invitation was stored")
+	}
+	// an INACTIVE membership elsewhere does not count
+	gone := seedTeamMember(t, seed, b.tenantID, "tenant_agent", "inactive")
+	if code, _ := postCreate(t, app, h, a, adminA, emailOf(gone), "tenant_agent"); code != http.StatusCreated {
+		t.Fatalf("a former member of another instance can be invited: %d", code)
+	}
+	// being an agent of a hub counts
+	hubPerson := seedUnaffiliatedUser(t, seed, "agente-do-hub@empresa.com")
+	hubID := uuid.New()
+	if _, err := seed.Exec(context.Background(), `INSERT INTO service_hubs (id, name) VALUES ($1, 'H')`, hubID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = seed.Exec(context.Background(), `DELETE FROM service_hubs WHERE id=$1`, hubID) })
+	if _, err := seed.Exec(context.Background(), `INSERT INTO hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, (SELECT id FROM roles WHERE key='hub_agent' AND tenant_id IS NULL))`, hubID, hubPerson); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := postCreate(t, app, h, a, adminA, "agente-do-hub@empresa.com", "tenant_agent"); code != http.StatusConflict {
+		t.Fatalf("inviting a hub agent = %d, want 409", code)
+	}
+	// somebody who works nowhere is the normal case
+	seedUnaffiliatedUser(t, seed, "novo@empresa.com")
+	code, inv := postCreate(t, app, h, a, adminA, "novo@empresa.com", "tenant_agent")
+	if code != http.StatusCreated {
+		t.Fatalf("a person who works nowhere: %d", code)
+	}
+	// ...until they start working elsewhere: resending the old invitation is refused too
+	newcomer := seedUnaffiliatedUser(t, seed, "novo2@empresa.com")
+	_, inv2 := postCreate(t, app, h, a, adminA, "novo2@empresa.com", "tenant_agent")
+	var role uuid.UUID
+	if err := seed.QueryRow(context.Background(), `SELECT id FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.Exec(context.Background(), `INSERT INTO memberships (id, tenant_id, user_id, role_id, status) VALUES ($1,$2,$3,$4,'active')`, uuid.New(), b.tenantID, newcomer, role); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := postResend(t, app, h, a.tenantID, adminA, inv2.ID); c != http.StatusConflict {
+		t.Fatalf("resend after the person joined another instance = %d, want 409", c)
+	}
+	_ = inv
+
+	// the function is no oracle: someone who cannot manage A's people always hears "no"
+	var answer bool
+	if err := platformdb.WithTenantSession(context.Background(), app, inB, false, func(ctx context.Context) error {
+		return platformdb.QuerierFromContext(ctx, app).QueryRow(ctx, `SELECT person_works_in_other_instance($1, $2)`, a.tenantID, emailOf(inB)).Scan(&answer)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if answer {
+		t.Fatalf("a caller who cannot manage the company's people learned who works elsewhere")
+	}
+	// "elsewhere" means ANOTHER instance: a colleague who works only here is not elsewhere
+	colleague := seedTeamMember(t, seed, a.tenantID, "tenant_agent", "active")
+	var asked bool
+	if err := asActor(t, app, a.tenantID, adminA, func(ctx context.Context) error {
+		return platformdb.QuerierFromContext(ctx, app).QueryRow(ctx, `SELECT person_works_in_other_instance($1, $2)`, a.tenantID, emailOf(colleague)).Scan(&asked)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if asked {
+		t.Fatalf("someone who works only in this company was reported as working elsewhere")
+	}
+	// a plain colleague of the company (member of A, but without membership.manage) learns nothing either
+	if err := asActor(t, app, a.tenantID, colleague, func(ctx context.Context) error {
+		return platformdb.QuerierFromContext(ctx, app).QueryRow(ctx, `SELECT person_works_in_other_instance($1, $2)`, a.tenantID, emailOf(inB)).Scan(&asked)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if asked {
+		t.Fatalf("a member without membership.manage learned who works in another instance")
+	}
+	// the company's own administrator does get the real answer
+	if err := asActor(t, app, a.tenantID, adminA, func(ctx context.Context) error {
+		return platformdb.QuerierFromContext(ctx, app).QueryRow(ctx, `SELECT person_works_in_other_instance($1, $2)`, a.tenantID, emailOf(inB)).Scan(&asked)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !asked {
+		t.Fatalf("the company's administrator was not told that the person works in another instance")
 	}
 }

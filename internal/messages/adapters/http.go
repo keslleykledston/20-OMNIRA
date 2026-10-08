@@ -3,6 +3,7 @@ package adapters
 import (
 	"encoding/json"
 	"errors"
+	"github.com/omnira/omnira/internal/entitlements"
 	"io"
 	"log"
 	"net/http"
@@ -155,6 +156,8 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "the antivirus is unavailable, try again later", http.StatusServiceUnavailable)
 	case errors.Is(err, application.ErrTemplateUnsupported), errors.Is(err, application.ErrTemplateNotAllowed), errors.Is(err, application.ErrTemplateParams):
 		http.Error(w, err.Error()[len("messages: "):], http.StatusUnprocessableEntity)
+	case errors.Is(err, entitlements.ErrDisabled):
+		http.Error(w, "this capability is disabled for your company", http.StatusForbidden)
 	case errors.Is(err, application.ErrForbidden), errors.Is(err, application.ErrNotAssignedToYou):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, application.ErrNotFound):

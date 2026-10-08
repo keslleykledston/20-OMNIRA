@@ -508,3 +508,90 @@ func TestHubAPI_TenantNamesComeOnlyFromGrantedTenants(t *testing.T) {
 		t.Error("a revoked grant still reveals the tenant name")
 	}
 }
+
+// Unified inbox for a person who serves several companies (ADR-0039): the screen can narrow it to some of them, and that
+// filter can only ever narrow what RLS shows.
+func TestHubInbox_CompanyFilterOnlyNarrowsWhatTheCallerMayRead(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	agent := w.hubAgent("multi")
+	w.grant(agent, "A")
+	w.grant(agent, "B")
+	a, b, c := w.tenant["A"].String(), w.tenant["B"].String(), w.tenant["C"].String()
+
+	tenantsOf := func(q string) map[string]int {
+		code, lb := api.list(agent, q)
+		if code != 200 {
+			t.Fatalf("%s: %d", q, code)
+		}
+		got := map[string]int{}
+		for _, it := range lb.Items {
+			got[it.TenantID.String()]++
+		}
+		return got
+	}
+	if all := tenantsOf(""); all[a] == 0 || all[b] == 0 || all[c] != 0 || len(all) != 2 {
+		t.Fatalf("default view must show every authorized company and nothing else: %v", all)
+	}
+	if only := tenantsOf("?companies=" + a); only[a] == 0 || len(only) != 1 {
+		t.Fatalf("filter to A: %v", only)
+	}
+	if both := tenantsOf("?companies=" + a + "," + b); len(both) != 2 {
+		t.Fatalf("filter to A and B: %v", both)
+	}
+	// naming a company the person has no grant on widens nothing: it is simply empty
+	if none := tenantsOf("?companies=" + c); len(none) != 0 {
+		t.Fatalf("a filter must never reveal a company the caller has no grant on: %v", none)
+	}
+	if mixed := tenantsOf("?companies=" + a + "," + c); mixed[c] != 0 || mixed[a] == 0 {
+		t.Fatalf("A plus an unauthorized C: %v", mixed)
+	}
+	for _, bad := range []string{"?companies=nope", "?companies=" + a + ",", "?tenant_id=" + a} {
+		if code, _ := api.list(agent, bad); code != 400 {
+			t.Errorf("%s: %d, want 400", bad, code)
+		}
+	}
+	// paging keeps the filter
+	code, page := api.list(agent, "?companies="+b+"&limit=1")
+	if code != 200 || len(page.Items) != 1 || page.Items[0].TenantID.String() != b {
+		t.Fatalf("filtered page: %d %+v", code, page.Items)
+	}
+
+	// the companies the screen offers are the live grants: a revoked one disappears
+	var body struct {
+		Companies []struct {
+			ID   uuid.UUID `json:"id"`
+			Name string    `json:"name"`
+		} `json:"companies"`
+	}
+	read := func() map[string]bool {
+		_, raw, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox", w.hub), agent, nil)
+		w.must(json.Unmarshal([]byte(raw), &body))
+		m := map[string]bool{}
+		for _, c := range body.Companies {
+			if c.Name == "" {
+				t.Errorf("a company without a name in the filter list")
+			}
+			m[c.ID.String()] = true
+		}
+		return m
+	}
+	if m := read(); !m[a] || !m[b] || m[c] || len(m) != 2 {
+		t.Fatalf("companies offered: %v", m)
+	}
+	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["B"])
+	if m := read(); m[b] || !m[a] {
+		t.Fatalf("a revoked grant is still offered: %v", m)
+	}
+	if rest := tenantsOf("?companies=" + b); len(rest) != 0 {
+		t.Fatalf("a revoked company is still readable through the filter: %v", rest)
+	}
+	// somebody else's grants are not mine: a hub admin sees every grant of the hub in RLS but is offered only their own companies
+	admin := w.hubAdmin("admin")
+	w.grant(admin, "C")
+	_, raw, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox", w.hub), admin, nil)
+	w.must(json.Unmarshal([]byte(raw), &body))
+	if len(body.Companies) != 1 || body.Companies[0].ID != w.tenant["C"] {
+		t.Fatalf("a hub admin is offered only the companies they personally serve: %+v", body.Companies)
+	}
+}

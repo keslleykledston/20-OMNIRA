@@ -45,7 +45,11 @@ export default function Sidebar() {
   // The Hub entry exists only for people who belong to a Service Hub (and only when the server has the Hub enabled).
   const hubItem: (typeof navItems)[number] = { label: 'Hub', path: '/hub', icon: 'channels' }
   const base = navItems.filter((item) => !item.mockBacked || isDevSurface())
-  const visibleNavItems = (hubs.data?.length ?? 0) > 0 ? [...base.slice(0, 2), hubItem, ...base.slice(2)] : base
+  // ADR-0039: the Access panel (people and permissions) is offered only to hub admins, and only when the server mounts it.
+  const accessItem: (typeof navItems)[number] = { label: 'Acessos', path: '/acessos', icon: 'contacts' }
+  const canAccess = (hubs.data ?? []).some((h) => h.can_manage_access)
+  const withHub = (hubs.data?.length ?? 0) > 0 ? [...base.slice(0, 2), hubItem, ...base.slice(2)] : base
+  const visibleNavItems = canAccess ? [...withHub.slice(0, 3), accessItem, ...withHub.slice(3)] : withHub
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(path + '/')

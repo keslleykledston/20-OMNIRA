@@ -448,18 +448,32 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 // RegisterHubHandlers mounts the read-only Hub API (feature-flagged by the caller). Every route runs behind
 // the authn middleware and UserSessionMiddleware: the caller's own RLS session, never system admin. Tenant
 // authority is never taken from the request; see hubadapters.HTTPHandler.
-func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI bool) {
+func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI bool) {
 	if s.authenticator == nil {
 		return
 	}
 	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
-	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI)
+	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI).WithAccessAPI(accessAPI)
 	s.mux.Handle("GET /api/v1/hubs", authnMiddleware(userSession(http.HandlerFunc(h.ListMyHubs))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", authnMiddleware(userSession(http.HandlerFunc(h.ListInbox))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/claim", authnMiddleware(userSession(http.HandlerFunc(h.ClaimItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/messages", authnMiddleware(userSession(http.HandlerFunc(h.ReplyItem))))
+	if accessAPI {
+		// ADR-0039: people and permissions. Only an admin of the hub in the path gets past the handler (uniform 404 otherwise).
+		a, err := hubadapters.NewAccessHandler(dbPool)
+		if err != nil {
+			log.Printf("hub access API disabled: %v", err)
+		} else {
+			s.mux.Handle("GET /api/v1/hubs/{hub_id}/access", authnMiddleware(userSession(http.HandlerFunc(a.Overview))))
+			s.mux.Handle("POST /api/v1/hubs/{hub_id}/access/agents", authnMiddleware(userSession(http.HandlerFunc(a.AddAgent))))
+			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/agents/{user_id}", authnMiddleware(userSession(http.HandlerFunc(a.RemoveAgent))))
+			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}", authnMiddleware(userSession(http.HandlerFunc(a.SetAccess))))
+			s.mux.Handle("POST /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins", authnMiddleware(userSession(http.HandlerFunc(a.AddInstanceAdmin))))
+			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins/{user_id}", authnMiddleware(userSession(http.HandlerFunc(a.RemoveInstanceAdmin))))
+		}
+	}
 	if adminAPI {
 		// Control plane (ADR-0038 phase 1): only an active platform operator who administers the hub gets past the handler.
 		a := hubadapters.NewAdminHandler(dbPool)
@@ -614,7 +628,8 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 			log.Printf("outbound media disabled: %v", err)
 		} else {
 			store := messagesadapters.NewPostgresOutboundStore(dbPool)
-			sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(dbPool)).WithMediaProviders(mediaProviderReady)
+			sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(dbPool)).WithMediaProviders(mediaProviderReady).
+				WithEntitlements(entitlements.NewChecker(dbPool).Gate)
 			attachments := messagesapplication.NewAttachments(sender, store, files, mediaadapters.NewVirusScanner(cfg.ClamAVAddr))
 			sendHandler.WithAttachments(attachments, store)
 			attachmentsOn := entitlements.NewChecker(dbPool).Require(entitlements.OutboundAttachments) // ADR-0038: per-company switch

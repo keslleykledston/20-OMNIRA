@@ -80,6 +80,10 @@ export function invitationErrorMessage(err: any, fallback = 'Não foi possível 
     case 404:
       return 'Convite não encontrado.';
     case 409:
+      // ADR-0039: someone who already works in another instance is the Hub administrator's to authorize.
+      if (typeof err?.response?.data === 'string' && err.response.data.includes('another instance')) {
+        return 'Esta pessoa já atua em outra instância. Só o administrador do Hub pode autorizá-la em mais de uma: peça a ele.';
+      }
       return 'Não foi possível: a pessoa já é membro ativo ou o convite não está mais pendente.';
     case 410:
       return 'Este convite expirou.';

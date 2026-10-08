@@ -134,7 +134,7 @@ func TestProvisioning_EndToEnd_WhatTheOperatorCreatesIsWhatTheAgentSees(t *testi
 		t.Fatalf("a revoked grant still reads %d conversation(s)", got)
 	}
 	// renewing the same grant reactivates it: same row, version moves on
-	grant2, err := f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, ValidUntil: future()})
+	grant2, err := f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, ValidUntil: future(), Renew: true})
 	f.must(err)
 	if grant2 != grant {
 		t.Fatalf("renewal created a second grant (%s vs %s)", grant2, grant)
@@ -283,7 +283,7 @@ func TestProvisioning_IdempotencyAndMembership(t *testing.T) {
 
 	// removing a member takes their grants with them and says how many
 	f.must(f.svc.RevokeGrant(f.ctx, hub, a.id, agent))
-	g3, err := f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent})
+	g3, err := f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, Renew: true})
 	f.must(err)
 	removed, err := f.svc.RemoveMember(f.ctx, hub, agent)
 	f.must(err)
@@ -391,7 +391,7 @@ func TestProvisioning_ReplyCapabilityIsExplicitAndAudited(t *testing.T) {
 	if canReply() {
 		t.Fatal("a grant must be read-only unless reply is asked for explicitly")
 	}
-	_, err = f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, CanReply: true})
+	_, err = f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, CanReply: true, Renew: true})
 	f.must(err)
 	if !canReply() {
 		t.Fatal("the reply capability was not stored")
@@ -416,3 +416,53 @@ func TestProvisioning_ReplyCapabilityIsExplicitAndAudited(t *testing.T) {
 		t.Errorf("a read-only grant must still read the tenant's conversations, got %d", got)
 	}
 }
+
+func TestProvisioning_GrantingAgainNeverWidensAccessByAccident(t *testing.T) {
+	f := newFx(t)
+	a := f.tenant("A")
+	agent := f.user("agent")
+	hub, err := f.svc.CreateHub(f.ctx, "Hub", "BPO")
+	f.must(err)
+	f.must(f.svc.AddMember(f.ctx, hub, agent, provisioning.RoleAgent))
+	_, err = f.svc.CreateContract(f.ctx, provisioning.ContractSpec{Hub: hub, Tenant: a.id})
+	f.must(err)
+	spec := provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, ValidUntil: future()}
+	_, err = f.svc.Grant(f.ctx, spec)
+	f.must(err)
+
+	widening := map[string]provisioning.GrantSpec{
+		"lifting the validity": {Hub: hub, Tenant: a.id, User: agent},
+		"extending it":         {Hub: hub, Tenant: a.id, User: agent, ValidUntil: ptrTime(time.Now().Add(72 * time.Hour))},
+		"read-only to reply":   {Hub: hub, Tenant: a.id, User: agent, ValidUntil: spec.ValidUntil, CanReply: true},
+	}
+	for name, w := range widening {
+		if _, err := f.svc.Grant(f.ctx, w); !errors.Is(err, provisioning.ErrConflict) {
+			t.Errorf("%s without Renew: got %v, want ErrConflict", name, err)
+		}
+	}
+	// keeping or narrowing needs no ceremony
+	if _, err := f.svc.Grant(f.ctx, spec); err != nil {
+		t.Errorf("granting the same thing again: %v", err)
+	}
+	if _, err := f.svc.Grant(f.ctx, provisioning.GrantSpec{Hub: hub, Tenant: a.id, User: agent, ValidUntil: ptrTime(time.Now().Add(time.Hour))}); err != nil {
+		t.Errorf("shortening the validity: %v", err)
+	}
+
+	// a revoked grant stays revoked until someone renews it on purpose
+	f.must(f.svc.RevokeGrant(f.ctx, hub, a.id, agent))
+	if _, err := f.svc.Grant(f.ctx, spec); !errors.Is(err, provisioning.ErrConflict) {
+		t.Fatalf("a revoked grant was revived without Renew: %v", err)
+	}
+	if got := f.reads(agent, a); got != 0 {
+		t.Fatalf("the refused re-grant still opened access (%d)", got)
+	}
+	spec.Renew = true
+	if _, err := f.svc.Grant(f.ctx, spec); err != nil {
+		t.Fatalf("explicit renewal: %v", err)
+	}
+	if got := f.reads(agent, a); got == 0 {
+		t.Fatalf("explicit renewal did not restore access")
+	}
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }

@@ -31,7 +31,8 @@ const usage = `usage: omnira-hubctl --operator NAME <command> [flags]
   member remove    --hub ID (--user ID | --email E)
   contract create  --hub ID --tenant ID [--valid-until RFC3339] [--queues ID,ID,...]
   contract status  --hub ID --tenant ID --status active|suspended|revoked
-  grant add        --hub ID --tenant ID (--user ID | --email E) [--valid-until RFC3339] [--reply]
+  grant add        --hub ID --tenant ID (--user ID | --email E) [--valid-until RFC3339] [--reply] [--renew]
+                   (over an existing grant it may only keep or narrow access; reviving a revoked grant, lifting/extending its validity or adding --reply needs --renew)
                    (--reply lets the agent claim and answer; without it the grant is read-only, and renewing without it removes the capability)
   grant revoke     --hub ID --tenant ID (--user ID | --email E)
   platform-operator add|revoke  (--user ID | --email E)   (who may create companies/Hubs and switch them on and off; ADR-0038)
@@ -49,6 +50,7 @@ type command struct {
 	role, status             string
 	validUntil               *time.Time
 	reply                    bool
+	renew                    bool
 	queues                   []uuid.UUID
 }
 
@@ -92,6 +94,7 @@ func parse(args []string) (command, error) {
 	sub.StringVar(&valid, "valid-until", "", "")
 	sub.StringVar(&queues, "queues", "", "")
 	sub.BoolVar(&c.reply, "reply", false, "")
+	sub.BoolVar(&c.renew, "renew", false, "")
 	if err := sub.Parse(rest); err != nil {
 		return c, fmt.Errorf("%w: %v", errUsage, err)
 	}
@@ -273,7 +276,7 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 		}
 		fmt.Fprintf(out, "contract hub %s -> tenant %s is now %s\n", c.hub, c.tenant, c.status)
 	case "grant add":
-		id, err := svc.Grant(ctx, provisioning.GrantSpec{Hub: c.hub, Tenant: c.tenant, User: user, ValidUntil: c.validUntil, CanReply: c.reply})
+		id, err := svc.Grant(ctx, provisioning.GrantSpec{Hub: c.hub, Tenant: c.tenant, User: user, ValidUntil: c.validUntil, CanReply: c.reply, Renew: c.renew})
 		if err != nil {
 			return err
 		}

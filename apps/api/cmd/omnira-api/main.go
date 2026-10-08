@@ -168,7 +168,7 @@ func main() {
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)
 	if cfg.HubAPIEnabled {
-		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled)
+		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)
 	}
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)

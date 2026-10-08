@@ -832,6 +832,14 @@ paths:
           schema: { type: string, format: uuid }
         - { $ref: '#/components/parameters/Limit' }
         - { $ref: '#/components/parameters/Cursor' }
+        - name: companies
+          in: query
+          required: false
+          description: |
+            Comma-separated company ids (max 50). A screen filter that only NARROWS the caller's authorized view: a
+            company the caller holds no live grant for stays invisible whatever is sent. Not a tenant selector
+            (`tenant_id` is still refused). Invalid ids are a 400.
+          schema: { type: string }
       responses:
         '200':
           description: A page of inbox items
@@ -1049,6 +1057,125 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: Unknown capability or status, or nothing to change }
+  /hubs/{hub_id}/access:
+    get:
+      operationId: getHubAccess
+      tags: [Hub]
+      summary: Access panel - instances, their administrators, the hub's agents and what each may do where (hub admin)
+      description: |
+        Behind `OMNIRA_HUB_ACCESS_API_ENABLED` (unrouted otherwise). Only an active ADMIN of this hub gets an answer;
+        everyone else, an agent of the same hub and an unknown hub included, gets the uniform 404. Only a hub admin can
+        authorize an agent in more than one instance.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The panel's read model
+          content: { application/json: { schema: { $ref: '#/components/schemas/HubAccessOverview' } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/access/agents:
+    post:
+      operationId: addHubAgent
+      tags: [Hub]
+      summary: Make an existing account an agent of the hub (grants access to no instance)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: { type: string, maxLength: 254 }
+      responses:
+        '200': { description: The agent, content: { application/json: { schema: { $ref: '#/components/schemas/HubAccessPerson' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: No eligible account for that e-mail (unknown, ambiguous and inactive are indistinguishable) }
+  /hubs/{hub_id}/access/agents/{user_id}:
+    delete:
+      operationId: removeHubAgent
+      tags: [Hub]
+      summary: Remove an agent from the hub; their grants end with it (hub admins cannot be removed here)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Removed }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}:
+    put:
+      operationId: setHubAgentAccess
+      tags: [Hub]
+      summary: Set what an agent may do in one instance - none, read, or read and reply (audited, effective at once)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [none, read, reply] }
+                valid_until: { type: [string, 'null'], format: date-time }
+      responses:
+        '204': { description: Set }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Unknown mode, validity in the past, the person is not an agent of the hub, or the instance is not active }
+  /hubs/{hub_id}/access/instances/{tenant_id}/admins:
+    post:
+      operationId: addInstanceAdmin
+      tags: [Hub]
+      summary: Make an existing account an administrator of one instance of this hub
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: { type: string, maxLength: 254 }
+      responses:
+        '200': { description: The administrator, content: { application/json: { schema: { $ref: '#/components/schemas/HubAccessPerson' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: No eligible account for that e-mail }
+  /hubs/{hub_id}/access/instances/{tenant_id}/admins/{user_id}:
+    delete:
+      operationId: removeInstanceAdmin
+      tags: [Hub]
+      summary: Withdraw administration of an instance (the person stays as an agent; the last administrator cannot be removed)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Withdrawn }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: It is the instance's only administrator }
   /tenants/{tenant_id}/inbox/conversations:
     get:
       operationId: listConversations
@@ -3398,7 +3525,7 @@ components:
           type: array
           items:
             type: object
-            required: [id, name, role, can_manage_companies]
+            required: [id, name, role, can_manage_companies, can_manage_access]
             properties:
               id: { type: string, format: uuid }
               name: { type: string }
@@ -3406,6 +3533,55 @@ components:
               can_manage_companies:
                 type: boolean
                 description: Only whether to offer the company-management screen; the server decides every request again.
+              can_manage_access:
+                type: boolean
+                description: Only whether to offer the Access panel (hub admins, when it is mounted); the server decides every request again.
+    HubAccessPerson:
+      type: object
+      required: [user_id, email, name]
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+    HubAccessOverview:
+      type: object
+      required: [hub_id, hub_name, instances, agents]
+      properties:
+        hub_id: { type: string, format: uuid }
+        hub_name: { type: string }
+        instances:
+          type: array
+          items:
+            type: object
+            required: [tenant_id, name, tenant_status, contract_status, admins, direct_agents, hub_agents]
+            properties:
+              tenant_id: { type: string, format: uuid }
+              name: { type: string }
+              tenant_status: { type: string }
+              contract_status: { type: string }
+              admins: { type: array, items: { $ref: '#/components/schemas/HubAccessPerson' } }
+              direct_agents: { type: integer, description: Active members of the company who are not administrators }
+              hub_agents: { type: integer, description: People with a live grant through this hub }
+        agents:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/HubAccessPerson'
+              - type: object
+                required: [hub_role, grants, direct_instances, instances]
+                properties:
+                  hub_role: { type: string, enum: [hub_agent, hub_admin] }
+                  grants:
+                    type: array
+                    items:
+                      type: object
+                      required: [tenant_id, mode]
+                      properties:
+                        tenant_id: { type: string, format: uuid }
+                        mode: { type: string, enum: [read, reply] }
+                        valid_until: { type: string, format: date-time }
+                  direct_instances: { type: array, items: { type: string, format: uuid }, description: Companies where the person is an active member in their own right }
+                  instances: { type: integer, description: Distinct companies the person works in (grants plus direct memberships) }
     HubCapability:
       type: object
       required: [key, label, description, gates]
@@ -3457,6 +3633,15 @@ components:
         next_cursor: { type: string }
         count: { type: integer }
         limit: { type: integer }
+        companies:
+          type: array
+          description: The companies the caller currently serves through this hub (live grants); feeds the screen's company filter. Describes, never authorizes.
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
     HubReplyResult:
       type: object
       required: [id, conversation_id, direction, body, status, created_at, tenant]

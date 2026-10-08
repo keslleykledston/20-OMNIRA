@@ -31,6 +31,8 @@ var (
 	ErrInvalid  = errors.New("invalid request")
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("already exists")
+	// ErrForbidden: an authenticated actor (WithActor) is not an active admin of the hub, or the change is reserved to hubctl.
+	ErrForbidden = errors.New("forbidden")
 )
 
 func invalid(format string, a ...any) error {
@@ -60,6 +62,37 @@ func New(pool *pgxpool.Pool, operator string) (*Service, error) {
 	return &Service{pool: pool, operator: operator, now: time.Now}, nil
 }
 
+type actorKey struct{}
+
+// WithActor marks the calls made with the returned context as done on behalf of an AUTHENTICATED person (the Access panel),
+// not by an operator at a shell. Every state-changing call then (1) re-asks the database, inside its own transaction, whether
+// that person is an admin of the hub, (2) refuses what is reserved to hubctl (creating/demoting/removing hub admins), and
+// (3) writes the person's id to audit_events.actor_id. Without it behaviour is unchanged (hubctl).
+func WithActor(ctx context.Context, user uuid.UUID) context.Context {
+	return context.WithValue(ctx, actorKey{}, user)
+}
+
+func actorOf(ctx context.Context) uuid.UUID {
+	id, _ := ctx.Value(actorKey{}).(uuid.UUID)
+	return id
+}
+
+// guard is the in-transaction authorization for an actor-driven call (no-op for hubctl).
+func (s *Service) guard(ctx context.Context, q platformdb.Querier, hub uuid.UUID) error {
+	actor := actorOf(ctx)
+	if actor == uuid.Nil {
+		return nil
+	}
+	var ok bool
+	if err := q.QueryRow(ctx, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')`, hub, actor).Scan(&ok); err != nil {
+		return err
+	}
+	if !ok {
+		return ErrForbidden
+	}
+	return nil
+}
+
 // tx runs fn in one system-session transaction.
 func (s *Service) tx(ctx context.Context, fn func(ctx context.Context, q platformdb.Querier) error) error {
 	return platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {
@@ -73,13 +106,18 @@ func (s *Service) audit(ctx context.Context, q platformdb.Querier, tenant *uuid.
 	}
 	meta["operator"] = s.operator
 	meta["via"] = "omnira-hubctl"
+	var actor *uuid.UUID
+	if a := actorOf(ctx); a != uuid.Nil {
+		actor = &a
+		meta["via"] = "omnira-access-panel"
+	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
 		return err
 	}
 	_, err = q.Exec(ctx, `INSERT INTO audit_events (id, tenant_id, actor_id, action, resource_type, resource_id, outcome, correlation_id, metadata)
-	                      VALUES ($1, $2, NULL, $3, $4, $5, 'success', $6, $7)`,
-		uuid.New(), tenant, action, resourceType, resourceID, uuid.NewString(), raw)
+	                      VALUES ($1, $2, $3, $4, $5, $6, 'success', $7, $8)`,
+		uuid.New(), tenant, actor, action, resourceType, resourceID, uuid.NewString(), raw)
 	return err
 }
 
@@ -141,7 +179,13 @@ func (s *Service) AddMember(ctx context.Context, hub, user uuid.UUID, role strin
 	if role != RoleAgent && role != RoleAdmin {
 		return invalid("role must be %s or %s", RoleAgent, RoleAdmin)
 	}
+	if actorOf(ctx) != uuid.Nil && role != RoleAgent {
+		return ErrForbidden // making hub admins is hubctl's job, not a button
+	}
 	return s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := s.guard(c, q, hub); err != nil {
+			return err
+		}
 		if err := s.requireHub(c, q, hub); err != nil {
 			return err
 		}
@@ -159,6 +203,9 @@ func (s *Service) AddMember(ctx context.Context, hub, user uuid.UUID, role strin
 		if prev != nil && *prev == role {
 			return nil // idempotent: nothing changes, nothing to audit
 		}
+		if prev != nil && *prev == RoleAdmin && actorOf(c) != uuid.Nil {
+			return ErrForbidden // demoting an admin is hubctl's job
+		}
 		if _, err := q.Exec(c, `INSERT INTO hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, $3)
 		                        ON CONFLICT (hub_id, user_id) DO UPDATE SET role_id = EXCLUDED.role_id, updated_at = now()`, hub, user, roleID); err != nil {
 			return err
@@ -174,6 +221,18 @@ func (s *Service) AddMember(ctx context.Context, hub, user uuid.UUID, role strin
 // RemoveMember removes the user from the hub. Their grants disappear with it (foreign key cascade); the count is audited.
 func (s *Service) RemoveMember(ctx context.Context, hub, user uuid.UUID) (grantsRemoved int, err error) {
 	err = s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := s.guard(c, q, hub); err != nil {
+			return err
+		}
+		if actorOf(c) != uuid.Nil {
+			var isAdmin bool
+			if err := q.QueryRow(c, `SELECT is_hub_admin($1, $2)`, hub, user).Scan(&isAdmin); err != nil {
+				return err
+			}
+			if isAdmin {
+				return ErrForbidden // removing a hub admin is hubctl's job
+			}
+		}
 		if err := q.QueryRow(c, `SELECT count(*) FROM effective_access_grants WHERE hub_id = $1 AND user_id = $2`, hub, user).Scan(&grantsRemoved); err != nil {
 			return err
 		}
@@ -299,10 +358,14 @@ type GrantSpec struct {
 	// CanReply lets the agent claim and reply in the tenant's conversations. Default false: read-only (least privilege).
 	// Granting again sets it exactly as given, so renewing without it deliberately removes the capability.
 	CanReply bool
+	// Renew is the explicit "yes, widen it" for a grant that already exists. Without it, granting over an existing row can
+	// only keep or narrow access: a revoked grant is not silently revived, a validity is not silently lifted or extended,
+	// and read-only is not silently upgraded to reply. (Codex review: re-running `grant add` must not widen access.)
+	Renew bool
 }
 
 // Grant lets a hub member act on a tenant. The contract is derived from (hub, tenant), never supplied.
-// Granting again renews the same grant (reactivates it and updates its validity).
+// Granting again over an existing grant keeps or narrows it; widening it needs GrantSpec.Renew.
 func (s *Service) Grant(ctx context.Context, spec GrantSpec) (uuid.UUID, error) {
 	if spec.Hub == uuid.Nil || spec.Tenant == uuid.Nil || spec.User == uuid.Nil {
 		return uuid.Nil, invalid("hub, tenant and user are required")
@@ -312,6 +375,9 @@ func (s *Service) Grant(ctx context.Context, spec GrantSpec) (uuid.UUID, error) 
 	}
 	var id uuid.UUID
 	err := s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := s.guard(c, q, spec.Hub); err != nil {
+			return err
+		}
 		if err := s.requireHub(c, q, spec.Hub); err != nil {
 			return err
 		}
@@ -328,11 +394,31 @@ func (s *Service) Grant(ctx context.Context, spec GrantSpec) (uuid.UUID, error) 
 		var contract uuid.UUID
 		var status string
 		var until *time.Time
-		if err := q.QueryRow(c, `SELECT id, status, valid_until FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2`, spec.Hub, spec.Tenant).Scan(&contract, &status, &until); err != nil {
+		// FOR SHARE conflicts with SetContractStatus's FOR UPDATE: a contract revoked concurrently cannot be granted
+		// against after the check (the check and the write see the same contract state).
+		if err := q.QueryRow(c, `SELECT id, status, valid_until FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR SHARE`, spec.Hub, spec.Tenant).Scan(&contract, &status, &until); err != nil {
 			return mapNoRows(err, "no contract between hub %s and tenant %s", spec.Hub, spec.Tenant)
 		}
 		if status != "active" || (until != nil && !until.After(s.now())) {
 			return invalid("the contract between hub %s and tenant %s is not active", spec.Hub, spec.Tenant)
+		}
+		if !spec.Renew {
+			var exStatus string
+			var exUntil *time.Time
+			var exReply bool
+			err := q.QueryRow(c, `SELECT status, valid_until, can_reply FROM effective_access_grants
+			                      WHERE hub_id = $1 AND user_id = $2 AND tenant_id = $3 AND service_contract_id = $4 FOR UPDATE`,
+				spec.Hub, spec.User, spec.Tenant, contract).Scan(&exStatus, &exUntil, &exReply)
+			if err == nil {
+				widens := exStatus != "active" ||
+					(exUntil != nil && (spec.ValidUntil == nil || spec.ValidUntil.Truncate(time.Microsecond).After(*exUntil))) || // the column keeps microseconds
+					(!exReply && spec.CanReply)
+				if widens {
+					return fmt.Errorf("%w: user %s already has a %s grant on tenant %s that this would widen; renew it explicitly", ErrConflict, spec.User, exStatus, spec.Tenant)
+				}
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
 		}
 		if err := q.QueryRow(c, `INSERT INTO effective_access_grants (hub_id, user_id, tenant_id, service_contract_id, valid_until, can_reply)
 		                         VALUES ($1, $2, $3, $4, $5, $6)
@@ -357,6 +443,9 @@ func (s *Service) Grant(ctx context.Context, spec GrantSpec) (uuid.UUID, error) 
 // RevokeGrant revokes the user's grant on the tenant. Revoking an already revoked grant is a no-op.
 func (s *Service) RevokeGrant(ctx context.Context, hub, tenant, user uuid.UUID) error {
 	return s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := s.guard(c, q, hub); err != nil {
+			return err
+		}
 		var id uuid.UUID
 		var status string
 		if err := q.QueryRow(c, `SELECT id, status FROM effective_access_grants WHERE hub_id = $1 AND tenant_id = $2 AND user_id = $3 FOR UPDATE`, hub, tenant, user).Scan(&id, &status); err != nil {

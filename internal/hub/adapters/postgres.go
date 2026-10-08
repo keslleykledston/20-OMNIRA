@@ -373,7 +373,7 @@ func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
 // ListHubInboxItems pages the hub's inbox by most recent activity with keyset pagination on (last_activity_at, id).
 // It runs inside the caller's database session, so RLS (not this query) decides which tenants' rows exist
 // for the caller; the hub_id filter only narrows within that.
-func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uuid.UUID, limit int, cursor string) ([]*domain.HubInboxItem, string, error) {
+func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uuid.UUID, onlyTenants []uuid.UUID, limit int, cursor string) ([]*domain.HubInboxItem, string, error) {
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -381,13 +381,19 @@ func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uui
 
 	query := `SELECT ` + inboxColumns + ` FROM hub_inbox_items WHERE hub_id = $1`
 	args := []interface{}{hubID}
+	// onlyTenants NARROWS what RLS already shows (a screen filter: "these companies only"). It can never widen it: rows the
+	// caller may not read are filtered out before this predicate is ever evaluated.
+	if len(onlyTenants) > 0 {
+		args = append(args, onlyTenants)
+		query += fmt.Sprintf(` AND tenant_id = ANY($%d::uuid[])`, len(args))
+	}
 	if cursor != "" {
 		ts, id, err := decodeInboxCursor(cursor)
 		if err != nil {
 			return nil, "", err
 		}
-		query += ` AND (last_activity_at, id) < ($2, $3)`
 		args = append(args, ts, id)
+		query += fmt.Sprintf(` AND (last_activity_at, id) < ($%d, $%d)`, len(args)-1, len(args))
 	}
 	query += fmt.Sprintf(` ORDER BY last_activity_at DESC, id DESC LIMIT $%d`, len(args)+1)
 	args = append(args, limit+1)

@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/omnira/omnira/internal/entitlements"
+
 	"github.com/omnira/omnira/internal/messages/ports"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -116,5 +118,31 @@ func TestSendTemplateWorksOutsideTheWindowAndValidatesTheVariables(t *testing.T)
 		if !errors.Is(err, c.want) || c.st.inserted != 0 {
 			t.Errorf("%s: err=%v inserted=%d", name, err, c.st.inserted)
 		}
+	}
+}
+
+// ADR-0038 (Codex H-01): switching outbound_attachments off must also stop sending a file that was uploaded earlier.
+func TestSendMediaHonoursTheAttachmentsSwitchBeforeAnythingIsQueued(t *testing.T) {
+	user, conn, conv := uuid.New(), uuid.New(), uuid.New()
+	tenant := uuid.New()
+	tc, _ := tenancydomain.NewTenantContext(tenant, user, tenancydomain.AccessSourceDirect)
+	ctx := tenancydomain.WithTenantContext(context.Background(), tc)
+	recent := time.Now().Add(-1 * time.Hour)
+	store := &fakeStore{sc: ports.SendContext{ConversationID: conv, AssignedTo: &user, ConnectionID: &conn, ConnectionReady: true, ToE164: "+5592966660001", Provider: "waha", LastInboundAt: &recent}}
+	var asked []string
+	off := func(_ context.Context, got uuid.UUID, capability string) error {
+		if got != tenant {
+			t.Errorf("the gate was asked about tenant %s, not the request's %s", got, tenant)
+		}
+		asked = append(asked, capability)
+		return entitlements.ErrDisabled
+	}
+	s := NewSender(store, allowAll{}).WithEntitlements(off)
+	_, err := s.SendMedia(ctx, nil, conv, uuid.New(), "", "key-12345678")
+	if !errors.Is(err, entitlements.ErrDisabled) {
+		t.Fatalf("a disabled capability must refuse the send, got %v", err)
+	}
+	if len(asked) != 1 || asked[0] != entitlements.OutboundAttachments || store.inserted != 0 {
+		t.Fatalf("asked=%v inserted=%d", asked, store.inserted)
 	}
 }

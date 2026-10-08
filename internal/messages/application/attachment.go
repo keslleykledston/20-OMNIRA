@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/omnira/omnira/internal/entitlements"
 	"log"
 	"time"
 
@@ -212,6 +213,11 @@ func (s *Sender) SendMedia(ctx context.Context, store ports.AttachmentStore, con
 		return SendResult{}, err
 	}
 	tc, sc, manage := p.tc, p.sc, p.manage
+	if s.entitled != nil {
+		if err := s.entitled(ctx, tc.TenantID, entitlements.OutboundAttachments); err != nil {
+			return SendResult{}, err
+		}
+	}
 	if !s.mediaSupported(sc.Provider) {
 		return SendResult{}, ErrMediaUnsupported
 	}

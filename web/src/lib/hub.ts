@@ -11,6 +11,8 @@ export interface HubSummary {
   role: 'hub_agent' | 'hub_admin'
   // Only whether to offer the company screen. The server decides every request again.
   can_manage_companies?: boolean
+  // Same for the Access panel (people and permissions): offered to hub admins when the server mounts it.
+  can_manage_access?: boolean
 }
 
 export interface HubInboxItem {
@@ -28,8 +30,15 @@ export interface HubInboxItem {
   unread_count: number
 }
 
+// A company the signed-in person may serve through the hub; feeds the inbox filter. Describes, never authorizes.
+export interface HubCompanyOption {
+  id: string
+  name: string
+}
+
 export interface HubInboxPage {
   items: HubInboxItem[]
+  companies?: HubCompanyOption[]
   has_more: boolean
   next_cursor?: string
   count: number
@@ -67,9 +76,13 @@ export const hubAPI = {
       throw err
     }
   },
-  inbox: (hubId: string, cursor?: string): Promise<HubInboxPage> =>
+  // `companies` only NARROWS the caller's authorized view (empty = all of it); the server never widens because of it.
+  inbox: (hubId: string, cursor?: string, companies: string[] = [], limit = 30): Promise<HubInboxPage> =>
     axios
-      .get<HubInboxPage>(`${API_BASE}/hubs/${enc(hubId)}/inbox`, { headers: authHeaders(), params: { limit: 30, ...(cursor ? { cursor } : {}) } })
+      .get<HubInboxPage>(`${API_BASE}/hubs/${enc(hubId)}/inbox`, {
+        headers: authHeaders(),
+        params: { limit, ...(cursor ? { cursor } : {}), ...(companies.length ? { companies: companies.join(',') } : {}) },
+      })
       .then((r) => r.data),
   item: (hubId: string, itemId: string): Promise<HubItemDetail> =>
     axios.get<HubItemDetail>(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}`, { headers: authHeaders() }).then((r) => r.data),
@@ -191,6 +204,80 @@ export function describeHubAdminError(err: unknown): string {
   switch (status) {
     case 404:
       return 'Você não tem permissão para gerenciar empresas neste Hub (ou a empresa não é deste Hub).'
+    case 400:
+      return 'Pedido inválido. Recarregue a tela e tente de novo.'
+    case 422:
+      return body || 'Os dados informados não foram aceitos.'
+    default:
+      return 'Não foi possível concluir a ação.'
+  }
+}
+
+// ---- Access panel (ADR-0039): instances (companies), their administrators, the hub's agents and what each may do where.
+// Only an active admin of the hub is answered; everyone else gets 404. Behind OMNIRA_HUB_ACCESS_API_ENABLED.
+
+export type AccessMode = 'none' | 'read' | 'reply'
+
+export interface AccessPerson {
+  user_id: string
+  email: string
+  name: string
+}
+
+export interface AccessInstance {
+  tenant_id: string
+  name: string
+  tenant_status: string
+  contract_status: string
+  admins: AccessPerson[]
+  direct_agents: number
+  hub_agents: number
+}
+
+export interface AccessGrant {
+  tenant_id: string
+  mode: 'read' | 'reply'
+  valid_until?: string
+}
+
+export interface AccessAgent extends AccessPerson {
+  hub_role: 'hub_agent' | 'hub_admin'
+  grants: AccessGrant[]
+  direct_instances: string[]
+  instances: number
+}
+
+export interface AccessOverview {
+  hub_id: string
+  hub_name: string
+  instances: AccessInstance[]
+  agents: AccessAgent[]
+}
+
+export const hubAccessAPI = {
+  overview: (hubId: string): Promise<AccessOverview> =>
+    axios.get<AccessOverview>(`${API_BASE}/hubs/${enc(hubId)}/access`, { headers: authHeaders() }).then((r) => r.data),
+  addAgent: (hubId: string, email: string): Promise<AccessPerson> =>
+    axios.post<AccessPerson>(`${API_BASE}/hubs/${enc(hubId)}/access/agents`, { email }, { headers: authHeaders() }).then((r) => r.data),
+  removeAgent: (hubId: string, userId: string): Promise<void> =>
+    axios.delete(`${API_BASE}/hubs/${enc(hubId)}/access/agents/${enc(userId)}`, { headers: authHeaders() }).then(() => undefined),
+  setAccess: (hubId: string, userId: string, tenantId: string, mode: AccessMode, validUntil?: string | null): Promise<void> =>
+    axios
+      .put(`${API_BASE}/hubs/${enc(hubId)}/access/agents/${enc(userId)}/instances/${enc(tenantId)}`, { mode, valid_until: validUntil ?? null }, { headers: authHeaders() })
+      .then(() => undefined),
+  addAdmin: (hubId: string, tenantId: string, email: string): Promise<AccessPerson> =>
+    axios.post<AccessPerson>(`${API_BASE}/hubs/${enc(hubId)}/access/instances/${enc(tenantId)}/admins`, { email }, { headers: authHeaders() }).then((r) => r.data),
+  removeAdmin: (hubId: string, tenantId: string, userId: string): Promise<void> =>
+    axios.delete(`${API_BASE}/hubs/${enc(hubId)}/access/instances/${enc(tenantId)}/admins/${enc(userId)}`, { headers: authHeaders() }).then(() => undefined),
+}
+
+export function describeHubAccessError(err: unknown): string {
+  const e = err as { response?: { status?: number; data?: unknown } }
+  const status = e?.response?.status
+  const body = typeof e?.response?.data === 'string' ? e.response.data.replace(/^access: invalid request: /, '').replace(/^provisioning: invalid request: /, '').trim() : ''
+  switch (status) {
+    case 404:
+      return 'Você não administra este Hub, ou a pessoa/empresa não pertence a ele.'
     case 400:
       return 'Pedido inválido. Recarregue a tela e tente de novo.'
     case 422:

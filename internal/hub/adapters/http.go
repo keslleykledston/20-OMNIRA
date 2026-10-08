@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,10 +46,15 @@ type HTTPHandler struct {
 	reply *replying.Service
 	// adminEnabled mirrors OMNIRA_HUB_ADMIN_API_ENABLED so the hub list only advertises the screen when its API is mounted.
 	adminEnabled bool
+	// accessEnabled mirrors OMNIRA_HUB_ACCESS_API_ENABLED for the same reason (the Access panel).
+	accessEnabled bool
 }
 
 // WithAdminAPI marks the company-management API as mounted (see ListMyHubs).
 func (h *HTTPHandler) WithAdminAPI(enabled bool) *HTTPHandler { h.adminEnabled = enabled; return h }
+
+// WithAccessAPI marks the Access panel API as mounted (see ListMyHubs).
+func (h *HTTPHandler) WithAccessAPI(enabled bool) *HTTPHandler { h.accessEnabled = enabled; return h }
 
 func NewHTTPHandler(pool *pgxpool.Pool) *HTTPHandler {
 	repo := NewPostgresHubRepository(pool)
@@ -145,7 +151,11 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	items, next, err := h.repo.ListHubInboxItems(r.Context(), hubID, opts.Limit, opts.Cursor)
+	only, ok := parseCompanyFilter(w, r)
+	if !ok {
+		return
+	}
+	items, next, err := h.repo.ListHubInboxItems(r.Context(), hubID, only, opts.Limit, opts.Cursor)
 	if errors.Is(err, ErrInvalidCursor) {
 		httpError(w, "invalid cursor", http.StatusBadRequest)
 		return
@@ -162,7 +172,61 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 		out = append(out, dto)
 	}
 	pagination.WritePaginationHeaders(w, &pagination.PageResult{Count: len(out), Limit: opts.Limit, HasMore: next != "", NextCursor: next})
-	writeJSON(w, map[string]any{"items": out, "has_more": next != "", "next_cursor": next, "count": len(out), "limit": opts.Limit})
+	writeJSON(w, map[string]any{"items": out, "has_more": next != "", "next_cursor": next, "count": len(out), "limit": opts.Limit,
+		"companies": h.companiesOf(r.Context(), hubID, actor)})
+}
+
+// parseCompanyFilter reads `companies=<uuid>,<uuid>`: a screen filter that only NARROWS the caller's authorized view. It is
+// not a tenant selector (tenant_id is still refused): rows outside the caller's grants are invisible whatever it says.
+func parseCompanyFilter(w http.ResponseWriter, r *http.Request) ([]uuid.UUID, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("companies"))
+	if raw == "" {
+		return nil, true
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > 50 {
+		httpError(w, "too many companies", http.StatusBadRequest)
+		return nil, false
+	}
+	out := make([]uuid.UUID, 0, len(parts))
+	for _, p := range parts {
+		id, err := uuid.Parse(strings.TrimSpace(p))
+		if err != nil || id == uuid.Nil {
+			httpError(w, "invalid companies filter", http.StatusBadRequest)
+			return nil, false
+		}
+		out = append(out, id)
+	}
+	return out, true
+}
+
+type companyDTO struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// companiesOf lists the companies this person is currently allowed to serve through the hub, to feed the screen's filter.
+// It only describes (names for a dropdown); what is READABLE is still decided by RLS on every row.
+func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID) []companyDTO {
+	out := []companyDTO{}
+	rows, err := platformdb.QuerierFromContext(ctx, h.pool).Query(ctx, `
+		SELECT DISTINCT t.id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name) AS name
+		FROM effective_access_grants g
+		JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id AND k.status = 'active' AND (k.valid_until IS NULL OR k.valid_until > now())
+		JOIN tenants t ON t.id = g.tenant_id AND t.status = 'active'
+		WHERE g.hub_id = $1 AND g.user_id = $2 AND g.status = 'active' AND (g.valid_until IS NULL OR g.valid_until > now())
+		ORDER BY 2, 1`, hubID, actor)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c companyDTO
+		if err := rows.Scan(&c.ID, &c.Name); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 type messageDTO struct {
@@ -299,6 +363,8 @@ type hubDTO struct {
 	// CanManageCompanies only tells the UI whether to offer the company-management screen. The server re-decides every
 	// request (AdminHandler); a client that ignores or forges this gains nothing.
 	CanManageCompanies bool `json:"can_manage_companies"`
+	// CanManageAccess: same idea for the Access panel (people and permissions); true for hub admins when it is mounted.
+	CanManageAccess bool `json:"can_manage_access"`
 }
 
 // ListMyHubs returns the active hubs the caller is a member of. Membership grants no tenant access by itself; this
@@ -335,6 +401,11 @@ func (h *HTTPHandler) ListMyHubs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows.Close()
+	if h.accessEnabled {
+		for i := range out {
+			out[i].CanManageAccess = out[i].Role == "hub_admin"
+		}
+	}
 	if h.adminEnabled {
 		isOp, err := provisioning.IsPlatformOperator(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), principal.UserID)
 		if err != nil {
@@ -370,6 +441,11 @@ func decodeWrite(w http.ResponseWriter, r *http.Request, into any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(into); err != nil {
+		httpError(w, "invalid request body", http.StatusBadRequest)
+		return false
+	}
+	// exactly one JSON value: `{"a":1}{"b":2}` is not a request (Codex L3)
+	if dec.More() {
 		httpError(w, "invalid request body", http.StatusBadRequest)
 		return false
 	}

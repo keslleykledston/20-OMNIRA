@@ -56,6 +56,15 @@ type Sender struct {
 	// mediaReady reports whether delivery of files is configured for a provider (nil: every supported provider). The API checks it at upload and
 	// at send, so a conversation on a provider this deployment cannot deliver through is refused up front instead of failing later.
 	mediaReady func(provider string) bool
+	// entitled is the per-company capability switch (ADR-0038). nil: no switches (tests, tooling).
+	entitled func(ctx context.Context, tenant uuid.UUID, capability string) error
+}
+
+// WithEntitlements makes sending a file depend on the company's outbound_attachments switch. The route-level gate only
+// covers upload and removal; an attachment uploaded BEFORE the switch went off must not leave through POST .../messages.
+func (s *Sender) WithEntitlements(g func(ctx context.Context, tenant uuid.UUID, capability string) error) *Sender {
+	s.entitled = g
+	return s
 }
 
 // WithMediaProviders installs the delivery-readiness check for outbound files.
