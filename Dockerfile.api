@@ -27,6 +27,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -o /build/omnira-api \
   ./apps/api/cmd/omnira-api
 
+# Operator tool for Service Hub provisioning (docs/ops/HUB-PROVISIONING.md); not started by the container
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o /build/omnira-hubctl ./apps/hubctl/cmd/omnira-hubctl
+
 # Stage 2: Runtime
 FROM alpine:latest
 
@@ -40,6 +43,7 @@ WORKDIR /app
 
 # Copiar binário do builder
 COPY --from=builder /build/omnira-api /app/omnira-api
+COPY --from=builder /build/omnira-hubctl /app/omnira-hubctl
 
 # Permissões
 RUN chown -R omnira:omnira /app
