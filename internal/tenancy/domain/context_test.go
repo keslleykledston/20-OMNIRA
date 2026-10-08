@@ -12,12 +12,12 @@ func TestNewTenantContext(t *testing.T) {
 	tenantID := uuid.New()
 
 	tests := []struct {
-		name      string
-		tenantID  uuid.UUID
-		actorID   uuid.UUID
-		source    AccessSource
-		wantErr   bool
-		wantSrc   AccessSource
+		name     string
+		tenantID uuid.UUID
+		actorID  uuid.UUID
+		source   AccessSource
+		wantErr  bool
+		wantSrc  AccessSource
 	}{
 		{
 			name:     "direct access",
@@ -42,6 +42,20 @@ func TestNewTenantContext(t *testing.T) {
 			source:   AccessSourceSystem,
 			wantErr:  false,
 			wantSrc:  AccessSourceSystem,
+		},
+		{
+			name:     "hub source cannot be minted without a grant",
+			tenantID: tenantID,
+			actorID:  userID,
+			source:   AccessSourceHub,
+			wantErr:  true,
+		},
+		{
+			name:     "unknown source is rejected",
+			tenantID: tenantID,
+			actorID:  userID,
+			source:   "root",
+			wantErr:  true,
 		},
 		{
 			name:     "nil tenant_id fails",

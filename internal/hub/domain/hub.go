@@ -28,52 +28,52 @@ type HubMembership struct {
 
 // ServiceContract represents delegation of a tenant to a hub
 type ServiceContract struct {
-	ID                uuid.UUID
-	HubID             uuid.UUID
-	TenantID          uuid.UUID
-	Status            string // active | suspended | revoked
-	ValidFrom         time.Time
-	ValidUntil        *time.Time
-	ServiceScope      map[string]interface{} // JSON: queues, capabilities, etc.
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID           uuid.UUID
+	HubID        uuid.UUID
+	TenantID     uuid.UUID
+	Status       string // active | suspended | revoked
+	ValidFrom    time.Time
+	ValidUntil   *time.Time
+	ServiceScope map[string]interface{} // JSON: queues, capabilities, etc.
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // EffectiveAccessGrant represents a cached grant of a Hub user to a Tenant
 type EffectiveAccessGrant struct {
-	ID                  uuid.UUID
-	HubID               uuid.UUID
-	UserID              uuid.UUID
-	TenantID            uuid.UUID
-	ServiceContractID   uuid.UUID
-	WorkPoolID          *uuid.UUID
-	Status              string // active | suspended | revoked
-	ValidFrom           time.Time
-	ValidUntil          *time.Time
-	GrantVersion        int64
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                uuid.UUID
+	HubID             uuid.UUID
+	UserID            uuid.UUID
+	TenantID          uuid.UUID
+	ServiceContractID uuid.UUID
+	WorkPoolID        *uuid.UUID
+	Status            string // active | suspended | revoked
+	ValidFrom         time.Time
+	ValidUntil        *time.Time
+	GrantVersion      int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // HubInboxItem represents a unified inbox item for hub agents
 type HubInboxItem struct {
-	ID               uuid.UUID
-	HubID            uuid.UUID
-	TenantID         uuid.UUID
-	ConversationID   uuid.UUID
-	QueueID          *uuid.UUID
-	AssignedUserID   *uuid.UUID
-	CustomerName     string
-	Channel          string
-	Status           string
-	Priority         string // low | normal | high | urgent
-	SLADueAt         *time.Time
-	LastActivityAt   *time.Time
-	UnreadCount      int
-	MetadataJSON     map[string]interface{}
-	Version          int64
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID             uuid.UUID
+	HubID          uuid.UUID
+	TenantID       uuid.UUID
+	ConversationID uuid.UUID
+	QueueID        *uuid.UUID
+	AssignedUserID *uuid.UUID
+	CustomerName   string
+	Channel        string
+	Status         string
+	Priority       string // low | normal | high | urgent
+	SLADueAt       *time.Time
+	LastActivityAt *time.Time
+	UnreadCount    int
+	MetadataJSON   map[string]interface{}
+	Version        int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // WorkPool groups agents within a hub by specialty
@@ -99,10 +99,10 @@ type Skill struct {
 
 // AgentSkill represents an agent's proficiency in a skill
 type AgentSkill struct {
-	ID            uuid.UUID
-	UserID        uuid.UUID
-	SkillID       uuid.UUID
-	Proficiency   string // basic | intermediate | advanced
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	SkillID     uuid.UUID
+	Proficiency string // basic | intermediate | advanced
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }

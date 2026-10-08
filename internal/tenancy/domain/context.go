@@ -11,17 +11,18 @@ import (
 // Construído APÓS autenticação + autorização, nunca antes.
 // Nenhuma parte do código aceita tenant_id do request como autoridade.
 type TenantContext struct {
-	TenantID          uuid.UUID
-	ActorID           uuid.UUID      // UserID humano; vazio somente quando Source=system
-	Source            AccessSource
+	TenantID uuid.UUID
+	ActorID  uuid.UUID // UserID humano; vazio somente quando Source=system
+	Source   AccessSource
 
 	// Hub delegation (populated only if Source=hub)
-	HubID             *uuid.UUID     // which hub (if hub access)
-	ServiceContractID *uuid.UUID     // which contract
-	EffectiveGrantID  *uuid.UUID     // which grant
+	HubID             *uuid.UUID // which hub (if hub access)
+	ServiceContractID *uuid.UUID // which contract
+	EffectiveGrantID  *uuid.UUID // which grant
+	WorkPoolID        *uuid.UUID // grant's work pool, when it has one
 
 	// Audit trail
-	CorrelationID     string         // trace requests across system
+	CorrelationID string // trace requests across system
 }
 
 // AccessSource — origin da requisição (direto, hub, etc).
@@ -45,6 +46,11 @@ func NewTenantContext(tenantID, actorID uuid.UUID, source AccessSource) (*Tenant
 	}
 	if source == "" {
 		source = AccessSourceDirect
+	}
+	// Hub access carries grant metadata and is built only by NewHubTenantContext; accepting it here
+	// would mint a "hub" context with no contract or grant behind it.
+	if source != AccessSourceDirect && source != AccessSourceSystem {
+		return nil, errors.New("unsupported access source for NewTenantContext: " + string(source))
 	}
 
 	return &TenantContext{
