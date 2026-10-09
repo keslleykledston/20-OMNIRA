@@ -29,6 +29,17 @@ func (r *PostgresRepository) system(ctx context.Context, fn func(ctx context.Con
 	})
 }
 
+// TenantActive implements ports.TenantGate.
+func (r *PostgresRepository) TenantActive(ctx context.Context, tenant uuid.UUID) (bool, error) {
+	var active bool
+	err := platformdb.WithSystemTenantSession(ctx, r.pool, tenant, func(c context.Context) error {
+		var err error
+		active, err = platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, r.pool), tenant)
+		return err
+	})
+	return active, err
+}
+
 func (r *PostgresRepository) Claim(ctx context.Context, limit int, lease time.Duration) ([]ports.Work, error) {
 	if limit <= 0 {
 		limit = 1

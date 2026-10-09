@@ -104,6 +104,7 @@ func (r *PostgresRepository) EnqueueVision(ctx context.Context, newerThan time.T
 			       CASE WHEN mm.mime = 'application/pdf' THEN 'document_text' ELSE 'description' END, 'gemini'
 			FROM message_media mm
 			JOIN tenant_ai_integrations ti ON ti.tenant_id = mm.tenant_id AND ti.provider = 'gemini' AND ti.enabled
+			JOIN tenants tn ON tn.id = mm.tenant_id AND tn.status = 'active'
 			WHERE mm.status = 'clean' AND mm.file_purged_at IS NULL AND mm.created_at >= $1
 			  AND mm.mime IN ('image/jpeg','image/png','image/webp','application/pdf')
 			  AND NOT EXISTS (SELECT 1 FROM message_media_analysis a WHERE a.tenant_id = mm.tenant_id AND a.message_id = mm.message_id

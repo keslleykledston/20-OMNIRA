@@ -404,3 +404,34 @@ func TestRetrigger_SuspendedCompany_IsNeverRetriggered(t *testing.T) {
 		t.Fatalf("after the reactivation: n=%d err=%v, want 1", n, err)
 	}
 }
+
+// Codex M / ADR-0038: a suspension that is in flight (not yet committed) is not raced: the sweep skips that company's rows
+// instead of writing behind it, and picks them up on the next pass once the suspension is rolled back.
+func TestRetrigger_ASuspensionInFlightIsNotRaced(t *testing.T) {
+	f := newLivenessFixture(t)
+	repo := NewPostgresLivenessRepository(f.app)
+	conv := f.conversation(t, &f.roundRobinQueue, nil, "open", past())
+	ctx := context.Background()
+
+	tx, err := f.seed.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, f.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	n, err := repo.Retrigger(ctx, &f.tenantID, nil, 10, time.Minute)
+	if err != nil || n != 0 || f.pendingJobCount(t, conv) != 0 {
+		t.Fatalf("the sweep wrote behind a suspension in flight: n=%d err=%v jobs=%d", n, err, f.pendingJobCount(t, conv))
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := repo.Retrigger(ctx, &f.tenantID, nil, 10, time.Minute); err != nil || n != 1 {
+		t.Fatalf("once the suspension was rolled back: n=%d err=%v, want 1", n, err)
+	}
+}

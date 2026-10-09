@@ -310,3 +310,45 @@ func TestSweeperDoesNotCancelRunsOfASuspendedCompany(t *testing.T) {
 		t.Fatalf("after the reactivation the run must be cancelled: %+v status=%s", r, s.runStatus())
 	}
 }
+
+// Codex M / ADR-0038: the run-tidying statement WAITS for a suspension that is in flight (it share-locks the active
+// companies it would touch) and, once the company is suspended, cancels nothing.
+func TestSweeperWaitsForASuspensionInFlightThenCancelsNothing(t *testing.T) {
+	s := newStack(t)
+	s.publish()
+	s.ingest("oi", true)
+	if err := s.handler.Handle(context.Background(), s.envelopes()[0]); err != nil {
+		t.Fatal(err)
+	}
+	s.exec(`UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, s.conv)
+	ctx := context.Background()
+	tx, err := s.env.Seed.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, s.env.TenantA); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan workerflows.SweepResult, 1)
+	go func() { done <- s.sweeper.Tick(ctx) }()
+	select {
+	case r := <-done:
+		t.Fatalf("the sweep did not wait for the suspension in flight: %+v", r)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if r.Cancelled != 0 || s.runStatus() != "waiting_input" {
+			t.Fatalf("a run of the company suspended meanwhile was cancelled: %+v status=%s", r, s.runStatus())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the sweep never finished")
+	}
+}

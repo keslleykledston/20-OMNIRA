@@ -321,11 +321,18 @@ func (r *PostgresFlowRepository) StrandedConversations(ctx context.Context, cuto
 // CancelRunsOfClosedConversations frees the one-active-run slot of conversations closed while a run waited.
 func (r *PostgresFlowRepository) CancelRunsOfClosedConversations(ctx context.Context) (int64, error) {
 	tag, err := r.q(ctx).Exec(ctx, `
+		WITH active AS (
+		  SELECT t.id FROM tenants t
+		  WHERE t.status = 'active'
+		    AND EXISTS (SELECT 1 FROM flow_runs fr JOIN conversations cv ON cv.tenant_id = fr.tenant_id AND cv.id = fr.conversation_id
+		                WHERE fr.tenant_id = t.id AND cv.status = 'closed' AND fr.status IN ('running','waiting_input','waiting_human'))
+		  FOR SHARE OF t
+		)
 		UPDATE flow_runs r SET status = 'cancelled', error = 'conversation closed', completed_at = now(), updated_at = now(), wait_until = NULL
 		FROM conversations c
 		WHERE c.tenant_id = r.tenant_id AND c.id = r.conversation_id AND c.status = 'closed'
 		  AND r.status IN ('running','waiting_input','waiting_human')
-		  AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = r.tenant_id AND t.status = 'active')`)
+		  AND r.tenant_id IN (SELECT id FROM active)`)
 	if err != nil {
 		return 0, err
 	}

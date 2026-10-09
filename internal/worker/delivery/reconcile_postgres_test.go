@@ -450,3 +450,33 @@ func TestReconcile_SuspendedCompany_IsNotReenqueued(t *testing.T) {
 		t.Fatalf("after the reactivation: n=%d err=%v, want 1", n, err)
 	}
 }
+
+// Codex M / ADR-0038: a suspension in flight is not raced by the reconciliation (it skips that company, picks it up later).
+func TestReconcile_ASuspensionInFlightIsNotRaced(t *testing.T) {
+	e := newReconcileEnv(t)
+	msg := e.seedMessage("queued")
+	old := 2 * time.Hour
+	e.seedSendEvent(msg, &old)
+	ctx := context.Background()
+	tx, err := e.seed.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, e.tenant); err != nil {
+		t.Fatal(err)
+	}
+	store := delivery.NewPostgresReconciliationStore(e.seed)
+	if n, err := store.ReconcileStrandedQueuedSends(ctx, testMaxAge, testGrace, 200); err != nil || n != 0 || e.totalEventCount(msg) != 1 {
+		t.Fatalf("reconciliation wrote behind a suspension in flight: n=%d err=%v events=%d", n, err, e.totalEventCount(msg))
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.ReconcileStrandedQueuedSends(ctx, testMaxAge, testGrace, 200); err != nil || n != 1 {
+		t.Fatalf("once the suspension was rolled back: n=%d err=%v, want 1", n, err)
+	}
+}

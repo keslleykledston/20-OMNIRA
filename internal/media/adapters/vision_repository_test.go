@@ -176,3 +176,35 @@ func TestASuspendedCompanysAnalysisJobsAreNotClaimedUntilReactivated(t *testing.
 		t.Fatal("after the reactivation the analysis job must be claimed")
 	}
 }
+
+// Codex H / ADR-0038: no analysis job is even created for a suspended company, and the repository answers the gate honestly.
+func TestASuspendedCompanyGetsNoAnalysisJobAndTheGateSaysSo(t *testing.T) {
+	e := newMEnv(t)
+	tenant, conv := e.tenant()
+	e.optIn(tenant, true, "key-do-tenant-1234567890")
+	repo := NewPostgresRepository(e.app)
+	msg := e.cleanMedia(tenant, conv, "image/png", "image")
+	if ok, err := repo.TenantActive(e.ctx, tenant); err != nil || !ok {
+		t.Fatalf("an active company: %v %v", ok, err)
+	}
+	e.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, tenant)
+	if ok, err := repo.TenantActive(e.ctx, tenant); err != nil || ok {
+		t.Fatalf("a suspended company: %v %v", ok, err)
+	}
+	if _, err := repo.EnqueueVision(e.ctx, time.Now().Add(-time.Hour), 1000); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM message_media_analysis WHERE message_id=$1`, msg).Scan(&n)
+	if n != 0 {
+		t.Fatalf("a suspended company got %d analysis job(s)", n)
+	}
+	e.exec(`UPDATE tenants SET status='active' WHERE id=$1`, tenant)
+	if _, err := repo.EnqueueVision(e.ctx, time.Now().Add(-time.Hour), 1000); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM message_media_analysis WHERE message_id=$1`, msg).Scan(&n)
+	if n != 1 {
+		t.Fatalf("after the reactivation the job must be created, got %d", n)
+	}
+}

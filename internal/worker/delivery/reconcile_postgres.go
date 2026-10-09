@@ -75,6 +75,7 @@ func (s *PostgresReconciliationStore) ReconcileStrandedQueuedSends(ctx context.C
 			  ORDER BY m.id
 			  LIMIT $2
 			  FOR UPDATE OF m SKIP LOCKED
+			  FOR SHARE OF tn SKIP LOCKED
 			),
 			latest_prev AS (
 			  SELECT DISTINCT ON (o.aggregate_id) o.aggregate_id, o.id AS prev_event_id

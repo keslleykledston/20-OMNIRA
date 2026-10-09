@@ -224,8 +224,12 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 	// Codex M / ADR-0038: the provider-id reservation (a write that precedes the send) is refused for a suspended company too.
 	m4c := queue(conv, "reserva durante a suspensao")
 	execInTenant(tenantA, `UPDATE tenants SET status = 'suspended' WHERE id = $1`, tenantA)
-	if _, err := store.EnsureReservedProviderMessageID(ctx, m4c, func(context.Context) (string, error) { return "wamid.reserva", nil }); !errors.Is(err, delivery.ErrTenantSuspended) {
+	asked := 0
+	if _, err := store.EnsureReservedProviderMessageID(ctx, m4c, func(context.Context) (string, error) { asked++; return "wamid.reserva", nil }); !errors.Is(err, delivery.ErrTenantSuspended) {
 		t.Fatalf("reserving an id for a suspended company: %v, want ErrTenantSuspended", err)
+	}
+	if asked != 0 {
+		t.Fatal("the provider was asked for a message id on behalf of a suspended company")
 	}
 	if _, p, _ := row(m4c); p != "" {
 		t.Fatal("a suspended company's message got a provider id")

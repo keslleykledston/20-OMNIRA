@@ -147,3 +147,9 @@ Revisão `task-mv0ejisb-0ff3dw`: **0 CRITICAL, 5 HIGH, 5 MEDIUM, tudo tratado** 
 - **POSTGRES VERIFIED:** pacotes `hub/adapters`, `hub/provisioning`, `worker/{delivery,flows,routing}`, `routing/adapters`, `intelligence/adapters`, `media/adapters`, `platform/db` todos verdes; mutantes dos dois scripts estendidos (resultado abaixo quando concluído).
 - **Decisão de risco:** o gancho de login continua síncrono (a pessoa precisa já ter o Hub no primeiro acesso), mas limitado a 8 s e nunca bloqueia o login por erro.
 
+## Terceira rodada (re-revisão do Codex de e77b052) — 2026-10-09
+`task-mv0gnbxs-m3e5ej`: **0 CRITICAL, 1 HIGH (mídia/vision/transcrição), 4 MEDIUM, 3 LOW**; HIGH e MEDIUM tratados (ADR-0038 "Terceira rodada"). Atomicidade, `lockAuthority`, `LockTenantActive` e a migration foram dadas como **fechadas** pelo Codex.
+- **POSTGRES / UNIT VERIFIED:** portão de mídia (3 testes unitários: arquivo, imagem, áudio; incluindo falha fechada e resultado tardio não gravado), `EnqueueVision` e `TenantActive` em Postgres, varredura de liveness/reconciliação que **pulam** uma suspensão em andamento, limpeza de runs que **espera** por ela, reserva de id que não chama o provedor, `TRUNCATE` também negado.
+- **Mutantes:** 35 em `scripts/test-hub-suspension-mutations.sh` (12 novos), todos mortos; suítes de acesso (43), resposta e administração rodadas de novo no código novo, verdes.
+- **LOW aceitos e documentados:** ordem global de locks, `CASCADE` do Hub, job de IA atrasado criado para empresa suspensa.
+

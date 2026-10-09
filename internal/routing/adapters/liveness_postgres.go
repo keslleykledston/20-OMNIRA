@@ -55,6 +55,7 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 			  ORDER BY c.routing_retry_at ASC NULLS FIRST, c.id
 			  LIMIT $3
 			  FOR UPDATE OF c SKIP LOCKED
+			  FOR SHARE OF t SKIP LOCKED
 			), bumped AS (
 			  UPDATE conversations c SET routing_retry_at = now() + make_interval(secs => $4::float8)
 			  FROM candidates

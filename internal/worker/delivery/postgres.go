@@ -148,6 +148,20 @@ func (s *PostgresOutboundStore) EnsureReservedProviderMessageID(ctx context.Cont
 		return existing, nil
 	}
 
+	// ADR-0038: a company suspended since the attempt began gets no new provider call (the persistence below also refuses it).
+	if err := platformdb.WithSystemTenantSession(ctx, s.pool, tenantID, func(c context.Context) error {
+		active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, s.pool), tenantID)
+		if err != nil {
+			return err
+		}
+		if !active {
+			return ErrTenantSuspended
+		}
+		return nil
+	}); err != nil {
+		return "", err
+	}
+
 	// Network call to the provider happens OUTSIDE any lock/transaction —
 	// new-message-id has no delivery side effect, so a wasted candidate from
 	// a losing race is harmless (PILOT.4A1 §7).

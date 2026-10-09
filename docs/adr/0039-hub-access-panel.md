@@ -103,7 +103,13 @@ Regra de ouro: **vários = grant do Hub**. Um administrador de empresa nunca cri
       perguntar "ainda é admin ativo?" (`lockAuthority`, também usada por toda chamada do painel); cada empresa é travada ativa
       (`LockTenantActive`). Rebaixar o autor ou suspender a empresa **durante** a aplicação espera o commit e é visto pela seguinte
       (testes determinísticos com a mudança presa em outra transação).
-    - O gancho do login tem **limite de 8 s**; `hub_preauthorizations` sem `DELETE`/`TRUNCATE` para a role da aplicação (revogados à parte,
+    - **Ordem de locks:** a autorização por e-mail trava autoridade (Hub, membership, conta) e depois empresa/contrato/grant; o reply trava
+      conversa, empresa, Hub, contrato, membership e grant. Todos são `FOR SHARE` (compatíveis entre si) e os caminhos administrativos
+      que escrevem pegam um recurso por vez; não há ciclo hoje (Codex: risco futuro `LOW` se algum caminho combinar `FOR UPDATE` neles).
+    - **Cascade:** apagar um Hub apaga as autorizações dele (`ON DELETE CASCADE`); não existe caminho de produção que apague Hubs, então o
+      "trilho não apagável" vale para a aplicação, não para quem apaga o próprio Hub no banco.
+    - O gancho do login tem **limite de 8 s**, **síncrono de propósito** (quem entra já precisa ter o Hub na primeira tela; o custo normal é
+      uma transação curta, e sob pool saturado o erro é registrado e o login segue); `hub_preauthorizations` sem `DELETE`/`TRUNCATE` para a role da aplicação (revogados à parte,
       porque os privilégios padrão a concedem a toda tabela).
 
 ## 4. Fora desta entrega (honesto)

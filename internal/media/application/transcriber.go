@@ -68,6 +68,10 @@ func (p *TranscriptionProcessor) handle(ctx context.Context, w ports.AnalysisWor
 			_ = p.repo.FailAnalysis(ctx, w, "internal_error")
 		}
 	}()
+	if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company's audio is not transcribed
+		p.metrics.Inc("transcribe", "company_suspended")
+		return
+	}
 	data, err := p.files.ReadClean(w.TenantID, w.MediaID, domain.MaxBytes)
 	if err != nil {
 		// The file is gone (retention, manual cleanup) or never was: no amount of retrying changes that.
@@ -101,6 +105,10 @@ func (p *TranscriptionProcessor) handle(ctx context.Context, w ports.AnalysisWor
 			return
 		}
 		a.Suspicious = a.Suspicious || domain.LooksLikeInstruction(a.Text)
+		if !serving(ctx, p.repo, w.TenantID) { // suspended while the engine was running: the result is not stored
+			p.metrics.Inc("transcribe", "company_suspended")
+			return
+		}
 		if e := p.repo.SaveAnalysis(ctx, w, a); e != nil {
 			log.Printf("transcription: cannot save %s: %v", w.ID, e)
 			return

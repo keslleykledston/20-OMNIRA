@@ -14,6 +14,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/media/domain"
 	"github.com/omnira/omnira/internal/media/ports"
 )
@@ -108,6 +109,21 @@ func (p *Processor) ProcessOnce(ctx context.Context) (int, error) {
 	return len(items), nil
 }
 
+// serving asks the repository whether the company is still active (ports.TenantGate). A repository without the gate is always
+// active; a failing question is answered "no" (fail closed): the row is simply left for the next claim.
+func serving(ctx context.Context, repo any, tenant uuid.UUID) bool {
+	g, ok := repo.(ports.TenantGate)
+	if !ok {
+		return true
+	}
+	active, err := g.TenantActive(ctx, tenant)
+	if err != nil {
+		log.Printf("media: cannot tell whether company %s is active: %v", tenant, err)
+		return false
+	}
+	return active
+}
+
 func (p *Processor) handle(ctx context.Context, w ports.Work) {
 	// A panic on one hostile file must not take the worker (and every other tenant's media) down.
 	defer func() {
@@ -116,6 +132,10 @@ func (p *Processor) handle(ctx context.Context, w ports.Work) {
 			p.terminal(ctx, w, ports.StatusFailed, "internal_error")
 		}
 	}()
+	if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company's files are neither fetched nor scanned
+		p.metrics.Inc("media", "company_suspended")
+		return
+	}
 	switch w.Status {
 	case ports.StatusPending:
 		p.fetchAndQuarantine(ctx, w)

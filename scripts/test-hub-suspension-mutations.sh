@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=omnira-hubsuspmut-$$; DB=omnira_test_suspmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig"
-FILES="internal/hub/replying/service.go internal/platform/db/tenant_active.go internal/inbox/adapters/webhook.go internal/groups/adapters/intake.go internal/worker/delivery/postgres.go internal/worker/delivery/send.go internal/worker/flows/handler.go internal/worker/flows/sweeper.go internal/flows/adapters/postgres_runs.go internal/worker/hubprojector/projector.go internal/worker/routing/postgres.go internal/routing/adapters/liveness_postgres.go internal/intelligence/adapters/job_store.go internal/media/adapters/repository.go internal/media/adapters/analysis_repository.go internal/worker/delivery/reconcile_postgres.go"
+FILES="internal/hub/replying/service.go internal/platform/db/tenant_active.go internal/inbox/adapters/webhook.go internal/groups/adapters/intake.go internal/worker/delivery/postgres.go internal/worker/delivery/send.go internal/worker/flows/handler.go internal/worker/flows/sweeper.go internal/flows/adapters/postgres_runs.go internal/worker/hubprojector/projector.go internal/worker/routing/postgres.go internal/routing/adapters/liveness_postgres.go internal/intelligence/adapters/job_store.go internal/media/adapters/repository.go internal/media/adapters/analysis_repository.go internal/worker/delivery/reconcile_postgres.go internal/media/application/processor.go internal/media/application/vision.go internal/media/application/transcriber.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -22,8 +22,8 @@ mkdb() {
     -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=$DB postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
   docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 }
-RUNRE='TestRunnerDoesNotRun|TestRetrigger_SuspendedCompany|TestASuspendedCompanys|TestSweeperDoesNotCancel|TestReconcile_SuspendedCompany|TestHubReply_WriteWaits|TestHubReply_CapabilityAndHappyPath|TestLockTenantActive|TestPostgresDeliveryStateMachine|TestSuspendedCompanysFlows|TestProjector_SuspendedCompany|TestMetaWebhookEndToEnd|TestIntakeDropsGroupMessagesOfASuspendedCompany'
-PKGS="./internal/worker/routing ./internal/routing/adapters ./internal/intelligence/adapters ./internal/media/adapters ./internal/hub/adapters ./internal/platform/db ./internal/worker/delivery ./internal/worker/flows ./internal/worker/hubprojector ./internal/inbox/adapters ./internal/groups/adapters"
+RUNRE='TestMediaIsNeitherFetched|TestVisionSendsNothing|TestTranscriptionDoesNothing|TestASuspendedCompanyGetsNoAnalysisJob|TestRetrigger_ASuspensionInFlight|TestReconcile_ASuspensionInFlight|TestSweeperWaitsForASuspension|TestRunnerDoesNotRun|TestRetrigger_SuspendedCompany|TestASuspendedCompanys|TestSweeperDoesNotCancel|TestReconcile_SuspendedCompany|TestHubReply_WriteWaits|TestHubReply_CapabilityAndHappyPath|TestLockTenantActive|TestPostgresDeliveryStateMachine|TestSuspendedCompanysFlows|TestProjector_SuspendedCompany|TestMetaWebhookEndToEnd|TestIntakeDropsGroupMessagesOfASuspendedCompany'
+PKGS="./internal/media/application ./internal/worker/routing ./internal/routing/adapters ./internal/intelligence/adapters ./internal/media/adapters ./internal/hub/adapters ./internal/platform/db ./internal/worker/delivery ./internal/worker/flows ./internal/worker/hubprojector ./internal/inbox/adapters ./internal/groups/adapters"
 run() { # the host toolchain with its warm module and build caches (a cold container recompiles everything per mutant)
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
@@ -31,7 +31,7 @@ run() { # the host toolchain with its warm module and build caches (a cold conta
     go test -count=1 -run "$RUNRE" $PKGS 2>&1
 }
 # the verdict is read from the output (the exit status of a pipeline ending in grep is grep's)
-verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 11 ]; }
+verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 12 ]; }
 
 mkdb "$PWD/migrations"
 out=$(run || true); verdict_green "$out" || { echo "$out" | tail -25; echo "FAIL: baseline is red"; exit 1; }
@@ -95,4 +95,31 @@ mut "a provider id is reserved for a suspended company" internal/worker/delivery
 			return ErrTenantSuspended' '} else if !active && false {
 			return ErrTenantSuspended'
 mut "reconciliation re-enqueues a suspended company"  internal/worker/delivery/reconcile_postgres.go "JOIN tenants tn ON tn.id = m.tenant_id AND tn.status = 'active'" "JOIN tenants tn ON tn.id = m.tenant_id"
+mut "a suspended company's files are fetched"        internal/media/application/processor.go 'if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company' 'if false && !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company'
+mut "a suspended company's images go to the provider" internal/media/application/vision.go 'if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: nothing leaves the server for a suspended company' 'if false && !serving(ctx, p.repo, w.TenantID) { // ADR-0038: nothing leaves the server for a suspended company'
+mut "a late vision result of a suspended company is stored" internal/media/application/vision.go 'if !serving(ctx, p.repo, w.TenantID) { // suspended while the provider was answering: the result is not stored' 'if false && !serving(ctx, p.repo, w.TenantID) { // suspended while the provider was answering: the result is not stored'
+mut "a suspended company's audio is transcribed"      internal/media/application/transcriber.go 'if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company' 'if false && !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company'
+mut "a late transcript of a suspended company is stored" internal/media/application/transcriber.go 'if !serving(ctx, p.repo, w.TenantID) { // suspended while the engine was running: the result is not stored' 'if false && !serving(ctx, p.repo, w.TenantID) { // suspended while the engine was running: the result is not stored'
+mut "the gate fails open when it cannot tell"         internal/media/application/processor.go '		return false
+	}
+	return active
+}' '		return true
+	}
+	return active
+}'
+mut "analysis jobs are created for a suspended company" internal/media/adapters/analysis_repository.go "JOIN tenants tn ON tn.id = mm.tenant_id AND tn.status = 'active'" "JOIN tenants tn ON tn.id = mm.tenant_id"
+mut "the repository gate always says active"          internal/media/adapters/repository.go 'active, err = platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, r.pool), tenant)' 'active, err = true, error(nil)'
+mut "the liveness sweep races a suspension in flight" internal/routing/adapters/liveness_postgres.go '			  FOR SHARE OF t SKIP LOCKED' ''
+mut "the run tidy-up races a suspension in flight"    internal/flows/adapters/postgres_runs.go '		  FOR SHARE OF t
+		)' '		)'
+mut "reconciliation races a suspension in flight"     internal/worker/delivery/reconcile_postgres.go '			  FOR SHARE OF tn SKIP LOCKED' ''
+mut "the provider is asked for an id for a suspended company" internal/worker/delivery/postgres.go '		if !active {
+			return ErrTenantSuspended
+		}
+		return nil
+	}); err != nil {' '		if !active && false {
+			return ErrTenantSuspended
+		}
+		return nil
+	}); err != nil {'
 echo "PASS: every mutant was killed"

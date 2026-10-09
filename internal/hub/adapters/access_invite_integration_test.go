@@ -576,6 +576,13 @@ func TestAccessInvite_TheApplicationRoleCannotEraseTheTrail(t *testing.T) {
 	if err == nil {
 		t.Fatal("the application role (even in a system session) could delete the authorization trail")
 	}
+	err = platformdb.WithTenantSession(w.ctx, w.app, uuid.Nil, true, func(c context.Context) error {
+		_, err := platformdb.QuerierFromContext(c, w.app).Exec(c, `TRUNCATE hub_preauthorizations`)
+		return err
+	})
+	if err == nil {
+		t.Fatal("the application role could truncate the authorization trail")
+	}
 	if w.count(`SELECT count(*) FROM hub_preauthorizations WHERE hub_id = $1`, w.hub) != 1 {
 		t.Fatal("the trail changed")
 	}

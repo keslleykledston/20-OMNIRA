@@ -96,6 +96,10 @@ func (p *VisionProcessor) handle(ctx context.Context, w ports.AnalysisWork) {
 			_ = p.repo.FailAnalysis(ctx, w, "internal_error")
 		}
 	}()
+	if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: nothing leaves the server for a suspended company
+		p.metrics.Inc("vision", "company_suspended")
+		return
+	}
 	// 1. the tenant must still be opted in (it may have switched the integration off since the job was created)
 	cfg, err := p.tenants.Resolve(ctx, w.TenantID)
 	if err != nil {
@@ -157,6 +161,10 @@ func (p *VisionProcessor) handle(ctx context.Context, w ports.AnalysisWork) {
 		}
 		// text read from an image is exactly where a hidden instruction would sit: flag it, never obey it
 		a.Suspicious = a.Suspicious || domain.LooksLikeInstruction(a.Text)
+		if !serving(ctx, p.repo, w.TenantID) { // suspended while the provider was answering: the result is not stored
+			p.metrics.Inc("vision", "company_suspended")
+			return
+		}
 		if e := p.repo.SaveAnalysis(ctx, w, a); e != nil {
 			log.Printf("vision: cannot save %s: %v", w.ID, e)
 			return
