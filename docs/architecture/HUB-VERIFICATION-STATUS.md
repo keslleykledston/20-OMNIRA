@@ -154,3 +154,6 @@ Revisão `task-mv0ejisb-0ff3dw`: **0 CRITICAL, 5 HIGH, 5 MEDIUM, tudo tratado** 
 - **Aceito e dito:** custo de latência da suspensão (espera a operação externa em curso); resíduo de fila de IA; presença, faxina de anexos e relay do outbox fora do congelamento.
 - **Revisão do Codex do commit `70e3649` (WhileActive): `CODEX_PLUGIN_NOT_EXECUTED`** — o Codex respondeu "usage limit" (volta às 05:13 do horário do servidor). **Não** se declara "zero CRITICAL/HIGH" para este commit: os achados da rodada anterior estão tratados por testes e mutantes, mas **sem** uma nova leitura independente. Pendência: rodar `codex-companion.mjs task` sobre `git show 70e3649` quando a cota voltar, antes de implantar.
 
+## Implantação da suspensão total e da autorização por e-mail — 2026-10-09
+LAB: imagens `sha-d7bb2a7` (api, worker, web), **migration 102 aplicada**, rollback `rollback-pre-suspension-20261009-*`, backup antes (local, externo e nuvem). Serviços saudáveis, bundle servido = construído, `hub_preauthorizations` com RLS+FORCE e **sem DELETE** para a role da aplicação, rotas novas respondem 401 sem login. Implantado a pedido do dono **com a revisão do Codex de `70e3649` ainda pendente** (`CODEX_PLUGIN_NOT_EXECUTED`: cota até 05:13). Não visto com login real nem webhook real.
+
