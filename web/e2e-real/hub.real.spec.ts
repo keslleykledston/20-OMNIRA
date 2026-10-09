@@ -19,6 +19,16 @@ test('Conversas junta as instâncias liberadas pelo Hub, com o logo de origem, e
   await page.getByLabel('NorteNet').check();
   await expect(list.getByText('Jose Carlos')).toHaveCount(0);
   await expect(list.getByText('Maria Souza')).toBeVisible();
+
+  // abas por instância (ADR-0040 §7): Todas + as instâncias liberadas; a C, sem acesso, não existe na barra
+  const bar = page.getByRole('tablist', { name: 'Instâncias' });
+  await expect(bar.getByRole('tab', { name: 'Todas' })).toBeVisible();
+  await expect(bar.getByRole('tab', { name: 'NorteNet' })).toBeVisible();
+  await expect(bar.getByRole('tab')).toHaveCount(3);
+  await bar.getByRole('tab', { name: 'NorteNet' }).click();
+  await expect(page.getByRole('note').first()).toContainText('chegam na próxima etapa');
+  await expect(list.getByText('Maria Souza')).toBeVisible();
+  await expect(list.getByText('Jose Carlos')).toHaveCount(0);
 });
 
 test('assumir e responder pelo Hub grava a mensagem na instância certa', async ({ page }) => {

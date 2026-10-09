@@ -251,8 +251,8 @@ describe('CompanyFilter', () => {
 
 describe('ConversationsEntry', () => {
   // the person's OWN instances (memberships); empty means a Hub-only person
-  let mine: object[] = [{ id: 'T1', name: 'Minha instância' }];
-  beforeEach(() => { mine = [{ id: 'T1', name: 'Minha instância' }]; });
+  let mine: object[] = [{ id: 'T1', legal_name: 'Minha instância' }];
+  beforeEach(() => { mine = [{ id: 'T1', legal_name: 'Minha instância' }]; });
   const tenants = (url: string) => (String(url).endsWith('/tenants') ? { data: mine } : null);
   const inbox = (companies: { id: string; name: string }[]) =>
     vi.mocked(axios.get).mockImplementation(async (url: string, cfg?: unknown) => {
@@ -272,9 +272,21 @@ describe('ConversationsEntry', () => {
     expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
   });
 
-  it('keeps the classic workspace for someone who serves one company through the Hub', async () => {
+  it('keeps the classic workspace when the Hub serves only the instance the person already has', async () => {
+    mine = [{ id: 'A', legal_name: 'Alfa' }];
+    inbox([{ id: 'A', name: 'Alfa' }]);
+    localStorage.setItem('tenantId', 'A');
+    renderAt(<ConversationsEntry />);
+    expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).toBeNull();
+  });
+
+  it('one own instance plus one the Hub authorized: two tabs (own instance open), nothing is hidden', async () => {
+    localStorage.setItem('tenantId', 'T1');
     inbox([{ id: 'A', name: 'Alfa' }]);
     renderAt(<ConversationsEntry />);
+    expect(await screen.findByRole('tab', { name: 'Alfa' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Minha instância' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
   });
 

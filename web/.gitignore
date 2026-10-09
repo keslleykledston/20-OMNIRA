@@ -8,3 +8,5 @@ build/
 pnpm-lock.yaml
 playwright-report/
 test-results/
+.e2e-local-dist
+.e2e-local-results

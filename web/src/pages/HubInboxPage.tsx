@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { hubAPI, type HubCompanyOption, type HubInboxItem } from '../lib/hub';
@@ -15,7 +15,10 @@ import CompanyFilter from '../components/hub/CompanyFilter';
 // authorized to serve, with a company filter where a single-company person has the channel selector. What appears here is
 // decided by the server from their live grants; nothing in this page chooses a tenant. Replying needs a reply-capable grant.
 // It is chosen by ConversationsEntry, not by a menu entry of its own (the old "Hub" item was the same inbox under another name).
-export default function HubInboxPage({ hubId: preferredHub = '' }: { hubId?: string }) {
+// `embedded` is the page living inside the Conversas tabs: the tabs are how one reaches an instance's full inbox, so the link to it
+// is not shown. `onlyCompany` pins the list to ONE instance (the tab of an instance the person reaches only through the Hub): the
+// title row and the company filter go away, the tab already says which instance it is. `notice` is a line shown above the list.
+export default function HubInboxPage({ hubId: preferredHub = '', embedded = false, onlyCompany = '', notice }: { hubId?: string; embedded?: boolean; onlyCompany?: string; notice?: React.ReactNode }) {
   const hubs = useMyHubs();
   const myTenants = useMyTenants();
   const [filter, setFilter] = useState<{ hub: string; ids: string[] }>({ hub: '', ids: [] });
@@ -29,7 +32,7 @@ export default function HubInboxPage({ hubId: preferredHub = '' }: { hubId?: str
   const selected = selection.hub === hubId ? selection.id : '';
   const setSelected = (id: string) => setSelection({ hub: hubId, id });
   // like the selection, the filter belongs to ONE hub
-  const companyIds = filter.hub === hubId ? filter.ids : [];
+  const companyIds = onlyCompany ? [onlyCompany] : filter.hub === hubId ? filter.ids : [];
 
   const inbox = useInfiniteQuery({
     queryKey: ['hub-inbox', hubId, companyIds],
@@ -85,27 +88,30 @@ export default function HubInboxPage({ hubId: preferredHub = '' }: { hubId?: str
   const showDetail = !isMobile || !!selected;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-3">
-        <h1 className="text-lg font-semibold text-text-primary">Conversas</h1>
-        {companies.length > 1 && (
-          <CompanyFilter companies={companies} value={companyIds} onChange={(ids) => { setFilter({ hub: hubId, ids }); setSelection({ hub: hubId, id: '' }); }} />
-        )}
-        {list.length > 1 ? (
-          <label className="flex items-center gap-2 text-sm text-text-secondary">
-            <span className="sr-only">Hub</span>
-            <select aria-label="Trocar de Hub" value={hubId} onChange={(e) => setPickedHub(e.target.value)} className="h-9 rounded-control border border-border-light bg-surface px-2 text-sm font-medium text-text-primary">
-              {list.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
-            </select>
-          </label>
-        ) : (
-          <span className="text-sm text-text-secondary">{hub.name}</span>
-        )}
-        <div className="ml-auto flex items-center gap-3">
-          {(myTenants.data?.length ?? 0) > 0 && (
-            <Link to="/inbox?modo=empresa" className="text-sm text-text-secondary underline-offset-2 hover:underline">Caixa completa de uma instância</Link>
+      {notice && <div role="note" className="border-b border-border-subtle bg-surface-muted px-4 py-2 text-[12px] text-text-secondary">{notice}</div>}
+      {!onlyCompany && (
+        <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-3">
+          <h1 className="text-lg font-semibold text-text-primary">Conversas</h1>
+          {companies.length > 1 && (
+            <CompanyFilter companies={companies} value={companyIds} onChange={(ids) => { setFilter({ hub: hubId, ids }); setSelection({ hub: hubId, id: '' }); }} />
           )}
+          {list.length > 1 ? (
+            <label className="flex items-center gap-2 text-sm text-text-secondary">
+              <span className="sr-only">Hub</span>
+              <select aria-label="Trocar de Hub" value={hubId} onChange={(e) => setPickedHub(e.target.value)} className="h-9 rounded-control border border-border-light bg-surface px-2 text-sm font-medium text-text-primary">
+                {list.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+              </select>
+            </label>
+          ) : (
+            <span className="text-sm text-text-secondary">{hub.name}</span>
+          )}
+          <div className="ml-auto flex items-center gap-3">
+            {!embedded && (myTenants.data?.length ?? 0) > 0 && (
+              <Link to="/inbox?modo=empresa" className="text-sm text-text-secondary underline-offset-2 hover:underline">Caixa completa de uma instância</Link>
+            )}
+          </div>
         </div>
-      </div>
+      )}
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[360px_minmax(0,1fr)]">
         {showList && (
           <section aria-label="Caixa do Hub" className="min-h-0 border-r border-border-subtle">

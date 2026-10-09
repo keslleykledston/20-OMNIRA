@@ -17,7 +17,7 @@ const ITEMS = [
   item(3, 'tenant-a', 'ISP Roraima', { status: 'closed' }),
 ];
 
-async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; writes?: { path: string; body: any; key?: string }[] } = {}) {
+async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; writes?: { path: string; body: any; key?: string }[]; revoked?: { tenant: string } } = {}) {
   const seen: string[] = [];
   let assignment: 'none' | 'me' = 'none';
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -34,8 +34,13 @@ async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; w
     if (p.endsWith('/events') || p.includes('/presence')) return route.abort();
     if (p === '/hubs') return opts.hubs === 404 ? json(route, {}, 404) : json(route, { items: opts.hubs ?? [{ id: HUB, name: 'K3G Service Desk', role: 'hub_agent' }] });
     if (p === `/hubs/${HUB}/inbox`) {
-      const companies = [...new Map(ITEMS.map((i) => [i.tenant_id, { id: i.tenant_id, name: i.tenant_name }])).values()];
-      return json(route, { items: ITEMS, companies, has_more: false, count: ITEMS.length, limit: 30 });
+      // `revoked.tenant` is read at request time: the test flips it while the page is open (the Hub ends that access)
+      const visible = ITEMS.filter((i) => i.tenant_id !== opts.revoked?.tenant);
+      // the server narrows by the instances asked for; the offered companies are always the whole authorized set
+      const asked = (url.searchParams.get('companies') ?? '').split(',').filter(Boolean);
+      const shown = asked.length ? visible.filter((i) => asked.includes(i.tenant_id)) : visible;
+      const companies = [...new Map(visible.map((i) => [i.tenant_id, { id: i.tenant_id, name: i.tenant_name }])).values()];
+      return json(route, { items: shown, companies, has_more: false, count: shown.length, limit: 30 });
     }
     const w = p.match(new RegExp(`^/hubs/${HUB}/inbox/([^/]+)/(claim|messages)$`));
     if (w && route.request().method() === 'POST') {
@@ -156,4 +161,37 @@ test('somente leitura: nenhum botão de assumir nem caixa de texto', async ({ pa
   await expect(page.getByRole('button', { name: 'Assumir' })).toHaveCount(0);
   await expect(page.getByRole('textbox')).toHaveCount(0);
   expect(writes).toEqual([]);
+});
+
+test('abas por instância: Todas, uma aba por instância, e a perda de acesso com a tela aberta borra a aba e some da barra', async ({ page }, info) => {
+  const opts = { revoked: { tenant: '' } };
+  await page.clock.install();
+  await install(page, opts);
+  await page.goto('/inbox');
+  const bar = page.getByRole('tablist', { name: 'Instâncias' });
+  await expect(bar.getByRole('tab')).toHaveText(['Todas', 'K3G', 'ISP Roraima', 'NorteNet']);
+  await expect(bar.getByRole('tab', { name: 'Todas' })).toHaveAttribute('aria-selected', 'true');
+
+  // a instância que a pessoa só alcança pelo Hub abre a visão de texto dela, com o aviso, sem o filtro de empresas
+  await bar.getByRole('tab', { name: 'NorteNet' }).click();
+  await expect(page).toHaveURL(/instancia=tenant-b/);
+  await expect(bar.getByRole('tab', { name: 'NorteNet' })).toHaveAttribute('aria-selected', 'true');
+  await expect(bar.getByRole('tab', { name: 'Todas' })).toHaveAttribute('aria-selected', 'false');
+  await expect(page.getByRole('note').first()).toContainText('Mídia, dados do cliente e chamado no ERP chegam na próxima etapa');
+  const list = page.getByRole('list', { name: 'Conversas do Hub' });
+  await expect(list.getByText('Maria Souza')).toBeVisible();
+  await expect(list.getByText('José Carlos')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Filtrar por instância' })).toHaveCount(0);
+  await page.mouse.move(700, 500); // out of the bar, so no hover state in the picture
+  await page.waitForTimeout(400); // colour transition
+  await page.screenshot({ path: info.outputPath('hub-abas.png') });
+
+  // o Hub encerra o acesso a NorteNet: na próxima leitura periódica a aba vira o aviso e nada da instância fica na tela
+  opts.revoked.tenant = 'tenant-b';
+  await page.clock.fastForward(16_000);
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('Você não tem mais acesso a esta instância');
+  await expect(page.getByText('Maria Souza')).toHaveCount(0);
+  await expect(bar.getByRole('tab', { name: 'NorteNet' })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('hub-abas-acesso-perdido.png') });
 });

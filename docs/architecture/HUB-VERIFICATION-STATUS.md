@@ -216,3 +216,20 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **NÃO verificado em produção:** nenhuma tela com login real do Keycloak; nenhuma conexão de canal criada pelo Hub no banco vivo; a distribuição não rodou com equipe real (não há equipe); nenhuma sessão viva no momento da conferência (o caminho de sessão foi provado no E2E real e no teste sob o papel `omnira_app`).
 - **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phases34-20261009-0815 20-omnira-<svc>:latest` + `docker compose up -d --no-deps --force-recreate api worker web`; as migrations 103-106 têm `down` testado (`scripts/test-hub-migrations.sh`); as imagens antigas funcionam com o esquema novo (só acrescentamos), então o rollback de código não exige desfazer migrations.
 
+
+## 2026-10-09 (tarde) — abas por instância em Conversas + ADR-0040 (proposta)
+
+- **IMPLEMENTED (só front, não implantado):** `ConversationsEntry` passa a mostrar abas (primitivo `Tabs`) quando a pessoa atende 2+ instâncias
+  (as próprias + as liberadas pelo Hub): "Todas" (inbox unificada, só se um Hub serve 2+) e uma aba por instância. Instância própria abre a caixa
+  completa (navegação completa, como o seletor de instância faz); instância só pelo Hub abre a visão de texto fixada nela, com aviso de visão reduzida.
+  Perda de acesso com a aba aberta (listas relidas a cada 15 s, só conclui "perdido" de leitura bem-sucedida): aviso borrado, cache da instância
+  descartado, aba some. Sem abas para quem tem uma instância só (comportamento anterior). `?modo=empresa` segue valendo.
+- **UNIT:** `ConversationsTabs.test.tsx` (12) + 2 ajustados em `HubAccessPage.test.tsx`; Vitest 805/806 (a mesma falha antiga de `SettingsShell` e o arquivo Playwright coletado).
+  Mutantes: 5 mortos (lista sempre confiável, aviso com 1 instância restante, cache mantido, trava de recarga esquecida no carregamento, nunca perdido);
+  1 sobrevivente equivalente (clique que não troca a instância: o efeito de troca automática faz o mesmo).
+- **HTTP (mock) no navegador, contra o código da árvore:** 17/17 (`npm run test:e2e:local`). **E2E real** (API + hubctl + Postgres descartável + bundle reconstruído): 8/8, cenário 1 ampliado com a barra de abas.
+- **Armadilha achada:** `web/playwright.config.ts` aponta `baseURL` para a **produção**; os specs `*.mock.spec.ts` rodados com ele verificam o bundle JÁ implantado,
+  não o código local. Use `npm run test:e2e:local` (`playwright.local.config.ts`, build + preview na porta 3187). As rodadas "Playwright mock" anteriores
+  a esta data foram contra o bundle implantado.
+- **NOT WIRED:** o contexto completo (mídia, contato, ERP) para quem tem acesso SÓ pelo Hub: depende do ADR-0040 (PROPOSTA, nenhuma migration). Até lá essas abas mostram a visão de texto.
+- **Sem revisão Codex** desta fatia (front, sem mudança de autorização): `CODEX_PLUGIN_NOT_EXECUTED`.
