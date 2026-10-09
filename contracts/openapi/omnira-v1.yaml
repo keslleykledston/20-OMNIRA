@@ -1049,6 +1049,7 @@ paths:
               properties:
                 status: { type: string, enum: [active, suspended] }
                 capabilities: { type: object, additionalProperties: { type: boolean } }
+                management_scopes: { type: array, items: { type: string, enum: [channels, integrations] }, description: 'Replaces the delegated management scopes; [] withdraws them all; absent = unchanged' }
       responses:
         '200':
           description: The company after the change
@@ -1057,6 +1058,447 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: Unknown capability or status, or nothing to change }
+  /hubs/{hub_id}/managed:
+    get:
+      operationId: listHubManagedInstances
+      tags: [Hub]
+      summary: Instances of this hub the caller may manage, with the scopes they may use
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Possibly empty
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [tenant_id, name, scopes]
+                      properties:
+                        tenant_id: { type: string, format: uuid }
+                        name: { type: string }
+                        scopes: { type: array, items: { type: string, enum: [channels, integrations] } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+  /hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}/management:
+    put:
+      operationId: setHubAgentManagement
+      tags: [Hub]
+      summary: Switch an agent's delegated management of one instance on or off (hub admin)
+      description: Needs a live grant; never implied by `can_reply`. Matters only where the contract delegates a management scope. Revoking the grant clears it, and renewing access never revives it.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [can_manage]
+              properties:
+                can_manage: { type: boolean }
+      responses:
+        '204': { description: Applied }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: No live grant for this person on this instance }
+  /hubs/{hub_id}/instances/{tenant_id}/channels/providers:
+    get:
+      operationId: listHubManagedChannelProviders
+      tags: [Hub]
+      summary: Provider catalog for a managed instance
+      description: |
+        Hub-delegated MANAGEMENT (ADR-0038 phase 3). Same behaviour as the tenant route of the same name, reached by a person the
+        contract delegates this scope to: a hub admin, or a grant with `can_manage`. Hub, contract, role/grant and scope are proven in
+        the caller's own session and re-asked of the database for every permission; the row-level policies are the second barrier.
+        Anything that does not hold (no such hub or instance, not a member, nothing delegated, suspended company) is the uniform 404;
+        a provider whose scope is not delegated is a 403. Secrets are never returned.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Provider catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ProviderDescriptor' } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/instances/{tenant_id}/channels/connections:
+    post:
+      operationId: createHubManagedChannelConnection
+      tags: [Hub]
+      summary: Create a connection in a managed instance
+      description: |
+        Hub-delegated MANAGEMENT (ADR-0038 phase 3). Same behaviour as the tenant route of the same name, reached by a person the
+        contract delegates this scope to: a hub admin, or a grant with `can_manage`. Hub, contract, role/grant and scope are proven in
+        the caller's own session and re-asked of the database for every permission; the row-level policies are the second barrier.
+        Anything that does not hold (no such hub or instance, not a member, nothing delegated, suspended company) is the uniform 404;
+        a provider whose scope is not delegated is a 403. Secrets are never returned.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGenericConnectionRequest' }
+      responses:
+        '201': { description: Connection created, content: { application/json: { schema: { $ref: '#/components/schemas/ChannelConnection' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: 'Invalid provider, inputs, or risk acknowledgement', content: { text/plain: { schema: { type: string } } } }
+        '503': { description: Provider disabled or not configured, content: { text/plain: { schema: { type: string } } } }
+    get:
+      operationId: listHubManagedChannelConnections
+      tags: [Hub]
+      summary: List the connections of a managed instance (only the scopes this person may manage)
+      description: |
+        Hub-delegated MANAGEMENT (ADR-0038 phase 3). Same behaviour as the tenant route of the same name, reached by a person the
+        contract delegates this scope to: a hub admin, or a grant with `can_manage`. Hub, contract, role/grant and scope are proven in
+        the caller's own session and re-asked of the database for every permission; the row-level policies are the second barrier.
+        Anything that does not hold (no such hub or instance, not a member, nothing delegated, suspended company) is the uniform 404;
+        a provider whose scope is not delegated is a 403. Secrets are never returned.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Connections without secrets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ChannelConnection' } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/instances/{tenant_id}/channels/connections/{connection_id}:
+    get:
+      operationId: getHubManagedChannelConnection
+      tags: [Hub]
+      summary: Get a connection of a managed instance
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /hubs/{hub_id}/instances/{tenant_id}/channels/connections/{connection_id}/test:
+    post:
+      operationId: testHubManagedChannelConnection
+      tags: [Hub]
+      summary: Probe the provider of a managed connection
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /hubs/{hub_id}/instances/{tenant_id}/channels/connections/{connection_id}/session/start:
+    post:
+      operationId: startHubManagedChannelSession
+      tags: [Hub]
+      summary: Start a managed connection session
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /hubs/{hub_id}/instances/{tenant_id}/channels/connections/{connection_id}/session/stop:
+    post:
+      operationId: stopHubManagedChannelSession
+      tags: [Hub]
+      summary: Stop a managed connection session
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { $ref: '#/components/responses/Connection' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /hubs/{hub_id}/instances/{tenant_id}/channels/connections/{connection_id}/qr:
+    get:
+      operationId: getHubManagedChannelConnectionQR
+      tags: [Hub]
+      summary: Get the pairing QR of a managed connection
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/ConnectionId' }
+      responses:
+        '200': { description: Pairing QR, content: { application/json: { schema: { $ref: '#/components/schemas/QRImage' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '502': { $ref: '#/components/responses/Text502' }
+  /hubs/{hub_id}/pools:
+    get:
+      operationId: listHubPools
+      tags: [Hub]
+      summary: Work pools of the hub with members (capacity, load) and the instances each answers for (hub admin)
+      description: Behind the Access API flag. Only an active admin of the hub; anything else is the uniform 404.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The pools
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/HubWorkPool' } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createHubPool
+      tags: [Hub]
+      summary: Create a work pool (hub admin)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 200 }
+                distribution: { type: string, enum: [manual, round_robin], default: manual }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/HubWorkPool' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Invalid name or distribution }
+  /hubs/{hub_id}/pools/{pool_id}:
+    patch:
+      operationId: updateHubPool
+      tags: [Hub]
+      summary: Rename a pool or change how it distributes (hub admin)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: pool_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 200 }
+                distribution: { type: string, enum: [manual, round_robin] }
+      responses:
+        '204': { description: Applied }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Invalid value or nothing to change }
+    delete:
+      operationId: deleteHubPool
+      tags: [Hub]
+      summary: Remove a pool; conversations already assigned stay with their holder (hub admin)
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: pool_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Removed }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /hubs/{hub_id}/pools/{pool_id}/members:
+    put:
+      operationId: setHubPoolMembers
+      tags: [Hub]
+      summary: Replace the members of a pool, each with their capacity (hub admin)
+      description: Everyone must belong to this hub. A person who stays keeps their place in the rotation.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: pool_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [members]
+              properties:
+                members:
+                  type: array
+                  maxItems: 200
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [user_id]
+                    properties:
+                      user_id: { type: string, format: uuid }
+                      max_open: { type: integer, minimum: 1, maximum: 500, default: 10 }
+      responses:
+        '204': { description: Applied }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Invalid capacity or duplicated person }
+  /hubs/{hub_id}/pools/{pool_id}/instances:
+    put:
+      operationId: setHubPoolInstances
+      tags: [Hub]
+      summary: Replace what a pool answers for (hub admin)
+      description: Each instance needs an active contract with this hub; a queue must belong to its instance; at most one pool answers for an (instance, queue).
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: pool_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [instances]
+              properties:
+                instances:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [tenant_id]
+                    properties:
+                      tenant_id: { type: string, format: uuid }
+                      queue_id: { type: string, format: uuid }
+      responses:
+        '204': { description: Applied }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Another pool already answers for that instance or queue }
+  /hubs/{hub_id}/inbox/{item_id}/transfer-candidates:
+    get:
+      operationId: listHubTransferCandidates
+      tags: [Hub]
+      summary: Who the holder may hand this conversation to
+      description: |
+        Other members of the hub with a live, reply-capable grant on this conversation's instance and queue, least loaded first. Only the
+        person who holds the conversation may ask. `expected_tenant_id` is the instance the screen shows; the server answers 409 if it differs.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: item_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: expected_tenant_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Candidates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [user_id, name, email, load]
+                      properties:
+                        user_id: { type: string, format: uuid }
+                        name: { type: string }
+                        email: { type: string }
+                        load: { type: integer, description: Unfinished conversations the person already holds in this hub }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: The screen shows another instance, the conversation is finalized or it is not yours }
+  /hubs/{hub_id}/inbox/{item_id}/transfer:
+    post:
+      operationId: transferHubConversation
+      tags: [Hub]
+      summary: Hand the conversation to another person of the hub, or give it back to the queue
+      description: |
+        Only the current holder, with a reply-capable grant. The person chosen must hold a live reply grant for that conversation, proven again
+        inside the transaction (a grant revoked meanwhile stops it). Recorded in the assignment history and the audit trail.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: item_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_tenant_id]
+              properties:
+                expected_tenant_id: { type: string, format: uuid }
+                to_user_id: { type: string, format: uuid, nullable: true, description: 'null = give it back to the queue' }
+      responses:
+        '200':
+          description: Transferred
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversation_id, assigned_to, tenant]
+                properties:
+                  conversation_id: { type: string, format: uuid }
+                  assigned_to: { type: string, format: uuid, nullable: true }
+                  tenant:
+                    type: object
+                    required: [id, name]
+                    properties:
+                      id: { type: string, format: uuid }
+                      name: { type: string }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: Not the holder, target not available, other instance on screen, or finalized }
   /hubs/{hub_id}/access:
     get:
       operationId: getHubAccess
@@ -3591,6 +4033,9 @@ components:
               id: { type: string, format: uuid }
               name: { type: string }
               role: { type: string, enum: [hub_agent, hub_admin] }
+              can_manage_instances:
+                type: boolean
+                description: At least one instance where the contract delegates management to this person (asked of the database); the server decides every request again.
               can_manage_companies:
                 type: boolean
                 description: Only whether to offer the company-management screen; the server decides every request again.
@@ -3642,6 +4087,7 @@ components:
               admins: { type: array, items: { $ref: '#/components/schemas/HubAccessPerson' } }
               direct_agents: { type: integer, description: Active members of the company who are not administrators }
               hub_agents: { type: integer, description: People with a live grant through this hub }
+              management_scopes: { type: array, items: { type: string, enum: [channels, integrations] }, description: What the contract delegates the hub to MANAGE here (empty = nothing) }
         agents:
           type: array
           items:
@@ -3659,9 +4105,38 @@ components:
                       properties:
                         tenant_id: { type: string, format: uuid }
                         mode: { type: string, enum: [read, reply] }
+                        can_manage: { type: boolean, description: May manage the scopes the contract delegates (never implied by the mode) }
                         valid_until: { type: string, format: date-time }
                   direct_instances: { type: array, items: { type: string, format: uuid }, description: Companies where the person is an active member in their own right }
                   instances: { type: integer, description: Distinct companies the person works in (grants plus direct memberships) }
+    HubWorkPool:
+      type: object
+      required: [id, name, description, distribution, members, instances]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        distribution: { type: string, enum: [manual, round_robin] }
+        members:
+          type: array
+          items:
+            type: object
+            required: [user_id, email, name, max_open, load]
+            properties:
+              user_id: { type: string, format: uuid }
+              email: { type: string }
+              name: { type: string }
+              max_open: { type: integer }
+              load: { type: integer, description: Unfinished conversations the person holds in this hub's instances }
+        instances:
+          type: array
+          items:
+            type: object
+            required: [tenant_id, name]
+            properties:
+              tenant_id: { type: string, format: uuid }
+              name: { type: string }
+              queue_id: { type: string, format: uuid }
     HubCapability:
       type: object
       required: [key, label, description, gates]
@@ -3685,6 +4160,7 @@ components:
         integrations: { type: integer }
         open_conversations: { type: integer }
         agents: { type: integer }
+        management_scopes: { type: array, items: { type: string, enum: [channels, integrations] }, description: What the contract delegates the hub to MANAGE here (empty = nothing) }
         created_at: { type: string, format: date-time }
     HubInboxItem:
       type: object

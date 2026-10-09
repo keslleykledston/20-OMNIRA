@@ -114,10 +114,10 @@ func (s *ERPConnectionService) TestConnection(ctx context.Context, id uuid.UUID)
 
 func (s *ERPConnectionService) authorize(ctx context.Context) (*tenancydomain.TenantContext, error) {
 	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil || tc.Source != tenancydomain.AccessSourceDirect {
+	if err != nil || !tc.MayManageAsTenant() {
 		return nil, ErrConnForbidden
 	}
-	ok, err := s.perms.HasPermission(ctx, tc.ActorID, PermissionChannelManage)
+	ok, err := s.perms.HasPermission(ctx, tc.ActorID, PermissionIntegrationManage)
 	if err != nil {
 		return nil, err
 	}

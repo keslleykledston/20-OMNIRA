@@ -9,6 +9,7 @@ import { handleUnauthorized, isUnauthorized } from '../lib/session';
 import { useMyHubs } from '../hooks/useMyHubs';
 import { Button, ConfirmDialog, EmptyState, ErrorState, Input, LoadingState, StatusBadge } from '../components/primitives';
 import CompaniesPanel from '../components/hub/CompaniesPanel';
+import PoolsPanel from '../components/hub/PoolsPanel';
 
 // Management panel of the Hub (ADR-0038/0039): the companies, who administers each one, which agents exist and what each one may do where.
 // One screen with two tabs (Agentes e permissões / Instâncias); the old /hub/instâncias address redirects here.
@@ -16,7 +17,7 @@ import CompaniesPanel from '../components/hub/CompaniesPanel';
 // signed-in hub admin; `can_manage_access` only decides whether the screen is offered. Only an admin of the HUB can
 // authorize an agent for more than one instance: a company's own administrator manages their company's people in
 // "Equipe" and has no route into this panel.
-type Tab = 'companies' | 'agents';
+type Tab = 'companies' | 'agents' | 'pools';
 
 const MODE_LABEL: Record<AccessMode, string> = { none: 'Sem acesso', read: 'Só leitura', reply: 'Ler e responder' };
 
@@ -34,7 +35,7 @@ export default function HubAccessPage() {
   const hubId = hub?.id ?? '';
   const qc = useQueryClient();
   const [params] = useSearchParams();
-  const [tab, setTab] = useState<Tab>(params.get('aba') === 'instancias' ? 'companies' : 'agents');
+  const [tab, setTab] = useState<Tab>(params.get('aba') === 'instancias' ? 'companies' : params.get('aba') === 'equipes' ? 'pools' : 'agents');
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [removeAgent, setRemoveAgent] = useState<AccessAgent | null>(null);
   const [removeAdmin, setRemoveAdmin] = useState<{ instance: AccessInstance; person: AccessPerson } | null>(null);
@@ -48,6 +49,11 @@ export default function HubAccessPage() {
   const fail = (err: unknown) => { setNotice({ tone: 'error', text: describeHubAccessError(err) }); void refresh(); };
   const ok = (text: string) => { setNotice({ tone: 'ok', text }); void refresh(); };
 
+  const setManage = useMutation({
+    mutationFn: (v: { user: string; tenant: string; can: boolean }) => hubAccessAPI.setManage(hubId, v.user, v.tenant, v.can),
+    onSuccess: () => { setNotice(null); void refresh(); },
+    onError: fail,
+  });
   const setAccess = useMutation({
     mutationFn: (v: { user: string; tenant: string; mode: AccessMode }) => hubAccessAPI.setAccess(hubId, v.user, v.tenant, v.mode),
     onSuccess: () => { setNotice(null); void refresh(); },
@@ -108,7 +114,7 @@ export default function HubAccessPage() {
       </div>
       <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
         <div role="tablist" aria-label="Seções do painel de acessos" className="inline-flex rounded-control bg-surface-muted p-1">
-          {([['agents', 'Agentes e permissões'], ['companies', 'Instâncias']] as const).map(([id, label]) => (
+          {([['agents', 'Agentes e permissões'], ['companies', 'Instâncias'], ['pools', 'Equipes']] as const).map(([id, label]) => (
             <button key={id} role="tab" type="button" aria-selected={tab === id} onClick={() => setTab(id)}
               className={`h-8 rounded-control px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary ${tab === id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary'}`}>
               {label}
@@ -123,12 +129,14 @@ export default function HubAccessPage() {
         {overview.isLoading && <LoadingState message="Carregando acessos…" />}
         {overview.isError && !isUnauthorized(overview.error) && <ErrorState message={describeHubAccessError(overview.error)} action={{ label: 'Tentar novamente', onClick: () => void overview.refetch() }} />}
         {data && tab === 'agents' && (
-          <AgentsTab data={data} busy={setAccess.isPending} adding={invite.isPending}
+          <AgentsTab data={data} busy={setAccess.isPending || setManage.isPending} adding={invite.isPending}
             onSet={(user, tenant, mode) => setAccess.mutate({ user, tenant, mode })}
+            onManage={(user, tenant, can) => setManage.mutate({ user, tenant, can })}
             onInvite={(email, access) => invite.mutate({ email, access })}
             onCancelInvite={(id) => revokeInvite.mutate(id)}
             onRemove={(a) => setRemoveAgent(a)} />
         )}
+        {data && tab === 'pools' && <PoolsPanel hubId={hubId} agents={data.agents} instances={data.instances} />}
         {tab === 'companies' && hub.can_manage_companies && (
           <CompaniesPanel hubId={hubId} extra={(tenantId) => {
             const inst = data?.instances.find((i) => i.tenant_id === tenantId);
@@ -228,9 +236,10 @@ function PendingInvitations({ items, nameOf, onCancel }: { items: AccessInvitati
   );
 }
 
-function AgentsTab({ data, busy, adding, onSet, onInvite, onCancelInvite, onRemove }: {
+function AgentsTab({ data, busy, adding, onSet, onManage, onInvite, onCancelInvite, onRemove }: {
   data: AccessOverview; busy: boolean; adding: boolean;
   onSet: (user: string, tenant: string, mode: AccessMode) => void;
+  onManage: (user: string, tenant: string, can: boolean) => void;
   onInvite: (email: string, access: { tenant_id: string; mode: 'read' | 'reply' }[]) => void;
   onCancelInvite: (id: string) => void;
   onRemove: (a: AccessAgent) => void;
@@ -261,6 +270,7 @@ function AgentsTab({ data, busy, adding, onSet, onInvite, onCancelInvite, onRemo
             <tbody>
               {data.agents.map((a) => {
                 const cell = new Map(a.grants.map((g) => [g.tenant_id, g.mode]));
+                const manages = new Map(a.grants.map((g) => [g.tenant_id, !!g.can_manage]));
                 const direct = a.direct_instances.map((t) => nameOf.get(t) ?? 'outra instância');
                 return (
                   <tr key={a.user_id} className="border-b border-border-subtle last:border-0 align-top">
@@ -286,6 +296,14 @@ function AgentsTab({ data, busy, adding, onSet, onInvite, onCancelInvite, onRemo
                             className="h-9 w-full rounded-control border border-border-light bg-surface px-2 text-sm text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary">
                             {(Object.keys(MODE_LABEL) as AccessMode[]).map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
                           </select>
+                          {value !== 'none' && (i.management_scopes ?? []).length > 0 && !locked && (
+                            <label className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
+                              <input type="checkbox" checked={manages.get(i.tenant_id) ?? false} disabled={busy}
+                                onChange={(e) => onManage(a.user_id, i.tenant_id, e.target.checked)}
+                                aria-label={`Gerenciar ${i.name} — ${a.email || a.name}`} />
+                              Gerenciar canais e integrações
+                            </label>
+                          )}
                         </td>
                       );
                     })}

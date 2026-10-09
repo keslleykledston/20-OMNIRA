@@ -365,6 +365,8 @@ type hubDTO struct {
 	CanManageCompanies bool `json:"can_manage_companies"`
 	// CanManageAccess: same idea for the Access panel (people and permissions); true for hub admins when it is mounted.
 	CanManageAccess bool `json:"can_manage_access"`
+	// CanManageInstances: at least one instance where the contract delegates management to this person (ADR-0038 phase 3).
+	CanManageInstances bool `json:"can_manage_instances"`
 }
 
 // ListMyHubs returns the active hubs the caller is a member of. Membership grants no tenant access by itself; this
@@ -414,7 +416,49 @@ func (h *HTTPHandler) ListMyHubs(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range out {
 			out[i].CanManageCompanies = isOp && out[i].Role == "hub_admin"
+			// asked of the database (the same function the row-level policies use), for THIS person, never inferred from the role alone
+			if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
+				`SELECT EXISTS (SELECT 1 FROM hub_tenant_service_contracts c WHERE c.hub_id = $1 AND has_hub_manage_access(c.tenant_id, $2, NULL, $1))`,
+				out[i].ID, principal.UserID).Scan(&out[i].CanManageInstances); err != nil {
+				httpError(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
 		}
+	}
+	writeJSON(w, map[string]any{"items": out})
+}
+
+type managedInstanceDTO struct {
+	TenantID uuid.UUID `json:"tenant_id"`
+	Name     string    `json:"name"`
+	Scopes   []string  `json:"scopes"` // the delegated scopes this person may use here
+}
+
+// GET /api/v1/hubs/{hub_id}/managed — the instances of the hub this person may MANAGE (ADR-0038 phase 3), with the scopes. Asked of the
+// database with the function the policies use; an unknown hub, a non-member and "nothing delegated" are all an empty list.
+func (h *HTTPHandler) ListManaged(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := requestScope(w, r)
+	if !ok {
+		return
+	}
+	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `SELECT tenant_id, name, scopes FROM managed_instances($2, $1)`, hub, actor)
+	if err != nil {
+		httpError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []managedInstanceDTO{}
+	for rows.Next() {
+		var d managedInstanceDTO
+		if err := rows.Scan(&d.TenantID, &d.Name, &d.Scopes); err != nil {
+			httpError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		httpError(w, "internal server error", http.StatusInternalServerError)
+		return
 	}
 	writeJSON(w, map[string]any{"items": out})
 }
@@ -462,6 +506,10 @@ func writeReplyError(w http.ResponseWriter, err error) {
 		httpError(w, "the company on screen is not the company of this conversation; reload", http.StatusConflict)
 	case errors.Is(err, replying.ErrTaken), errors.Is(err, messagesapp.ErrNotAssignedToYou):
 		httpError(w, "conversation is assigned to another agent", http.StatusConflict)
+	case errors.Is(err, replying.ErrNotHolder):
+		httpError(w, "the conversation is not yours: only who holds it may transfer it", http.StatusConflict)
+	case errors.Is(err, replying.ErrTransferTarget):
+		httpError(w, "transfer target not available: that person cannot take this conversation now", http.StatusConflict)
 	case errors.Is(err, replying.ErrClosed), errors.Is(err, messagesapp.ErrConversationClosed):
 		httpError(w, "conversation is finalized: the contact's next message starts a new attendance", http.StatusConflict)
 	case errors.Is(err, messagesapp.ErrUnassigned):
@@ -525,6 +573,60 @@ func (h *HTTPHandler) ClaimItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"item_id": t.Item.ID, "conversation_id": t.Item.ConversationID, "changed": changed,
+		"tenant": map[string]any{"id": t.Item.TenantID, "name": t.TenantName}})
+}
+
+type transferRequest struct {
+	ExpectedTenantID uuid.UUID  `json:"expected_tenant_id"`
+	ToUserID         *uuid.UUID `json:"to_user_id"` // null = give it back to the queue
+}
+
+// TransferCandidates serves GET /hubs/{hub_id}/inbox/{item_id}/transfer-candidates?expected_tenant_id=: who the holder may hand the
+// conversation to. The company on screen is checked like in every write (a stale screen gets 409, never another company's people).
+func (h *HTTPHandler) TransferCandidates(w http.ResponseWriter, r *http.Request) {
+	sc, ok := h.writeScope(w, r)
+	if !ok {
+		return
+	}
+	expected, err := uuid.Parse(r.URL.Query().Get("expected_tenant_id"))
+	if err != nil {
+		httpError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	t, err := h.reply.Authorize(r.Context(), sc.actor, sc.hub, sc.item, expected, correlationOf(r))
+	if err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	items, err := h.reply.Candidates(r.Context(), sc.actor, t)
+	if err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
+// TransferItem serves POST /hubs/{hub_id}/inbox/{item_id}/transfer: the holder hands the conversation to another person of the hub, or
+// gives it back to the queue (to_user_id null). Needs a reply-capable grant, and the person chosen must have one too.
+func (h *HTTPHandler) TransferItem(w http.ResponseWriter, r *http.Request) {
+	sc, ok := h.writeScope(w, r)
+	if !ok {
+		return
+	}
+	var req transferRequest
+	if !decodeWrite(w, r, &req) {
+		return
+	}
+	t, err := h.reply.Authorize(r.Context(), sc.actor, sc.hub, sc.item, req.ExpectedTenantID, correlationOf(r))
+	if err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	if err := h.reply.Transfer(r.Context(), sc.actor, t, req.ToUserID); err != nil {
+		writeReplyError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"conversation_id": t.Item.ConversationID, "assigned_to": req.ToUserID,
 		"tenant": map[string]any{"id": t.Item.TenantID, "name": t.TenantName}})
 }
 

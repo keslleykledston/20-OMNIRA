@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/omnira/omnira/internal/hub/authority"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
@@ -292,31 +293,10 @@ func (s *Service) ApplyPreauthorizations(ctx context.Context, user uuid.UUID) (a
 	return applied, err
 }
 
-// lockAuthority pins the hub, the person's membership and their account until the transaction ends (demoting or deactivating
-// them, or pausing the hub, waits for it) and THEN asks whether they are an active admin of an active hub, so the answer cannot
-// be overtaken by a change that commits afterwards. One statement per row: a JOIN would let PostgreSQL's re-check drop the row.
+// lockAuthority: the in-transaction proof that the person is an active admin of an active hub lives in ONE place, shared with the work
+// pools (authority.LockHubAdmin): it pins the hub, the membership and the account, then asks the database.
 func lockAuthority(ctx context.Context, q platformdb.Querier, hub, person uuid.UUID) (bool, error) {
-	for _, pin := range []struct {
-		sql  string
-		args []any
-	}{
-		{`SELECT 1 FROM service_hubs WHERE id = $1 FOR SHARE`, []any{hub}},
-		{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2 FOR SHARE`, []any{hub, person}},
-		{`SELECT 1 FROM users WHERE id = $1 FOR SHARE`, []any{person}},
-	} {
-		rows, err := q.Query(ctx, pin.sql, pin.args...)
-		if err != nil {
-			return false, err
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return false, err
-		}
-	}
-	var ok bool
-	err := q.QueryRow(ctx, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')
-	                              AND EXISTS (SELECT 1 FROM users WHERE id = $2 AND status = 'active')`, hub, person).Scan(&ok)
-	return ok, err
+	return authority.LockHubAdmin(ctx, q, hub, person)
 }
 
 // RevokeInvitation cancels a choice that has not been applied yet.

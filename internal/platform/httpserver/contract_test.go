@@ -85,7 +85,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterTenancyHandlers(nil, false)
 	s.RegisterDeviceAdminHandlers(nil, contractDeviceAdminHandler{})
 	s.RegisterInboxHandlers(nil, &config.Config{MediaDir: t.TempDir(), OutboundMediaEnabled: true, ClamAVAddr: "clamav:3310"})
-	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil))
+	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil), true)
 	s.RegisterChannelDirectory(nil, channeladapters.NewDirectoryHandler(nil, nil))
 	s.RegisterChannelTemplates(nil, channeladapters.NewTemplatesHandler(nil, nil, nil, nil))
 	s.RegisterWahaConnectionHandlers(nil, channeladapters.NewConnectionHandler(nil))

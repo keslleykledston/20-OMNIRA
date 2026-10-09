@@ -127,6 +127,8 @@ func (h *AdminHandler) CreateCompany(w http.ResponseWriter, r *http.Request) {
 type updateCompanyRequest struct {
 	Status       string          `json:"status"`
 	Capabilities map[string]bool `json:"capabilities"`
+	// ManagementScopes: absent = unchanged; [] = withdraw every delegation (ADR-0038 phase 3)
+	ManagementScopes *[]string `json:"management_scopes"`
 }
 
 func (h *AdminHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +145,7 @@ func (h *AdminHandler) UpdateCompany(w http.ResponseWriter, r *http.Request) {
 	if !decodeWrite(w, r, &body) {
 		return
 	}
-	co, err := h.svc.Update(r.Context(), operator, hub, tenant, companies.UpdateInput{Status: body.Status, Capabilities: body.Capabilities})
+	co, err := h.svc.Update(r.Context(), operator, hub, tenant, companies.UpdateInput{Status: body.Status, Capabilities: body.Capabilities, ManagementScopes: body.ManagementScopes})
 	if err != nil {
 		writeAdminError(w, err)
 		return

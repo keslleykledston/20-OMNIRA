@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { describeHubAdminError, hubAdminAPI, type HubCompany } from '../../lib/hub';
+import { Link } from 'react-router-dom';
+import { describeHubAdminError, hubAdminAPI, MANAGEMENT_SCOPE_LABEL, type HubCompany, type ManagementScope } from '../../lib/hub';
 import { handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { Button, ConfirmDialog, EmptyState, ErrorState, Input, LoadingState, Modal, StatusBadge } from '../primitives';
 
@@ -21,7 +22,7 @@ export default function CompaniesPanel({ hubId, extra }: { hubId: string; extra?
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['hub-companies', hubId] });
   const update = useMutation({
-    mutationFn: (v: { id: string; body: { status?: 'active' | 'suspended'; capabilities?: Record<string, boolean> } }) => hubAdminAPI.update(hubId, v.id, v.body),
+    mutationFn: (v: { id: string; body: { status?: 'active' | 'suspended'; capabilities?: Record<string, boolean>; management_scopes?: ManagementScope[] } }) => hubAdminAPI.update(hubId, v.id, v.body),
     onSuccess: () => { setNotice(null); void refresh(); },
     onError: (err) => { setNotice({ tone: 'error', text: describeHubAdminError(err) }); void refresh(); },
     onSettled: () => setConfirm(null),
@@ -34,7 +35,7 @@ export default function CompaniesPanel({ hubId, extra }: { hubId: string; extra?
     <section className="space-y-4" aria-label="Instâncias">
       <div className="flex flex-wrap items-start gap-3">
         <p className="max-w-3xl text-sm text-text-secondary">
-          Canais de WhatsApp e integrações ERP/CRM são configurados hoje dentro de cada instância, no menu Canais. Configurá-los por aqui é a próxima etapa (ADR-0038, fase 3); os números abaixo só mostram o que já existe.
+          Canais de WhatsApp e integrações ERP/CRM seguem sendo configurados dentro de cada instância, no menu Canais. Quando o contrato delega a gestão ao Hub, quem for administrador do Hub (ou tiver a chave “Gerenciar” na matriz de agentes) também pode configurá-los por aqui.
         </p>
         <div className="ml-auto"><Button onClick={() => setCreating(true)}>Nova instância</Button></div>
       </div>
@@ -47,7 +48,12 @@ export default function CompaniesPanel({ hubId, extra }: { hubId: string; extra?
       {list.isError && !isUnauthorized(list.error) && <ErrorState message={describeHubAdminError(list.error)} action={{ label: 'Tentar novamente', onClick: () => void list.refetch() }} />}
       {list.data && items.length === 0 && <EmptyState title="Nenhuma instância" description="Crie a primeira instância deste Hub." />}
       {items.map((c) => (
-        <CompanyCard key={c.id} company={c} caps={caps} busy={update.isPending} extra={extra?.(c.id)}
+        <CompanyCard key={c.id} company={c} caps={caps} busy={update.isPending} extra={extra?.(c.id)} hubId={hubId}
+          onToggleScope={(scope, on) => {
+            const now = new Set(c.management_scopes ?? []);
+            if (on) now.add(scope); else now.delete(scope);
+            update.mutate({ id: c.id, body: { management_scopes: [...now] } });
+          }}
           onToggleCap={(key, on) => update.mutate({ id: c.id, body: { capabilities: { [key]: on } } })}
           onStatus={() => (c.status === 'active' ? setConfirm(c) : update.mutate({ id: c.id, body: { status: 'active' } }))} />
       ))}
@@ -60,12 +66,14 @@ export default function CompaniesPanel({ hubId, extra }: { hubId: string; extra?
   );
 }
 
-function CompanyCard({ company: c, caps, busy, extra, onToggleCap, onStatus }: {
+function CompanyCard({ company: c, caps, busy, extra, hubId, onToggleCap, onToggleScope, onStatus }: {
   company: HubCompany;
   caps: { key: string; label: string; description: string; gates: string }[];
   busy: boolean;
   extra?: ReactNode;
+  hubId: string;
   onToggleCap: (key: string, on: boolean) => void;
+  onToggleScope: (scope: ManagementScope, on: boolean) => void;
   onStatus: () => void;
 }) {
   const suspended = c.status !== 'active';
@@ -101,6 +109,21 @@ function CompanyCard({ company: c, caps, busy, extra, onToggleCap, onStatus }: {
               </span>
             </label>
           ))}
+        </div>
+      </fieldset>
+      <fieldset className="mt-4" disabled={busy}>
+        <legend className="text-sm font-medium text-text-primary">Gestão delegada ao Hub</legend>
+        <p className="text-xs text-text-tertiary">O que o contrato permite ao Hub configurar nesta instância. Nada é delegado por padrão.</p>
+        <div className="mt-2 flex flex-wrap gap-4">
+          {(['channels', 'integrations'] as ManagementScope[]).map((scope) => (
+            <label key={scope} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={(c.management_scopes ?? []).includes(scope)} onChange={(e) => onToggleScope(scope, e.target.checked)} aria-label={`${MANAGEMENT_SCOPE_LABEL[scope]} — ${c.display_name}`} />
+              <span>{MANAGEMENT_SCOPE_LABEL[scope]}</span>
+            </label>
+          ))}
+          {(c.management_scopes ?? []).length > 0 && !suspended && (
+            <Link to={`/instancias/${hubId}/${c.id}/canais`} className="ml-auto text-sm font-medium text-accent-primary underline-offset-2 hover:underline">Abrir canais e integrações</Link>
+          )}
         </div>
       </fieldset>
       {extra}

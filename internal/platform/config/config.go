@@ -17,20 +17,20 @@ var (
 )
 
 type Config struct {
-	Env               string
-	HTTPAddr          string
-	DatabaseURL       string
-	NatsURL           string
-	ValkeyURL         string
-	OtelEndpoint      string
-	AuthIssuer        string
-	AuthAudience      string
-	AuthMode          string
-	AuthClientID      string
-	AuthClientSecret  string
-	AuthRedirectURL   string
-	AuthPostLoginURL  string
-	AuthCookieSecure  bool
+	Env              string
+	HTTPAddr         string
+	DatabaseURL      string
+	NatsURL          string
+	ValkeyURL        string
+	OtelEndpoint     string
+	AuthIssuer       string
+	AuthAudience     string
+	AuthMode         string
+	AuthClientID     string
+	AuthClientSecret string
+	AuthRedirectURL  string
+	AuthPostLoginURL string
+	AuthCookieSecure bool
 	// OutboundMediaEnabled turns on operator file uploads and sending (ADR-0024). Needs OMNIRA_MEDIA_DIR (with a writable outbound/ area
 	// for the API) and OMNIRA_CLAMAV_ADDR: without the antivirus nothing is accepted.
 	OutboundMediaEnabled bool
@@ -38,12 +38,16 @@ type Config struct {
 	HubAPIEnabled bool
 	// HubProjectorEnabled makes the worker keep hub_inbox_items in step with the tenants' conversations every
 	// HubProjectorIntervalSeconds. Off by default; needs the Hub migrations (093+).
-	HubProjectorEnabled         bool
+	HubProjectorEnabled bool
 	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
 	HubAdminAPIEnabled bool
 	// HubAccessAPIEnabled mounts the people-and-permissions routes of ADR-0039 (hub admins only). Needs HubAPIEnabled.
-	HubAccessAPIEnabled bool
+	HubAccessAPIEnabled         bool
 	HubProjectorIntervalSeconds int
+	// HubDistributorEnabled makes the worker give new conversations to the least loaded member of a round-robin work pool
+	// (ADR-0038 phase 4) every HubDistributorIntervalSeconds. Off by default; needs migration 104.
+	HubDistributorEnabled         bool
+	HubDistributorIntervalSeconds int
 	// TicketOpenNoticeEnabled sends the customer a message with the ticket number when an operator opens an external ticket
 	// (on by default; OMNIRA_TICKET_OPEN_NOTICE_ENABLED=false turns it off).
 	TicketOpenNoticeEnabled bool
@@ -54,38 +58,38 @@ type Config struct {
 	// Per-minute quotas enforced after tenant authorization (R-2). Generous on purpose: they stop a runaway client, not a busy operator.
 	RateLimitUserPerMin   int
 	RateLimitTenantPerMin int
-	DevAuthEnabled    bool
-	CredentialsKey    []byte
-	credentialsKeyErr error
-	WahaEnabled       bool
-	WahaBaseURL       string
-	WahaAPIKey        string
-	WahaEngine        string
+	DevAuthEnabled        bool
+	CredentialsKey        []byte
+	credentialsKeyErr     error
+	WahaEnabled           bool
+	WahaBaseURL           string
+	WahaAPIKey            string
+	WahaEngine            string
 	// MediaDir: where the media pipeline keeps files (ADR-0016). Empty disables the pipeline reader.
 	MediaDir string
 	// ClamAVAddr: clamd host:port used by the worker's antivirus stage.
 	ClamAVAddr string
 	// WhisperURL: the local speech-to-text server (omnira-whisper systemd unit). Empty disables transcription.
-	WhisperURL string
-	MetaEnabled       bool
+	WhisperURL  string
+	MetaEnabled bool
 	// FlowsEnabled turns on the Flow Builder API and runtime (ADR-0019). Off by default: nothing changes when unset.
 	FlowsEnabled bool
 	// FlowsAIEnabled lets Flow AI nodes call the platform's configured model (also needs OMNIRA_AI_* ready). Off by default:
 	// AI nodes then take their error port.
 	FlowsAIEnabled bool
-	PublicBaseURL     string
+	PublicBaseURL  string
 	// WebBaseURL: host do frontend como o navegador enxerga (links de e-mail). Diferente
 	// de PublicBaseURL, que é a URL server-to-server usada por webhooks.
-	WebBaseURL        string
-	SMTPHost          string
-	SMTPPort          int
-	SMTPUsername      string
-	SMTPPassword      string
-	SMTPFrom          string
-	SMTPReplyTo       string
-	SMTPTLS           string // starttls (padrão) | implicit | none (só dev)
-	AllowPrivilegedDB bool
-	GracefulShutdown  int // segundos
+	WebBaseURL         string
+	SMTPHost           string
+	SMTPPort           int
+	SMTPUsername       string
+	SMTPPassword       string
+	SMTPFrom           string
+	SMTPReplyTo        string
+	SMTPTLS            string // starttls (padrão) | implicit | none (só dev)
+	AllowPrivilegedDB  bool
+	GracefulShutdown   int // segundos
 	SessionIdleTimeout int // segundos (padrão 7200 = 2h)
 
 	// AI* (PRODUCT.7C0/7C1): deliberately NOT validated by Validate() below.
@@ -95,10 +99,10 @@ type Config struct {
 	// the feature may actually run; callers (apps/api/cmd/omnira-api)
 	// consult it and construct no generator at all when false, which is
 	// what makes the AI HTTP endpoint fail closed by construction.
-	AIEnabled       bool
-	AIProvider      string
-	AIModel         string
-	AIAPIKey        string
+	AIEnabled        bool
+	AIProvider       string
+	AIModel          string
+	AIAPIKey         string
 	AITimeoutSeconds int
 }
 
@@ -132,57 +136,59 @@ func Load() *Config {
 		}
 	}
 	return &Config{
-		Env:               getEnv("OMNIRA_ENV", "development"),
-		HTTPAddr:          getEnv("OMNIRA_HTTP_ADDR", ":8080"),
-		DatabaseURL:       getEnv("OMNIRA_DATABASE_URL", ""),
-		NatsURL:           getEnv("OMNIRA_NATS_URL", "nats://localhost:4222"),
-		ValkeyURL:         getEnv("OMNIRA_VALKEY_URL", "redis://localhost:6379/0"),
-		OtelEndpoint:      getEnv("OMNIRA_OTEL_ENDPOINT", "http://localhost:4317"),
-		AuthIssuer:        getEnv("OMNIRA_AUTH_ISSUER", "http://localhost:8080"),
-		AuthAudience:      getEnv("OMNIRA_AUTH_AUDIENCE", "omnira"),
-		AuthMode:          getEnv("OMNIRA_AUTH_MODE", "mock"),
-		AuthClientID:      os.Getenv("OMNIRA_AUTH_CLIENT_ID"),
-		AuthClientSecret:  os.Getenv("OMNIRA_AUTH_CLIENT_SECRET"),
-		AuthRedirectURL:   os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
-		AuthPostLoginURL:  getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
-		AuthCookieSecure:  getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
-		OutboundMediaEnabled: getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
-		HubAPIEnabled: getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
-		HubProjectorEnabled: getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
-		HubAdminAPIEnabled: getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
-		HubAccessAPIEnabled: getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
-		HubProjectorIntervalSeconds: getEnvInt("OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS", 60),
-		TicketOpenNoticeEnabled: getEnv("OMNIRA_TICKET_OPEN_NOTICE_ENABLED", "true") != "false",
-		MobileAuthEnabled:  getEnv("OMNIRA_AUTH_MOBILE_ENABLED", "false") == "true",
-		MobileClientID:     getEnv("OMNIRA_AUTH_MOBILE_CLIENT_ID", "omnira-mobile"),
-		MobileRedirectURIs: splitList(os.Getenv("OMNIRA_AUTH_MOBILE_REDIRECT_URIS")),
-		RateLimitUserPerMin:   getEnvInt("OMNIRA_RATELIMIT_USER_PER_MIN", 1200),
-		RateLimitTenantPerMin: getEnvInt("OMNIRA_RATELIMIT_TENANT_PER_MIN", 6000),
-		DevAuthEnabled:    getEnv("OMNIRA_DEV_AUTH_ENABLED", "false") == "true",
-		CredentialsKey:    key,
-		credentialsKeyErr: keyErr,
-		WahaEnabled:       getEnv("OMNIRA_WAHA_ENABLED", "false") == "true",
-		WahaBaseURL:       getEnv("OMNIRA_WAHA_BASE_URL", "http://waha:3000"),
-		WahaAPIKey:        os.Getenv("OMNIRA_WAHA_API_KEY"),
-		WahaEngine:        getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
-		MediaDir:          os.Getenv("OMNIRA_MEDIA_DIR"),
-		ClamAVAddr:        os.Getenv("OMNIRA_CLAMAV_ADDR"),
-		WhisperURL:        os.Getenv("OMNIRA_WHISPER_URL"),
-		MetaEnabled:       getEnv("OMNIRA_META_ENABLED", "false") == "true",
-		FlowsEnabled:      getEnv("OMNIRA_FLOWS_ENABLED", "false") == "true",
-		FlowsAIEnabled:    getEnv("OMNIRA_FLOWS_AI_ENABLED", "false") == "true",
-		PublicBaseURL:     os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
-		WebBaseURL:        os.Getenv("OMNIRA_WEB_BASE_URL"),
-		SMTPHost:          os.Getenv("OMNIRA_SMTP_HOST"),
-		SMTPPort:          getEnvInt("OMNIRA_SMTP_PORT", 587),
-		SMTPUsername:      os.Getenv("OMNIRA_SMTP_USERNAME"),
-		SMTPPassword:      os.Getenv("OMNIRA_SMTP_PASSWORD"),
-		SMTPFrom:          os.Getenv("OMNIRA_SMTP_FROM"),
-		SMTPReplyTo:       os.Getenv("OMNIRA_SMTP_REPLY_TO"),
-		SMTPTLS:           getEnv("OMNIRA_SMTP_TLS", "starttls"),
-		AllowPrivilegedDB: getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
-		GracefulShutdown:  getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
-		SessionIdleTimeout: getEnvInt("OMNIRA_SESSION_IDLE_TIMEOUT", 7200), // padrão: 2h
+		Env:                           getEnv("OMNIRA_ENV", "development"),
+		HTTPAddr:                      getEnv("OMNIRA_HTTP_ADDR", ":8080"),
+		DatabaseURL:                   getEnv("OMNIRA_DATABASE_URL", ""),
+		NatsURL:                       getEnv("OMNIRA_NATS_URL", "nats://localhost:4222"),
+		ValkeyURL:                     getEnv("OMNIRA_VALKEY_URL", "redis://localhost:6379/0"),
+		OtelEndpoint:                  getEnv("OMNIRA_OTEL_ENDPOINT", "http://localhost:4317"),
+		AuthIssuer:                    getEnv("OMNIRA_AUTH_ISSUER", "http://localhost:8080"),
+		AuthAudience:                  getEnv("OMNIRA_AUTH_AUDIENCE", "omnira"),
+		AuthMode:                      getEnv("OMNIRA_AUTH_MODE", "mock"),
+		AuthClientID:                  os.Getenv("OMNIRA_AUTH_CLIENT_ID"),
+		AuthClientSecret:              os.Getenv("OMNIRA_AUTH_CLIENT_SECRET"),
+		AuthRedirectURL:               os.Getenv("OMNIRA_AUTH_REDIRECT_URL"),
+		AuthPostLoginURL:              getEnv("OMNIRA_AUTH_POST_LOGIN_URL", "/login?oidc=complete"),
+		AuthCookieSecure:              getEnv("OMNIRA_AUTH_COOKIE_SECURE", "false") == "true",
+		OutboundMediaEnabled:          getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
+		HubAPIEnabled:                 getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
+		HubProjectorEnabled:           getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
+		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
+		HubAccessAPIEnabled:           getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
+		HubProjectorIntervalSeconds:   getEnvInt("OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS", 60),
+		HubDistributorEnabled:         getEnv("OMNIRA_HUB_DISTRIBUTOR_ENABLED", "false") == "true",
+		HubDistributorIntervalSeconds: getEnvInt("OMNIRA_HUB_DISTRIBUTOR_INTERVAL_SECONDS", 15),
+		TicketOpenNoticeEnabled:       getEnv("OMNIRA_TICKET_OPEN_NOTICE_ENABLED", "true") != "false",
+		MobileAuthEnabled:             getEnv("OMNIRA_AUTH_MOBILE_ENABLED", "false") == "true",
+		MobileClientID:                getEnv("OMNIRA_AUTH_MOBILE_CLIENT_ID", "omnira-mobile"),
+		MobileRedirectURIs:            splitList(os.Getenv("OMNIRA_AUTH_MOBILE_REDIRECT_URIS")),
+		RateLimitUserPerMin:           getEnvInt("OMNIRA_RATELIMIT_USER_PER_MIN", 1200),
+		RateLimitTenantPerMin:         getEnvInt("OMNIRA_RATELIMIT_TENANT_PER_MIN", 6000),
+		DevAuthEnabled:                getEnv("OMNIRA_DEV_AUTH_ENABLED", "false") == "true",
+		CredentialsKey:                key,
+		credentialsKeyErr:             keyErr,
+		WahaEnabled:                   getEnv("OMNIRA_WAHA_ENABLED", "false") == "true",
+		WahaBaseURL:                   getEnv("OMNIRA_WAHA_BASE_URL", "http://waha:3000"),
+		WahaAPIKey:                    os.Getenv("OMNIRA_WAHA_API_KEY"),
+		WahaEngine:                    getEnv("OMNIRA_WAHA_ENGINE", "GOWS"),
+		MediaDir:                      os.Getenv("OMNIRA_MEDIA_DIR"),
+		ClamAVAddr:                    os.Getenv("OMNIRA_CLAMAV_ADDR"),
+		WhisperURL:                    os.Getenv("OMNIRA_WHISPER_URL"),
+		MetaEnabled:                   getEnv("OMNIRA_META_ENABLED", "false") == "true",
+		FlowsEnabled:                  getEnv("OMNIRA_FLOWS_ENABLED", "false") == "true",
+		FlowsAIEnabled:                getEnv("OMNIRA_FLOWS_AI_ENABLED", "false") == "true",
+		PublicBaseURL:                 os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
+		WebBaseURL:                    os.Getenv("OMNIRA_WEB_BASE_URL"),
+		SMTPHost:                      os.Getenv("OMNIRA_SMTP_HOST"),
+		SMTPPort:                      getEnvInt("OMNIRA_SMTP_PORT", 587),
+		SMTPUsername:                  os.Getenv("OMNIRA_SMTP_USERNAME"),
+		SMTPPassword:                  os.Getenv("OMNIRA_SMTP_PASSWORD"),
+		SMTPFrom:                      os.Getenv("OMNIRA_SMTP_FROM"),
+		SMTPReplyTo:                   os.Getenv("OMNIRA_SMTP_REPLY_TO"),
+		SMTPTLS:                       getEnv("OMNIRA_SMTP_TLS", "starttls"),
+		AllowPrivilegedDB:             getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
+		GracefulShutdown:              getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
+		SessionIdleTimeout:            getEnvInt("OMNIRA_SESSION_IDLE_TIMEOUT", 7200), // padrão: 2h
 
 		AIEnabled:        getEnv("OMNIRA_AI_ENABLED", "false") == "true",
 		AIProvider:       strings.ToLower(strings.TrimSpace(getEnv("OMNIRA_AI_PROVIDER", "openai"))),

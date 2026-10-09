@@ -46,8 +46,13 @@ export default function Sidebar() {
   // ADR-0039: the Access panel (people and permissions) is offered only to hub admins, and only when the server mounts it.
   const accessItem: (typeof navItems)[number] = { label: 'Acessos', path: '/acessos', icon: 'key' }
   const canAccess = (hubs.data ?? []).some((h) => h.can_manage_access)
+  // ADR-0038 phase 3: channels/integrations of the instances the Hub delegated to this person
+  const manageItem: (typeof navItems)[number] = { label: 'Canais das instâncias', path: '/instancias', icon: 'channels' }
+  const canManage = (hubs.data ?? []).some((h) => h.can_manage_instances)
   // There is no separate "Hub" entry: "Conversas" is the one inbox, and it widens to every authorized company by itself (ADR-0039 revisão).
-  const visibleNavItems = canAccess ? [...base.slice(0, 2), accessItem, ...base.slice(2)] : base
+  const withAccess = canAccess ? [...base.slice(0, 2), accessItem, ...base.slice(2)] : base
+  const channelsAt = withAccess.findIndex((i) => i.path === '/channels')
+  const visibleNavItems = canManage ? [...withAccess.slice(0, channelsAt + 1), manageItem, ...withAccess.slice(channelsAt + 1)] : withAccess
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(path + '/')

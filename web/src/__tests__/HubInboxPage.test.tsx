@@ -43,6 +43,7 @@ type Hubs = { id: string; name: string; role: string }[];
 const H1 = { id: 'hub-1', name: 'K3G Service Desk', role: 'hub_agent' };
 const H2 = { id: 'hub-2', name: 'Outro Hub', role: 'hub_agent' };
 
+let candidatesReply: object[] = [];
 let hubsReply: Hubs | 404 | 500 = [H1];
 let pages: Record<string, { items: HubInboxItem[]; has_more: boolean; next_cursor?: string }[]> = {};
 let details: Record<string, HubItemDetail | 404> = {};
@@ -55,6 +56,7 @@ function serve() {
       if (hubsReply === 404 || hubsReply === 500) return Promise.reject({ response: { status: hubsReply } });
       return { data: { items: hubsReply } };
     }
+    if (u.endsWith('/transfer-candidates')) return { data: { items: candidatesReply } };
     let m = u.match(/\/hubs\/([^/]+)\/inbox\/([^/]+)$/);
     if (m) {
       const d = details[`${m[1]}/${m[2]}`];
@@ -313,6 +315,60 @@ describe('HubInboxPage — claiming and replying (write path)', () => {
     return user;
   };
   const posts = () => vi.mocked(axios.post).mock.calls;
+
+  it('"Transferir conversa" is offered only to who holds the conversation, and lists who may receive it with their load', async () => {
+    candidatesReply = [{ user_id: 'u2', name: 'Beto', email: 'beto@k3g.com', load: 3 }, { user_id: 'u3', name: '', email: 'cris@k3g.com', load: 0 }];
+    const user = await open('me');
+    await user.click(screen.getByRole('button', { name: 'Transferir conversa' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Transferir conversa' });
+    expect(await within(dialog).findByLabelText('Beto')).toBeInTheDocument();
+    expect(within(dialog).getByText('3 abertas')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Transferir' })).toBeDisabled(); // nobody picked yet
+    const asked = vi.mocked(axios.get).mock.calls.find((c) => String(c[0]).endsWith('/transfer-candidates'))!;
+    expect((asked[1] as { params: object }).params).toEqual({ expected_tenant_id: a.tenant_id });
+  });
+
+  it.each([['none'], ['other']] as const)('no "Transferir conversa" when the conversation is %s', async (assignment) => {
+    await open(assignment);
+    expect(screen.queryByRole('button', { name: 'Transferir conversa' })).toBeNull();
+  });
+
+  it('transferring sends the chosen person with the DISPLAYED company, then closes the dialog', async () => {
+    candidatesReply = [{ user_id: 'u2', name: 'Beto', email: 'beto@k3g.com', load: 3 }];
+    vi.mocked(axios.post).mockResolvedValue({ data: { conversation_id: a.conversation_id, assigned_to: 'u2', tenant: { id: a.tenant_id, name: 'ISP Roraima' } } });
+    const user = await open('me');
+    await user.click(screen.getByRole('button', { name: 'Transferir conversa' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Transferir conversa' });
+    await user.click(await within(dialog).findByLabelText('Beto'));
+    await user.click(within(dialog).getByRole('button', { name: 'Transferir' }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(String(posts()[0][0])).toMatch(/\/hubs\/hub-1\/inbox\/a\/transfer$/);
+    expect(posts()[0][1]).toEqual({ expected_tenant_id: a.tenant_id, to_user_id: 'u2' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Transferir conversa' })).toBeNull());
+  });
+
+  it('giving it back to the queue sends no person', async () => {
+    candidatesReply = [];
+    vi.mocked(axios.post).mockResolvedValue({ data: { conversation_id: a.conversation_id, assigned_to: null, tenant: { id: a.tenant_id, name: 'ISP Roraima' } } });
+    const user = await open('me');
+    await user.click(screen.getByRole('button', { name: 'Transferir conversa' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Transferir conversa' });
+    expect(await within(dialog).findByText(/Ninguém mais tem acesso/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Devolver à fila' }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0][1]).toEqual({ expected_tenant_id: a.tenant_id, to_user_id: null });
+  });
+
+  it('a person who lost access meanwhile is refused in words and the dialog stays open', async () => {
+    candidatesReply = [{ user_id: 'u2', name: 'Beto', email: 'beto@k3g.com', load: 0 }];
+    vi.mocked(axios.post).mockRejectedValue({ response: { status: 409, data: 'transfer target not available' } });
+    const user = await open('me');
+    await user.click(screen.getByRole('button', { name: 'Transferir conversa' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Transferir conversa' });
+    await user.click(await within(dialog).findByLabelText('Beto'));
+    await user.click(within(dialog).getByRole('button', { name: 'Transferir' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/não pode receber esta conversa/);
+  });
 
   it('a read-only grant offers neither claim nor composer', async () => {
     await open('none', { canReply: false });

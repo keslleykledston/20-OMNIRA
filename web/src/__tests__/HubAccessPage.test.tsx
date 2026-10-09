@@ -88,6 +88,24 @@ describe('HubAccessPage', () => {
     expect(body).toEqual({ mode: 'reply', valid_until: null });
   });
 
+  it('the "Gerenciar" switch shows only where the contract delegates something and the person has access; it sends exactly that grant', async () => {
+    ov = overview();
+    ov.instances[0].management_scopes = ['channels']; // Alfa delegates; Gama delegates nothing
+    ov.agents[1].grants[0].can_manage = false;
+    serve();
+    vi.mocked(axios.put).mockResolvedValue({ data: {} });
+    renderAt(<HubAccessPage />);
+    const box = await screen.findByLabelText('Gerenciar Alfa — x@k3g.com');
+    expect(box).not.toBeChecked();
+    expect(screen.queryByLabelText('Gerenciar Gama — x@k3g.com')).toBeNull(); // nothing delegated there
+    expect(screen.queryByLabelText('Gerenciar Alfa — chefe@k3g.com')).toBeNull(); // no access in that cell, nothing to manage
+    await userEvent.click(box);
+    await waitFor(() => expect(axios.put).toHaveBeenCalledTimes(1));
+    const [url, body] = vi.mocked(axios.put).mock.calls[0];
+    expect(String(url)).toMatch(/\/hubs\/hub-1\/access\/agents\/u-x\/instances\/A\/management$/);
+    expect(body).toEqual({ can_manage: true });
+  });
+
   it('a server refusal is said in words and the table is reloaded', async () => {
     vi.mocked(axios.put).mockRejectedValue({ response: { status: 404 } });
     renderAt(<HubAccessPage />);

@@ -9,6 +9,7 @@ import TicketReconciliationPage from './pages/TicketReconciliationPage'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
 import HubAccessPage from './pages/HubAccessPage'
+import HubManagedPage, { HubManagedChannelsRoute } from './pages/HubManagedPage'
 import ConversationsEntry from './pages/ConversationsEntry'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
@@ -51,6 +52,9 @@ function AppRoutes() {
         <Route path="/hub" element={<Navigate to="/inbox" replace />} />
         <Route path="/hub/empresas" element={<Navigate to="/acessos?aba=instancias" replace />} />
         <Route path="/acessos" element={<HubAccessPage />} />
+        <Route path="/instancias" element={<HubManagedPage />} />
+        <Route path="/instancias/:hubId/:tenantId/canais" element={<HubManagedChannelsRoute />} />
+        <Route path="/instancias/:hubId/:tenantId/canais/whatsapp/new" element={<HubManagedChannelsRoute wizard />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/flows" element={<FlowsPage />} />
         <Route path="/flows/:flowId" element={<FlowEditorPage />} />

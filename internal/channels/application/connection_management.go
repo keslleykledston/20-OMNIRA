@@ -73,17 +73,22 @@ func (s *ConnectionManagementService) Register(provider string, manager Connecti
 
 func (s *ConnectionManagementService) authorize(ctx context.Context) error {
 	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil || tc.Source != tenancydomain.AccessSourceDirect {
+	if err != nil || !tc.MayManageAsTenant() {
 		return ErrConnForbidden
 	}
-	ok, err := s.perms.HasPermission(ctx, tc.ActorID, PermissionChannelManage)
-	if err != nil {
-		return err
+	// Either management permission opens the catalog and the list; each provider's own manager then asks for ITS permission
+	// (channel.manage for WhatsApp lines, integration.manage for ERP/CRM). A member holds both through one role permission;
+	// a Hub manager holds the ones the contract delegates (scopes channels / integrations).
+	for _, permission := range []string{PermissionChannelManage, PermissionIntegrationManage} {
+		ok, err := s.perms.HasPermission(ctx, tc.ActorID, permission)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
 	}
-	if !ok {
-		return ErrConnForbidden
-	}
-	return nil
+	return ErrConnForbidden
 }
 
 func (s *ConnectionManagementService) Providers(ctx context.Context) ([]ports.ProviderDescriptor, error) {
@@ -162,6 +167,9 @@ func (s *ConnectionManagementService) List(ctx context.Context) ([]ConnectionVie
 	items := []ConnectionView{}
 	for _, provider := range providers {
 		found, err := s.managers[provider].List(ctx)
+		if errors.Is(err, ErrConnForbidden) {
+			continue // delegated scopes differ per provider: what this person may not manage is simply not listed
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +184,7 @@ func (s *ConnectionManagementService) Get(ctx context.Context, id uuid.UUID) (Co
 	}
 	for _, manager := range s.managers {
 		item, err := manager.Get(ctx, id)
-		if errors.Is(err, ErrConnNotFound) {
+		if errors.Is(err, ErrConnNotFound) || errors.Is(err, ErrConnForbidden) {
 			continue
 		}
 		return item, err
@@ -189,7 +197,7 @@ func (s *ConnectionManagementService) session(ctx context.Context, id uuid.UUID)
 		return nil, err
 	}
 	for _, manager := range s.managers {
-		if _, err := manager.Get(ctx, id); errors.Is(err, ErrConnNotFound) {
+		if _, err := manager.Get(ctx, id); errors.Is(err, ErrConnNotFound) || errors.Is(err, ErrConnForbidden) {
 			continue
 		} else if err != nil {
 			return nil, err

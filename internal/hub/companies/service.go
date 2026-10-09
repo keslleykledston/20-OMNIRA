@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -52,7 +54,9 @@ type Company struct {
 	Integrations     int             `json:"integrations"`
 	OpenConversation int             `json:"open_conversations"`
 	Agents           int             `json:"agents"`
-	CreatedAt        time.Time       `json:"created_at"`
+	// ManagementScopes — what the contract delegates the Hub to MANAGE in this company (ADR-0038 phase 3): channels, integrations.
+	ManagementScopes []string  `json:"management_scopes"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type CreateInput struct {
@@ -65,7 +69,13 @@ type CreateInput struct {
 type UpdateInput struct {
 	Status       string          // "" = unchanged; active | suspended
 	Capabilities map[string]bool // nil/empty = unchanged
+	// ManagementScopes replaces the delegated management scopes; nil = unchanged, an empty slice withdraws every delegation.
+	ManagementScopes *[]string
 }
+
+// ManageableScopes are the scopes a contract can delegate today. 'team', 'queues' and 'settings' are reserved by the schema and
+// not offered: nothing would read them.
+var ManageableScopes = []string{"channels", "integrations"}
 
 type Service struct {
 	pool *pgxpool.Pool
@@ -121,12 +131,13 @@ const companyColumns = `
 	(SELECT count(*) FROM channel_connections cc WHERE cc.tenant_id = t.id AND cc.channel = 'whatsapp'),
 	(SELECT count(*) FROM channel_connections cc WHERE cc.tenant_id = t.id AND cc.channel = 'erp'),
 	(SELECT count(*) FROM conversations cv WHERE cv.tenant_id = t.id AND cv.status <> 'closed'),
-	(SELECT count(*) FROM effective_access_grants g WHERE g.tenant_id = t.id AND g.hub_id = c.hub_id AND g.status = 'active')`
+	(SELECT count(*) FROM effective_access_grants g WHERE g.tenant_id = t.id AND g.hub_id = c.hub_id AND g.status = 'active'),
+	c.management_scopes`
 
 func scanCompany(row pgx.Row) (Company, error) {
 	var co Company
 	err := row.Scan(&co.ID, &co.LegalName, &co.TradeName, &co.DisplayName, &co.Status, &co.ContractStatus, &co.CreatedAt,
-		&co.Channels, &co.Integrations, &co.OpenConversation, &co.Agents)
+		&co.Channels, &co.Integrations, &co.OpenConversation, &co.Agents, &co.ManagementScopes)
 	return co, err
 }
 
@@ -328,8 +339,25 @@ func (s *Service) Update(ctx context.Context, operator, hub, tenant uuid.UUID, i
 	if in.Status != "" && in.Status != "active" && in.Status != "suspended" {
 		return Company{}, invalid("status must be active or suspended")
 	}
-	if in.Status == "" && len(in.Capabilities) == 0 {
+	if in.Status == "" && len(in.Capabilities) == 0 && in.ManagementScopes == nil {
 		return Company{}, invalid("nothing to change")
+	}
+	var scopes []string
+	if in.ManagementScopes != nil {
+		seen := map[string]bool{}
+		for _, sc := range *in.ManagementScopes {
+			if !slices.Contains(ManageableScopes, sc) {
+				return Company{}, invalid("management scope %q is not available (use channels or integrations)", sc)
+			}
+			if !seen[sc] {
+				seen[sc] = true
+				scopes = append(scopes, sc)
+			}
+		}
+		sort.Strings(scopes)
+		if scopes == nil {
+			scopes = []string{}
+		}
 	}
 	for k := range in.Capabilities {
 		if !entitlements.Known(k) {
@@ -376,6 +404,20 @@ func (s *Service) Update(ctx context.Context, operator, hub, tenant uuid.UUID, i
 			}
 			if effective != want {
 				if err := audit(c, q, tenant, operator, "platform.company.capability_changed", map[string]any{"hub_id": hub, "capability": cap.Key, "from": effective, "to": want}); err != nil {
+					return err
+				}
+			}
+		}
+		if in.ManagementScopes != nil {
+			var prev []string
+			if err := q.QueryRow(c, `SELECT management_scopes FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR UPDATE`, hub, tenant).Scan(&prev); err != nil {
+				return err
+			}
+			if !slices.Equal(prev, scopes) {
+				if _, err := q.Exec(c, `UPDATE hub_tenant_service_contracts SET management_scopes = $3, updated_at = now() WHERE hub_id = $1 AND tenant_id = $2`, hub, tenant, scopes); err != nil {
+					return err
+				}
+				if err := audit(c, q, tenant, operator, "platform.company.management_scopes_changed", map[string]any{"hub_id": hub, "from": prev, "to": scopes}); err != nil {
 					return err
 				}
 			}

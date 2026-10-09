@@ -12,11 +12,10 @@ import {
 } from '../components/primitives'
 import {
   integrationErrorMessage,
-  integrationsAPI,
   type ChannelConnection,
   type ProviderDescriptor,
 } from '../lib/integrations'
-import { getTenantId } from '../lib/session'
+import { useChannelScope } from '../features/channels/ChannelScope'
 import { PROVIDER_KIND_LABEL, STATE_LABEL, STATE_VARIANT, formatAccount, toConnectionState } from '../features/channels/types'
 import { WizardStepper } from '../features/channels/components/WizardStepper'
 import { QRCodeView, QRInstructions } from '../features/channels/components/QRCodeView'
@@ -35,6 +34,8 @@ const STEPS = [
 
 export default function WahaWizardPage() {
   const navigate = useNavigate()
+  const scope = useChannelScope()
+  const { api } = scope
   const [params] = useSearchParams()
   const providerId = params.get('provider') ?? 'waha'
   const resumeId = params.get('connection')
@@ -43,8 +44,8 @@ export default function WahaWizardPage() {
   const [cancelOpen, setCancelOpen] = useState(false)
 
   const providers = useQuery({
-    queryKey: ['channel-providers', getTenantId()],
-    queryFn: () => integrationsAPI.providers(),
+    queryKey: ['channel-providers', scope.key],
+    queryFn: () => api.providers(),
     retry: false,
   })
   const provider: ProviderDescriptor | undefined = useMemo(
@@ -54,8 +55,8 @@ export default function WahaWizardPage() {
 
   // Resuming a connection that already exists (card action "Detalhes").
   const resumed = useQuery({
-    queryKey: ['channel-connection', getTenantId(), resumeId],
-    queryFn: () => integrationsAPI.get(resumeId!),
+    queryKey: ['channel-connection', scope.key, resumeId],
+    queryFn: () => api.get(resumeId!),
     enabled: !!resumeId && !connection,
     retry: false,
   })
@@ -70,11 +71,11 @@ export default function WahaWizardPage() {
       onCancel={() => setCancelOpen(true)}
       cancelOpen={cancelOpen}
       onCancelDismiss={() => setCancelOpen(false)}
-      onCancelConfirm={() => navigate('/channels')}
+      onCancelConfirm={() => navigate(scope.basePath)}
       navigate={navigate}
     />
   ) : (
-    <Shell step={1} onBack={() => navigate('/channels')}>
+    <Shell step={1} onBack={() => navigate(scope.basePath)}>
       <ConfigureStep
         provider={provider}
         isLoading={providers.isLoading}
@@ -86,7 +87,7 @@ export default function WahaWizardPage() {
               : null
         }
         onCreated={setConnection}
-        onCancel={() => navigate('/channels')}
+        onCancel={() => navigate(scope.basePath)}
       />
     </Shell>
   )
@@ -157,15 +158,16 @@ function ConfigureStep({
   onCreated: (c: ChannelConnection) => void
   onCancel: () => void
 }) {
+  const { api } = useChannelScope()
   const [values, setValues] = useState<Record<string, string>>({})
   const [acknowledged, setAcknowledged] = useState(false)
 
   const create = useMutation({
     mutationFn: async () => {
-      const created = await integrationsAPI.create(provider!.id, values, acknowledged)
+      const created = await api.create(provider!.id, values, acknowledged)
       // Start the gateway session right away so step 2 has something to show.
       try {
-        return await integrationsAPI.start(created.id)
+        return await api.start(created.id)
       } catch {
         return created
       }
@@ -262,6 +264,7 @@ function ConnectedFlow({
   onCancelConfirm: () => void
   navigate: (to: string) => void
 }) {
+  const scope = useChannelScope()
   const { connection: live, state } = useLiveConnection(connection)
   const qr = useConnectionQr(connection.id, state)
   const restart = useRestartSession(connection.id)
@@ -363,10 +366,10 @@ function ConnectedFlow({
             </dl>
 
             <div className="mt-8 flex w-full max-w-sm flex-col gap-2 sm:flex-row">
-              <Button variant="primary" className="flex-1" onClick={() => navigate('/inbox')}>
+              <Button variant="primary" className="flex-1" onClick={() => navigate(scope.inboxPath)}>
                 Ir para conversas
               </Button>
-              <Button variant="secondary" className="flex-1" onClick={() => navigate('/channels')}>
+              <Button variant="secondary" className="flex-1" onClick={() => navigate(scope.basePath)}>
                 Voltar aos canais
               </Button>
             </div>

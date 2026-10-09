@@ -1,0 +1,16 @@
+DROP FUNCTION IF EXISTS managed_instances(UUID, UUID);
+DROP POLICY IF EXISTS audit_events_hub_manage_read_own ON audit_events;
+DROP FUNCTION IF EXISTS lock_managed_tenant(UUID, UUID);
+DROP POLICY IF EXISTS tenant_entitlements_hub_manage_read ON tenant_entitlements;
+DROP POLICY IF EXISTS channel_credentials_hub_manage_delete ON channel_credentials;
+DROP POLICY IF EXISTS channel_credentials_hub_manage_update ON channel_credentials;
+DROP POLICY IF EXISTS channel_credentials_hub_manage_insert ON channel_credentials;
+DROP POLICY IF EXISTS channel_credentials_hub_manage_read ON channel_credentials;
+DROP POLICY IF EXISTS channel_connections_hub_manage_delete ON channel_connections;
+DROP POLICY IF EXISTS channel_connections_hub_manage_update ON channel_connections;
+DROP POLICY IF EXISTS channel_connections_hub_manage_insert ON channel_connections;
+DROP POLICY IF EXISTS channel_connections_hub_manage_read ON channel_connections;
+DROP FUNCTION IF EXISTS channel_connection_scope(TEXT);
+DROP FUNCTION IF EXISTS has_hub_manage_access(UUID, UUID, TEXT, UUID);
+ALTER TABLE effective_access_grants DROP COLUMN IF EXISTS can_manage;
+ALTER TABLE hub_tenant_service_contracts DROP COLUMN IF EXISTS management_scopes;

@@ -17,6 +17,10 @@ import (
 
 const PermissionChannelManage = "channel.manage"
 
+// PermissionIntegrationManage — gerir conexões de ERP/CRM. Para quem é membro da empresa vale o MESMO papel de channel.manage (nada muda
+// para o tenant); para a gestão delegada pelo Hub é outro escopo do contrato ("integrations", não "channels").
+const PermissionIntegrationManage = "integration.manage"
+
 var (
 	ErrConnForbidden       = errors.New("channel: forbidden")
 	ErrConnNotFound        = errors.New("channel: connection not found")
@@ -64,7 +68,7 @@ func NewWahaConnectionService(conns ports.ChannelConnectionRepository, credentia
 
 func (s *WahaConnectionService) authorize(ctx context.Context) (*tenancydomain.TenantContext, error) {
 	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil || tc.Source != tenancydomain.AccessSourceDirect {
+	if err != nil || !tc.MayManageAsTenant() {
 		return nil, ErrConnForbidden
 	}
 	ok, err := s.perms.HasPermission(ctx, tc.ActorID, PermissionChannelManage)

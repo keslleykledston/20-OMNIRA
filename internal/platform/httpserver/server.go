@@ -460,6 +460,12 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/claim", authnMiddleware(userSession(http.HandlerFunc(h.ClaimItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/messages", authnMiddleware(userSession(http.HandlerFunc(h.ReplyItem))))
+	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}/transfer-candidates", authnMiddleware(userSession(http.HandlerFunc(h.TransferCandidates))))
+	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/transfer", authnMiddleware(userSession(http.HandlerFunc(h.TransferItem))))
+	if adminAPI {
+		// ADR-0038 phase 3: the instances this person may manage through the hub (the same flag as the managed channel routes).
+		s.mux.Handle("GET /api/v1/hubs/{hub_id}/managed", authnMiddleware(userSession(http.HandlerFunc(h.ListManaged))))
+	}
 	if accessAPI {
 		// ADR-0039: people and permissions. Only an admin of the hub in the path gets past the handler (uniform 404 otherwise).
 		a, err := hubadapters.NewAccessHandler(dbPool)
@@ -472,6 +478,15 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/invitations/{invitation_id}", authnMiddleware(userSession(http.HandlerFunc(a.RevokeInvitation))))
 			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/agents/{user_id}", authnMiddleware(userSession(http.HandlerFunc(a.RemoveAgent))))
 			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}", authnMiddleware(userSession(http.HandlerFunc(a.SetAccess))))
+			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}/management", authnMiddleware(userSession(http.HandlerFunc(a.SetManage))))
+			// ADR-0038 phase 4: work pools (who answers for which instance, and automatic distribution). Hub admins only.
+			pools := hubadapters.NewPoolsHandler(dbPool)
+			s.mux.Handle("GET /api/v1/hubs/{hub_id}/pools", authnMiddleware(userSession(http.HandlerFunc(pools.List))))
+			s.mux.Handle("POST /api/v1/hubs/{hub_id}/pools", authnMiddleware(userSession(http.HandlerFunc(pools.Create))))
+			s.mux.Handle("PATCH /api/v1/hubs/{hub_id}/pools/{pool_id}", authnMiddleware(userSession(http.HandlerFunc(pools.Update))))
+			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/pools/{pool_id}", authnMiddleware(userSession(http.HandlerFunc(pools.Delete))))
+			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/pools/{pool_id}/members", authnMiddleware(userSession(http.HandlerFunc(pools.SetMembers))))
+			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/pools/{pool_id}/instances", authnMiddleware(userSession(http.HandlerFunc(pools.SetInstances))))
 			s.mux.Handle("POST /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins", authnMiddleware(userSession(http.HandlerFunc(a.AddInstanceAdmin))))
 			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins/{user_id}", authnMiddleware(userSession(http.HandlerFunc(a.RemoveInstanceAdmin))))
 		}
@@ -916,7 +931,7 @@ func (s *Server) RegisterChannelTemplates(dbPool *pgxpool.Pool, h *channeladapte
 
 // RegisterChannelManagementHandlers exposes the provider-neutral catalog and
 // connection routes introduced in I0. Provider-specific paths remain aliases.
-func (s *Server) RegisterChannelManagementHandlers(dbPool *pgxpool.Pool, h *channeladapters.ManagementHandler) {
+func (s *Server) RegisterChannelManagementHandlers(dbPool *pgxpool.Pool, h *channeladapters.ManagementHandler, hubManaged bool) {
 	if s.authenticator == nil || h == nil {
 		return
 	}
@@ -936,6 +951,22 @@ func (s *Server) RegisterChannelManagementHandlers(dbPool *pgxpool.Pool, h *chan
 	s.mux.Handle("POST "+base+"/{connection_id}/session/start", wrap(h.StartSession))
 	s.mux.Handle("POST "+base+"/{connection_id}/session/stop", wrap(h.StopSession))
 	s.mux.Handle("GET "+base+"/{connection_id}/qr", wrap(h.QR))
+	if hubManaged {
+		// ADR-0038 phase 3: the SAME handlers, reached by a Hub person the contract delegates channel/integration management to.
+		// The middleware proves hub -> contract -> role/grant and builds a `hub_manage` context; each permission is then asked of the
+		// database again (scope channels / integrations) and the row-level policies of migration 103 are the second barrier.
+		hubBase := "/api/v1/hubs/{hub_id}/instances/{tenant_id}/channels/connections"
+		manage := hubadapters.ManageSession(dbPool)
+		hubWrap := func(fn http.HandlerFunc) http.Handler { return authnMiddleware(manage(fn)) }
+		s.mux.Handle("GET /api/v1/hubs/{hub_id}/instances/{tenant_id}/channels/providers", hubWrap(h.Providers))
+		s.mux.Handle("POST "+hubBase, hubWrap(h.Create))
+		s.mux.Handle("GET "+hubBase, hubWrap(h.List))
+		s.mux.Handle("GET "+hubBase+"/{connection_id}", hubWrap(h.Get))
+		s.mux.Handle("POST "+hubBase+"/{connection_id}/test", hubWrap(h.TestConnection))
+		s.mux.Handle("POST "+hubBase+"/{connection_id}/session/start", hubWrap(h.StartSession))
+		s.mux.Handle("POST "+hubBase+"/{connection_id}/session/stop", hubWrap(h.StopSession))
+		s.mux.Handle("GET "+hubBase+"/{connection_id}/qr", hubWrap(h.QR))
+	}
 }
 
 // RegisterWahaWebhook exposes only the connection-scoped WAHA callback.

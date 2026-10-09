@@ -5,6 +5,7 @@ import { describeHubWriteError, hubWriteAPI, type HubItemDetail, type HubMessage
 import { handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { TenantBadge } from '../primitives/TenantBadge';
 import MessageComposer from '../inbox/MessageComposer';
+import TransferDialog from './TransferDialog';
 import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 
 const TYPE_LABEL: Record<string, string> = { image: 'Imagem', video: 'Vídeo', audio: 'Áudio', document: 'Documento', sticker: 'Figurinha' };
@@ -47,6 +48,7 @@ export default function HubItemView({ hubId, detail, onBack }: { hubId: string; 
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [transferring, setTransferring] = useState(false);
   // A retry of the SAME text keeps its key (no double send); a different text is a new attempt.
   const pending = useRef<{ text: string; key: string } | null>(null);
   const tenantName = detail.tenant.name || detail.item.tenant_name || 'Instância não identificada';
@@ -141,6 +143,11 @@ export default function HubItemView({ hubId, detail, onBack }: { hubId: string; 
           </div>
         )}
         {mode === 'reply' && (
+          <div className="mb-1 flex justify-end">
+            <button type="button" onClick={() => setTransferring(true)} className="text-xs font-medium text-accent-primary underline-offset-2 hover:underline">Transferir conversa</button>
+          </div>
+        )}
+        {mode === 'reply' && (
           <MessageComposer
             draftKey={`hub:${detail.tenant.id}:${detail.conversation.id}`}
             onSend={send}
@@ -150,6 +157,8 @@ export default function HubItemView({ hubId, detail, onBack }: { hubId: string; 
           />
         )}
       </footer>
+      <TransferDialog hubId={hubId} detail={detail} open={transferring} onClose={() => setTransferring(false)}
+        onDone={() => { setTransferring(false); void refresh(); void queryClient.invalidateQueries({ queryKey: ['hub-inbox', hubId] }); }} />
     </div>
   );
 }

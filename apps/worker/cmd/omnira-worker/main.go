@@ -50,6 +50,7 @@ import (
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	flowsworker "github.com/omnira/omnira/internal/worker/flows"
+	"github.com/omnira/omnira/internal/worker/hubdistributor"
 	"github.com/omnira/omnira/internal/worker/hubprojector"
 	intelligenceworker "github.com/omnira/omnira/internal/worker/intelligence"
 	"github.com/omnira/omnira/internal/worker/jobsstream"
@@ -210,6 +211,12 @@ func main() {
 		interval := time.Duration(cfg.HubProjectorIntervalSeconds) * time.Second
 		go hubprojector.New(dbPool).Run(workerCtx, interval)
 		log.Printf("Hub inbox projector started (every %s)\n", interval)
+	}
+	// ADR-0038 phase 4: distribute new conversations among the members of round-robin work pools (needs migration 104).
+	if cfg.HubDistributorEnabled {
+		every := time.Duration(cfg.HubDistributorIntervalSeconds) * time.Second
+		go hubdistributor.New(dbPool).Run(workerCtx, every)
+		log.Printf("Hub work-pool distributor started (every %s)\n", every)
 	}
 	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool)
 	go routingworker.NewSweep(livenessRepo).Run(workerCtx)

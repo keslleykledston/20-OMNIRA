@@ -290,7 +290,7 @@ func main() {
 	} else if err := providerRegistry.RegisterDescriptor(waha.Descriptor(false, wahaReason), nil); err != nil {
 		log.Fatalf("WAHA provider descriptor error: %v", err)
 	}
-	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management))
+	srv.RegisterChannelManagementHandlers(dbPool, channeladapters.NewManagementHandler(management), cfg.HubAPIEnabled && cfg.HubAdminAPIEnabled)
 	srv.RegisterChannelDirectory(dbPool, channeladapters.NewDirectoryHandler(erpConnections, erpCredentials))
 	// ADR-0020: finalize an attendance, and the contact's attendance history and pending items. Always on: it is an explicit
 	// action behind the existing conversation.claim / conversation.manage permissions. Built first because the copilot's

@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Button, Icon, Input, Modal } from '../../../components/primitives'
 import { syncTemplates } from '../../../lib/templates'
+import { useChannelScope } from '../ChannelScope'
 import {
   integrationErrorMessage,
-  integrationsAPI,
   type ChannelConnection,
   type ProviderDescriptor,
 } from '../../../lib/integrations'
@@ -53,6 +53,7 @@ export function CredentialsConnectDialog({ open, provider, connection, onClose, 
   const [created, setCreated] = useState<ChannelConnection | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const { api, instanceName } = useChannelScope()
 
   const active = connection ?? created
   const reset = () => {
@@ -67,7 +68,7 @@ export function CredentialsConnectDialog({ open, provider, connection, onClose, 
   }
 
   const create = useMutation({
-    mutationFn: () => integrationsAPI.create(provider!.id, values, false),
+    mutationFn: () => api.create(provider!.id, values, false),
     onSuccess: (c) => {
       setError(null)
       setValues({}) // secrets leave the page state as soon as they are sent
@@ -98,7 +99,7 @@ export function CredentialsConnectDialog({ open, provider, connection, onClose, 
   })
 
   const test = useMutation({
-    mutationFn: (id: string) => integrationsAPI.test(id),
+    mutationFn: (id: string) => api.test(id),
     onSuccess: (c) => {
       setError(null)
       setCreated(c)
@@ -142,9 +143,12 @@ export function CredentialsConnectDialog({ open, provider, connection, onClose, 
             <Button variant="secondary" onClick={close}>
               Fechar
             </Button>
-            <Button variant="secondary" onClick={() => sync.mutate(active.id)} disabled={sync.isPending}>
-              {sync.isPending ? 'Sincronizando…' : 'Sincronizar templates'}
-            </Button>
+            {/* Syncing Meta templates is not delegated through the Hub yet (ADR-0038 phase 3 covers connections); the instance's own team does it */}
+            {!instanceName && (
+              <Button variant="secondary" onClick={() => sync.mutate(active.id)} disabled={sync.isPending}>
+                {sync.isPending ? 'Sincronizando…' : 'Sincronizar templates'}
+              </Button>
+            )}
             <Button variant="primary" onClick={() => test.mutate(active.id)} disabled={test.isPending}>
               {test.isPending ? 'Testando…' : 'Testar conexão'}
             </Button>

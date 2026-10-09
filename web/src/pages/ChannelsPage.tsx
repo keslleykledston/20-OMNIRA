@@ -13,11 +13,10 @@ import {
 } from '../components/primitives'
 import {
   integrationErrorMessage,
-  integrationsAPI,
   type ChannelConnection,
   type ProviderDescriptor,
 } from '../lib/integrations'
-import { getTenantId } from '../lib/session'
+import { useChannelScope } from '../features/channels/ChannelScope'
 import { CHANNEL_TABS } from '../features/channels/types'
 import {
   ChannelCardSkeleton,
@@ -31,7 +30,8 @@ import { connectionsKey, useLiveConnection } from '../features/channels/data/use
 export default function ChannelsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const tenantId = getTenantId()
+  const scope = useChannelScope()
+  const { api } = scope
 
   const [tab, setTab] = useState<string>('all')
   const [addOpen, setAddOpen] = useState(false)
@@ -41,14 +41,14 @@ export default function ChannelsPage() {
   const [actionError, setActionError] = useState<string | null>(null)
 
   const providers = useQuery({
-    queryKey: ['channel-providers', tenantId],
-    queryFn: () => integrationsAPI.providers(),
+    queryKey: ['channel-providers', scope.key],
+    queryFn: () => api.providers(),
     retry: false,
   })
 
   const connections = useQuery({
-    queryKey: connectionsKey(),
-    queryFn: () => integrationsAPI.list(),
+    queryKey: connectionsKey(scope.key),
+    queryFn: () => api.list(),
     retry: false,
   })
 
@@ -58,16 +58,16 @@ export default function ChannelsPage() {
     return map
   }, [providers.data])
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: connectionsKey() })
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: connectionsKey(scope.key) })
 
   const start = useMutation({
-    mutationFn: (id: string) => integrationsAPI.start(id),
+    mutationFn: (id: string) => api.start(id),
     onSuccess: () => void invalidate(),
     onError: (e) => setActionError(integrationErrorMessage(e, 'Não foi possível iniciar a sessão.')),
   })
 
   const stop = useMutation({
-    mutationFn: (id: string) => integrationsAPI.stop(id),
+    mutationFn: (id: string) => api.stop(id),
     onSuccess: () => {
       setPendingStop(null)
       void invalidate()
@@ -79,7 +79,7 @@ export default function ChannelsPage() {
   })
 
   const test = useMutation({
-    mutationFn: (id: string) => integrationsAPI.test(id),
+    mutationFn: (id: string) => api.test(id),
     onSuccess: () => void invalidate(),
     onError: (e) => setActionError(integrationErrorMessage(e, 'Não foi possível testar a conexão.')),
   })
@@ -93,7 +93,7 @@ export default function ChannelsPage() {
   const onPickProvider = (p: ProviderDescriptor) => {
     setAddOpen(false)
     if (p.connect_method === 'qr_session') {
-      navigate(`/channels/whatsapp/new?provider=${p.id}`)
+      navigate(`${scope.basePath}/whatsapp/new?provider=${p.id}`)
     } else if (p.connect_method === 'credentials') {
       setCredConnection(null)
       setCredProvider(p)
@@ -103,8 +103,8 @@ export default function ChannelsPage() {
   return (
     <div className="px-6 py-6 lg:px-8 lg:py-8">
       <PageHeader
-        title="Canais"
-        description="Conecte e gerencie seus canais de atendimento."
+        title={scope.instanceName ? `Canais e integrações — ${scope.instanceName}` : 'Canais'}
+        description={scope.instanceName ? 'Conecte e gerencie os canais e integrações desta instância, delegados ao Hub pelo contrato.' : 'Conecte e gerencie seus canais de atendimento.'}
         className="mb-4 border-b-0 bg-transparent p-0"
         actions={
           <Button variant="primary" size="md" onClick={() => setAddOpen(true)}>
@@ -228,6 +228,7 @@ function LiveChannelConnectionCard({
   startPending: boolean
 }) {
   const navigate = useNavigate()
+  const { basePath } = useChannelScope()
   const { connection: live, state } = useLiveConnection(connection)
   const isLive = state === 'connected' || state === 'degraded'
 
@@ -258,7 +259,7 @@ function LiveChannelConnectionCard({
       connection={live}
       provider={provider}
       actions={actions}
-      onOpenDetails={state === 'qr_required' ? () => navigate(`/channels/whatsapp/new?connection=${live.id}`) : undefined}
+      onOpenDetails={state === 'qr_required' ? () => navigate(`${basePath}/whatsapp/new?connection=${live.id}`) : undefined}
     />
   )
 }

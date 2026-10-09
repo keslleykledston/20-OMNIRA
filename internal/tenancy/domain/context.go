@@ -33,6 +33,10 @@ const (
 	AccessSourceDirect AccessSource = "direct" // usuário tem membership direto no tenant
 	AccessSourceHub    AccessSource = "hub"    // usuário acessa via hub grant
 	AccessSourceSystem AccessSource = "system" // operação de sistema
+	// AccessSourceHubManage — o Hub GERE (canais/integrações) a empresa, por contrato + papel/grant (ADR-0038 fase 3). É uma fonte
+	// PRÓPRIA de propósito: todo código que exige AccessSourceDirect (envio de mensagem, tickets, roteamento...) continua recusando
+	// este contexto; só os serviços de gestão de canal o aceitam, e cada permissão é revalidada no banco.
+	AccessSourceHubManage AccessSource = "hub_manage"
 )
 
 // NewTenantContext — factory. Exige tenant_id e, para acesso humano,
@@ -81,6 +85,33 @@ func NewHubTenantContext(
 		EffectiveGrantID:  &grantID,
 		CorrelationID:     correlationID,
 	}, nil
+}
+
+// NewHubManageTenantContext — contexto de GESTÃO delegada pelo Hub. grantID é nulo para o administrador do Hub (que gere pelo
+// papel, sem grant). O escopo (canais, integrações...) NÃO vai no contexto: cada permissão pergunta ao banco, ao vivo.
+func NewHubManageTenantContext(tenantID, actorID, hubID, contractID uuid.UUID, grantID *uuid.UUID, correlationID string) (*TenantContext, error) {
+	if tenantID == uuid.Nil || actorID == uuid.Nil || hubID == uuid.Nil || contractID == uuid.Nil {
+		return nil, errors.New("tenant_id, actor_id, hub_id, contract_id required for hub management")
+	}
+	return &TenantContext{
+		TenantID: tenantID, ActorID: actorID, Source: AccessSourceHubManage,
+		HubID: &hubID, ServiceContractID: &contractID, EffectiveGrantID: grantID, CorrelationID: correlationID,
+	}, nil
+}
+
+// MayManageAsTenant — o contexto pode chegar a um serviço de gestão de canal? Direto (membership) ou gestão delegada pelo Hub com
+// hub e contrato conhecidos. Qualquer outra fonte (inclusive o Hub de leitura/resposta) é recusada.
+func (tc *TenantContext) MayManageAsTenant() bool {
+	if tc == nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil {
+		return false
+	}
+	switch tc.Source {
+	case AccessSourceDirect:
+		return true
+	case AccessSourceHubManage:
+		return tc.HubID != nil && *tc.HubID != uuid.Nil && tc.ServiceContractID != nil && *tc.ServiceContractID != uuid.Nil
+	}
+	return false
 }
 
 // ContextKey — chave para armazenar TenantContext no context.

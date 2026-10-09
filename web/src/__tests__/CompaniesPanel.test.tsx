@@ -66,6 +66,27 @@ describe('CompaniesPanel', () => {
     expect(body).toEqual({ capabilities: { whatsapp_channel: false } });
   });
 
+  it('delegating management sends the whole new list of scopes for exactly that company, and withdrawing sends what is left', async () => {
+    companies = [company('A', { management_scopes: ['channels'] }), company('B')];
+    serve();
+    vi.mocked(axios.patch).mockResolvedValue({ data: company('A') });
+    renderAt(<CompaniesPanel hubId="hub-1" />);
+    const a = await screen.findByRole('region', { name: 'Instância Instância A' });
+    expect(within(a).getByLabelText(/Canais de atendimento/)).toBeChecked();
+    expect(within(a).getByLabelText(/Integrações de retaguarda/)).not.toBeChecked();
+    expect(within(a).getByRole('link', { name: 'Abrir canais e integrações' })).toHaveAttribute('href', '/instancias/hub-1/A/canais');
+    await userEvent.click(within(a).getByLabelText(/Integrações de retaguarda/));
+    await waitFor(() => expect(axios.patch).toHaveBeenCalledTimes(1));
+    expect(String(vi.mocked(axios.patch).mock.calls[0][0])).toMatch(/\/hubs\/hub-1\/companies\/A$/);
+    expect(vi.mocked(axios.patch).mock.calls[0][1]).toEqual({ management_scopes: ['channels', 'integrations'] });
+    await userEvent.click(within(a).getByLabelText(/Canais de atendimento/));
+    await waitFor(() => expect(axios.patch).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(axios.patch).mock.calls[1][1]).toEqual({ management_scopes: [] });
+    // a company that delegates nothing offers no way into the channels screen
+    const b = screen.getByRole('region', { name: 'Instância Instância B' });
+    expect(within(b).queryByRole('link', { name: 'Abrir canais e integrações' })).toBeNull();
+  });
+
   it('suspending asks first and says what happens; cancelling changes nothing', async () => {
     renderAt(<CompaniesPanel hubId="hub-1" />);
     const a = await screen.findByRole('region', { name: 'Instância Instância A' });

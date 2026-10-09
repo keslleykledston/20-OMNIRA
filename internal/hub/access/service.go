@@ -81,11 +81,14 @@ type Instance struct {
 	Admins         []Person  `json:"admins"`
 	DirectAgents   int       `json:"direct_agents"` // active members of the company who are not administrators
 	HubAgents      int       `json:"hub_agents"`    // people with a live grant through this hub
+	// ManagementScopes: what the contract delegates the hub to manage here (channels, integrations). Empty = nothing.
+	ManagementScopes []string `json:"management_scopes"`
 }
 
 type Grant struct {
 	TenantID   uuid.UUID  `json:"tenant_id"`
-	Mode       string     `json:"mode"` // read | reply (a revoked/suspended grant is not listed: it is "none")
+	Mode       string     `json:"mode"`       // read | reply (a revoked/suspended grant is not listed: it is "none")
+	CanManage  bool       `json:"can_manage"` // may manage the scopes the contract delegates (ADR-0038 phase 3); never implied by the mode
 	ValidUntil *time.Time `json:"valid_until,omitempty"`
 }
 
@@ -119,7 +122,8 @@ func (s *Service) Overview(ctx context.Context, actor, hub uuid.UUID) (Overview,
 			       (SELECT count(*) FROM memberships m JOIN roles r ON r.id = m.role_id
 			         WHERE m.tenant_id = t.id AND m.status = 'active' AND r.key <> 'tenant_admin'),
 			       (SELECT count(DISTINCT g.user_id) FROM effective_access_grants g
-			         WHERE g.hub_id = k.hub_id AND g.tenant_id = t.id AND g.status = 'active' AND (g.valid_until IS NULL OR g.valid_until > now()))
+			         WHERE g.hub_id = k.hub_id AND g.tenant_id = t.id AND g.status = 'active' AND (g.valid_until IS NULL OR g.valid_until > now())),
+			       k.management_scopes
 			FROM hub_tenant_service_contracts k JOIN tenants t ON t.id = k.tenant_id
 			WHERE k.hub_id = $1 ORDER BY lower(COALESCE(NULLIF(t.trade_name, ''), t.legal_name)), t.id`, hub)
 		if err != nil {
@@ -128,7 +132,7 @@ func (s *Service) Overview(ctx context.Context, actor, hub uuid.UUID) (Overview,
 		idx := map[uuid.UUID]int{}
 		for rows.Next() {
 			var in Instance
-			if err := rows.Scan(&in.TenantID, &in.Name, &in.TenantStatus, &in.ContractStatus, &in.DirectAgents, &in.HubAgents); err != nil {
+			if err := rows.Scan(&in.TenantID, &in.Name, &in.TenantStatus, &in.ContractStatus, &in.DirectAgents, &in.HubAgents, &in.ManagementScopes); err != nil {
 				rows.Close()
 				return err
 			}
@@ -188,7 +192,7 @@ func (s *Service) Overview(ctx context.Context, actor, hub uuid.UUID) (Overview,
 			return err
 		}
 		grants, err := q.Query(c, `
-			SELECT g.user_id, g.tenant_id, g.can_reply, g.valid_until
+			SELECT g.user_id, g.tenant_id, g.can_reply, g.can_manage, g.valid_until
 			FROM effective_access_grants g
 			WHERE g.hub_id = $1 AND g.status = 'active' AND (g.valid_until IS NULL OR g.valid_until > now())`, hub)
 		if err != nil {
@@ -198,7 +202,7 @@ func (s *Service) Overview(ctx context.Context, actor, hub uuid.UUID) (Overview,
 			var user uuid.UUID
 			var g Grant
 			var reply bool
-			if err := grants.Scan(&user, &g.TenantID, &reply, &g.ValidUntil); err != nil {
+			if err := grants.Scan(&user, &g.TenantID, &reply, &g.CanManage, &g.ValidUntil); err != nil {
 				grants.Close()
 				return err
 			}
@@ -329,6 +333,12 @@ func (s *Service) SetAccess(ctx context.Context, actor, hub, user, tenant uuid.U
 	}
 	_, err := s.prov.Grant(pctx, provisioning.GrantSpec{Hub: hub, Tenant: tenant, User: user, ValidUntil: validUntil, CanReply: mode == "reply", Renew: true})
 	return mapProv(err)
+}
+
+// SetManage switches, for one agent on one instance, the delegated management of channels/integrations (the "Gerenciar" switch).
+// It needs a live grant and only matters where the contract delegates a scope (the panel shows both facts).
+func (s *Service) SetManage(ctx context.Context, actor, hub, user, tenant uuid.UUID, can bool) error {
+	return mapProv(s.prov.SetManage(provisioning.WithActor(ctx, actor), hub, tenant, user, can))
 }
 
 // ------------------------------------------------------------------ instance administrators

@@ -195,6 +195,36 @@ func (h *AccessHandler) SetAccess(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type setManageRequest struct {
+	CanManage bool `json:"can_manage"`
+}
+
+// PUT /api/v1/hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}/management
+// The "Gerenciar" switch (ADR-0038 phase 3): needs a live grant; matters only where the contract delegates a management scope.
+func (h *AccessHandler) SetManage(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := h.scope(w, r)
+	if !ok {
+		return
+	}
+	user, ok := pathUUID(w, r, "user_id")
+	if !ok {
+		return
+	}
+	tenant, ok := pathUUID(w, r, "tenant_id")
+	if !ok {
+		return
+	}
+	var body setManageRequest
+	if !decodeWrite(w, r, &body) {
+		return
+	}
+	if err := h.svc.SetManage(r.Context(), actor, hub, user, tenant, body.CanManage); err != nil {
+		writeAccessPanelError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // POST /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins
 func (h *AccessHandler) AddInstanceAdmin(w http.ResponseWriter, r *http.Request) {
 	actor, hub, ok := h.scope(w, r)

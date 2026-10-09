@@ -482,6 +482,9 @@ func (s *Service) Grant(ctx context.Context, spec GrantSpec) (uuid.UUID, error) 
 		                         VALUES ($1, $2, $3, $4, $5, $6)
 		                         ON CONFLICT (hub_id, user_id, tenant_id, service_contract_id) DO UPDATE SET
 		                           status = 'active', valid_until = EXCLUDED.valid_until, can_reply = EXCLUDED.can_reply,
+		                           -- management survives a change of the reading/replying mode of a LIVE grant, but a grant that was
+		                           -- revoked or suspended comes back WITHOUT it: renewing access never revives a delegation of management
+		                           can_manage = CASE WHEN effective_access_grants.status = 'active' THEN effective_access_grants.can_manage ELSE false END,
 		                           grant_version = effective_access_grants.grant_version + 1, updated_at = now()
 		                         RETURNING id`, spec.Hub, spec.User, spec.Tenant, contract, spec.ValidUntil, spec.CanReply).Scan(&id); err != nil {
 			return err
@@ -512,10 +515,36 @@ func (s *Service) RevokeGrant(ctx context.Context, hub, tenant, user uuid.UUID) 
 		if status == "revoked" {
 			return nil
 		}
-		if _, err := q.Exec(c, `UPDATE effective_access_grants SET status = 'revoked', grant_version = grant_version + 1, updated_at = now() WHERE id = $1`, id); err != nil {
+		if _, err := q.Exec(c, `UPDATE effective_access_grants SET status = 'revoked', can_manage = false, grant_version = grant_version + 1, updated_at = now() WHERE id = $1`, id); err != nil {
 			return err
 		}
 		return s.audit(c, q, &tenant, "hub.grant.revoked", "hub_grant", id, map[string]any{"hub_id": hub, "user_id": user, "from": status})
+	})
+}
+
+// SetManage switches the delegated MANAGEMENT of channels/integrations on or off for one live grant (ADR-0038 phase 3). It is never
+// implied by reading or replying, and it needs an active grant: management without the right to see the instance makes no sense.
+func (s *Service) SetManage(ctx context.Context, hub, tenant, user uuid.UUID, can bool) error {
+	return s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := s.guard(c, q, hub); err != nil {
+			return err
+		}
+		var id uuid.UUID
+		var status string
+		var prev bool
+		if err := q.QueryRow(c, `SELECT id, status, can_manage FROM effective_access_grants WHERE hub_id = $1 AND tenant_id = $2 AND user_id = $3 FOR UPDATE`, hub, tenant, user).Scan(&id, &status, &prev); err != nil {
+			return mapNoRows(err, "user %s has no grant on tenant %s in hub %s", user, tenant, hub)
+		}
+		if status != "active" {
+			return invalid("the grant is %s: give the person access first", status)
+		}
+		if prev == can {
+			return nil
+		}
+		if _, err := q.Exec(c, `UPDATE effective_access_grants SET can_manage = $2, grant_version = grant_version + 1, updated_at = now() WHERE id = $1`, id, can); err != nil {
+			return err
+		}
+		return s.audit(c, q, &tenant, "hub.grant.manage_changed", "hub_grant", id, map[string]any{"hub_id": hub, "user_id": user, "can_manage": can})
 	})
 }
 

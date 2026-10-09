@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/application"
+	"github.com/omnira/omnira/internal/hub/distribution"
 	"github.com/omnira/omnira/internal/hub/domain"
 	messagesapp "github.com/omnira/omnira/internal/messages/application"
 	messagesports "github.com/omnira/omnira/internal/messages/ports"
@@ -35,6 +36,10 @@ var (
 	ErrTaken = errors.New("replying: conversation is assigned to another agent")
 	// ErrClosed: the attendance was finalized.
 	ErrClosed = errors.New("replying: conversation is closed")
+	// ErrNotHolder: only the person who holds the conversation may hand it over.
+	ErrNotHolder = errors.New("replying: the conversation is not yours")
+	// ErrTransferTarget: the person chosen cannot take this conversation right now (no live reply grant, inactive, or the same person).
+	ErrTransferTarget = errors.New("replying: transfer target not available")
 )
 
 // ItemLoader reads an inbox item through the caller's RLS session.
@@ -218,4 +223,100 @@ func (s *Service) Send(ctx context.Context, actor uuid.UUID, t *Target, text, ke
 		return s.audit(c, t, actor, "hub.message.sent", "message", r.Message.ID, map[string]any{"message_id": r.Message.ID})
 	})
 	return res, err
+}
+
+// Candidate is a person the conversation can be handed to, with how much they already hold in this hub.
+type Candidate struct {
+	UserID uuid.UUID `json:"user_id"`
+	Name   string    `json:"name"`
+	Email  string    `json:"email"`
+	Load   int       `json:"load"`
+}
+
+// holds locks the conversation and proves the actor is its current holder (and still delegated). It returns the conversation's queue.
+func (s *Service) holds(c context.Context, t *Target, actor uuid.UUID) (queue *uuid.UUID, err error) {
+	assigned, closed, err := s.delegationHolds(c, t, actor, "FOR UPDATE")
+	if err != nil {
+		return nil, err
+	}
+	if closed {
+		return nil, ErrClosed
+	}
+	if assigned == nil || *assigned != actor {
+		return nil, ErrNotHolder
+	}
+	err = platformdb.QuerierFromContext(c, s.pool).QueryRow(c, `SELECT queue_id FROM conversations WHERE tenant_id = $1 AND id = $2`, t.Item.TenantID, t.Item.ConversationID).Scan(&queue)
+	return queue, err
+}
+
+// Candidates lists who may receive the conversation: other members of the hub with a live, reply-capable grant on this instance for the
+// conversation's queue, least loaded first. Only the current holder may ask. The list is what the screen offers; Transfer proves the
+// chosen person again, inside its own transaction.
+func (s *Service) Candidates(ctx context.Context, actor uuid.UUID, t *Target) ([]Candidate, error) {
+	out := []Candidate{}
+	err := platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
+		queue, err := s.holds(c, t, actor)
+		if err != nil {
+			return err
+		}
+		rows, err := platformdb.QuerierFromContext(c, s.pool).Query(c, `
+			SELECT u.id, COALESCE(u.display_name, ''), COALESCE(u.email, ''),
+			       (SELECT count(*) FROM conversations cv WHERE cv.assigned_to_user_id = u.id AND cv.status <> 'closed'
+			         AND cv.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = $1))
+			FROM hub_memberships hm JOIN users u ON u.id = hm.user_id AND u.status = 'active'
+			WHERE hm.hub_id = $1 AND u.id <> $2 AND has_active_hub_access(u.id, $3, $4, $1, true, true)
+			ORDER BY 4, lower(COALESCE(u.email, '')), u.id`, t.Item.HubID, actor, t.Item.TenantID, queue)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cand Candidate
+			if err := rows.Scan(&cand.UserID, &cand.Name, &cand.Email, &cand.Load); err != nil {
+				return err
+			}
+			out = append(out, cand)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// Transfer hands the conversation to another person (to != nil) or gives it back to the queue (to == nil). Only the current holder may.
+// The conversation row is locked, so of two simultaneous transfers (or a transfer and a claim) exactly one acts; the person chosen is
+// proven again, pinned, inside this transaction (distribution.CanTake): a grant revoked meanwhile stops the transfer. History and audit
+// say who handed it to whom.
+func (s *Service) Transfer(ctx context.Context, actor uuid.UUID, t *Target, to *uuid.UUID) error {
+	if to != nil && *to == actor {
+		return ErrTransferTarget
+	}
+	return platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
+		queue, err := s.holds(c, t, actor)
+		if err != nil {
+			return err
+		}
+		q := platformdb.QuerierFromContext(c, s.pool)
+		reason, action := "hub_release", "hub.conversation.released"
+		meta := map[string]any{}
+		if to != nil {
+			ok, err := distribution.CanTake(c, q, t.Item.HubID, t.Item.TenantID, queue, *to)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return ErrTransferTarget
+			}
+			reason, action = "hub_transfer", "hub.conversation.transferred"
+			meta["to_user_id"] = *to
+		}
+		if _, err := q.Exec(c, `UPDATE conversations SET assigned_to_user_id = $3, assigned_at = CASE WHEN $3::uuid IS NULL THEN NULL ELSE now() END, updated_at = now()
+		                        WHERE tenant_id = $1 AND id = $2`, t.Item.TenantID, t.Item.ConversationID, to); err != nil {
+			return fmt.Errorf("transfer: %w", err)
+		}
+		if _, err := q.Exec(c, `INSERT INTO assignment_events (tenant_id, conversation_id, from_user_id, to_user_id, changed_by, reason)
+		                        VALUES ($1, $2, $3, $4, $3, $5)`, t.Item.TenantID, t.Item.ConversationID, actor, to, reason); err != nil {
+			return fmt.Errorf("transfer history: %w", err)
+		}
+		return s.audit(c, t, actor, action, "conversation", t.Item.ConversationID, meta)
+	})
 }

@@ -13,6 +13,8 @@ export interface HubSummary {
   can_manage_companies?: boolean
   // Same for the Access panel (people and permissions): offered to hub admins when the server mounts it.
   can_manage_access?: boolean
+  // At least one instance where the contract delegates channel/integration management to this person (ADR-0038 phase 3).
+  can_manage_instances?: boolean
 }
 
 export interface HubInboxItem {
@@ -107,12 +109,39 @@ export interface HubReplyResult {
   tenant: HubWriteTenant
 }
 
+export interface TransferCandidate {
+  user_id: string
+  name: string
+  email: string
+  /** Open conversations the person already holds in this hub. */
+  load: number
+}
+
+export interface HubTransferResult {
+  conversation_id: string
+  /** null = given back to the queue */
+  assigned_to: string | null
+  tenant: HubWriteTenant
+}
+
 // Writes. `expectedTenantId` is the company the screen is SHOWING. It authorizes nothing: the server derives the tenant
 // from the item and answers 409 if the two differ, so a stale or confused screen can never speak as another company.
 export const hubWriteAPI = {
   claim: (hubId: string, itemId: string, expectedTenantId: string): Promise<HubClaimResult> =>
     axios
       .post<HubClaimResult>(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/claim`, { expected_tenant_id: expectedTenantId }, { headers: authHeaders() })
+      .then((r) => r.data),
+  // ADR-0038 phase 4: hand the conversation to another person of the hub who may answer this instance, or give it back to the queue.
+  candidates: (hubId: string, itemId: string, expectedTenantId: string): Promise<TransferCandidate[]> =>
+    axios
+      .get<{ items: TransferCandidate[] }>(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/transfer-candidates`, {
+        headers: authHeaders(),
+        params: { expected_tenant_id: expectedTenantId },
+      })
+      .then((r) => r.data.items),
+  transfer: (hubId: string, itemId: string, expectedTenantId: string, toUserId: string | null): Promise<HubTransferResult> =>
+    axios
+      .post<HubTransferResult>(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/transfer`, { expected_tenant_id: expectedTenantId, to_user_id: toUserId }, { headers: authHeaders() })
       .then((r) => r.data),
   reply: (hubId: string, itemId: string, expectedTenantId: string, text: string, idempotencyKey: string): Promise<HubReplyResult> =>
     axios
@@ -136,6 +165,8 @@ export function describeHubWriteError(err: unknown): string {
       return 'Esta conversa não está mais disponível para você: o acesso pode ter sido encerrado.'
     case 409:
       if (body.includes('another agent')) return 'Esta conversa já está com outro operador.'
+      if (body.includes('not available')) return 'Essa pessoa não pode receber esta conversa agora (sem acesso para responder nesta instância).'
+      if (body.includes('not yours')) return 'Só quem está com a conversa pode transferi-la.'
       if (body.includes('claim')) return 'Assuma esta conversa antes de responder.'
       if (body.includes('window')) return 'Janela de 24 h fechada: só mensagem de template até o cliente escrever de novo.'
       if (body.includes('finalized')) return 'Este atendimento foi finalizado.'
@@ -159,6 +190,10 @@ export interface HubCapability {
   gates: string
 }
 
+export type ManagementScope = 'channels' | 'integrations'
+
+export const MANAGEMENT_SCOPE_LABEL: Record<ManagementScope, string> = { channels: 'Canais de atendimento', integrations: 'Integrações de retaguarda' }
+
 export interface HubCompany {
   id: string
   legal_name: string
@@ -171,6 +206,8 @@ export interface HubCompany {
   integrations: number
   open_conversations: number
   agents: number
+  /** What the contract delegates the Hub to manage in this instance. Absent from older servers. */
+  management_scopes?: ManagementScope[]
   created_at: string
 }
 
@@ -193,7 +230,7 @@ export const hubAdminAPI = {
     axios
       .post<HubCompany>(`${API_BASE}/hubs/${enc(hubId)}/companies`, body, { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } })
       .then((r) => r.data),
-  update: (hubId: string, tenantId: string, body: { status?: 'active' | 'suspended'; capabilities?: Record<string, boolean> }): Promise<HubCompany> =>
+  update: (hubId: string, tenantId: string, body: { status?: 'active' | 'suspended'; capabilities?: Record<string, boolean>; management_scopes?: ManagementScope[] }): Promise<HubCompany> =>
     axios.patch<HubCompany>(`${API_BASE}/hubs/${enc(hubId)}/companies/${enc(tenantId)}`, body, { headers: authHeaders() }).then((r) => r.data),
 }
 
@@ -232,11 +269,13 @@ export interface AccessInstance {
   admins: AccessPerson[]
   direct_agents: number
   hub_agents: number
+  management_scopes?: ManagementScope[]
 }
 
 export interface AccessGrant {
   tenant_id: string
   mode: 'read' | 'reply'
+  can_manage?: boolean
   valid_until?: string
 }
 
@@ -286,6 +325,10 @@ export const hubAccessAPI = {
     axios
       .put(`${API_BASE}/hubs/${enc(hubId)}/access/agents/${enc(userId)}/instances/${enc(tenantId)}`, { mode, valid_until: validUntil ?? null }, { headers: authHeaders() })
       .then(() => undefined),
+  setManage: (hubId: string, userId: string, tenantId: string, canManage: boolean): Promise<void> =>
+    axios
+      .put(`${API_BASE}/hubs/${enc(hubId)}/access/agents/${enc(userId)}/instances/${enc(tenantId)}/management`, { can_manage: canManage }, { headers: authHeaders() })
+      .then(() => undefined),
   addAdmin: (hubId: string, tenantId: string, email: string): Promise<AccessPerson> =>
     axios.post<AccessPerson>(`${API_BASE}/hubs/${enc(hubId)}/access/instances/${enc(tenantId)}/admins`, { email }, { headers: authHeaders() }).then((r) => r.data),
   removeAdmin: (hubId: string, tenantId: string, userId: string): Promise<void> =>
@@ -305,5 +348,75 @@ export function describeHubAccessError(err: unknown): string {
       return body || 'Os dados informados não foram aceitos.'
     default:
       return 'Não foi possível concluir a ação.'
+  }
+}
+
+/** An instance the signed-in person may manage through a hub, with the scopes they may use there (ADR-0038 phase 3). */
+export interface ManagedInstance {
+  tenant_id: string
+  name: string
+  scopes: ManagementScope[]
+}
+
+export const hubManageAPI = {
+  managed: (hubId: string): Promise<ManagedInstance[]> =>
+    axios.get<{ items: ManagedInstance[] }>(`${API_BASE}/hubs/${enc(hubId)}/managed`, { headers: authHeaders() }).then((r) => r.data.items),
+}
+
+// ---- Work pools (ADR-0038 phase 4): who answers for which instance and how new conversations are distributed. Hub admins only.
+
+export type PoolDistribution = 'manual' | 'round_robin'
+
+export interface PoolMember {
+  user_id: string
+  email: string
+  name: string
+  max_open: number
+  /** Unfinished conversations the person holds in this hub's instances. */
+  load: number
+}
+
+export interface PoolInstance {
+  tenant_id: string
+  name: string
+  queue_id?: string
+}
+
+export interface WorkPool {
+  id: string
+  name: string
+  description: string
+  distribution: PoolDistribution
+  members: PoolMember[]
+  instances: PoolInstance[]
+}
+
+export const hubPoolsAPI = {
+  list: (hubId: string): Promise<WorkPool[]> =>
+    axios.get<{ items: WorkPool[] }>(`${API_BASE}/hubs/${enc(hubId)}/pools`, { headers: authHeaders() }).then((r) => r.data.items),
+  create: (hubId: string, name: string, distribution: PoolDistribution): Promise<WorkPool> =>
+    axios.post<WorkPool>(`${API_BASE}/hubs/${enc(hubId)}/pools`, { name, distribution }, { headers: authHeaders() }).then((r) => r.data),
+  update: (hubId: string, poolId: string, body: { name?: string; distribution?: PoolDistribution }): Promise<void> =>
+    axios.patch(`${API_BASE}/hubs/${enc(hubId)}/pools/${enc(poolId)}`, body, { headers: authHeaders() }).then(() => undefined),
+  remove: (hubId: string, poolId: string): Promise<void> =>
+    axios.delete(`${API_BASE}/hubs/${enc(hubId)}/pools/${enc(poolId)}`, { headers: authHeaders() }).then(() => undefined),
+  setMembers: (hubId: string, poolId: string, members: { user_id: string; max_open: number }[]): Promise<void> =>
+    axios.put(`${API_BASE}/hubs/${enc(hubId)}/pools/${enc(poolId)}/members`, { members }, { headers: authHeaders() }).then(() => undefined),
+  setInstances: (hubId: string, poolId: string, instances: { tenant_id: string; queue_id?: string }[]): Promise<void> =>
+    axios.put(`${API_BASE}/hubs/${enc(hubId)}/pools/${enc(poolId)}/instances`, { instances }, { headers: authHeaders() }).then(() => undefined),
+}
+
+export function describeHubPoolError(err: unknown): string {
+  const e = err as { response?: { status?: number; data?: unknown } }
+  const body = typeof e?.response?.data === 'string' ? e.response.data.replace(/^distribution: (invalid request|conflict|not found): /, '').trim() : ''
+  switch (e?.response?.status) {
+    case 404:
+      return 'Você não administra este Hub, ou a pessoa/instância não pertence a ele.'
+    case 409:
+      return 'Outra equipe já atende essa instância (ou fila). Tire-a de lá primeiro.'
+    case 422:
+      return body || 'Confira os dados.'
+    default:
+      return 'Não foi possível salvar.'
   }
 }
