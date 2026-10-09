@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   describeHubAccessError, hubAccessAPI,
@@ -8,16 +8,19 @@ import {
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
 import { useMyHubs } from '../hooks/useMyHubs';
 import { Button, ConfirmDialog, EmptyState, ErrorState, Input, LoadingState, StatusBadge } from '../components/primitives';
+import CompaniesPanel from '../components/hub/CompaniesPanel';
 
-// Access panel (ADR-0039): who administers each instance (company), which agents exist and what each one may do where.
+// Management panel of the Hub (ADR-0038/0039): the companies, who administers each one, which agents exist and what each one may do where.
+// One screen with two tabs (Agentes e permissões / Instâncias); the old /hub/instâncias address redirects here.
 // Separate from the conversations workspace on purpose. Everything shown and done is decided by the server for the
 // signed-in hub admin; `can_manage_access` only decides whether the screen is offered. Only an admin of the HUB can
 // authorize an agent for more than one instance: a company's own administrator manages their company's people in
 // "Equipe" and has no route into this panel.
-type Tab = 'instances' | 'agents';
+type Tab = 'companies' | 'agents';
 
 const MODE_LABEL: Record<AccessMode, string> = { none: 'Sem acesso', read: 'Só leitura', reply: 'Ler e responder' };
 
+// One word on screen (owner decision, 2026-10-09): "instância" is what the user sees for what the code calls a tenant or company.
 export function instanceLabel(n: number): string {
   if (n <= 0) return 'Nenhuma instância';
   return n === 1 ? 'Uma instância' : `${n} instâncias`;
@@ -30,7 +33,8 @@ export default function HubAccessPage() {
   const hub = adminOf.find((h) => h.id === picked) ?? adminOf[0];
   const hubId = hub?.id ?? '';
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>('agents');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(params.get('aba') === 'instancias' ? 'companies' : 'agents');
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [removeAgent, setRemoveAgent] = useState<AccessAgent | null>(null);
   const [removeAdmin, setRemoveAdmin] = useState<{ instance: AccessInstance; person: AccessPerson } | null>(null);
@@ -74,7 +78,7 @@ export default function HubAccessPage() {
   });
   const dropAdmin = useMutation({
     mutationFn: (v: { tenant: string; user: string }) => hubAccessAPI.removeAdmin(hubId, v.tenant, v.user),
-    onSuccess: () => ok('Administração retirada. A pessoa continua na empresa como atendente.'),
+    onSuccess: () => ok('Administração retirada. A pessoa continua na instância como atendente.'),
     onError: fail,
     onSettled: () => setRemoveAdmin(null),
   });
@@ -92,7 +96,7 @@ export default function HubAccessPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-3">
-        <Link to="/hub" className="text-sm text-text-secondary underline-offset-2 hover:underline">← Caixa do Hub</Link>
+        <Link to="/inbox" className="text-sm text-text-secondary underline-offset-2 hover:underline">← Conversas</Link>
         <h1 className="text-lg font-semibold text-text-primary">Acessos</h1>
         {adminOf.length > 1 ? (
           <select aria-label="Trocar de Hub" value={hubId} onChange={(e) => setPicked(e.target.value)} className="h-9 rounded-control border border-border-light bg-surface px-2 text-sm font-medium text-text-primary">
@@ -101,11 +105,10 @@ export default function HubAccessPage() {
         ) : (
           <span className="text-sm text-text-secondary">{hub.name}</span>
         )}
-        {hub.can_manage_companies && <Link to="/hub/empresas" className="ml-auto text-sm font-medium text-accent-primary underline-offset-2 hover:underline">Empresas</Link>}
       </div>
       <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
         <div role="tablist" aria-label="Seções do painel de acessos" className="inline-flex rounded-control bg-surface-muted p-1">
-          {([['agents', 'Agentes e permissões'], ['instances', 'Instâncias e administradores']] as const).map(([id, label]) => (
+          {([['agents', 'Agentes e permissões'], ['companies', 'Instâncias']] as const).map(([id, label]) => (
             <button key={id} role="tab" type="button" aria-selected={tab === id} onClick={() => setTab(id)}
               className={`h-8 rounded-control px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary ${tab === id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary'}`}>
               {label}
@@ -126,8 +129,14 @@ export default function HubAccessPage() {
             onCancelInvite={(id) => revokeInvite.mutate(id)}
             onRemove={(a) => setRemoveAgent(a)} />
         )}
-        {data && tab === 'instances' && (
-          <InstancesTab data={data} adding={addAdmin.isPending}
+        {tab === 'companies' && hub.can_manage_companies && (
+          <CompaniesPanel hubId={hubId} extra={(tenantId) => {
+            const inst = data?.instances.find((i) => i.tenant_id === tenantId);
+            return inst ? <AdminsSection instance={inst} adding={addAdmin.isPending} onAdd={(tenant, email) => addAdmin.mutate({ tenant, email })} onRemove={(i, p) => setRemoveAdmin({ instance: i, person: p })} /> : null;
+          }} />
+        )}
+        {data && tab === 'companies' && !hub.can_manage_companies && (
+          <CompaniesAdminsOnly data={data} adding={addAdmin.isPending}
             onAdd={(tenant, email) => addAdmin.mutate({ tenant, email })}
             onRemove={(instance, person) => setRemoveAdmin({ instance, person })} />
         )}
@@ -136,7 +145,7 @@ export default function HubAccessPage() {
         message="Todos os acessos deste agente às instâncias deste Hub terminam na hora. A conta dele não é apagada."
         onCancel={() => setRemoveAgent(null)} onConfirm={() => removeAgent && dropAgent.mutate(removeAgent.user_id)} />
       <ConfirmDialog open={!!removeAdmin} title={`Retirar a administração de ${removeAdmin?.person.email || 'esta pessoa'}?`} destructive isPending={dropAdmin.isPending} confirmLabel="Retirar administração"
-        message={`Ela deixa de administrar ${removeAdmin?.instance.name ?? 'a instância'}, mas continua na empresa como atendente. Uma instância precisa de ao menos um administrador.`}
+        message={`Ela deixa de administrar ${removeAdmin?.instance.name ?? 'a instância'}, mas continua na instância como atendente. Uma instância precisa de ao menos um administrador.`}
         onCancel={() => setRemoveAdmin(null)} onConfirm={() => removeAdmin && dropAdmin.mutate({ tenant: removeAdmin.instance.tenant_id, user: removeAdmin.person.user_id })} />
     </div>
   );
@@ -208,7 +217,7 @@ function PendingInvitations({ items, nameOf, onCancel }: { items: AccessInvitati
           <li key={inv.id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
             <span className="font-medium text-text-primary">{inv.email}</span>
             <span className="text-text-secondary">
-              {inv.access.length === 0 ? 'sem acesso a instâncias ainda' : inv.access.map((a) => `${nameOf.get(a.tenant_id) ?? 'outra empresa'}: ${MODE_LABEL[a.mode]}`).join(' · ')}
+              {inv.access.length === 0 ? 'sem acesso a instâncias ainda' : inv.access.map((a) => `${nameOf.get(a.tenant_id) ?? 'outra instância'}: ${MODE_LABEL[a.mode]}`).join(' · ')}
             </span>
             <span className="text-xs text-text-tertiary">vale até {new Date(inv.expires_at).toLocaleDateString('pt-BR')}</span>
             <button type="button" aria-label={`Cancelar a autorização de ${inv.email}`} className="ml-auto text-xs text-status-danger underline-offset-2 hover:underline" onClick={() => onCancel(inv.id)}>Cancelar</button>
@@ -233,7 +242,7 @@ function AgentsTab({ data, busy, adding, onSet, onInvite, onCancelInvite, onRemo
       <InvitePanel instances={instances} busy={adding} onInvite={onInvite} />
       <PendingInvitations items={data.invitations ?? []} nameOf={nameOf} onCancel={onCancelInvite} />
       {data.agents.length === 0 && <EmptyState title="Nenhum agente neste Hub" description="Adicione um agente e depois defina em quais instâncias ele atua." />}
-      {data.agents.length > 0 && instances.length === 0 && <EmptyState title="Nenhuma instância" description="Crie uma empresa em Empresas para poder liberar agentes." />}
+      {data.agents.length > 0 && instances.length === 0 && <EmptyState title="Nenhuma instância" description="Crie uma instância na aba Instâncias para poder liberar agentes." />}
       {data.agents.length > 0 && instances.length > 0 && (
         <div className="overflow-x-auto rounded-sheet border border-border-subtle bg-surface">
           <table className="w-full min-w-[40rem] text-sm">
@@ -252,7 +261,7 @@ function AgentsTab({ data, busy, adding, onSet, onInvite, onCancelInvite, onRemo
             <tbody>
               {data.agents.map((a) => {
                 const cell = new Map(a.grants.map((g) => [g.tenant_id, g.mode]));
-                const direct = a.direct_instances.map((t) => nameOf.get(t) ?? 'outra empresa');
+                const direct = a.direct_instances.map((t) => nameOf.get(t) ?? 'outra instância');
                 return (
                   <tr key={a.user_id} className="border-b border-border-subtle last:border-0 align-top">
                     <th scope="row" className="px-3 py-2 text-left font-normal">
@@ -288,20 +297,55 @@ function AgentsTab({ data, busy, adding, onSet, onInvite, onCancelInvite, onRemo
         </div>
       )}
       <p className="text-xs text-text-tertiary">
-        Só o administrador do Hub libera um agente em mais de uma instância. O administrador de cada empresa gerencia as pessoas dela em “Equipe”, dentro do OMNIRA.
+        Só o administrador do Hub libera um agente em mais de uma instância. O administrador de cada instância gerencia as pessoas dela em “Equipe”, dentro do OMNIRA.
       </p>
     </section>
   );
 }
 
-function InstancesTab({ data, adding, onAdd, onRemove }: {
+// The administrators of ONE company (an admin of the Hub may name more than one; a company's own administrator manages their agents in "Equipe").
+function AdminsSection({ instance: i, adding, onAdd, onRemove }: {
+  instance: AccessInstance; adding: boolean;
+  onAdd: (tenant: string, email: string) => void;
+  onRemove: (instance: AccessInstance, person: AccessPerson) => void;
+}) {
+  const suspended = i.tenant_status !== 'active' || i.contract_status !== 'active';
+  return (
+    <div className="mt-4 border-t border-border-subtle pt-3" aria-label={`Administradores de ${i.name}`}>
+      <h3 className="text-sm font-medium text-text-primary">Administradores</h3>
+      <p className="text-xs text-text-tertiary">{i.direct_agents} na equipe · {i.hub_agents} agentes do Hub</p>
+      {i.admins.length === 0 ? (
+        <p className="mt-1 text-sm text-status-warning">Sem administrador. Adicione alguém abaixo.</p>
+      ) : (
+        <ul className="mt-1 divide-y divide-border-subtle">
+          {i.admins.map((p) => (
+            <li key={p.user_id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
+              <span className="font-medium text-text-primary">{p.name || p.email}</span>
+              {p.name && <span className="text-text-secondary">{p.email}</span>}
+              <button type="button" aria-label={`Retirar administração de ${p.email || p.name} em ${i.name}`} className="ml-auto text-xs text-status-danger underline-offset-2 hover:underline" onClick={() => onRemove(i, p)}>Retirar</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!suspended && (
+        <div className="mt-3">
+          <AddByEmail label={`Novo administrador de ${i.name}`} placeholder="pessoa@empresa.com.br" busy={adding} onAdd={(email) => onAdd(i.tenant_id, email)}
+            help="Precisa já ter conta no OMNIRA. Para convidar uma pessoa nova, use a Equipe da própria instância." />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// For an admin of the Hub who may not create or suspend companies: the same companies, with their administrators only.
+function CompaniesAdminsOnly({ data, adding, onAdd, onRemove }: {
   data: AccessOverview; adding: boolean;
   onAdd: (tenant: string, email: string) => void;
   onRemove: (instance: AccessInstance, person: AccessPerson) => void;
 }) {
-  if (data.instances.length === 0) return <EmptyState title="Nenhuma instância" description="Crie uma empresa em Empresas." />;
+  if (data.instances.length === 0) return <EmptyState title="Nenhuma instância" description="Ainda não há instâncias neste Hub." />;
   return (
-    <section className="space-y-3" aria-label="Instâncias e administradores">
+    <section className="space-y-3" aria-label="Instâncias">
       {data.instances.map((i) => {
         const suspended = i.tenant_status !== 'active' || i.contract_status !== 'active';
         return (
@@ -309,28 +353,8 @@ function InstancesTab({ data, adding, onAdd, onRemove }: {
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-base font-semibold text-text-primary">{i.name}</h2>
               <StatusBadge status={suspended ? 'danger' : 'success'}>{suspended ? 'Suspensa' : 'Ativa'}</StatusBadge>
-              <span className="text-sm text-text-secondary">{i.direct_agents} na equipe · {i.hub_agents} agentes do Hub</span>
             </div>
-            <h3 className="mt-3 text-sm font-medium text-text-primary">Administradores</h3>
-            {i.admins.length === 0 ? (
-              <p className="mt-1 text-sm text-status-warning">Sem administrador. Adicione alguém abaixo.</p>
-            ) : (
-              <ul className="mt-1 divide-y divide-border-subtle">
-                {i.admins.map((p) => (
-                  <li key={p.user_id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
-                    <span className="font-medium text-text-primary">{p.name || p.email}</span>
-                    {p.name && <span className="text-text-secondary">{p.email}</span>}
-                    <button type="button" aria-label={`Retirar administração de ${p.email || p.name} em ${i.name}`} className="ml-auto text-xs text-status-danger underline-offset-2 hover:underline" onClick={() => onRemove(i, p)}>Retirar</button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {!suspended && (
-              <div className="mt-3">
-                <AddByEmail label={`Novo administrador de ${i.name}`} placeholder="pessoa@empresa.com.br" busy={adding} onAdd={(email) => onAdd(i.tenant_id, email)}
-                  help="Precisa já ter conta no OMNIRA. Para convidar uma pessoa nova, use a Equipe da própria empresa." />
-              </div>
-            )}
+            <AdminsSection instance={i} adding={adding} onAdd={onAdd} onRemove={onRemove} />
           </article>
         );
       })}

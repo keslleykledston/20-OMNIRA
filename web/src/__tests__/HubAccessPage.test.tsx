@@ -11,7 +11,7 @@ import { renderAt, setSession } from './testUtils';
 import type { AccessOverview } from '../lib/hub';
 
 vi.mock('axios');
-vi.mock('../pages/InboxWorkspace', () => ({ default: () => <div>Caixa completa da empresa</div> }));
+vi.mock('../pages/InboxWorkspace', () => ({ default: () => <div>Caixa completa da instância</div> }));
 const unauthorized = vi.hoisted(() => vi.fn());
 vi.mock('../lib/session', async (orig) => ({ ...(await orig<typeof import('../lib/session')>()), handleUnauthorized: unauthorized }));
 
@@ -37,6 +37,7 @@ function serve() {
   vi.mocked(axios.get).mockImplementation(async (url: string) => {
     if (String(url).endsWith('/hubs')) return { data: { items: hubs } };
     if (String(url).endsWith('/access')) return { data: ov };
+    if (String(url).endsWith('/companies')) return { data: { items: ov.instances.map((i) => ({ id: i.tenant_id, legal_name: i.name, trade_name: i.name, display_name: i.name, status: i.tenant_status, contract_status: i.contract_status, capabilities: {}, channels: 0, integrations: 0, open_conversations: 0, agents: 0, created_at: new Date().toISOString() })), capabilities: [] } };
     return Promise.reject({ response: { status: 404 } });
   });
 }
@@ -146,11 +147,23 @@ describe('HubAccessPage', () => {
     expect(within(rowAdmin).queryByRole('button', { name: 'Remover do Hub' })).toBeNull();
   });
 
+  it('one tab, one list: the instances tab shows each instance with its administrators when the person can manage instances', async () => {
+    renderAt(<HubAccessPage />);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Instâncias' }));
+    const alfa = await screen.findByRole('region', { name: 'Instância Alfa' });
+    expect(within(alfa).getByText('Ana Admin')).toBeInTheDocument();
+    expect(within(alfa).getByRole('button', { name: 'Suspender' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nova instância' })).toBeInTheDocument();
+    // the old second screen is gone: no link to a separate "Empresas"/"Instâncias" page
+    expect(screen.queryByRole('link', { name: /Empresas|Instâncias/ })).toBeNull();
+  });
+
   it('the instances tab lists administrators, adds one and asks before withdrawing one', async () => {
+    hubs = [{ id: 'hub-1', name: 'K3G Solutions', role: 'hub_admin', can_manage_access: true, can_manage_companies: false }];
     vi.mocked(axios.post).mockResolvedValue({ data: person('u-n', 'novo@alfa.com') });
     vi.mocked(axios.delete).mockResolvedValue({ data: {} });
     renderAt(<HubAccessPage />);
-    await userEvent.click(await screen.findByRole('tab', { name: 'Instâncias e administradores' }));
+    await userEvent.click(await screen.findByRole('tab', { name: 'Instâncias' }));
     const alfa = await screen.findByRole('article', { name: 'Instância Alfa' });
     expect(within(alfa).getByText('Ana Admin')).toBeInTheDocument();
     expect(screen.getByRole('article', { name: 'Instância Beta' })).toHaveTextContent('Sem administrador');
@@ -164,7 +177,7 @@ describe('HubAccessPage', () => {
 
     const gama = screen.getByRole('article', { name: 'Instância Gama' });
     await userEvent.click(within(gama).getByRole('button', { name: 'Retirar administração de dois@gama.com em Gama' }));
-    expect(await screen.findByText(/continua na empresa como atendente/)).toBeInTheDocument();
+    expect(await screen.findByText(/continua na instância como atendente/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Retirar administração' }));
     await waitFor(() => expect(axios.delete).toHaveBeenCalledTimes(1));
     expect(String(vi.mocked(axios.delete).mock.calls[0][0])).toMatch(/\/hubs\/hub-1\/access\/instances\/C\/admins\/u2$/);
@@ -192,11 +205,11 @@ describe('CompanyFilter', () => {
   const cos = [{ id: 'A', name: 'Alfa' }, { id: 'B', name: 'Beta' }, { id: 'C', name: 'Gama' }];
 
   it('summarises: all by default, one by name, several by count', () => {
-    expect(filterSummary(cos, [])).toBe('Todas as empresas');
+    expect(filterSummary(cos, [])).toBe('Todas as instâncias');
     expect(filterSummary(cos, ['B'])).toBe('Beta');
-    expect(filterSummary(cos, ['A', 'C'])).toBe('2 empresas');
-    expect(filterSummary(cos, ['A', 'B', 'C'])).toBe('Todas as empresas');
-    expect(filterSummary(cos, ['zzz'])).toBe('Todas as empresas'); // an id the person no longer serves narrows nothing
+    expect(filterSummary(cos, ['A', 'C'])).toBe('2 instâncias');
+    expect(filterSummary(cos, ['A', 'B', 'C'])).toBe('Todas as instâncias');
+    expect(filterSummary(cos, ['zzz'])).toBe('Todas as instâncias'); // an id the person no longer serves narrows nothing
   });
 
   it('picks one, then more, and goes back to all', async () => {
@@ -206,22 +219,27 @@ describe('CompanyFilter', () => {
       return <CompanyFilter companies={cos} value={v} onChange={(ids) => { calls.push(ids); setV(ids); }} />;
     }
     render(<Host />);
-    await userEvent.click(screen.getByRole('button', { name: 'Filtrar por empresa' }));
-    expect(screen.getByLabelText('Todas as empresas')).toBeChecked();
+    await userEvent.click(screen.getByRole('button', { name: 'Filtrar por instância' }));
+    expect(screen.getByLabelText('Todas as instâncias')).toBeChecked();
     await userEvent.click(screen.getByLabelText('Beta'));
     await userEvent.click(screen.getByLabelText('Gama'));
     expect(calls).toEqual([['B'], ['B', 'C']]);
-    expect(screen.getByLabelText('Todas as empresas')).not.toBeChecked();
-    await userEvent.click(screen.getByLabelText('Todas as empresas'));
+    expect(screen.getByLabelText('Todas as instâncias')).not.toBeChecked();
+    await userEvent.click(screen.getByLabelText('Todas as instâncias'));
     expect(calls[2]).toEqual([]);
-    expect(screen.getByRole('button', { name: 'Filtrar por empresa' })).toHaveTextContent('Todas as empresas');
+    expect(screen.getByRole('button', { name: 'Filtrar por instância' })).toHaveTextContent('Todas as instâncias');
   });
 });
 
 describe('ConversationsEntry', () => {
+  // the person's OWN instances (memberships); empty means a Hub-only person
+  let mine: object[] = [{ id: 'T1', name: 'Minha instância' }];
+  beforeEach(() => { mine = [{ id: 'T1', name: 'Minha instância' }]; });
+  const tenants = (url: string) => (String(url).endsWith('/tenants') ? { data: mine } : null);
   const inbox = (companies: { id: string; name: string }[]) =>
     vi.mocked(axios.get).mockImplementation(async (url: string, cfg?: unknown) => {
       if (String(url).endsWith('/hubs')) return { data: { items: hubs } };
+      if (tenants(url)) return tenants(url);
       if (String(url).includes('/inbox')) {
         const params = (cfg as { params?: Record<string, string> })?.params ?? {};
         return { data: { items: [], companies, has_more: false, count: 0, limit: Number(params.limit ?? 30) } };
@@ -233,21 +251,29 @@ describe('ConversationsEntry', () => {
     hubs = [];
     inbox([]);
     renderAt(<ConversationsEntry />);
-    expect(await screen.findByText('Caixa completa da empresa')).toBeInTheDocument();
+    expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
   });
 
   it('keeps the classic workspace for someone who serves one company through the Hub', async () => {
     inbox([{ id: 'A', name: 'Alfa' }]);
     renderAt(<ConversationsEntry />);
-    expect(await screen.findByText('Caixa completa da empresa')).toBeInTheDocument();
+    expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
+  });
+
+  it('a person with NO instance of their own and ONE authorized instance still gets the Hub inbox (no empty classic workspace)', async () => {
+    mine = [];
+    inbox([{ id: 'A', name: 'Alfa' }]);
+    renderAt(<ConversationsEntry />);
+    expect(await screen.findByRole('heading', { name: 'Conversas' })).toBeInTheDocument();
+    expect(screen.queryByText('Caixa completa da instância')).toBeNull();
   });
 
   it('shows every company in one inbox, with the company filter, for someone who serves two or more', async () => {
     inbox([{ id: 'A', name: 'Alfa' }, { id: 'B', name: 'Beta' }]);
     renderAt(<ConversationsEntry />);
     expect(await screen.findByRole('heading', { name: 'Conversas' })).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Filtrar por empresa' })).toHaveTextContent('Todas as empresas');
-    expect(screen.queryByText('Caixa completa da empresa')).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Filtrar por instância' })).toHaveTextContent('Todas as instâncias');
+    expect(screen.queryByText('Caixa completa da instância')).toBeNull();
     // the default request carries NO company filter: everything the server authorizes
     const inboxCalls = vi.mocked(axios.get).mock.calls.filter((c) => String(c[0]).includes('/inbox'));
     expect(inboxCalls.every((c) => !('companies' in ((c[1] as { params: object }).params)))).toBe(true);
@@ -256,7 +282,7 @@ describe('ConversationsEntry', () => {
   it('narrows the server request when companies are picked', async () => {
     inbox([{ id: 'A', name: 'Alfa' }, { id: 'B', name: 'Beta' }]);
     renderAt(<ConversationsEntry />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Filtrar por empresa' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Filtrar por instância' }));
     await userEvent.click(screen.getByLabelText('Beta'));
     await waitFor(() => {
       const last = vi.mocked(axios.get).mock.calls.filter((c) => String(c[0]).includes('/inbox')).at(-1)!;
@@ -269,15 +295,16 @@ describe('ConversationsEntry', () => {
     const gate = new Promise<void>((r) => { release = r; });
     vi.mocked(axios.get).mockImplementation(async (url: string, cfg?: unknown) => {
       if (String(url).endsWith('/hubs')) return { data: { items: hubs } };
+      if (tenants(url)) return tenants(url);
       const params = (cfg as { params?: Record<string, string> })?.params ?? {};
       if (params.companies) await gate; // the filtered request hangs
       return { data: { items: [], companies: [{ id: 'A', name: 'Alfa' }, { id: 'B', name: 'Beta' }], has_more: false, count: 0, limit: 30 } };
     });
     renderAt(<ConversationsEntry />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Filtrar por empresa' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Filtrar por instância' }));
     await userEvent.click(screen.getByLabelText('Beta'));
     // still there, still open, and the choice is shown as made
-    expect(screen.getByRole('button', { name: 'Filtrar por empresa' })).toHaveTextContent('Beta');
+    expect(screen.getByRole('button', { name: 'Filtrar por instância' })).toHaveTextContent('Beta');
     expect(screen.getByLabelText('Beta')).toBeChecked();
     release();
   });
@@ -286,20 +313,21 @@ describe('ConversationsEntry', () => {
     hubs = [{ id: 'hub-1', name: 'Primeiro', role: 'hub_agent' }, { id: 'hub-2', name: 'Segundo', role: 'hub_agent' }];
     vi.mocked(axios.get).mockImplementation(async (url: string) => {
       if (String(url).endsWith('/hubs')) return { data: { items: hubs } };
+      if (tenants(url)) return tenants(url);
       if (String(url).includes('/hubs/hub-2/inbox')) return { data: { items: [], companies: [{ id: 'A', name: 'Alfa' }, { id: 'B', name: 'Beta' }], has_more: false, count: 0, limit: 30 } };
       if (String(url).includes('/hubs/hub-1/inbox')) return { data: { items: [], companies: [{ id: 'Z', name: 'Zeta' }], has_more: false, count: 0, limit: 30 } };
       return Promise.reject({ response: { status: 404 } });
     });
     renderAt(<ConversationsEntry />);
-    expect(await screen.findByRole('button', { name: 'Filtrar por empresa' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Filtrar por instância' })).toBeInTheDocument();
     expect(screen.getByLabelText('Trocar de Hub')).toHaveValue('hub-2');
-    expect(screen.queryByText('Caixa completa da empresa')).toBeNull();
+    expect(screen.queryByText('Caixa completa da instância')).toBeNull();
   });
 
   it('?modo=empresa asks for the classic workspace and never probes the Hub', async () => {
     inbox([{ id: 'A', name: 'Alfa' }, { id: 'B', name: 'Beta' }]);
     renderAt(<ConversationsEntry />, '/inbox?modo=empresa');
-    expect(await screen.findByText('Caixa completa da empresa')).toBeInTheDocument();
+    expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
     expect(vi.mocked(axios.get).mock.calls.some((c) => String(c[0]).includes('/inbox'))).toBe(false);
   });
 
@@ -309,6 +337,6 @@ describe('ConversationsEntry', () => {
       return Promise.reject({ response: { status: 500 } });
     });
     renderAt(<ConversationsEntry />);
-    expect(await screen.findByText('Caixa completa da empresa')).toBeInTheDocument();
+    expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
   });
 });

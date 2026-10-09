@@ -45,7 +45,6 @@ export default function InboxWorkspace() {
   // Three panes only when the space left AFTER the app sidebar can hold them (the sidebar takes ~224px): below 1440px the
   // details open in a drawer instead of squeezing the conversation.
   const wide = useMediaQuery('(min-width: 1440px)', true);
-  const [channelFilter, setChannelFilter] = useState('');
   const channelLines = useChannelLines();
 
   // PRODUCT.6-O2D2 deep link: conversation_id is UNTRUSTED navigation
@@ -70,7 +69,7 @@ export default function InboxWorkspace() {
     isFetchingNextPage,
     fetchNextPage,
   } = useInfiniteQuery({
-    queryKey: ['inbox-conversations', tenantId, segment, debouncedSearch, channelFilter],
+    queryKey: ['inbox-conversations', tenantId, segment, debouncedSearch],
     initialPageParam: '' as string,
     queryFn: async ({ pageParam }) => {
       try {
@@ -81,7 +80,6 @@ export default function InboxWorkspace() {
             q: debouncedSearch || undefined,
             assigned: segment === 'mine' ? 'me' : undefined,
             waiting: segment === 'waiting' ? true : undefined,
-            channel_connection_id: channelFilter || undefined,
             kind: segment === 'spam' ? 'spam' : undefined,
             // finalized attendances (ADR-0020) are out of the default list; this segment asks for them
             status: segment === 'closed' ? 'closed' : undefined,
@@ -208,8 +206,6 @@ export default function InboxWorkspace() {
             onLoadMore={() => void fetchNextPage()}
             waitThresholds={waitThresholds}
             channels={channelLines.data ?? []}
-            channelFilter={channelFilter}
-            onChannelFilterChange={setChannelFilter}
           />
         </div>
 

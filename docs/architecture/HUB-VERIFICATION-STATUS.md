@@ -157,3 +157,13 @@ Revisão `task-mv0ejisb-0ff3dw`: **0 CRITICAL, 5 HIGH, 5 MEDIUM, tudo tratado** 
 ## Implantação da suspensão total e da autorização por e-mail — 2026-10-09
 LAB: imagens `sha-d7bb2a7` (api, worker, web), **migration 102 aplicada**, rollback `rollback-pre-suspension-20261009-*`, backup antes (local, externo e nuvem). Serviços saudáveis, bundle servido = construído, `hub_preauthorizations` com RLS+FORCE e **sem DELETE** para a role da aplicação, rotas novas respondem 401 sem login. Implantado a pedido do dono **com a revisão do Codex de `70e3649` ainda pendente** (`CODEX_PLUGIN_NOT_EXECUTED`: cota até 05:13). Não visto com login real nem webhook real.
 
+## Auditoria de rotas/telas, vocabulário "Instância", Conversas única e origem do canal (ADR-0039 §6) — 2026-10-09
+
+Mudança **só de frontend** (commit local; **não implantada**). Evidência:
+
+- **UNIT (Vitest):** 772 testes, 771 verdes; o único vermelho é `SettingsShell` (já vermelho no HEAD anterior; confirmado com `git stash`). Novos/alterados: `ChannelOrigin`, `CompaniesPanel`, `HubAccessPage` (aba Instâncias única, `ConversationsEntry` com pessoa só-Hub), navegação sem "Hub".
+- **E2E com mock (Playwright, navegador real, API mockada):** 11/11 em `hub.mock`, `hub-access.mock`, `hub-companies.mock`. Prova a tela, **não** o backend nem a sessão real.
+- **Spike da fase 3:** apenas leitura de código, resultado em ADR-0038 ("Spike da fase 3"). Fase 3 segue **NOT WIRED**.
+- **Não verificado:** nenhuma tela foi aberta com sessão real do Keycloak em produção; o aviso do dono de que o layout em produção difere das capturas **não** foi reproduzido (o bundle servido era o construído). O que se viu como diferente é a ausência da fase 3 e a duplicidade já descrita, corrigidas acima.
+- **Codex:** `CODEX_PLUGIN_NOT_EXECUTED` para esta mudança.
+

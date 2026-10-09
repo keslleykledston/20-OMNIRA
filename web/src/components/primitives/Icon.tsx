@@ -27,8 +27,10 @@ export type IconName =
   | 'whatsapp'
   | 'sparkles'
   | 'paperclip'
+  | 'key'
 
 const paths: Record<IconName, string> = {
+  key: 'M15.5 7.5 19 4m2-2-2 2m0 0 2 2-3.5 3.5-2-2m-2.1 2.1a5 5 0 1 1-7.07 7.07 5 5 0 0 1 7.07-7.07Zm0 0L15.5 7.5',
   paperclip: 'm21.4 11-9.2 9.2a6 6 0 0 1-8.5-8.5l8.6-8.6a4 4 0 1 1 5.7 5.7l-8.6 8.5a2 2 0 0 1-2.8-2.8l8.5-8.5',
   dashboard: 'M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z',
   conversations: 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12Z',

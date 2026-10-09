@@ -11,12 +11,12 @@ interface Props {
 
 export function filterSummary(companies: HubCompanyOption[], value: string[]): string {
   const known = value.filter((id) => companies.some((c) => c.id === id));
-  if (known.length === 0 || known.length === companies.length) return 'Todas as empresas';
-  if (known.length === 1) return companies.find((c) => c.id === known[0])?.name ?? '1 empresa';
-  return `${known.length} empresas`;
+  if (known.length === 0 || known.length === companies.length) return 'Todas as instâncias';
+  if (known.length === 1) return companies.find((c) => c.id === known[0])?.name ?? '1 instância';
+  return `${known.length} instâncias`;
 }
 
-// The drop-down that replaces the channel selector in the unified conversations view: all the companies the person is
+// The drop-down that replaces the channel selector in the unified conversations view: all the instances the person is
 // authorized to serve, or one or more of them. A screen filter only: the server decides what is readable.
 export default function CompanyFilter({ companies, value, onChange }: Props) {
   const [open, setOpen] = useState(false);
@@ -42,16 +42,16 @@ export default function CompanyFilter({ companies, value, onChange }: Props) {
 
   return (
     <div ref={root} className="relative">
-      <button type="button" aria-haspopup="true" aria-expanded={open} aria-label="Filtrar por empresa" onClick={() => setOpen((o) => !o)}
+      <button type="button" aria-haspopup="true" aria-expanded={open} aria-label="Filtrar por instância" onClick={() => setOpen((o) => !o)}
         className="flex h-9 w-full max-w-[16rem] items-center justify-between gap-2 rounded-control border border-border-light bg-surface px-2.5 text-sm font-medium text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary">
         <span className="truncate">{filterSummary(companies, value)}</span>
         <span aria-hidden className="text-text-tertiary">▾</span>
       </button>
       {open && (
-        <div role="group" aria-label="Empresas" className="absolute left-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-control border border-border-light bg-surface p-1 shadow-lg">
+        <div role="group" aria-label="Instâncias" className="absolute left-0 z-20 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-control border border-border-light bg-surface p-1 shadow-lg">
           <label className={clsx('flex cursor-pointer items-center gap-2 rounded-control px-2 py-1.5 text-sm hover:bg-surface-muted', all && 'font-semibold')}>
             <input type="checkbox" checked={all} onChange={() => onChange([])} />
-            <span>Todas as empresas</span>
+            <span>Todas as instâncias</span>
           </label>
           <div className="my-1 border-t border-border-subtle" />
           <ul className="max-h-64 overflow-y-auto">

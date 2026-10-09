@@ -1,6 +1,6 @@
 import { test, expect, Page, Route } from '@playwright/test';
 
-// Tela de Empresas do Hub (plano de controle, ADR-0038) em um navegador real, com a API mockada. O backend é provado por testes Go
+// Aba "Instâncias" do painel de Acessos (plano de controle, ADR-0038 + ADR-0039) em um navegador real, com a API mockada. O backend é provado por testes Go
 // contra PostgreSQL real; aqui se confere a tela: só aparece para quem pode gerenciar, lista, criar, suspender e ligar/desligar capacidades.
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
@@ -31,8 +31,12 @@ async function install(page: Page, opts: { manage: boolean }) {
     const p = url.pathname.replace('/api/v1', '');
     const method = route.request().method();
     if (p.endsWith('/events') || p.includes('/presence')) return route.abort();
-    if (p === '/hubs') return json(route, { items: [{ id: HUB, name: 'K3G Solutions', role: opts.manage ? 'hub_admin' : 'hub_agent', can_manage_companies: opts.manage }] });
+    if (p === '/hubs') return json(route, { items: [{ id: HUB, name: 'K3G Solutions', role: opts.manage ? 'hub_admin' : 'hub_agent', can_manage_access: opts.manage, can_manage_companies: opts.manage }] });
     if (p === `/hubs/${HUB}/inbox`) return json(route, { items: [], has_more: false, count: 0, limit: 30 });
+    if (p === `/hubs/${HUB}/access`) {
+      const person = (id: string, email: string) => ({ user_id: id, name: '', email });
+      return json(route, { hub_id: HUB, agents: [], invitations: [], instances: companies.map((c: any) => ({ tenant_id: c.id, name: c.display_name, tenant_status: c.status, contract_status: c.contract_status, admins: [person('adm-' + c.id, `adm@${c.id}.example`)], direct_agents: 1, hub_agents: 0 })) });
+    }
     if (p === `/hubs/${HUB}/companies` && method === 'GET') return json(route, { items: companies, capabilities: CAPS });
     if (p === `/hubs/${HUB}/companies` && method === 'POST') {
       const body = route.request().postDataJSON();
@@ -58,15 +62,17 @@ async function install(page: Page, opts: { manage: boolean }) {
   return writes;
 }
 
-test('o operador vê as empresas, cria uma, suspende e liga/desliga capacidades', async ({ page }) => {
+test('o operador vê as instâncias, cria uma, suspende e liga/desliga capacidades', async ({ page }) => {
   const writes = await install(page, { manage: true });
-  await page.goto('/hub');
-  await page.getByRole('link', { name: 'Empresas' }).click();
-  await expect(page).toHaveURL(/\/hub\/empresas$/);
+  // o endereço antigo /hub/empresas leva à aba; não existe mais uma tela separada
+  await page.goto('/hub/empresas');
+  await expect(page).toHaveURL(/\/acessos\?aba=instancias$/);
+  await expect(page.getByRole('tab', { name: 'Instâncias', selected: true })).toBeVisible();
 
-  const a = page.getByRole('region', { name: 'Empresa ISP Roraima' });
+  const a = page.getByRole('region', { name: 'Instância ISP Roraima' });
   await expect(a.getByText('Ativa')).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Empresa NorteNet' }).getByText('Suspensa')).toBeVisible();
+  await expect(a.getByText('adm@c1.example')).toBeVisible(); // os administradores ficam no MESMO cartão da instância
+  await expect(page.getByRole('region', { name: 'Instância NorteNet' }).getByText('Suspensa')).toBeVisible();
 
   // a chave só muda quando o servidor confirma (o servidor é a verdade), então clica e espera o estado novo
   await a.getByLabel(/ERP \/ CRM/).click();
@@ -75,26 +81,25 @@ test('o operador vê as empresas, cria uma, suspende e liga/desliga capacidades'
 
   await a.getByRole('button', { name: 'Suspender' }).click();
   await expect(page.getByText(/perdem o acesso na hora/)).toBeVisible();
-  await page.getByRole('button', { name: 'Suspender empresa' }).click();
+  await page.getByRole('button', { name: 'Suspender instância' }).click();
   await expect(a.getByText('Suspensa')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Nova empresa' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Nova empresa' });
+  await page.getByRole('button', { name: 'Nova instância' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Nova instância' });
   await dialog.getByLabel(/Razão social/).fill('Fibra Norte Ltda');
   await dialog.getByLabel(/Nome fantasia/).fill('Fibra Norte');
-  await dialog.getByRole('button', { name: 'Criar empresa' }).click();
+  await dialog.getByRole('button', { name: 'Criar instância' }).click();
   await expect(page.getByText(/Ninguém tem acesso a ela ainda/)).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Empresa Fibra Norte' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Instância Fibra Norte' })).toBeVisible();
   const post = writes.find((w) => w.method === 'POST')!;
   expect(post.key).toMatch(/^new-company-/);
   expect(post.body.legal_name).toBe('Fibra Norte Ltda');
 });
 
-test('quem não pode gerenciar não vê o link e a página diz que está indisponível', async ({ page }) => {
+test('quem não administra o Hub não vê o item Acessos e a página diz que está indisponível', async ({ page }) => {
   await install(page, { manage: false });
-  await page.goto('/hub');
-  await expect(page.getByText('K3G Solutions')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Empresas' })).toHaveCount(0);
-  await page.goto('/hub/empresas');
-  await expect(page.getByText('Gestão de empresas indisponível')).toBeVisible();
+  await page.goto('/inbox');
+  await expect(page.getByRole('link', { name: 'Acessos' })).toHaveCount(0);
+  await page.goto('/acessos');
+  await expect(page.getByText('Painel de acessos indisponível')).toBeVisible();
 });

@@ -16,10 +16,9 @@ const items: { label: string; path: string; icon: IconName }[] = [
 export default function MobileNav() {
   const location = useLocation()
   const hubs = useMyHubs()
-  // Same rule as the desktop sidebar: the Hub entry exists only for members of a Service Hub (and only when the server has it on).
-  const shown = [...((hubs.data?.length ?? 0) > 0 ? [items[0], { label: 'Hub', path: '/hub', icon: 'channels' as IconName }, ...items.slice(1)] : items)]
-  // admins of a Hub also get the Access panel (ADR-0039)
-  if ((hubs.data ?? []).some((h) => h.can_manage_access)) shown.splice(2, 0, { label: 'Acessos', path: '/acessos', icon: 'contacts' as IconName })
+  // Same rule as the desktop sidebar: no separate Hub entry; admins of a Hub also get the Access panel (ADR-0039)
+  const shown = [...items]
+  if ((hubs.data ?? []).some((h) => h.can_manage_access)) shown.splice(1, 0, { label: 'Acessos', path: '/acessos', icon: 'key' as IconName })
   // startsWith keeps child routes (e.g. /contacts/:id, /channels/whatsapp/new)
   // active under their parent item.
   const isActive = (path: string) => location.pathname.startsWith(path)

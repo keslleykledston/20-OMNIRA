@@ -40,7 +40,7 @@ describe('TenantSwitcher', () => {
     tenants({ id: A, legal_name: 'Alfa Ltda', trade_name: 'Alfa Telecom' }, { id: B, legal_name: 'Beta Ltda' })
     renderAt(<TenantSwitcher />)
 
-    const select = (await screen.findByRole('combobox', { name: 'Trocar de empresa' })) as HTMLSelectElement
+    const select = (await screen.findByRole('combobox', { name: 'Trocar de instância' })) as HTMLSelectElement
     expect(select.value).toBe(A)
     expect(Array.from(select.options).map((o) => o.text)).toEqual(['Alfa Telecom', 'Beta Ltda'])
   })
@@ -50,7 +50,7 @@ describe('TenantSwitcher', () => {
     const go = vi.fn()
     renderAt(<TenantSwitcher go={go} />)
 
-    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Trocar de empresa' }), B)
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Trocar de instância' }), B)
     expect(localStorage.getItem('tenantId')).toBe(B)
     expect(localStorage.getItem('preferredTenantId')).toBe(B)
     expect(go).toHaveBeenCalledWith('/')
@@ -61,7 +61,7 @@ describe('TenantSwitcher', () => {
     const go = vi.fn()
     renderAt(<TenantSwitcher go={go} />)
 
-    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Trocar de empresa' }), A)
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Trocar de instância' }), A)
     expect(go).not.toHaveBeenCalled()
   })
 
@@ -71,7 +71,7 @@ describe('TenantSwitcher', () => {
     tenants({ id: A, legal_name: 'Alfa' }, { id: B, legal_name: 'Beta' })
     renderAt(<TenantSwitcher />)
 
-    const select = (await screen.findByRole('combobox', { name: 'Trocar de empresa' })) as HTMLSelectElement
+    const select = (await screen.findByRole('combobox', { name: 'Trocar de instância' })) as HTMLSelectElement
     expect(select.value).toBe('')
     expect(screen.getByRole('option', { name: 'Selecione…' })).toBeDisabled()
   })

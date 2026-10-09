@@ -15,7 +15,7 @@ vi.mock('../lib/session', async (orig) => ({ ...(await orig<typeof import('../li
 const item = (id: string, over: Partial<HubInboxItem> = {}): HubInboxItem => ({
   id,
   tenant_id: 'tenant-' + id,
-  tenant_name: 'Empresa ' + id,
+  tenant_name: 'Instância ' + id,
   conversation_id: 'conv-' + id,
   customer_name: 'Cliente ' + id,
   channel: 'whatsapp',
@@ -134,7 +134,7 @@ describe('HubInboxPage — the aggregated inbox', () => {
     const list = await screen.findByRole('list', { name: 'Conversas do Hub' });
     for (const id of ['a', 'b', 'c']) {
       const row = within(list).getByText('Cliente ' + id).closest('button')!;
-      expect(row).toHaveTextContent('Empresa ' + id);
+      expect(row).toHaveTextContent('Instância ' + id);
     }
     expect(within(list).getByLabelText('3 sem resposta')).toBeInTheDocument();
     expect(within(list).getByText('Finalizado')).toBeInTheDocument();
@@ -270,42 +270,21 @@ describe('HubInboxPage — small screens', () => {
   });
 });
 
-describe('Sidebar — Hub entry', () => {
+describe('Navigation — there is no separate "Hub" entry (ADR-0039 revisão: Conversas é a única caixa)', () => {
   const links = () => screen.getAllByRole('link').map((a) => a.getAttribute('href'));
 
-  it('is offered only to people who belong to a Hub, right after Conversas', async () => {
-    serve();
-    renderAt(<Sidebar />);
-    await waitFor(() => expect(calls().some((u) => u.endsWith('/hubs'))).toBe(true));
-    expect(links()).toContain('/inbox');
-    await waitFor(() => expect(links()).toContain('/hub'));
-    const hrefs = links();
-    expect(hrefs.indexOf('/hub')).toBe(hrefs.indexOf('/inbox') + 1);
-  });
-
-  it.each([['no hubs', [] as Hubs], ['the Hub is off (404)', 404 as const], ['the request fails', 500 as const]])('is absent when %s', async (_n, reply) => {
-    hubsReply = reply;
+  it.each([['a member of a Hub', undefined], ['no hubs', [] as Hubs], ['the Hub is off (404)', 404 as const]])('the sidebar has no /hub link for %s', async (_n, reply) => {
+    if (reply !== undefined) hubsReply = reply;
     serve();
     renderAt(<Sidebar />);
     await waitFor(() => expect(calls().some((u) => u.endsWith('/hubs'))).toBe(true));
     await new Promise((r) => setTimeout(r, 40));
+    expect(links()).toContain('/inbox');
     expect(links()).not.toContain('/hub');
   });
-});
 
-describe('MobileNav — Hub entry', () => {
-  const links = () => screen.getAllByRole('link').map((a) => a.getAttribute('href'));
-
-  it('adds the Hub right after Conversas for members of a Hub', async () => {
-    serve();
-    renderAt(<MobileNav />);
-    await waitFor(() => expect(links()).toContain('/hub'));
-    const hrefs = links();
-    expect(hrefs.indexOf('/hub')).toBe(hrefs.indexOf('/inbox') + 1);
-  });
-
-  it.each([['no hubs', [] as Hubs], ['the Hub is off (404)', 404 as const]])('is unchanged when %s', async (_n, reply) => {
-    hubsReply = reply;
+  it.each([['a member of a Hub', undefined], ['no hubs', [] as Hubs]])('the mobile bar is unchanged for %s', async (_n, reply) => {
+    if (reply !== undefined) hubsReply = reply;
     serve();
     renderAt(<MobileNav />);
     await waitFor(() => expect(calls().some((u) => u.endsWith('/hubs'))).toBe(true));

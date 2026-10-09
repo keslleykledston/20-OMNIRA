@@ -1,7 +1,7 @@
 import { test, expect, Page, Route } from '@playwright/test';
 
 // Hub (inbox agregada; leitura, e assumir/responder só com permissão) em um navegador real, com a API mockada. O backend do Hub é coberto por testes Go
-// contra PostgreSQL real (RLS, HTTP, projetor); aqui se confere a tela: entrada no menu, lista com o nome da empresa, abertura
+// contra PostgreSQL real (RLS, HTTP, projetor); aqui se confere a tela: entrada no menu, lista com o nome da instância, abertura
 // somente leitura, ausência de composer e de pedidos de mídia, e o comportamento no celular.
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
@@ -33,7 +33,10 @@ async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; w
     seen.push(p);
     if (p.endsWith('/events') || p.includes('/presence')) return route.abort();
     if (p === '/hubs') return opts.hubs === 404 ? json(route, {}, 404) : json(route, { items: opts.hubs ?? [{ id: HUB, name: 'K3G Service Desk', role: 'hub_agent' }] });
-    if (p === `/hubs/${HUB}/inbox`) return json(route, { items: ITEMS, has_more: false, count: ITEMS.length, limit: 30 });
+    if (p === `/hubs/${HUB}/inbox`) {
+      const companies = [...new Map(ITEMS.map((i) => [i.tenant_id, { id: i.tenant_id, name: i.tenant_name }])).values()];
+      return json(route, { items: ITEMS, companies, has_more: false, count: ITEMS.length, limit: 30 });
+    }
     const w = p.match(new RegExp(`^/hubs/${HUB}/inbox/([^/]+)/(claim|messages)$`));
     if (w && route.request().method() === 'POST') {
       const body = route.request().postDataJSON();
@@ -67,13 +70,13 @@ async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; w
   return seen;
 }
 
-test('o Hub aparece no menu e abre a inbox agregada, somente leitura', async ({ page }, info) => {
+test('Conversas junta todas as instâncias liberadas (não há item "Hub" no menu), somente leitura', async ({ page }, info) => {
   const seen = await install(page);
   await page.goto('/');
-  const link = page.getByRole('link', { name: 'Hub' });
-  await expect(link).toBeVisible();
-  await link.click();
-  await expect(page).toHaveURL(/\/hub$/);
+  await expect(page.getByRole('link', { name: 'Hub', exact: true })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Conversas' }).first().click();
+  await expect(page).toHaveURL(/\/inbox$/);
+  await expect(page.getByRole('button', { name: 'Filtrar por instância' })).toContainText('Todas as instâncias');
 
   const list = page.getByRole('list', { name: 'Conversas do Hub' });
   await expect(list.getByText('José Carlos')).toBeVisible();
@@ -81,6 +84,7 @@ test('o Hub aparece no menu e abre a inbox agregada, somente leitura', async ({ 
   await expect(list.getByText('ISP Roraima').first()).toBeVisible();
   await expect(list.getByText('Alta')).toBeVisible();
   await expect(list.getByText('Finalizado')).toBeVisible();
+  await expect(list.getByRole('img', { name: 'WhatsApp' }).first()).toBeVisible();
 
   await list.getByText('Maria Souza').click();
   const header = page.getByRole('heading', { name: 'Maria Souza' }).locator('xpath=ancestor::header');
@@ -95,23 +99,23 @@ test('o Hub aparece no menu e abre a inbox agregada, somente leitura', async ({ 
   expect(seen.some((p) => p.includes('/media'))).toBe(false);
 });
 
-test('sem Hub no servidor (404) o menu não mostra o Hub e a página explica', async ({ page }) => {
+test('sem Hub no servidor (404) o endereço antigo /hub leva a Conversas, que continua funcionando', async ({ page }) => {
   await install(page, { hubs: 404 });
   await page.goto('/');
-  await expect(page.getByRole('link', { name: 'Conversas' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Hub' })).toHaveCount(0);
-  await page.goto('/hub');
-  await expect(page.getByText('Hub indisponível')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Conversas' }).first()).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Hub', exact: true })).toHaveCount(0);
+  await page.goto('/inbox');
+  await expect(page).toHaveURL(/\/inbox$/);
 });
 
 test('no celular: lista, depois só a conversa, com voltar', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await install(page);
-  await page.goto('/hub');
+  await page.goto('/inbox');
   const list = page.getByRole('list', { name: 'Conversas do Hub' });
   await expect(list.getByText('Ana Lima')).toBeVisible();
   await page.screenshot({ path: info.outputPath('hub-mobile-list.png') });
-  await expect(page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('link', { name: 'Hub' })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Navegação principal' }).getByRole('link', { name: 'Hub', exact: true })).toHaveCount(0);
   await list.getByText('José Carlos').click();
   await expect(page.getByText('Estou sem internet desde ontem à noite')).toBeVisible();
   await expect(list).toHaveCount(0);
@@ -120,10 +124,10 @@ test('no celular: lista, depois só a conversa, com voltar', async ({ page }, in
   await expect(page.getByRole('list', { name: 'Conversas do Hub' })).toBeVisible();
 });
 
-test('com permissão de resposta: assumir, ver "Respondendo como" e enviar com a empresa da conversa', async ({ page }, info) => {
+test('com permissão de resposta: assumir, ver "Respondendo como" e enviar com a instância da conversa', async ({ page }, info) => {
   const writes: { path: string; body: any; key?: string }[] = [];
   await install(page, { canReply: true, writes });
-  await page.goto('/hub');
+  await page.goto('/inbox');
   const list = page.getByRole('list', { name: 'Conversas do Hub' });
   await list.getByText('Maria Souza').click();
   await expect(page.getByText('Assuma a conversa para responder como NorteNet.')).toBeVisible();
@@ -146,7 +150,7 @@ test('com permissão de resposta: assumir, ver "Respondendo como" e enviar com a
 test('somente leitura: nenhum botão de assumir nem caixa de texto', async ({ page }) => {
   const writes: { path: string; body: any }[] = [];
   await install(page, { canReply: false, writes });
-  await page.goto('/hub');
+  await page.goto('/inbox');
   await page.getByRole('list', { name: 'Conversas do Hub' }).getByText('Maria Souza').click();
   await expect(page.getByRole('note')).toContainText('Somente leitura');
   await expect(page.getByRole('button', { name: 'Assumir' })).toHaveCount(0);

@@ -5,6 +5,7 @@ import { describeHubWriteError, hubWriteAPI, type HubItemDetail, type HubMessage
 import { handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { TenantBadge } from '../primitives/TenantBadge';
 import MessageComposer from '../inbox/MessageComposer';
+import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 
 const TYPE_LABEL: Record<string, string> = { image: 'Imagem', video: 'Vídeo', audio: 'Áudio', document: 'Documento', sticker: 'Figurinha' };
 
@@ -48,7 +49,7 @@ export default function HubItemView({ hubId, detail, onBack }: { hubId: string; 
   const [error, setError] = useState<string | null>(null);
   // A retry of the SAME text keeps its key (no double send); a different text is a new attempt.
   const pending = useRef<{ text: string; key: string } | null>(null);
-  const tenantName = detail.tenant.name || detail.item.tenant_name || 'Empresa não identificada';
+  const tenantName = detail.tenant.name || detail.item.tenant_name || 'Instância não identificada';
   const mode = composerMode(detail);
   useEffect(() => {
     setError(null);
@@ -105,8 +106,9 @@ export default function HubItemView({ hubId, detail, onBack }: { hubId: string; 
           <div className="min-w-0">
             <h2 className="truncate font-semibold text-text-primary">{detail.item.customer_name || 'Sem nome'}</h2>
             <p className="flex items-center gap-2 text-[11px] text-text-secondary">
-              <TenantBadge name={detail.tenant.name || detail.item.tenant_name || 'Empresa não identificada'} />
-              <span>· {detail.item.channel || 'Canal não informado'}</span>
+              <TenantBadge name={detail.tenant.name || detail.item.tenant_name || 'Instância não identificada'} />
+              <ChannelOrigin source={detail.item.channel} />
+              <span>{channelLabel(detail.item.channel)}</span>
               {detail.conversation.status === 'closed' && <span>· Finalizado</span>}
             </p>
           </div>

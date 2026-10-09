@@ -1,7 +1,7 @@
 import { test, expect, Page, Route } from '@playwright/test';
 
 // Painel de Acessos (ADR-0039) e "Conversas" unificadas em um navegador real, com a API MOCKADA. O backend é provado por testes Go contra
-// PostgreSQL real; aqui se confere a tela: quem vê o quê, a matriz, e o filtro de empresas no lugar do menu de canais.
+// PostgreSQL real; aqui se confere a tela: quem vê o quê, a matriz, e o filtro de instâncias no lugar do menu de canais.
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const HUB = '99999999-0000-0000-0000-000000000001';
@@ -85,7 +85,7 @@ async function install(page: Page, opts: { admin: boolean; companies: { id: stri
 
 test('o administrador do Hub vê a matriz, libera um agente em uma segunda instância e o painel conta isso', async ({ page }) => {
   const { writes } = await install(page, { admin: true, companies: [] });
-  await page.goto('/hub');
+  await page.goto('/inbox');
   await page.getByRole('link', { name: 'Acessos' }).first().click();
   await expect(page).toHaveURL(/\/acessos$/);
 
@@ -100,7 +100,7 @@ test('o administrador do Hub vê a matriz, libera um agente em uma segunda inst�
   expect(writes.some((w) => w.method === 'PUT' && w.path.endsWith('/agents/x/instances/B') && w.body.mode === 'reply')).toBe(true);
 
   // administradores por instância
-  await page.getByRole('tab', { name: 'Instâncias e administradores' }).click();
+  await page.getByRole('tab', { name: 'Instâncias' }).click();
   await expect(page.getByRole('article', { name: 'Instância ISP Roraima' }).getByText('Ana')).toBeVisible();
   await expect(page.getByRole('article', { name: 'Instância NorteNet' }).getByText('b2@nortenet.com')).toBeVisible();
 });
@@ -129,22 +129,24 @@ test('o administrador autoriza por e-mail quem ainda não tem conta, vê a autor
 
 test('quem não administra o Hub não vê o painel nem o link para ele', async ({ page }) => {
   await install(page, { admin: false, companies: [] });
-  await page.goto('/hub');
+  await page.goto('/inbox');
   await expect(page.getByRole('link', { name: 'Acessos' })).toHaveCount(0);
   await page.goto('/acessos');
   await expect(page.getByText('Painel de acessos indisponível')).toBeVisible();
 });
 
-test('Conversas unificadas: quem atende duas empresas vê tudo e filtra por empresa no lugar do menu de canais', async ({ page }) => {
+test('Conversas unificadas: quem atende duas instâncias vê tudo e filtra por instância no lugar do menu de canais', async ({ page }) => {
   const { inboxQueries } = await install(page, { admin: false, companies: [{ id: 'A', name: 'ISP Roraima' }, { id: 'B', name: 'NorteNet' }] });
   await page.goto('/inbox');
   await expect(page.getByRole('heading', { name: 'Conversas' })).toBeVisible();
   await expect(page.getByText('Cliente Alfa')).toBeVisible();
   await expect(page.getByText('Cliente Beta')).toBeVisible();
   await expect(page.getByRole('combobox', { name: /canal/i })).toHaveCount(0);
+  // cada conversa diz de onde veio (logo do canal); hoje só existe WhatsApp
+  await expect(page.getByRole('img', { name: 'WhatsApp' }).first()).toBeVisible();
 
-  const filter = page.getByRole('button', { name: 'Filtrar por empresa' });
-  await expect(filter).toContainText('Todas as empresas');
+  const filter = page.getByRole('button', { name: 'Filtrar por instância' });
+  await expect(filter).toContainText('Todas as instâncias');
   await filter.click();
   await page.getByLabel('NorteNet').check();
   await expect(page.getByText('Cliente Alfa')).toHaveCount(0);
@@ -152,6 +154,6 @@ test('Conversas unificadas: quem atende duas empresas vê tudo e filtra por empr
   await expect(filter).toContainText('NorteNet');
   expect(inboxQueries).toContain('B');
 
-  await page.getByLabel('Todas as empresas').check();
+  await page.getByLabel('Todas as instâncias').check();
   await expect(page.getByText('Cliente Alfa')).toBeVisible();
 });

@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 import type { HubInboxItem } from '../../lib/hub';
 import { TenantBadge } from '../primitives/TenantBadge';
 
@@ -44,10 +45,11 @@ export default function HubInboxList({ items, selectedId, onSelect, hasMore, loa
                   <time className="flex-shrink-0 text-[11px] text-text-tertiary">{when(it.last_activity_at)}</time>
                 </span>
                 <span className="flex items-center gap-2 text-[11px]">
-                  <TenantBadge name={it.tenant_name || 'Empresa não identificada'} />
+                  <TenantBadge name={it.tenant_name || 'Instância não identificada'} />
                 </span>
                 <span className="flex items-center gap-2 text-[11px] text-text-secondary">
-                  <span>{it.channel || 'Canal não informado'}</span>
+                  <ChannelOrigin source={it.channel} />
+                  <span>{channelLabel(it.channel)}</span>
                   {it.status === 'closed' && <span className="rounded-pill bg-status-muted px-2 py-0.5">Finalizado</span>}
                   {PRIORITY[it.priority] && <span className="rounded-pill bg-status-warning-soft px-2 py-0.5 text-status-warning-strong">{PRIORITY[it.priority]}</span>}
                   {it.unread_count > 0 && (

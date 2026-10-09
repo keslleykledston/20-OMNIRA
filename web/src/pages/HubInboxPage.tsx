@@ -11,11 +11,11 @@ import HubInboxList from '../components/hub/HubInboxList';
 import HubItemView from '../components/hub/HubItemView';
 import CompanyFilter from '../components/hub/CompanyFilter';
 
-// The Hub workspace: ONE inbox across every company the signed-in operator is authorized to serve. What appears here is
+// "Conversas" for a person the Hub authorized for two or more companies (ADR-0039): ONE inbox across every company they are
+// authorized to serve, with a company filter where a single-company person has the channel selector. What appears here is
 // decided by the server from their live grants; nothing in this page chooses a tenant. Replying needs a reply-capable grant.
-// `unified` is the same view offered as "Conversas" to a person who serves two or more companies (ADR-0039): the company
-// filter takes the place of the channel selector and the default is every company they are authorized to serve.
-export default function HubInboxPage({ unified = false, hubId: preferredHub = '' }: { unified?: boolean; hubId?: string }) {
+// It is chosen by ConversationsEntry, not by a menu entry of its own (the old "Hub" item was the same inbox under another name).
+export default function HubInboxPage({ hubId: preferredHub = '' }: { hubId?: string }) {
   const hubs = useMyHubs();
   const myTenants = useMyTenants();
   const [filter, setFilter] = useState<{ hub: string; ids: string[] }>({ hub: '', ids: [] });
@@ -86,7 +86,7 @@ export default function HubInboxPage({ unified = false, hubId: preferredHub = ''
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-3">
-        <h1 className="text-lg font-semibold text-text-primary">{unified ? 'Conversas' : 'Hub'}</h1>
+        <h1 className="text-lg font-semibold text-text-primary">Conversas</h1>
         {companies.length > 1 && (
           <CompanyFilter companies={companies} value={companyIds} onChange={(ids) => { setFilter({ hub: hubId, ids }); setSelection({ hub: hubId, id: '' }); }} />
         )}
@@ -101,14 +101,8 @@ export default function HubInboxPage({ unified = false, hubId: preferredHub = ''
           <span className="text-sm text-text-secondary">{hub.name}</span>
         )}
         <div className="ml-auto flex items-center gap-3">
-          {unified && (myTenants.data?.length ?? 0) > 0 && (
-            <Link to="/inbox?modo=empresa" className="text-sm text-text-secondary underline-offset-2 hover:underline">Caixa completa de uma empresa</Link>
-          )}
-          {hub.can_manage_access && (
-            <Link to="/acessos" className="text-sm font-medium text-accent-primary underline-offset-2 hover:underline">Acessos</Link>
-          )}
-          {hub.can_manage_companies && (
-            <Link to="/hub/empresas" className="text-sm font-medium text-accent-primary underline-offset-2 hover:underline">Empresas</Link>
+          {(myTenants.data?.length ?? 0) > 0 && (
+            <Link to="/inbox?modo=empresa" className="text-sm text-text-secondary underline-offset-2 hover:underline">Caixa completa de uma instância</Link>
           )}
         </div>
       </div>
@@ -118,7 +112,7 @@ export default function HubInboxPage({ unified = false, hubId: preferredHub = ''
             {inbox.isLoading && <LoadingState message="Carregando conversas…" />}
             {inbox.isError && <div className="p-4"><ErrorState message="Não foi possível carregar as conversas." action={{ label: 'Tentar novamente', onClick: () => void inbox.refetch() }} /></div>}
             {!inbox.isLoading && !inbox.isError && items.length === 0 && (
-              <EmptyState title="Nenhuma conversa" description={companyIds.length > 0 ? 'Não há conversas nas empresas selecionadas.' : 'Você não tem acesso delegado a nenhuma empresa neste Hub, ou ainda não há conversas.'} />
+              <EmptyState title="Nenhuma conversa" description={companyIds.length > 0 ? 'Não há conversas nas instâncias selecionadas.' : 'Você não tem acesso delegado a nenhuma instância neste Hub, ou ainda não há conversas.'} />
             )}
             {items.length > 0 && (
               <HubInboxList items={items} selectedId={selected} onSelect={setSelected} hasMore={!!inbox.hasNextPage} loadingMore={inbox.isFetchingNextPage} onLoadMore={() => void inbox.fetchNextPage()} />
@@ -127,7 +121,7 @@ export default function HubInboxPage({ unified = false, hubId: preferredHub = ''
         )}
         {showDetail && (
           <section aria-label="Conversa selecionada" className="min-h-0">
-            {!selected && <EmptyState title="Selecione uma conversa" description="O nome da empresa aparece em cada conversa." />}
+            {!selected && <EmptyState title="Selecione uma conversa" description="O nome da instância aparece em cada conversa." />}
             {selected && detail.isLoading && <LoadingState message="Abrindo a conversa…" />}
             {selected && detail.isError && !isUnauthorized(detail.error) && (
               <div className="p-4">

@@ -8,8 +8,6 @@ import Tickets from './pages/Tickets'
 import TicketReconciliationPage from './pages/TicketReconciliationPage'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
-import HubInboxPage from './pages/HubInboxPage'
-import HubCompaniesPage from './pages/HubCompaniesPage'
 import HubAccessPage from './pages/HubAccessPage'
 import ConversationsEntry from './pages/ConversationsEntry'
 import ContactsPage from './pages/ContactsPage'
@@ -49,8 +47,9 @@ function AppRoutes() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/supervisor" element={<SupervisorDashboard />} />
         <Route path="/inbox" element={<ConversationsEntry />} />
-        <Route path="/hub" element={<HubInboxPage />} />
-        <Route path="/hub/empresas" element={<HubCompaniesPage />} />
+        {/* ADR-0039 (revisão 2026-10-09): "Conversas" é a única caixa; o Hub deixou de ser um destino à parte. Os endereços antigos continuam valendo. */}
+        <Route path="/hub" element={<Navigate to="/inbox" replace />} />
+        <Route path="/hub/empresas" element={<Navigate to="/acessos?aba=instancias" replace />} />
         <Route path="/acessos" element={<HubAccessPage />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/flows" element={<FlowsPage />} />

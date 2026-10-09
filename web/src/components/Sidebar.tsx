@@ -42,14 +42,12 @@ export default function Sidebar() {
   const location = useLocation()
   const tenant = useTenantDisplay()
   const hubs = useMyHubs()
-  // The Hub entry exists only for people who belong to a Service Hub (and only when the server has the Hub enabled).
-  const hubItem: (typeof navItems)[number] = { label: 'Hub', path: '/hub', icon: 'channels' }
   const base = navItems.filter((item) => !item.mockBacked || isDevSurface())
   // ADR-0039: the Access panel (people and permissions) is offered only to hub admins, and only when the server mounts it.
-  const accessItem: (typeof navItems)[number] = { label: 'Acessos', path: '/acessos', icon: 'contacts' }
+  const accessItem: (typeof navItems)[number] = { label: 'Acessos', path: '/acessos', icon: 'key' }
   const canAccess = (hubs.data ?? []).some((h) => h.can_manage_access)
-  const withHub = (hubs.data?.length ?? 0) > 0 ? [...base.slice(0, 2), hubItem, ...base.slice(2)] : base
-  const visibleNavItems = canAccess ? [...withHub.slice(0, 3), accessItem, ...withHub.slice(3)] : withHub
+  // There is no separate "Hub" entry: "Conversas" is the one inbox, and it widens to every authorized company by itself (ADR-0039 revisão).
+  const visibleNavItems = canAccess ? [...base.slice(0, 2), accessItem, ...base.slice(2)] : base
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(path + '/')

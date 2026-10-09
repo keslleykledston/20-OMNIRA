@@ -4,6 +4,7 @@ import { ConversationItem } from '../../types/api';
 import { Icon } from '../primitives';
 import { WhatsAppName } from '../contacts/WhatsAppName';
 import { ChannelBadge } from './ChannelBadge';
+import { ChannelOrigin } from './ChannelOrigin';
 import type { ChannelLine } from '../../lib/channelLines';
 import { INTERNAL_ROLE_LABEL } from '../../lib/contacts';
 import { DEFAULT_WAIT_THRESHOLDS, InboxSegment, inboxTimeLabel, previewText, waitInfo, WaitThresholds, WaitTone } from '../../lib/inboxModel';
@@ -21,10 +22,8 @@ interface ConversationListPanelProps {
   isFetchingMore?: boolean;
   onLoadMore?: () => void;
   waitThresholds?: WaitThresholds;
-  /** The tenant's WhatsApp lines; the selector and badges appear only when there is more than one. */
+  /** The instance's channel lines. There is no channel filter any more (every channel of the instance is merged in this list); the lines only say where each row came from. */
   channels?: ChannelLine[];
-  channelFilter?: string;
-  onChannelFilterChange?: (id: string) => void;
 }
 
 const SEGMENTS: { id: InboxSegment; label: string }[] = [
@@ -74,8 +73,6 @@ export default function ConversationListPanel({
   onLoadMore,
   waitThresholds = DEFAULT_WAIT_THRESHOLDS,
   channels = [],
-  channelFilter = '',
-  onChannelFilterChange,
 }: ConversationListPanelProps) {
   const multiChannel = channels.length > 1;
   const lineById = new Map(channels.map((c) => [c.id, c] as const));
@@ -127,23 +124,6 @@ export default function ConversationListPanel({
             );
           })}
         </div>
-        {multiChannel && onChannelFilterChange && (
-          <label className="block">
-            <span className="sr-only">Filtrar por canal</span>
-            <select
-              value={channelFilter}
-              onChange={(e) => onChannelFilterChange(e.target.value)}
-              className="w-full rounded-control border border-transparent bg-surface-muted px-2.5 py-1.5 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent-primary"
-            >
-              <option value="">Todos os canais</option>
-              {channels.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <label className="relative block">
           <span className="sr-only">Buscar contato</span>
           <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" />
@@ -237,6 +217,7 @@ export default function ConversationListPanel({
                 thresholds={waitThresholds}
                 inSpam={segment === 'spam'}
                 line={multiChannel && conv.channel_connection_id ? lineById.get(conv.channel_connection_id) : undefined}
+                origin={conv.channel_connection_id ? lineById.get(conv.channel_connection_id) : undefined}
                 onSelect={onSelect}
               />
             ))}
@@ -276,6 +257,7 @@ function ConversationRow({
   thresholds,
   inSpam,
   line,
+  origin,
   onSelect,
 }: {
   conv: ConversationItem;
@@ -284,6 +266,8 @@ function ConversationRow({
   thresholds: WaitThresholds;
   inSpam: boolean;
   line?: ChannelLine;
+  /** The line this conversation runs on; says where it came from (logo), whether or not the instance has several lines. */
+  origin?: ChannelLine;
   onSelect: (id: string) => void;
 }) {
   const name = conv.contact_name || conv.contact_phone;
@@ -344,6 +328,7 @@ function ConversationRow({
             )}
           </span>
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-text-tertiary">
+            <ChannelOrigin source={origin?.provider ?? 'whatsapp'} detail={origin?.label} />
             <ChannelBadge line={line} />
             <span className={clsx(unassigned && 'font-medium text-status-warning')}>{state}</span>
             {kindBadge(conv)}

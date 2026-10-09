@@ -126,3 +126,15 @@ Regra de ouro: **vários = grant do Hub**. Um administrador de empresa nunca cri
 Ver `docs/architecture/HUB-VERIFICATION-STATUS.md` (seção "Painel de Acessos"). Tudo em Postgres real
 (`internal/hub/adapters`, `internal/hub/provisioning`, `internal/tenancy/adapters`), mutantes em
 `scripts/test-hub-access-mutations.sh`, telas em Vitest. **Nenhuma** tela foi vista com sessão real do Keycloak.
+
+## 6. Revisão de 2026-10-09 (decisões do dono após a auditoria de rotas e telas)
+
+A auditoria achou duplicidade e desvio do pedido original; corrigido no frontend (nada no backend mudou):
+
+- **Um termo na tela: "Instância"** (decisão do dono). "Empresa" é só o nome no código/API (`companies`, `tenant`).
+- **Um só painel de gestão (`/acessos`)** com duas abas: *Agentes e permissões* e *Instâncias* (criar, suspender, capacidades **e** administradores no mesmo cartão). `/hub/empresas` virou redirecionamento para `/acessos?aba=instancias`; a tela `HubCompaniesPage` foi removida (`components/hub/CompaniesPanel.tsx`).
+- **Uma só caixa: "Conversas".** O item "Hub" saiu do menu (desktop e celular) e `/hub` redireciona para `/inbox`. `ConversationsEntry` decide: a visão unificada aparece para quem tem **2+ instâncias autorizadas** pelo Hub, **ou 1 só se a pessoa não tem instância própria** (sem isso a única caixa dela ficaria vazia).
+- **O filtro de canais foi substituído** (pedido do dono): na caixa de uma instância **todos os canais ficam juntos** (sem seletor de canal); na visão unificada o seletor é o de instâncias. O seletor "Instância" do cabeçalho segue sendo o de quem tem 2+ memberships diretas.
+- **Sinal de origem do canal** em cada conversa (lista, cabeçalho do chat e visão unificada): `ChannelOrigin`, um logo pequeno **sempre com nome em texto** (`aria-label`/tooltip). Hoje só **WhatsApp** existe; e-mail, Instagram e Facebook já têm desenho e entram quando uma integração informar o `provider`/`channel`. O backend ainda aceita `channel_connection_id` no filtro da lista (sem uso na tela).
+- **Ícones:** "Acessos" ganhou ícone próprio (chave).
+- Continua fora (honesto): a fase 3 (canais/ERP pelo Hub) — ver o **spike** em ADR-0038; a aba Instâncias avisa que, por ora, canais e ERP/CRM se configuram dentro de cada instância, em **Canais**.

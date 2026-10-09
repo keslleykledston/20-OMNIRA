@@ -15,6 +15,7 @@ import { Icon } from '../primitives';
 import { dayLabel, sortChronological } from '../../lib/inboxModel';
 import { useChannelLines, useConversationChannel } from '../../lib/channelLines';
 import { ChannelBadge } from './ChannelBadge';
+import { ChannelOrigin } from './ChannelOrigin';
 import { TemplateSendDialog } from './TemplateSendDialog';
 import FinalizeDialog from './FinalizeDialog';
 import { emitInboxNotice, useInboxNotice } from '../../lib/inboxNotice';
@@ -209,6 +210,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             </h3>
             <WhatsAppName principal={conversation?.contact_name} whatsapp={conversation?.contact_whatsapp_name} />
             <p className="flex items-center gap-1.5 truncate text-[11px] text-text-secondary">
+              <ChannelOrigin source={line?.provider ?? 'whatsapp'} detail={line?.label} />
               <span className="truncate">
                 {line ? (line.provider_kind === 'official' ? 'WhatsApp oficial' : 'WhatsApp') : 'Canal não informado'} · {conversation?.contact_phone}
               </span>

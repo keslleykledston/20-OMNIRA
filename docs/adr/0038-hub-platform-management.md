@@ -169,3 +169,22 @@ Também corrigidos no reply: conversa finalizada entre o carregamento e o lock a
 
 **Provas:** `scripts/test-hub-suspension-mutations.sh` (15 mutantes mortos, cada um por pelo menos um teste que falha), testes em PostgreSQL real em `internal/hub/adapters` (escrita espera revogação em andamento, 5 linhas × claim/reply + finalização), `internal/platform/db` (a suspensão espera quem perguntou primeiro), `internal/worker/{delivery,flows,hubprojector}`, `internal/inbox/adapters` (Meta ponta a ponta) e `internal/groups/adapters`.
 
+
+## Spike da fase 3 (gestão de canais e ERP/CRM pelo Hub) — resultado de 2026-10-09
+
+Pergunta do ADR §5: os handlers de canal/integração dependem só do `TenantContext` ou leem a membership direto? **Leem a membership.** Achados, por leitura do código (nada foi implementado nesta fatia):
+
+1. **Autorização de rota.** `tenancyadapters.AuthorizationMiddleware` chama `AuthorizeAccessToTenant`, que só aceita **membership direta**. Uma pessoa que só tem grant do Hub recebe 403 em `/tenants/{id}/channels/...`. O `EffectiveAccessResolver` (`Source=hub`) existe, mas só o usa o Hub (`/hubs/{hub}/inbox`).
+2. **Permissão por papel.** `channeladapters.PostgresPermissionChecker.HasPermission` consulta `memberships ⋈ role_permissions` pelo `user_id`. Para um contexto `Source=hub` responde "não" sempre. O mesmo vale para os verificadores de `inbox` e `tickets`.
+3. **RLS é por usuário.** As políticas de `channel_connections` (e das demais tabelas do tenant) são `has_active_membership(...) OR is_system_admin()` / `has_active_admin_membership(...)`. Sob a sessão do próprio usuário, quem só tem grant **não enxerga nada**.
+4. **O atalho seria perigoso.** Rodar o handler do tenant numa `WithSystemTenantSession` faz `app.is_system_admin='true'`, que **desliga a RLS para todas as empresas**: sobraria só o `WHERE tenant_id` do código, contra a regra "RLS é a segunda barreira". **Descartado.**
+
+**Desenho recomendado (por escopo, não de uma vez):**
+- Nova função SQL `has_hub_manage_access(tenant, user, scope)` (mesma base de `has_active_hub_access`, exige `can_manage` + `management_scopes` do contrato + empresa ativa) e, **por tabela** de cada escopo (`channels` → `channel_connections` e credenciais; `integrations` → tabelas de ERP/CRM e IA), uma política `OR has_hub_manage_access(...)`. A RLS passa a valer para o Hub também.
+- Rotas novas `/hubs/{hub}/tenants/{tenant}/channels/...` que montam o **mesmo handler** atrás de um middleware `Source=hub` (resolve hub→contrato→grant→escopo) e de um `PermissionChecker` que, para `Source=hub`, responde pelo `management_scopes` do contrato e não pela membership.
+- Segredo nunca na resposta/log/auditoria (já é regra dos handlers; um teste novo prova no caminho do Hub).
+- Primeira fatia: escopo `channels`, só leitura + teste de conexão; depois criar/parear. Cada fatia com mutantes de RLS e revisão do Codex antes de ligar a flag.
+
+**Conversas completas para quem só tem grant:** pela mesma razão (ponto 3), levar o workspace inteiro (tickets, contexto, atribuição) para quem só tem grant exigiria policies de RLS em dezenas de tabelas. **Não recomendado agora.** A visão unificada continua sendo a do Hub (lista + leitura + assumir + responder texto); o que falta nela (anexos, contexto, finalizar) entra por fatias, cada uma com a política de RLS da tabela que lê.
+
+**Não feito:** nada disto está implementado; fase 3 continua `NOT WIRED`.

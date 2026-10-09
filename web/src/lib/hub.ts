@@ -131,7 +131,7 @@ export function describeHubWriteError(err: unknown): string {
   const body = typeof e?.response?.data === 'string' ? e.response.data : ''
   switch (status) {
     case 403:
-      return 'Seu acesso a esta empresa é somente leitura.'
+      return 'Seu acesso a esta instância é somente leitura.'
     case 404:
       return 'Esta conversa não está mais disponível para você: o acesso pode ter sido encerrado.'
     case 409:
@@ -139,7 +139,7 @@ export function describeHubWriteError(err: unknown): string {
       if (body.includes('claim')) return 'Assuma esta conversa antes de responder.'
       if (body.includes('window')) return 'Janela de 24 h fechada: só mensagem de template até o cliente escrever de novo.'
       if (body.includes('finalized')) return 'Este atendimento foi finalizado.'
-      if (body.includes('company')) return 'A empresa exibida não é a desta conversa. Recarregue a tela.'
+      if (body.includes('company')) return 'A instância exibida não é a desta conversa. Recarregue a tela.'
       return 'A conversa mudou, tente novamente.'
     case 400:
     case 422:
@@ -203,7 +203,7 @@ export function describeHubAdminError(err: unknown): string {
   const body = typeof e?.response?.data === 'string' ? e.response.data.replace(/^companies: invalid request: /, '').trim() : ''
   switch (status) {
     case 404:
-      return 'Você não tem permissão para gerenciar empresas neste Hub (ou a empresa não é deste Hub).'
+      return 'Você não tem permissão para gerenciar instâncias neste Hub (ou a instância não é deste Hub).'
     case 400:
       return 'Pedido inválido. Recarregue a tela e tente de novo.'
     case 422:
@@ -298,7 +298,7 @@ export function describeHubAccessError(err: unknown): string {
   const body = typeof e?.response?.data === 'string' ? e.response.data.replace(/^access: invalid request: /, '').replace(/^provisioning: invalid request: /, '').trim() : ''
   switch (status) {
     case 404:
-      return 'Você não administra este Hub, ou a pessoa/empresa não pertence a ele.'
+      return 'Você não administra este Hub, ou a pessoa/instância não pertence a ele.'
     case 400:
       return 'Pedido inválido. Recarregue a tela e tente de novo.'
     case 422:

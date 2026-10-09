@@ -12,9 +12,9 @@ export default function TenantSwitcher({ go }: { go?: (path: string) => void }) 
 
   return (
     <label className="flex items-center gap-2 text-sm text-text-secondary">
-      <span className="hidden sm:inline">Empresa</span>
+      <span className="hidden sm:inline">Instância</span>
       <select
-        aria-label="Trocar de empresa"
+        aria-label="Trocar de instância"
         value={list.some((t) => t.id === current) ? current : ''}
         onChange={(e) => e.target.value && e.target.value !== current && switchTenant(e.target.value, go)}
         className="h-9 max-w-[8.5rem] truncate rounded-control border border-border-light bg-surface px-2 text-sm font-medium text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary sm:max-w-[16rem]"

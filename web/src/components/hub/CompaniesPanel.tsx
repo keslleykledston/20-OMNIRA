@@ -1,18 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { describeHubAdminError, hubAdminAPI, type HubCompany } from '../lib/hub';
-import { handleUnauthorized, isUnauthorized } from '../lib/session';
-import { useMyHubs } from '../hooks/useMyHubs';
-import { Button, ConfirmDialog, EmptyState, ErrorState, Input, LoadingState, Modal, StatusBadge } from '../components/primitives';
+import { describeHubAdminError, hubAdminAPI, type HubCompany } from '../../lib/hub';
+import { handleUnauthorized, isUnauthorized } from '../../lib/session';
+import { Button, ConfirmDialog, EmptyState, ErrorState, Input, LoadingState, Modal, StatusBadge } from '../primitives';
 
-// Control plane of the Hub (ADR-0038 phase 1): create companies, switch them on and off, issue or withdraw their
-// capabilities. Everything shown and done here is decided by the server for the signed-in operator; this page never
-// chooses a tenant by itself and `can_manage_companies` only decides whether the screen is offered.
-export default function HubCompaniesPage() {
-  const hubs = useMyHubs();
-  const hub = (hubs.data ?? []).find((h) => h.can_manage_companies);
-  const hubId = hub?.id ?? '';
+// Companies of a Hub (ADR-0038 phase 1), shown as the "Instâncias" tab of the Access panel (ADR-0039): create companies, switch
+// them on and off, issue or withdraw their capabilities. Everything shown and done here is decided by the server for the
+// signed-in operator; this panel never chooses a tenant by itself, and the caller only mounts it when the server says the
+// person may manage companies. `extra` lets the Access panel put each company's administrators inside the same card.
+export default function CompaniesPanel({ hubId, extra }: { hubId: string; extra?: (tenantId: string) => ReactNode }) {
   const qc = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [confirm, setConfirm] = useState<HubCompany | null>(null);
@@ -20,8 +16,8 @@ export default function HubCompaniesPage() {
 
   const list = useQuery({ queryKey: ['hub-companies', hubId], enabled: !!hubId, queryFn: () => hubAdminAPI.companies(hubId), retry: false });
   useEffect(() => {
-    if ([hubs.error, list.error].some(isUnauthorized)) handleUnauthorized();
-  }, [hubs.error, list.error]);
+    if (isUnauthorized(list.error)) handleUnauthorized();
+  }, [list.error]);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['hub-companies', hubId] });
   const update = useMutation({
@@ -31,59 +27,50 @@ export default function HubCompaniesPage() {
     onSettled: () => setConfirm(null),
   });
 
-  if (hubs.isLoading) return <div className="p-6"><LoadingState message="Carregando…" /></div>;
-  if (!hub) {
-    return (
-      <div className="p-6">
-        <EmptyState title="Gestão de empresas indisponível" description="Esta área é só para operadores da plataforma que administram um Hub, e precisa estar habilitada neste ambiente." />
-      </div>
-    );
-  }
   const caps = list.data?.capabilities ?? [];
   const items = list.data?.items ?? [];
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-3">
-        <Link to="/hub" className="text-sm text-text-secondary underline-offset-2 hover:underline">← Caixa do Hub</Link>
-        <h1 className="text-lg font-semibold text-text-primary">Empresas</h1>
-        <span className="text-sm text-text-secondary">{hub.name}</span>
-        <div className="ml-auto"><Button onClick={() => setCreating(true)}>Nova empresa</Button></div>
+    <section className="space-y-4" aria-label="Instâncias">
+      <div className="flex flex-wrap items-start gap-3">
+        <p className="max-w-3xl text-sm text-text-secondary">
+          Canais de WhatsApp e integrações ERP/CRM são configurados hoje dentro de cada instância, no menu Canais. Configurá-los por aqui é a próxima etapa (ADR-0038, fase 3); os números abaixo só mostram o que já existe.
+        </p>
+        <div className="ml-auto"><Button onClick={() => setCreating(true)}>Nova instância</Button></div>
       </div>
-      <div className="mx-auto w-full max-w-5xl space-y-4 p-4">
-        {notice && (
-          <div role="alert" className={notice.tone === 'error' ? 'rounded-control border border-status-danger-border bg-status-danger-soft px-3 py-2 text-sm text-status-danger' : 'rounded-control border border-status-success-border bg-status-success-soft px-3 py-2 text-sm text-status-success'}>
-            {notice.text}
-          </div>
-        )}
-        {list.isLoading && <LoadingState message="Carregando empresas…" />}
-        {list.isError && !isUnauthorized(list.error) && <ErrorState message={describeHubAdminError(list.error)} action={{ label: 'Tentar novamente', onClick: () => void list.refetch() }} />}
-        {list.data && items.length === 0 && <EmptyState title="Nenhuma empresa" description="Crie a primeira empresa deste Hub." />}
-        {items.map((c) => (
-          <CompanyCard key={c.id} company={c} caps={caps} busy={update.isPending}
-            onToggleCap={(key, on) => update.mutate({ id: c.id, body: { capabilities: { [key]: on } } })}
-            onStatus={() => (c.status === 'active' ? setConfirm(c) : update.mutate({ id: c.id, body: { status: 'active' } }))} />
-        ))}
-      </div>
+      {notice && (
+        <div role="alert" className={notice.tone === 'error' ? 'rounded-control border border-status-danger-border bg-status-danger-soft px-3 py-2 text-sm text-status-danger' : 'rounded-control border border-status-success-border bg-status-success-soft px-3 py-2 text-sm text-status-success'}>
+          {notice.text}
+        </div>
+      )}
+      {list.isLoading && <LoadingState message="Carregando instâncias…" />}
+      {list.isError && !isUnauthorized(list.error) && <ErrorState message={describeHubAdminError(list.error)} action={{ label: 'Tentar novamente', onClick: () => void list.refetch() }} />}
+      {list.data && items.length === 0 && <EmptyState title="Nenhuma instância" description="Crie a primeira instância deste Hub." />}
+      {items.map((c) => (
+        <CompanyCard key={c.id} company={c} caps={caps} busy={update.isPending} extra={extra?.(c.id)}
+          onToggleCap={(key, on) => update.mutate({ id: c.id, body: { capabilities: { [key]: on } } })}
+          onStatus={() => (c.status === 'active' ? setConfirm(c) : update.mutate({ id: c.id, body: { status: 'active' } }))} />
+      ))}
       <NewCompanyModal open={creating} hubId={hubId} onClose={() => setCreating(false)}
-        onCreated={(c) => { setCreating(false); setNotice({ tone: 'ok', text: `Empresa “${c.display_name}” criada. Ninguém tem acesso a ela ainda: conceda o acesso aos atendentes.` }); void refresh(); }} />
-      <ConfirmDialog open={!!confirm} title={`Suspender ${confirm?.display_name ?? ''}?`} destructive isPending={update.isPending} confirmLabel="Suspender empresa"
-        message="A empresa deixa de ser atendida: os membros dela e os atendentes do Hub perdem o acesso na hora. Nada é apagado e ela pode ser reativada."
+        onCreated={(c) => { setCreating(false); setNotice({ tone: 'ok', text: `Instância “${c.display_name}” criada. Ninguém tem acesso a ela ainda: conceda o acesso aos atendentes.` }); void refresh(); }} />
+      <ConfirmDialog open={!!confirm} title={`Suspender ${confirm?.display_name ?? ''}?`} destructive isPending={update.isPending} confirmLabel="Suspender instância"
+        message="A instância deixa de ser atendida: os membros dela e os atendentes do Hub perdem o acesso na hora. Nada é apagado e ela pode ser reativada."
         onCancel={() => setConfirm(null)} onConfirm={() => confirm && update.mutate({ id: confirm.id, body: { status: 'suspended' } })} />
-    </div>
+    </section>
   );
 }
 
-function CompanyCard({ company: c, caps, busy, onToggleCap, onStatus }: {
+function CompanyCard({ company: c, caps, busy, extra, onToggleCap, onStatus }: {
   company: HubCompany;
   caps: { key: string; label: string; description: string; gates: string }[];
   busy: boolean;
+  extra?: ReactNode;
   onToggleCap: (key: string, on: boolean) => void;
   onStatus: () => void;
 }) {
   const suspended = c.status !== 'active';
   return (
-    <section aria-label={`Empresa ${c.display_name}`} className="rounded-sheet border border-border-subtle bg-surface p-4">
+    <section aria-label={`Instância ${c.display_name}`} className="rounded-sheet border border-border-subtle bg-surface p-4">
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-base font-semibold text-text-primary">{c.display_name}</h2>
         <StatusBadge status={suspended ? 'danger' : 'success'}>{suspended ? 'Suspensa' : 'Ativa'}</StatusBadge>
@@ -116,6 +103,7 @@ function CompanyCard({ company: c, caps, busy, onToggleCap, onStatus }: {
           ))}
         </div>
       </fieldset>
+      {extra}
     </section>
   );
 }
@@ -154,17 +142,17 @@ function NewCompanyModal({ open, hubId, onClose, onCreated }: { open: boolean; h
   const valid = legal.trim().length >= 2;
 
   return (
-    <Modal open={open} title="Nova empresa" description="Cria a empresa dentro deste Hub. Nenhum atendente recebe acesso automaticamente." onClose={onClose}
+    <Modal open={open} title="Nova instância" description="Cria a instância dentro deste Hub. Nenhum atendente recebe acesso automaticamente." onClose={onClose}
       footer={<>
         <Button variant="secondary" size="sm" onClick={onClose} disabled={create.isPending}>Cancelar</Button>
-        <Button size="sm" disabled={!valid} isLoading={create.isPending} onClick={() => { setError(null); create.mutate(); }}>Criar empresa</Button>
+        <Button size="sm" disabled={!valid} isLoading={create.isPending} onClick={() => { setError(null); create.mutate(); }}>Criar instância</Button>
       </>}>
       <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (valid && !create.isPending) { setError(null); create.mutate(); } }}>
         <Input label="Razão social" value={legal} onChange={(e) => setLegal(e.target.value)} maxLength={200} required />
         <Input label="Nome fantasia (opcional)" value={trade} onChange={(e) => setTrade(e.target.value)} maxLength={200} />
         <Input label="CNPJ (opcional)" value={taxId} onChange={(e) => setTaxId(e.target.value)} maxLength={32} />
         <Input label="E-mail do primeiro administrador (opcional)" type="email" value={admin} onChange={(e) => setAdmin(e.target.value)} maxLength={254}
-          helperText="Precisa ser alguém que já tem conta no OMNIRA. Para convidar uma pessoa nova, use a equipe da própria empresa depois." />
+          helperText="Precisa ser alguém que já tem conta no OMNIRA. Para convidar uma pessoa nova, use a equipe da própria instância depois." />
         {error && <p role="alert" className="text-sm text-status-danger">{error}</p>}
       </form>
     </Modal>
