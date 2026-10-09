@@ -208,3 +208,31 @@ test('equipes: o administrador monta a equipe e a distribuição automática ent
   await expect(bruno.getByText('Respondendo como ISP Roraima')).toBeVisible();
   await ctx2.close();
 });
+
+test('auditoria: o administrador vê quem mudou o quê, e só ele', async ({ page }) => {
+  await signIn(page, 'admin@e2e.test');
+  await page.goto('/acessos?aba=auditoria');
+  const table = page.getByRole('table');
+  await expect(table.getByText('Gestão delegada ao Hub alterada').first()).toBeVisible();
+  await expect(table.getByText('Conexão de canal/integração criada').first()).toBeVisible();
+  await expect(table.getByText('pelo Hub').first()).toBeVisible(); // a conexão feita pela Carla através do Hub
+  await expect(table.getByText('Equipe criada').first()).toBeVisible();
+  await expect(table.getByText('Chave “Gerenciar” alterada').first()).toBeVisible();
+  // mensagens e atendimentos não entram, e nenhum segredo aparece
+  await expect(page.getByText('hub.message.sent')).toHaveCount(0);
+  const body = await api(page, `/hubs/${env.hub}/audit?limit=200`);
+  expect(body.status).toBe(200);
+  expect(body.body).not.toContain('segredo-do-crm-12345');
+  expect(body.body).not.toContain('hub.message');
+  expect(body.body).not.toContain('hub.conversation');
+  // filtrar por instância
+  await page.getByLabel('Filtrar auditoria por instância').selectOption({ label: 'NorteNet' });
+  await expect(table.getByText('NorteNet').first()).toBeVisible(); // as concessões iniciais de acesso à NorteNet
+  await expect(table.getByText('ISP Roraima')).toHaveCount(0); // e nenhuma da outra instância
+
+  const other = await page.context().browser()!.newContext();
+  const p2 = await other.newPage();
+  await signIn(p2, 'agent1@e2e.test');
+  expect((await api(p2, `/hubs/${env.hub}/audit`)).status).toBe(404);
+  await other.close();
+});

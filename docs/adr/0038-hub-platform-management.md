@@ -1,6 +1,6 @@
 # ADR-0038 — Gestão de empresas, integrações e atendentes pelo Hub (PROPOSTO)
 
-Status: **ACEITO (direção e decisões da §9); fase 0 IMPLEMENTADA e POSTGRES VERIFIED em 2026-10-08; fase 1 (criar empresa, suspender, capacidades) IMPLEMENTADA e POSTGRES/HTTP VERIFIED em 2026-10-08; fase 2 entregue pelo ADR-0039; fases 3 (gestão delegada de canais/integrações, migration 103) e 4 (equipes, distribuição automática, transferência, migration 104) IMPLEMENTADAS e POSTGRES/HTTP VERIFIED em 2026-10-09 (local, ainda não implantadas); fase 5 (E2E em navegador real, `scripts/e2e-hub-browser.sh`) IMPLEMENTADA e verde (7/7) em 2026-10-09.**
+Status: **ACEITO (direção e decisões da §9); fase 0 IMPLEMENTADA e POSTGRES VERIFIED em 2026-10-08; fase 1 (criar empresa, suspender, capacidades) IMPLEMENTADA e POSTGRES/HTTP VERIFIED em 2026-10-08; fase 2 entregue pelo ADR-0039; fases 3 (gestão delegada de canais/integrações, migration 103) e 4 (equipes, distribuição automática, transferência, migration 104) IMPLEMENTADAS e POSTGRES/HTTP VERIFIED em 2026-10-09 (local, ainda não implantadas); fase 5 (E2E em navegador real, `scripts/e2e-hub-browser.sh`) IMPLEMENTADA e verde (8/8) em 2026-10-09.**
 Contexto anterior: ADR-0036 (Hub dentro do OMNIRA), ADR-0037 (assumir e responder pelo Hub).
 Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`) até o gate de cada fase passar.
 
