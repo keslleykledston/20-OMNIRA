@@ -30,6 +30,11 @@ for i in $(seq 1 90); do [ "$(docker logs "$PG" 2>&1 | grep -c 'database system 
 PGPORT=$(docker port "$PG" 5432/tcp | head -1 | cut -d: -f2); NATSPORT=$(docker port "$NATS" 4222/tcp | head -1 | cut -d: -f2)
 psql_o() { docker exec -i "$PG" psql -U omnira -d hubbrowser -X -q -At -v ON_ERROR_STOP=1 "$@"; }
 
+# a marker only THIS run knows, written into the throwaway database itself: the browser helpers refuse any database that does not carry it
+NONCE=$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+PGID=$(docker inspect -f '{{.Id}}' "$PG")
+psql_o -c "ALTER DATABASE hubbrowser SET omnira.e2e_run = '$NONCE'" >/dev/null
+
 echo "== migrations (production migrator)"
 docker run --rm --network "container:$PG" -v "$PWD/migrations:/migrations:ro" -v "$PWD/tools:/tools:ro" \
   -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=hubbrowser postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
@@ -92,7 +97,7 @@ curl -sf --max-time 2 "http://127.0.0.1:$WEBPORT/" >/dev/null || { echo "web did
 
 echo "== browser"
 export E2E_BASE_URL="http://127.0.0.1:$WEBPORT" E2E_HUB="$HUB" E2E_TA="$TA" E2E_TB="$TB" E2E_TC="$TC"
-export E2E_RUN="$$" E2E_WORK="$WORK"   # the helpers derive and PROVE the rest (container label, published port, binary)
+export E2E_RUN="$$" E2E_WORK="$WORK" E2E_PG_ID="$PGID" E2E_NONCE="$NONCE"   # the helpers derive and PROVE the rest (container id, run marker, published port, binary)
 set +e
 (cd web && npx playwright test -c playwright.real.config.ts "$@")
 STATUS=$?

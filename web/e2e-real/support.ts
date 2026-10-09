@@ -32,22 +32,25 @@ export async function signIn(page: Page, email: string): Promise<{ id: string; e
   return user;
 }
 
-let verifiedFor = '';
-
 /**
  * These helpers write with the database owner's rights (sessions, seed data, hubctl). They run ONLY against the throwaway database that
  * scripts/e2e-hub-browser.sh creates (Codex review). The script hands over ONE value, the run number; everything else is DERIVED and proven:
  * the container is named from it AND carries the script's own run label and image; the database URL is built from that container's real
  * published port (so SQL and hubctl reach the same database by construction); the hubctl binary must be a regular file, not a link, owned by
  * this user, not writable by others, inside this run's private work directory. No shell is involved anywhere, and the seeded database is
- * checked (five e2e.test people and nobody else) before the first write of every new target.
+ * checked (five e2e.test people and nobody else) before EVERY write.
  */
 function target(): { container: string; appdb: string; hubctlBin: string } {
   const run = process.env.E2E_RUN ?? '';
   if (!/^\d{1,10}$/.test(run)) throw new Error('E2E_RUN is not a run number of scripts/e2e-hub-browser.sh: refusing to write anywhere');
-  const container = `omnira-hubbrowser-${run}-pg`;
-  const identity = execFileSync('docker', ['inspect', '-f', '{{index .Config.Labels "com.omnira.integration-test.run"}}|{{.Config.Image}}', container], { encoding: 'utf8' }).trim();
-  if (identity !== `hubbrowser-${run}|postgres:16-alpine`) throw new Error(`the container ${container} is not the throwaway database of this run (${identity})`);
+  const nonce = process.env.E2E_NONCE ?? '';
+  const pgId = process.env.E2E_PG_ID ?? '';
+  if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(pgId)) throw new Error('E2E_NONCE / E2E_PG_ID are not the run markers of scripts/e2e-hub-browser.sh');
+  const name = `omnira-hubbrowser-${run}-pg`;
+  // the IMMUTABLE container id the script recorded must be the one behind the name NOW (checked on every call: a replaced container fails closed)
+  const identity = execFileSync('docker', ['inspect', '-f', '{{.Id}}|{{index .Config.Labels "com.omnira.integration-test.run"}}|{{.Config.Image}}', name], { encoding: 'utf8' }).trim();
+  if (identity !== `${pgId}|hubbrowser-${run}|postgres:16-alpine`) throw new Error(`the container ${name} is not the throwaway database of this run (${identity})`);
+  const container = pgId; // from here on the container is addressed by its immutable id, never by name
   const port = execFileSync('docker', ['port', container, '5432/tcp'], { encoding: 'utf8' }).trim().split('\n')[0].split(':').pop() ?? '';
   if (!/^\d{2,5}$/.test(port)) throw new Error('cannot determine the published port of the throwaway database');
   const appdb = `postgres://omnira_app:omnira_app@127.0.0.1:${port}/hubbrowser?sslmode=disable`;
@@ -61,12 +64,9 @@ function target(): { container: string; appdb: string; hubctlBin: string } {
   const bst = fs.lstatSync(hubctlBin);
   if (!bst.isFile() || bst.isSymbolicLink() || bst.uid !== process.getuid!() || (bst.mode & 0o022) !== 0) throw new Error('hubctl must be a regular file of this user, not writable by others');
 
-  const key = `${container}|${port}|${hubctlBin}`;
-  if (verifiedFor !== key) {
-    const probe = psql(container, `SELECT current_database() || '|' || (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM users WHERE email LIKE '%@e2e.test')`);
-    if (probe !== 'hubbrowser|5|5') throw new Error(`the database is not the seeded throwaway one (${probe}): refusing to write`);
-    verifiedFor = key;
-  }
+  // the database itself must carry the marker only this run wrote (and hold exactly the five seeded e2e.test people): checked every call
+  const probe = psql(container, `SELECT current_database() || '|' || coalesce(current_setting('omnira.e2e_run', true), '') || '|' || (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM users WHERE email LIKE '%@e2e.test')`);
+  if (probe !== `hubbrowser|${nonce}|5|5`) throw new Error(`the database is not the seeded throwaway one of this run (${probe.replace(nonce, '<nonce>')}): refusing to write`);
   return { container, appdb, hubctlBin };
 }
 
