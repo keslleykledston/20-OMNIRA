@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 RUN=hubbrowser-$$
 PG=omnira-$RUN-pg; NATS=omnira-$RUN-nats
-WORK=$(mktemp -d); chmod 777 "$WORK"
+WORK=$(mktemp -d)  # private (0700): the browser helpers refuse a work directory other users can enter
 APIPORT=$((19000 + $$ % 900)); WEBPORT=$((20000 + $$ % 900))
 LBL=(--label com.omnira.integration-test=true --label "com.omnira.integration-test.run=$RUN")
 cleanup() {
@@ -38,6 +38,7 @@ echo "== build the real binaries (host toolchain) and the web bundle"
 mkdir -p "$WORK/bin"
 GOFLAGS=-buildvcs=false go build -o "$WORK/bin/api" ./apps/api/cmd/omnira-api
 GOFLAGS=-buildvcs=false go build -o "$WORK/bin/hubctl" ./apps/hubctl/cmd/omnira-hubctl
+chmod 0700 "$WORK/bin" "$WORK/bin/api" "$WORK/bin/hubctl"   # the browser helpers refuse a binary others can write
 (cd web && npm run build >/dev/null 2>&1) || { echo "web build failed"; exit 1; }
 APPDB="postgres://omnira_app:omnira_app@127.0.0.1:$PGPORT/hubbrowser?sslmode=disable"
 ctl() { OMNIRA_DATABASE_URL="$APPDB" "$WORK/bin/hubctl" --operator e2e "$@"; }
@@ -91,7 +92,7 @@ curl -sf --max-time 2 "http://127.0.0.1:$WEBPORT/" >/dev/null || { echo "web did
 
 echo "== browser"
 export E2E_BASE_URL="http://127.0.0.1:$WEBPORT" E2E_HUB="$HUB" E2E_TA="$TA" E2E_TB="$TB" E2E_TC="$TC"
-export E2E_PG_CONTAINER="$PG" E2E_APPDB="$APPDB" E2E_HUBCTL_BIN="$WORK/bin/hubctl"
+export E2E_RUN="$$" E2E_WORK="$WORK"   # the helpers derive and PROVE the rest (container label, published port, binary)
 set +e
 (cd web && npx playwright test -c playwright.real.config.ts "$@")
 STATUS=$?

@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { expect, type Page } from '@playwright/test';
 
 // Helpers of the real-stack browser E2E (scripts/e2e-hub-browser.sh sets E2E_* and starts the API, the database and the web app).
@@ -29,25 +32,36 @@ export async function signIn(page: Page, email: string): Promise<{ id: string; e
   return user;
 }
 
-const CONTAINER_RE = /^omnira-hubbrowser-\d+-pg$/;
-const APPDB_RE = /^postgres:\/\/omnira_app:omnira_app@127\.0\.0\.1:\d+\/hubbrowser\?sslmode=disable$/;
-const HUBCTL_RE = /^\/[A-Za-z0-9_./-]+\/bin\/hubctl$/;
 let verifiedFor = '';
 
 /**
  * These helpers write with the database owner's rights (sessions, seed data, hubctl). They run ONLY against the throwaway database that
- * scripts/e2e-hub-browser.sh creates (Codex review): no shell is involved (fixed argv, the script only supplies three validated values: the
- * container name, the application URL of that database and the hubctl binary), and every new combination is verified against the database
- * itself - it must be the seeded one, holding nobody but the five seeded e2e.test people - before the first write.
+ * scripts/e2e-hub-browser.sh creates (Codex review). The script hands over ONE value, the run number; everything else is DERIVED and proven:
+ * the container is named from it AND carries the script's own run label and image; the database URL is built from that container's real
+ * published port (so SQL and hubctl reach the same database by construction); the hubctl binary must be a regular file, not a link, owned by
+ * this user, not writable by others, inside this run's private work directory. No shell is involved anywhere, and the seeded database is
+ * checked (five e2e.test people and nobody else) before the first write of every new target.
  */
 function target(): { container: string; appdb: string; hubctlBin: string } {
-  const container = process.env.E2E_PG_CONTAINER ?? '';
-  const appdb = process.env.E2E_APPDB ?? '';
-  const hubctlBin = process.env.E2E_HUBCTL_BIN ?? '';
-  if (!CONTAINER_RE.test(container)) throw new Error('E2E_PG_CONTAINER is not the throwaway database of scripts/e2e-hub-browser.sh: refusing to write anywhere else');
-  if (!APPDB_RE.test(appdb)) throw new Error('E2E_APPDB does not point at the throwaway database: refusing to run');
-  if (!HUBCTL_RE.test(hubctlBin)) throw new Error('E2E_HUBCTL_BIN is not the hubctl built by the script: refusing to run');
-  const key = `${container}|${appdb}|${hubctlBin}`;
+  const run = process.env.E2E_RUN ?? '';
+  if (!/^\d{1,10}$/.test(run)) throw new Error('E2E_RUN is not a run number of scripts/e2e-hub-browser.sh: refusing to write anywhere');
+  const container = `omnira-hubbrowser-${run}-pg`;
+  const identity = execFileSync('docker', ['inspect', '-f', '{{index .Config.Labels "com.omnira.integration-test.run"}}|{{.Config.Image}}', container], { encoding: 'utf8' }).trim();
+  if (identity !== `hubbrowser-${run}|postgres:16-alpine`) throw new Error(`the container ${container} is not the throwaway database of this run (${identity})`);
+  const port = execFileSync('docker', ['port', container, '5432/tcp'], { encoding: 'utf8' }).trim().split('\n')[0].split(':').pop() ?? '';
+  if (!/^\d{2,5}$/.test(port)) throw new Error('cannot determine the published port of the throwaway database');
+  const appdb = `postgres://omnira_app:omnira_app@127.0.0.1:${port}/hubbrowser?sslmode=disable`;
+
+  const work = process.env.E2E_WORK ?? '';
+  const realWork = fs.realpathSync(work);
+  if (!work || realWork !== work || path.dirname(work) !== fs.realpathSync(os.tmpdir())) throw new Error('E2E_WORK is not this run\'s private temporary directory');
+  const wst = fs.lstatSync(work);
+  if (!wst.isDirectory() || wst.uid !== process.getuid!() || (wst.mode & 0o077) !== 0) throw new Error('the work directory must be private to this user');
+  const hubctlBin = path.join(work, 'bin', 'hubctl');
+  const bst = fs.lstatSync(hubctlBin);
+  if (!bst.isFile() || bst.isSymbolicLink() || bst.uid !== process.getuid!() || (bst.mode & 0o022) !== 0) throw new Error('hubctl must be a regular file of this user, not writable by others');
+
+  const key = `${container}|${port}|${hubctlBin}`;
   if (verifiedFor !== key) {
     const probe = psql(container, `SELECT current_database() || '|' || (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM users WHERE email LIKE '%@e2e.test')`);
     if (probe !== 'hubbrowser|5|5') throw new Error(`the database is not the seeded throwaway one (${probe}): refusing to write`);

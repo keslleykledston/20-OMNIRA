@@ -633,3 +633,42 @@ func TestPools_EditsWaitForTheHubLockOfAnAssignmentInProgress(t *testing.T) {
 		t.Errorf("delete after the lock was released: %v", err)
 	}
 }
+
+// Codex review (round 4): the pool must be chosen AFTER the hub lock. An edit that removes the instance from the pool and commits while an
+// assignment is waiting for the lock must be seen by that assignment: it goes through no pool at all, instead of through a stale one.
+func TestDistribute_ChoosesThePoolAfterTheHubLock(t *testing.T) {
+	w := newWorld(t)
+	a := w.agent("a")
+	w.grant(a, "A", true)
+	w.pool("round_robin", []string{"A"}, a)
+	conv, item := w.item("A", true)
+
+	tx, err := w.owner.Begin(w.ctx)
+	w.must(err)
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	_, err = tx.Exec(w.ctx, `SELECT pg_advisory_xact_lock(hashtextextended('hub-distribution:' || $1::text, 0))`, w.hub)
+	w.must(err)
+	_, err = tx.Exec(w.ctx, `DELETE FROM work_pool_instances WHERE hub_id = $1 AND tenant_id = $2`, w.hub, w.tenant["A"]) // the edit, not yet visible
+	w.must(err)
+
+	done := make(chan *uuid.UUID, 1)
+	go func() {
+		who, err := w.svc.Distribute(w.ctx, w.hub, item)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- who
+	}()
+	select {
+	case <-done:
+		t.Fatal("the assignment did not wait for the hub lock")
+	case <-time.After(700 * time.Millisecond):
+	}
+	w.must(tx.Commit(w.ctx)) // the edit becomes visible, the lock is released
+	if who := <-done; who != nil {
+		t.Fatalf("assigned through a pool that no longer serves the instance: %v", who)
+	}
+	if w.holder(conv) != nil {
+		t.Fatal("the conversation must stay unassigned")
+	}
+}
