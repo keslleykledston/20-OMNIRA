@@ -301,3 +301,12 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
   **Prova só-leitura no banco real, com a role da aplicação:** um membro real continua sendo membro e enxergando as conversas da sua instância sem contexto de atuação; a mesma pessoa, com um contexto de atuação, deixa de ser membro (0 conversas), como projetado. Nada foi gravado (ROLLBACK).
 - **NÃO verificado em produção:** nenhuma tela com login real do Keycloak; o contexto completo com concessão real (precisa de teto + chaves via `hubctl serving ...` e da flag; ver `docs/ops/HUB-PROVISIONING.md`).
 - **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase03-20261009-1745 20-omnira-<svc>:latest` + `docker compose up -d --no-deps --force-recreate api worker web`; a 109 tem `down` testado e as imagens antigas funcionam com o esquema novo (as funções de membro só ganharam uma cláusula que vale sempre fora do contexto delegado).
+
+## 2026-10-09 (noite) — contexto completo LIGADO em produção para a conta do dono (a pedido)
+
+- **Feito:** `serving ceiling` e `serving grant --preset atendimento` para `keslley@k3gsolutions.com.br` na empresa **Test Company** (a única instância à qual essa conta tem acesso SÓ pelo Hub; `operator=claude-keslley-test`, auditados:
+  `hub.contract.ceiling_changed` e `hub.grant.serving_changed`); `OMNIRA_HUB_SERVE_ENABLED=true` no `.env` e só a api recriada (healthy, 0 panics). `.env` anterior em `/data/cafegpt/tmp/env-pre-phase03-20261009-1745`.
+- **Observação:** Test Company LTDA e Keslley_Pessoal são instâncias das quais a conta já é **membro** (tenant_admin): nelas a aba abre a caixa completa pela membership (não pelo contexto delegado), e foi aí que as imagens que não apareciam no Hub passaram a aparecer (abas, implantadas antes). **Test Company** não tem conversas nem mídia (0/0/0).
+- **Provado em produção (só leitura, papel da aplicação, ROLLBACK):** a porta abre para Test Company e entrega as 5 chaves; para Test Company LTDA (sem teto) entrega `{}`; `membership.manage` nunca é concedida. Sem login, a rota com o cabeçalho responde 401.
+- **NÃO provado:** a tela com login real do Keycloak; mídia pelo contexto delegado com dado real (a instância não tem conversa).
+- **Rollback:** `omnira-hubctl ... serving grant ... --keys none` e/ou `serving ceiling ... --keys none` (efeito imediato), ou `OMNIRA_HUB_SERVE_ENABLED=false` + recriar a api.
