@@ -1,96 +1,126 @@
 # ADR-0040 — Contexto completo da instância dentro do Hub (acesso delegado a dados operacionais)
 
-Status: **PROPOSTA** (nada implementado; nenhuma migration escrita). Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`).
-Relaciona: ADR-0036 (Hub dentro do OMNIRA), ADR-0038 (plataforma/gestão), ADR-0039 (painel de acessos, "Conversas" unificada).
+Status: **PROPOSTA v2 — alternativa A+** (aguarda aceite do dono; nenhuma migration escrita). Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`)
+salvo onde diz o contrário. v1 (2026-10-09) propunha o predicado único; v2 incorpora o parecer externo "Arquitetura de Acesso Delegado Hub–Instâncias"
+(09/10/2026), que aprova a base A e exige separar relacionamento, contexto e capacidade.
+Relaciona: ADR-0036, ADR-0038, ADR-0039; `docs/architecture/HUB-DELEGATION-TABLE-MATRIX.md` (Fase 01, gerada do catálogo real).
 
 ## 1. O problema
 
-A "Conversas" do Hub foi entregue só com texto: sem mídia, sem painel do contato, sem classificar/editar contato e sem abrir chamado
-no ERP da instância. Isso foi decisão de implementação, não do produto: o que torna o Hub útil é atender **com o contexto completo
-da instância** (mídia, cliente, ERP). Sem isso o Hub é uma caixa de entrada com menos recursos que a da instância.
+A "Conversas" do Hub tem só texto: sem mídia, sem painel do contato, sem classificar/editar contato e sem abrir chamado no ERP da instância.
+O produto exige atender **com o contexto completo da instância, sob privilégio mínimo**. A causa é estrutural: a caixa completa
+(`/api/v1/tenants/{tenant_id}/...`, ~40 rotas, e o RLS por baixo) supõe que o ator é **membro** do tenant.
 
-Causa técnica: toda a caixa completa (rotas `/api/v1/tenants/{tenant_id}/...` e o RLS por baixo) só reconhece **membership**.
-Quem tem apenas concessão do Hub é recusado em quase tudo. A concessão só foi liberada (políticas `has_active_hub_access`
-e `has_hub_manage_access`) em 6 tabelas operacionais/de gestão: `conversations`, `messages`, `audit_events`, `channel_connections`,
-`channel_credentials`, `tenant_entitlements` (mais `tenants` e as tabelas do próprio Hub).
+## 2. Fatos medidos (catálogo real, 2026-10-09; só leitura)
 
-## 2. Fatos medidos no código e no catálogo (2026-10-09, só leitura)
+- 81 tabelas com RLS forçado. Classificação proposta (matriz): 43 operacionais, 8 administrativas, 2 de segredo, 3 de gestão delegada já existente,
+  4 de sistema, 15 de plataforma/Hub, 3 de catálogo global, 3 a decidir (grupos WhatsApp).
+- **O banco não distingue papéis entre membros:** nas ~43 tabelas operacionais, `SELECT/INSERT/UPDATE/DELETE` valem para qualquer membro ativo
+  (`has_active_membership`). A capacidade fina (`contact.classify`, `ticket.create`...) vive na aplicação (`PermissionChecker`). O RLS de hoje
+  é barreira de isolamento **entre instâncias**, não de privilégio **dentro** da instância.
+- Delegação do Hub já presente em 6 tabelas: `conversations`, `messages` (leitura), `audit_events`, `channel_connections`, `channel_credentials`, `tenant_entitlements` (gestão).
+- Já existem: contrato Hub–instância, concessão efetiva, avaliação ao vivo (`now()`), trava de suspensão (`LockTenantActive`), `AccessSource` (Direct, HubManage),
+  atribuição de auditoria (`via=hub`).
 
-- 81 tabelas com RLS ligado. Cerca de 55 usam `has_active_membership(tenant_id, current_user_id())` como único predicado de linha.
-  Só `membership_invitations` escreve a regra inline contra `memberships`. Ou seja: **já existe um ponto único de definição**.
-- Tabelas só-admin (`has_active_admin_membership`): `tenant_ai_integrations`, `ai_usage`, escrita de `channel_*`, `tenants`, `memberships`.
-- A caixa completa usa ~40 rotas de tenant (conversas, mídia, contato, notas, tópicos, resumo, tickets/ERP, finalizar, memória).
-- Autorização de aplicação: `AuthorizationMiddleware` -> `AuthorizeAccessToTenant` (membership) e checagem de permissão por handler.
-  O Hub já tem o conceito de fonte de acesso (`AccessSource`: Direct, HubManage) e o checker já pergunta ao banco ao vivo.
-- Já existem: contrato Hub–instância (`hub_tenant_service_contracts`), concessão efetiva (`effective_access_grants`), avaliação ao vivo
-  (`now()`), trava de suspensão (`LockTenantActive`) e atribuição de auditoria (`via=hub`).
+## 3. Pesquisa (mercado) e o que o parecer corrigiu
 
-## 3. Como sistemas profissionais resolvem (pesquisa)
+Padrões: delegação do lado do cliente com papéis mínimos e prazo (Microsoft GDAP); assumir papel com confiança condicional (AWS STS/ExternalId);
+convidado/colaborador externo (Azure B2B, GitHub outside collaborators, Slack Connect); plataforma agindo em conta conectada (Stripe Connect); ReBAC (OpenFGA).
+Correções do parecer, todas aceitas aqui: `contract_id` **não** é um ExternalId (a proteção é validar a cadeia inteira); o objeto "convidado" do Azure B2B é camada de
+identidade, não membership de domínio; a duração máxima do GDAP admite extensão; nada disto foi reverificado em fonte primária (links a conferir na implementação).
 
-| Padrão | Exemplos | Ideia |
+## 4. Decisão proposta: A+ (relacionamento + contexto explícito + capacidade + RLS + revogação)
+
+```
+permitir = identidade_válida AND contexto_de_atuação_válido AND relacionamento_vigente
+           AND capacidade_autorizada AND recurso_no_escopo AND ausência_de_bloqueio
+```
+
+1. **Relacionamento (ReBAC, ao vivo):** ator → Hub → contrato → instância → concessão. Sem cópia, sem membership fictícia (B rejeitada).
+2. **Contexto de atuação explícito, nunca a soma de privilégios.** O front declara em cada requisição como a pessoa atua
+   (`X-OMNIRA-Acting-As: member` ou `hub:<hub_id>`); o middleware resolve **uma** fonte por requisição:
+   - sem o cabeçalho: só membership (comportamento atual preservado); sem membership, nega;
+   - `hub:<id>`: só a delegação, mesmo que a pessoa seja admin da instância (não herda privilégios administrativos);
+   - a revogação do contexto delegado nega ainda que exista membership independente;
+   - a troca de contexto é uma nova resolução e fica na trilha de auditoria.
+   Substitui a regra da v1 "membership vence".
+3. **Capacidade.** Reusa o vocabulário **existente** de permissões (`permissions`/`role_permissions`: `contact.classify`, `ticket.create`...), sem criar um
+   segundo. A concessão carrega um conjunto de capacidades limitado pelo teto do contrato (concessão ⊆ contrato; o Hub não amplia). Preset "atendimento":
+   ler/responder conversa, mídia, ler/classificar contato. Opcionais por concessão: editar contato, vincular cliente, criar chamado, transferir, executar fluxo, IA.
+   Sempre negado à delegação: equipe, contrato, credenciais de canal/ERP, chaves de IA, segurança.
+4. **RLS como segunda barreira independente — granularidade por DOMÍNIO.** O banco recebe `has_tenant_access(tenant, user, domínio, necessidade)` onde domínio
+   ∈ {conversa, mídia, contato, chamado, fluxo-execução, ia} e necessidade ∈ {ler, escrever}; as capacidades finas continuam na aplicação, **como já são para membros**.
+   Divergência consciente do parecer: exigir capacidade por operação e por tabela no banco só para delegados seria mais rígido que para membros e criaria um segundo
+   mecanismo de permissão. Tabelas sensíveis (contato-escrita, chamado, fluxo) podem subir a granularidade depois, caso a caso, se a revisão pedir.
+5. **Classes de tabela (matriz):** operacional (migra para o predicado do seu domínio); administrativa e segredo (só membro/admin, nunca delegação);
+   gestão delegada (inalterada; revisão abaixo); sistema; plataforma. Teste de catálogo: toda tabela com `tenant_id` tem classe declarada, e o predicado de cada política confere com a classe.
+6. **Mesma URL.** `/api/v1/tenants/{tenant_id}/...` segue; a URL identifica o alvo e **não concede**. `tenant_id` de URL/payload nunca autoriza.
+7. **Hub Inbox** continua por instância autorizada (projeção `hub_inbox_items` com políticas próprias). Sem conexão privilegiada, sem bypass de RLS.
+8. **Identidade de contato:** o mesmo telefone em duas instâncias não compartilha contratos, etiquetas, chamados nem histórico; classificação e vínculo são locais à instância.
+   (Já é assim: contatos são por tenant; o teste cruzado fica nos gates.)
+
+## 5. Revisão das três tabelas já delegáveis (parecer §5.1; feita em 2026-10-09 no catálogo vivo)
+
+- **`channel_credentials`** (RLS forçado; colunas: `ciphertext bytea`, sem texto claro). A política de leitura do gestor delegado
+  (`channel_credentials_hub_manage_read`) é `EXISTS(conexão pai)` **sem** chamar `has_hub_manage_access` por extensão: hoje o resultado é o correto porque a subconsulta passa pelo RLS de
+  `channel_connections` (escopo conferido ali), mas depende de um efeito indireto. **Ação:** tornar o predicado explícito (migration nova; 103–106 estão congeladas) com teste e mutante.
+  Achado pré-existente: qualquer **membro** (inclusive agente) pode `SELECT` o `ciphertext` no nível do banco; a confidencialidade vem da chave fora do banco e de nenhuma resposta da API carregar o campo
+  (conferido por busca no código: nenhum modelo de resposta o expõe; não é prova por teste). Para delegados o risco é igual ao de um agente membro, nunca maior (escopo da conexão); recomenda-se restringir a leitura do
+  `ciphertext` a serviço/admin como endurecimento separado.
+- **`channel_connections`:** o gestor delegado lê/escreve só conexões do **escopo** que o contrato delegou (`channel_connection_scope(channel)`); já é a exigência do parecer, não ampliar.
+- **`audit_events`:** o gestor delegado lê **somente os próprios** eventos (`actor_id = current_user_id()`), não há visibilidade global (exigência do parecer atendida).
+  Achado pré-existente: qualquer membro lê todos os eventos da instância no banco (a API exige `audit.read`). Fica na matriz como item de endurecimento.
+
+## 6. Revogação, suspensão, filas, ERP, seletores, fluxos, IA
+
+- **Garantia-alvo (parecer §7):** após o commit da revogação nenhuma operação **nova** é admitida com a concessão. Já vale para HTTP (avaliação ao vivo); a verificar em
+  SSE/realtime, download de mídia (autorização por download, sem URL durável), ERP, copiloto, fluxos e jobs pendentes (revalidar ao executar).
+  O refresh de 15 s e a tela borrada são complementares, **não** controle de segurança; acrescentar **push de invalidação** pelo canal realtime existente.
+  Limites explícitos: o que já foi baixado não se recolhe; transação em curso vê o próprio snapshot; operações longas têm política própria de admissão/cancelamento.
+- **Suspensão com drenagem:** já bloqueia novos trabalhos e espera os admitidos (`LockTenantActive`/`WhileActive`); manter o estado de drenagem na documentação.
+- **ERP (abrir chamado):** ator → contexto delegado → concessão → contrato → `ticket.create` → cliente e recurso comprovadamente da instância → integração escolhida **no backend**
+  → credencial lida só no executor → ator/contexto/resultado auditados → idempotência. O front nunca escolhe credencial, conta ERP ou instância.
+- **Filas e jobs:** só IDs e metadados mínimos; segredo nunca em fila; trabalho iniciado por pessoa carrega ator, contexto e concessão de origem e é revalidado ao executar.
+- **Seletores:** diretório de participantes aptos = membros internos + agentes do Hub com concessão e capacidade vigentes; sem membership artificial.
+- **Flow Builder:** ver, editar, publicar e **executar** são capacidades separadas; delegação só executa fluxo aprovado.
+- **Copiloto de IA:** só dados do contexto delegado; cada ferramenta confere a própria capacidade (`ai.assist` não implica `ticket.create`); o contexto de autorização é decidido no backend e propagado
+  nas execuções assíncronas; prompts/argumentos não o substituem.
+- **LGPD/transparência:** área "Acessos delegados" para o admin da instância (Hubs e contratos, pessoas e capacidades, vigência, operações sensíveis com ator real e contexto).
+  Auditoria com `actor_user_id`, `acting_as`, `hub_id`, `tenant_id`, `grant_id`, `contract_id`, `request_id`. Papéis de controlador/operador avaliados pelo tratamento real (revisão jurídica, fora do código).
+
+## 7. Limite de confiança do RLS (parecer §4.3)
+
+O RLS atual confia em `app.current_user_id`/`app.is_system_admin` escritos pela aplicação via `SET LOCAL`. Isso protege contra consultas que esquecem filtro, **não** contra uma conexão da
+aplicação comprometida capaz de forjar essas variáveis. O papel de aplicação não é superusuário nem `BYPASSRLS`; `FORCE ROW LEVEL SECURITY` está ligado nas tabelas revisadas. Cobrir esse modelo de
+ameaça exigiria identidades de banco distintas por contexto e fica fora desta ADR. Nota técnica: políticas permissivas se combinam por `OR`; cada migração deve conferir o conjunto existente
+(a matriz mostra, por comando, quais fontes já existem) antes de acrescentar uma política.
+
+## 8. Fases (cada uma só avança com acesso cruzado, mutantes, papel real da aplicação e passada do Codex; HIGH/CRITICAL bloqueia)
+
+| Fase | Escopo | Gate |
 |---|---|---|
-| Relação de delegação do lado do cliente, com papéis mínimos e prazo | Microsoft GDAP/CSP (grupo de segurança do parceiro recebe papéis **no tenant do cliente**; o cliente aceita, define duração de 1 a 730 dias e pode encerrar) | O **tenant dono** guarda a relação e os papéis; o parceiro só mapeia as pessoas dele |
-| Assumir papel no destino, sessão curta e atribuída | AWS STS AssumeRole com ExternalId (evita o "confused deputy"); Stripe Connect (plataforma age em nome da conta conectada) | O chamador se autentica como ele mesmo; o servidor valida a relação **para aquele destino** e age com escopo do destino |
-| Convidado/colaborador externo com registro no destino | Azure B2B guest, Slack guests, GitHub outside collaborators | Um registro **tipado** (`guest`) no destino, com papel e prazo; some quando a relação acaba |
-| ReBAC (Zanzibar/OpenFGA) | OpenFGA: "usuário de outra organização é uma tupla, sem caso especial"; revogar = apagar a tupla | Uma fonte da verdade das relações, consultada ao vivo |
+| 01 | Inventário e classificação: **matriz gerada** (feita; classificação a revisar), mapa das ~40 rotas, baseline de testes | Nenhuma mudança geral de RLS antes da revisão da matriz |
+| 02 | Núcleo: `ActingContext`, resolução de relacionamento, concessão com capacidades ⊆ teto do contrato, cabeçalho de contexto, auditoria; membros inalterados | Sem união de privilégios; `tenant_id` nunca autoriza |
+| 03 | Piloto: conversas, mensagens, **mídia** e leitura de contato, ponta a ponta, com RLS e revogação testada | Isolamento entre instâncias e entre Hubs numa jornada completa |
+| 04 | Operações: classificar/editar contato, vincular cliente, diretório de atendentes, transferir, **chamado no ERP** | Nenhuma credencial de canal/ERP exposta |
+| 05 | Indiretas: fluxos, copiloto, realtime, mídia, workers/jobs, suspensão, revogação | Nenhum caminho privilegiado alternativo |
+| 06 | Segurança e liberação: negativos, concorrência, regressão de membro, `EXPLAIN (ANALYZE, BUFFERS)` do predicado por linha, Codex, rollback | Rollout gradual só após isolamento, privilégio mínimo, latência |
 
-Princípios comuns (e o que adotamos):
-1. A relação pertence ao tenant (contrato) e é **consentida, com escopo e prazo**. -> já temos o contrato.
-2. **Um único ponto de decisão** "esta pessoa, neste tenant, agora, com este nível". -> um predicado de banco, uma resolução na aplicação.
-3. **Papel por dados**, não por `if` espalhado. -> o nível da concessão mapeia para um papel em `roles`/`role_permissions`.
-4. **Revogação ao vivo**, sem cópia a sincronizar. -> avaliação por `now()`; nada materializado.
-5. **Atribuição** em toda ação ("fulano, via Hub X"). -> `via=hub`, `hub_id` já existem.
-6. Não adotar um motor externo (OpenFGA etc.): segunda fonte de verdade e consistência a administrar sem ganho aqui.
+Testes indispensáveis (parecer §12.1) viram a lista de aceite de cada fase, todos com o papel real da aplicação (`omnira_app`), nunca com o dono.
 
-## 4. Alternativas
+## 9. Interface (decisão de produto já tomada e implementada na parte de front)
 
-- **A. Predicado único novo `has_tenant_access(tenant, user, nivel)`** = membership ativa **OU** delegação ativa do Hub no nível pedido.
-  As políticas das tabelas **operacionais** passam de `has_active_membership` para ele (migração mecânica, uma lista explícita);
-  tabelas administrativas e de segredo **não** migram. A aplicação resolve a fonte de acesso no mesmo middleware
-  (membership -> `Direct`; senão delegação ao vivo -> `HubServe`), na **mesma URL** `/api/v1/tenants/{tenant_id}/...`.
-  Os handlers não mudam; as permissões vêm do papel mapeado pela concessão. **(recomendada)**
-- **B. Membership "convidada" gerenciada pelo Hub** (registro tipado no tenant, criado/encerrado na mesma transação da concessão).
-  É o padrão de convidados do mercado. Esforço pequeno, mas cria uma segunda representação a manter em sincronia com a concessão
-  e expõe o registro ao admin da instância (editar/remover). Aceitável **somente** se o registro for a única fonte e a concessão apenas o convite.
-- **C. Rota espelho `/hubs/{hub}/serve/{tenant}/...`** reaproveitando handlers com contexto confiável. Evita editar RLS, mas o banco
-  deixa de ser segunda barreira independente (confia no que a aplicação diz), e duplica a superfície de rotas. **Não recomendada.**
-- **D. Motor de autorização externo (ReBAC)**. Rejeitada (ver 3.6).
+"Conversas" tem abas por instância na mesma aba do navegador (`6e670d3`): **Todas** e uma por instância. Revogado o acesso, a aba borra com a mensagem de contato com o administrador do Hub,
+o cache da instância é descartado e a aba some na próxima leitura. Até a fase 03 concluir, quem tem acesso **só** pelo Hub continua com a visão de texto (aviso na aba).
 
-## 5. Decisão proposta: A, em fases por área
+## 10. Divergências conscientes em relação ao parecer
 
-Classes de tabela (declaradas em dados; um teste de catálogo falha se uma tabela com `tenant_id` não estiver classificada):
-- **operacional** (conversas, mensagens, mídia, contatos, notas, tópicos, resumos, tickets, vínculos CRM, atribuições, fluxos de leitura):
-  `has_tenant_access` (SELECT = leitura; INSERT/UPDATE/DELETE = escrita, só com concessão de resposta).
-- **administrativa** (equipe, convites, configurações, chaves de IA, consumo, papéis): **só membro**; nunca delegação.
-- **segredo** (`channel_credentials`, tokens): inalterado (já tem política própria `has_hub_manage_access`).
+1. Granularidade do banco por **domínio** e não por operação/tabela (§4.4), porque o banco hoje não distingue capacidades nem para membros.
+2. Vocabulário de capacidades = o já existente em `permissions`, não nomes novos (`conversation.read`...), para não manter dois dicionários.
+3. A Fase 01 já tem uma primeira matriz; a classificação é proposta e precisa da revisão do parecerista e do dono.
+4. A política ilustrativa com `auth.current_tenant_id()` não se aplica: o OMNIRA decide por usuário e relacionamento, não por um GUC de tenant.
 
-Fases (cada uma só avança com testes de acesso cruzado, mutantes e passada do Codex; HIGH/CRITICAL bloqueia):
-1. Predicado + classificação + teste de catálogo; migrar conversas, mensagens e **mídia** (leitura).
-2. Contato, notas, tópicos, resumo, memória (leitura, depois escrita com `can_reply`: classificar, editar, finalizar).
-3. ERP/tickets (criar/atualizar chamado), reconciliação.
-4. Lista de instâncias do usuário inclui as delegadas; pessoas do Hub aparecem **somente leitura**, marcadas "Acesso do Hub", na equipe da instância.
+## 11. O que NÃO muda
 
-## 6. Riscos e perguntas abertas
-
-1. **Raio de impacto**: ~45 tabelas operacionais. Mitigação: lista explícita, teste de catálogo, mutante por tabela.
-2. **Privilégio indevido**: superfícies só-membro (equipe, segredos, chaves de IA, auditoria da instância) não podem ser alcançadas por delegação.
-3. **Confused deputy**: o `tenant_id` da URL vem do cliente; o servidor tem de provar contrato + concessão para **aquela** instância (o `contract_id` faz o papel do ExternalId).
-4. **Revogação**: o banco recusa a próxima requisição (ao vivo). A tela mostra o que já baixou até o próximo refresh (15 s); bloqueio visual no front. Tokens Bearer não rechecam conta (limite já aceito).
-5. **Seletores internos**: listas de atendentes, destinos de transferência e presença leem `memberships`/`agent_profiles`. Pessoas delegadas não aparecem lá; transferir entre pessoas do Hub segue pelo fluxo do Hub.
-6. **Desempenho**: o predicado roda por linha. Função `STABLE SECURITY DEFINER` com índices e medição antes de liberar.
-7. **Papel por concessão**: `can_reply` -> conjunto do `tenant_agent`; só leitura -> conjunto de leitura. Falta decidir se vira `roles` novos (`hub_agent`, `hub_viewer`) ou reusa os atuais.
-8. **LGPD/consentimento**: o operador do Hub passa a ver dados de clientes finais da instância. Exige base contratual explícita e trilha visível ao admin da instância (hoje a auditoria é só do Hub).
-9. **Precedência**: pessoa que é membro e também tem concessão: membership vence; sem dupla contagem de cota/auditoria.
-10. **Fluxos que assumem membership** (Flow Builder, copiloto de IA, notificações): inventariar antes da fase 2.
-
-## 7. Interface (decisão de produto, já tomada)
-
-"Conversas" do Hub passa a ter **abas superiores** (estilo plano), na mesma aba do navegador: **Todas** (triagem unificada) e uma aba por instância
-com a caixa completa dela. Revogada a concessão: a aba fica borrada com mensagem "Você não tem mais acesso a esta instância. Fale com o administrador do Hub.",
-o cache da instância é descartado, e na próxima carga a aba nem aparece (a lista vem da concessão ativa no servidor).
-Até a fase 3 concluir, quem tem acesso **só** pelo Hub continua com a visão reduzida; membros da instância já têm a caixa completa nas abas.
-
-## 8. O que NÃO muda
-
-RLS continua sendo a segunda barreira, `tenant_id` do payload nunca autoriza, nenhuma política é removida, nada de segredo em fila,
-suspensão da instância continua esperando o trabalho em andamento.
+RLS permanece (nenhuma política removida), `tenant_id` do payload/URL nunca autoriza, nada de segredo em fila, nenhuma membership fictícia, delegação não dá acesso implícito a equipe/segurança/chaves de IA,
+suspensão continua esperando o trabalho já admitido, e membros mantêm o comportamento atual.
