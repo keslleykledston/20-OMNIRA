@@ -105,10 +105,12 @@ type Overview struct {
 	HubName   string     `json:"hub_name"`
 	Instances []Instance `json:"instances"`
 	Agents    []Agent    `json:"agents"`
+	// Invitations are the authorizations waiting for a person's first sign-in (ADR-0039 §3.10).
+	Invitations []Invitation `json:"invitations"`
 }
 
 func (s *Service) Overview(ctx context.Context, actor, hub uuid.UUID) (Overview, error) {
-	out := Overview{HubID: hub, Instances: []Instance{}, Agents: []Agent{}}
+	out := Overview{HubID: hub, Instances: []Instance{}, Agents: []Agent{}, Invitations: []Invitation{}}
 	err := s.tx(ctx, actor, hub, func(c context.Context, q platformdb.Querier) error {
 		if err := q.QueryRow(c, `SELECT name FROM service_hubs WHERE id = $1`, hub).Scan(&out.HubName); err != nil {
 			return err
@@ -243,7 +245,8 @@ func (s *Service) Overview(ctx context.Context, actor, hub uuid.UUID) (Overview,
 			}
 			out.Agents[i].Instances = len(seen)
 		}
-		return nil
+		out.Invitations, err = s.pendingInvitations(c, q, hub)
+		return err
 	})
 	return out, err
 }

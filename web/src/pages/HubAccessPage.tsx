@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   describeHubAccessError, hubAccessAPI,
-  type AccessAgent, type AccessInstance, type AccessMode, type AccessOverview, type AccessPerson,
+  type AccessAgent, type AccessInstance, type AccessInvitation, type AccessMode, type AccessOverview, type AccessPerson,
 } from '../lib/hub';
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
 import { useMyHubs } from '../hooks/useMyHubs';
@@ -49,9 +49,16 @@ export default function HubAccessPage() {
     onSuccess: () => { setNotice(null); void refresh(); },
     onError: fail,
   });
-  const addAgent = useMutation({
-    mutationFn: (email: string) => hubAccessAPI.addAgent(hubId, email),
-    onSuccess: (p) => ok(`${p.email || 'A pessoa'} agora é agente deste Hub. Ela ainda não tem acesso a nenhuma instância: defina na tabela.`),
+  const invite = useMutation({
+    mutationFn: (v: { email: string; access: { tenant_id: string; mode: 'read' | 'reply' }[] }) => hubAccessAPI.invite(hubId, v.email, v.access),
+    onSuccess: (r, v) => ok(r.status === 'applied'
+      ? `${v.email} já tinha conta: agora é agente deste Hub${v.access.length ? ' com o acesso escolhido' : '. Defina o acesso na tabela'}.`
+      : `${v.email} ainda não tem conta. A autorização fica guardada por 14 dias e vale no primeiro acesso dessa pessoa. Avise-a para entrar no OMNIRA com este e-mail.`),
+    onError: fail,
+  });
+  const revokeInvite = useMutation({
+    mutationFn: (id: string) => hubAccessAPI.revokeInvitation(hubId, id),
+    onSuccess: () => ok('Autorização cancelada.'),
     onError: fail,
   });
   const dropAgent = useMutation({
@@ -113,9 +120,10 @@ export default function HubAccessPage() {
         {overview.isLoading && <LoadingState message="Carregando acessos…" />}
         {overview.isError && !isUnauthorized(overview.error) && <ErrorState message={describeHubAccessError(overview.error)} action={{ label: 'Tentar novamente', onClick: () => void overview.refetch() }} />}
         {data && tab === 'agents' && (
-          <AgentsTab data={data} busy={setAccess.isPending} adding={addAgent.isPending}
+          <AgentsTab data={data} busy={setAccess.isPending} adding={invite.isPending}
             onSet={(user, tenant, mode) => setAccess.mutate({ user, tenant, mode })}
-            onAdd={(email) => addAgent.mutate(email)}
+            onInvite={(email, access) => invite.mutate({ email, access })}
+            onCancelInvite={(id) => revokeInvite.mutate(id)}
             onRemove={(a) => setRemoveAgent(a)} />
         )}
         {data && tab === 'instances' && (
@@ -147,20 +155,83 @@ function AddByEmail({ label, placeholder, help, busy, onAdd }: { label: string; 
   );
 }
 
-function AgentsTab({ data, busy, adding, onSet, onAdd, onRemove }: {
+// One box for both cases: the e-mail of a person who already has an account becomes an agent right away; the e-mail of a
+// person who has none is kept and applied at their first sign-in. The access picked here is optional (default: none), and
+// can always be changed in the table.
+function InvitePanel({ instances, busy, onInvite }: { instances: AccessInstance[]; busy: boolean; onInvite: (email: string, access: { tenant_id: string; mode: 'read' | 'reply' }[]) => void }) {
+  const [email, setEmail] = useState('');
+  const [picks, setPicks] = useState<Record<string, AccessMode>>({});
+  const valid = /^\S+@\S+$/.test(email.trim());
+  const open = instances.filter((i) => i.tenant_status === 'active' && i.contract_status === 'active');
+  return (
+    <form className="space-y-3 rounded-sheet border border-border-subtle bg-surface p-4" aria-label="Adicionar pessoa"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!valid || busy) return;
+        const access = open.flatMap((i) => (picks[i.tenant_id] === 'read' || picks[i.tenant_id] === 'reply' ? [{ tenant_id: i.tenant_id, mode: picks[i.tenant_id] as 'read' | 'reply' }] : []));
+        onInvite(email.trim(), access);
+        setEmail('');
+        setPicks({});
+      }}>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[16rem] flex-1">
+          <Input label="Adicionar pessoa ao Hub" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="pessoa@empresa.com.br" maxLength={254}
+            helperText="Serve para quem já tem conta e para quem ainda não tem: nesse caso, a autorização vale no primeiro acesso, por 14 dias." />
+        </div>
+        <Button size="sm" type="submit" disabled={!valid} isLoading={busy}>Adicionar</Button>
+      </div>
+      {open.length > 0 && (
+        <fieldset className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <legend className="mb-1 text-sm font-medium text-text-primary">Acesso inicial (opcional)</legend>
+          {open.map((i) => (
+            <label key={i.tenant_id} className="flex items-center justify-between gap-2 text-sm text-text-secondary">
+              <span className="truncate">{i.name}</span>
+              <select aria-label={`Acesso inicial em ${i.name}`} value={picks[i.tenant_id] ?? 'none'} onChange={(e) => setPicks((p) => ({ ...p, [i.tenant_id]: e.target.value as AccessMode }))}
+                className="h-9 rounded-control border border-border-light bg-surface px-2 text-sm text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary">
+                {(Object.keys(MODE_LABEL) as AccessMode[]).map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
+              </select>
+            </label>
+          ))}
+        </fieldset>
+      )}
+    </form>
+  );
+}
+
+function PendingInvitations({ items, nameOf, onCancel }: { items: AccessInvitation[]; nameOf: Map<string, string>; onCancel: (id: string) => void }) {
+  if (items.length === 0) return null;
+  return (
+    <section aria-label="Autorizações aguardando o primeiro acesso" className="rounded-sheet border border-border-subtle bg-surface p-4">
+      <h2 className="text-sm font-semibold text-text-primary">Aguardando o primeiro acesso</h2>
+      <ul className="mt-2 divide-y divide-border-subtle">
+        {items.map((inv) => (
+          <li key={inv.id} className="flex flex-wrap items-center gap-2 py-1.5 text-sm">
+            <span className="font-medium text-text-primary">{inv.email}</span>
+            <span className="text-text-secondary">
+              {inv.access.length === 0 ? 'sem acesso a instâncias ainda' : inv.access.map((a) => `${nameOf.get(a.tenant_id) ?? 'outra empresa'}: ${MODE_LABEL[a.mode]}`).join(' · ')}
+            </span>
+            <span className="text-xs text-text-tertiary">vale até {new Date(inv.expires_at).toLocaleDateString('pt-BR')}</span>
+            <button type="button" aria-label={`Cancelar a autorização de ${inv.email}`} className="ml-auto text-xs text-status-danger underline-offset-2 hover:underline" onClick={() => onCancel(inv.id)}>Cancelar</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function AgentsTab({ data, busy, adding, onSet, onInvite, onCancelInvite, onRemove }: {
   data: AccessOverview; busy: boolean; adding: boolean;
   onSet: (user: string, tenant: string, mode: AccessMode) => void;
-  onAdd: (email: string) => void;
+  onInvite: (email: string, access: { tenant_id: string; mode: 'read' | 'reply' }[]) => void;
+  onCancelInvite: (id: string) => void;
   onRemove: (a: AccessAgent) => void;
 }) {
   const instances = data.instances;
   const nameOf = new Map(instances.map((i) => [i.tenant_id, i.name]));
   return (
     <section className="space-y-4" aria-label="Agentes e permissões">
-      <div className="rounded-sheet border border-border-subtle bg-surface p-4">
-        <AddByEmail label="Adicionar agente ao Hub" placeholder="pessoa@empresa.com.br" busy={adding} onAdd={onAdd}
-          help="A pessoa precisa já ter conta no OMNIRA. Entrar no Hub não dá acesso a nenhuma instância: o acesso é definido na tabela abaixo." />
-      </div>
+      <InvitePanel instances={instances} busy={adding} onInvite={onInvite} />
+      <PendingInvitations items={data.invitations ?? []} nameOf={nameOf} onCancel={onCancelInvite} />
       {data.agents.length === 0 && <EmptyState title="Nenhum agente neste Hub" description="Adicione um agente e depois defina em quais instâncias ele atua." />}
       {data.agents.length > 0 && instances.length === 0 && <EmptyState title="Nenhuma instância" description="Crie uma empresa em Empresas para poder liberar agentes." />}
       {data.agents.length > 0 && instances.length > 0 && (

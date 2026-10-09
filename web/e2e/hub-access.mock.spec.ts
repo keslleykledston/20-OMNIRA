@@ -20,7 +20,7 @@ const overview = () => ({
 });
 
 async function install(page: Page, opts: { admin: boolean; companies: { id: string; name: string }[] }) {
-  const ov = overview();
+  const ov = { ...overview(), invitations: [] as { id: string; email: string; access: { tenant_id: string; mode: string }[]; created_at: string; expires_at: string }[] };
   const writes: { method: string; path: string; body: any }[] = [];
   const inboxQueries: string[] = [];
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -47,6 +47,19 @@ async function install(page: Page, opts: { admin: boolean; companies: { id: stri
       return json(route, { items, companies: opts.companies, has_more: false, count: items.length, limit: 30 });
     }
     if (p === `/hubs/${HUB}/access` && method === 'GET') return json(route, ov);
+    if (p === `/hubs/${HUB}/access/invitations` && method === 'POST') {
+      const body = route.request().postDataJSON();
+      writes.push({ method, path: p, body });
+      if (String(body.email).startsWith('conta@')) return json(route, { status: 'applied' });
+      ov.invitations.push({ id: 'inv-1', email: body.email, access: body.access, created_at: '2026-10-09T00:00:00Z', expires_at: '2026-10-23T00:00:00Z' });
+      return json(route, { status: 'pending', expires_at: '2026-10-23T00:00:00Z' });
+    }
+    const cancel = p.match(new RegExp(`^/hubs/${HUB}/access/invitations/([^/]+)$`));
+    if (cancel && method === 'DELETE') {
+      writes.push({ method, path: p, body: null });
+      ov.invitations = ov.invitations.filter((i) => i.id !== cancel[1]);
+      return route.fulfill({ status: 204 });
+    }
     if (p === `/hubs/${HUB}/access/agents` && method === 'POST') {
       const body = route.request().postDataJSON();
       writes.push({ method, path: p, body });
@@ -90,6 +103,28 @@ test('o administrador do Hub vê a matriz, libera um agente em uma segunda inst�
   await page.getByRole('tab', { name: 'Instâncias e administradores' }).click();
   await expect(page.getByRole('article', { name: 'Instância ISP Roraima' }).getByText('Ana')).toBeVisible();
   await expect(page.getByRole('article', { name: 'Instância NorteNet' }).getByText('b2@nortenet.com')).toBeVisible();
+});
+
+test('o administrador autoriza por e-mail quem ainda não tem conta, vê a autorização aguardando e a cancela', async ({ page }) => {
+  const { writes } = await install(page, { admin: true, companies: [] });
+  await page.goto('/acessos');
+  await page.getByLabel('Adicionar pessoa ao Hub').fill('Futuro@Nova.com');
+  await page.getByLabel('Acesso inicial em NorteNet').selectOption('reply');
+  await page.getByRole('button', { name: 'Adicionar' }).click();
+  await expect(page.getByRole('alert')).toContainText('ainda não tem conta');
+  const waiting = page.getByRole('region', { name: 'Autorizações aguardando o primeiro acesso' });
+  await expect(waiting.getByText('Futuro@Nova.com')).toBeVisible();
+  await expect(waiting.getByText(/NorteNet: Ler e responder/)).toBeVisible();
+  const sent = writes.find((w) => w.path.endsWith('/access/invitations'))!;
+  expect(sent.body).toEqual({ email: 'Futuro@Nova.com', access: [{ tenant_id: 'B', mode: 'reply' }] });
+
+  await waiting.getByRole('button', { name: 'Cancelar a autorização de Futuro@Nova.com' }).click();
+  await expect(waiting).toHaveCount(0);
+  expect(writes.some((w) => w.method === 'DELETE' && w.path.endsWith('/access/invitations/inv-1'))).toBe(true);
+
+  await page.getByLabel('Adicionar pessoa ao Hub').fill('conta@k3g.com');
+  await page.getByRole('button', { name: 'Adicionar' }).click();
+  await expect(page.getByRole('alert')).toContainText('já tinha conta');
 });
 
 test('quem não administra o Hub não vê o painel nem o link para ele', async ({ page }) => {

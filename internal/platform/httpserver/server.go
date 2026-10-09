@@ -468,6 +468,8 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 		} else {
 			s.mux.Handle("GET /api/v1/hubs/{hub_id}/access", authnMiddleware(userSession(http.HandlerFunc(a.Overview))))
 			s.mux.Handle("POST /api/v1/hubs/{hub_id}/access/agents", authnMiddleware(userSession(http.HandlerFunc(a.AddAgent))))
+			s.mux.Handle("POST /api/v1/hubs/{hub_id}/access/invitations", authnMiddleware(userSession(http.HandlerFunc(a.Invite))))
+			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/invitations/{invitation_id}", authnMiddleware(userSession(http.HandlerFunc(a.RevokeInvitation))))
 			s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/agents/{user_id}", authnMiddleware(userSession(http.HandlerFunc(a.RemoveAgent))))
 			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}", authnMiddleware(userSession(http.HandlerFunc(a.SetAccess))))
 			s.mux.Handle("POST /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins", authnMiddleware(userSession(http.HandlerFunc(a.AddInstanceAdmin))))

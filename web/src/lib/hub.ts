@@ -247,11 +247,28 @@ export interface AccessAgent extends AccessPerson {
   instances: number
 }
 
+/** Access picked for a person who may not have an account yet; it is applied at their first sign-in (ADR-0039 §3.10). */
+export interface AccessInvitation {
+  id: string
+  email: string
+  access: { tenant_id: string; mode: 'read' | 'reply' }[]
+  created_at: string
+  expires_at: string
+}
+
 export interface AccessOverview {
   hub_id: string
   hub_name: string
   instances: AccessInstance[]
   agents: AccessAgent[]
+  /** Not yet applied. Absent from older servers. */
+  invitations?: AccessInvitation[]
+}
+
+export interface InviteResult {
+  /** `applied`: the account existed and the access is already in the table. `pending`: kept until the first sign-in. */
+  status: 'applied' | 'pending'
+  expires_at?: string
 }
 
 export const hubAccessAPI = {
@@ -259,6 +276,10 @@ export const hubAccessAPI = {
     axios.get<AccessOverview>(`${API_BASE}/hubs/${enc(hubId)}/access`, { headers: authHeaders() }).then((r) => r.data),
   addAgent: (hubId: string, email: string): Promise<AccessPerson> =>
     axios.post<AccessPerson>(`${API_BASE}/hubs/${enc(hubId)}/access/agents`, { email }, { headers: authHeaders() }).then((r) => r.data),
+  invite: (hubId: string, email: string, access: { tenant_id: string; mode: 'read' | 'reply' }[]): Promise<InviteResult> =>
+    axios.post<InviteResult>(`${API_BASE}/hubs/${enc(hubId)}/access/invitations`, { email, access }, { headers: authHeaders() }).then((r) => r.data),
+  revokeInvitation: (hubId: string, id: string): Promise<void> =>
+    axios.delete(`${API_BASE}/hubs/${enc(hubId)}/access/invitations/${enc(id)}`, { headers: authHeaders() }).then(() => undefined),
   removeAgent: (hubId: string, userId: string): Promise<void> =>
     axios.delete(`${API_BASE}/hubs/${enc(hubId)}/access/agents/${enc(userId)}`, { headers: authHeaders() }).then(() => undefined),
   setAccess: (hubId: string, userId: string, tenantId: string, mode: AccessMode, validUntil?: string | null): Promise<void> =>

@@ -106,6 +106,48 @@ func (h *AccessHandler) AddAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p)
 }
 
+type inviteRequest struct {
+	Email  string                `json:"email"`
+	Access []access.InviteAccess `json:"access"`
+}
+
+// POST /api/v1/hubs/{hub_id}/access/invitations
+// One gesture for both cases: the e-mail of an existing account becomes an agent now ({"status":"applied"}); the e-mail of
+// a person without an account is kept for 14 days and applied at their first sign-in ({"status":"pending"}).
+func (h *AccessHandler) Invite(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := h.scope(w, r)
+	if !ok {
+		return
+	}
+	var body inviteRequest
+	if !decodeWrite(w, r, &body) {
+		return
+	}
+	res, err := h.svc.Invite(r.Context(), actor, hub, body.Email, body.Access)
+	if err != nil {
+		writeAccessPanelError(w, err)
+		return
+	}
+	writeJSON(w, res)
+}
+
+// DELETE /api/v1/hubs/{hub_id}/access/invitations/{invitation_id}
+func (h *AccessHandler) RevokeInvitation(w http.ResponseWriter, r *http.Request) {
+	actor, hub, ok := h.scope(w, r)
+	if !ok {
+		return
+	}
+	id, ok := pathUUID(w, r, "invitation_id")
+	if !ok {
+		return
+	}
+	if err := h.svc.RevokeInvitation(r.Context(), actor, hub, id); err != nil {
+		writeAccessPanelError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // DELETE /api/v1/hubs/{hub_id}/access/agents/{user_id}
 func (h *AccessHandler) RemoveAgent(w http.ResponseWriter, r *http.Request) {
 	actor, hub, ok := h.scope(w, r)

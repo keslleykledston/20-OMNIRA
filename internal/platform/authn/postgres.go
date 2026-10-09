@@ -10,7 +10,18 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
-type PostgresIdentityResolver struct{ pool *pgxpool.Pool }
+type PostgresIdentityResolver struct {
+	pool *pgxpool.Pool
+	// afterProvision, when set, runs after every successful sign-in provisioning, outside its transaction. It must never
+	// block or fail a sign-in: its errors are logged and dropped.
+	afterProvision func(ctx context.Context, userID uuid.UUID)
+}
+
+// WithAfterProvision registers a hook for "this person just signed in" (used to apply Hub authorizations written for their e-mail).
+func (r *PostgresIdentityResolver) WithAfterProvision(fn func(ctx context.Context, userID uuid.UUID)) *PostgresIdentityResolver {
+	r.afterProvision = fn
+	return r
+}
 
 func NewPostgresIdentityResolver(pool *pgxpool.Pool) *PostgresIdentityResolver {
 	return &PostgresIdentityResolver{pool: pool}
@@ -133,5 +144,8 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 		}
 		return nil
 	})
+	if err == nil && r.afterProvision != nil {
+		r.afterProvision(ctx, userID)
+	}
 	return userID, err
 }

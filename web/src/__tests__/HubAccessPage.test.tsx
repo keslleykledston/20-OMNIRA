@@ -94,15 +94,44 @@ describe('HubAccessPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/não administra este Hub/);
   });
 
-  it('adding an agent posts the e-mail and says that no access was granted', async () => {
-    vi.mocked(axios.post).mockResolvedValue({ data: person('u-n', 'novo@k3g.com') });
+  it('adding a person who already has an account sends the e-mail with the chosen access, and says it applied', async () => {
+    vi.mocked(axios.post).mockResolvedValue({ data: { status: 'applied' } });
     renderAt(<HubAccessPage />);
-    await userEvent.type(await screen.findByLabelText('Adicionar agente ao Hub'), 'novo@k3g.com');
+    await userEvent.type(await screen.findByLabelText('Adicionar pessoa ao Hub'), 'novo@k3g.com');
+    await userEvent.selectOptions(screen.getByLabelText('Acesso inicial em Alfa'), 'reply');
+    await userEvent.selectOptions(screen.getByLabelText('Acesso inicial em Gama'), 'read');
+    // a suspended instance is not offered
+    expect(screen.queryByLabelText('Acesso inicial em Beta')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Adicionar' }));
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
-    expect(String(vi.mocked(axios.post).mock.calls[0][0])).toMatch(/\/hubs\/hub-1\/access\/agents$/);
-    expect(vi.mocked(axios.post).mock.calls[0][1]).toEqual({ email: 'novo@k3g.com' });
-    expect(await screen.findByRole('alert')).toHaveTextContent(/ainda não tem acesso a nenhuma instância/);
+    expect(String(vi.mocked(axios.post).mock.calls[0][0])).toMatch(/\/hubs\/hub-1\/access\/invitations$/);
+    expect(vi.mocked(axios.post).mock.calls[0][1]).toEqual({
+      email: 'novo@k3g.com',
+      access: [{ tenant_id: 'A', mode: 'reply' }, { tenant_id: 'C', mode: 'read' }],
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent(/já tinha conta.*com o acesso escolhido/);
+  });
+
+  it('adding a person with no access picked sends an empty list; a person without an account is told it waits for the first sign-in', async () => {
+    vi.mocked(axios.post).mockResolvedValue({ data: { status: 'pending', expires_at: '2026-10-23T00:00:00Z' } });
+    renderAt(<HubAccessPage />);
+    await userEvent.type(await screen.findByLabelText('Adicionar pessoa ao Hub'), 'futuro@k3g.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Adicionar' }));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(axios.post).mock.calls[0][1]).toEqual({ email: 'futuro@k3g.com', access: [] });
+    expect(await screen.findByRole('alert')).toHaveTextContent(/ainda não tem conta.*primeiro acesso/);
+  });
+
+  it('lists the authorizations that wait for a first sign-in and cancels one', async () => {
+    ov = { ...overview(), invitations: [{ id: 'inv-1', email: 'futuro@k3g.com', access: [{ tenant_id: 'A', mode: 'reply' }], created_at: '2026-10-09T00:00:00Z', expires_at: '2026-10-23T00:00:00Z' }] };
+    vi.mocked(axios.delete).mockResolvedValue({ data: {} });
+    renderAt(<HubAccessPage />);
+    const box = await screen.findByRole('region', { name: 'Autorizações aguardando o primeiro acesso' });
+    expect(within(box).getByText('futuro@k3g.com')).toBeInTheDocument();
+    expect(within(box).getByText(/Alfa: Ler e responder/)).toBeInTheDocument();
+    await userEvent.click(within(box).getByRole('button', { name: 'Cancelar a autorização de futuro@k3g.com' }));
+    await waitFor(() => expect(axios.delete).toHaveBeenCalledTimes(1));
+    expect(String(vi.mocked(axios.delete).mock.calls[0][0])).toMatch(/\/hubs\/hub-1\/access\/invitations\/inv-1$/);
   });
 
   it('removing an agent asks first; cancelling changes nothing', async () => {

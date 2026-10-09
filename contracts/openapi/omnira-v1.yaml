@@ -1098,6 +1098,67 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: No eligible account for that e-mail (unknown, ambiguous and inactive are indistinguishable) }
+  /hubs/{hub_id}/access/invitations:
+    post:
+      operationId: inviteHubPerson
+      tags: [Hub]
+      summary: Authorize a person by e-mail, with the access picked (hub admin). Works before the account exists.
+      description: |
+        One gesture for both cases. The e-mail of an ACTIVE account becomes an agent of the hub now, with exactly the access
+        listed (`status: applied`). An e-mail without an account is kept for 14 days and applied at the first sign-in whose
+        address the identity provider verified, only while the administrator who wrote it is still an admin of an active
+        hub (`status: pending`). There is no link or token. Companies must be active instances of this hub.
+        The administrator can tell `applied` from `pending` (accepted: they provision this hub's people).
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email]
+              properties:
+                email: { type: string, maxLength: 254 }
+                access:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [tenant_id, mode]
+                    properties:
+                      tenant_id: { type: string, format: uuid }
+                      mode: { type: string, enum: [read, reply] }
+      responses:
+        '200':
+          description: Applied now, or kept until the first sign-in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [applied, pending] }
+                  expires_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '422': { description: Invalid e-mail, repeated company or mode other than read/reply }
+  /hubs/{hub_id}/access/invitations/{invitation_id}:
+    delete:
+      operationId: cancelHubInvitation
+      tags: [Hub]
+      summary: Cancel an authorization that has not been applied yet
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: invitation_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Cancelled }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /hubs/{hub_id}/access/agents/{user_id}:
     delete:
       operationId: removeHubAgent
@@ -3545,10 +3606,29 @@ components:
         name: { type: string }
     HubAccessOverview:
       type: object
-      required: [hub_id, hub_name, instances, agents]
+      required: [hub_id, hub_name, instances, agents, invitations]
       properties:
         hub_id: { type: string, format: uuid }
         hub_name: { type: string }
+        invitations:
+          type: array
+          description: Authorizations waiting for a person's first sign-in (not applied, not expired)
+          items:
+            type: object
+            required: [id, email, access, created_at, expires_at]
+            properties:
+              id: { type: string, format: uuid }
+              email: { type: string }
+              access:
+                type: array
+                items:
+                  type: object
+                  required: [tenant_id, mode]
+                  properties:
+                    tenant_id: { type: string, format: uuid }
+                    mode: { type: string, enum: [read, reply] }
+              created_at: { type: string, format: date-time }
+              expires_at: { type: string, format: date-time }
         instances:
           type: array
           items:

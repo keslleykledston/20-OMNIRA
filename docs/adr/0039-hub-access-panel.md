@@ -78,10 +78,31 @@ Regra de ouro: **vários = grant do Hub**. Um administrador de empresa nunca cri
    chave no *sender* errado (o handler usava um sender sem a chave; só o serviço de anexos usava o com a chave): agora a rota
    envia mídia **por** `Attachments.SendMedia`, e há teste pela rota HTTP real com os dois senders distintos, como em produção.
 
+10. **Autorizar pessoa por e-mail, com ou sem conta (2026-10-09, migration 102).** Um só gesto no painel: e-mail + acesso inicial por
+    instância (opcional). Se o e-mail já é de **uma** conta ativa, a pessoa vira agente do Hub **na hora**, com exatamente o acesso
+    escolhido (as mesmas escritas dos outros botões, pelo mesmo serviço, como o administrador). Se não há conta, a escolha fica
+    guardada em `hub_preauthorizations` por **14 dias**, cancelável, e vale no **primeiro acesso** em que o provedor de identidade
+    afirma o e-mail como **verificado** (gancho em `ProvisionIdentity`, o login web). **Não há link nem token**: nada para encaminhar
+    ou interceptar; confia-se no mesmo que o convite de empresa já confia (e-mail verificado pelo IdP).
+    - **A autoridade acompanha a escolha e é conferida de novo ao aplicar:** o administrador que a escreveu precisa ainda ser admin
+      ativo de um Hub ativo; senão a autorização vira `void` e nada acontece. Cada empresa é revalidada na hora de aplicar (suspensa
+      nesse meio-tempo = pulada e contada, o resto vale). Aplicar é **uma vez** (as linhas pendentes são travadas; dois logins
+      simultâneos aplicam uma só vez), nunca depois de vencida ou cancelada, e uma autorização já aplicada não ressuscita se o
+      administrador tirar o acesso depois.
+    - **Quem é hub_admin não é rebaixado** por ser "convidado como agente" (isso continua do `hubctl`).
+    - **Aceito e dito:** o administrador do Hub consegue distinguir "aplicado" de "aguardando" (logo, se um e-mail tem conta). Ele é
+      quem cadastra as pessoas deste Hub e a tela lista as duas coisas de qualquer forma; o botão antigo "adicionar por e-mail"
+      (só conta existente, resposta uniforme) continua na API.
+    - **Risco que depende do provedor de identidade:** se o realm aceitar login com e-mail **não** verificado, nada é aplicado
+      (testado), mas o administrador precisa saber que a pessoa só recebe o acesso depois de confirmar o e-mail no Keycloak.
+    - Falha ao aplicar nunca bloqueia o login (o erro é registrado; a próxima entrada tenta de novo).
+    - **Limite:** aplicar usa uma segunda conexão do pool enquanto segura as linhas pendentes; muitos primeiros logins com
+      autorização pendente exatamente ao mesmo tempo disputariam o pool (é um evento por pessoa).
+
 ## 4. Fora desta entrega (honesto)
 
-- **Convidar pessoa sem conta** pelo Hub (e-mail + senha temporária + aceite): hoje a pessoa precisa **já ter conta**; quem
-  convida pessoa nova é o administrador da empresa em "Equipe" (e depois o admin do Hub libera as demais instâncias).
+- ~~Convidar pessoa sem conta pelo Hub~~ **feito** em 2026-10-09 (§3.10): por e-mail, sem senha temporária nem link. Continua fora: o
+  administrador de uma **empresa** convidar pessoa nova segue pela "Equipe" da empresa, que é outro fluxo.
 - Validade (`valid_until`) e filas por agente na tela; pools/skills/distribuição (ADR-0038 fase 4).
 - Suspensão ainda não para webhooks, worker de entrega e fluxos (achados H-02/H-03 do Codex): **abertos**.
 - Corrida revogação × escrita do reply (H1 do Codex) e o restante do review do reply: **abertos**.

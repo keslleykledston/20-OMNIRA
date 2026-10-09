@@ -31,6 +31,7 @@ import (
 	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	flowstemplates "github.com/omnira/omnira/internal/flows/templates"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
+	hubaccess "github.com/omnira/omnira/internal/hub/access"
 	identityadapters "github.com/omnira/omnira/internal/identity/adapters"
 	identityapp "github.com/omnira/omnira/internal/identity/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -117,6 +118,21 @@ func main() {
 	sessionStore := authn.NewPostgresSessionStore(dbPool)
 	if cfg.AuthMode == "oidc" {
 		resolver := authn.NewPostgresIdentityResolver(dbPool)
+		if cfg.HubAPIEnabled && cfg.HubAccessAPIEnabled {
+			// ADR-0039 §3.10: a Hub administrator may have authorized this person's e-mail before the account existed;
+			// it takes effect at their first verified sign-in. A failure here never blocks the sign-in.
+			if accessSvc, accessErr := hubaccess.New(dbPool); accessErr != nil {
+				log.Printf("hub access: authorizations by e-mail are disabled: %v", accessErr)
+			} else {
+				resolver.WithAfterProvision(func(ctx context.Context, userID uuid.UUID) {
+					if n, err := accessSvc.ApplyPreauthorizations(ctx, userID); err != nil {
+						log.Printf("hub access: applying the authorizations waiting for a new sign-in: %v", err)
+					} else if n > 0 {
+						log.Printf("hub access: %d authorization(s) took effect at sign-in", n)
+					}
+				})
+			}
+		}
 		oidcAuth, discovery, oidcErr := authn.NewOIDCAuthenticator(context.Background(), cfg.AuthIssuer, cfg.AuthAudience, nil, resolver)
 		if oidcErr != nil {
 			log.Fatalf("OIDC configuration error: %v", oidcErr)

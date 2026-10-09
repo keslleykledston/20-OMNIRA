@@ -123,6 +123,14 @@ echo "$(put /out/agent.jar "/hubs/$HUB/access/agents/$OTHER_ID/instances/$TB" "{
 echo "$(get /out/other.jar "/hubs/$HUB/inbox" /out/ac8.json) the new agent inbox after taking B back"
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox?companies=$TA" /out/ac9.json) hub admin inbox filtered to A"
 echo "$(get /out/agent.jar /hubs /out/ac10.json) hubs with the access panel on"
+del() { curl -s --max-time 15 -o "$3" -w "%{http_code}" -b "$1" -X DELETE "http://127.0.0.1:$APIPORT/api/v1$2"; }
+echo "$(post /out/other.jar "/hubs/$HUB/access/invitations" "{\"email\":\"novidade@example.com\",\"access\":[{\"tenant_id\":\"$TB\",\"mode\":\"read\"}]}" /out/iv0.json) invite by a user outside the hub"
+echo "$(post /out/agent.jar "/hubs/$HUB/access/invitations" "{\"email\":\"novidade@example.com\",\"access\":[{\"tenant_id\":\"$TB\",\"mode\":\"read\"}]}" /out/iv1.json) invite an e-mail without an account"
+echo "$(get /out/agent.jar "/hubs/$HUB/access" /out/iv2.json) panel lists the waiting authorization"
+INV_ID=$(sed -n "s/.*\"invitations\":\[{\"id\":\"\([0-9a-f-]*\)\".*/\1/p" /out/iv2.json | head -1)
+echo "$(del /out/other.jar "/hubs/$HUB/access/invitations/$INV_ID" /out/iv3.json) cancel by a user outside the hub"
+echo "$(del /out/agent.jar "/hubs/$HUB/access/invitations/$INV_ID" /out/iv4.json) cancel the waiting authorization"
+echo "$(get /out/agent.jar "/hubs/$HUB/access" /out/iv5.json) panel after cancelling"
 # ---- write path: A is reply-capable, B is read-only, C has no grant
 ITEM_B=$(sed -n "s/.*\"id\":\"\([0-9a-f-]*\)\",\"tenant_id\":\"$TB\".*/\1/p" /out/inbox.json | head -1)
 post() { curl -s --max-time 15 -o "$4" -w "%{http_code}" -b "$1" -H "Content-Type: application/json" ${5:+-H "Idempotency-Key: $5"} -d "$3" "http://127.0.0.1:$APIPORT/api/v1$2"; }
@@ -223,6 +231,11 @@ ok(code('take B back')==204 and load('ac8.json')['items']==[] and load('ac8.json
 ac9=load('ac9.json')
 ok(code("hub admin inbox filtered to A")==200 and ac9['items'] and {i['tenant_id'] for i in ac9['items']}=={ta},"the company filter narrows the unified inbox to A")
 ok(load('ac10.json')['items'][0]['can_manage_access'] is True,"the hub list offers the access panel to the hub admin")
+iv1,iv2,iv5=load('iv1.json'),load('iv2.json'),load('iv5.json')
+ok(code('invite by a user outside the hub')==404,"a user outside the hub cannot authorize anyone (uniform 404)")
+ok(code('invite an e-mail without an account')==200 and iv1['status']=='pending' and iv1.get('expires_at'),"an e-mail without an account is kept as a pending authorization")
+ok(code('panel lists the waiting authorization')==200 and len(iv2['invitations'])==1 and iv2['invitations'][0]['email']=='novidade@example.com' and iv2['invitations'][0]['access'][0]['tenant_id']==tb,"the panel lists it with the access that was picked")
+ok(code('cancel by a user outside the hub')==404 and code('cancel the waiting authorization')==204 and load('iv5.json')['invitations']==[],"only the hub admin cancels it, and it disappears from the panel")
 ok(code('access panel when its flag is off')==404,"with OMNIRA_HUB_ACCESS_API_ENABLED=false the access panel does not exist")
 rec=open(w+'/phaseA.txt').read()
 ok('3 upserted' in rec,"hubctl reconcile projected the 3 conversations of the 3 contracted companies")

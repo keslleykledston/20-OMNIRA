@@ -79,3 +79,11 @@ Para gerenciar administradores das instâncias, agentes e o que cada um pode faz
 5. Regra 5: o administrador de uma empresa **não consegue** convidar quem já atua em outra instância (409); isso é do administrador do Hub, pela tela Acessos.
 6. `hubctl grant add` sobre um grant que já existe só mantém ou reduz o acesso; reativar revogado, tirar/estender validade ou subir de leitura para resposta exigem `--renew`.
 Desligar: `OMNIRA_HUB_ACCESS_API_ENABLED=false` (as concessões feitas continuam valendo: são dados). "Conversas" unificadas (2+ empresas) dependem só de `OMNIRA_HUB_API_ENABLED`.
+
+## Autorizar uma pessoa nova (sem conta) — 2026-10-09
+No painel `/acessos`, aba "Agentes e permissões", caixa **Adicionar pessoa ao Hub**: digite o e-mail e escolha o acesso inicial (opcional).
+- A pessoa **já tem conta**: vira agente na hora; o acesso aparece na tabela.
+- A pessoa **não tem conta**: aparece em "Aguardando o primeiro acesso" por 14 dias. **Avise-a** (o OMNIRA não envia e-mail por isso) para entrar com **aquele** e-mail e **confirmá-lo** no Keycloak; no primeiro acesso o Hub a reconhece e aplica o que você escolheu. "Cancelar" desfaz antes disso.
+- Só vale enquanto você (quem autorizou) continuar administrador do Hub; se deixar de ser, a autorização é descartada.
+- Consulta rápida: `SELECT email, status, expires_at FROM hub_preauthorizations ORDER BY created_at DESC;` (leitura como dono; nunca desligue RLS).
+

@@ -52,6 +52,8 @@ func newAccessAPI(t *testing.T, w *world) *accessAPI {
 	mux.Handle("GET /api/v1/hubs", shim(session(http.HandlerFunc(h.ListMyHubs))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/access", shim(session(http.HandlerFunc(a.Overview))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/access/agents", shim(session(http.HandlerFunc(a.AddAgent))))
+	mux.Handle("POST /api/v1/hubs/{hub_id}/access/invitations", shim(session(http.HandlerFunc(a.Invite))))
+	mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/invitations/{invitation_id}", shim(session(http.HandlerFunc(a.RevokeInvitation))))
 	mux.Handle("DELETE /api/v1/hubs/{hub_id}/access/agents/{user_id}", shim(session(http.HandlerFunc(a.RemoveAgent))))
 	mux.Handle("PUT /api/v1/hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}", shim(session(http.HandlerFunc(a.SetAccess))))
 	mux.Handle("POST /api/v1/hubs/{hub_id}/access/instances/{tenant_id}/admins", shim(session(http.HandlerFunc(a.AddInstanceAdmin))))
