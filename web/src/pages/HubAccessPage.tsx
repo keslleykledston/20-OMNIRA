@@ -10,6 +10,7 @@ import { useMyHubs } from '../hooks/useMyHubs';
 import { Button, ConfirmDialog, EmptyState, ErrorState, Input, LoadingState, StatusBadge } from '../components/primitives';
 import CompaniesPanel from '../components/hub/CompaniesPanel';
 import PoolsPanel from '../components/hub/PoolsPanel';
+import AuditPanel from '../components/hub/AuditPanel';
 
 // Management panel of the Hub (ADR-0038/0039): the companies, who administers each one, which agents exist and what each one may do where.
 // One screen with two tabs (Agentes e permissões / Instâncias); the old /hub/instâncias address redirects here.
@@ -17,7 +18,7 @@ import PoolsPanel from '../components/hub/PoolsPanel';
 // signed-in hub admin; `can_manage_access` only decides whether the screen is offered. Only an admin of the HUB can
 // authorize an agent for more than one instance: a company's own administrator manages their company's people in
 // "Equipe" and has no route into this panel.
-type Tab = 'companies' | 'agents' | 'pools';
+type Tab = 'companies' | 'agents' | 'pools' | 'audit';
 
 const MODE_LABEL: Record<AccessMode, string> = { none: 'Sem acesso', read: 'Só leitura', reply: 'Ler e responder' };
 
@@ -35,7 +36,7 @@ export default function HubAccessPage() {
   const hubId = hub?.id ?? '';
   const qc = useQueryClient();
   const [params] = useSearchParams();
-  const [tab, setTab] = useState<Tab>(params.get('aba') === 'instancias' ? 'companies' : params.get('aba') === 'equipes' ? 'pools' : 'agents');
+  const [tab, setTab] = useState<Tab>(params.get('aba') === 'instancias' ? 'companies' : params.get('aba') === 'equipes' ? 'pools' : params.get('aba') === 'auditoria' ? 'audit' : 'agents');
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [removeAgent, setRemoveAgent] = useState<AccessAgent | null>(null);
   const [removeAdmin, setRemoveAdmin] = useState<{ instance: AccessInstance; person: AccessPerson } | null>(null);
@@ -114,7 +115,7 @@ export default function HubAccessPage() {
       </div>
       <div className="mx-auto w-full max-w-6xl space-y-4 p-4">
         <div role="tablist" aria-label="Seções do painel de acessos" className="inline-flex rounded-control bg-surface-muted p-1">
-          {([['agents', 'Agentes e permissões'], ['companies', 'Instâncias'], ['pools', 'Equipes']] as const).map(([id, label]) => (
+          {([['agents', 'Agentes e permissões'], ['companies', 'Instâncias'], ['pools', 'Equipes'], ['audit', 'Auditoria']] as const).map(([id, label]) => (
             <button key={id} role="tab" type="button" aria-selected={tab === id} onClick={() => setTab(id)}
               className={`h-8 rounded-control px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary ${tab === id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-secondary hover:text-text-primary'}`}>
               {label}
@@ -136,6 +137,7 @@ export default function HubAccessPage() {
             onCancelInvite={(id) => revokeInvite.mutate(id)}
             onRemove={(a) => setRemoveAgent(a)} />
         )}
+        {data && tab === 'audit' && <AuditPanel hubId={hubId} instances={data.instances} />}
         {data && tab === 'pools' && <PoolsPanel hubId={hubId} agents={data.agents} instances={data.instances} />}
         {tab === 'companies' && hub.can_manage_companies && (
           <CompaniesPanel hubId={hubId} extra={(tenantId) => {

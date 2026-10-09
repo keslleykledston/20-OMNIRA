@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=omnira-hubinvmut-$$; DB=omnira_test_invmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig"
-FILES="internal/hub/access/invitations.go internal/platform/authn/postgres.go internal/hub/provisioning/service.go"
+FILES="internal/hub/access/invitations.go internal/hub/authority/authority.go internal/platform/authn/postgres.go internal/hub/provisioning/service.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -78,7 +78,7 @@ mut "an applied authorization is not marked applied"   $I "SET status = 'applied
 # NOT a mutant: dropping the HANDLER's admin check alone survives by design, because the service asks the database again inside its
 # own transaction (access.Service.tx): "who may ask" has two independent layers and the tests prove the pair (hub agent, company
 # admin and anonymous are refused, nothing is written). Removing both layers at once is not mutated here.
-mut "the author's membership is not pinned while applying" $I '{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2 FOR SHARE`, []any{hub, person}},' '{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, []any{hub, person}},'
+mut "the author's membership is not pinned while applying" internal/hub/authority/authority.go '{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2 FOR SHARE`, []any{hub, person}},' '{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, []any{hub, person}},'
 mut "the company is not pinned while applying"         $I 'if _, err := platformdb.LockTenantActive(ctx, q, tenant); err != nil {
 		return err
 	}' '_ = platformdb.LockTenantActive'

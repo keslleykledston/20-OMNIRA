@@ -130,9 +130,11 @@ sqlmut "a suspended company is managed"                    $M "AND t.status = 'a
 sqlmut "a suspended contract still delegates"              $M "AND c.status = 'active' AND c.valid_from <= now() AND (c.valid_until IS NULL OR c.valid_until > now())
          AND CASE" "AND CASE"
 sqlmut "anyone may ask about anyone"                       $M "SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+     AND public.user_is_active(p_user_id)
      AND EXISTS (
        SELECT 1
        FROM public.hub_tenant_service_contracts c" "SELECT true
+     AND public.user_is_active(p_user_id)
      AND EXISTS (
        SELECT 1
        FROM public.hub_tenant_service_contracts c"

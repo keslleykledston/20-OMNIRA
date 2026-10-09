@@ -140,6 +140,5 @@ mut "candidates include the holder"                        $RP 'AND u.id <> $2 A
 mut "candidates include inactive accounts"                 $RP "JOIN users u ON u.id = hm.user_id AND u.status = 'active'" "JOIN users u ON u.id = hm.user_id"
 # --- SQL
 M=000104_hub_work_pools.up.sql
-sqlmut "two pools may answer for the same instance"        $M "  CONSTRAINT work_pool_instances_one_pool_per_scope UNIQUE NULLS NOT DISTINCT (hub_id, tenant_id, queue_id)
-);" ");"
+sqlmut "two pools may answer for the same instance"        $M "UNIQUE NULLS NOT DISTINCT (hub_id, tenant_id, queue_id)" "CHECK (true)"
 echo "PASS: every mutation was killed by a failing real-Postgres test ($N mutants)"

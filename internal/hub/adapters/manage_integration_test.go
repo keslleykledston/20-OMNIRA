@@ -690,12 +690,28 @@ func TestHubManagerCannotUseAnotherHubsPath(t *testing.T) {
 // channel provider - instead of landing in the middle of it. A hold-based test: the handler parks inside the middleware while each change
 // is attempted; every one must be blocked, and every one must go through once the request is released.
 func TestHubManagerHoldsEverythingTheAuthorizationDependsOn(t *testing.T) {
-	w := newWorld(t)
-	agent := w.hubAgent("agent")
-	g := w.grant(agent, "A")
-	w.canManage(g)
-	w.scopes("A", "channels")
+	// A person who manages through a GRANT, and a hub ADMIN who manages through the role (no grant row at all): each is pinned by the rows
+	// its own authority rests on, so each is proven separately (the grant's foreign key to the membership would otherwise hide a missing pin).
+	for _, persona := range []string{"agent with a can_manage grant", "hub admin without any grant"} {
+		persona := persona
+		t.Run(persona, func(t *testing.T) {
+			w := newWorld(t)
+			var who, grant uuid.UUID
+			if persona == "agent with a can_manage grant" {
+				who = w.hubAgent("agent")
+				grant = w.grant(who, "A")
+				w.canManage(grant)
+			} else {
+				who = w.hubAdmin("admin")
+			}
+			w.scopes("A", "channels")
+			holdAndChange(t, w, who, grant)
+		})
+	}
+}
 
+func holdAndChange(t *testing.T, w *world, who, grant uuid.UUID) {
+	t.Helper()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	releaseOnce := func() { once.Do(func() { close(release) }) }
@@ -723,7 +739,7 @@ func TestHubManagerHoldsEverythingTheAuthorizationDependsOn(t *testing.T) {
 	done := make(chan int, 1)
 	go func() {
 		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/hubs/"+w.hub.String()+"/instances/"+w.tenant["A"].String()+"/probe", nil)
-		req.Header.Set("X-Test-User", agent.String())
+		req.Header.Set("X-Test-User", who.String())
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			done <- -1
@@ -738,16 +754,20 @@ func TestHubManagerHoldsEverythingTheAuthorizationDependsOn(t *testing.T) {
 		t.Fatal("the request never got past the middleware")
 	}
 
-	changes := []struct {
+	type change struct {
 		what, sql string
 		args      []any
-	}{
+	}
+	changes := []change{
 		{"suspending the company", `UPDATE tenants SET status = 'suspended' WHERE id = $1`, []any{w.tenant["A"]}},
 		{"pausing the hub", `UPDATE service_hubs SET status = 'suspended' WHERE id = $1`, []any{w.hub}},
 		{"suspending the contract", `UPDATE hub_tenant_service_contracts SET status = 'suspended' WHERE tenant_id = $1`, []any{w.tenant["A"]}},
-		{"removing the person from the hub", `DELETE FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, []any{w.hub, agent}},
-		{"deactivating the account", `UPDATE users SET status = 'inactive' WHERE id = $1`, []any{agent}},
-		{"revoking the grant", `UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, []any{g}},
+		{"removing the person from the hub", `DELETE FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, []any{w.hub, who}},
+		{"changing the person's role in the hub", `UPDATE hub_memberships SET role_id = $3 WHERE hub_id = $1 AND user_id = $2`, []any{w.hub, who, w.roleHubAgent}},
+		{"deactivating the account", `UPDATE users SET status = 'inactive' WHERE id = $1`, []any{who}},
+	}
+	if grant != uuid.Nil {
+		changes = append(changes, change{"revoking the grant", `UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, []any{grant}})
 	}
 	for _, c := range changes {
 		ctx, cancel := context.WithTimeout(w.ctx, 600*time.Millisecond)

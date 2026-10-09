@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=omnira-hubaccessmut-$$; DB=omnira_test_accessmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/hub/access/service.go internal/hub/provisioning/service.go internal/hub/adapters/access_http.go internal/hub/adapters/http.go internal/hub/adapters/postgres.go internal/messages/application/attachment.go internal/tenancy/adapters/invitations_http.go internal/tenancy/adapters/team_http.go internal/messages/adapters/http.go internal/hub/access/invitations.go"
+FILES="internal/hub/access/service.go internal/hub/provisioning/service.go internal/hub/adapters/access_http.go internal/hub/adapters/http.go internal/hub/adapters/postgres.go internal/messages/application/attachment.go internal/tenancy/adapters/invitations_http.go internal/tenancy/adapters/team_http.go internal/messages/adapters/http.go internal/hub/access/invitations.go internal/hub/authority/authority.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -64,7 +64,7 @@ mut "the access service lets anybody in"                  $S "		ok, err := lockA
 			return err
 		}
 		if false {"
-mut "the access service ignores a suspended hub"          internal/hub/access/invitations.go "AND EXISTS (SELECT 1 FROM service_hubs WHERE id = \$1 AND status = 'active')" "AND true"
+mut "the access service ignores a suspended hub"          internal/hub/authority/authority.go "AND EXISTS (SELECT 1 FROM service_hubs WHERE id = \$1 AND status = 'active')" "AND true"
 mut "the handler lets a non-admin through"                $H "	if !admin {
 		httpError(w, \"not found\", http.StatusNotFound)" "	if false {
 		httpError(w, \"not found\", http.StatusNotFound)"
@@ -122,7 +122,7 @@ mut "a failed lookup counts as 'not elsewhere'"           $I "	if err := q.Query
 		return false
 	}"
 
-mut "a deactivated hub admin still passes the panel guard" internal/hub/access/invitations.go "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')" "AND true"
+mut "a deactivated hub admin still passes the panel guard" internal/hub/authority/authority.go "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')" "AND true"
 mut "a deactivated hub admin still passes the grant guard" $P "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')" "AND true"
 mut "the panel reads a hub role without locking the row"  $P "WHERE hub_id = \$1 AND user_id = \$2 FOR UPDATE\`, hub, user).Scan(&roleID)" "WHERE hub_id = \$1 AND user_id = \$2\`, hub, user).Scan(&roleID)"
 mut "the media route skips the attachments switch"        $W "res, err = h.att.SendMedia(" "res, err = h.svc.SendMedia("

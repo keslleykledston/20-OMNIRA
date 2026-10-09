@@ -1499,6 +1499,49 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: Not the holder, target not available, other instance on screen, or finalized }
+  /hubs/{hub_id}/audit:
+    get:
+      operationId: listHubAudit
+      tags: [Hub]
+      summary: Who changed what in the instances of this hub (hub admin)
+      description: |
+        Configuration changes only: access, delegation of management, teams, channel/integration connections, instance status. Never the per-message
+        or per-conversation traffic, never another hub's instances. Each event carries a short whitelist of facts, never the raw record. Behind the
+        Access API flag; only an active admin of the hub, anything else is the uniform 404. Newest first; `next` is the cursor for older events.
+      parameters:
+        - { name: hub_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: tenant, in: query, required: false, schema: { type: string, format: uuid }, description: Narrow to one instance of this hub }
+        - { name: before, in: query, required: false, schema: { type: string, format: date-time }, description: Cursor from a previous page }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: A page of events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  next: { type: string, format: date-time, description: Cursor for the next (older) page; absent on the last page }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, at, action]
+                      properties:
+                        id: { type: string, format: uuid }
+                        at: { type: string, format: date-time }
+                        action: { type: string }
+                        tenant_id: { type: string, format: uuid }
+                        tenant_name: { type: string }
+                        actor_id: { type: string, format: uuid }
+                        actor_email: { type: string }
+                        actor_name: { type: string }
+                        via: { type: string, enum: [hub], description: Present when the change was made through the hub's management of an instance }
+                        facts: { type: object, additionalProperties: true, description: Whitelisted description of the change }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '404': { $ref: '#/components/responses/Text404' }
   /hubs/{hub_id}/access:
     get:
       operationId: getHubAccess

@@ -22,7 +22,7 @@ mkdb() {
     -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=$DB postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
   docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 }
-RUNRE='TestMediaIsNeitherFetched|TestVisionRunsEvery|TestTranscriptionRunsEvery|TestASuspendedCompanyGetsNoAnalysisJob|TestWhileActiveHolds|TestClaimDoesNotRace|TestAnalysisClaimAndEnqueueDoNotRace|TestAnAIJobClaimDoesNotRace|TestRetrigger_ASuspensionInFlight|TestReconcile_ASuspensionInFlight|TestSweeperWaitsForASuspension|TestASuspendedCompanysJobsAreNotClaimed|TestASuspendedCompanysMediaIsNotClaimed|TestRunnerDoesNotRun|TestRetrigger_SuspendedCompany|TestASuspendedCompanys|TestSweeperDoesNotCancel|TestReconcile_SuspendedCompany|TestHubReply_WriteWaits|TestHubReply_CapabilityAndHappyPath|TestLockTenantActive|TestPostgresDeliveryStateMachine|TestSuspendedCompanysFlows|TestProjector_SuspendedCompany|TestMetaWebhookEndToEnd|TestIntakeDropsGroupMessagesOfASuspendedCompany'
+RUNRE='TestAPanic|TestMediaIsNeitherFetched|TestVisionRunsEvery|TestTranscriptionRunsEvery|TestASuspendedCompanyGetsNoAnalysisJob|TestWhileActiveHolds|TestClaimDoesNotRace|TestAnalysisClaimAndEnqueueDoNotRace|TestAnAIJobClaimDoesNotRace|TestRetrigger_ASuspensionInFlight|TestReconcile_ASuspensionInFlight|TestSweeperWaitsForASuspension|TestASuspendedCompanysJobsAreNotClaimed|TestASuspendedCompanysMediaIsNotClaimed|TestRunnerDoesNotRun|TestRetrigger_SuspendedCompany|TestASuspendedCompanys|TestSweeperDoesNotCancel|TestReconcile_SuspendedCompany|TestHubReply_WriteWaits|TestHubReply_CapabilityAndHappyPath|TestLockTenantActive|TestPostgresDeliveryStateMachine|TestSuspendedCompanysFlows|TestProjector_SuspendedCompany|TestMetaWebhookEndToEnd|TestIntakeDropsGroupMessagesOfASuspendedCompany'
 PKGS="./internal/media/application ./internal/worker/routing ./internal/routing/adapters ./internal/intelligence/adapters ./internal/media/adapters ./internal/hub/adapters ./internal/platform/db ./internal/worker/delivery ./internal/worker/flows ./internal/worker/hubprojector ./internal/inbox/adapters ./internal/groups/adapters"
 run() { # the host toolchain with its warm module and build caches (a cold container recompiles everything per mutant)
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
@@ -95,10 +95,17 @@ mut "the run tidy-up races a suspension in flight"    internal/flows/adapters/po
 		)' '		)'
 mut "reconciliation races a suspension in flight"     internal/worker/delivery/reconcile_postgres.go '			  FOR SHARE OF tn SKIP LOCKED' ''
 mut "a suspended company's files are fetched"        internal/media/application/processor.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
-		switch w.Status {' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) {
-		switch w.Status {'
-mut "a suspended company's images go to the provider" internal/media/application/vision.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {'
-mut "a suspended company's audio is transcribed"      internal/media/application/transcriber.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {'
+		// A panic on one hostile file' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) {
+		// A panic on one hostile file'
+mut "a suspended company's images go to the provider" internal/media/application/vision.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
+		defer func() { // recovered INSIDE the gate' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) {
+		defer func() { // recovered INSIDE the gate'
+mut "a suspended company's audio is transcribed"      internal/media/application/transcriber.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
+		defer func() { // recovered INSIDE the gate' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) {
+		defer func() { // recovered INSIDE the gate'
+mut "a panic on a file is not failed inside the gate"      internal/media/application/processor.go '				p.terminal(ctx, w, ports.StatusFailed, "internal_error")' '				_ = w'
+mut "a panic in vision is not failed inside the gate"      internal/media/application/vision.go '				_ = p.repo.FailAnalysis(ctx, w, "internal_error")' '				_ = w'
+mut "a panic in transcription is not failed inside the gate" internal/media/application/transcriber.go '				_ = p.repo.FailAnalysis(ctx, w, "internal_error")' '				_ = w'
 mut "the operation runs outside the gate's lock"      internal/media/application/processor.go '	ran, err := g.WhileActive(ctx, tenant, func(c context.Context) error {
 		fn(c)
 		return nil

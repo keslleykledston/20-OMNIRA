@@ -420,3 +420,69 @@ export function describeHubPoolError(err: unknown): string {
       return 'Não foi possível salvar.'
   }
 }
+
+// ---- Audit (ADR-0038 §6): who changed what, in the instances of this hub. Hub admins only.
+
+export interface AuditEvent {
+  id: string
+  at: string
+  action: string
+  tenant_id?: string
+  tenant_name?: string
+  actor_id?: string
+  actor_email?: string
+  actor_name?: string
+  /** "hub" when the change was made through the hub's management of an instance. */
+  via?: 'hub'
+  facts?: Record<string, unknown>
+}
+
+export interface AuditPage {
+  items: AuditEvent[]
+  next?: string
+}
+
+export const hubAuditAPI = {
+  list: (hubId: string, opts: { tenant?: string; before?: string } = {}): Promise<AuditPage> =>
+    axios
+      .get<AuditPage>(`${API_BASE}/hubs/${enc(hubId)}/audit`, { headers: authHeaders(), params: { tenant: opts.tenant || undefined, before: opts.before || undefined } })
+      .then((r) => r.data),
+}
+
+const AUDIT_LABEL: Record<string, string> = {
+  'platform.company.created': 'Instância criada',
+  'platform.company.status_changed': 'Situação da instância alterada',
+  'platform.company.capability_changed': 'Capacidade da instância alterada',
+  'platform.company.management_scopes_changed': 'Gestão delegada ao Hub alterada',
+  'platform.operator.added': 'Operador de plataforma adicionado',
+  'platform.operator.revoked': 'Operador de plataforma retirado',
+  'hub.created': 'Hub criado',
+  'hub.status_changed': 'Situação do Hub alterada',
+  'hub.member.added': 'Agente adicionado ao Hub',
+  'hub.member.removed': 'Agente removido do Hub',
+  'hub.member.role_changed': 'Papel no Hub alterado',
+  'hub.contract.created': 'Contrato criado',
+  'hub.contract.status_changed': 'Situação do contrato alterada',
+  'hub.grant.granted': 'Acesso concedido',
+  'hub.grant.revoked': 'Acesso retirado',
+  'hub.grant.manage_changed': 'Chave “Gerenciar” alterada',
+  'hub.instance.admin_added': 'Administrador da instância adicionado',
+  'hub.instance.admin_removed': 'Administrador da instância retirado',
+  'hub.preauthorization.created': 'Autorização por e-mail criada',
+  'hub.preauthorization.applied': 'Autorização por e-mail aplicada no primeiro acesso',
+  'hub.preauthorization.revoked': 'Autorização por e-mail cancelada',
+  'hub.preauthorization.voided': 'Autorização por e-mail anulada',
+  'hub.pool.created': 'Equipe criada',
+  'hub.pool.updated': 'Equipe alterada',
+  'hub.pool.deleted': 'Equipe removida',
+  'hub.pool.members_set': 'Integrantes da equipe alterados',
+  'hub.pool.instances_set': 'Instâncias da equipe alteradas',
+  'channel.connection_created': 'Conexão de canal/integração criada',
+  'channel.session_started': 'Sessão de canal iniciada',
+  'channel.session_stopped': 'Sessão de canal encerrada',
+}
+
+/** A readable sentence for an audit action; an action this screen does not know is shown as it is (never hidden). */
+export function auditLabel(action: string): string {
+  return AUDIT_LABEL[action] ?? action
+}

@@ -481,6 +481,9 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 			s.mux.Handle("PUT /api/v1/hubs/{hub_id}/access/agents/{user_id}/instances/{tenant_id}/management", authnMiddleware(userSession(http.HandlerFunc(a.SetManage))))
 			// ADR-0038 phase 4: work pools (who answers for which instance, and automatic distribution). Hub admins only.
 			pools := hubadapters.NewPoolsHandler(dbPool)
+			// ADR-0038 §6: who changed what in the instances of this hub (read-only, hub admins only).
+			audit := hubadapters.NewAuditHandler(dbPool)
+			s.mux.Handle("GET /api/v1/hubs/{hub_id}/audit", authnMiddleware(userSession(http.HandlerFunc(audit.List))))
 			s.mux.Handle("GET /api/v1/hubs/{hub_id}/pools", authnMiddleware(userSession(http.HandlerFunc(pools.List))))
 			s.mux.Handle("POST /api/v1/hubs/{hub_id}/pools", authnMiddleware(userSession(http.HandlerFunc(pools.Create))))
 			s.mux.Handle("PATCH /api/v1/hubs/{hub_id}/pools/{pool_id}", authnMiddleware(userSession(http.HandlerFunc(pools.Update))))
