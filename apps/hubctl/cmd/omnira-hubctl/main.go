@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/worker/hubdistributor"
 	"github.com/omnira/omnira/internal/worker/hubprojector"
 )
 
@@ -39,6 +40,7 @@ const usage = `usage: omnira-hubctl --operator NAME <command> [flags]
   platform-operator list
   show             --hub ID
   reconcile        (project every conversation into the Hub inbox once; the worker does this on a schedule when enabled)
+  distribute       (hand the open, unassigned conversations of round-robin work pools to their members once; the worker does this on a schedule when OMNIRA_HUB_DISTRIBUTOR_ENABLED=true)
 
 Environment: OMNIRA_DATABASE_URL (application role).`
 
@@ -73,7 +75,7 @@ func parse(args []string) (command, error) {
 	}
 	c.group = rest[0]
 	rest = rest[1:]
-	if c.group != "show" && c.group != "reconcile" {
+	if c.group != "show" && c.group != "reconcile" && c.group != "distribute" {
 		if len(rest) == 0 {
 			return c, fmt.Errorf("%w: %s needs an action", errUsage, c.group)
 		}
@@ -115,7 +117,7 @@ func parse(args []string) (command, error) {
 		return u, nil
 	}
 	var err error
-	needHub := !(c.group == "hub" && c.action == "create") && c.group != "reconcile" && c.group != "platform-operator"
+	needHub := !(c.group == "hub" && c.action == "create") && c.group != "reconcile" && c.group != "distribute" && c.group != "platform-operator"
 	needTenant := (c.group == "contract") || (c.group == "grant")
 	needUser := (c.group == "member") || (c.group == "grant") || (c.group == "platform-operator" && c.action != "list")
 	if c.hub, err = id("hub", hub, needHub); err != nil {
@@ -147,7 +149,7 @@ func parse(args []string) (command, error) {
 		}
 	}
 	switch c.group + " " + c.action {
-	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "show ", "reconcile ", "platform-operator add", "platform-operator revoke", "platform-operator list":
+	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "show ", "reconcile ", "distribute ", "platform-operator add", "platform-operator revoke", "platform-operator list":
 	default:
 		return c, fmt.Errorf("%w: unknown command %q", errUsage, strings.TrimSpace(c.group+" "+c.action))
 	}
@@ -315,6 +317,12 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "projected: %d upserted, %d removed\n", res.Upserted, res.Removed)
+	case "distribute ":
+		tried, assigned, err := hubdistributor.New(pool).RunOnce(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "distributed: %d assigned of %d considered\n", assigned, tried)
 	case "show ":
 		s, err := svc.Describe(ctx, c.hub)
 		if err != nil {

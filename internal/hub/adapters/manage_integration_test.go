@@ -275,6 +275,12 @@ func TestHubManagerNeedsTheRightGrant(t *testing.T) {
 	if code, _ := api.call("GET", agent, "A", "connections", nil); code != http.StatusOK {
 		t.Fatalf("an active grant manages again: %d", code)
 	}
+	// an account that is no longer active stops managing at once, over HTTP too
+	w.exec(`UPDATE users SET status = 'inactive' WHERE id = $1`, agent)
+	if code, _ := api.call("GET", agent, "A", "connections", nil); code != http.StatusNotFound {
+		t.Fatalf("an inactive account must not manage: %d", code)
+	}
+	w.exec(`UPDATE users SET status = 'active' WHERE id = $1`, agent)
 	// the contract stops delegating: nothing is manageable any more
 	w.scopes("A")
 	if code, _ := api.call("GET", agent, "A", "connections", nil); code != http.StatusNotFound {
@@ -443,6 +449,13 @@ func TestHubManagerRowLevelSecurityOnTheChannelTables(t *testing.T) {
 	if n := w.n(manager, `SELECT count(*) FROM channel_connections`); n < 1 {
 		t.Error("restored grant must manage again")
 	}
+
+	// an account that is not active manages nothing, whatever rows it still has (Codex review)
+	w.exec(`UPDATE users SET status = 'inactive' WHERE id = $1`, manager)
+	if n := w.n(manager, `SELECT count(*) FROM channel_connections`); n != 0 {
+		t.Errorf("an inactive account must manage nothing at the database level, saw %d row(s)", n)
+	}
+	w.exec(`UPDATE users SET status = 'active' WHERE id = $1`, manager)
 
 	// and it stops at a company, a contract or a hub that is no longer live (again asked of the database directly)
 	for name, step := range map[string][2]string{
@@ -672,17 +685,21 @@ func TestHubManagerCannotUseAnotherHubsPath(t *testing.T) {
 	}
 }
 
-// ADR-0038: a company that is being managed through the hub is held ACTIVE for the whole request, so a suspension waits for the
-// request instead of landing in the middle of it (the same rule as every other write path). A hold-based test: the handler parks
-// inside the middleware while a suspension is attempted.
-func TestHubManagerHoldsTheCompanyActiveForTheRequest(t *testing.T) {
+// ADR-0038 + Codex review: while a management request is in progress EVERYTHING its authority depends on is held (company, hub, contract,
+// the person's membership and account, and their grant): a suspension or a revocation waits for the request - including the call to the
+// channel provider - instead of landing in the middle of it. A hold-based test: the handler parks inside the middleware while each change
+// is attempted; every one must be blocked, and every one must go through once the request is released.
+func TestHubManagerHoldsEverythingTheAuthorizationDependsOn(t *testing.T) {
 	w := newWorld(t)
-	admin := w.hubAdmin("admin")
+	agent := w.hubAgent("agent")
+	g := w.grant(agent, "A")
+	w.canManage(g)
 	w.scopes("A", "channels")
 
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	releaseOnce := func() { once.Do(func() { close(release) }) }
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/hubs/{hub_id}/instances/{tenant_id}/probe", func() http.Handler {
 		shim := func(next http.Handler) http.Handler {
@@ -706,7 +723,7 @@ func TestHubManagerHoldsTheCompanyActiveForTheRequest(t *testing.T) {
 	done := make(chan int, 1)
 	go func() {
 		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/hubs/"+w.hub.String()+"/instances/"+w.tenant["A"].String()+"/probe", nil)
-		req.Header.Set("X-Test-User", admin.String())
+		req.Header.Set("X-Test-User", agent.String())
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			done <- -1
@@ -721,16 +738,32 @@ func TestHubManagerHoldsTheCompanyActiveForTheRequest(t *testing.T) {
 		t.Fatal("the request never got past the middleware")
 	}
 
-	ctx, cancel := context.WithTimeout(w.ctx, 700*time.Millisecond)
-	defer cancel()
-	if _, err := w.owner.Exec(ctx, `UPDATE tenants SET status = 'suspended' WHERE id = $1`, w.tenant["A"]); err == nil {
-		t.Fatal("the suspension did not wait for the management request in progress")
+	changes := []struct {
+		what, sql string
+		args      []any
+	}{
+		{"suspending the company", `UPDATE tenants SET status = 'suspended' WHERE id = $1`, []any{w.tenant["A"]}},
+		{"pausing the hub", `UPDATE service_hubs SET status = 'suspended' WHERE id = $1`, []any{w.hub}},
+		{"suspending the contract", `UPDATE hub_tenant_service_contracts SET status = 'suspended' WHERE tenant_id = $1`, []any{w.tenant["A"]}},
+		{"removing the person from the hub", `DELETE FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, []any{w.hub, agent}},
+		{"deactivating the account", `UPDATE users SET status = 'inactive' WHERE id = $1`, []any{agent}},
+		{"revoking the grant", `UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, []any{g}},
+	}
+	for _, c := range changes {
+		ctx, cancel := context.WithTimeout(w.ctx, 600*time.Millisecond)
+		_, err := w.owner.Exec(ctx, c.sql, c.args...)
+		cancel()
+		if err == nil {
+			t.Errorf("%s did not wait for the management request in progress", c.what)
+		}
 	}
 	releaseOnce()
 	if code := <-done; code != http.StatusNoContent {
 		t.Fatalf("the request: %d", code)
 	}
-	w.exec(`UPDATE tenants SET status = 'suspended' WHERE id = $1`, w.tenant["A"]) // now nothing holds it
+	for _, c := range changes { // now nothing holds them
+		w.exec(c.sql, c.args...)
+	}
 }
 
 // A `hub_manage` context answers to exactly TWO permissions (channel.manage -> scope channels, integration.manage -> scope integrations),

@@ -87,3 +87,12 @@ No painel `/acessos`, aba "Agentes e permissões", caixa **Adicionar pessoa ao H
 - Só vale enquanto você (quem autorizou) continuar administrador do Hub; se deixar de ser, a autorização é descartada.
 - Consulta rápida: `SELECT email, status, expires_at FROM hub_preauthorizations ORDER BY created_at DESC;` (leitura como dono; nunca desligue RLS).
 
+## Gestão delegada de canais e equipes (ADR-0038 fases 3 e 4, migrations 103 e 104)
+
+1. **Delegar a gestão** (operador de plataforma): na aba **Instâncias**, em "Gestão delegada ao Hub", marque *Canais de atendimento* e/ou *Integrações de retaguarda* para a instância. Nada é delegado por padrão. `OMNIRA_HUB_API_ENABLED=true` e `OMNIRA_HUB_ADMIN_API_ENABLED=true` no api.
+2. **Quem gerencia:** o administrador do Hub vale automaticamente; qualquer agente precisa de grant vivo **e** da chave *Gerenciar canais e integrações* na matriz (aba **Agentes e permissões**). Quem gerencia vê o item **Canais das instâncias** no menu e usa as mesmas telas de Canais da instância.
+3. **Equipes e distribuição:** aba **Equipes** (administrador do Hub). Crie a equipe, marque integrantes (com capacidade) e instâncias, e escolha *Automática* para distribuir. Para a distribuição rodar, ligue `OMNIRA_HUB_DISTRIBUTOR_ENABLED=true` (e, se quiser, `OMNIRA_HUB_DISTRIBUTOR_INTERVAL_SECONDS`, padrão 15) no **worker** (precisa do projetor ligado). A conversa só vai para quem tem acesso de resposta àquela instância; sem ninguém disponível ela fica na fila para assumir.
+4. **Transferir:** quem está com a conversa usa *Transferir conversa* (ou devolve à fila).
+5. **Desligar:** `OMNIRA_HUB_DISTRIBUTOR_ENABLED=false` para a distribuição; tirar os escopos do contrato corta a gestão na hora (são dados, valem no servidor).
+6. **Rollback das migrations:** `000104` e `000103` têm `down` (testados por `scripts/test-hub-migrations.sh`); desfazer 103 apaga `management_scopes` e `can_manage`.
+

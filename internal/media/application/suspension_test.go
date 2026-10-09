@@ -201,3 +201,72 @@ func TestTranscriptionRunsEveryEngineCallAndEveryWriteInsideTheGateAndNothingWhe
 		t.Fatalf("a suspended company's audio was transcribed or recorded: calls=%d reads=%d", eng.calls, files.read)
 	}
 }
+
+// Codex review: a panic recovered OUTSIDE the gate would write its failure after the gate released the company's lock, i.e. possibly after
+// a suspension. The failure of a panicking fetch/provider/engine is written INSIDE the gate, whatever step panicked.
+
+type panicFetcher struct{}
+
+func (panicFetcher) Fetch(context.Context, string) ([]byte, string, error) { panic("hostile file") }
+
+type terminalSpy struct {
+	*gatedRepo
+	wrote, outside int
+}
+
+func (r *terminalSpy) MarkTerminal(ctx context.Context, w ports.Work, st ports.Status, reason string) error {
+	r.wrote++
+	if !r.gatedRepo.gate.inside {
+		r.outside++
+	}
+	return r.gatedRepo.fakeRepo.MarkTerminal(ctx, w, st, reason)
+}
+
+type panicEngine struct{}
+
+func (panicEngine) Transcribe(context.Context, []byte, string) (ports.Analysis, error) {
+	panic("engine bug")
+}
+
+func TestAPanicOnAFileIsFailedInsideTheCompanyGate(t *testing.T) {
+	w := newWork(ports.StatusPending)
+	repo := &terminalSpy{gatedRepo: &gatedRepo{fakeRepo: newRepo(w), gate: gate{active: true}}}
+	p, err := NewProcessor(repo, newStore(), panicFetcher{}, &fakeScanner{}, DefaultConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.wrote != 1 || repo.outside != 0 {
+		t.Fatalf("the failure of a panicking fetch must be written once and INSIDE the gate: wrote=%d outside=%d", repo.wrote, repo.outside)
+	}
+	if st := repo.get(w.ID).work.Status; st != ports.StatusFailed {
+		t.Fatalf("status = %s, want failed", st)
+	}
+}
+
+func TestAPanicInVisionOrTranscriptionIsFailedInsideTheCompanyGate(t *testing.T) {
+	r := newRig(t, optedIn(), imageWork())
+	g := &gatedAnalysisRepo{fakeAnalysisRepo: r.repo, gate: gate{active: true}, t: t}
+	p, _ := NewVisionProcessor(g, r.vision, r.files, fakeTenants{cfg: optedIn()}, panicAnalyzer{}, r.ledger, nil)
+	if _, err := p.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.repo.failed != "internal_error" || g.outside != 0 {
+		t.Fatalf("vision: failed=%q writes outside the gate=%d", r.repo.failed, g.outside)
+	}
+
+	repo := &fakeAnalysisRepo{work: []ports.AnalysisWork{{ID: uuid.New(), TenantID: uuid.New(), MessageID: uuid.New(), MediaID: uuid.New(), Kind: "transcript", Attempts: 1, Mime: "audio/ogg"}}}
+	tg := &gatedAnalysisRepo{fakeAnalysisRepo: repo, gate: gate{active: true}, t: t}
+	tp, err := NewTranscriptionProcessor(tg, &fakeFiles{data: []byte("OggS....")}, panicEngine{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tp.ProcessOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.failed != "internal_error" || tg.outside != 0 {
+		t.Fatalf("transcription: failed=%q writes outside the gate=%d", repo.failed, tg.outside)
+	}
+}

@@ -20,7 +20,8 @@ export default function CompaniesPanel({ hubId, extra }: { hubId: string; extra?
     if (isUnauthorized(list.error)) handleUnauthorized();
   }, [list.error]);
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ['hub-companies', hubId] });
+  // the Access panel's overview carries each instance's delegated scopes (the "Gerenciar" switch depends on them): keep it in step
+  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['hub-companies', hubId] }), qc.invalidateQueries({ queryKey: ['hub-access', hubId] })]);
   const update = useMutation({
     mutationFn: (v: { id: string; body: { status?: 'active' | 'suspended'; capabilities?: Record<string, boolean>; management_scopes?: ManagementScope[] } }) => hubAdminAPI.update(hubId, v.id, v.body),
     onSuccess: () => { setNotice(null); void refresh(); },

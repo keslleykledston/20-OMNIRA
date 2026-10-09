@@ -131,15 +131,23 @@ func whileServing(ctx context.Context, repo any, tenant uuid.UUID, fn func(ctx c
 }
 
 func (p *Processor) handle(ctx context.Context, w ports.Work) {
-	// A panic on one hostile file must not take the worker (and every other tenant's media) down.
+	// Outside the gate nothing is written: if the gate machinery itself panics the row stays claimed and is simply retried when its lease ends.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("media: panic on %s: %v", w.ID, r)
-			p.terminal(ctx, w, ports.StatusFailed, "internal_error")
+			log.Printf("media: panic outside the company gate on %s: %v", w.ID, r)
 		}
 	}()
 	// ADR-0038: a suspended company's files are neither fetched nor scanned, and the suspension waits for one in progress
 	if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
+		// A panic on one hostile file must not take the worker (and every other tenant's media) down. It is recovered INSIDE the gate:
+		// the file's removal and its failed status are written while the company is still held active. Recovering outside would let
+		// the gate release its lock first, and the write would then land after a suspension (Codex review).
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("media: panic on %s: %v", w.ID, r)
+				p.terminal(ctx, w, ports.StatusFailed, "internal_error")
+			}
+		}()
 		switch w.Status {
 		case ports.StatusPending:
 			p.fetchAndQuarantine(ctx, w)

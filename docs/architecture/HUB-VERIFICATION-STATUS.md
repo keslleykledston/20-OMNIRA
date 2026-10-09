@@ -167,3 +167,24 @@ Mudança **só de frontend** (commit local; **não implantada**). Evidência:
 - **Não verificado:** nenhuma tela foi aberta com sessão real do Keycloak em produção; o aviso do dono de que o layout em produção difere das capturas **não** foi reproduzido (o bundle servido era o construído). O que se viu como diferente é a ausência da fase 3 e a duplicidade já descrita, corrigidas acima.
 - **Codex:** `CODEX_PLUGIN_NOT_EXECUTED` para esta mudança.
 
+## Fases 3 e 4 do ADR-0038: gestão delegada, equipes, distribuição e transferência (migrations 103 e 104) — 2026-10-09
+
+Local (commit `8398b7b`), **não implantado**. Evidência:
+
+- **POSTGRES VERIFIED** (banco descartável, papel `omnira_app` sem bypass): `internal/hub/adapters` (gestão: pilha real middleware + serviços de canal + RLS do próprio usuário; escopos separados; grant/contrato/empresa/Hub vivos; capacidade desligada ainda bloqueia; segredo fora da resposta e da auditoria; a RLS recusa sozinha o que a aplicação nunca pediria; outro Hub; lista/flag; transferência com corridas), `internal/hub/distribution` (equipes, rodízio, só quem pode responder, capacidade, fila × instância, dois workers = uma atribuição, **revogação concorrente vence**, conversa travada é pulada), `internal/worker/hubdistributor`.
+- **Mutantes (fase 3):** `scripts/test-hub-manage-mutations.sh` — todos mortos por teste real; três camadas redundantes documentadas como **não-mutantes** (o "negar" do lock isolado, o USING da política de UPDATE, o guard do `managed_instances`). Fase 4: ver abaixo.
+- **Migrations 093..104:** sobe/desce/sobe idêntico (`scripts/test-hub-migrations.sh`); toda tabela com `tenant_id` tem RLS+FORCE+política; toda função DEFINER fixa `pg_temp` por último.
+- **UNIT/Playwright mock:** Vitest 789/790 (`SettingsShell` vermelho desde antes).
+- **NOT VERIFIED:** nada foi visto com sessão real do Keycloak; nenhuma conexão de canal foi criada de verdade pelo Hub (os serviços de canal usaram sessão/probe falsos); a distribuição não rodou com conversas reais.
+
+## Revisão do Codex das fases 3 e 4 + E2E em navegador real (ADR-0038 fase 5) — 2026-10-09
+
+**Codex (task-mv0r7tzn-ip44zd, leitura somente) sobre `8945027..8398b7b`:** 0 CRITICAL, **3 HIGH, 1 MEDIUM** — todos corrigidos e provados:
+- **HIGH (70e3649)** pânico recuperado *fora* do portão da empresa gravava a falha depois de soltar o lock (poderia ser depois de uma suspensão): agora a recuperação roda **dentro** do portão (`processor`, `vision`, `transcriber`); testes `TestAPanic...` falham no código antigo e passam no novo.
+- **HIGH** conta **inativa** mantinha autoridade no Hub: `user_is_active()` (migration 103) entra em `has_hub_manage_access` e (migration **105**) em `has_active_hub_access`; sessões de conta inativa deixam de resolver (`ResolveSession`, provado sob o papel `omnira_app`). *Resíduo declarado:* tokens Bearer (JWT de ferramentas/dev) são verificados só criptograficamente.
+- **HIGH** revogação concorrente podia correr contra a chamada ao provedor: `lock_managed_tenant(tenant, user, hub)` agora prende, até o fim da requisição, empresa, Hub, contrato, vínculo, conta e grant (na ordem das rotas administrativas); teste de retenção para cada mudança (`TestHubManagerHoldsEverythingTheAuthorizationDependsOn`). *Custo aceito:* suspender/revogar espera a chamada ao provedor em curso.
+- **MEDIUM** distribuição podia passar de `max_open` com dois workers: as atribuições de uma equipe são serializadas na linha da equipe; teste com 8 distribuições concorrentes e capacidade 2. *Limite declarado:* a capacidade só decide quem a distribuição **automática** escolhe; assumir/transferir à mão não conta contra ela.
+
+**E2E em navegador real (`scripts/e2e-hub-browser.sh`, 7 cenários, 7/7):** API real (`omnira-api` com todas as flags do Hub), `omnira-hubctl`, o bundle web real servido por `vite preview` com proxy `/api`, PostgreSQL descartável com papel sem bypass e **sessões reais** (`auth_sessions`). Cobre: Conversas unificadas com logo de origem e filtro por instância (pessoa só-Hub, sem item "Hub"); assumir e responder (a mensagem cai só na instância certa); leitura somente; transferência (só entre quem pode responder, histórico e auditoria, a API recusa quem não segura); delegação (operador → administrador → agente cria a conexão de CRM pelo Hub; segredo fora de respostas e auditoria; escopo "canais" não delegado dá 403; retirar a chave corta na hora); segurança (agente não vê painel/equipes; instância sem acesso não existe); equipes + distribuição automática (rodízio 2/2, só quem pode responder, histórico como "sistema", idempotente).
+**Ainda NÃO provado:** login real do Keycloak, canal WhatsApp real (a conexão de CRM é só **armazenada**), webhooks reais, `Bearer` de usuário inativo.
+

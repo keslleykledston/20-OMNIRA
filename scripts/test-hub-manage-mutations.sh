@@ -74,7 +74,7 @@ PV=internal/hub/provisioning/service.go; CO=internal/hub/companies/service.go; H
 # has_hub_manage_access again (two independent layers: lock+eligibility, then hub-matched contract). The tests prove the pair; the
 # lock itself is proven by TestHubManagerHoldsTheCompanyActiveForTheRequest (mutants below).
 mut "the contract/hub of the path is not matched"          $MW 'WHERE c.hub_id = $1 AND c.tenant_id = $2 AND has_hub_manage_access($2, $3, NULL, $1)' 'WHERE c.tenant_id = $2 AND has_hub_manage_access($2, $3, NULL, NULL)'
-mut "the company is not held active for the request"       $MW 'SELECT lock_managed_tenant($1, $2)' 'SELECT true'
+mut "the company is not held active for the request"       $MW 'SELECT lock_managed_tenant($1, $2, $3)' 'SELECT true'
 # --- Go: permission checker
 mut "hub managers get every tenant permission"             $CK '		default:
 			return false, nil
@@ -154,9 +154,18 @@ CREATE POLICY channel_credentials_hub_manage_update" "WITH CHECK (true);
 CREATE POLICY channel_credentials_hub_manage_update"
 sqlmut "the entitlement row is hidden from the manager"    $M "USING (has_hub_manage_access(tenant_id, current_user_id()));" "USING (false);"
 sqlmut "the audit insert is refused for the manager"       $M "USING (tenant_id IS NOT NULL AND actor_id = current_user_id() AND has_hub_manage_access(tenant_id, current_user_id()));" "USING (false);"
-sqlmut "the tenant lock is not taken"                      $M "    AND public.has_hub_manage_access(p_tenant_id, p_user_id)
-  FOR SHARE OF t;" "    AND public.has_hub_manage_access(p_tenant_id, p_user_id)
-  ;"
+sqlmut "the company is not pinned for the request"         $M "  PERFORM 1 FROM public.tenants WHERE id = p_tenant_id FOR SHARE;" "  NULL;"
+sqlmut "the hub is not pinned for the request"             $M "  PERFORM 1 FROM public.service_hubs WHERE id = p_hub_id FOR SHARE;" "  NULL;"
+sqlmut "the contract is not pinned for the request"        $M "  PERFORM 1 FROM public.hub_tenant_service_contracts WHERE hub_id = p_hub_id AND tenant_id = p_tenant_id FOR SHARE;" "  NULL;"
+sqlmut "the membership is not pinned for the request"      $M "  PERFORM 1 FROM public.hub_memberships WHERE hub_id = p_hub_id AND user_id = p_user_id FOR SHARE;" "  NULL;"
+sqlmut "the account is not pinned for the request"         $M "  PERFORM 1 FROM public.users WHERE id = p_user_id FOR SHARE;" "  NULL;"
+sqlmut "the grant is not pinned for the request"           $M "  PERFORM 1 FROM public.effective_access_grants WHERE hub_id = p_hub_id AND tenant_id = p_tenant_id AND user_id = p_user_id FOR SHARE;" "  NULL;"
+sqlmut "an inactive account manages"                       $M "     AND public.user_is_active(p_user_id)
+     AND EXISTS (
+       SELECT 1
+       FROM public.hub_tenant_service_contracts c" "     AND EXISTS (
+       SELECT 1
+       FROM public.hub_tenant_service_contracts c"
 sqlmut "a hub admin is not eligible without a grant"       $M "EXISTS (SELECT 1 FROM public.roles r WHERE r.id = hm.role_id AND r.tenant_id IS NULL AND r.key = 'hub_admin')" "false"
 # NOT a mutant: dropping the caller guard of managed_instances() alone survives by design, because the function it calls
 # (has_hub_manage_access) carries the same guard: asked about somebody else it answers false for every instance, so the list is empty.

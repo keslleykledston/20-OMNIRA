@@ -1,6 +1,6 @@
 # ADR-0038 — Gestão de empresas, integrações e atendentes pelo Hub (PROPOSTO)
 
-Status: **ACEITO (direção e decisões da §9); fase 0 IMPLEMENTADA e POSTGRES VERIFIED em 2026-10-08; fase 1 (criar empresa, suspender, capacidades) IMPLEMENTADA e POSTGRES/HTTP VERIFIED em 2026-10-08; fases 2–5 NOT WIRED.**
+Status: **ACEITO (direção e decisões da §9); fase 0 IMPLEMENTADA e POSTGRES VERIFIED em 2026-10-08; fase 1 (criar empresa, suspender, capacidades) IMPLEMENTADA e POSTGRES/HTTP VERIFIED em 2026-10-08; fase 2 entregue pelo ADR-0039; fases 3 (gestão delegada de canais/integrações, migration 103) e 4 (equipes, distribuição automática, transferência, migration 104) IMPLEMENTADAS e POSTGRES/HTTP VERIFIED em 2026-10-09 (local, ainda não implantadas); fase 5 (E2E em navegador real, `scripts/e2e-hub-browser.sh`) IMPLEMENTADA e verde (7/7) em 2026-10-09.**
 Contexto anterior: ADR-0036 (Hub dentro do OMNIRA), ADR-0037 (assumir e responder pelo Hub).
 Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`) até o gate de cada fase passar.
 
@@ -188,3 +188,21 @@ Pergunta do ADR §5: os handlers de canal/integração dependem só do `TenantCo
 **Conversas completas para quem só tem grant:** pela mesma razão (ponto 3), levar o workspace inteiro (tickets, contexto, atribuição) para quem só tem grant exigiria policies de RLS em dezenas de tabelas. **Não recomendado agora.** A visão unificada continua sendo a do Hub (lista + leitura + assumir + responder texto); o que falta nela (anexos, contexto, finalizar) entra por fatias, cada uma com a política de RLS da tabela que lê.
 
 **Não feito:** nada disto está implementado; fase 3 continua `NOT WIRED`.
+
+
+## Fase 3 e fase 4 — o que foi implementado (2026-10-09)
+
+**Fase 3 — gestão delegada de canais e integrações (migration 103).** Segue o desenho do "Spike da fase 3" acima, com estas decisões:
+- Contrato: `management_scopes` (`channels` = linhas WhatsApp, `integrations` = ERP/CRM; `team`/`queues`/`settings` ficam **reservados**, a API não os aceita). Só um **operador de plataforma** altera (PATCH `/hubs/{hub}/companies/{tenant}`, auditado). Nada é delegado por padrão.
+- Pessoa: **administrador do Hub** (papel `hub_admin`) ou **grant com `can_manage`** (chave "Gerenciar" na matriz de agentes; exige grant vivo; **nunca implícita** de `can_reply`; zera ao revogar e **não volta** ao renovar o acesso).
+- Uma única definição SQL, `has_hub_manage_access(tenant, user, escopo, hub)`, alimenta as políticas de RLS de `channel_connections` (por linha: ERP = `integrations`, resto = `channels`), `channel_credentials` (segue a conexão), `tenant_entitlements` (leitura: sem ela, "sem linha" valeria como LIGADO e uma capacidade desligada deixaria de bloquear o gestor do Hub) e `audit_events` (só os eventos do próprio gestor; o INSERT ... ON CONFLICT exige o SELECT). **Sessão de sistema descartada** (desligaria a RLS de todas as empresas).
+- Aplicação: nova fonte de acesso `hub_manage` (os guards `Source=Direct` do resto do código continuam recusando); `ManageSession` abre a sessão RLS **do próprio usuário**, segura a empresa ativa durante a requisição (`lock_managed_tenant`: a suspensão espera), prova hub → contrato → papel/grant e responde **404 uniforme** a qualquer negativa. Cada permissão pergunta ao banco de novo (`channel.manage` → `channels`, `integration.manage` → `integrations`). Rotas: `/hubs/{hub}/instances/{tenant}/channels/...` (mesmos handlers); `GET /hubs/{hub}/managed`; `PUT .../access/agents/{user}/instances/{tenant}/management`.
+- Auditoria: o evento do canal leva `via=hub` e o id do Hub; segredo nunca na resposta nem na auditoria (testado).
+- **Fora desta entrega (honesto):** sincronizar templates da Meta pelo Hub (rota só do tenant); `team`/`queues`/`settings`; assistente "Nova instância" com canal + ERP no mesmo fluxo.
+
+**Fase 4 — equipes, distribuição e transferência (migration 104).**
+- Equipe (`work_pools`): integrantes com capacidade (`max_open`, padrão 10) e instâncias (ou uma fila) que atende; **no máximo uma equipe por (instância, fila)**; o integrante tem de ser do Hub (FK composta). Só administrador do Hub edita (provado dentro da transação: `authority.LockHubAdmin`, compartilhado com o painel de Acessos).
+- Distribuição automática (`round_robin`): o worker (`OMNIRA_HUB_DISTRIBUTOR_ENABLED`, desligado por padrão) entrega a conversa aberta e sem dono ao integrante **menos carregado** (empate: quem espera há mais tempo) **que ainda tem grant vivo de resposta para a fila da conversa**; a autorização da pessoa escolhida é **fixada (`FOR SHARE`) e reprovada na própria transação**; conversa `FOR UPDATE SKIP LOCKED`; empresa suspensa não é tocada; histórico `assignment_events` marcado como sistema.
+- Transferência/devolução à fila: só quem **segura** a conversa; o destino precisa de grant vivo de resposta (revogação concorrente vence); lista de candidatos pelo servidor; histórico e auditoria dizem quem passou para quem.
+- A equipe **não concede acesso**: só escolhe entre quem já tem.
+- **Fora desta entrega:** habilidades (`skills`), filtro por presença, SLA por equipe, reatribuição por administrador.

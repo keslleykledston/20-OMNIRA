@@ -62,14 +62,21 @@ func (p *TranscriptionProcessor) ProcessOnce(ctx context.Context) (int, error) {
 }
 
 func (p *TranscriptionProcessor) handle(ctx context.Context, w ports.AnalysisWork) {
-	defer func() {
+	defer func() { // outside the gate nothing is written (the job is retried when its lease ends)
 		if r := recover(); r != nil {
-			log.Printf("transcription: panic on %s: %v", w.ID, r)
-			_ = p.repo.FailAnalysis(ctx, w, "internal_error")
+			log.Printf("transcription: panic outside the company gate on %s: %v", w.ID, r)
 		}
 	}()
 	// ADR-0038: a suspended company's audio is not transcribed, and the suspension waits for the one in progress
-	if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {
+	if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
+		defer func() { // recovered INSIDE the gate, so the failure is written while the company is still held active
+			if r := recover(); r != nil {
+				log.Printf("transcription: panic on %s: %v", w.ID, r)
+				_ = p.repo.FailAnalysis(ctx, w, "internal_error")
+			}
+		}()
+		p.process(ctx, w)
+	}) {
 		p.metrics.Inc("transcribe", "company_suspended")
 	}
 }

@@ -89,7 +89,7 @@ func (t *trackedWriter) Write(b []byte) (int, error) {
 func resolveManageContext(ctx context.Context, pool *pgxpool.Pool, hubID, tenantID, actor uuid.UUID) (*tenancydomain.TenantContext, error) {
 	q := platformdb.QuerierFromContext(ctx, pool)
 	var locked *bool
-	if err := q.QueryRow(ctx, `SELECT lock_managed_tenant($1, $2)`, tenantID, actor).Scan(&locked); err != nil {
+	if err := q.QueryRow(ctx, `SELECT lock_managed_tenant($1, $2, $3)`, tenantID, actor, hubID).Scan(&locked); err != nil {
 		return nil, err
 	}
 	if locked == nil || !*locked {

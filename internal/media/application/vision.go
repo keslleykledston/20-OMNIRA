@@ -90,14 +90,21 @@ func (p *VisionProcessor) skip(ctx context.Context, w ports.AnalysisWork, reason
 }
 
 func (p *VisionProcessor) handle(ctx context.Context, w ports.AnalysisWork) {
-	defer func() {
+	defer func() { // outside the gate nothing is written (the job is retried when its lease ends)
 		if r := recover(); r != nil {
-			log.Printf("vision: panic on %s: %v", w.ID, r)
-			_ = p.repo.FailAnalysis(ctx, w, "internal_error")
+			log.Printf("vision: panic outside the company gate on %s: %v", w.ID, r)
 		}
 	}()
 	// ADR-0038: nothing leaves the server for a suspended company, and the suspension waits for the call in progress
-	if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {
+	if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
+		defer func() { // recovered INSIDE the gate, so the failure is written while the company is still held active
+			if r := recover(); r != nil {
+				log.Printf("vision: panic on %s: %v", w.ID, r)
+				_ = p.repo.FailAnalysis(ctx, w, "internal_error")
+			}
+		}()
+		p.process(ctx, w)
+	}) {
 		p.metrics.Inc("vision", "company_suspended")
 	}
 }

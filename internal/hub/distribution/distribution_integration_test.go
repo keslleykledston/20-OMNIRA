@@ -517,3 +517,31 @@ func TestPending_ListsOnlyWhatARoundRobinPoolCouldTake(t *testing.T) {
 }
 
 var _ = pgx.ErrNoRows
+
+// Codex review: two workers distributing DIFFERENT conversations at the same time must not both see room for the last slot.
+func TestDistribute_CapacityIsNotOvershotByConcurrentWorkers(t *testing.T) {
+	w := newWorld(t)
+	a := w.agent("a")
+	w.grant(a, "A", true)
+	w.pool("round_robin", []string{"A"}, a)
+	w.exec(`UPDATE work_pool_members SET max_open = 2 WHERE user_id = $1`, a)
+	var items []uuid.UUID
+	for i := 0; i < 8; i++ {
+		_, item := w.item("A", true)
+		items = append(items, item)
+	}
+	var wg sync.WaitGroup
+	for _, item := range items {
+		wg.Add(1)
+		go func(item uuid.UUID) {
+			defer wg.Done()
+			if _, err := w.svc.Distribute(w.ctx, w.hub, item); err != nil {
+				t.Error(err)
+			}
+		}(item)
+	}
+	wg.Wait()
+	if n := w.count(`SELECT count(*) FROM conversations WHERE assigned_to_user_id = $1 AND status <> 'closed'`, a); n != 2 {
+		t.Fatalf("a member with capacity 2 must hold exactly 2 after eight concurrent distributions, holds %d", n)
+	}
+}

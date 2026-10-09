@@ -26,7 +26,7 @@ run() { # the host toolchain with its warm module and build caches (a cold conta
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -run 'TestHubReply|TestHub_Suspended|TestHubAccess|TestPlatformOperator|TestDelegatedSender|TestResolveHubAccess' ./internal/hub/adapters ./internal/hub/application ./internal/hub/provisioning ./internal/messages/application 2>&1
+    go test -count=1 -run 'TestHubReply|TestHub_Suspended|TestHubAccess|TestPlatformOperator|TestDelegatedSender|TestResolveHubAccess|TestInactiveAccount' ./internal/hub/adapters ./internal/hub/application ./internal/hub/provisioning ./internal/messages/application 2>&1
 }
 # NOTE: exit status of a pipeline ending in grep is grep's, so the verdict is read from the output.
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 4 ]; }
@@ -97,9 +97,11 @@ PY
   mkdb "$WORK/mig"
   killed "$1" "$(run || true)"
 }
-sqlmut "SQL access function ignores can_reply"            000098_hub_access_requires_active_tenant.up.sql "      AND (NOT p_require_reply OR g.can_reply)
+sqlmut "SQL access function ignores can_reply"            000105_hub_access_requires_active_user.up.sql "      AND (NOT p_require_reply OR g.can_reply)
 " ""
-sqlmut "SQL access function ignores the company's status" 000098_hub_access_requires_active_tenant.up.sql "      AND t.status = 'active'
+sqlmut "SQL access function ignores the company's status" 000105_hub_access_requires_active_user.up.sql "      AND t.status = 'active'
+" ""
+sqlmut "SQL access function accepts an inactive account"  000105_hub_access_requires_active_user.up.sql "     AND public.user_is_active(p_user_id)
 " ""
 sqlmut "is_platform_operator answers for any user"        000099_platform_operators.up.sql "SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
      AND EXISTS (SELECT 1 FROM public.platform_operators" "SELECT true

@@ -29,6 +29,7 @@ func TestParse(t *testing.T) {
 		{"platform operator list needs nothing", []string{"--operator", "ana", "platform-operator", "list"}, func(c command) bool { return c.action == "list" }},
 		{"show", []string{"--operator", "ana", "show", "--hub", hub.String()}, func(c command) bool { return c.group == "show" && c.hub == hub }},
 		{"reconcile needs no hub", []string{"--operator", "ana", "reconcile"}, func(c command) bool { return c.group == "reconcile" && c.hub == uuid.Nil }},
+		{"distribute needs no hub", []string{"--operator", "ana", "distribute"}, func(c command) bool { return c.group == "distribute" && c.hub == uuid.Nil }},
 	}
 	for _, c := range ok {
 		got, err := parse(c.args)
