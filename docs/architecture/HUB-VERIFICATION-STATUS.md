@@ -290,3 +290,14 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Gate de integração completo:** 33 pacotes ok; migrations 093..109 sobem/descem/sobem idênticas.
 - **Revisão Codex (2026-10-09):** CRITICAL 0, HIGH 1, MEDIUM 4, LOW 1. H-01 improcedente (sem coluna de estado em `hub_memberships`), M-03 falso (a 109 usa `NULLIF`), M-04 e L-01 corrigidos com teste e mutante, M-02 e M-01 aceitos (ADR-0040 §12). Nenhum CRITICAL/HIGH em aberto.
 - **NÃO provado:** login real do Keycloak; o contexto completo com uma concessão real de produção (nenhum teto/chave existe lá); desempenho (`EXPLAIN`) das políticas em tabelas grandes; tempo real delegado; classificar/editar contato e chamado no ERP (fase 04).
+
+## Implantação (2026-10-09, LAB) — sha-b9dbfee: ADR-0040 fase 03 (migration 109), flag desligada
+
+- **Antes:** backup `omnira_dev_20261009T214524Z.dump` (local, disco externo e nuvem, checksum conferido); tags de rollback `rollback-pre-phase03-20261009-1745` (api, worker, web); `.env` antigo em `/data/cafegpt/tmp/env-pre-phase03-20261009-1745` (0600).
+- **Migration aplicada ao banco vivo:** 000109 (de 000108). Produção: 3 contratos e 3 concessões, **nenhum com teto ou chaves delegadas** (nada a migrar).
+- **Imagens** `sha-b9dbfee` (api, worker, web) construídas de um worktree limpo do HEAD (removido depois); recriadas e saudáveis; id da imagem em uso = id da tag; bundle servido (`index-DEu53mtj.js`) = bundle construído e contém o modo "Atendendo pelo Hub".
+- **`OMNIRA_HUB_SERVE_ENABLED`: vazia = DESLIGADA.** Com ela desligada o cabeçalho de contexto é recusado (403), nenhuma instância anuncia o contexto completo e o comportamento visível é o da seção anterior (abas, visão de texto do Hub).
+- **Conferido no ar:** rotas de instância, de Hub e de mídia por caminho respondem 401 sem login (com e sem cabeçalho); funções novas executáveis pela role da aplicação; as 5 políticas novas presentes; 0 funções DEFINER sem `pg_temp` fixado; 0 panics e 0 erros nos logs.
+  **Prova só-leitura no banco real, com a role da aplicação:** um membro real continua sendo membro e enxergando as conversas da sua instância sem contexto de atuação; a mesma pessoa, com um contexto de atuação, deixa de ser membro (0 conversas), como projetado. Nada foi gravado (ROLLBACK).
+- **NÃO verificado em produção:** nenhuma tela com login real do Keycloak; o contexto completo com concessão real (precisa de teto + chaves via `hubctl serving ...` e da flag; ver `docs/ops/HUB-PROVISIONING.md`).
+- **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase03-20261009-1745 20-omnira-<svc>:latest` + `docker compose up -d --no-deps --force-recreate api worker web`; a 109 tem `down` testado e as imagens antigas funcionam com o esquema novo (as funções de membro só ganharam uma cláusula que vale sempre fora do contexto delegado).
