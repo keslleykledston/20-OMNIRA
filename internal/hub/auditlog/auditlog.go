@@ -83,7 +83,8 @@ func ParseCursor(token string) (*Cursor, error) {
 // cursor of the previous page.
 //
 // Which events belong to THIS hub (Codex review: a company may have a contract with several hubs): (1) every event the writer attributed to this hub
-// (metadata hub_id = this hub), whatever the company; (2) events about one of the hub's instances that carry NO hub attribution at all (the company's
+// (metadata hub_id = this hub) about this hub itself (no company) or about one of ITS instances - never a company without a contract with this hub,
+// whatever the metadata claims; (2) events about one of the hub's instances that carry NO hub attribution at all (the company's
 // own channel and status changes). An event attributed to ANOTHER hub is never returned, even for a shared company.
 func (s *Service) List(ctx context.Context, actor, hub uuid.UUID, tenant *uuid.UUID, after *Cursor, limit int) (Page, error) {
 	if actor == uuid.Nil || hub == uuid.Nil {
@@ -115,7 +116,11 @@ func (s *Service) List(ctx context.Context, actor, hub uuid.UUID, tenant *uuid.U
 			SELECT e.id, e.created_at, e.action, e.tenant_id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name, ''),
 			       e.actor_id, COALESCE(u.email, ''), COALESCE(u.display_name, ''), COALESCE(e.metadata, '{}'::jsonb)
 			FROM (
-			  (SELECT e.* FROM audit_events e WHERE e.metadata ->> 'hub_id' = $1::text AND `+kinds+` ORDER BY e.created_at DESC, e.id DESC LIMIT $5)
+			  (SELECT e.* FROM audit_events e
+			    WHERE e.metadata ->> 'hub_id' = $1::text
+			      AND (e.tenant_id IS NULL OR e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = $1::uuid))
+			      AND `+kinds+`
+			    ORDER BY e.created_at DESC, e.id DESC LIMIT $5)
 			  UNION ALL
 			  (SELECT e.* FROM audit_events e
 			    WHERE NOT (e.metadata ? 'hub_id') AND e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = $1::uuid) AND `+kinds+`

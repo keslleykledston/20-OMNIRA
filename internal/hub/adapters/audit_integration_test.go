@@ -101,8 +101,10 @@ func TestAudit_OnlyAnAdminOfTheHubSeesItsInstancesConfigurationChanges(t *testin
 	w.exec(`INSERT INTO hub_tenant_service_contracts (id, hub_id, tenant_id, valid_from) VALUES ($1, $2, $3, now() - interval '1 day')`, uuid.New(), otherHub, tA)
 	w.auditEvent(&tA, &otherAdmin, "hub.grant.granted", `{"hub_id":"`+otherHub.String()+`","mode":"reply","name":"SO-DO-OUTRO-HUB"}`, now.Add(-30*time.Second))
 	w.auditEvent(&tA, &admin, "channel.connection_created", `{"provider":"waha","name":"proprio-da-empresa"}`, now.Add(-90*time.Second))
-	// a foreign company carrying THIS hub's id in its metadata is this hub's own history, but a foreign company's unattributed event is not ours
+	// a foreign company's unattributed event is not ours; nor is an event about a company WITHOUT a contract with this hub, even if its metadata
+	// carries this hub's id (the metadata is a claim, the contract is the fact)
 	w.auditEvent(&foreign, &admin, "channel.connection_created", `{"provider":"waha","name":"empresa-alheia"}`, now.Add(-45*time.Second))
+	w.auditEvent(&foreign, &admin, "hub.grant.granted", `{"hub_id":"`+w.hub.String()+`","name":"empresa-alheia-com-id-deste-hub"}`, now.Add(-46*time.Second))
 
 	for name, who := range map[string]uuid.UUID{"agent": agent, "admin of another hub": otherAdmin, "anonymous": uuid.Nil} {
 		want := http.StatusNotFound

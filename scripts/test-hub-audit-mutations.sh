@@ -71,7 +71,10 @@ mut "anybody may read the audit"                         $A '		if !ok {
 		}' '		if false && !ok {
 			return ErrForbidden
 		}'
-mut "events attributed to another hub are listed"        $A "(SELECT e.* FROM audit_events e WHERE e.metadata ->> 'hub_id' = \$1::text AND" "(SELECT e.* FROM audit_events e WHERE \$1::text IS NOT NULL AND"
+mut "events attributed to another hub are listed"        $A "WHERE e.metadata ->> 'hub_id' = \$1::text
+			      AND (e.tenant_id" "WHERE \$1::text IS NOT NULL
+			      AND (e.tenant_id"
+mut "an event claiming this hub about a company without a contract is listed" $A "AND (e.tenant_id IS NULL OR e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = \$1::uuid))" "AND (\$1::text IS NOT NULL)"
 mut "a foreign company's unattributed events are listed" $A "AND e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = \$1::uuid) AND" "AND \$1::text IS NOT NULL AND"
 mut "a shared company's other-hub events leak in"        $A "WHERE NOT (e.metadata ? 'hub_id') AND e.tenant_id IN" "WHERE e.tenant_id IN"
 mut "message and conversation traffic is listed"         $A "			  AND e.action NOT LIKE 'hub.message.%' AND e.action NOT LIKE 'hub.conversation.%'" ""
