@@ -9,14 +9,19 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/access"
 	"github.com/omnira/omnira/internal/platform/authn"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 type signIn struct {
@@ -403,5 +408,175 @@ func TestAccessInvite_AnInactiveAccountIsTreatedLikeNoAccountAndAnotherHubCannot
 	}
 	if w.pending(w.e("inativa")) != 1 {
 		t.Fatal("a stranger cancelled the authorization")
+	}
+}
+
+// ---- Codex review of 4bfcf4e: the application is atomic, on one connection, and under the locks that matter.
+
+// inFlight runs apply in a goroutine and proves it does NOT finish while the held transaction is still open, then commits it.
+func inFlight(t *testing.T, w *world, hold func(tx pgxTx), apply func() error) error {
+	t.Helper()
+	tx, err := w.owner.Begin(w.ctx)
+	w.must(err)
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	hold(tx)
+	done := make(chan error, 1)
+	go func() { done <- apply() }()
+	select {
+	case err := <-done:
+		t.Fatalf("the application finished (%v) while a conflicting change was still in flight: it did not wait for it", err)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	w.must(tx.Commit(w.ctx))
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(20 * time.Second):
+		t.Fatal("the application never finished after the change committed")
+		return nil
+	}
+}
+
+type pgxTx interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func (w *world) execIn(tx pgxTx, sql string, args ...any) {
+	w.t.Helper()
+	_, err := tx.Exec(w.ctx, sql, args...)
+	w.must(err)
+}
+
+func (w *world) verifiedUser(email string) uuid.UUID {
+	u := w.user("v")
+	w.email(u, email)
+	w.exec(`INSERT INTO user_identities (user_id, issuer, subject, email, email_verified) VALUES ($1, 'https://idp.test/realm', $2, $3, true)`, u, "sub-"+u.String(), email)
+	return u
+}
+
+func TestAccessInvite_ApplyingWaitsForADemotionOfTheAuthorThatIsInFlightAndThenVoids(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	author := w.hubAdmin("author")
+	api.invite(author, w.e("atrasada"), api.tenantAccess("A", "reply"))
+	user := w.verifiedUser(w.e("atrasada"))
+
+	err := inFlight(t, w, func(tx pgxTx) {
+		w.execIn(tx, `UPDATE hub_memberships SET role_id = $3 WHERE hub_id = $1 AND user_id = $2`, w.hub, author, w.roleHubAgent)
+	}, func() error { _, err := api.svc.ApplyPreauthorizations(w.ctx, user); return err })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.count(`SELECT count(*) FROM hub_memberships WHERE user_id = $1`, user) != 0 || w.reads(user, "A").conversations != 0 {
+		t.Fatal("an authorization was applied after its author was demoted")
+	}
+	if w.preStatus(w.e("atrasada")) != "void" {
+		t.Fatalf("status %q, want void", w.preStatus(w.e("atrasada")))
+	}
+}
+
+func TestAccessInvite_ApplyingWaitsForASuspensionThatIsInFlightAndSkipsTheCompany(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	author := w.hubAdmin("author")
+	api.invite(author, w.e("suspensa"), api.tenantAccess("A", "reply"), api.tenantAccess("B", "read"))
+	user := w.verifiedUser(w.e("suspensa"))
+
+	err := inFlight(t, w, func(tx pgxTx) {
+		w.execIn(tx, `UPDATE tenants SET status = 'suspended' WHERE id = $1`, w.tenant["B"])
+	}, func() error { _, err := api.svc.ApplyPreauthorizations(w.ctx, user); return err })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.count(`SELECT count(*) FROM effective_access_grants WHERE user_id = $1 AND tenant_id = $2`, user, w.tenant["B"]) != 0 {
+		t.Fatal("a grant was written for a company whose suspension was in flight")
+	}
+	if w.reads(user, "A").conversations == 0 {
+		t.Fatal("the other company must still be applied")
+	}
+}
+
+func TestAccessInvite_ManySimultaneousFirstSignInsDoNotExhaustASmallPool(t *testing.T) {
+	w := newWorld(t)
+	admin := w.hubAdmin("admin")
+	_, appURL := testhelpers.RequireIntegrationDatabase(t)
+	cfg, err := pgxpool.ParseConfig(appURL)
+	w.must(err)
+	cfg.MaxConns = 2 // the old design held one connection and asked for another: with 2 connections, 2 sign-ins deadlock each other
+	small, err := pgxpool.NewWithConfig(w.ctx, cfg)
+	w.must(err)
+	defer small.Close()
+	svc, err := access.New(small)
+	w.must(err)
+	api := newAccessAPI(t, w)
+	var users []uuid.UUID
+	for i := 0; i < 8; i++ {
+		email := w.e("pool" + strconv.Itoa(i))
+		api.invite(admin, email, api.tenantAccess("A", "read"), api.tenantAccess("B", "reply"))
+		users = append(users, w.verifiedUser(email))
+	}
+	ctx, cancel := context.WithTimeout(w.ctx, 25*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, u := range users {
+		wg.Add(1)
+		go func(u uuid.UUID) {
+			defer wg.Done()
+			if _, err := svc.ApplyPreauthorizations(ctx, u); err != nil {
+				t.Errorf("apply on a 2-connection pool: %v", err)
+			}
+		}(u)
+	}
+	wg.Wait()
+	for _, u := range users {
+		if w.reads(u, "A").conversations == 0 || w.reads(u, "B").conversations == 0 {
+			t.Fatal("a sign-in on the small pool was not applied")
+		}
+	}
+}
+
+func TestAccessInvite_ApplyingIsAllOrNothing(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	api.invite(admin, w.e("atomica"), api.tenantAccess("A", "reply"), api.tenantAccess("B", "read"))
+	user := w.verifiedUser(w.e("atomica"))
+	// a failure at the very last step (the audit row of the application) must undo the membership and both grants
+	w.exec(`CREATE OR REPLACE FUNCTION zz_fail_preauth_audit() RETURNS trigger AS $$ BEGIN
+	          IF NEW.action = 'hub.preauthorization.applied' AND NEW.actor_id = '` + user.String() + `' THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`)
+	w.exec(`CREATE TRIGGER zz_fail_preauth_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION zz_fail_preauth_audit()`)
+	t.Cleanup(func() {
+		_, _ = w.owner.Exec(context.Background(), `DROP TRIGGER IF EXISTS zz_fail_preauth_audit ON audit_events`)
+		_, _ = w.owner.Exec(context.Background(), `DROP FUNCTION IF EXISTS zz_fail_preauth_audit()`)
+	})
+	if _, err := api.svc.ApplyPreauthorizations(w.ctx, user); err == nil {
+		t.Fatal("the injected failure did not surface")
+	}
+	if w.count(`SELECT count(*) FROM hub_memberships WHERE user_id = $1`, user) != 0 || w.count(`SELECT count(*) FROM effective_access_grants WHERE user_id = $1`, user) != 0 {
+		t.Fatal("a failed application left a membership or grants behind")
+	}
+	if w.pending(w.e("atomica")) != 1 {
+		t.Fatal("a failed application must leave the authorization pending (it is retried at the next sign-in)")
+	}
+	w.exec(`DROP TRIGGER zz_fail_preauth_audit ON audit_events`)
+	if n, err := api.svc.ApplyPreauthorizations(w.ctx, user); err != nil || n != 1 || w.reads(user, "A").conversations == 0 {
+		t.Fatalf("the retry: n=%d err=%v", n, err)
+	}
+}
+
+func TestAccessInvite_TheApplicationRoleCannotEraseTheTrail(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	api.invite(admin, w.e("trilha"), api.tenantAccess("A", "read"))
+	err := platformdb.WithTenantSession(w.ctx, w.app, uuid.Nil, true, func(c context.Context) error {
+		_, err := platformdb.QuerierFromContext(c, w.app).Exec(c, `DELETE FROM hub_preauthorizations WHERE hub_id = $1`, w.hub)
+		return err
+	})
+	if err == nil {
+		t.Fatal("the application role (even in a system session) could delete the authorization trail")
+	}
+	if w.count(`SELECT count(*) FROM hub_preauthorizations WHERE hub_id = $1`, w.hub) != 1 {
+		t.Fatal("the trail changed")
 	}
 }

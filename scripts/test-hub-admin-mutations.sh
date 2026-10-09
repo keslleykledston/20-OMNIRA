@@ -22,11 +22,11 @@ mkdb() { # mkdb <migrations dir>
     -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=$DB postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
   docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 }
-run() {
-  docker run --rm --network host -v "$PWD":/app -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false -e OMNIRA_INTEGRATION_TEST=1 \
-    -e OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    -e OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    golang:1.25 go test -count=1 -run 'TestHubAdmin|TestHub_Suspended|TestConnectionManagementHonours' ./internal/hub/adapters ./internal/channels/application 2>&1
+run() { # the host toolchain with its warm module and build caches (a cold container recompiles everything per mutant)
+  OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
+    OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
+    OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
+    go test -count=1 -run 'TestHubAdmin|TestHub_Suspended|TestConnectionManagementHonours' ./internal/hub/adapters ./internal/channels/application 2>&1
 }
 # NOTE: exit status of a pipeline ending in grep is grep's, so the verdict is read from the output.
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 2 ]; }

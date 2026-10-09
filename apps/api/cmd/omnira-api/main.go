@@ -125,6 +125,9 @@ func main() {
 				log.Printf("hub access: authorizations by e-mail are disabled: %v", accessErr)
 			} else {
 				resolver.WithAfterProvision(func(ctx context.Context, userID uuid.UUID) {
+					// bounded: a sign-in never waits long for this (it is one short transaction)
+					ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+					defer cancel()
 					if n, err := accessSvc.ApplyPreauthorizations(ctx, userID); err != nil {
 						log.Printf("hub access: applying the authorizations waiting for a new sign-in: %v", err)
 					} else if n > 0 {

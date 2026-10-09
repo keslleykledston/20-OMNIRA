@@ -290,3 +290,23 @@ func TestSuspendedCompanysFlowsNeitherStartNorAdvance(t *testing.T) {
 		t.Fatalf("after the reactivation the timeout must fire: %+v status=%s", r, s.runStatus())
 	}
 }
+
+// Codex M / ADR-0038: the sweeper does not even tidy the runs of a suspended company (a run of a closed conversation is
+// cancelled only after the reactivation).
+func TestSweeperDoesNotCancelRunsOfASuspendedCompany(t *testing.T) {
+	s := newStack(t)
+	s.publish()
+	s.ingest("oi", true)
+	if err := s.handler.Handle(context.Background(), s.envelopes()[0]); err != nil {
+		t.Fatal(err)
+	}
+	s.exec(`UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, s.conv)
+	s.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, s.env.TenantA)
+	if r := s.sweeper.Tick(context.Background()); r.Cancelled != 0 || s.runStatus() != "waiting_input" {
+		t.Fatalf("a suspended company's run was cancelled: %+v status=%s", r, s.runStatus())
+	}
+	s.exec(`UPDATE tenants SET status='active' WHERE id=$1`, s.env.TenantA)
+	if r := s.sweeper.Tick(context.Background()); r.Cancelled != 1 || s.runStatus() != "cancelled" {
+		t.Fatalf("after the reactivation the run must be cancelled: %+v status=%s", r, s.runStatus())
+	}
+}

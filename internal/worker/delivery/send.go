@@ -23,6 +23,9 @@ import (
 // consumer terminates it instead of redelivering.
 var ErrPermanent = errors.New("channel delivery: permanent job error")
 
+// ErrTenantSuspended: the company was suspended while the attempt was running (ADR-0038); nothing is sent.
+var ErrTenantSuspended = errors.New("channel delivery: company is suspended")
+
 // OutboundJob is the persisted state needed to deliver one queued message.
 type OutboundJob struct {
 	MessageID    uuid.UUID
@@ -266,6 +269,8 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 			return genErr
 		})
 		switch {
+		case errors.Is(err, ErrTenantSuspended):
+			return h.failSuspended(ctx, messageID)
 		case errors.Is(err, ports.ErrCapabilityNotSupported):
 			// Provider has no stable-id mechanism: fall back to the
 			// pre-PILOT.4A1 behavior (message id as the idempotency key) —

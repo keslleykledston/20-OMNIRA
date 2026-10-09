@@ -394,3 +394,42 @@ func TestAStalledWorkerCannotMoveAJobAnotherWorkerNowHolds(t *testing.T) {
 		t.Fatalf("the current holder must be able to complete: ok=%v err=%v", ok, err)
 	}
 }
+
+// Codex H2 / ADR-0038: a suspended company's AI jobs are not claimed (no pipeline, no cost, no tickets or summaries while it
+// is suspended); the pending job is untouched and is taken after the reactivation.
+func TestASuspendedCompanysJobsAreNotClaimedUntilReactivated(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	msg := e.message(a.id, a.conversation, "x")
+	store := NewPostgresJobStore(e.app)
+	if _, err := store.EnsureFromEvent(e.ctx, cnv(msg), application.PipelineVersion); err != nil {
+		t.Fatal(err)
+	}
+	e.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, a.id)
+	claimed, err := store.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range claimed {
+		if j.TenantID == a.id {
+			t.Fatalf("a suspended company's job was claimed: %+v", j)
+		}
+	}
+	var state string
+	_ = e.seed.QueryRow(e.ctx, `SELECT state FROM intelligence_jobs WHERE tenant_id=$1`, a.id).Scan(&state)
+	if state != "pending" {
+		t.Fatalf("the job must stay pending, got %q", state)
+	}
+	e.exec(`UPDATE tenants SET status='active' WHERE id=$1`, a.id)
+	claimed, err = store.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, j := range claimed {
+		found = found || j.TenantID == a.id
+	}
+	if !found {
+		t.Fatal("after the reactivation the job must be claimed")
+	}
+}

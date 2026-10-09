@@ -3,6 +3,7 @@ package delivery_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -217,6 +218,17 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 	}
 	if s, p, r := row(m4b); s != "failed" || r != "company_suspended" || p != "" || sender.calls != callsBefore {
 		t.Fatalf("suspended company: status=%s provider=%q reason=%q calls %d->%d", s, p, r, callsBefore, sender.calls)
+	}
+	execInTenant(tenantA, `UPDATE tenants SET status = 'active' WHERE id = $1`, tenantA)
+
+	// Codex M / ADR-0038: the provider-id reservation (a write that precedes the send) is refused for a suspended company too.
+	m4c := queue(conv, "reserva durante a suspensao")
+	execInTenant(tenantA, `UPDATE tenants SET status = 'suspended' WHERE id = $1`, tenantA)
+	if _, err := store.EnsureReservedProviderMessageID(ctx, m4c, func(context.Context) (string, error) { return "wamid.reserva", nil }); !errors.Is(err, delivery.ErrTenantSuspended) {
+		t.Fatalf("reserving an id for a suspended company: %v, want ErrTenantSuspended", err)
+	}
+	if _, p, _ := row(m4c); p != "" {
+		t.Fatal("a suspended company's message got a provider id")
 	}
 	execInTenant(tenantA, `UPDATE tenants SET status = 'active' WHERE id = $1`, tenantA)
 

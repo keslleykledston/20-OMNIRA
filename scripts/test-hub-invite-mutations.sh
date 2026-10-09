@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=omnira-hubinvmut-$$; DB=omnira_test_invmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig"
-FILES="internal/hub/access/invitations.go internal/platform/authn/postgres.go"
+FILES="internal/hub/access/invitations.go internal/platform/authn/postgres.go internal/hub/provisioning/service.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -58,12 +58,12 @@ mut "an unverified address receives the authorization" $I 'AND i.email_verified)
 mut "an expired authorization takes effect"            $I "WHERE email = \$1 AND status = 'pending' AND expires_at > now() ORDER BY created_at FOR UPDATE" "WHERE email = \$1 AND status = 'pending' ORDER BY created_at FOR UPDATE"
 mut "the author's authority is not rechecked"          $I 'if !live {' 'if !live && false {'
 mut "the pending rows are not locked"                  $I 'ORDER BY created_at FOR UPDATE' 'ORDER BY created_at'
-mut "inviting a hub admin demotes them"                $I 'if role == nil || *role != provisioning.RoleAdmin {' 'if role == nil || *role != provisioning.RoleAdmin || true {'
+mut "inviting a hub admin demotes them"                $I 'if role != provisioning.RoleAdmin {' 'if role != provisioning.RoleAdmin || true {'
 mut "a company suspended meanwhile fails the rest"     $I 'if tolerant && errors.Is(err, ErrNotFound) {' 'if false && errors.Is(err, ErrNotFound) {'
 mut "asking again stacks instead of replacing"         $I "WHERE hub_id = \$1 AND email = \$2 AND status = 'pending'\`, hub, e)" "WHERE hub_id = \$1 AND email = \$2 AND status = 'nonexistent'\`, hub, e)"
 mut "an inactive account counts as existing"           $I "WHERE lower(email) = \$1 AND status = 'active' LIMIT 2" "WHERE lower(email) = \$1 LIMIT 2"
 mut "the company is not checked at invite time"        $I 'for _, a := range access {
-			if err := requireContract(c, q, hub, a.TenantID); err != nil {
+			if err := requireOpenCompany(c, q, hub, a.TenantID); err != nil {
 				return err
 			}
 		}' '_ = access'
@@ -78,5 +78,22 @@ mut "an applied authorization is not marked applied"   $I "SET status = 'applied
 # NOT a mutant: dropping the HANDLER's admin check alone survives by design, because the service asks the database again inside its
 # own transaction (access.Service.tx): "who may ask" has two independent layers and the tests prove the pair (hub agent, company
 # admin and anonymous are refused, nothing is written). Removing both layers at once is not mutated here.
+mut "the author's membership is not pinned while applying" $I '{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2 FOR SHARE`, []any{hub, person}},' '{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, []any{hub, person}},'
+mut "the company is not pinned while applying"         $I 'if _, err := platformdb.LockTenantActive(ctx, q, tenant); err != nil {
+		return err
+	}' '_ = platformdb.LockTenantActive'
+mut "the application opens its own connections again" internal/hub/provisioning/service.go 'if q, ok := ctx.Value(joinKey{}).(platformdb.Querier); ok {' 'if q, ok := ctx.Value(joinKey{}).(platformdb.Querier); ok && false {'
 mut "the sign-in hook never runs"                      internal/platform/authn/postgres.go 'if err == nil && r.afterProvision != nil {' 'if false && err == nil && r.afterProvision != nil {'
+# SQL layer: the trail cannot be erased by the application role (migration 102)
+rm -rf "$WORK/mig"; mkdir -p "$WORK/mig"; cp migrations/*.sql "$WORK/mig/"
+python3 - "$WORK/mig/000102_hub_preauthorizations.up.sql" <<'PY'
+import sys
+p=sys.argv[1]; s=open(p).read()
+a="REVOKE DELETE, TRUNCATE ON hub_preauthorizations FROM omnira_app;"
+assert a in s, "SQL mutation target not found"
+open(p,'w').write(s.replace(a,"",1))
+PY
+mkdb "$WORK/mig"
+killed "the application role can delete the trail" "$(run || true)"
+mkdb "$PWD/migrations"
 echo "PASS: every mutant was killed"

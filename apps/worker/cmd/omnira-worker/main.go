@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
@@ -428,7 +429,16 @@ func main() {
 		topicRepo := intelligenceadapters.NewPostgresTopicRepository(dbPool)
 		routingSvc := intelligenceapp.NewRoutingService(intelligenceadapters.NewPostgresRoutingRepository(dbPool), topicRepo, intelligenceFlags, intelligencedomain.DefaultRoutingConfig(), intelligenceCounters)
 		session := func(ctx context.Context, tenantID uuid.UUID, fn func(context.Context) error) error {
-			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, fn)
+			return platformdb.WithSystemTenantSession(ctx, dbPool, tenantID, func(c context.Context) error {
+				// ADR-0038: a company suspended after its job was claimed is not processed (the claim already skips
+				// suspended companies); the job is retried later like any transient condition.
+				if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, dbPool), tenantID); err != nil {
+					return err
+				} else if !active {
+					return errors.New("company is suspended")
+				}
+				return fn(c)
+			})
 		}
 		var pipeline intelligenceapp.Pipeline = intelligenceapp.RoutingPipeline{Routing: routingSvc}
 		if intelligenceFlags.TopicSummariesEnabled {

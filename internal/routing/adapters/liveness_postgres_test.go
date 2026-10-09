@@ -382,3 +382,25 @@ func TestActiveQueuesForAgent_UnavailableMember_IsExcluded(t *testing.T) {
 		t.Fatalf("expected no eligible queues for an unavailable member, got %v", queueIDs)
 	}
 }
+
+// Codex H1 / ADR-0038: the liveness sweep does not re-trigger the assignment of a suspended company's conversations, so
+// nothing is assigned while it is suspended; after the reactivation the same conversation is picked up.
+func TestRetrigger_SuspendedCompany_IsNeverRetriggered(t *testing.T) {
+	f := newLivenessFixture(t)
+	repo := NewPostgresLivenessRepository(f.app)
+	conv := f.conversation(t, &f.roundRobinQueue, nil, "open", past())
+
+	if _, err := f.seed.Exec(context.Background(), `UPDATE tenants SET status='suspended' WHERE id=$1`, f.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
+	if err != nil || n != 0 || f.pendingJobCount(t, conv) != 0 {
+		t.Fatalf("a suspended company's conversation was re-triggered: n=%d err=%v jobs=%d", n, err, f.pendingJobCount(t, conv))
+	}
+	if _, err := f.seed.Exec(context.Background(), `UPDATE tenants SET status='active' WHERE id=$1`, f.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := repo.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute); err != nil || n != 1 {
+		t.Fatalf("after the reactivation: n=%d err=%v, want 1", n, err)
+	}
+}

@@ -54,9 +54,8 @@ func (s *Service) tx(ctx context.Context, actor, hub uuid.UUID, fn func(ctx cont
 	}
 	return platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {
 		q := platformdb.QuerierFromContext(c, s.pool)
-		var ok bool
-		if err := q.QueryRow(c, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')
-		                    AND EXISTS (SELECT 1 FROM users WHERE id = $2 AND status = 'active')`, hub, actor).Scan(&ok); err != nil {
+		ok, err := lockAuthority(c, q, hub, actor)
+		if err != nil {
 			return err
 		}
 		if !ok {

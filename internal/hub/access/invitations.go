@@ -106,7 +106,8 @@ func activeUserByEmail(ctx context.Context, q platformdb.Querier, email string) 
 	return ids[0], true, nil
 }
 
-// Invite authorizes the e-mail. See the file comment.
+// Invite authorizes the e-mail. See the file comment. Everything happens in ONE transaction (on one connection), under the
+// locks that keep the administrator an administrator until it commits.
 func (s *Service) Invite(ctx context.Context, actor, hub uuid.UUID, email string, access []InviteAccess) (InviteResult, error) {
 	e, err := normalizeEmail(email)
 	if err != nil {
@@ -115,18 +116,24 @@ func (s *Service) Invite(ctx context.Context, actor, hub uuid.UUID, email string
 	if err := checkInviteAccess(access); err != nil {
 		return InviteResult{}, err
 	}
-	var user uuid.UUID
-	var exists bool
 	var res InviteResult
 	err = s.tx(ctx, actor, hub, func(c context.Context, q platformdb.Querier) error {
 		for _, a := range access {
-			if err := requireContract(c, q, hub, a.TenantID); err != nil {
+			if err := requireOpenCompany(c, q, hub, a.TenantID); err != nil {
 				return err
 			}
 		}
-		var err error
-		if user, exists, err = activeUserByEmail(c, q, e); err != nil || exists {
+		user, exists, err := activeUserByEmail(c, q, e)
+		if err != nil {
 			return err
+		}
+		if exists {
+			// the account exists: the same writes the panel's other buttons make, by the same service, as this administrator
+			if _, err := s.applyTo(c, q, actor, hub, user, access, false); err != nil {
+				return err
+			}
+			res = InviteResult{Status: "applied"}
+			return nil
 		}
 		// no account yet: keep the choice. Asking again for the same address replaces the previous choice.
 		if _, err := q.Exec(c, `UPDATE hub_preauthorizations SET status = 'revoked', updated_at = now()
@@ -149,47 +156,41 @@ func (s *Service) Invite(ctx context.Context, actor, hub uuid.UUID, email string
 	if err != nil {
 		return InviteResult{}, err
 	}
-	if !exists {
-		return res, nil
+	return res, nil
+}
+
+// requireOpenCompany pins the company as active until the transaction ends (a suspension waits for it) and checks that it is
+// an active instance of this hub.
+func requireOpenCompany(ctx context.Context, q platformdb.Querier, hub, tenant uuid.UUID) error {
+	if _, err := platformdb.LockTenantActive(ctx, q, tenant); err != nil {
+		return err
 	}
-	// the account exists: the same writes the panel's other buttons make, by the same service, as this administrator
-	if _, err := s.applyTo(ctx, actor, hub, user, access, false); err != nil {
-		return InviteResult{}, err
-	}
-	return InviteResult{Status: "applied"}, nil
+	return requireContract(ctx, q, hub, tenant)
 }
 
 // applyTo makes the person an agent of the hub (unless they already administer it: that role is hubctl's to change) and
-// sets each access. tolerant: a company that stopped being offered meanwhile is skipped and counted instead of failing the
-// rest (used when applying a choice that waited days); otherwise the first refusal is returned.
-func (s *Service) applyTo(ctx context.Context, creator, hub, user uuid.UUID, access []InviteAccess, tolerant bool) (skipped int, err error) {
-	pctx := provisioning.WithActor(ctx, creator)
-	var role *string
-	if err := platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {
-		var k string
-		switch err := platformdb.QuerierFromContext(c, s.pool).QueryRow(c, `SELECT r.key FROM hub_memberships hm JOIN roles r ON r.id = hm.role_id
-		                                                                   WHERE hm.hub_id = $1 AND hm.user_id = $2`, hub, user).Scan(&k); {
-		case errors.Is(err, pgx.ErrNoRows):
-			return nil
-		case err != nil:
-			return err
-		}
-		role = &k
-		return nil
-	}); err != nil {
+// sets each access, ALL inside the caller's transaction q (a system session): one connection, atomic, under the caller's
+// locks. tolerant: a company that stopped being offered meanwhile is skipped and counted instead of failing the rest (used
+// when applying a choice that waited days); otherwise the first refusal is returned.
+func (s *Service) applyTo(ctx context.Context, q platformdb.Querier, creator, hub, user uuid.UUID, access []InviteAccess, tolerant bool) (skipped int, err error) {
+	pctx := provisioning.Join(provisioning.WithActor(ctx, creator), q)
+	var role string
+	switch err := q.QueryRow(ctx, `SELECT r.key FROM hub_memberships hm JOIN roles r ON r.id = hm.role_id
+	                                WHERE hm.hub_id = $1 AND hm.user_id = $2`, hub, user).Scan(&role); {
+	case errors.Is(err, pgx.ErrNoRows):
+		role = ""
+	case err != nil:
 		return 0, err
 	}
-	if role == nil || *role != provisioning.RoleAdmin {
+	if role != provisioning.RoleAdmin {
 		if err := s.prov.AddMember(pctx, hub, user, provisioning.RoleAgent); err != nil {
 			return 0, mapProv(err)
 		}
 	}
 	for _, a := range access {
-		// the company must be offered NOW: provisioning itself would still grant on a suspended company (the read policy would
-		// hide it, but the row would be there)
-		if err := platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {
-			return requireContract(c, platformdb.QuerierFromContext(c, s.pool), hub, a.TenantID)
-		}); err != nil {
+		// the company must be offered NOW, and stay active until commit (provisioning itself would still grant on a suspended
+		// company: the read policy would hide it, but the row would be there)
+		if err := requireOpenCompany(ctx, q, hub, a.TenantID); err != nil {
 			if tolerant && errors.Is(err, ErrNotFound) {
 				skipped++
 				continue
@@ -211,8 +212,10 @@ func (s *Service) applyTo(ctx context.Context, creator, hub, user uuid.UUID, acc
 
 // ApplyPreauthorizations is called after someone signs in. It applies every unexpired choice waiting for the address of
 // this account, but only when the identity provider has VERIFIED that address, and only while the administrator who wrote
-// the choice is still an active admin of an active hub (otherwise the choice is voided). Safe to call on every sign-in and
-// concurrently: the pending rows are locked, so a second caller waits and then finds nothing left.
+// the choice is still an active admin of an active hub (otherwise the choice is voided). It is ONE transaction on ONE
+// connection: the pending rows, the author's authority and each company are locked until it commits, so a demotion or a
+// suspension that races with it either happens first (and is seen) or waits; nothing is applied halfway. Safe to call on every
+// sign-in and concurrently: a second caller waits for the first and then finds nothing left.
 func (s *Service) ApplyPreauthorizations(ctx context.Context, user uuid.UUID) (applied int, err error) {
 	if user == uuid.Nil {
 		return 0, nil
@@ -257,9 +260,8 @@ func (s *Service) ApplyPreauthorizations(ctx context.Context, user uuid.UUID) (a
 			return err
 		}
 		for _, p := range list {
-			var live bool
-			if err := q.QueryRow(c, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')
-			                                AND EXISTS (SELECT 1 FROM users WHERE id = $2 AND status = 'active')`, p.hub, p.creator).Scan(&live); err != nil {
+			live, err := lockAuthority(c, q, p.hub, p.creator)
+			if err != nil {
 				return err
 			}
 			if !live {
@@ -272,7 +274,7 @@ func (s *Service) ApplyPreauthorizations(ctx context.Context, user uuid.UUID) (a
 				}
 				continue
 			}
-			skipped, err := s.applyTo(ctx, p.creator, p.hub, user, p.access, true)
+			skipped, err := s.applyTo(c, q, p.creator, p.hub, user, p.access, true)
 			if err != nil {
 				return err
 			}
@@ -288,6 +290,33 @@ func (s *Service) ApplyPreauthorizations(ctx context.Context, user uuid.UUID) (a
 		return nil
 	})
 	return applied, err
+}
+
+// lockAuthority pins the hub, the person's membership and their account until the transaction ends (demoting or deactivating
+// them, or pausing the hub, waits for it) and THEN asks whether they are an active admin of an active hub, so the answer cannot
+// be overtaken by a change that commits afterwards. One statement per row: a JOIN would let PostgreSQL's re-check drop the row.
+func lockAuthority(ctx context.Context, q platformdb.Querier, hub, person uuid.UUID) (bool, error) {
+	for _, pin := range []struct {
+		sql  string
+		args []any
+	}{
+		{`SELECT 1 FROM service_hubs WHERE id = $1 FOR SHARE`, []any{hub}},
+		{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2 FOR SHARE`, []any{hub, person}},
+		{`SELECT 1 FROM users WHERE id = $1 FOR SHARE`, []any{person}},
+	} {
+		rows, err := q.Query(ctx, pin.sql, pin.args...)
+		if err != nil {
+			return false, err
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return false, err
+		}
+	}
+	var ok bool
+	err := q.QueryRow(ctx, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')
+	                              AND EXISTS (SELECT 1 FROM users WHERE id = $2 AND status = 'active')`, hub, person).Scan(&ok)
+	return ok, err
 }
 
 // RevokeInvitation cancels a choice that has not been applied yet.

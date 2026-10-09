@@ -55,6 +55,7 @@ func (s *PostgresReconciliationStore) ReconcileStrandedQueuedSends(ctx context.C
 			WITH candidates AS (
 			  SELECT m.id AS message_id, m.tenant_id
 			  FROM messages m
+			  JOIN tenants tn ON tn.id = m.tenant_id AND tn.status = 'active'
 			  WHERE m.status = 'queued'
 			    AND m.direction = 'outbound'
 			    AND EXISTS (

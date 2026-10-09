@@ -39,6 +39,7 @@ func (r *PostgresRepository) Claim(ctx context.Context, limit int, lease time.Du
 			WITH due AS (
 			  SELECT id FROM message_media
 			  WHERE status IN ('pending','quarantined') AND next_attempt_at <= now()
+			    AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = message_media.tenant_id AND t.status = 'active')
 			  ORDER BY next_attempt_at, created_at
 			  LIMIT $1
 			  FOR UPDATE SKIP LOCKED

@@ -142,3 +142,37 @@ func TestTenantAIResolverReturnsOnlyAnEnabledReadableIntegration(t *testing.T) {
 	var _ ports.TenantAIResolver = r
 	_ = context.Background
 }
+
+// Codex H2 / ADR-0038: vision/transcription jobs of a suspended company are not claimed (they cost money and write results).
+func TestASuspendedCompanysAnalysisJobsAreNotClaimedUntilReactivated(t *testing.T) {
+	e := newMEnv(t)
+	tenant, conv := e.tenant()
+	e.optIn(tenant, true, "key-do-tenant-1234567890")
+	repo := NewPostgresRepository(e.app)
+	msg := e.cleanMedia(tenant, conv, "image/png", "image")
+	if _, err := repo.EnqueueVision(e.ctx, time.Now().Add(-time.Hour), 10); err != nil {
+		t.Fatal(err)
+	}
+	e.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, tenant)
+	items, err := repo.ClaimAnalysis(e.ctx, "description", 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.MessageID == msg {
+			t.Fatalf("a suspended company's analysis job was claimed: %+v", it)
+		}
+	}
+	e.exec(`UPDATE tenants SET status='active' WHERE id=$1`, tenant)
+	items, err = repo.ClaimAnalysis(e.ctx, "description", 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range items {
+		found = found || it.MessageID == msg
+	}
+	if !found {
+		t.Fatal("after the reactivation the analysis job must be claimed")
+	}
+}

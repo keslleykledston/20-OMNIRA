@@ -21,6 +21,7 @@ func (r *PostgresRepository) ClaimAnalysis(ctx context.Context, kind string, lim
 			WITH due AS (
 			  SELECT a.id FROM message_media_analysis a
 			  WHERE a.status = 'pending' AND a.kind = $1 AND a.next_attempt_at <= now()
+			    AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = a.tenant_id AND t.status = 'active')
 			  ORDER BY a.next_attempt_at, a.created_at
 			  LIMIT $2
 			  FOR UPDATE OF a SKIP LOCKED

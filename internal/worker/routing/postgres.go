@@ -32,5 +32,16 @@ func (r *PostgresConversationRunner) RunForConversation(ctx context.Context, con
 	if err != nil {
 		return err
 	}
-	return platformdb.WithSystemTenantSession(ctx, r.pool, tenantID, fn)
+	return platformdb.WithSystemTenantSession(ctx, r.pool, tenantID, func(c context.Context) error {
+		// A suspended company is not served (ADR-0038): its conversations are not assigned. The job is simply done; the
+		// share lock keeps the suspension from committing in the middle of the assignment.
+		active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, r.pool), tenantID)
+		if err != nil {
+			return err
+		}
+		if !active {
+			return nil
+		}
+		return fn(c)
+	})
 }

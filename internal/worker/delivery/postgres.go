@@ -199,6 +199,11 @@ func (s *PostgresOutboundStore) readReservation(ctx context.Context, messageID u
 func (s *PostgresOutboundStore) tryPersistReservation(ctx context.Context, tenantID, messageID uuid.UUID, candidate string) (bool, error) {
 	var won bool
 	err := platformdb.WithSystemTenantSession(ctx, s.pool, tenantID, func(scoped context.Context) error {
+		if active, err := platformdb.LockTenantActive(scoped, platformdb.QuerierFromContext(scoped, s.pool), tenantID); err != nil {
+			return err
+		} else if !active {
+			return ErrTenantSuspended
+		}
 		tag, err := platformdb.QuerierFromContext(scoped, s.pool).Exec(scoped, `
 			UPDATE messages SET reserved_provider_message_id=$3, updated_at=now()
 			WHERE tenant_id=$1 AND id=$2 AND reserved_provider_message_id=''`,

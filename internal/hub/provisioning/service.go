@@ -94,8 +94,34 @@ func (s *Service) guard(ctx context.Context, q platformdb.Querier, hub uuid.UUID
 	return nil
 }
 
-// tx runs fn in one system-session transaction.
+type joinKey struct{}
+
+// Join makes the calls made with the returned context run inside q, an already open SYSTEM-session transaction of the
+// caller, instead of each opening its own (each call becomes a savepoint, so a refused call leaves nothing behind and the
+// caller may go on). It exists so a caller that must apply several changes together (a person's authorization: membership
+// plus grants) does it atomically, on ONE connection, under the locks it already holds. q must come from
+// platformdb.WithTenantSession(..., isSystemAdmin=true).
+func Join(ctx context.Context, q platformdb.Querier) context.Context {
+	return context.WithValue(ctx, joinKey{}, q)
+}
+
+// tx runs fn in one system-session transaction (or, after Join, inside the caller's).
 func (s *Service) tx(ctx context.Context, fn func(ctx context.Context, q platformdb.Querier) error) error {
+	if q, ok := ctx.Value(joinKey{}).(platformdb.Querier); ok {
+		tx, isTx := q.(pgx.Tx)
+		if !isTx {
+			return fn(ctx, q)
+		}
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if err := fn(ctx, sp); err != nil {
+			_ = sp.Rollback(ctx)
+			return err
+		}
+		return sp.Commit(ctx)
+	}
 	return platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {
 		return fn(c, platformdb.QuerierFromContext(c, s.pool))
 	})

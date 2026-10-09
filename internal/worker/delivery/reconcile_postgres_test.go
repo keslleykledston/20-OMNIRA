@@ -431,3 +431,22 @@ func TestReconcile_RespectsBatchSize(t *testing.T) {
 		t.Fatalf("created=%d, want exactly batchSize=3", n)
 	}
 }
+
+// Codex M / ADR-0038: reconciliation does not recreate delivery intents for a suspended company.
+func TestReconcile_SuspendedCompany_IsNotReenqueued(t *testing.T) {
+	e := newReconcileEnv(t)
+	msg := e.seedMessage("queued")
+	old := 2 * time.Hour
+	e.seedSendEvent(msg, &old)
+	e.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, e.tenant)
+
+	store := delivery.NewPostgresReconciliationStore(e.seed)
+	n, err := store.ReconcileStrandedQueuedSends(context.Background(), testMaxAge, testGrace, 200)
+	if err != nil || n != 0 || e.totalEventCount(msg) != 1 {
+		t.Fatalf("a suspended company's message was re-enqueued: n=%d err=%v events=%d", n, err, e.totalEventCount(msg))
+	}
+	e.exec(`UPDATE tenants SET status='active' WHERE id=$1`, e.tenant)
+	if n, err := store.ReconcileStrandedQueuedSends(context.Background(), testMaxAge, testGrace, 200); err != nil || n != 1 {
+		t.Fatalf("after the reactivation: n=%d err=%v, want 1", n, err)
+	}
+}

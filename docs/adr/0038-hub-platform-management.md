@@ -139,6 +139,14 @@ Regra: **empresa suspensa não é atendida, em nenhum caminho.** Antes só a lei
 | Projetor do Hub | A empresa fica **congelada** (nada copiado, nada removido); a RLS já esconde; a primeira passada após reativar atualiza | Cumpre "grants, contratos e itens ficam guardados". |
 | Reply/claim do Hub | Trava (`FOR SHARE`) empresa, Hub, contrato, vínculo e grant até o commit, **depois** pergunta `has_active_hub_access` | Fecha H1: uma revogação em andamento ou é vista pela escrita, ou espera ela terminar. Mesma ordem de locks dos caminhos administrativos (empresa, Hub, contrato, vínculo, grant). |
 
+**Segunda rodada (revisão do Codex de 7a20153..4bfcf4e, task-mv0ejisb-0ff3dw):** o roteamento (job de atribuição e a varredura de
+liveness que reenfileira), os jobs de IA (`intelligence_jobs`), a análise de mídia (`message_media` e `message_media_analysis`, vision e
+transcrição), a limpeza de runs de fluxo, a reserva de id do provedor e a reconciliação de envios também **param** para empresa
+suspensa: as consultas de "pegar trabalho" só enxergam empresa ativa (o trabalho fica pendente, nada se perde) e, onde existe uma
+sessão por empresa, ela pergunta `LockTenantActive` primeiro (roteamento: o job é dado como feito; IA: tentativa transitória; reserva:
+a mensagem falha como `company_suspended`). Fica de fora de propósito: faxina de retenção de anexos enviados (apaga arquivos vencidos,
+não atende ninguém) e gravação de presença de agentes.
+
 Também corrigidos no reply: conversa finalizada entre o carregamento e o lock agora recusa (409, antes enfileirava); a auditoria de `hub.message.sent` aponta para a **mensagem** (`resource_type=message`).
 
 **Risco aceito (M-02):** o `--operator` do `hubctl` continua um texto declarado (mais conta do SO e host, como evidência, nunca como prova). Quem tem as credenciais do banco já pode escrever qualquer coisa, inclusive em `audit_events`; assinar a invocação não muda isso. O caminho com identidade de verdade é a API autenticada (`/hub/empresas`, `/acessos`), que grava `actor_id`. `hubctl` fica como ferramenta de bancada/emergência.

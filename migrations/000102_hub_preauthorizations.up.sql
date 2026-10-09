@@ -30,5 +30,7 @@ ALTER TABLE hub_preauthorizations FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY hub_preauthorizations_system ON hub_preauthorizations FOR ALL USING (is_system_admin()) WITH CHECK (is_system_admin());
 
--- no DELETE: the row is the trail of who authorized whom
+-- no DELETE: the row is the trail of who authorized whom. The default privileges of the app role grant every table to it, so
+-- the grant below is not enough: DELETE and TRUNCATE are revoked explicitly.
 GRANT SELECT, INSERT, UPDATE ON hub_preauthorizations TO omnira_app;
+REVOKE DELETE, TRUNCATE ON hub_preauthorizations FROM omnira_app;

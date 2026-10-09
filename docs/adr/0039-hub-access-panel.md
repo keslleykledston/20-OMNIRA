@@ -96,8 +96,15 @@ Regra de ouro: **vários = grant do Hub**. Um administrador de empresa nunca cri
     - **Risco que depende do provedor de identidade:** se o realm aceitar login com e-mail **não** verificado, nada é aplicado
       (testado), mas o administrador precisa saber que a pessoa só recebe o acesso depois de confirmar o e-mail no Keycloak.
     - Falha ao aplicar nunca bloqueia o login (o erro é registrado; a próxima entrada tenta de novo).
-    - **Limite:** aplicar usa uma segunda conexão do pool enquanto segura as linhas pendentes; muitos primeiros logins com
-      autorização pendente exatamente ao mesmo tempo disputariam o pool (é um evento por pessoa).
+    - **Atômico, numa só conexão (revisão do Codex):** aplicar (e o "aplicar agora" de uma conta existente) é **uma** transação em **uma**
+      conexão (`provisioning.Join` faz as chamadas do serviço de provisionamento rodarem dentro dela, cada uma num savepoint): membership
+      e grants valem juntos ou nenhum, e muitos primeiros logins ao mesmo tempo não esgotam o pool (teste com pool de 2 conexões).
+    - **Autoridade e empresa travadas até o commit:** o Hub, a membership e a conta de quem autorizou são travados `FOR SHARE` **antes** de
+      perguntar "ainda é admin ativo?" (`lockAuthority`, também usada por toda chamada do painel); cada empresa é travada ativa
+      (`LockTenantActive`). Rebaixar o autor ou suspender a empresa **durante** a aplicação espera o commit e é visto pela seguinte
+      (testes determinísticos com a mudança presa em outra transação).
+    - O gancho do login tem **limite de 8 s**; `hub_preauthorizations` sem `DELETE`/`TRUNCATE` para a role da aplicação (revogados à parte,
+      porque os privilégios padrão a concedem a toda tabela).
 
 ## 4. Fora desta entrega (honesto)
 

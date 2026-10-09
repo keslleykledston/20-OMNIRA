@@ -489,3 +489,33 @@ func TestDerivedTextIsReadableByMembersOnlyOfTheirTenantAndWritableByNoOperator(
 		t.Fatal("an operator session must not be able to insert derived text")
 	}
 }
+
+// Codex H2 / ADR-0038: media of a suspended company is not fetched or scanned while it is suspended.
+func TestASuspendedCompanysMediaIsNotClaimedUntilReactivated(t *testing.T) {
+	e := newMEnv(t)
+	tenant, conv := e.tenant()
+	msg := e.message(tenant, conv, "inbound", "http://localhost:3000/api/files/s/x")
+	repo := NewPostgresRepository(e.app)
+	e.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, tenant)
+	items, err := repo.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.TenantID == tenant {
+			t.Fatalf("a suspended company's media was claimed: %+v", it)
+		}
+	}
+	e.exec(`UPDATE tenants SET status='active' WHERE id=$1`, tenant)
+	items, err = repo.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range items {
+		found = found || it.MessageID == msg
+	}
+	if !found {
+		t.Fatal("after the reactivation the media must be claimed")
+	}
+}

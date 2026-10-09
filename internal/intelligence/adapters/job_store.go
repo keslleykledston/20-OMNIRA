@@ -67,6 +67,7 @@ func (s *PostgresJobStore) Claim(ctx context.Context, limit int, lease time.Dura
 			WITH due AS (
 			  SELECT id FROM intelligence_jobs
 			  WHERE next_attempt_at <= now() AND (state = 'pending' OR (state = 'running' AND locked_until < now()))
+			    AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = intelligence_jobs.tenant_id AND t.status = 'active')
 			  ORDER BY next_attempt_at, created_at
 			  LIMIT $1
 			  FOR UPDATE SKIP LOCKED

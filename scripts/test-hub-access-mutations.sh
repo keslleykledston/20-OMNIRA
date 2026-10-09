@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=omnira-hubaccessmut-$$; DB=omnira_test_accessmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/hub/access/service.go internal/hub/provisioning/service.go internal/hub/adapters/access_http.go internal/hub/adapters/http.go internal/hub/adapters/postgres.go internal/messages/application/attachment.go internal/tenancy/adapters/invitations_http.go internal/tenancy/adapters/team_http.go internal/messages/adapters/http.go"
+FILES="internal/hub/access/service.go internal/hub/provisioning/service.go internal/hub/adapters/access_http.go internal/hub/adapters/http.go internal/hub/adapters/postgres.go internal/messages/application/attachment.go internal/tenancy/adapters/invitations_http.go internal/tenancy/adapters/team_http.go internal/messages/adapters/http.go internal/hub/access/invitations.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -23,11 +23,11 @@ mkdb() { # mkdb <migrations dir>
     -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=$DB postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
   docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 }
-run() {
-  docker run --rm --network host -v "$PWD":/app -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false -e OMNIRA_INTEGRATION_TEST=1 \
-    -e OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    -e OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    golang:1.25 go test -count=1 -run 'TestAccess|TestHubInbox_CompanyFilter|TestHubInbox_AFutureGrant|TestProvisioning_GrantingAgain|TestInvitationRefuses|TestTeamReactivation|TestTwoReactivations|TestTwoAdminDemotions|TestSendMediaHonours|TestSendingAnUploadedFile' ./internal/hub/adapters ./internal/hub/provisioning ./internal/tenancy/adapters ./internal/messages/application ./internal/messages/adapters 2>&1
+run() { # the host toolchain with its warm module and build caches (a cold container recompiles everything per mutant)
+  OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
+    OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
+    OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
+    go test -count=1 -run 'TestAccess|TestHubInbox_CompanyFilter|TestHubInbox_AFutureGrant|TestProvisioning_GrantingAgain|TestInvitationRefuses|TestTeamReactivation|TestTwoReactivations|TestTwoAdminDemotions|TestSendMediaHonours|TestSendingAnUploadedFile' ./internal/hub/adapters ./internal/hub/provisioning ./internal/tenancy/adapters ./internal/messages/application ./internal/messages/adapters 2>&1
 }
 # NOTE: exit status of a pipeline ending in grep is grep's, so the verdict is read from the output.
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 5 ]; }
@@ -55,14 +55,16 @@ PY
   cp "$WORK/orig/$2" "$2"
 }
 S=internal/hub/access/service.go; P=internal/hub/provisioning/service.go; H=internal/hub/adapters/access_http.go; L=internal/hub/adapters/http.go; D=internal/hub/adapters/postgres.go; A=internal/messages/application/attachment.go; I=internal/tenancy/adapters/invitations_http.go; T=internal/tenancy/adapters/team_http.go; W=internal/messages/adapters/http.go
-mut "the access service lets anybody in"                  $S "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')\`, hub, actor).Scan(&ok); err != nil {
+mut "the access service lets anybody in"                  $S "		ok, err := lockAuthority(c, q, hub, actor)
+		if err != nil {
 			return err
 		}
-		if !ok {" "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')\`, hub, actor).Scan(&ok); err != nil {
+		if !ok {" "		ok, err := lockAuthority(c, q, hub, actor)
+		if err != nil {
 			return err
 		}
 		if false {"
-mut "the access service ignores a suspended hub"          $S "AND EXISTS (SELECT 1 FROM service_hubs WHERE id = \$1 AND status = 'active')" "AND true"
+mut "the access service ignores a suspended hub"          internal/hub/access/invitations.go "AND EXISTS (SELECT 1 FROM service_hubs WHERE id = \$1 AND status = 'active')" "AND true"
 mut "the handler lets a non-admin through"                $H "	if !admin {
 		httpError(w, \"not found\", http.StatusNotFound)" "	if false {
 		httpError(w, \"not found\", http.StatusNotFound)"
@@ -120,7 +122,7 @@ mut "a failed lookup counts as 'not elsewhere'"           $I "	if err := q.Query
 		return false
 	}"
 
-mut "a deactivated hub admin still passes the panel guard" $S "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')" "AND true"
+mut "a deactivated hub admin still passes the panel guard" internal/hub/access/invitations.go "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')" "AND true"
 mut "a deactivated hub admin still passes the grant guard" $P "AND EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')" "AND true"
 mut "the panel reads a hub role without locking the row"  $P "WHERE hub_id = \$1 AND user_id = \$2 FOR UPDATE\`, hub, user).Scan(&roleID)" "WHERE hub_id = \$1 AND user_id = \$2\`, hub, user).Scan(&roleID)"
 mut "the media route skips the attachments switch"        $W "res, err = h.att.SendMedia(" "res, err = h.svc.SendMedia("

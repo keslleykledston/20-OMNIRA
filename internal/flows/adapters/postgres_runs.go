@@ -324,7 +324,8 @@ func (r *PostgresFlowRepository) CancelRunsOfClosedConversations(ctx context.Con
 		UPDATE flow_runs r SET status = 'cancelled', error = 'conversation closed', completed_at = now(), updated_at = now(), wait_until = NULL
 		FROM conversations c
 		WHERE c.tenant_id = r.tenant_id AND c.id = r.conversation_id AND c.status = 'closed'
-		  AND r.status IN ('running','waiting_input','waiting_human')`)
+		  AND r.status IN ('running','waiting_input','waiting_human')
+		  AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = r.tenant_id AND t.status = 'active')`)
 	if err != nil {
 		return 0, err
 	}

@@ -140,3 +140,10 @@ Estado: **LAB, ainda NÃO implantado** (commit local), atrás de `OMNIRA_HUB_ACC
 - **Vitest** 757/758 (a falha é a do `SettingsShell`, anterior); **Playwright com API MOCKADA** 4/4 (inclui o fluxo novo e o painel visto em captura de tela).
 - **NOT VERIFIED:** nenhum login real no Keycloak (se o realm exige e-mail verificado, e como o Keycloak entrega `email_verified`), nenhum e-mail de aviso (não há: o administrador avisa a pessoa), efeito em empresas reais.
 
+## Segunda rodada de correções (revisão do Codex de 7a20153..4bfcf4e) — 2026-10-09
+Revisão `task-mv0ejisb-0ff3dw`: **0 CRITICAL, 5 HIGH, 5 MEDIUM, tudo tratado** (ver ADR-0038 "Segunda rodada" e ADR-0039 §3.10). Estado: LAB, commits locais, **não implantado**.
+- **HIGH 1** roteamento (job + varredura de liveness) → para empresa suspensa; **HIGH 2** jobs de IA e de mídia (vision/transcrição) → só pegam trabalho de empresa ativa; **HIGH 3** gancho do login → uma transação/uma conexão, 8 s de limite, pool de 2 conexões prova; **HIGH 4** autor demovido durante a aplicação → `lockAuthority` (a aplicação espera e então anula); **HIGH 5** suspensão × concessão → `LockTenantActive` por empresa dentro da mesma transação.
+- **MEDIUM:** limpeza de runs de fluxo, reserva de id e reconciliação param para empresa suspensa; aplicação parcial impossível (teste com falha injetada no último passo: nada fica, a autorização continua pendente e a nova tentativa aplica); `DELETE`/`TRUNCATE` revogados em `hub_preauthorizations` (teste: nem sessão de sistema da aplicação apaga).
+- **POSTGRES VERIFIED:** pacotes `hub/adapters`, `hub/provisioning`, `worker/{delivery,flows,routing}`, `routing/adapters`, `intelligence/adapters`, `media/adapters`, `platform/db` todos verdes; mutantes dos dois scripts estendidos (resultado abaixo quando concluído).
+- **Decisão de risco:** o gancho de login continua síncrono (a pessoa precisa já ter o Hub no primeiro acesso), mas limitado a 8 s e nunca bloqueia o login por erro.
+
