@@ -206,3 +206,13 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 
 **Rodada final de mutantes (código final):** `manage` 38, `distribution` 37, `audit` 13, `suspension` (inclui 3 mutantes de "pânico dentro do portão"), `reply` (inclui "conta inativa"), `access`, `admin`, `invite` — **todas PASS**. Mutantes que sobreviveram durante o caminho foram camadas redundantes (documentadas como "não-mutante" nos próprios scripts) ou lacunas de teste (corrigidas com teste novo).
 
+## Implantação das fases 3-5 (2026-10-09, LAB) — sha-faabb5d
+
+- **Antes:** backup `omnira_dev_20261009T121535Z.dump` (local, disco externo e nuvem, conferidos); tags de rollback `rollback-pre-phases34-20261009-0815` (api, worker, web); `.env` antigo em `/data/cafegpt/tmp/env-pre-phases34` (0600).
+- **Migrations aplicadas ao banco vivo:** 000103 (gestão delegada), 000104 (equipes), 000105 (conta ativa), 000106 (índices da auditoria) — de 000102 para 000106. Produção tinha 0 equipes, 3 contratos, 3 grants, 0 contas inativas (nada a migrar além do esquema).
+- **Imagens** `sha-faabb5d` (api, worker, web) construídas de um worktree limpo do HEAD; api/worker/web recriados e saudáveis; bundle servido = bundle construído.
+- **Flag nova:** `OMNIRA_HUB_DISTRIBUTOR_ENABLED=true` (intervalo 15 s) no worker; sem equipe de rodízio criada ela não faz nada. O worker registrou "Hub work-pool distributor started".
+- **Conferido no ar:** rotas novas (`managed`, `pools`, `audit`, `instances/.../channels`, `transfer`) respondem 401 sem login; `user_is_active` **não** é executável pela aplicação, `session_account_active` e `has_hub_manage_access` são; `work_pool_instances` com RLS+FORCE; 0 funções DEFINER sem `pg_temp` fixado; 0 panics nos logs de api e worker.
+- **NÃO verificado em produção:** nenhuma tela com login real do Keycloak; nenhuma conexão de canal criada pelo Hub no banco vivo; a distribuição não rodou com equipe real (não há equipe); nenhuma sessão viva no momento da conferência (o caminho de sessão foi provado no E2E real e no teste sob o papel `omnira_app`).
+- **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phases34-20261009-0815 20-omnira-<svc>:latest` + `docker compose up -d --no-deps --force-recreate api worker web`; as migrations 103-106 têm `down` testado (`scripts/test-hub-migrations.sh`); as imagens antigas funcionam com o esquema novo (só acrescentamos), então o rollback de código não exige desfazer migrations.
+
