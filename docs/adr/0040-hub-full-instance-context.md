@@ -14,7 +14,7 @@ O produto exige atender **com o contexto completo da instância, sob privilégio
 ## 2. Fatos medidos (catálogo real, 2026-10-09; só leitura)
 
 - 81 tabelas com RLS forçado. Classificação proposta (matriz): 43 operacionais, 8 administrativas, 2 de segredo, 3 de gestão delegada já existente,
-  4 de sistema, 15 de plataforma/Hub, 3 de catálogo global, 3 a decidir (grupos WhatsApp).
+  4 de sistema, 15 de plataforma/Hub, 3 de catálogo global, 3 de grupos WhatsApp (**decidido em 2026-10-09: só membro por enquanto**).
 - **O banco não distingue papéis entre membros:** nas ~43 tabelas operacionais, `SELECT/INSERT/UPDATE/DELETE` valem para qualquer membro ativo
   (`has_active_membership`). A capacidade fina (`contact.classify`, `ticket.create`...) vive na aplicação (`PermissionChecker`). O RLS de hoje
   é barreira de isolamento **entre instâncias**, não de privilégio **dentro** da instância.
@@ -48,10 +48,8 @@ permitir = identidade_válida AND contexto_de_atuação_válido AND relacionamen
    segundo. A concessão carrega um conjunto de capacidades limitado pelo teto do contrato (concessão ⊆ contrato; o Hub não amplia). Preset "atendimento":
    ler/responder conversa, mídia, ler/classificar contato. Opcionais por concessão: editar contato, vincular cliente, criar chamado, transferir, executar fluxo, IA.
    Sempre negado à delegação: equipe, contrato, credenciais de canal/ERP, chaves de IA, segurança.
-4. **RLS como segunda barreira independente — granularidade por DOMÍNIO.** O banco recebe `has_tenant_access(tenant, user, domínio, necessidade)` onde domínio
-   ∈ {conversa, mídia, contato, chamado, fluxo-execução, ia} e necessidade ∈ {ler, escrever}; as capacidades finas continuam na aplicação, **como já são para membros**.
-   Divergência consciente do parecer: exigir capacidade por operação e por tabela no banco só para delegados seria mais rígido que para membros e criaria um segundo
-   mecanismo de permissão. Tabelas sensíveis (contato-escrita, chamado, fluxo) podem subir a granularidade depois, caso a caso, se a revisão pedir.
+4. **RLS como segunda barreira independente — relação + domínio + ler/escrever no banco; capacidade fina na aplicação, alimentada pela MESMA concessão.**
+   Análise comparativa (decisão do dono em 2026-10-09: "ver qual atinge o objetivo e escala"), ver §4.1.
 5. **Classes de tabela (matriz):** operacional (migra para o predicado do seu domínio); administrativa e segredo (só membro/admin, nunca delegação);
    gestão delegada (inalterada; revisão abaixo); sistema; plataforma. Teste de catálogo: toda tabela com `tenant_id` tem classe declarada, e o predicado de cada política confere com a classe.
 6. **Mesma URL.** `/api/v1/tenants/{tenant_id}/...` segue; a URL identifica o alvo e **não concede**. `tenant_id` de URL/payload nunca autoriza.
@@ -59,11 +57,38 @@ permitir = identidade_válida AND contexto_de_atuação_válido AND relacionamen
 8. **Identidade de contato:** o mesmo telefone em duas instâncias não compartilha contratos, etiquetas, chamados nem histórico; classificação e vínculo são locais à instância.
    (Já é assim: contatos são por tenant; o teste cruzado fica nos gates.)
 
+### 4.1 Granularidade da capacidade: banco por operação (parecer) × banco por domínio (v2 inicial)
+
+Fatos do repositório que decidem a questão:
+1. **O RLS só enxerga LINHA e COMANDO** (`SELECT/INSERT/UPDATE/DELETE`), nunca a operação de negócio. Em `contacts`, classificar (`PUT .../classification`) e editar detalhes (alias, e-mail)
+   são o **mesmo** `UPDATE contacts`, em colunas diferentes. Uma política não distingue os dois; separar exigiria gatilhos ou privilégio por coluna (que é por papel, não por requisição).
+2. **A capacidade `contact.update`, `contact.read`, `customer.link` do parecer não existe no modelo real.** O vocabulário de permissões tem **uma** chave de contato, `contact.classify`,
+   que hoje cobre classificar, editar detalhes e vincular conta (`classification_http.go`, `details.go`). Capacidade fina exige primeiro **criar as chaves na aplicação**; o banco não pode espelhá-las por operação.
+3. **Hoje nem membros têm separação no banco** (matriz): exigir capacidade por tabela e operação só para delegados seria mais rígido que para membros e criaria um segundo dicionário de permissões
+   que precisa andar junto com o da aplicação a cada funcionalidade nova (deriva).
+4. **O que o parecer acerta (e fica):** o delegado é MENOS confiável que um membro, o teto do contrato limita o que o Hub concede, e a capacidade tem de ser verificada em cada operação, inclusive nas indiretas.
+
+| Critério | Banco por operação/tabela (parecer, à letra) | Banco por domínio + capacidade fina na aplicação (adotado) |
+|---|---|---|
+| Expressável pelo RLS | Parcialmente: só no nível tabela×comando; classificar≠editar não | Sim, é exatamente o que o RLS enxerga |
+| Princípio do menor privilégio | Alto no papel; parte ilusória (item 1) | Alto: domínio sem concessão = tabelas inacessíveis ao delegado, mesmo com bug na aplicação; capacidade fina conferida no serviço |
+| Escala com funcionalidades novas | Cada capacidade nova = migration de política + permissão + tela | Capacidade nova = linha em `permissions` + checagem no serviço + tela; **sem migration de RLS** |
+| Fonte da verdade | Duas (política e permissão) | Uma: o conjunto de permissões da concessão alimenta a aplicação **e**, por um mapa permissão→domínio, o predicado do banco |
+| Custo por linha | Um predicado por política (igual) | Igual; forma recomendada: `tenant_id IN (SELECT ...)` avaliado uma vez, medir com `EXPLAIN (ANALYZE, BUFFERS)` (Fase 06) |
+| Risco de brecha | Políticas por capacidade divergirem do app | Domínio mal classificado; mitigado pelo teste de catálogo e pela matriz revisada |
+
+**Desenho adotado ("A+ em camadas", une as duas visões):**
+- A **concessão** guarda um conjunto de chaves de permissão **existentes** (⊆ teto do contrato). É a única fonte.
+- Uma tabela de dados `permission_domains` mapeia chave → (domínio, ler/escrever). O banco responde `has_tenant_access(tenant, user, domínio, necessidade)` consultando a concessão e esse mapa; a aplicação confere a **chave** da operação. Mesma fonte, duas camadas.
+- Operações de maior risco com efeito externo (abrir chamado no ERP, qualquer uso de credencial) são **mediadas por serviço**: a capacidade é conferida antes de a credencial ser lida, no executor; o banco nunca é a única barreira nelas.
+- Capacidades mais finas que as de hoje (por exemplo separar editar contato de classificar) entram como **novas chaves de permissão** (dados + serviço), quando o produto pedir.
+- Se a revisão do parecerista exigir subir a granularidade de uma tabela específica (contato-escrita, chamado), isso é um acréscimo localizado sobre a mesma estrutura, não um redesenho.
+
 ## 5. Revisão das três tabelas já delegáveis (parecer §5.1; feita em 2026-10-09 no catálogo vivo)
 
 - **`channel_credentials`** (RLS forçado; colunas: `ciphertext bytea`, sem texto claro). A política de leitura do gestor delegado
   (`channel_credentials_hub_manage_read`) é `EXISTS(conexão pai)` **sem** chamar `has_hub_manage_access` por extensão: hoje o resultado é o correto porque a subconsulta passa pelo RLS de
-  `channel_connections` (escopo conferido ali), mas depende de um efeito indireto. **Ação:** tornar o predicado explícito (migration nova; 103–106 estão congeladas) com teste e mutante.
+  `channel_connections` (escopo conferido ali), mas depende de um efeito indireto. **Ação executada em 2026-10-09:** migration `000107` torna o predicado explícito (a leitura exige o escopo do canal da conexão, como as outras três políticas); teste novo abre a política da conexão de propósito e prova que a leitura de credencial se sustenta sozinha; mutante morto. Local, não implantada.
   Achado pré-existente: qualquer **membro** (inclusive agente) pode `SELECT` o `ciphertext` no nível do banco; a confidencialidade vem da chave fora do banco e de nenhuma resposta da API carregar o campo
   (conferido por busca no código: nenhum modelo de resposta o expõe; não é prova por teste). Para delegados o risco é igual ao de um agente membro, nunca maior (escopo da conexão); recomenda-se restringir a leitura do
   `ciphertext` a serviço/admin como endurecimento separado.
@@ -115,8 +140,8 @@ o cache da instância é descartado e a aba some na próxima leitura. Até a fas
 
 ## 10. Divergências conscientes em relação ao parecer
 
-1. Granularidade do banco por **domínio** e não por operação/tabela (§4.4), porque o banco hoje não distingue capacidades nem para membros.
-2. Vocabulário de capacidades = o já existente em `permissions`, não nomes novos (`conversation.read`...), para não manter dois dicionários.
+1. Granularidade do banco por **domínio** e não por operação/tabela (§4.1), porque o RLS não enxerga operação de negócio (classificar e editar são o mesmo `UPDATE contacts`) e porque nem membros têm essa separação no banco.
+2. Vocabulário de capacidades = o já existente em `permissions`, não nomes novos (`conversation.read`, `contact.update`...): as chaves do parecer não existem no modelo real (só há `contact.classify` para contato); novas chaves entram como dados quando o produto pedir.
 3. A Fase 01 já tem uma primeira matriz; a classificação é proposta e precisa da revisão do parecerista e do dono.
 4. A política ilustrativa com `auth.current_tenant_id()` não se aplica: o OMNIRA decide por usuário e relacionamento, não por um GUC de tenant.
 

@@ -233,3 +233,13 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
   a esta data foram contra o bundle implantado.
 - **NOT WIRED:** o contexto completo (mídia, contato, ERP) para quem tem acesso SÓ pelo Hub: depende do ADR-0040 (PROPOSTA, nenhuma migration). Até lá essas abas mostram a visão de texto.
 - **Sem revisão Codex** desta fatia (front, sem mudança de autorização): `CODEX_PLUGIN_NOT_EXECUTED`.
+
+## 2026-10-09 (noite) — migration 107 e decisões do ADR-0040
+
+- **IMPLEMENTED (local, NÃO implantada):** `000107_channel_credentials_delegated_read_explicit`: a leitura delegada de `channel_credentials` passa a exigir, ela mesma, o escopo do canal da conexão
+  (antes dependia do RLS da conexão pai). Sem efeito de comportamento hoje; defesa em profundidade pedida pela revisão externa (ADR-0040 §5).
+- **POSTGRES VERIFIED:** `TestHubManagerCredentialReadDoesNotRelyOnTheConnectionPolicy` (abre a política da conexão de propósito e confere que o gestor só lê a credencial do próprio escopo);
+  `scripts/test-hub-migrations.sh` 093..107 (sobe, desce e sobe idêntico; catálogo ok); `internal/hub/adapters` ok; gate de integração completo: **33 pacotes ok** (inclui `tenancy/adapters`, verde após as correções do aceite de convite);
+  mutação de gestão 39/39 (o mutante novo morre por 1 teste).
+- **Decisões do dono:** grupos de WhatsApp ficam só para membros; a granularidade do banco para delegados será avaliada pela análise do ADR-0040 §4.1 (domínio no banco, capacidade fina no serviço).
+- **Sem revisão Codex** desta migration: `CODEX_PLUGIN_NOT_EXECUTED`.

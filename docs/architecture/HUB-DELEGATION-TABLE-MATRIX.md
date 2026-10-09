@@ -68,9 +68,9 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 | `flows` | T | member | member | member | member | — | administrativa | fluxo (definição) | editar/publicar: só membro |
 | `channel_credentials` | T | member+other | admin+hub_manage | admin+hub_manage | admin+hub_manage | — | segredo | credenciais/config sensível | ciphertext/chaves; ver revisão das 3 tabelas |
 | `tenant_ai_integrations` | T | admin | admin | admin | admin | — | segredo | credenciais/config sensível | ciphertext/chaves; ver revisão das 3 tabelas |
-| `wa_group_archive_batches` | T | member | member | member | member | — | a decidir | grupos WhatsApp | não consta na lista do parecer; manter só membro até decisão |
-| `wa_group_messages` | T | member | member | member | member | — | a decidir | grupos WhatsApp | não consta na lista do parecer; manter só membro até decisão |
-| `wa_groups` | T | member | member | member | member | — | a decidir | grupos WhatsApp | não consta na lista do parecer; manter só membro até decisão |
+| `wa_group_archive_batches` | T | member | member | member | member | — | só membro (decidido 2026-10-09) | grupos WhatsApp | fora da delegação por decisão do dono (2026-10-09) |
+| `wa_group_messages` | T | member | member | member | member | — | só membro (decidido 2026-10-09) | grupos WhatsApp | fora da delegação por decisão do dono (2026-10-09) |
+| `wa_groups` | T | member | member | member | member | — | só membro (decidido 2026-10-09) | grupos WhatsApp | fora da delegação por decisão do dono (2026-10-09) |
 | `channel_webhook_events` | T | member | admin | — | — | — | sistema | infra/worker | só worker/sistema |
 | `intelligence_jobs` | T | member | sysadmin | sysadmin | sysadmin | — | sistema | infra/worker | só worker/sistema |
 | `message_media_analysis` | T | member | sysadmin | sysadmin | sysadmin | — | sistema | infra/worker | só worker/sistema |
@@ -100,7 +100,7 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 - gestão delegada (já existe): 3
 - administrativa: 8
 - segredo: 2
-- a decidir: 3
+- só membro (decidido 2026-10-09): 3
 - sistema: 4
 - plataforma/Hub: 15
 - catálogo global: 3

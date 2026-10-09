@@ -353,6 +353,37 @@ func TestHubManagerCannotReachAnotherInstanceByConnectionID(t *testing.T) {
 	}
 }
 
+// ADR-0040 section 5 / migration 107: the delegated read of a credential carries its OWN scope condition. It must not depend on the connection
+// being visible: with the connection read policy deliberately opened, a manager still reads only the credentials of the connections whose scope
+// the grant holds (not another instance's, not an ERP row of a scope that was not delegated).
+func TestHubManagerCredentialReadDoesNotRelyOnTheConnectionPolicy(t *testing.T) {
+	w := newWorld(t)
+	manager := w.hubAgent("manager")
+	w.canManage(w.grant(manager, "A"))
+	w.scopes("A", "channels")
+	w.scopes("B", "channels")
+	conn := func(tenant, channel, provider string) {
+		id := uuid.New()
+		w.exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities)
+		        VALUES($1,$2,$3,$4,'unofficial',$5,'active','[]')`, id, w.tenant[tenant], channel, provider, id.String())
+		w.exec(`INSERT INTO channel_credentials(tenant_id,connection_id,ciphertext) VALUES($1,$2,'\x00')`, w.tenant[tenant], id)
+	}
+	conn("A", "whatsapp", "waha")
+	conn("B", "whatsapp", "waha")
+	conn("A", "erp", "k3g_crm")
+	// the connection policy is wide open for the duration of this test (OR-ed with the others): only the credential policy can hold now
+	w.exec(`CREATE POLICY zz_test_connections_open ON channel_connections FOR SELECT USING (true)`)
+	t.Cleanup(func() {
+		_, _ = w.owner.Exec(w.ctx, `DROP POLICY IF EXISTS zz_test_connections_open ON channel_connections`)
+	})
+	if n := w.n(manager, `SELECT count(*) FROM channel_connections`); n < 3 {
+		t.Fatalf("the test needs the connection policy to be open (saw %d connections)", n)
+	}
+	if n := w.n(manager, `SELECT count(*) FROM channel_credentials`); n != 1 {
+		t.Errorf("with every connection visible a manager must still read only the credential of A's WhatsApp line (scope channels): saw %d", n)
+	}
+}
+
 // The database is the second barrier: asked directly (as the person, never as system), it admits exactly what the policies say.
 func TestHubManagerRowLevelSecurityOnTheChannelTables(t *testing.T) {
 	w := newWorld(t)

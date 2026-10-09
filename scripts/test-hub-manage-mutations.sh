@@ -171,4 +171,6 @@ sqlmut "an inactive account manages"                       $M "     AND public.u
 sqlmut "a hub admin is not eligible without a grant"       $M "EXISTS (SELECT 1 FROM public.roles r WHERE r.id = hm.role_id AND r.tenant_id IS NULL AND r.key = 'hub_admin')" "false"
 # NOT a mutant: dropping the caller guard of managed_instances() alone survives by design, because the function it calls
 # (has_hub_manage_access) carries the same guard: asked about somebody else it answers false for every instance, so the list is empty.
+# migration 107 (ADR-0040 section 5): the delegated read of a credential states its own scope condition; the test opens the connection policy on purpose
+sqlmut "the credential read policy checks no scope of its own" 000107_channel_credentials_delegated_read_explicit.up.sql "    AND has_hub_manage_access(c.tenant_id, current_user_id(), channel_connection_scope(c.channel))));" "    AND true));"
 echo "PASS: every mutation was killed by a failing real-Postgres test ($N mutants)"
