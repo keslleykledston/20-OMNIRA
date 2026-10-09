@@ -433,3 +433,47 @@ func TestASuspendedCompanysJobsAreNotClaimedUntilReactivated(t *testing.T) {
 		t.Fatal("after the reactivation the job must be claimed")
 	}
 }
+
+func TestAnAIJobClaimDoesNotRaceASuspensionInFlight(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	msg := e.message(a.id, a.conversation, "x")
+	store := NewPostgresJobStore(e.app)
+	if _, err := store.EnsureFromEvent(e.ctx, cnv(msg), application.PipelineVersion); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := e.seed.Begin(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(e.ctx) }()
+	if _, err := tx.Exec(e.ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, a.id); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range claimed {
+		if j.TenantID == a.id {
+			t.Fatal("the claim raced a suspension in flight")
+		}
+	}
+	if err := tx.Rollback(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = store.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, j := range claimed {
+		found = found || j.TenantID == a.id
+	}
+	if !found {
+		t.Fatal("once the suspension was rolled back the job must be claimed")
+	}
+}

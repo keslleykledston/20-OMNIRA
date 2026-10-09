@@ -29,15 +29,19 @@ func (r *PostgresRepository) system(ctx context.Context, fn func(ctx context.Con
 	})
 }
 
-// TenantActive implements ports.TenantGate.
-func (r *PostgresRepository) TenantActive(ctx context.Context, tenant uuid.UUID) (bool, error) {
-	var active bool
+// WhileActive implements ports.TenantGate. fn gets the CALLER's context (not the lock transaction's): its own repository calls
+// open their own sessions; this one only holds the share lock on the company's row until fn returns.
+func (r *PostgresRepository) WhileActive(ctx context.Context, tenant uuid.UUID, fn func(ctx context.Context) error) (bool, error) {
+	ran := false
 	err := platformdb.WithSystemTenantSession(ctx, r.pool, tenant, func(c context.Context) error {
-		var err error
-		active, err = platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, r.pool), tenant)
-		return err
+		active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, r.pool), tenant)
+		if err != nil || !active {
+			return err
+		}
+		ran = true
+		return fn(ctx)
 	})
-	return active, err
+	return ran, err
 }
 
 func (r *PostgresRepository) Claim(ctx context.Context, limit int, lease time.Duration) ([]ports.Work, error) {
@@ -48,12 +52,13 @@ func (r *PostgresRepository) Claim(ctx context.Context, limit int, lease time.Du
 	err := r.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
 		rows, err := q.Query(ctx, `
 			WITH due AS (
-			  SELECT id FROM message_media
-			  WHERE status IN ('pending','quarantined') AND next_attempt_at <= now()
-			    AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = message_media.tenant_id AND t.status = 'active')
-			  ORDER BY next_attempt_at, created_at
+			  SELECT mm.id FROM message_media mm
+			  JOIN tenants t ON t.id = mm.tenant_id AND t.status = 'active'
+			  WHERE mm.status IN ('pending','quarantined') AND mm.next_attempt_at <= now()
+			  ORDER BY mm.next_attempt_at, mm.created_at
 			  LIMIT $1
-			  FOR UPDATE SKIP LOCKED
+			  FOR UPDATE OF mm SKIP LOCKED
+			  FOR SHARE OF t SKIP LOCKED
 			), claimed AS (
 			  UPDATE message_media mm
 			  SET attempts = mm.attempts + 1,

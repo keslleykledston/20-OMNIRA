@@ -519,3 +519,46 @@ func TestASuspendedCompanysMediaIsNotClaimedUntilReactivated(t *testing.T) {
 		t.Fatal("after the reactivation the media must be claimed")
 	}
 }
+
+// Codex H / ADR-0038: a claim does not race a suspension that is in flight: it skips that company's rows (no lease is written
+// behind the suspension) and takes them once the suspension is rolled back.
+func TestClaimDoesNotRaceASuspensionInFlight(t *testing.T) {
+	e := newMEnv(t)
+	tenant, conv := e.tenant()
+	msg := e.message(tenant, conv, "inbound", "http://localhost:3000/api/files/s/x")
+	repo := NewPostgresRepository(e.app)
+	tx, err := e.seed.Begin(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(e.ctx) }()
+	if _, err := tx.Exec(e.ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	items, err := repo.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.MessageID == msg {
+			t.Fatal("the claim raced a suspension in flight")
+		}
+	}
+	if err := tx.Rollback(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	items, err = repo.Claim(e.ctx, 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range items {
+		found = found || it.MessageID == msg
+	}
+	if !found {
+		t.Fatal("once the suspension was rolled back the media must be claimed")
+	}
+}

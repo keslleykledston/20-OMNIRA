@@ -20,11 +20,12 @@ func (r *PostgresRepository) ClaimAnalysis(ctx context.Context, kind string, lim
 		rows, err := q.Query(ctx, `
 			WITH due AS (
 			  SELECT a.id FROM message_media_analysis a
+			  JOIN tenants t ON t.id = a.tenant_id AND t.status = 'active'
 			  WHERE a.status = 'pending' AND a.kind = $1 AND a.next_attempt_at <= now()
-			    AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = a.tenant_id AND t.status = 'active')
 			  ORDER BY a.next_attempt_at, a.created_at
 			  LIMIT $2
 			  FOR UPDATE OF a SKIP LOCKED
+			  FOR SHARE OF t SKIP LOCKED
 			), claimed AS (
 			  UPDATE message_media_analysis a
 			  SET attempts = a.attempts + 1, next_attempt_at = now() + make_interval(secs => $3::float8), updated_at = now()
@@ -111,6 +112,7 @@ func (r *PostgresRepository) EnqueueVision(ctx context.Context, newerThan time.T
 			                  AND a.kind IN ('description','document_text'))
 			ORDER BY mm.created_at
 			LIMIT $2
+			FOR SHARE OF tn SKIP LOCKED
 			ON CONFLICT (tenant_id, message_id, kind) DO NOTHING`, newerThan, limit)
 		n = int(tag.RowsAffected())
 		return err

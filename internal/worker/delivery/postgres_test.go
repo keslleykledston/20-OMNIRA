@@ -211,6 +211,8 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 	// Codex H-03 / ADR-0038: a message queued BEFORE the company was suspended must not reach the provider afterwards.
 	// It fails with a readable reason (nothing is held back to go out later on its own after a reactivation).
 	m4b := queue(conv, "enfileirada antes da suspensao")
+	// with the provider id ALREADY reserved the reservation step is skipped, so this isolates the guard in LockOutbound
+	execInTenant(tenantA, `UPDATE messages SET reserved_provider_message_id = 'wamid.ja-reservado' WHERE id = $1`, m4b)
 	execInTenant(tenantA, `UPDATE tenants SET status = 'suspended' WHERE id = $1`, tenantA)
 	callsBefore = sender.calls
 	if err := h.Handle(ctx, job(m4b), 1); err != nil {

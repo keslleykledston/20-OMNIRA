@@ -148,41 +148,47 @@ func (s *PostgresOutboundStore) EnsureReservedProviderMessageID(ctx context.Cont
 		return existing, nil
 	}
 
-	// ADR-0038: a company suspended since the attempt began gets no new provider call (the persistence below also refuses it).
-	if err := platformdb.WithSystemTenantSession(ctx, s.pool, tenantID, func(c context.Context) error {
-		active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, s.pool), tenantID)
+	// The provider call happens inside a short transaction of its own that holds ONLY the share lock on the COMPANY's row
+	// (ADR-0038): a suspension waits for the call in progress and no call starts after it is visible. The message row is not
+	// locked and the reservation still commits in its own transaction, independent of (and before) the delivery transaction:
+	// new-message-id has no delivery side effect, so a wasted candidate from a losing race is harmless (PILOT.4A1 §7).
+	var won bool
+	var reserved string
+	err = platformdb.WithSystemTenantSession(ctx, s.pool, tenantID, func(scoped context.Context) error {
+		q := platformdb.QuerierFromContext(scoped, s.pool)
+		active, err := platformdb.LockTenantActive(scoped, q, tenantID)
 		if err != nil {
 			return err
 		}
 		if !active {
 			return ErrTenantSuspended
 		}
+		candidate, err := generate(ctx)
+		if err != nil {
+			return err
+		}
+		if candidate == "" {
+			return fmt.Errorf("%w: provider returned an empty reserved message id", ErrPermanent)
+		}
+		tag, err := q.Exec(scoped, `
+			UPDATE messages SET reserved_provider_message_id=$3, updated_at=now()
+			WHERE tenant_id=$1 AND id=$2 AND reserved_provider_message_id=''`, tenantID, messageID, candidate)
+		if err != nil {
+			return fmt.Errorf("channel delivery: persist reservation: %w", err)
+		}
+		if won = tag.RowsAffected() == 1; won {
+			reserved = candidate
+		}
 		return nil
-	}); err != nil {
-		return "", err
-	}
-
-	// Network call to the provider happens OUTSIDE any lock/transaction —
-	// new-message-id has no delivery side effect, so a wasted candidate from
-	// a losing race is harmless (PILOT.4A1 §7).
-	candidate, err := generate(ctx)
-	if err != nil {
-		return "", err
-	}
-	if candidate == "" {
-		return "", fmt.Errorf("%w: provider returned an empty reserved message id", ErrPermanent)
-	}
-
-	won, err := s.tryPersistReservation(ctx, tenantID, messageID, candidate)
+	})
 	if err != nil {
 		return "", err
 	}
 	if won {
-		return candidate, nil
+		return reserved, nil
 	}
 
-	// Lost the race: another delivery attempt persisted first. Read and
-	// reuse its value rather than proceeding with our own candidate.
+	// Lost the race: another delivery attempt persisted first. Read and reuse its value rather than proceeding with our own candidate.
 	_, winner, err := s.readReservation(ctx, messageID)
 	if err != nil {
 		return "", err
@@ -208,30 +214,6 @@ func (s *PostgresOutboundStore) readReservation(ctx context.Context, messageID u
 		return uuid.Nil, "", fmt.Errorf("channel delivery: read reservation: %w", err)
 	}
 	return tenantID, reserved, nil
-}
-
-func (s *PostgresOutboundStore) tryPersistReservation(ctx context.Context, tenantID, messageID uuid.UUID, candidate string) (bool, error) {
-	var won bool
-	err := platformdb.WithSystemTenantSession(ctx, s.pool, tenantID, func(scoped context.Context) error {
-		if active, err := platformdb.LockTenantActive(scoped, platformdb.QuerierFromContext(scoped, s.pool), tenantID); err != nil {
-			return err
-		} else if !active {
-			return ErrTenantSuspended
-		}
-		tag, err := platformdb.QuerierFromContext(scoped, s.pool).Exec(scoped, `
-			UPDATE messages SET reserved_provider_message_id=$3, updated_at=now()
-			WHERE tenant_id=$1 AND id=$2 AND reserved_provider_message_id=''`,
-			tenantID, messageID, candidate)
-		if err != nil {
-			return err
-		}
-		won = tag.RowsAffected() == 1
-		return nil
-	})
-	if err != nil {
-		return false, fmt.Errorf("channel delivery: persist reservation: %w", err)
-	}
-	return won, nil
 }
 
 func (s *PostgresOutboundStore) MarkSent(ctx context.Context, messageID uuid.UUID, providerMessageID string) error {

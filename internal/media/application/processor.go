@@ -109,19 +109,25 @@ func (p *Processor) ProcessOnce(ctx context.Context) (int, error) {
 	return len(items), nil
 }
 
-// serving asks the repository whether the company is still active (ports.TenantGate). A repository without the gate is always
-// active; a failing question is answered "no" (fail closed): the row is simply left for the next claim.
-func serving(ctx context.Context, repo any, tenant uuid.UUID) bool {
+// whileServing runs fn for the company only while it is active, holding it active until fn returns (ports.TenantGate.WhileActive),
+// so every external call and every write fn makes happens under the lock that a suspension has to wait for. A repository without
+// the gate is always active; a failing gate answers "no" (fail closed): the row is simply left for the next claim.
+// It reports whether fn ran.
+func whileServing(ctx context.Context, repo any, tenant uuid.UUID, fn func(ctx context.Context)) bool {
 	g, ok := repo.(ports.TenantGate)
 	if !ok {
+		fn(ctx)
 		return true
 	}
-	active, err := g.TenantActive(ctx, tenant)
+	ran, err := g.WhileActive(ctx, tenant, func(c context.Context) error {
+		fn(c)
+		return nil
+	})
 	if err != nil {
-		log.Printf("media: cannot tell whether company %s is active: %v", tenant, err)
+		log.Printf("media: cannot run for company %s: %v", tenant, err)
 		return false
 	}
-	return active
+	return ran
 }
 
 func (p *Processor) handle(ctx context.Context, w ports.Work) {
@@ -132,15 +138,16 @@ func (p *Processor) handle(ctx context.Context, w ports.Work) {
 			p.terminal(ctx, w, ports.StatusFailed, "internal_error")
 		}
 	}()
-	if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company's files are neither fetched nor scanned
+	// ADR-0038: a suspended company's files are neither fetched nor scanned, and the suspension waits for one in progress
+	if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
+		switch w.Status {
+		case ports.StatusPending:
+			p.fetchAndQuarantine(ctx, w)
+		case ports.StatusQuarantined:
+			p.scan(ctx, w)
+		}
+	}) {
 		p.metrics.Inc("media", "company_suspended")
-		return
-	}
-	switch w.Status {
-	case ports.StatusPending:
-		p.fetchAndQuarantine(ctx, w)
-	case ports.StatusQuarantined:
-		p.scan(ctx, w)
 	}
 }
 

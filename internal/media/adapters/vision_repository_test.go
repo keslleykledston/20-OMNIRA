@@ -177,19 +177,27 @@ func TestASuspendedCompanysAnalysisJobsAreNotClaimedUntilReactivated(t *testing.
 	}
 }
 
-// Codex H / ADR-0038: no analysis job is even created for a suspended company, and the repository answers the gate honestly.
-func TestASuspendedCompanyGetsNoAnalysisJobAndTheGateSaysSo(t *testing.T) {
+// Codex H / ADR-0038: no analysis job is even created for a suspended company; WhileActive runs only while it is active.
+func TestASuspendedCompanyGetsNoAnalysisJobAndTheGateRunsOnlyWhileActive(t *testing.T) {
 	e := newMEnv(t)
 	tenant, conv := e.tenant()
 	e.optIn(tenant, true, "key-do-tenant-1234567890")
 	repo := NewPostgresRepository(e.app)
 	msg := e.cleanMedia(tenant, conv, "image/png", "image")
-	if ok, err := repo.TenantActive(e.ctx, tenant); err != nil || !ok {
-		t.Fatalf("an active company: %v %v", ok, err)
+	ran := 0
+	run := func() bool {
+		ok, err := repo.WhileActive(e.ctx, tenant, func(context.Context) error { ran++; return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if !run() || ran != 1 {
+		t.Fatal("an active company must run")
 	}
 	e.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, tenant)
-	if ok, err := repo.TenantActive(e.ctx, tenant); err != nil || ok {
-		t.Fatalf("a suspended company: %v %v", ok, err)
+	if run() || ran != 1 {
+		t.Fatal("a suspended company must not run")
 	}
 	if _, err := repo.EnqueueVision(e.ctx, time.Now().Add(-time.Hour), 1000); err != nil {
 		t.Fatal(err)
@@ -206,5 +214,107 @@ func TestASuspendedCompanyGetsNoAnalysisJobAndTheGateSaysSo(t *testing.T) {
 	_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM message_media_analysis WHERE message_id=$1`, msg).Scan(&n)
 	if n != 1 {
 		t.Fatalf("after the reactivation the job must be created, got %d", n)
+	}
+}
+
+// ADR-0038: the suspension WAITS for an operation that is running under WhileActive, and every later call sees the company suspended:
+// no external call can start after the suspension is visible, none is cut short before it.
+func TestWhileActiveHoldsTheSuspensionBackUntilTheOperationEnds(t *testing.T) {
+	e := newMEnv(t)
+	tenant, _ := e.tenant()
+	repo := NewPostgresRepository(e.app)
+	started, release := make(chan struct{}), make(chan struct{})
+	finished := make(chan error, 1)
+	go func() {
+		_, err := repo.WhileActive(e.ctx, tenant, func(context.Context) error { close(started); <-release; return nil })
+		finished <- err
+	}()
+	<-started
+	suspended := make(chan error, 1)
+	go func() {
+		_, err := e.seed.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, tenant)
+		suspended <- err
+	}()
+	select {
+	case err := <-suspended:
+		t.Fatalf("the suspension did not wait for the operation in progress (err=%v)", err)
+	case <-time.After(1200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-suspended:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the suspension never finished")
+	}
+	if ok, _ := repo.WhileActive(e.ctx, tenant, func(context.Context) error { return nil }); ok {
+		t.Fatal("an operation started after the suspension")
+	}
+}
+
+func TestAnalysisClaimAndEnqueueDoNotRaceASuspensionInFlight(t *testing.T) {
+	e := newMEnv(t)
+	tenant, conv := e.tenant()
+	e.optIn(tenant, true, "key-do-tenant-1234567890")
+	repo := NewPostgresRepository(e.app)
+	msg := e.cleanMedia(tenant, conv, "image/png", "image")
+	hold := func() func() {
+		tx, err := e.seed.Begin(e.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(e.ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		rollback := func() { _ = tx.Rollback(e.ctx) }
+		t.Cleanup(rollback) // a failed assertion must not leave the suspension open (the env cleanup would wait for it forever)
+		return rollback
+	}
+	count := func() (n int) {
+		_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM message_media_analysis WHERE message_id=$1`, msg).Scan(&n)
+		return
+	}
+	// enqueue while the suspension is in flight: no job is created behind it
+	rollback := hold()
+	if _, err := repo.EnqueueVision(e.ctx, time.Now().Add(-time.Hour), 1000); err != nil {
+		t.Fatal(err)
+	}
+	if count() != 0 {
+		t.Fatal("EnqueueVision raced a suspension in flight")
+	}
+	rollback()
+	if _, err := repo.EnqueueVision(e.ctx, time.Now().Add(-time.Hour), 1000); err != nil || count() != 1 {
+		t.Fatalf("once the suspension was rolled back: %v count=%d", err, count())
+	}
+	// claim while it is in flight: no lease is written behind it
+	rollback = hold()
+	items, err := repo.ClaimAnalysis(e.ctx, "description", 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.MessageID == msg {
+			t.Fatal("ClaimAnalysis raced a suspension in flight")
+		}
+	}
+	rollback()
+	items, err = repo.ClaimAnalysis(e.ctx, "description", 1000, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, it := range items {
+		found = found || it.MessageID == msg
+	}
+	if !found {
+		t.Fatal("once the suspension was rolled back the analysis job must be claimed")
 	}
 }

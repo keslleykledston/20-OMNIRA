@@ -147,15 +147,21 @@ sessão por empresa, ela pergunta `LockTenantActive` primeiro (roteamento: o job
 a mensagem falha como `company_suspended`). Fica de fora de propósito: faxina de retenção de anexos enviados (apaga arquivos vencidos,
 não atende ninguém) e gravação de presença de agentes.
 
-**Terceira rodada (re-revisão do Codex, task-mv0gnbxs-m3e5ej, 1 HIGH + 4 MEDIUM):** mídia/vision/transcrição consultam o portão opcional
-`ports.TenantGate` (a repositório pergunta `LockTenantActive`) **antes de cada operação externa** (buscar o arquivo, antivírus, chamar o
-Gemini, transcrever) e **antes de gravar** o resultado; uma pergunta que falha conta como "não" (falha fechada); a linha reclamada fica
-como está (a locação vence e ela volta a ser reclamada quando a empresa estiver ativa); `EnqueueVision` não cria trabalho para empresa
-suspensa. A varredura de liveness e a reconciliação **travam a linha da empresa** (`FOR SHARE ... SKIP LOCKED`: uma suspensão em
-andamento é pulada, não disputada) e a limpeza de runs trava as empresas ativas que ela toca (espera a suspensão em andamento); a
-reserva de id de provedor pergunta **antes** de chamar o provedor. **Aceito e dito:** uma chamada ao provedor/Gemini que **já
-estava em andamento** quando a suspensão confirmou termina (não dá para desfazê-la) e seu custo é contabilizado, mas o resultado não é
-gravado; `EnsureFromEvent` ainda pode criar um job de IA atrasado para empresa suspensa (resíduo de fila, nunca é pego nem executado).
+**Terceira rodada (re-revisões do Codex, task-mv0gnbxs-m3e5ej e task-mv0holp8-xyusd8):** o desenho final para tudo que chama algo
+**fora do banco** em nome da empresa é **segurar o lock da empresa durante a operação**, não só perguntar antes:
+`ports.TenantGate.WhileActive(ctx, tenant, fn)` abre uma transação curta que trava `FOR SHARE` a linha da empresa e roda `fn` inteiro
+(buscar o arquivo, antivírus, chamar o Gemini, transcrever **e gravar o resultado em todos os ramos**: texto, vazio, rejeitado, erro).
+A suspensão **espera** a operação em curso e nenhuma operação começa depois de a suspensão ser visível; `ran=false` = empresa suspensa,
+`fn` não rodou e a linha reclamada fica como está (a locação vence e ela volta a ser reclamada quando a empresa estiver ativa). Uma
+pergunta que falha conta como "não" (falha fechada). Vale para a mídia (`Processor`), a visão e a transcrição. A **reserva de id do
+provedor** também chama o provedor com o lock da empresa seguro (a mensagem não é travada: a reserva continua confirmando numa
+transação própria, antes da entrega). Os **claims** de mídia, análise e jobs de IA, o `EnqueueVision`, a varredura de liveness e a
+reconciliação de envios fazem `JOIN tenants ... FOR SHARE OF t SKIP LOCKED` (uma suspensão em andamento é pulada, nunca disputada;
+as linhas voltam quando ela é desfeita); a limpeza de runs de fluxo espera a suspensão em andamento.
+**Custo e limite assumidos:** a suspensão de uma empresa pode demorar até o fim da operação externa em curso dela (o maior prazo é o
+da chamada ao provedor/Gemini); `EnsureFromEvent` ainda pode criar um job de IA atrasado para empresa suspensa (resíduo de fila,
+nunca é pego nem executado); a gravação de presença de agentes, a faxina de retenção de anexos enviados e o relay do outbox seguem
+fora do congelamento de propósito (não atendem clientes; os consumidores têm seus próprios portões).
 
 Também corrigidos no reply: conversa finalizada entre o carregamento e o lock agora recusa (409, antes enfileirava); a auditoria de `hub.message.sent` aponta para a **mensagem** (`resource_type=message`).
 

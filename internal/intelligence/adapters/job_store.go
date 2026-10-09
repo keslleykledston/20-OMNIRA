@@ -65,12 +65,13 @@ func (s *PostgresJobStore) Claim(ctx context.Context, limit int, lease time.Dura
 	err := s.system(ctx, func(ctx context.Context, q platformdb.Querier) error {
 		rows, err := q.Query(ctx, `
 			WITH due AS (
-			  SELECT id FROM intelligence_jobs
-			  WHERE next_attempt_at <= now() AND (state = 'pending' OR (state = 'running' AND locked_until < now()))
-			    AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = intelligence_jobs.tenant_id AND t.status = 'active')
-			  ORDER BY next_attempt_at, created_at
+			  SELECT j.id FROM intelligence_jobs j
+			  JOIN tenants t ON t.id = j.tenant_id AND t.status = 'active'
+			  WHERE j.next_attempt_at <= now() AND (j.state = 'pending' OR (j.state = 'running' AND j.locked_until < now()))
+			  ORDER BY j.next_attempt_at, j.created_at
 			  LIMIT $1
-			  FOR UPDATE SKIP LOCKED
+			  FOR UPDATE OF j SKIP LOCKED
+			  FOR SHARE OF t SKIP LOCKED
 			)
 			UPDATE intelligence_jobs j
 			SET state = 'running', attempts = j.attempts + 1, started_at = now(), locked_until = now() + make_interval(secs => $2::float8), updated_at = now()

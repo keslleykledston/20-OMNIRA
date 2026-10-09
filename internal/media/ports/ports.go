@@ -62,12 +62,15 @@ type Repository interface {
 	MarkPurged(ctx context.Context, w Work) error
 }
 
-// TenantGate is an OPTIONAL capability of a repository: whether the company is still active (ADR-0038). Processors ask it right
-// before each external operation (fetching a file, scanning, calling an AI provider, transcribing) and before storing a result;
-// a repository that does not implement it (a test fake) is treated as "always active". A company that is suspended is not served:
-// the claimed row is left alone (its lease expires and it is claimed again once the company is active), nothing leaves the server.
+// TenantGate is an OPTIONAL capability of a repository (ADR-0038): run something for a company ONLY while it is active, and keep
+// it active until the something is done. WhileActive takes a share lock on the company's row for the whole call, so the UPDATE
+// that suspends the company waits for the operation in progress and no operation starts after the suspension is visible: that is
+// what lets a processor wrap EVERYTHING that acts in the company's name (fetching a file, scanning it, calling an AI provider,
+// transcribing, and writing the result, in every branch) in one call. ran=false means the company is suspended (or does not
+// exist) and fn did not run; the claimed row is left as it is (its lease expires and it is claimed again once the company is
+// active). A repository without the capability (a test fake) is treated as "always active".
 type TenantGate interface {
-	TenantActive(ctx context.Context, tenant uuid.UUID) (bool, error)
+	WhileActive(ctx context.Context, tenant uuid.UUID, fn func(ctx context.Context) error) (ran bool, err error)
 }
 
 // Store keeps the bytes. Quarantined files are never readable by the API; only Promote moves a file to the

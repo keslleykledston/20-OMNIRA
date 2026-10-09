@@ -22,7 +22,7 @@ mkdb() {
     -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=$DB postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
   docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 }
-RUNRE='TestMediaIsNeitherFetched|TestVisionSendsNothing|TestTranscriptionDoesNothing|TestASuspendedCompanyGetsNoAnalysisJob|TestRetrigger_ASuspensionInFlight|TestReconcile_ASuspensionInFlight|TestSweeperWaitsForASuspension|TestRunnerDoesNotRun|TestRetrigger_SuspendedCompany|TestASuspendedCompanys|TestSweeperDoesNotCancel|TestReconcile_SuspendedCompany|TestHubReply_WriteWaits|TestHubReply_CapabilityAndHappyPath|TestLockTenantActive|TestPostgresDeliveryStateMachine|TestSuspendedCompanysFlows|TestProjector_SuspendedCompany|TestMetaWebhookEndToEnd|TestIntakeDropsGroupMessagesOfASuspendedCompany'
+RUNRE='TestMediaIsNeitherFetched|TestVisionRunsEvery|TestTranscriptionRunsEvery|TestASuspendedCompanyGetsNoAnalysisJob|TestWhileActiveHolds|TestClaimDoesNotRace|TestAnalysisClaimAndEnqueueDoNotRace|TestAnAIJobClaimDoesNotRace|TestRetrigger_ASuspensionInFlight|TestReconcile_ASuspensionInFlight|TestSweeperWaitsForASuspension|TestASuspendedCompanysJobsAreNotClaimed|TestASuspendedCompanysMediaIsNotClaimed|TestRunnerDoesNotRun|TestRetrigger_SuspendedCompany|TestASuspendedCompanys|TestSweeperDoesNotCancel|TestReconcile_SuspendedCompany|TestHubReply_WriteWaits|TestHubReply_CapabilityAndHappyPath|TestLockTenantActive|TestPostgresDeliveryStateMachine|TestSuspendedCompanysFlows|TestProjector_SuspendedCompany|TestMetaWebhookEndToEnd|TestIntakeDropsGroupMessagesOfASuspendedCompany'
 PKGS="./internal/media/application ./internal/worker/routing ./internal/routing/adapters ./internal/intelligence/adapters ./internal/media/adapters ./internal/hub/adapters ./internal/platform/db ./internal/worker/delivery ./internal/worker/flows ./internal/worker/hubprojector ./internal/inbox/adapters ./internal/groups/adapters"
 run() { # the host toolchain with its warm module and build caches (a cold container recompiles everything per mutant)
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
@@ -87,39 +87,46 @@ mut "routing assigns for a suspended company"        internal/worker/routing/pos
 		return fn(c)' '		_ = active
 		return fn(c)'
 mut "the liveness sweep re-triggers a suspended company" internal/routing/adapters/liveness_postgres.go "JOIN tenants t ON t.id = c.tenant_id AND t.status = 'active'" "JOIN tenants t ON t.id = c.tenant_id"
-mut "AI jobs of a suspended company are claimed"     internal/intelligence/adapters/job_store.go "AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = intelligence_jobs.tenant_id AND t.status = 'active')" "AND true"
-mut "media of a suspended company is claimed"        internal/media/adapters/repository.go "AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = message_media.tenant_id AND t.status = 'active')" "AND true"
-mut "analysis jobs of a suspended company are claimed" internal/media/adapters/analysis_repository.go "AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = a.tenant_id AND t.status = 'active')" "AND true"
-mut "the sweeper tidies a suspended company's runs"  internal/flows/adapters/postgres_runs.go "AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = r.tenant_id AND t.status = 'active')" "AND true"
-mut "a provider id is reserved for a suspended company" internal/worker/delivery/postgres.go '} else if !active {
-			return ErrTenantSuspended' '} else if !active && false {
-			return ErrTenantSuspended'
+mut "the sweeper tidies a suspended company's runs"  internal/flows/adapters/postgres_runs.go "AND r.tenant_id IN (SELECT id FROM active)" "AND true"
 mut "reconciliation re-enqueues a suspended company"  internal/worker/delivery/reconcile_postgres.go "JOIN tenants tn ON tn.id = m.tenant_id AND tn.status = 'active'" "JOIN tenants tn ON tn.id = m.tenant_id"
-mut "a suspended company's files are fetched"        internal/media/application/processor.go 'if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company' 'if false && !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company'
-mut "a suspended company's images go to the provider" internal/media/application/vision.go 'if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: nothing leaves the server for a suspended company' 'if false && !serving(ctx, p.repo, w.TenantID) { // ADR-0038: nothing leaves the server for a suspended company'
-mut "a late vision result of a suspended company is stored" internal/media/application/vision.go 'if !serving(ctx, p.repo, w.TenantID) { // suspended while the provider was answering: the result is not stored' 'if false && !serving(ctx, p.repo, w.TenantID) { // suspended while the provider was answering: the result is not stored'
-mut "a suspended company's audio is transcribed"      internal/media/application/transcriber.go 'if !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company' 'if false && !serving(ctx, p.repo, w.TenantID) { // ADR-0038: a suspended company'
-mut "a late transcript of a suspended company is stored" internal/media/application/transcriber.go 'if !serving(ctx, p.repo, w.TenantID) { // suspended while the engine was running: the result is not stored' 'if false && !serving(ctx, p.repo, w.TenantID) { // suspended while the engine was running: the result is not stored'
-mut "the gate fails open when it cannot tell"         internal/media/application/processor.go '		return false
-	}
-	return active
-}' '		return true
-	}
-	return active
-}'
 mut "analysis jobs are created for a suspended company" internal/media/adapters/analysis_repository.go "JOIN tenants tn ON tn.id = mm.tenant_id AND tn.status = 'active'" "JOIN tenants tn ON tn.id = mm.tenant_id"
-mut "the repository gate always says active"          internal/media/adapters/repository.go 'active, err = platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, r.pool), tenant)' 'active, err = true, error(nil)'
 mut "the liveness sweep races a suspension in flight" internal/routing/adapters/liveness_postgres.go '			  FOR SHARE OF t SKIP LOCKED' ''
 mut "the run tidy-up races a suspension in flight"    internal/flows/adapters/postgres_runs.go '		  FOR SHARE OF t
 		)' '		)'
 mut "reconciliation races a suspension in flight"     internal/worker/delivery/reconcile_postgres.go '			  FOR SHARE OF tn SKIP LOCKED' ''
+mut "a suspended company's files are fetched"        internal/media/application/processor.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) {
+		switch w.Status {' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) {
+		switch w.Status {'
+mut "a suspended company's images go to the provider" internal/media/application/vision.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {'
+mut "a suspended company's audio is transcribed"      internal/media/application/transcriber.go 'if !whileServing(ctx, p.repo, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {' 'if !whileServing(ctx, struct{}{}, w.TenantID, func(ctx context.Context) { p.process(ctx, w) }) {'
+mut "the operation runs outside the gate's lock"      internal/media/application/processor.go '	ran, err := g.WhileActive(ctx, tenant, func(c context.Context) error {
+		fn(c)
+		return nil
+	})' '	_ = g
+	fn(ctx)
+	ran, err := true, error(nil)'
+# NOT a mutant: "the gate fails open when it cannot tell" is equivalent: fn only ever runs INSIDE WhileActive, so a failing gate cannot
+# run anything whatever whileServing returns (fail closed by construction; TestMediaIsNeitherFetchedNorScanned covers the failing gate).
+mut "the repository gate runs for a suspended company" internal/media/adapters/repository.go 'if err != nil || !active {
+			return err
+		}
+		ran = true' 'if err != nil || (!active && false) {
+			return err
+		}
+		ran = true'
+mut "media of a suspended company is claimed"        internal/media/adapters/repository.go "JOIN tenants t ON t.id = mm.tenant_id AND t.status = 'active'" "JOIN tenants t ON t.id = mm.tenant_id"
+mut "the media claim races a suspension in flight"   internal/media/adapters/repository.go '			  FOR SHARE OF t SKIP LOCKED' ''
+mut "analysis jobs of a suspended company are claimed" internal/media/adapters/analysis_repository.go "JOIN tenants t ON t.id = a.tenant_id AND t.status = 'active'" "JOIN tenants t ON t.id = a.tenant_id"
+mut "the analysis claim races a suspension in flight" internal/media/adapters/analysis_repository.go '			  FOR SHARE OF t SKIP LOCKED' ''
+mut "analysis jobs are created behind a suspension in flight" internal/media/adapters/analysis_repository.go '			FOR SHARE OF tn SKIP LOCKED
+' ''
+mut "AI jobs of a suspended company are claimed"     internal/intelligence/adapters/job_store.go "JOIN tenants t ON t.id = j.tenant_id AND t.status = 'active'" "JOIN tenants t ON t.id = j.tenant_id"
+mut "the AI claim races a suspension in flight"      internal/intelligence/adapters/job_store.go '			  FOR SHARE OF t SKIP LOCKED' ''
 mut "the provider is asked for an id for a suspended company" internal/worker/delivery/postgres.go '		if !active {
 			return ErrTenantSuspended
 		}
-		return nil
-	}); err != nil {' '		if !active && false {
+		candidate, err := generate(ctx)' '		if !active && false {
 			return ErrTenantSuspended
 		}
-		return nil
-	}); err != nil {'
+		candidate, err := generate(ctx)'
 echo "PASS: every mutant was killed"
