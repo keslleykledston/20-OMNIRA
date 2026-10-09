@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	"log"
 	"net/http"
 	"strconv"
@@ -203,6 +204,9 @@ func parseCompanyFilter(w http.ResponseWriter, r *http.Request) ([]uuid.UUID, bo
 type companyDTO struct {
 	ID   uuid.UUID `json:"id"`
 	Name string    `json:"name"`
+	// FullContext tells the screen it may open the full workspace of this company for this person (ADR-0040): serving is enabled and the
+	// person holds conversation.read there through this hub, right now. Display only: every request is decided again, by the server and the data layer.
+	FullContext bool `json:"full_context"`
 }
 
 // companiesOf lists the companies this person is currently allowed to serve through the hub, to feed the screen's filter.
@@ -210,19 +214,20 @@ type companyDTO struct {
 func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID) []companyDTO {
 	out := []companyDTO{}
 	rows, err := platformdb.QuerierFromContext(ctx, h.pool).Query(ctx, `
-		SELECT DISTINCT t.id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name) AS name
+		SELECT DISTINCT t.id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name) AS name,
+		       ($3::boolean AND COALESCE('conversation.read' = ANY (delegated_permissions(t.id, $2, $1)), false)) AS full_context
 		FROM effective_access_grants g
 		JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id AND k.status = 'active' AND k.valid_from <= now() AND (k.valid_until IS NULL OR k.valid_until > now())
 		JOIN tenants t ON t.id = g.tenant_id AND t.status = 'active'
 		WHERE g.hub_id = $1 AND g.user_id = $2 AND g.status = 'active' AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())
-		ORDER BY 2, 1`, hubID, actor)
+		ORDER BY 2, 1`, hubID, actor, tenancyadapters.DelegatedServingEnabled())
 	if err != nil {
 		return out
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var c companyDTO
-		if err := rows.Scan(&c.ID, &c.Name); err == nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.FullContext); err == nil {
 			out = append(out, c)
 		}
 	}

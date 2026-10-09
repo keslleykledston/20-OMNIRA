@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	osuser "os/user"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ const usage = `usage: omnira-hubctl --operator NAME <command> [flags]
                    (over an existing grant it may only keep or narrow access; reviving a revoked grant, lifting/extending its validity or adding --reply needs --renew)
                    (--reply lets the agent claim and answer; without it the grant is read-only, and renewing without it removes the capability)
   grant revoke     --hub ID --tenant ID (--user ID | --email E)
+  serving ceiling  --hub ID --tenant ID (--preset atendimento|leitura | --keys a,b,... | --keys none)   (ADR-0040: what the CONTRACT lets the hub delegate to its people in this company)
+  serving grant    --hub ID --tenant ID (--user ID | --email E) (--preset atendimento|leitura | --keys a,b,... | --keys none)   (the keys of ONE person's grant; inside the ceiling; --keys none withdraws all)
   platform-operator add|revoke  (--user ID | --email E)   (who may create companies/Hubs and switch them on and off; ADR-0038)
   platform-operator list
   show             --hub ID
@@ -54,6 +57,27 @@ type command struct {
 	reply                    bool
 	renew                    bool
 	queues                   []uuid.UUID
+	keys, preset             string // delegated serving (ADR-0040): "serving ceiling" and "serving grant"
+}
+
+func presetNames() []string {
+	var n []string
+	for k := range provisioning.ServingPresets {
+		n = append(n, k)
+	}
+	sort.Strings(n)
+	return n
+}
+
+// servingKeys: the keys of a preset, or the --keys list ("none" = an empty set, which withdraws everything).
+func (c command) servingKeys() []string {
+	if c.preset != "" {
+		return provisioning.ServingPresets[c.preset]
+	}
+	if strings.TrimSpace(c.keys) == "none" {
+		return []string{}
+	}
+	return strings.Split(c.keys, ",")
 }
 
 var errUsage = errors.New("usage")
@@ -95,6 +119,8 @@ func parse(args []string) (command, error) {
 	sub.StringVar(&c.status, "status", "", "")
 	sub.StringVar(&valid, "valid-until", "", "")
 	sub.StringVar(&queues, "queues", "", "")
+	sub.StringVar(&c.keys, "keys", "", "")
+	sub.StringVar(&c.preset, "preset", "", "")
 	sub.BoolVar(&c.reply, "reply", false, "")
 	sub.BoolVar(&c.renew, "renew", false, "")
 	if err := sub.Parse(rest); err != nil {
@@ -118,8 +144,8 @@ func parse(args []string) (command, error) {
 	}
 	var err error
 	needHub := !(c.group == "hub" && c.action == "create") && c.group != "reconcile" && c.group != "distribute" && c.group != "platform-operator"
-	needTenant := (c.group == "contract") || (c.group == "grant")
-	needUser := (c.group == "member") || (c.group == "grant") || (c.group == "platform-operator" && c.action != "list")
+	needTenant := (c.group == "contract") || (c.group == "grant") || (c.group == "serving")
+	needUser := (c.group == "member") || (c.group == "grant") || (c.group == "serving" && c.action == "grant") || (c.group == "platform-operator" && c.action != "list")
 	if c.hub, err = id("hub", hub, needHub); err != nil {
 		return c, err
 	}
@@ -149,7 +175,7 @@ func parse(args []string) (command, error) {
 		}
 	}
 	switch c.group + " " + c.action {
-	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "show ", "reconcile ", "distribute ", "platform-operator add", "platform-operator revoke", "platform-operator list":
+	case "hub create", "hub status", "member add", "member remove", "contract create", "contract status", "grant add", "grant revoke", "serving ceiling", "serving grant", "show ", "reconcile ", "distribute ", "platform-operator add", "platform-operator revoke", "platform-operator list":
 	default:
 		return c, fmt.Errorf("%w: unknown command %q", errUsage, strings.TrimSpace(c.group+" "+c.action))
 	}
@@ -158,6 +184,16 @@ func parse(args []string) (command, error) {
 	}
 	if (c.group == "hub" || c.group == "contract") && c.action == "status" && c.status == "" {
 		return c, fmt.Errorf("%w: --status is required", errUsage)
+	}
+	if c.group == "serving" {
+		if (c.keys == "") == (c.preset == "") {
+			return c, fmt.Errorf("%w: give exactly one of --keys or --preset (%s); an empty --keys \"none\" withdraws everything", errUsage, strings.Join(presetNames(), ", "))
+		}
+		if c.preset != "" {
+			if _, ok := provisioning.ServingPresets[c.preset]; !ok {
+				return c, fmt.Errorf("%w: unknown --preset %q (%s)", errUsage, c.preset, strings.Join(presetNames(), ", "))
+			}
+		}
 	}
 	if c.group == "member" && c.action == "add" && c.role == "" {
 		c.role = provisioning.RoleAgent
@@ -287,6 +323,18 @@ func execute(ctx context.Context, c command, out io.Writer) error {
 			mode = "can claim and REPLY"
 		}
 		fmt.Fprintf(out, "grant %s: user %s may act on tenant %s through hub %s (%s)\n", id, user, c.tenant, c.hub, mode)
+	case "serving ceiling":
+		keys := c.servingKeys()
+		if err := svc.SetCeiling(ctx, c.hub, c.tenant, keys); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "contract ceiling: hub %s may delegate %v on tenant %s\n", c.hub, keys, c.tenant)
+	case "serving grant":
+		keys := c.servingKeys()
+		if err := svc.SetServing(ctx, c.hub, c.tenant, user, keys); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "serving: user %s may use %v on tenant %s through hub %s (and only what the contract's ceiling also holds)\n", user, keys, c.tenant, c.hub)
 	case "grant revoke":
 		if err := svc.RevokeGrant(ctx, c.hub, c.tenant, user); err != nil {
 			return err

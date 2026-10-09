@@ -542,9 +542,9 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	streamAuth := sessionStreamAuthorizer{pool: dbPool, authz: authzSvc}
 	streamSession := inboxadapters.StreamMiddleware(streamAuth)
 	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn, streamAuth, inboxadapters.RealtimeOptions{SessionRecheck: s.streamCredentialRecheck()})
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetConversation))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations)))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetConversation)))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
 	// Media retrieval: GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media
@@ -554,14 +554,18 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	if cfg.MediaDir != "" {
 		if store, err := mediaadapters.OpenFileStore(cfg.MediaDir); err == nil {
 			handler = handler.WithMediaReader(mediaadapters.NewReader(dbPool, store))
-			s.mux.Handle("GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetMedia))))
+			s.mux.Handle("GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media", tenancyadapters.Delegable("media.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetMedia)))))
+			// the same file for a Hub agent, with the hub named in the path (an <img>/<audio> cannot send the acting header)
+			s.mux.Handle("GET /api/v1/hubs/{hub_id}/serve/{tenant_id}/messages/{message_id}/media", tenancyadapters.Delegable("media.read", authnMiddleware(tenancyadapters.DelegatedPath(dbPool)(http.HandlerFunc(handler.GetMedia)))))
 		} else {
 			log.Printf("media store unavailable, media downloads disabled: %v", err)
 		}
 	} else if cfg.WahaEnabled && cfg.WahaBaseURL != "" {
 		if mediaRetriever, err := inboxadapters.NewMediaRetriever(dbPool, cfg.WahaBaseURL); err == nil {
 			handler = handler.WithMediaRetriever(mediaRetriever)
-			s.mux.Handle("GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetMedia))))
+			s.mux.Handle("GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media", tenancyadapters.Delegable("media.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetMedia)))))
+			// the same file for a Hub agent, with the hub named in the path (an <img>/<audio> cannot send the acting header)
+			s.mux.Handle("GET /api/v1/hubs/{hub_id}/serve/{tenant_id}/messages/{message_id}/media", tenancyadapters.Delegable("media.read", authnMiddleware(tenancyadapters.DelegatedPath(dbPool)(http.HandlerFunc(handler.GetMedia)))))
 		}
 	}
 
@@ -588,7 +592,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/contacts/{contact_id}/notes/{note_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.DeleteNote))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/people", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListPeople))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.ListContacts))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.GetContact))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}", tenancyadapters.Delegable("contact.read", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.GetContact)))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/contacts/{contact_id}", authnMiddleware(tenantSession(http.HandlerFunc(contactsHandler.SetKind))))
 	classificationHandler := contactsadapters.NewClassificationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool)).WithEnabled(identityFlags.ContactClassificationEnabled)
 	s.contactClassification = classificationHandler
@@ -619,7 +623,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		routingadapters.NewPostgresConversationAssigner(dbPool),
 		auditRec,
 	))
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Assign))))
+	// ADR-0040 phase 03: a Hub agent attending the instance claims and answers through the Hub's own write path (delegatedWrites); everybody else
+	// reaches the original handler untouched. Delegable marks the route and names the key it needs in the delegated context.
+	delegatedWrites := hubadapters.NewDelegatedWrites(dbPool)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", tenancyadapters.Delegable("conversation.claim", authnMiddleware(tenantSession(delegatedWrites.Claim(http.HandlerFunc(assignHandler.Assign))))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.Unassign))))
 
 	// Co-attendance: invite, transfer, accept, reject, leave
@@ -637,7 +644,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		messagesadapters.NewPostgresOutboundStore(dbPool),
 		channeladapters.NewPostgresPermissionChecker(dbPool),
 	))
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.Send))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", tenancyadapters.Delegable("conversation.reply", authnMiddleware(tenantSession(delegatedWrites.Reply(http.HandlerFunc(sendHandler.Send))))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/template", authnMiddleware(tenantSession(http.HandlerFunc(sendHandler.SendTemplate))))
 	// ADR-0024: operator files to the customer, only through providers this deployment actually delivers with. Off by default; without the antivirus and a writable outbound area nothing is registered.
 	mediaProviderReady := func(provider string) bool {

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Proves the Hub migrations (093..108) against a throwaway Postgres, using the PRODUCTION migrator
+# Proves the Hub migrations (093..109) against a throwaway Postgres, using the PRODUCTION migrator
 # (tools/migrate-sql.sh: one transaction per migration, ON_ERROR_STOP, schema_migrations ledger).
 #
 #   1. apply everything up to 092 only            -> dump A (pre-Hub schema)
-#   2. apply 093..108                             -> dump B
+#   2. apply 093..109                             -> dump B
 #   3. roll back 095, 094, 093 (reverse order)    -> dump C   must equal A  (down really undoes up)
-#   4. apply 093..108 again                       -> dump D   must equal B  (up is reproducible)
+#   4. apply 093..109 again                       -> dump D   must equal B  (up is reproducible)
 #   5. catalogue checks: every tenant_id table has RLS+FORCE+policy; omnira_app is not superuser/bypassrls
 #
 # Nothing here touches omnira_dev. Container is labeled like scripts/test-integration.sh.
@@ -46,7 +46,7 @@ echo "== 1. baseline (<= 092)"
 run "$WORK/pre" up | tail -1
 dump > "$WORK/A.sql"
 
-echo "== 2. up 093..108"
+echo "== 2. up 093..109"
 run "$PWD/migrations" up | grep -E "applying|up to date"
 dump > "$WORK/B.sql"
 [ "$(psql_q "SELECT max(version) FROM schema_migrations")" = "$(ls migrations/*.up.sql | sort | tail -1 | xargs basename | sed 's/.up.sql//')" ] \
@@ -90,4 +90,4 @@ unpinned=$(psql_q "SELECT string_agg(p.proname, ',') FROM pg_proc p JOIN pg_name
 role=$(psql_q "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname='omnira_app'")
 [ "$role" = "f" ] || { echo "FAIL: omnira_app can bypass RLS"; exit 1; }
 echo "   every tenant_id table has RLS+FORCE+policy; the 13 Hub and control-plane tables have RLS+FORCE; every SECURITY DEFINER function pins pg_temp last; omnira_app cannot bypass RLS"
-echo "PASS: Hub migrations 093..108 apply, roll back to the exact pre-Hub schema, and re-apply identically"
+echo "PASS: Hub migrations 093..109 apply, roll back to the exact pre-Hub schema, and re-apply identically"

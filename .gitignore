@@ -30,3 +30,6 @@ backups/
 # AI task router — decision log local, nao versionar
 .agents/router/logs/
 .backup-test/
+
+# a plain `go build ./apps/hubctl/...` drops the binary here
+/omnira-hubctl

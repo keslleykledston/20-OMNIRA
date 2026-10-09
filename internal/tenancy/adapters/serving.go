@@ -26,10 +26,27 @@ var delegatedServing atomic.Bool
 // EnableDelegatedServing — the process-wide switch (OMNIRA_HUB_SERVE_ENABLED), read at request time.
 func EnableDelegatedServing(on bool) { delegatedServing.Store(on) }
 
+// DelegatedServingEnabled — whether the switch is on (the Hub inbox only advertises the full context when it is).
+func DelegatedServingEnabled() bool { return delegatedServing.Load() }
+
 var (
 	errServeDenied  = errors.New("delegated serving: not found")
 	errServeHandled = errors.New("delegated serving: handled")
+	errServeForbid  = errors.New("delegated serving: permission not held")
 )
+
+type delegableKey struct{}
+
+// Delegable — marks a route as one a Hub agent may reach in the delegated context, and names the permission key it needs. It wraps the
+// OUTERMOST handler of the route (before authentication), so the middleware can read it. A route that is not marked is NOT reachable in
+// the delegated context at all (404), whatever its own authorization says: the module-local checks of routes that were not migrated still look at
+// memberships, and without this a person who is both a member and a delegate would reach them with their membership while acting for a hub.
+// Members' requests are not affected in any way.
+func Delegable(permission string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), delegableKey{}, permission)))
+	})
+}
 
 // resolveServeContext — lock_served_tenant validates the whole chain (account, hub, instance, contract, hub membership, individual
 // grant, at least one delegable permission), pins those rows for the transaction and sets the acting hub for it. Only then are the ids of
@@ -65,6 +82,12 @@ func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, p
 		http.Error(w, "delegated context is not enabled", http.StatusForbidden)
 		return
 	}
+	permission, delegable := r.Context().Value(delegableKey{}).(string)
+	if !delegable {
+		log.Printf("tenancy: delegated context refused: route %q is not delegable (tenant=%s hub=%s actor=%s)", r.Pattern, tenantID, hubID, principal.UserID)
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	tw := &trackedResponseWriter{ResponseWriter: w}
 	serr := platformdb.WithTenantSession(r.Context(), pool, principal.UserID, false, func(ctx context.Context) error {
 		tc, err := resolveServeContext(ctx, pool, hubID, tenantID, principal.UserID)
@@ -74,11 +97,21 @@ func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, p
 		if !ratelimit.EnforceTenantUser(tw, r, tc.TenantID, tc.ActorID) {
 			return errServeHandled
 		}
+		// the key THIS route needs, asked of the database in this very transaction (live), in the delegated context
+		held, err := ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, pool), tc.TenantID, tc.ActorID, permission)
+		if err != nil {
+			return err
+		}
+		if !held {
+			return errServeForbid
+		}
 		next.ServeHTTP(tw, r.WithContext(domain.WithTenantContext(ctx, tc)))
 		return nil
 	})
 	switch {
 	case serr == nil, errors.Is(serr, errServeHandled):
+	case errors.Is(serr, errServeForbid):
+		http.Error(tw, "forbidden", http.StatusForbidden)
 	case errors.Is(serr, errServeDenied):
 		// the same answer for a stranger, a revoked grant and an instance that does not exist; ids only in the log, never a reason to the client
 		log.Printf("tenancy: delegated context refused (tenant=%s hub=%s actor=%s)", tenantID, hubID, principal.UserID)
@@ -102,4 +135,27 @@ func ActorHasPermission(ctx context.Context, q platformdb.Querier, tenantID, use
 		return false, err
 	}
 	return ok, nil
+}
+
+// DelegatedPath — the same delegated admission for a route whose client cannot send the acting header (an <img>, <audio> or <video> loads
+// its source without custom headers): the hub is named in the PATH instead, `/api/v1/hubs/{hub_id}/serve/{tenant_id}/...`. It is the same
+// declaration of context, validated by the same door (lock_served_tenant); the path is a target, never authority. Wrap the handler with
+// Delegable(...) and register it under that path.
+func DelegatedPath(pool *pgxpool.Pool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, err := authn.FromContext(r.Context())
+			if err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			hubID, herr := uuid.Parse(r.PathValue("hub_id"))
+			tenantID, terr := uuid.Parse(r.PathValue("tenant_id"))
+			if herr != nil || terr != nil || hubID == uuid.Nil || tenantID == uuid.Nil {
+				http.Error(w, "invalid acting context", http.StatusBadRequest)
+				return
+			}
+			serveDelegated(w, r, next, pool, principal, tenantID, hubID)
+		})
+	}
 }

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -545,6 +546,122 @@ func (s *Service) SetManage(ctx context.Context, hub, tenant, user uuid.UUID, ca
 			return err
 		}
 		return s.audit(c, q, &tenant, "hub.grant.manage_changed", "hub_grant", id, map[string]any{"hub_id": hub, "user_id": user, "can_manage": can})
+	})
+}
+
+// ---------------------------------------------------------------- delegated serving (ADR-0040)
+
+// ServingPresets are named sets of permission keys. "atendimento" is what an agent needs to attend an instance end to end (read, claim, reply,
+// open the files, read the contact card); "leitura" is the same without claiming or replying.
+var ServingPresets = map[string][]string{
+	"atendimento": {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read"},
+	"leitura":     {"conversation.read", "media.read", "contact.read"},
+}
+
+// cleanKeys sorts, de-duplicates and checks that every key can be delegated at all (it has a row in permission_domains).
+func cleanKeys(ctx context.Context, q platformdb.Querier, keys []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	for _, k := range out {
+		var ok bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM permission_domains WHERE permission_key = $1)`, k).Scan(&ok); err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, invalid("%q cannot be delegated to a hub (it is not a delegable permission)", k)
+		}
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out, nil
+}
+
+// SetCeiling replaces the permission keys the CONTRACT lets the hub delegate to the people it serves this company with. It is a platform
+// decision (made with the company's consent), so it is reached through hubctl and not through the hub's own panel. Lowering it takes effect
+// at once: what a grant may use is always the grant AND the ceiling, evaluated live.
+func (s *Service) SetCeiling(ctx context.Context, hub, tenant uuid.UUID, keys []string) error {
+	return s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := s.guard(c, q, hub); err != nil {
+			return err
+		}
+		clean, err := cleanKeys(c, q, keys)
+		if err != nil {
+			return err
+		}
+		var id uuid.UUID
+		if err := q.QueryRow(c, `SELECT id FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR UPDATE`, hub, tenant).Scan(&id); err != nil {
+			return mapNoRows(err, "no contract between hub %s and tenant %s", hub, tenant)
+		}
+		if _, err := q.Exec(c, `UPDATE hub_tenant_service_contracts SET delegable_permissions = $2, updated_at = now() WHERE id = $1`, id, clean); err != nil {
+			return err
+		}
+		return s.audit(c, q, &tenant, "hub.contract.ceiling_changed", "hub_contract", id, map[string]any{"hub_id": hub, "delegable_permissions": clean})
+	})
+}
+
+// SetServing replaces the permission keys of one live grant. They must lie inside the contract's ceiling. Replying needs claiming and claiming
+// needs reading (an agent cannot answer what they may not take, nor take what they may not see); can_reply follows the key 'conversation.reply',
+// so the two ways the system knows "may answer" cannot disagree after this call.
+func (s *Service) SetServing(ctx context.Context, hub, tenant, user uuid.UUID, keys []string) error {
+	return s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
+		if err := s.guard(c, q, hub); err != nil {
+			return err
+		}
+		clean, err := cleanKeys(c, q, keys)
+		if err != nil {
+			return err
+		}
+		has := func(k string) bool {
+			for _, x := range clean {
+				if x == k {
+					return true
+				}
+			}
+			return false
+		}
+		if has("conversation.reply") && !has("conversation.claim") {
+			return invalid("conversation.reply needs conversation.claim")
+		}
+		if (has("conversation.claim") || has("conversation.reply")) && !has("conversation.read") {
+			return invalid("claiming or replying needs conversation.read")
+		}
+		var grant uuid.UUID
+		var status string
+		var ceiling []string
+		err = q.QueryRow(c, `
+			SELECT g.id, g.status, k.delegable_permissions
+			FROM effective_access_grants g JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id
+			WHERE g.hub_id = $1 AND g.tenant_id = $2 AND g.user_id = $3 FOR UPDATE OF g`, hub, tenant, user).Scan(&grant, &status, &ceiling)
+		if err != nil {
+			return mapNoRows(err, "user %s has no grant on tenant %s in hub %s", user, tenant, hub)
+		}
+		if status != "active" {
+			return invalid("the grant is %s: give the person access first", status)
+		}
+		inCeiling := map[string]bool{}
+		for _, k := range ceiling {
+			inCeiling[k] = true
+		}
+		for _, k := range clean {
+			if !inCeiling[k] {
+				return invalid("%q is above the contract's ceiling for this company: the platform must delegate it first", k)
+			}
+		}
+		if _, err := q.Exec(c, `UPDATE effective_access_grants SET permissions = $2, can_reply = $3, grant_version = grant_version + 1, updated_at = now() WHERE id = $1`,
+			grant, clean, has("conversation.reply")); err != nil {
+			return err
+		}
+		return s.audit(c, q, &tenant, "hub.grant.serving_changed", "hub_grant", grant, map[string]any{"hub_id": hub, "user_id": user, "permissions": clean})
 	})
 }
 

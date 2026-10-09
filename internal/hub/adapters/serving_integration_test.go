@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
+	"github.com/omnira/omnira/internal/hub/provisioning"
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
@@ -380,7 +381,7 @@ func (w *world) servedChain(probe *servedProbe, asks ...string) http.Handler {
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(w.app), tenancyadapters.NewPostgresTenantRepository(w.app))
 	mw := tenancyadapters.AuthorizationMiddleware(w.app, authz)
 	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/tenants/{tenant_id}/probe", mw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/probe", tenancyadapters.Delegable("conversation.read", mw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		tc, err := tenancydomain.FromContext(r.Context())
 		if err != nil {
 			http.Error(rw, "no context", http.StatusInternalServerError)
@@ -400,7 +401,7 @@ func (w *world) servedChain(probe *servedProbe, asks ...string) http.Handler {
 			probe.perms[k] = ok
 		}
 		rw.WriteHeader(http.StatusOK)
-	})))
+	}))))
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if u := r.Header.Get("X-Test-User"); u != "" {
 			id, _ := uuid.Parse(u)
@@ -673,14 +674,14 @@ func TestDelegatedServingHoldsEverythingTheAuthorizationRestsOn(t *testing.T) {
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(w.app), tenancyadapters.NewPostgresTenantRepository(w.app))
 	mw := tenancyadapters.AuthorizationMiddleware(w.app, authz)
 	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/tenants/{tenant_id}/probe", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/probe", tenancyadapters.Delegable("conversation.read", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		id, _ := uuid.Parse(r.Header.Get("X-Test-User"))
 		mw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 			close(entered)
 			<-release
 			rw.WriteHeader(http.StatusNoContent)
 		})).ServeHTTP(rw, r.WithContext(contextWithPrincipal(r, id)))
-	}))
+	})))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	// LIFO: registered after srv.Close, so the parked request is released BEFORE the server waits for it (no hang on a failed assertion)
@@ -761,4 +762,106 @@ func TestPermissionQuestionsAreOnlyAnsweredAboutTheCaller(t *testing.T) {
 			t.Error("a member must be able to ask about themselves")
 		}
 	})
+}
+
+// --- provisioning (what hubctl and, later, the admin console call)
+
+func (w *world) provisioner(t *testing.T) *provisioning.Service {
+	t.Helper()
+	svc, err := provisioning.New(w.app, "test-operator")
+	w.must(err)
+	return svc
+}
+
+func TestProvisioningTheCeilingAndTheGrantsKeys(t *testing.T) {
+	w := newWorld(t)
+	svc := w.provisioner(t)
+	agent := w.hubAgent("agent")
+	g := w.grant(agent, "A")
+	var delegable func() []string = func() []string {
+		var k []string
+		w.must(w.owner.QueryRow(w.ctx, `SELECT delegable_permissions FROM hub_tenant_service_contracts WHERE id = $1`, w.contract["A"]).Scan(&k))
+		sort.Strings(k)
+		return k
+	}
+	var grantRow = func() (keys []string, reply bool) {
+		w.must(w.owner.QueryRow(w.ctx, `SELECT permissions, can_reply FROM effective_access_grants WHERE id = $1`, g).Scan(&keys, &reply))
+		sort.Strings(keys)
+		return
+	}
+
+	// a key that can never be delegated is refused, whoever asks
+	if err := svc.SetCeiling(w.ctx, w.hub, w.tenant["A"], []string{"conversation.read", "membership.manage"}); err == nil {
+		t.Error("a key with no row in permission_domains must not enter a ceiling")
+	}
+	if got := delegable(); len(got) != 0 {
+		t.Fatalf("a refused ceiling changed the contract: %v", got)
+	}
+	preset := provisioning.ServingPresets["atendimento"]
+	w.must(svc.SetCeiling(w.ctx, w.hub, w.tenant["A"], preset))
+	if got := delegable(); !reflect.DeepEqual(got, sortedCopy(preset)) {
+		t.Fatalf("ceiling = %v", got)
+	}
+	// no contract with that tenant/hub pair
+	if err := svc.SetCeiling(w.ctx, w.hub, uuid.New(), preset); err == nil {
+		t.Error("a ceiling for a company the hub has no contract with must be refused")
+	}
+
+	// grant keys: inside the ceiling only
+	w.must(svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, []string{"conversation.read", "media.read"}))
+	if keys, reply := grantRow(); !reflect.DeepEqual(keys, []string{"conversation.read", "media.read"}) || reply {
+		t.Errorf("grant after a read-only set = %v reply=%v", keys, reply)
+	}
+	w.must(svc.SetCeiling(w.ctx, w.hub, w.tenant["A"], []string{"conversation.read"}))
+	if err := svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, []string{"conversation.read", "media.read"}); err == nil {
+		t.Error("a key above the contract's ceiling must be refused")
+	}
+	w.must(svc.SetCeiling(w.ctx, w.hub, w.tenant["A"], preset))
+
+	// coherence of claiming/replying, and can_reply follows the reply key
+	for name, keys := range map[string][]string{
+		"reply without claim": {"conversation.read", "conversation.reply"},
+		"claim without read":  {"conversation.claim"},
+		"reply without read":  {"conversation.claim", "conversation.reply"},
+		"a non-delegable key": {"conversation.read", "tenant.manage"},
+		"an unknown key":      {"conversation.read", "no.such.key"},
+	} {
+		if err := svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, keys); err == nil {
+			t.Errorf("%s must be refused", name)
+		}
+	}
+	w.must(svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, preset))
+	if keys, reply := grantRow(); !reflect.DeepEqual(keys, sortedCopy(preset)) || !reply {
+		t.Errorf("the attendance preset must set can_reply: %v reply=%v", keys, reply)
+	}
+	w.must(svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, provisioning.ServingPresets["leitura"]))
+	if _, reply := grantRow(); reply {
+		t.Error("withdrawing the reply key must withdraw can_reply too (the two must not disagree)")
+	}
+	// the live effect: lowering the ceiling cuts what the grant may use at once, without touching the grant
+	w.must(svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, preset))
+	w.must(svc.SetCeiling(w.ctx, w.hub, w.tenant["A"], []string{"conversation.read"}))
+	if got := w.delegated(agent, "A"); !reflect.DeepEqual(got, []string{"conversation.read"}) {
+		t.Errorf("effective permissions after lowering the ceiling = %v", got)
+	}
+	// a revoked grant cannot be edited (the ceiling is wide again, so only the status can be the reason), and a person with no grant is not found
+	w.must(svc.SetCeiling(w.ctx, w.hub, w.tenant["A"], preset))
+	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, g)
+	if err := svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, preset); err == nil {
+		t.Error("a revoked grant must not be edited")
+	}
+	stranger := w.hubAgent("stranger")
+	if err := svc.SetServing(w.ctx, w.hub, w.tenant["A"], stranger, preset); err == nil {
+		t.Error("a person with no grant must be refused")
+	}
+	// the audit trail names what changed
+	if n := w.count(`SELECT count(*) FROM audit_events WHERE tenant_id = $1 AND action IN ('hub.contract.ceiling_changed','hub.grant.serving_changed')`, w.tenant["A"]); n < 4 {
+		t.Errorf("provisioning left %d audit event(s), want at least 4", n)
+	}
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }
