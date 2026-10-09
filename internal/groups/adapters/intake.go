@@ -95,6 +95,12 @@ func (i *Intake) ProcessGroupMessage(ctx context.Context, conn channeldomain.Cha
 	}
 	err = platformdb.WithSystemTenantSession(ctx, i.pool, conn.TenantID, func(scoped context.Context) error {
 		q := platformdb.QuerierFromContext(scoped, i.pool)
+		// A suspended company is not served (ADR-0038): the group message is dropped before anything is persisted.
+		if active, err := platformdb.LockTenantActive(scoped, q, conn.TenantID); err != nil {
+			return err
+		} else if !active {
+			return nil
+		}
 		var groupID uuid.UUID
 		scanErr := q.QueryRow(scoped, `
 			SELECT id FROM wa_groups

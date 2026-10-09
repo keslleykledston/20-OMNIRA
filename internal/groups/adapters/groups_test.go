@@ -208,6 +208,36 @@ func TestIntakeStoresOnlyEnabledGroupsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+// Codex H-02 / ADR-0038: a suspended company stores nothing from its groups either; after reactivation the same
+// message is stored (nothing, not even the dedup record, was kept while suspended).
+func TestIntakeDropsGroupMessagesOfASuspendedCompany(t *testing.T) {
+	e := newEnv(t)
+	tenant, conn := e.tenant()
+	g := e.group(tenant, conn, jid1, "Oficial", true)
+	intake := NewIntake(e.app, channeladapters.NewPostgresWebhookEventStore(e.app))
+	msg := groupMsg(conn, jid1, "m-susp", "durante a suspensao", time.Now().UTC().Add(-time.Minute))
+
+	if _, err := e.seed.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	ing, dup, err := intake.ProcessGroupMessage(e.ctx, conn, "k-susp", "message.any", "digest-k-susp", msg)
+	if err != nil || ing || dup {
+		t.Fatalf("suspended: ingested=%v duplicate=%v err=%v, want a silent drop", ing, dup, err)
+	}
+	if n := e.count(`SELECT count(*) FROM wa_group_messages WHERE group_id=$1`, g); n != 0 {
+		t.Fatalf("a suspended company stored %d group messages", n)
+	}
+	if n := e.count(`SELECT count(*) FROM channel_webhook_events WHERE provider_event_id=$1`, "k-susp"); n != 0 {
+		t.Fatalf("a suspended company left %d dedup records", n)
+	}
+	if _, err := e.seed.Exec(e.ctx, `UPDATE tenants SET status='active' WHERE id=$1`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if ing, dup, err := intake.ProcessGroupMessage(e.ctx, conn, "k-susp", "message.any", "digest-k-susp", msg); err != nil || !ing || dup {
+		t.Fatalf("after reactivation: ingested=%v duplicate=%v err=%v", ing, dup, err)
+	}
+}
+
 func TestGroupAPIPermissionsEnableDisableCursorAndDeleteAreTenantScoped(t *testing.T) {
 	e := newEnv(t)
 	tenantA, connA := e.tenant()

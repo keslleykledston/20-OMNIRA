@@ -272,7 +272,8 @@ type DueRun struct {
 }
 
 func (r *PostgresFlowRepository) DueRuns(ctx context.Context, now time.Time, limit int) ([]DueRun, error) {
-	rows, err := r.q(ctx).Query(ctx, `SELECT tenant_id, id FROM flow_runs WHERE status='waiting_input' AND wait_until IS NOT NULL AND wait_until <= $1 ORDER BY wait_until LIMIT $2`, now, limit)
+	rows, err := r.q(ctx).Query(ctx, `SELECT r.tenant_id, r.id FROM flow_runs r JOIN tenants t ON t.id = r.tenant_id AND t.status = 'active'
+		WHERE r.status='waiting_input' AND r.wait_until IS NOT NULL AND r.wait_until <= $1 ORDER BY r.wait_until LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +299,7 @@ type StrandedConversation struct {
 // (system-admin session; each is then released in its own tenant session).
 func (r *PostgresFlowRepository) StrandedConversations(ctx context.Context, cutoff time.Time, limit int) ([]StrandedConversation, error) {
 	rows, err := r.q(ctx).Query(ctx, `
-		SELECT c.tenant_id, c.id FROM conversations c
+		SELECT c.tenant_id, c.id FROM conversations c JOIN tenants t ON t.id = c.tenant_id AND t.status = 'active'
 		WHERE c.automation_mode = 'bot' AND c.updated_at < $1
 		  AND NOT EXISTS (SELECT 1 FROM flow_runs r WHERE r.tenant_id = c.tenant_id AND r.conversation_id = c.id AND r.status IN ('running','waiting_input','waiting_human'))
 		ORDER BY c.updated_at LIMIT $2`, cutoff, limit)

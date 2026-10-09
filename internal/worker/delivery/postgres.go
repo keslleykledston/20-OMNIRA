@@ -94,6 +94,12 @@ func (s *PostgresOutboundStore) LockOutbound(ctx context.Context, messageID uuid
 		job.ToE164 = *phone
 	}
 	job.ConnectionActive = active != nil && *active
+	// The company must still be active, and stay so until this transaction ends (share lock on its row).
+	tenantActive, err := platformdb.LockTenantActive(ctx, platformdb.QuerierFromContext(ctx, s.pool), tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("channel delivery: check company status: %w", err)
+	}
+	job.TenantSuspended = !tenantActive
 	if tplName != nil && tplLang != nil {
 		t := &TemplateJob{Name: *tplName, Language: *tplLang}
 		if err := json.Unmarshal(tplParams, &t.Params); err != nil {

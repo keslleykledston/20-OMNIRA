@@ -58,7 +58,12 @@ func (s *Sweeper) Tick(ctx context.Context) SweepResult {
 	}
 	for _, d := range due {
 		d := d
+		ran := false
 		err := platformdb.WithSystemTenantSession(ctx, s.pool, d.TenantID, func(c context.Context) error {
+			if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, s.pool), d.TenantID); err != nil || !active {
+				return err // a suspended company's flows do not advance (ADR-0038)
+			}
+			ran = true
 			_, err := s.engine.OnTimeout(c, d.RunID)
 			return err
 		})
@@ -66,7 +71,9 @@ func (s *Sweeper) Tick(ctx context.Context) SweepResult {
 			s.logf("flows sweeper: timeout of run %s failed: %v", d.RunID, err)
 			continue
 		}
-		res.TimedOut++
+		if ran {
+			res.TimedOut++
+		}
 	}
 
 	var stranded []adapters.StrandedConversation
@@ -78,14 +85,21 @@ func (s *Sweeper) Tick(ctx context.Context) SweepResult {
 	}
 	for _, st := range stranded {
 		st := st
+		ran := false
 		err := platformdb.WithSystemTenantSession(ctx, s.pool, st.TenantID, func(c context.Context) error {
+			if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, s.pool), st.TenantID); err != nil || !active {
+				return err
+			}
+			ran = true
 			return s.engine.ReleaseStranded(c, st.ConversationID)
 		})
 		if err != nil {
 			s.logf("flows sweeper: releasing conversation %s failed: %v", st.ConversationID, err)
 			continue
 		}
-		res.Released++
+		if ran {
+			res.Released++
+		}
 	}
 
 	if err := s.admin(ctx, func(c context.Context) error {

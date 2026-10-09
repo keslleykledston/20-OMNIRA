@@ -299,6 +299,38 @@ func TestProjector_RelationshipLifecycle(t *testing.T) {
 	}
 }
 
+// Codex M-01 / ADR-0038: while a company is suspended its cache is FROZEN: nothing new is copied in and nothing is
+// removed (the read policy already hides it); the first pass after the reactivation brings it up to date.
+func TestProjector_SuspendedCompanyIsFrozenAndCatchesUpOnReactivation(t *testing.T) {
+	f := newFx(t)
+	a := f.tenant("A", f.hub)
+	first := f.conversation(a, ptr(a.queue1))
+	f.reconcile()
+	if _, ok := f.item(f.hub, a.id, first); !ok {
+		t.Fatal("setup: not projected")
+	}
+	f.exec(`UPDATE tenants SET status = 'suspended' WHERE id = $1`, a.id)
+	second := f.conversation(a, ptr(a.queue1))
+	f.exec(`UPDATE conversations SET status = 'closed' WHERE id = $1`, first)
+	if res := f.reconcile(); res.Upserted != 0 || res.Removed != 0 {
+		t.Fatalf("a pass over a suspended company changed the cache: %+v", res)
+	}
+	if _, ok := f.item(f.hub, a.id, second); ok {
+		t.Fatal("a conversation of a suspended company was copied into the Hub cache")
+	}
+	if it, ok := f.item(f.hub, a.id, first); !ok || it.Status != "open" {
+		t.Fatalf("the cache of a suspended company was touched: present=%v %+v", ok, it)
+	}
+	f.exec(`UPDATE tenants SET status = 'active' WHERE id = $1`, a.id)
+	f.reconcile()
+	if _, ok := f.item(f.hub, a.id, second); !ok {
+		t.Fatal("after the reactivation the new conversation was not projected")
+	}
+	if it, ok := f.item(f.hub, a.id, first); !ok || it.Status != "closed" {
+		t.Fatalf("after the reactivation the changed conversation is stale: present=%v %+v", ok, it)
+	}
+}
+
 func TestProjector_TenantAndHubIsolation(t *testing.T) {
 	f := newFx(t)
 	hub2 := uuid.New()

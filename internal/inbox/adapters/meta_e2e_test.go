@@ -111,4 +111,36 @@ func TestMetaWebhookEndToEndPersistsDedupesAndIsolates(t *testing.T) {
 	if code := post(body("unknown-"+uuid.NewString(), "wamid.z")); code != http.StatusUnauthorized {
 		t.Fatalf("unknown phone code=%d", code)
 	}
+
+	// Codex H-02 / ADR-0038: a suspended company records nothing. The provider still gets 200 (no retry storm), but no
+	// contact, conversation, message or dedup record appears; after the reactivation the same event is stored normally.
+	events4 := func(tn uuid.UUID) (n int) {
+		if err := seed.QueryRow(ctx, `SELECT count(*) FROM channel_webhook_events WHERE tenant_id=$1`, tn).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	contacts := func(tn uuid.UUID) (n int) {
+		if err := seed.QueryRow(ctx, `SELECT count(*) FROM contacts WHERE tenant_id=$1`, tn).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if _, err := seed.Exec(ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, tenantA); err != nil {
+		t.Fatal(err)
+	}
+	beforeMsgs, beforeEvents, beforeContacts := count(tenantA), events4(tenantA), contacts(tenantA)
+	late := "wamid." + uuid.NewString()
+	if code := post(body(phoneA, late)); code != 200 {
+		t.Fatalf("suspended company must still be answered 200 so the provider does not retry, got %d", code)
+	}
+	if m, e, c := count(tenantA), events4(tenantA), contacts(tenantA); m != beforeMsgs || e != beforeEvents || c != beforeContacts {
+		t.Fatalf("a suspended company recorded something: messages %d->%d events %d->%d contacts %d->%d", beforeMsgs, m, beforeEvents, e, beforeContacts, c)
+	}
+	if _, err := seed.Exec(ctx, `UPDATE tenants SET status='active' WHERE id=$1`, tenantA); err != nil {
+		t.Fatal(err)
+	}
+	if code := post(body(phoneA, late)); code != 200 || count(tenantA) != beforeMsgs+1 {
+		t.Fatalf("after reactivation the event must be stored: code=%d messages=%d (was %d)", code, count(tenantA), beforeMsgs)
+	}
 }

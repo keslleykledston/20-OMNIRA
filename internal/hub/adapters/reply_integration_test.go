@@ -182,6 +182,13 @@ func TestHubReply_CapabilityAndHappyPath(t *testing.T) {
 				t.Errorf("audit %s: %d rows", action, n)
 			}
 		}
+		// Codex M3: the audit row points at what it is about - the sent message by its id, the claim by the conversation's
+		if n := w.count(`SELECT count(*) FROM audit_events WHERE tenant_id = $1 AND action = 'hub.message.sent' AND resource_type = 'message' AND resource_id = $2`, w.tenant["A"], got.ID.String()); n != 1 {
+			t.Errorf("the audit of the sent message must name the message (resource_type=message, its id): %d rows", n)
+		}
+		if n := w.count(`SELECT count(*) FROM audit_events WHERE tenant_id = $1 AND action = 'hub.conversation.claimed' AND resource_type = 'conversation' AND resource_id = $2`, w.tenant["A"], w.conv["A"].String()); n != 1 {
+			t.Errorf("the audit of the claim must name the conversation: %d rows", n)
+		}
 	})
 	t.Run("idempotency: same key and text replays (200), same key and other text is 422, one message only", func(t *testing.T) {
 		code, _, h := api.reply(alice, "A", "A", "Olá, em que posso ajudar?", "key-alice-0002")

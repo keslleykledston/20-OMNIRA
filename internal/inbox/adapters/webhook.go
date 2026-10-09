@@ -24,11 +24,13 @@ type WebhookIntake struct {
 	events  channelports.WebhookEventStore
 	inbound *inboxapp.InboundService
 	status  metric.Int64Counter
+	dropped metric.Int64Counter
 }
 
 func NewWebhookIntake(pool *pgxpool.Pool, events channelports.WebhookEventStore, inbound *inboxapp.InboundService) *WebhookIntake {
 	status, _ := otel.Meter("omnira/inbox").Int64Counter("delivery_status_receipt_total")
-	return &WebhookIntake{pool: pool, events: events, inbound: inbound, status: status}
+	dropped, _ := otel.Meter("omnira/inbox").Int64Counter("webhook_dropped_tenant_suspended_total")
+	return &WebhookIntake{pool: pool, events: events, inbound: inbound, status: status, dropped: dropped}
 }
 
 // receiptShape describes an id WITHOUT revealing it: prefix (true/false), kind of chat address and
@@ -56,7 +58,18 @@ func (i *WebhookIntake) ProcessWebhook(ctx context.Context, connection channeldo
 	}
 	var duplicate bool
 	err := platformdb.WithSystemTenantSession(ctx, i.pool, connection.TenantID, func(scoped context.Context) error {
-		var err error
+		// A suspended company is not served (ADR-0038): nothing is recorded and no automation starts. The provider still
+		// gets a success answer so it does not retry; the event, including the dedup record, is simply not kept.
+		active, err := platformdb.LockTenantActive(scoped, platformdb.QuerierFromContext(scoped, i.pool), connection.TenantID)
+		if err != nil {
+			return err
+		}
+		if !active {
+			if i.dropped != nil {
+				i.dropped.Add(scoped, 1, metric.WithAttributes(attribute.String("event", eventType)))
+			}
+			return nil
+		}
 		duplicate, err = i.events.MarkReceived(scoped, connection, deduplicationKey, eventType, payloadDigest)
 		if err != nil || duplicate {
 			return err

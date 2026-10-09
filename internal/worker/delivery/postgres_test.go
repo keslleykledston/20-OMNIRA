@@ -207,6 +207,19 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 		t.Fatalf("inactive channel: %s %q calls %d->%d", s, r, callsBefore, sender.calls)
 	}
 
+	// Codex H-03 / ADR-0038: a message queued BEFORE the company was suspended must not reach the provider afterwards.
+	// It fails with a readable reason (nothing is held back to go out later on its own after a reactivation).
+	m4b := queue(conv, "enfileirada antes da suspensao")
+	execInTenant(tenantA, `UPDATE tenants SET status = 'suspended' WHERE id = $1`, tenantA)
+	callsBefore = sender.calls
+	if err := h.Handle(ctx, job(m4b), 1); err != nil {
+		t.Fatal(err)
+	}
+	if s, p, r := row(m4b); s != "failed" || r != "company_suspended" || p != "" || sender.calls != callsBefore {
+		t.Fatalf("suspended company: status=%s provider=%q reason=%q calls %d->%d", s, p, r, callsBefore, sender.calls)
+	}
+	execInTenant(tenantA, `UPDATE tenants SET status = 'active' WHERE id = $1`, tenantA)
+
 	// Unknown message id is terminal.
 	if err := h.Handle(ctx, job(uuid.New()), 1); err == nil {
 		t.Fatal("unknown message must be terminal")

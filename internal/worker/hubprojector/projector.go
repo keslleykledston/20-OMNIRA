@@ -233,6 +233,11 @@ func (p *Projector) run(ctx context.Context, hubID, tenantID, conversationID uui
 	}
 	var res Result
 	err := platformdb.WithSystemTenantSession(ctx, p.pool, tenantID, func(c context.Context) error {
+		// A suspended company is frozen, not erased: nothing is projected or removed while it is suspended (the read policy
+		// already hides it, ADR-0038), and the first pass after reactivation brings the cache up to date.
+		if active, err := platformdb.LockTenantActive(c, platformdb.QuerierFromContext(c, p.pool), tenantID); err != nil || !active {
+			return err
+		}
 		var up, rm int64
 		if err := platformdb.QuerierFromContext(c, p.pool).QueryRow(c, reconcileSQL, hubID, tenantID, p.lookbackDays, conv).Scan(&up, &rm); err != nil {
 			return err

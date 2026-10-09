@@ -44,6 +44,9 @@ type OutboundJob struct {
 	// response (MarkSent) — this semantic is unchanged by PILOT.4A1.
 	ProviderMessageID string
 	ConnectionActive  bool
+	// TenantSuspended is true when the company was suspended at the moment the message was locked. The store takes a
+	// share lock on the company row, so the suspension cannot commit while this attempt is still deciding (ADR-0038).
+	TenantSuspended bool
 	// Template is set when this message is an approved-template send (WhatsApp Cloud API); Text then only holds the
 	// rendered preview shown in the inbox and is NOT what the provider receives.
 	Template *TemplateJob
@@ -229,6 +232,9 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 		log.Printf("channel delivery: skipped, already terminal message_id=%s tenant_id=%s status=%s", messageID, tenantID, peek.Status)
 		return nil
 	}
+	if peek.TenantSuspended {
+		return h.failSuspended(ctx, messageID)
+	}
 	if !peek.ConnectionActive || peek.ConnectionID == uuid.Nil {
 		h.count(ctx, "channel_inactive")
 		return h.store.RunForMessage(ctx, messageID, func(scoped context.Context) error {
@@ -285,6 +291,10 @@ func (h *Handler) Handle(ctx context.Context, raw []byte, attempt int) error {
 		if out.Status != "queued" || out.ProviderMessageID != "" {
 			h.count(scoped, "already_processed")
 			return nil
+		}
+		if out.TenantSuspended {
+			h.count(scoped, "company_suspended")
+			return h.store.MarkFailed(scoped, messageID, "company_suspended")
 		}
 		if !out.ConnectionActive || out.ConnectionID == uuid.Nil {
 			h.count(scoped, "channel_inactive")
@@ -447,4 +457,14 @@ func Classify(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// failSuspended ends the attempt for a message whose company is suspended: nothing reaches the provider and the message
+// is marked failed with a reason a person can read. Nothing is held back to be sent later: after a reactivation a stale
+// answer must not go out on its own, the agent decides whether to write again.
+func (h *Handler) failSuspended(ctx context.Context, messageID uuid.UUID) error {
+	h.count(ctx, "company_suspended")
+	return h.store.RunForMessage(ctx, messageID, func(scoped context.Context) error {
+		return h.store.MarkFailed(scoped, messageID, "company_suspended")
+	})
 }

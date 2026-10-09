@@ -119,10 +119,29 @@ Resposta do dono: adotar as recomendações. Valores adotados: (1) `platform_ope
 - **API (flag `OMNIRA_HUB_ADMIN_API_ENABLED`, desligada por padrão):** `GET/POST /api/v1/hubs/{hub}/companies`, `PATCH /api/v1/hubs/{hub}/companies/{tenant}` (status e capacidades, atômico e auditado). Só passa quem é operador de plataforma ativo **e** `hub_admin` de um Hub ativo (checado na sessão do próprio usuário e de novo dentro da transação de sistema); qualquer outro caso é o mesmo 404. Empresa nova nasce com fila padrão, contrato com o Hub e **nenhum** acesso; primeiro administrador opcional (usuário existente, e-mail exato).
 - **Tela:** `/hub/empresas` (Empresas): lista, nova empresa (uma Idempotency-Key por tentativa), suspender com confirmação, reativar, chaves de capacidade. `GET /hubs` ganhou `can_manage_companies` (só para a tela oferecer o link; o servidor decide de novo).
 - **Provas:** testes em PostgreSQL real (HTTP + serviço direto + RLS), teste unitário do gate de canais, 11 testes vitest e 2 specs Playwright (API mockada); mutantes em `scripts/test-hub-admin-mutations.sh`.
-- **Limites conhecidos:** convidar pessoa nova como administrador não existe ainda (use a equipe da própria empresa); a suspensão não impede a entrada de webhooks nem encerra jobs em andamento; o gate de anexos e da rota WAHA legada está no wiring do servidor e **não** tem teste além da compilação; o botão de anexo na UI do tenant ainda aparece com a capacidade desligada (o servidor responde 403); gestão delegada dos canais pelo Hub (fase 3) não existe; a matriz de atendentes (fase 2) não existe.
+- **Limites conhecidos:** convidar pessoa nova como administrador não existe ainda (use a equipe da própria empresa); a suspensão agora também para o trabalho em segundo plano (ver "Suspensão de ponta a ponta" abaixo), mas não encerra uma chamada ao provedor que já estava em andamento; o gate de anexos e da rota WAHA legada está no wiring do servidor e **não** tem teste além da compilação; o botão de anexo na UI do tenant ainda aparece com a capacidade desligada (o servidor responde 403); gestão delegada dos canais pelo Hub (fase 3) não existe; a matriz de atendentes (fase 2) não existe.
 
 ## 10. Riscos
 - Gestão delegada é a parte mais sensível (credenciais de cliente): por isso fica na fase 3, depois de operador, criação e matriz estarem provados.
 - Reuso dos handlers de tenant pode esconder dependência de membership: o spike vem antes de qualquer código.
 - Papel de plataforma é um novo ponto de poder: tabela só escrita por `hubctl`, auditada, sem tela de autopromoção.
 - Hoje o E2E do Hub é só mock; nada acima vale em produção sem E2E real (fase 5).
+
+## Suspensão de ponta a ponta (fecha os achados H-02, H-03, M-01 e H1 do Codex) — 2026-10-09
+
+Regra: **empresa suspensa não é atendida, em nenhum caminho.** Antes só a leitura/escrita interativa parava (098 e `authorization.go`); agora todo caminho que escreve em nome da empresa pergunta, **na própria transação**, `platformdb.LockTenantActive` (lê `tenants.status` e toma um lock compartilhado da linha). O `UPDATE` que suspende conflita com esse lock: ou o trabalho que já decidiu seguir termina antes da suspensão confirmar, ou ele encontra a empresa suspensa e não faz nada. Não existe janela "escreveu depois de a suspensão aparecer".
+
+| Caminho | O que acontece com empresa suspensa | Decisão |
+|---|---|---|
+| Webhook WAHA/Meta (`WebhookIntake`) e mensagens de grupo | **Nada é gravado** (nem contato, conversa, mensagem, ticket, fluxo, nem o registro de deduplicação); o provedor recebe 200 para não reenviar; contador `webhook_dropped_tenant_suspended_total` | É o que o §Empresa já dizia ("entradas de webhook recusadas/ignoradas"). Consequência assumida: **o que o cliente final escrever durante a suspensão não é guardado**; reativar não o recupera. |
+| Worker de entrega (`LockOutbound`) | A mensagem já enfileirada vira `failed` com motivo `company_suspended`; **nada chega ao provedor** | Não fica retida para sair sozinha depois: uma resposta velha não pode ser enviada ao cliente na reativação; a pessoa decide se escreve de novo. |
+| Fluxos (job de entrada, timeouts, liberação de conversas presas) | Não começam nem avançam; o job é dado como feito; as consultas do sweeper já filtram empresa ativa (sem fome por causa de uma empresa suspensa grande) | Os mesmos eventos funcionam normalmente depois da reativação. |
+| Projetor do Hub | A empresa fica **congelada** (nada copiado, nada removido); a RLS já esconde; a primeira passada após reativar atualiza | Cumpre "grants, contratos e itens ficam guardados". |
+| Reply/claim do Hub | Trava (`FOR SHARE`) empresa, Hub, contrato, vínculo e grant até o commit, **depois** pergunta `has_active_hub_access` | Fecha H1: uma revogação em andamento ou é vista pela escrita, ou espera ela terminar. Mesma ordem de locks dos caminhos administrativos (empresa, Hub, contrato, vínculo, grant). |
+
+Também corrigidos no reply: conversa finalizada entre o carregamento e o lock agora recusa (409, antes enfileirava); a auditoria de `hub.message.sent` aponta para a **mensagem** (`resource_type=message`).
+
+**Risco aceito (M-02):** o `--operator` do `hubctl` continua um texto declarado (mais conta do SO e host, como evidência, nunca como prova). Quem tem as credenciais do banco já pode escrever qualquer coisa, inclusive em `audit_events`; assinar a invocação não muda isso. O caminho com identidade de verdade é a API autenticada (`/hub/empresas`, `/acessos`), que grava `actor_id`. `hubctl` fica como ferramenta de bancada/emergência.
+
+**Provas:** `scripts/test-hub-suspension-mutations.sh` (15 mutantes mortos, cada um por pelo menos um teste que falha), testes em PostgreSQL real em `internal/hub/adapters` (escrita espera revogação em andamento, 5 linhas × claim/reply + finalização), `internal/platform/db` (a suspensão espera quem perguntou primeiro), `internal/worker/{delivery,flows,hubprojector}`, `internal/inbox/adapters` (Meta ponta a ponta) e `internal/groups/adapters`.
+

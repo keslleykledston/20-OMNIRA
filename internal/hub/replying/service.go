@@ -113,6 +113,31 @@ func (s *Service) delegationHolds(ctx context.Context, t *Target, actor uuid.UUI
 	if err != nil {
 		return nil, false, fmt.Errorf("lock conversation: %w", err)
 	}
+	// Pin the authorization rows until this transaction ends. Revoking a grant, ending a contract, removing the person
+	// from the Hub, pausing the Hub or suspending the company each UPDATE/DELETE one of these rows, so the change either
+	// commits before the answer below (and is seen by it) or waits until this write is done. Without the pin, a
+	// revocation committed between the check and the INSERT would still be followed by a write (Codex H1).
+	// One statement per table (a JOIN here would let PostgreSQL's re-check drop the row after a concurrent update), always
+	// in the same order the administrative paths take them: company, hub, contract, membership, grant.
+	for _, pin := range []struct {
+		sql  string
+		args []any
+	}{
+		{`SELECT 1 FROM tenants WHERE id = $1 FOR SHARE`, []any{t.Item.TenantID}},
+		{`SELECT 1 FROM service_hubs WHERE id = $1 FOR SHARE`, []any{t.Item.HubID}},
+		{`SELECT 1 FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR SHARE`, []any{t.Item.HubID, t.Item.TenantID}},
+		{`SELECT 1 FROM hub_memberships WHERE hub_id = $1 AND user_id = $2 FOR SHARE`, []any{t.Item.HubID, actor}},
+		{`SELECT 1 FROM effective_access_grants WHERE hub_id = $1 AND tenant_id = $2 AND user_id = $3 FOR SHARE`, []any{t.Item.HubID, t.Item.TenantID, actor}},
+	} {
+		rows, err := q.Query(ctx, pin.sql, pin.args...)
+		if err != nil {
+			return nil, false, fmt.Errorf("pin authorization: %w", err)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, false, fmt.Errorf("pin authorization: %w", err)
+		}
+	}
 	var ok bool
 	if err := q.QueryRow(ctx, `SELECT has_active_hub_access($1, $2, $3, $4, true, true)`,
 		actor, t.Item.TenantID, queue, t.Item.HubID).Scan(&ok); err != nil {
@@ -124,7 +149,7 @@ func (s *Service) delegationHolds(ctx context.Context, t *Target, actor uuid.UUI
 	return assigned, status == "closed", nil
 }
 
-func (s *Service) audit(ctx context.Context, t *Target, actor uuid.UUID, action string, resource uuid.UUID, meta map[string]any) error {
+func (s *Service) audit(ctx context.Context, t *Target, actor uuid.UUID, action, resourceType string, resource uuid.UUID, meta map[string]any) error {
 	meta["hub_id"] = t.Item.HubID
 	meta["conversation_id"] = t.Item.ConversationID
 	meta["grant_id"] = t.Access.EffectiveGrantID
@@ -135,8 +160,8 @@ func (s *Service) audit(ctx context.Context, t *Target, actor uuid.UUID, action 
 	}
 	_, err = platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
 		INSERT INTO audit_events (id, tenant_id, actor_id, action, resource_type, resource_id, outcome, correlation_id, metadata)
-		VALUES ($1, $2, $3, $4, 'conversation', $5, 'success', $6, $7)`,
-		uuid.New(), t.Item.TenantID, actor, action, resource.String(), t.Access.CorrelationID, raw)
+		VALUES ($1, $2, $3, $4, $5, $6, 'success', $7, $8)`,
+		uuid.New(), t.Item.TenantID, actor, action, resourceType, resource.String(), t.Access.CorrelationID, raw)
 	return err
 }
 
@@ -167,7 +192,7 @@ func (s *Service) Claim(ctx context.Context, actor uuid.UUID, t *Target) (change
 			return fmt.Errorf("claim history: %w", err)
 		}
 		changed = true
-		return s.audit(c, t, actor, "hub.conversation.claimed", t.Item.ConversationID, map[string]any{})
+		return s.audit(c, t, actor, "hub.conversation.claimed", "conversation", t.Item.ConversationID, map[string]any{})
 	})
 	return changed, err
 }
@@ -177,7 +202,10 @@ func (s *Service) Send(ctx context.Context, actor uuid.UUID, t *Target, text, ke
 	var res messagesapp.SendResult
 	err := platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
 		r, err := s.sender.Send(c, actor, t.Item.ConversationID, text, key, func(gc context.Context, _ *messagesports.SendContext) error {
-			_, _, err := s.delegationHolds(gc, t, actor, "FOR SHARE")
+			_, closed, err := s.delegationHolds(gc, t, actor, "FOR SHARE")
+			if err == nil && closed {
+				return ErrClosed // the context was loaded before the lock: the attendance may have been finalized since
+			}
 			return err
 		})
 		if err != nil {
@@ -187,7 +215,7 @@ func (s *Service) Send(ctx context.Context, actor uuid.UUID, t *Target, text, ke
 		if r.Replayed {
 			return nil
 		}
-		return s.audit(c, t, actor, "hub.message.sent", r.Message.ID, map[string]any{"message_id": r.Message.ID})
+		return s.audit(c, t, actor, "hub.message.sent", "message", r.Message.ID, map[string]any{"message_id": r.Message.ID})
 	})
 	return res, err
 }

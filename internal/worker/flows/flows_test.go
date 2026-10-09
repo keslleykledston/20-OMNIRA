@@ -250,3 +250,43 @@ func TestSweeperTimeoutsStrandedAndClosedConversations(t *testing.T) {
 		t.Fatal("the run of a closed conversation must be cancelled")
 	}
 }
+
+// Codex H-03 / ADR-0038: the flows of a suspended company neither start nor advance (no answer goes out, no timeout
+// fires), and nothing is lost: the very same job and the same wait run normally after the reactivation.
+func TestSuspendedCompanysFlowsNeitherStartNorAdvance(t *testing.T) {
+	s := newStack(t)
+	s.publish()
+	s.ingest("oi", true)
+	job := s.envelopes()[0]
+	outbound := func() int {
+		return s.count(`SELECT count(*) FROM messages WHERE conversation_id=$1 AND direction='outbound'`, s.conv)
+	}
+	suspend := func() { s.exec(`UPDATE tenants SET status='suspended' WHERE id=$1`, s.env.TenantA) }
+	reactivate := func() { s.exec(`UPDATE tenants SET status='active' WHERE id=$1`, s.env.TenantA) }
+
+	suspend()
+	if err := s.handler.Handle(context.Background(), job); err != nil {
+		t.Fatalf("a suspended company's job is simply done, not an error: %v", err)
+	}
+	if s.count(`SELECT count(*) FROM flow_runs WHERE conversation_id=$1`, s.conv) != 0 || outbound() != 0 {
+		t.Fatal("a flow started for a suspended company")
+	}
+	reactivate()
+	if err := s.handler.Handle(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if s.runStatus() != "waiting_input" || outbound() != 1 {
+		t.Fatalf("after the reactivation the same job must start the flow: %s", s.runStatus())
+	}
+
+	// a wait that expires while the company is suspended does not fire; it fires after the reactivation
+	s.clock = s.clock.Add(25 * time.Hour)
+	suspend()
+	if r := s.sweeper.Tick(context.Background()); r.TimedOut != 0 || s.runStatus() != "waiting_input" {
+		t.Fatalf("a timeout fired for a suspended company: %+v status=%s", r, s.runStatus())
+	}
+	reactivate()
+	if r := s.sweeper.Tick(context.Background()); r.TimedOut != 1 || s.runStatus() != "completed" {
+		t.Fatalf("after the reactivation the timeout must fire: %+v status=%s", r, s.runStatus())
+	}
+}
