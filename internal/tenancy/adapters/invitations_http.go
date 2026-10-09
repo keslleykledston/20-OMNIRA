@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -601,7 +602,7 @@ func (h *InvitationsHandler) InvitationStatus(w http.ResponseWriter, r *http.Req
 // explicitamente aqui, em Go — a sessão de sistema não tem RLS para
 // confiar, tem que ser o código.
 //
-// Requer POST body com { "password": "<senha temporária>" } para validar identidade.
+// O corpo pode trazer { "password": "<senha temporária>" } (opcional; ver abaixo).
 type acceptInvitationRequest struct {
 	Password string `json:"password"`
 }
@@ -613,15 +614,13 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var req acceptInvitationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Password) == "" {
-		http.Error(w, "password is required", http.StatusBadRequest)
-		return
-	}
-
+	// A senha temporária é opcional. A identidade já é provada pela sessão (SSO) com e-mail verificado pelo IdP e igual ao do
+	// convite; a página de aceite (/invite/:token) não envia senha. Exigi-la deixava o aceite pela interface sempre em 400.
+	// Se vier senha, ela precisa bater com a do convite e passa a ser a senha inicial da conta (troca obrigatória).
 	token := r.PathValue("token")
 	sum := sha256.Sum256([]byte(token))
 	hash := hex.EncodeToString(sum[:])
@@ -662,8 +661,9 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 			return errInvitationExpired
 		}
 
-		// Validar a senha temporária contra o hash armazenado
-		if !password.Verify(tempPasswordHash, req.Password) {
+		// Senha enviada: precisa bater com a temporária do convite.
+		withPassword := strings.TrimSpace(req.Password) != ""
+		if withPassword && !password.Verify(tempPasswordHash, req.Password) {
 			return errInvitationPasswordInvalid
 		}
 		// ADR-0039, de novo: o convite pode ter sido emitido antes de a pessoa passar a atuar em outra instância.
@@ -676,27 +676,26 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 			return errInvitationOtherInstance
 		}
 
-		// Hash a senha temporária para armazenar como password_hash inicial
-		passwordHash, err := password.Hash(req.Password)
-		if err != nil {
-			return err
+		// Aceite sem senha (SSO) não toca na credencial da conta.
+		if withPassword {
+			passwordHash, err := password.Hash(req.Password)
+			if err != nil {
+				return err
+			}
+			// password_expires_at não nulo = força troca de senha no login
+			if _, err := q.Exec(ctx, `
+				UPDATE users
+				SET password_hash=$2, password_expires_at=$3, updated_at=now()
+				WHERE id=$1`,
+				principal.UserID, passwordHash, password.ExpiresAt()); err != nil {
+				return err
+			}
 		}
-		passwordExpiresAt := password.ExpiresAt()
 
 		if _, err := q.Exec(ctx, `
 			UPDATE membership_invitations
 			SET status='accepted', accepted_by_user_id=$2, accepted_at=now(), updated_at=now()
 			WHERE id=$1`, invitationID, principal.UserID); err != nil {
-			return err
-		}
-
-		// Criar ou atualizar user com password_hash e flag de troca obrigatória
-		// (password_expires_at não nulo = força troca de senha no login)
-		if _, err := q.Exec(ctx, `
-			UPDATE users
-			SET password_hash=$2, password_expires_at=$3, updated_at=now()
-			WHERE id=$1`,
-			principal.UserID, passwordHash, passwordExpiresAt); err != nil {
 			return err
 		}
 

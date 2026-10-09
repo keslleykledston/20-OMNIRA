@@ -182,3 +182,11 @@ CREATE TABLE password_resets (token_hash, used_at, expires_at...)
 ---
 
 **Próximo passo**: Task #2.5 — modificar `AcceptInvitation()` para guardar password_hash e testes.
+
+## Decisão 2026-10-09: a senha temporária é opcional no aceite
+
+`AcceptInvitation` exigia `password` no corpo desde o commit `df6fdcc`, mas a página `/invite/:token` (SSO) nunca enviou senha:
+todo aceite pela interface terminava em 400. A identidade já é provada pela sessão com e-mail verificado pelo IdP e igual ao do
+convite. Agora: sem senha, o aceite não toca na credencial da conta; com senha, ela precisa bater com a temporária do convite
+(401 se não) e vira a primeira senha da conta, com troca obrigatória. Testes: `invitations_accept_password_test.go`.
+Continua pendente (Task #3-4): login por senha e "esqueci a senha". Nada hoje consome `password_hash` para autenticar.

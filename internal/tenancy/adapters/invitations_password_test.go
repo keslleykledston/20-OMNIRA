@@ -57,7 +57,7 @@ func TestAcceptInvitationWithPassword(t *testing.T) {
 		diff := expiresAt.Sub(now)
 
 		// Deve ser ~72h no futuro (±10 min de tolerância)
-		if diff < 71*time.Hour*60 || diff > 73*time.Hour {
+		if diff < 71*time.Hour || diff > 73*time.Hour {
 			t.Errorf("password_expires_at=%v, want ~72h in future", diff)
 		}
 	})
