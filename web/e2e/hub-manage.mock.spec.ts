@@ -88,7 +88,7 @@ async function install(page: Page, opts: { role: 'hub_admin' | 'hub_agent'; oper
   return { writes, gets };
 }
 
-test('o operador delega canais e integrações no cartão da instância, e o link para as telas aparece', async ({ page }) => {
+test('o operador delega canais e integrações no cartão da instância, e o link para as telas aparece', async ({ page }, info) => {
   const { writes } = await install(page, { role: 'hub_admin', operator: true });
   await page.goto('/acessos?aba=instancias');
   const card = page.getByRole('region', { name: 'Instância ISP Roraima' });
@@ -98,9 +98,10 @@ test('o operador delega canais e integrações no cartão da instância, e o lin
   await expect(card.getByLabel(/Canais de atendimento/)).toBeChecked();
   await expect(card.getByRole('link', { name: 'Abrir canais e integrações' })).toHaveAttribute('href', `/instancias/${HUB}/A/canais`);
   expect(writes.find((w) => w.method === 'PATCH')!.body).toEqual({ management_scopes: ['channels'] });
+  await page.screenshot({ path: info.outputPath('hub-instancias.png'), fullPage: true });
 });
 
-test('quem gerencia vê "Canais das instâncias" e usa a MESMA tela de Canais, falando com as rotas do Hub', async ({ page }) => {
+test('quem gerencia vê "Canais das instâncias" e usa a MESMA tela de Canais, falando com as rotas do Hub', async ({ page }, info) => {
   const { gets } = await install(page, { role: 'hub_agent', manages: true });
   await page.goto('/inbox');
   await page.getByRole('link', { name: 'Canais das instâncias' }).first().click();
@@ -109,6 +110,7 @@ test('quem gerencia vê "Canais das instâncias" e usa a MESMA tela de Canais, f
   await expect(page).toHaveURL(new RegExp(`/instancias/${HUB}/A/canais$`));
   await expect(page.getByRole('heading', { name: /Canais e integrações — ISP Roraima/ })).toBeVisible();
   await expect(page.getByText('WhatsApp (não oficial)').first()).toBeVisible();
+  await page.screenshot({ path: info.outputPath('hub-canais-instancia.png') });
   expect(gets.some((p) => p === `/hubs/${HUB}/instances/A/channels/connections`)).toBe(true);
   expect(gets.some((p) => p.startsWith('/tenants/') && p.includes('/channels'))).toBe(false); // nunca as rotas da empresa
 });
@@ -125,7 +127,7 @@ test('a chave "Gerenciar" na matriz só aparece onde o contrato delega e envia e
   await expect.poll(() => writes.some((w) => w.method === 'PUT' && w.path.endsWith('/access/agents/u-beto/instances/A/management') && w.body.can_manage === true)).toBe(true);
 });
 
-test('equipes: criar, escolher integrantes com capacidade e instâncias, e ligar a distribuição automática', async ({ page }) => {
+test('equipes: criar, escolher integrantes com capacidade e instâncias, e ligar a distribuição automática', async ({ page }, info) => {
   const { writes } = await install(page, { role: 'hub_admin' });
   await page.goto('/acessos?aba=equipes');
   await page.getByRole('textbox', { name: 'Nova equipe' }).fill('Vendas');
@@ -147,6 +149,7 @@ test('equipes: criar, escolher integrantes com capacidade e instâncias, e ligar
 
   await team.getByLabel('Distribuição da equipe Suporte').selectOption('round_robin');
   await expect.poll(() => writes.some((w) => w.method === 'PATCH' && w.body?.distribution === 'round_robin')).toBe(true);
+  await page.screenshot({ path: info.outputPath('hub-equipes.png'), fullPage: true });
 });
 
 test('transferir: o titular escolhe quem recebe e a tela envia a pessoa com a instância exibida', async ({ page }, info) => {

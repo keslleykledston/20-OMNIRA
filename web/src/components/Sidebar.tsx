@@ -47,7 +47,7 @@ export default function Sidebar() {
   const accessItem: (typeof navItems)[number] = { label: 'Acessos', path: '/acessos', icon: 'key' }
   const canAccess = (hubs.data ?? []).some((h) => h.can_manage_access)
   // ADR-0038 phase 3: channels/integrations of the instances the Hub delegated to this person
-  const manageItem: (typeof navItems)[number] = { label: 'Canais das instâncias', path: '/instancias', icon: 'channels' }
+  const manageItem: (typeof navItems)[number] = { label: 'Canais das instâncias', path: '/instancias', icon: 'building' }
   const canManage = (hubs.data ?? []).some((h) => h.can_manage_instances)
   // There is no separate "Hub" entry: "Conversas" is the one inbox, and it widens to every authorized company by itself (ADR-0039 revisão).
   const withAccess = canAccess ? [...base.slice(0, 2), accessItem, ...base.slice(2)] : base
