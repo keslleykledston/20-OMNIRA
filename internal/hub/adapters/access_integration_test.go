@@ -11,12 +11,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/hub/access"
 	"github.com/omnira/omnira/internal/hub/adapters"
+	"github.com/omnira/omnira/internal/hub/provisioning"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
@@ -392,6 +394,71 @@ func TestAccess_HubListAdvertisesThePanelOnlyToHubAdmins(t *testing.T) {
 		w.must(json.Unmarshal([]byte(body), &out))
 		if len(out.Items) != 1 || out.Items[0].CanManageAccess != want {
 			t.Errorf("can_manage_access for %s = %+v, want %v", user, out.Items, want)
+		}
+	}
+}
+
+func TestAccess_AnInactiveAccountCannotUseThePanelEvenWithAValidSession(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	if code, _ := api.overview(admin); code != 200 {
+		t.Fatalf("active admin: %d", code)
+	}
+	w.exec(`UPDATE users SET status = 'inactive' WHERE id = $1`, admin)
+	if code, _ := api.overview(admin); code != 404 {
+		t.Fatalf("a deactivated hub admin still reads the panel: %d", code)
+	}
+	target := w.user("target")
+	w.email(target, "alvo@example.com")
+	if code, _ := api.call("POST", api.base()+"/agents", admin, map[string]any{"email": "alvo@example.com"}); code != 404 {
+		t.Fatalf("a deactivated hub admin still writes: %d", code)
+	}
+	if n := w.count(`SELECT count(*) FROM hub_memberships WHERE user_id = $1`, target); n != 0 {
+		t.Fatalf("a refused write changed the database")
+	}
+}
+
+// Codex: a hubctl promotion racing the panel must never be undone by it (demoted by the upsert, or deleted under its feet).
+func TestAccess_APromotionByHubctlIsNeverUndoneByThePanel(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	ctl, err := provisioning.New(w.app, "hubctl-test")
+	w.must(err)
+	person := w.user("person")
+	w.email(person, "pessoa@example.com")
+
+	for round := 0; round < 25; round++ {
+		w.exec(`DELETE FROM hub_memberships WHERE user_id = $1`, person)
+		var wg sync.WaitGroup
+		var ctlErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _, _ = api.svc.AddAgent(w.ctx, admin, w.hub, "pessoa@example.com") }()
+		go func() { defer wg.Done(); <-start; ctlErr = ctl.AddMember(w.ctx, w.hub, person, provisioning.RoleAdmin) }()
+		close(start)
+		wg.Wait()
+		w.must(ctlErr)
+		if n := w.count(`SELECT count(*) FROM hub_memberships hm JOIN roles r ON r.id = hm.role_id WHERE hm.user_id = $1 AND r.key = 'hub_admin'`, person); n != 1 {
+			t.Fatalf("round %d: the promotion to hub admin did not survive the panel", round)
+		}
+	}
+	// the same for removal
+	for round := 0; round < 25; round++ {
+		w.exec(`DELETE FROM hub_memberships WHERE user_id = $1`, person)
+		w.exec(`INSERT INTO hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, $3)`, w.hub, person, w.roleHubAgent)
+		var wg sync.WaitGroup
+		var ctlErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _ = api.svc.RemoveAgent(w.ctx, admin, w.hub, person) }()
+		go func() { defer wg.Done(); <-start; ctlErr = ctl.AddMember(w.ctx, w.hub, person, provisioning.RoleAdmin) }()
+		close(start)
+		wg.Wait()
+		w.must(ctlErr)
+		if n := w.count(`SELECT count(*) FROM hub_memberships hm JOIN roles r ON r.id = hm.role_id WHERE hm.user_id = $1 AND r.key = 'hub_admin'`, person); n != 1 {
+			t.Fatalf("round %d: the panel deleted a hub admin that hubctl had just promoted", round)
 		}
 	}
 }

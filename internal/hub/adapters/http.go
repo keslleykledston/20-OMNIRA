@@ -212,9 +212,9 @@ func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID) [
 	rows, err := platformdb.QuerierFromContext(ctx, h.pool).Query(ctx, `
 		SELECT DISTINCT t.id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name) AS name
 		FROM effective_access_grants g
-		JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id AND k.status = 'active' AND (k.valid_until IS NULL OR k.valid_until > now())
+		JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id AND k.status = 'active' AND k.valid_from <= now() AND (k.valid_until IS NULL OR k.valid_until > now())
 		JOIN tenants t ON t.id = g.tenant_id AND t.status = 'active'
-		WHERE g.hub_id = $1 AND g.user_id = $2 AND g.status = 'active' AND (g.valid_until IS NULL OR g.valid_until > now())
+		WHERE g.hub_id = $1 AND g.user_id = $2 AND g.status = 'active' AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())
 		ORDER BY 2, 1`, hubID, actor)
 	if err != nil {
 		return out

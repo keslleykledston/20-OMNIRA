@@ -68,6 +68,13 @@ func NewAttachments(sender *Sender, store ports.AttachmentStore, files ports.Att
 	return &Attachments{sender: sender, store: store, files: files, scanner: scanner, now: time.Now}
 }
 
+// SendMedia queues the uploaded file through the sender THIS service was built with. The HTTP handler goes through here, so the
+// per-company switch installed on that sender (WithEntitlements) is the one that applies: a handler holding its own, different
+// sender would silently skip it (Codex HIGH: the production wiring used two senders).
+func (a *Attachments) SendMedia(ctx context.Context, store ports.AttachmentStore, conversationID, attachmentID uuid.UUID, caption, idempotencyKey string) (SendResult, error) {
+	return a.sender.SendMedia(ctx, store, conversationID, attachmentID, caption, idempotencyKey)
+}
+
 // AttachmentTarget is the conversation an upload is for, after the authorization checks of a send.
 type AttachmentTarget struct {
 	TenantID, ActorID, ConversationID uuid.UUID

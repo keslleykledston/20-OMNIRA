@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 RUN=hubsmoke-$$
 PG=omnira-$RUN-pg; NATS=omnira-$RUN-nats
 WORK=$(mktemp -d); chmod 777 "$WORK"
-cleanup() { docker ps -aq --filter "name=$RUN" | xargs -r docker rm -f >/dev/null 2>&1 || true; rm -rf "$WORK" 2>/dev/null || true; }
+cleanup() { docker ps -aq --filter "name=$RUN" | xargs -r docker rm -fvv >/dev/null 2>&1 || true; rm -rf "$WORK" 2>/dev/null || true; }
 APIPORT=$((18000 + $$ % 900))  # unique per run: the containers share the host network and a stale API must never answer for us
 trap cleanup EXIT
 LBL=(--label com.omnira.integration-test=true --label "com.omnira.integration-test.run=$RUN")
@@ -78,7 +78,7 @@ get() { curl -s --max-time 15 -o "$3" -w "%{http_code}" -b "$1" "http://127.0.0.
 login() { curl -s --max-time 15 -o /dev/null -w "%{http_code}" -c "$2" -H "Content-Type: application/json" -d "{\"email\":\"$1\"}" http://127.0.0.1:$APIPORT/api/v1/auth/dev/login; }
 ctl() { OMNIRA_DATABASE_URL="$APPDB" /out/bin/hubctl --operator e2e "$@"; }
 
-start_api OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=true
+start_api OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=true OMNIRA_HUB_ACCESS_API_ENABLED=true
 echo "$(login test@omnira.local /out/agent.jar) login agent"
 echo "$(get /out/agent.jar /hubs /out/hubs.json) /hubs"
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox" /out/inbox.json) inbox"
@@ -108,6 +108,21 @@ echo "$(patch /out/agent.jar "/hubs/$HUB/companies/$TA" "{\"status\":\"active\",
 echo "$(get /out/agent.jar "/hubs/$HUB/inbox" /out/cp10.json) inbox after reactivating A"
 echo "$(patch /out/other.jar "/hubs/$HUB/companies/$TA" "{\"status\":\"suspended\"}" /out/cp11.json) suspend A by a user outside the hub"
 echo "$(patch /out/agent.jar "/hubs/$HUB/companies/$TA" "{\"capabilities\":{\"root_access\":true}}" /out/cp12.json) unknown capability"
+# ---- Access panel (ADR-0039): the agent is hub_admin (no operator needed); the other dev user is outside the hub
+put() { curl -s --max-time 15 -o "$4" -w "%{http_code}" -b "$1" -X PUT -H "Content-Type: application/json" -d "$3" "http://127.0.0.1:$APIPORT/api/v1$2"; }
+echo "$(get /out/other.jar "/hubs/$HUB/access" /out/ac0.json) access panel by a user outside the hub"
+echo "$(get /out/agent.jar "/hubs/$HUB/access" /out/ac1.json) access panel by the hub admin"
+echo "$(post /out/other.jar "/hubs/$HUB/access/agents" "{\"email\":\"admin@omnira.local\"}" /out/ac1b.json) add agent by a user outside the hub"
+echo "$(post /out/agent.jar "/hubs/$HUB/access/agents" "{\"email\":\"admin@omnira.local\"}" /out/ac2.json) add the other user as an agent"
+OTHER_ID=$(sed -n "s/.*\"user_id\":\"\([0-9a-f-]*\)\",\"email\":\"admin@omnira.local\".*/\1/p" /out/ac2.json | head -1)
+echo "$(get /out/other.jar "/hubs/$HUB/inbox" /out/ac3.json) the new agent inbox before any access"
+echo "$(put /out/agent.jar "/hubs/$HUB/access/agents/$OTHER_ID/instances/$TB" "{\"mode\":\"read\"}" /out/ac4.json) give the new agent read access to B"
+echo "$(get /out/other.jar "/hubs/$HUB/inbox" /out/ac5.json) the new agent inbox with read access to B"
+echo "$(put /out/other.jar "/hubs/$HUB/access/agents/$OTHER_ID/instances/$TA" "{\"mode\":\"reply\"}" /out/ac6.json) the new agent tries to give itself reply access to A"
+echo "$(put /out/agent.jar "/hubs/$HUB/access/agents/$OTHER_ID/instances/$TB" "{\"mode\":\"none\"}" /out/ac7.json) take B back"
+echo "$(get /out/other.jar "/hubs/$HUB/inbox" /out/ac8.json) the new agent inbox after taking B back"
+echo "$(get /out/agent.jar "/hubs/$HUB/inbox?companies=$TA" /out/ac9.json) hub admin inbox filtered to A"
+echo "$(get /out/agent.jar /hubs /out/ac10.json) hubs with the access panel on"
 # ---- write path: A is reply-capable, B is read-only, C has no grant
 ITEM_B=$(sed -n "s/.*\"id\":\"\([0-9a-f-]*\)\",\"tenant_id\":\"$TB\".*/\1/p" /out/inbox.json | head -1)
 post() { curl -s --max-time 15 -o "$4" -w "%{http_code}" -b "$1" -H "Content-Type: application/json" ${5:+-H "Idempotency-Key: $5"} -d "$3" "http://127.0.0.1:$APIPORT/api/v1$2"; }
@@ -129,6 +144,7 @@ stop_api
 start_api OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=false
 echo "$(login test@omnira.local /out/agent3.jar) login agent third"
 echo "$(get /out/agent3.jar "/hubs/$HUB/companies" /out/cp_off.json) companies when the admin flag is off"
+echo "$(get /out/agent3.jar "/hubs/$HUB/access" /out/ac_off.json) access panel when its flag is off"
 echo "$(get /out/agent3.jar /hubs /out/hubs_admin_off.json) hubs when the admin flag is off"
 stop_api
 
@@ -194,6 +210,20 @@ ok({i['tenant_id'] for i in load('cp10.json')['items']}=={ta,tb},"after reactiva
 ok(code('suspend A by a user outside the hub')==404,"a user outside the hub cannot suspend a company")
 ok(code('unknown capability')==422,"an unknown capability is refused")
 ok(code('companies when the admin flag is off')==404 and not load('hubs_admin_off.json')['items'][0]['can_manage_companies'],"with OMNIRA_HUB_ADMIN_API_ENABLED=false the control plane does not exist and is not advertised")
+ac=load('ac1.json')
+ok(code('access panel by a user outside the hub')==404 and code('add agent by a user outside the hub')==404,"a user outside the hub gets the uniform 404 from the access panel, reads and writes")
+ok(code('access panel by the hub admin')==200 and len(ac['instances'])==4 and any(a['hub_role']=='hub_admin' for a in ac['agents']),"the hub admin (no operator needed) reads the panel: the 4 instances (3 seeded + the one created) and the hub's people")
+ok(code('add the other user as an agent')==200 and load('ac2.json')['email']=='admin@omnira.local',"an existing account becomes an agent of the hub")
+ok(code("the new agent inbox before any access")==200 and load('ac3.json')['items']==[] and load('ac3.json')['companies']==[],"joining the hub opened nothing: empty inbox, no companies offered")
+ok(code('give the new agent read access to B')==204,"the matrix cell is set")
+ac5=load('ac5.json')
+ok(code("the new agent inbox with read access to B")==200 and {i['tenant_id'] for i in ac5['items']}=={tb} and [c['id'] for c in ac5['companies']]==[tb],"that very cell opens exactly company B, and B is the only company offered to the filter")
+ok(code('the new agent tries to give itself reply access to A')==404,"an agent cannot grant itself anything (uniform 404)")
+ok(code('take B back')==204 and load('ac8.json')['items']==[] and load('ac8.json')['companies']==[],"taking the cell back closes B on the very next read")
+ac9=load('ac9.json')
+ok(code("hub admin inbox filtered to A")==200 and ac9['items'] and {i['tenant_id'] for i in ac9['items']}=={ta},"the company filter narrows the unified inbox to A")
+ok(load('ac10.json')['items'][0]['can_manage_access'] is True,"the hub list offers the access panel to the hub admin")
+ok(code('access panel when its flag is off')==404,"with OMNIRA_HUB_ACCESS_API_ENABLED=false the access panel does not exist")
 rec=open(w+'/phaseA.txt').read()
 ok('3 upserted' in rec,"hubctl reconcile projected the 3 conversations of the 3 contracted companies")
 PY

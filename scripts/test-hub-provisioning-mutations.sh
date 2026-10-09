@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 F=internal/hub/provisioning/service.go
 NAME=omnira-hubprovmut-$$; DB=omnira_test_provmut
 WORK=$(mktemp -d); cp "$F" "$WORK/orig.go"
-cleanup() { cp "$WORK/orig.go" "$F"; docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { cp "$WORK/orig.go" "$F"; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --label com.omnira.integration-test=true --label "com.omnira.integration-test.run=provmut-$$" \

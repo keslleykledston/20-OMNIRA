@@ -8,7 +8,7 @@ NAME=omnira-hubadminmut-$$; DB=omnira_test_adminmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
 FILES="internal/hub/companies/service.go internal/entitlements/entitlements.go internal/hub/adapters/admin_http.go internal/channels/application/connection_management.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
-cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --label com.omnira.integration-test=true --label "com.omnira.integration-test.run=adminmut-$$" \

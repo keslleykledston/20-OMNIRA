@@ -76,7 +76,7 @@ func (h *SendHandler) Send(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "outbound media is not enabled", http.StatusNotImplemented)
 			return
 		}
-		res, err = h.svc.SendMedia(r.Context(), h.attStore, conversationID, *req.AttachmentID, req.Text, r.Header.Get("Idempotency-Key"))
+		res, err = h.att.SendMedia(r.Context(), h.attStore, conversationID, *req.AttachmentID, req.Text, r.Header.Get("Idempotency-Key"))
 	} else {
 		res, err = h.svc.Send(r.Context(), conversationID, req.Text, r.Header.Get("Idempotency-Key"))
 	}

@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	"github.com/omnira/omnira/internal/entitlements"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
@@ -59,6 +60,8 @@ type attEnv struct {
 	scanner *fakeScanner
 	dir     string
 	files   *mediaadapters.OutboundFiles
+	// switchOff makes the outbound_attachments switch answer "disabled" (ADR-0038).
+	switchOff *atomic.Bool
 }
 
 func newAttEnv(t *testing.T) *attEnv {
@@ -70,8 +73,18 @@ func newAttEnv(t *testing.T) *attEnv {
 	}
 	scanner := &fakeScanner{}
 	store := messagesadapters.NewPostgresOutboundStore(e.app)
-	sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(e.app))
-	h := messagesadapters.NewSendHandler(sender).WithAttachments(messagesapplication.NewAttachments(sender, store, files, scanner), store)
+	// The same shape as production wiring (internal/platform/httpserver): the handler's own sender and the one the attachments service
+	// is built with are DIFFERENT objects, and only the second carries the per-company switch. The handler must go through the second.
+	switchOff := &atomic.Bool{}
+	gate := func(_ context.Context, _ uuid.UUID, capability string) error {
+		if switchOff.Load() && capability == entitlements.OutboundAttachments {
+			return entitlements.ErrDisabled
+		}
+		return nil
+	}
+	textSender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(e.app))
+	mediaSender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(e.app)).WithEntitlements(gate)
+	h := messagesadapters.NewSendHandler(textSender).WithAttachments(messagesapplication.NewAttachments(mediaSender, store, files, scanner), store)
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(e.app), tenancyadapters.NewPostgresTenantRepository(e.app))
 	mw := tenancyadapters.AuthorizationMiddleware(e.app, authz)
 	mux := http.NewServeMux()
@@ -79,7 +92,7 @@ func newAttEnv(t *testing.T) *attEnv {
 	mux.Handle("POST "+base+"/messages", mw(http.HandlerFunc(h.Send)))
 	mux.Handle("POST "+base+"/attachments", h.BufferUpload(mw(http.HandlerFunc(h.Upload))))
 	mux.Handle("DELETE "+base+"/attachments/{attachment_id}", mw(http.HandlerFunc(h.RemoveAttachment)))
-	return &attEnv{env: e, h: h, mux: mux, scanner: scanner, dir: dir, files: files}
+	return &attEnv{env: e, h: h, mux: mux, scanner: scanner, dir: dir, files: files, switchOff: switchOff}
 }
 
 func pngFile(t *testing.T) []byte {
@@ -621,5 +634,41 @@ func TestAProviderThisDeploymentCannotDeliverThroughIsRefusedUpFront(t *testing.
 	        VALUES ('11111111-1111-4111-8111-111111111111',$1,$2,$3,'document','application/pdf',10,repeat('b',64),'seed.pdf')`, a.tenantA, a.convA, a.agent1)
 	if r := a.sendReq(a.agent1, a.tenantA, a.convA, "notready-key-1", `{"attachment_id":"11111111-1111-4111-8111-111111111111"}`); r.code != 422 {
 		t.Fatalf("send: %d %s", r.code, r.body)
+	}
+}
+
+// ADR-0038 (Codex HIGH): switching outbound_attachments off must stop SENDING an already uploaded file through the real route,
+// not only uploading. The handler and the attachments service use different senders in production; this proves the right one answers.
+func TestSendingAnUploadedFileHonoursTheAttachmentsSwitchThroughTheRoute(t *testing.T) {
+	a := newAttEnv(t)
+	up := a.upload(a.agent1, a.tenantA, a.convA, "foto.png", "image/png", pngFile(t))
+	if up.code != 201 {
+		t.Fatalf("upload: %d %s", up.code, up.body)
+	}
+	id := up.m["id"].(string)
+	media := func() int {
+		var n int
+		_ = a.seed.QueryRow(context.Background(), `SELECT count(*) FROM messages WHERE tenant_id=$1 AND conversation_id=$2 AND message_type='image'`, a.tenantA, a.convA).Scan(&n)
+		return n
+	}
+
+	a.switchOff.Store(true)
+	if s := a.sendReq(a.agent1, a.tenantA, a.convA, "media-switch-0001", `{"attachment_id":"`+id+`","text":"x"}`); s.code != 403 {
+		t.Fatalf("send with the switch off: %d %s (want 403)", s.code, s.body)
+	}
+	if media() != 0 {
+		t.Fatalf("a refused send queued a media message")
+	}
+	// plain text is not a file: it keeps working with the switch off
+	if s := a.sendReq(a.agent1, a.tenantA, a.convA, "text-switch-0001", `{"text":"olá"}`); s.code != 202 {
+		t.Fatalf("text with the attachments switch off: %d %s", s.code, s.body)
+	}
+	// and the very same upload goes out once the switch is back on: the refusal changed nothing about it
+	a.switchOff.Store(false)
+	if s := a.sendReq(a.agent1, a.tenantA, a.convA, "media-switch-0002", `{"attachment_id":"`+id+`"}`); s.code != 202 {
+		t.Fatalf("send after switching back on: %d %s", s.code, s.body)
+	}
+	if media() != 1 {
+		t.Fatalf("media messages = %d, want 1", media())
 	}
 }

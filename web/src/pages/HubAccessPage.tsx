@@ -25,7 +25,9 @@ export function instanceLabel(n: number): string {
 
 export default function HubAccessPage() {
   const hubs = useMyHubs();
-  const hub = (hubs.data ?? []).find((h) => h.can_manage_access);
+  const adminOf = (hubs.data ?? []).filter((h) => h.can_manage_access);
+  const [picked, setPicked] = useState('');
+  const hub = adminOf.find((h) => h.id === picked) ?? adminOf[0];
   const hubId = hub?.id ?? '';
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('agents');
@@ -85,7 +87,13 @@ export default function HubAccessPage() {
       <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-3">
         <Link to="/hub" className="text-sm text-text-secondary underline-offset-2 hover:underline">← Caixa do Hub</Link>
         <h1 className="text-lg font-semibold text-text-primary">Acessos</h1>
-        <span className="text-sm text-text-secondary">{hub.name}</span>
+        {adminOf.length > 1 ? (
+          <select aria-label="Trocar de Hub" value={hubId} onChange={(e) => setPicked(e.target.value)} className="h-9 rounded-control border border-border-light bg-surface px-2 text-sm font-medium text-text-primary">
+            {adminOf.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+          </select>
+        ) : (
+          <span className="text-sm text-text-secondary">{hub.name}</span>
+        )}
         {hub.can_manage_companies && <Link to="/hub/empresas" className="ml-auto text-sm font-medium text-accent-primary underline-offset-2 hover:underline">Empresas</Link>}
       </div>
       <div className="mx-auto w-full max-w-6xl space-y-4 p-4">

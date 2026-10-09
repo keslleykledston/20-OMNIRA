@@ -15,12 +15,12 @@ import CompanyFilter from '../components/hub/CompanyFilter';
 // decided by the server from their live grants; nothing in this page chooses a tenant. Replying needs a reply-capable grant.
 // `unified` is the same view offered as "Conversas" to a person who serves two or more companies (ADR-0039): the company
 // filter takes the place of the channel selector and the default is every company they are authorized to serve.
-export default function HubInboxPage({ unified = false }: { unified?: boolean }) {
+export default function HubInboxPage({ unified = false, hubId: preferredHub = '' }: { unified?: boolean; hubId?: string }) {
   const hubs = useMyHubs();
   const myTenants = useMyTenants();
   const [filter, setFilter] = useState<{ hub: string; ids: string[] }>({ hub: '', ids: [] });
   const list = hubs.data ?? [];
-  const [pickedHub, setPickedHub] = useState('');
+  const [pickedHub, setPickedHub] = useState(preferredHub);
   // The selection remembers which hub it belongs to, so an item id can never be used against another hub (not even for one render).
   const [selection, setSelection] = useState({ hub: '', id: '' });
   const isMobile = useMediaQuery('(max-width: 767px)');

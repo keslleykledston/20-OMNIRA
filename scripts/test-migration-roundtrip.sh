@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 V=${1:?usage: $0 <latest-migration-name>}
 NAME=omnira-mig-rt-$$
 WORK=$(mktemp -d)
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" -e POSTGRES_USER=omnira -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=rt postgres:16-alpine >/dev/null

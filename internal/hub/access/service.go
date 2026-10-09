@@ -55,7 +55,8 @@ func (s *Service) tx(ctx context.Context, actor, hub uuid.UUID, fn func(ctx cont
 	return platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {
 		q := platformdb.QuerierFromContext(c, s.pool)
 		var ok bool
-		if err := q.QueryRow(c, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')`, hub, actor).Scan(&ok); err != nil {
+		if err := q.QueryRow(c, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')
+		                    AND EXISTS (SELECT 1 FROM users WHERE id = $2 AND status = 'active')`, hub, actor).Scan(&ok); err != nil {
 			return err
 		}
 		if !ok {
@@ -370,6 +371,10 @@ func (s *Service) AddInstanceAdmin(ctx context.Context, actor, hub, tenant uuid.
 func (s *Service) RemoveInstanceAdmin(ctx context.Context, actor, hub, tenant, user uuid.UUID) error {
 	return s.tx(ctx, actor, hub, func(c context.Context, q platformdb.Querier) error {
 		if err := requireContract(c, q, hub, tenant); err != nil {
+			return err
+		}
+		// Same key as PATCH /team: the panel and the company's own team screen cannot both pass "not the last one".
+		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended('omnira.tenant-admins:' || $1::text, 0))`, tenant); err != nil {
 			return err
 		}
 		// lock the administrators of this instance so two removals cannot both pass the "not the last one" check

@@ -96,7 +96,7 @@ cleanup_run() {
     [ -z "$cid" ] && continue
     name=$(docker inspect -f '{{.Name}}' "$cid" | sed 's#^/##')
     echo "   removing ${name} (exact match on run ${run_id})"
-    docker rm -f "$cid" >/dev/null 2>&1 || true
+    docker rm -fv "$cid" >/dev/null 2>&1 || true
     n=$((n+1))
   done <<< "$ids"
   echo "== removed ${n} container(s) belonging to run ${run_id}"
@@ -152,8 +152,8 @@ echo "== RUN_ID=${RUN_ID}"
 cleanup() {
   local status=$?
   echo "== tearing down ${CONTAINER} / ${NATS_CONTAINER}"
-  docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
-  docker rm -f "${NATS_CONTAINER}" >/dev/null 2>&1 || true
+  docker rm -fv "${CONTAINER}" >/dev/null 2>&1 || true
+  docker rm -fv "${NATS_CONTAINER}" >/dev/null 2>&1 || true
   exit $status
 }
 trap cleanup EXIT

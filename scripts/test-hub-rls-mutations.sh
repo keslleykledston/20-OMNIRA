@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 NAME=omnira-hubmut-$$
 DB=omnira_test_mut
 WORK=$(mktemp -d)
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --label com.omnira.integration-test=true --label "com.omnira.integration-test.run=hubmut-$$" \

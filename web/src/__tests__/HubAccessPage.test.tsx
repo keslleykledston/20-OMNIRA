@@ -141,6 +141,17 @@ describe('HubAccessPage', () => {
     expect(String(vi.mocked(axios.delete).mock.calls[0][0])).toMatch(/\/hubs\/hub-1\/access\/instances\/C\/admins\/u2$/);
   });
 
+  it('with two hubs administered, the admin picks which one the panel shows', async () => {
+    hubs = [
+      { id: 'hub-1', name: 'Primeiro', role: 'hub_admin', can_manage_access: true },
+      { id: 'hub-2', name: 'Segundo', role: 'hub_admin', can_manage_access: true },
+    ];
+    renderAt(<HubAccessPage />);
+    await screen.findByRole('table');
+    await userEvent.selectOptions(screen.getByLabelText('Trocar de Hub'), 'hub-2');
+    await waitFor(() => expect(vi.mocked(axios.get).mock.calls.some((c) => String(c[0]).endsWith('/hubs/hub-2/access'))).toBe(true));
+  });
+
   it('labels', () => {
     expect(instanceLabel(0)).toBe('Nenhuma instância');
     expect(instanceLabel(1)).toBe('Uma instância');
@@ -240,6 +251,20 @@ describe('ConversationsEntry', () => {
     expect(screen.getByRole('button', { name: 'Filtrar por empresa' })).toHaveTextContent('Beta');
     expect(screen.getByLabelText('Beta')).toBeChecked();
     release();
+  });
+
+  it('with two hubs, the one that serves two or more companies is used (not just the first)', async () => {
+    hubs = [{ id: 'hub-1', name: 'Primeiro', role: 'hub_agent' }, { id: 'hub-2', name: 'Segundo', role: 'hub_agent' }];
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/hubs')) return { data: { items: hubs } };
+      if (String(url).includes('/hubs/hub-2/inbox')) return { data: { items: [], companies: [{ id: 'A', name: 'Alfa' }, { id: 'B', name: 'Beta' }], has_more: false, count: 0, limit: 30 } };
+      if (String(url).includes('/hubs/hub-1/inbox')) return { data: { items: [], companies: [{ id: 'Z', name: 'Zeta' }], has_more: false, count: 0, limit: 30 } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+    renderAt(<ConversationsEntry />);
+    expect(await screen.findByRole('button', { name: 'Filtrar por empresa' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Trocar de Hub')).toHaveValue('hub-2');
+    expect(screen.queryByText('Caixa completa da empresa')).toBeNull();
   });
 
   it('?modo=empresa asks for the classic workspace and never probes the Hub', async () => {

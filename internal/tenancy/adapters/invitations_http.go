@@ -357,6 +357,13 @@ func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, 
 // instance. The wording is stable: the web app recognises it.
 const errOtherInstanceMessage = "this person already works in another instance; only the Hub administrator can authorize them in more than one"
 
+// lockPerson takes a transaction-scoped lock for one person. Everything that can put a person into an instance asks "do they
+// already work elsewhere?" and then writes; holding this lock across both makes the pair atomic per person.
+func lockPerson(ctx context.Context, q platformdb.Querier, user uuid.UUID) error {
+	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('omnira.person-instance:' || $1::text, 0))`, user)
+	return err
+}
+
 // worksElsewhere asks the database (person_works_in_other_instance, migration 101) whether the invited e-mail belongs to a
 // person who already works in an instance other than this one. A failed question counts as "yes": fail closed.
 func (h *InvitationsHandler) worksElsewhere(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, email string) bool {
@@ -660,6 +667,11 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 			return errInvitationPasswordInvalid
 		}
 		// ADR-0039, de novo: o convite pode ter sido emitido antes de a pessoa passar a atuar em outra instância.
+		// O lock por pessoa serializa "perguntar e entrar": dois convites aceitos ao mesmo tempo, em empresas diferentes, não
+		// passam os dois pela pergunta antes de qualquer um gravar a membership (Codex).
+		if err := lockPerson(ctx, q, principal.UserID); err != nil {
+			return err
+		}
 		if h.worksElsewhere(ctx, q, tenantID, email) {
 			return errInvitationOtherInstance
 		}

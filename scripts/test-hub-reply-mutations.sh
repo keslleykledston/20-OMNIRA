@@ -8,7 +8,7 @@ NAME=omnira-hubreplymut-$$; DB=omnira_test_replymut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
 FILES="internal/hub/provisioning/operators.go internal/hub/replying/service.go internal/messages/application/delegated_send.go internal/hub/application/authorization.go internal/hub/adapters/http.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
-cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 docker run -d --name "$NAME" --label com.omnira.integration-test=true --label "com.omnira.integration-test.run=replymut-$$" \

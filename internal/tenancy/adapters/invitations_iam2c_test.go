@@ -425,6 +425,28 @@ func TestInvitationRefusesSomeoneWhoAlreadyWorksInAnotherInstance(t *testing.T) 
 	if asked {
 		t.Fatalf("a member without membership.manage learned who works in another instance")
 	}
+	// the by-user variant (used when a membership is reactivated) is no oracle either, and says the same to a manager
+	var byUser bool
+	ask := func(actor, subject uuid.UUID) bool {
+		if err := asActor(t, app, a.tenantID, actor, func(ctx context.Context) error {
+			return platformdb.QuerierFromContext(ctx, app).QueryRow(ctx, `SELECT user_works_in_other_instance($1, $2)`, a.tenantID, subject).Scan(&byUser)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return byUser
+	}
+	if ask(colleague, inB) {
+		t.Fatalf("by-user: a member without membership.manage learned who works elsewhere")
+	}
+	if ask(inB, inB) {
+		t.Fatalf("by-user: someone with no role in this company learned who works elsewhere")
+	}
+	if !ask(adminA, inB) {
+		t.Fatalf("by-user: the company's administrator was not told that the person works in another instance")
+	}
+	if ask(adminA, colleague) {
+		t.Fatalf("by-user: someone who works only in this company was reported as working elsewhere")
+	}
 	// the company's own administrator does get the real answer
 	if err := asActor(t, app, a.tenantID, adminA, func(ctx context.Context) error {
 		return platformdb.QuerierFromContext(ctx, app).QueryRow(ctx, `SELECT person_works_in_other_instance($1, $2)`, a.tenantID, emailOf(inB)).Scan(&asked)

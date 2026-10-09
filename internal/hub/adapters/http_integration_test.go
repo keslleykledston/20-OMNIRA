@@ -595,3 +595,31 @@ func TestHubInbox_CompanyFilterOnlyNarrowsWhatTheCallerMayRead(t *testing.T) {
 		t.Fatalf("a hub admin is offered only the companies they personally serve: %+v", body.Companies)
 	}
 }
+
+// A grant that has not started yet is not offered by the filter (and reads nothing: RLS says so too).
+func TestHubInbox_AFutureGrantIsNotOfferedToTheFilter(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	agent := w.hubAgent("future")
+	w.grant(agent, "A")
+	w.grant(agent, "B")
+	w.exec(`UPDATE effective_access_grants SET valid_from = now() + interval '1 day' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["B"])
+	_, raw, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox", w.hub), agent, nil)
+	var body struct {
+		Items []struct {
+			TenantID uuid.UUID `json:"tenant_id"`
+		} `json:"items"`
+		Companies []struct {
+			ID uuid.UUID `json:"id"`
+		} `json:"companies"`
+	}
+	w.must(json.Unmarshal([]byte(raw), &body))
+	if len(body.Companies) != 1 || body.Companies[0].ID != w.tenant["A"] {
+		t.Fatalf("a grant that has not started yet is offered: %+v", body.Companies)
+	}
+	for _, it := range body.Items {
+		if it.TenantID == w.tenant["B"] {
+			t.Fatalf("a grant that has not started yet reads data")
+		}
+	}
+}

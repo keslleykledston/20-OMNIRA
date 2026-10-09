@@ -69,3 +69,13 @@ Para criar e suspender empresas e ligar/desligar capacidades pela tela **Hub ›
 3. `OMNIRA_HUB_API_ENABLED=true` e `OMNIRA_HUB_ADMIN_API_ENABLED=true` no `.env`; recriar o `api`.
 4. Uma empresa criada pela tela nasce **sem acesso para ninguém**: conceda o acesso aos atendentes com `contract`/`grant` (a empresa já nasce com o contrato).
 Desligar tudo: `OMNIRA_HUB_ADMIN_API_ENABLED=false`. As capacidades já desligadas continuam valendo no servidor (é dado, não flag).
+
+## Painel de Acessos (ADR-0039) — pessoas e permissões por instância
+Para gerenciar administradores das instâncias, agentes e o que cada um pode fazer em cada instância pela tela **Acessos** (`/acessos`):
+1. Migration 101 aplicada (backup antes) e imagem do API/web reconstruída.
+2. `OMNIRA_HUB_API_ENABLED=true` e `OMNIRA_HUB_ACCESS_API_ENABLED=true` no `.env`; recriar o `api`. **Não** exige ser operador de plataforma: basta ser `hub_admin` do Hub.
+3. Quem é `hub_admin` continua sendo definido só pelo `hubctl` (`member add --role hub_admin`); a tela não cria nem remove administradores do Hub.
+4. A pessoa a ser adicionada como agente ou administrador de instância **já precisa ter conta** no OMNIRA (e-mail exato). Pessoa nova: o administrador da empresa a convida em "Equipe"; depois o administrador do Hub a libera nas demais instâncias.
+5. Regra 5: o administrador de uma empresa **não consegue** convidar quem já atua em outra instância (409); isso é do administrador do Hub, pela tela Acessos.
+6. `hubctl grant add` sobre um grant que já existe só mantém ou reduz o acesso; reativar revogado, tirar/estender validade ou subir de leitura para resposta exigem `--renew`.
+Desligar: `OMNIRA_HUB_ACCESS_API_ENABLED=false` (as concessões feitas continuam valendo: são dados). "Conversas" unificadas (2+ empresas) dependem só de `OMNIRA_HUB_API_ENABLED`.

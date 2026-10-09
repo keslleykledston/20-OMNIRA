@@ -27,7 +27,7 @@ check() { # check <description> <command...>
 }
 
 cleanup() {
-  docker rm -f "$C" >/dev/null 2>&1 || true
+  docker rm -fv "$C" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

@@ -267,6 +267,14 @@ func (h *TeamHandler) UpdateMembership(w http.ResponseWriter, r *http.Request) {
 
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 
+	// Uma alteração de papel/status por vez em cada empresa (mesma chave usada pelo painel de acessos do Hub): é o que torna
+	// "contar os outros administradores" e "escrever" atômicos. Travar só a linha do alvo deixava dois pedidos, sobre
+	// administradores diferentes, enxergarem um ao outro como "o outro admin" e esvaziarem a empresa (Codex).
+	if _, err := q.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended('omnira.tenant-admins:' || $1::text, 0))`, tc.TenantID); err != nil {
+		http.Error(w, "failed to read membership", http.StatusInternalServerError)
+		return
+	}
+
 	// Trava a linha: a checagem de "último admin" e a escrita precisam ser
 	// atômicas, senão dois pedidos simultâneos removem os dois últimos.
 	var targetUser uuid.UUID
@@ -294,16 +302,35 @@ func (h *TeamHandler) UpdateMembership(w http.ResponseWriter, r *http.Request) {
 		newStatus = *req.Status
 	}
 
+	// ADR-0039: reativar a membership de alguém que já atua em outra instância é colocá-lo em mais de uma; isso é do
+	// administrador do Hub. O lock por pessoa torna "perguntar e reativar" atômico (duas reativações simultâneas, em
+	// empresas diferentes, não passam as duas).
+	if currentStatus != "active" && newStatus == "active" {
+		if err := lockPerson(r.Context(), q, targetUser); err != nil {
+			http.Error(w, "failed to update membership", http.StatusInternalServerError)
+			return
+		}
+		var elsewhere bool
+		if err := q.QueryRow(r.Context(), `SELECT user_works_in_other_instance($1, $2)`, tc.TenantID, targetUser).Scan(&elsewhere); err != nil || elsewhere {
+			http.Error(w, errOtherInstanceMessage, http.StatusConflict)
+			return
+		}
+	}
+
 	// O tenant não pode ficar sem nenhum administrador ativo: sem isso ninguém
 	// mais consegue gerir acessos, e a recuperação exige intervenção no banco.
 	losesAdmin := currentRole == "tenant_admin" && currentStatus == "active" &&
 		(newRole != "tenant_admin" || newStatus != "active")
 	if losesAdmin {
 		var otherAdmins int
+		// Trava TODOS os administradores ativos antes de contar: com só a linha do alvo travada, dois pedidos que rebaixam
+		// administradores diferentes enxergam um ao outro como "o outro admin" e os dois passam (Codex).
 		if err := q.QueryRow(r.Context(), `
-			SELECT count(*) FROM memberships m
-			JOIN roles r ON r.id = m.role_id
-			WHERE m.tenant_id=$1 AND m.id<>$2 AND m.status='active' AND r.key='tenant_admin'`,
+			SELECT count(*) FROM (
+			  SELECT m.id FROM memberships m
+			  JOIN roles r ON r.id = m.role_id
+			  WHERE m.tenant_id=$1 AND m.id<>$2 AND m.status='active' AND r.key='tenant_admin'
+			  FOR UPDATE OF m) locked`,
 			tc.TenantID, membershipID).Scan(&otherAdmins); err != nil {
 			http.Error(w, "failed to check administrators", http.StatusInternalServerError)
 			return

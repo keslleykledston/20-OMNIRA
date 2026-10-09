@@ -18,7 +18,7 @@ ok()  { echo "  ${GRN}✓${NC} $*"; }
 bad() { echo "  ${RED}✗ $*${NC}"; FAILS=$((FAILS+1)); }
 psql_src()  { docker exec -i "$SRC" psql -U $OWNER -v ON_ERROR_STOP=1 -q -tA "$@"; }
 psql_frs()  { docker exec -i "$FRESH" psql -U $OWNER -v ON_ERROR_STOP=1 -q -tA "$@"; }
-cleanup() { docker rm -f $FRESH >/dev/null 2>&1; psql_src -d postgres -c "DROP DATABASE IF EXISTS $SRC_DB" -c "DROP DATABASE IF EXISTS $RST_DB" >/dev/null 2>&1; rm -f /tmp/bkp-*.dump /tmp/bkp-roles.sql; }
+cleanup() { docker rm -fv $FRESH >/dev/null 2>&1; psql_src -d postgres -c "DROP DATABASE IF EXISTS $SRC_DB" -c "DROP DATABASE IF EXISTS $RST_DB" >/dev/null 2>&1; rm -f /tmp/bkp-*.dump /tmp/bkp-roles.sql; }
 trap cleanup EXIT
 docker ps --format '{{.Names}}' | grep -qx "$SRC" || { echo "container $SRC not running"; exit 2; }
 
@@ -103,7 +103,7 @@ grep -v "^$" /tmp/bkp-restore.err | grep -iv "already exists" | head -3
 compare "same-cluster" psql_src $RST_DB "$SRC"
 
 echo "== 3b. disaster recovery: restore into a FRESH cluster"
-docker rm -f $FRESH >/dev/null 2>&1
+docker rm -fv $FRESH >/dev/null 2>&1
 docker run -d --name $FRESH -e POSTGRES_USER=$OWNER -e POSTGRES_PASSWORD=x postgres:16-alpine >/dev/null || exit 1
 for i in $(seq 1 30); do docker exec $FRESH pg_isready -U $OWNER >/dev/null 2>&1 && break; sleep 1; done
 sleep 2

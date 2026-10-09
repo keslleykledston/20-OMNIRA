@@ -84,7 +84,8 @@ func (s *Service) guard(ctx context.Context, q platformdb.Querier, hub uuid.UUID
 		return nil
 	}
 	var ok bool
-	if err := q.QueryRow(ctx, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')`, hub, actor).Scan(&ok); err != nil {
+	if err := q.QueryRow(ctx, `SELECT is_hub_admin($1, $2) AND EXISTS (SELECT 1 FROM service_hubs WHERE id = $1 AND status = 'active')
+	                    AND EXISTS (SELECT 1 FROM users WHERE id = $2 AND status = 'active')`, hub, actor).Scan(&ok); err != nil {
 		return err
 	}
 	if !ok {
@@ -119,6 +120,24 @@ func (s *Service) audit(ctx context.Context, q platformdb.Querier, tenant *uuid.
 	                      VALUES ($1, $2, $3, $4, $5, $6, 'success', $7, $8)`,
 		uuid.New(), tenant, actor, action, resourceType, resourceID, uuid.NewString(), raw)
 	return err
+}
+
+// lockedHubRole locks the person's membership row and returns the role key it has NOW. The row is locked on its own, and the
+// role is read in a second statement: joining roles in the locking query lets PostgreSQL's recheck of a concurrently updated
+// row drop it from the result (the join was matched against the old role), which would read "not a member" for a person who was
+// just promoted - and let the caller delete or demote them.
+func lockedHubRole(ctx context.Context, q platformdb.Querier, hub, user uuid.UUID) (key string, found bool, err error) {
+	var roleID uuid.UUID
+	switch err := q.QueryRow(ctx, `SELECT role_id FROM hub_memberships WHERE hub_id = $1 AND user_id = $2 FOR UPDATE`, hub, user).Scan(&roleID); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	if err := q.QueryRow(ctx, `SELECT key FROM roles WHERE id = $1`, roleID).Scan(&key); err != nil {
+		return "", false, err
+	}
+	return key, true, nil
 }
 
 func isUnique(err error) bool {
@@ -196,9 +215,15 @@ func (s *Service) AddMember(ctx context.Context, hub, user uuid.UUID, role strin
 		if err := q.QueryRow(c, `SELECT id FROM roles WHERE tenant_id IS NULL AND key = $1 LIMIT 1`, role).Scan(&roleID); err != nil {
 			return mapNoRows(err, "system role %s", role)
 		}
-		var prev *string
-		if err := q.QueryRow(c, `SELECT (SELECT r.key FROM hub_memberships hm JOIN roles r ON r.id = hm.role_id WHERE hm.hub_id = $1 AND hm.user_id = $2)`, hub, user).Scan(&prev); err != nil {
+		// FOR UPDATE: a concurrent hubctl promotion of this person must not slip between this read and the write below, or the
+		// panel would demote a hub admin it believed to be an agent (Codex).
+		prevKey, found, err := lockedHubRole(c, q, hub, user)
+		if err != nil {
 			return err
+		}
+		var prev *string
+		if found {
+			prev = &prevKey
 		}
 		if prev != nil && *prev == role {
 			return nil // idempotent: nothing changes, nothing to audit
@@ -206,8 +231,14 @@ func (s *Service) AddMember(ctx context.Context, hub, user uuid.UUID, role strin
 		if prev != nil && *prev == RoleAdmin && actorOf(c) != uuid.Nil {
 			return ErrForbidden // demoting an admin is hubctl's job
 		}
+		// Acting people may only ADD an agent: if a hub admin appeared in the meantime (no row existed when we looked), the
+		// conflict must not demote them.
+		guardAdmin := ""
+		if actorOf(c) != uuid.Nil {
+			guardAdmin = ` WHERE hub_memberships.role_id NOT IN (SELECT id FROM roles WHERE tenant_id IS NULL AND key = 'hub_admin')`
+		}
 		if _, err := q.Exec(c, `INSERT INTO hub_memberships (hub_id, user_id, role_id) VALUES ($1, $2, $3)
-		                        ON CONFLICT (hub_id, user_id) DO UPDATE SET role_id = EXCLUDED.role_id, updated_at = now()`, hub, user, roleID); err != nil {
+		                        ON CONFLICT (hub_id, user_id) DO UPDATE SET role_id = EXCLUDED.role_id, updated_at = now()`+guardAdmin, hub, user, roleID); err != nil {
 			return err
 		}
 		action, meta := "hub.member.added", map[string]any{"user_id": user, "role": role}
@@ -225,11 +256,12 @@ func (s *Service) RemoveMember(ctx context.Context, hub, user uuid.UUID) (grants
 			return err
 		}
 		if actorOf(c) != uuid.Nil {
-			var isAdmin bool
-			if err := q.QueryRow(c, `SELECT is_hub_admin($1, $2)`, hub, user).Scan(&isAdmin); err != nil {
+			// locked read: a promotion by hubctl committed after this point waits for us instead of being deleted under its feet
+			key, found, err := lockedHubRole(c, q, hub, user)
+			if err != nil {
 				return err
 			}
-			if isAdmin {
+			if found && key == RoleAdmin {
 				return ErrForbidden // removing a hub admin is hubctl's job
 			}
 		}
