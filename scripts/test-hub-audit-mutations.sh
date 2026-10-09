@@ -71,13 +71,18 @@ mut "anybody may read the audit"                         $A '		if !ok {
 		}' '		if false && !ok {
 			return ErrForbidden
 		}'
-mut "another hub's instances are listed"                 $A "WHERE (e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = \$1) OR e.metadata ->> 'hub_id' = \$1::text)" "WHERE (true OR e.metadata ->> 'hub_id' = \$1::text OR \$1::text IS NULL)"
+mut "events attributed to another hub are listed"        $A "(SELECT e.* FROM audit_events e WHERE e.metadata ->> 'hub_id' = \$1::text AND" "(SELECT e.* FROM audit_events e WHERE \$1::text IS NOT NULL AND"
+mut "a foreign company's unattributed events are listed" $A "AND e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = \$1::uuid) AND" "AND \$1::text IS NOT NULL AND"
+mut "a shared company's other-hub events leak in"        $A "WHERE NOT (e.metadata ? 'hub_id') AND e.tenant_id IN" "WHERE e.tenant_id IN"
 mut "message and conversation traffic is listed"         $A "			  AND e.action NOT LIKE 'hub.message.%' AND e.action NOT LIKE 'hub.conversation.%'" ""
-mut "unrelated actions are listed"                       $A "			  AND (e.action LIKE 'hub.%' OR e.action LIKE 'platform.%' OR e.action LIKE 'channel.connection_%' OR e.action LIKE 'channel.session_%')" "			  AND true"
+mut "unrelated actions are listed"                       $A "(e.action LIKE 'hub.%' OR e.action LIKE 'platform.%' OR e.action LIKE 'channel.connection_%' OR e.action LIKE 'channel.session_%')" "(true)"
 mut "the raw record leaks (a key outside the whitelist)" $A 'var factKeys = []string{"from",' 'var factKeys = []string{"secret", "from",'
 mut "the instance filter is ignored"                     $A "			  AND (\$2::uuid IS NULL OR e.tenant_id = \$2)" "			  AND (\$2::uuid IS NULL OR true)"
-mut "the cursor is ignored"                              $A "			  AND (\$3::timestamptz IS NULL OR e.created_at < \$3)" "			  AND (\$3::timestamptz IS NULL OR true)"
-mut "oldest first"                                       $A "ORDER BY e.created_at DESC, e.id DESC" "ORDER BY e.created_at ASC, e.id ASC"
+mut "the cursor is ignored"                              $A "AND (\$3::timestamptz IS NULL OR (e.created_at, e.id) < (\$3::timestamptz, \$4::uuid))" "AND (\$3::timestamptz IS NULL OR \$4::uuid IS NULL OR true)"
+mut "the cursor skips events sharing a timestamp"        $A "(e.created_at, e.id) < (\$3::timestamptz, \$4::uuid))" "e.created_at < \$3::timestamptz AND (\$4::uuid IS NOT NULL OR true))"
+mut "oldest first"                                       $A "			ORDER BY e.created_at DESC, e.id DESC
+			LIMIT \$5\`, hub, tenant" "			ORDER BY e.created_at ASC, e.id ASC
+			LIMIT \$5\`, hub, tenant"
 mut "the page is not cut"                                $A 'if len(out.Items) > limit {' 'if false {'
 mut "the via marker is dropped"                          $A 'if v, _ := meta["via"].(string); v == "hub" {' 'if v, _ := meta["via"].(string); v == "never" {'
 echo "PASS: every mutation was killed by a failing real-Postgres test ($N mutants)"

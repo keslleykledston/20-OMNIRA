@@ -97,6 +97,12 @@ func TestAudit_OnlyAnAdminOfTheHubSeesItsInstancesConfigurationChanges(t *testin
 	w.auditEvent(&foreign, &admin, "platform.company.status_changed", `{"from":"active","to":"suspended"}`, now)
 	w.auditEvent(&tA, &admin, "tickets.created", `{}`, now)
 	w.auditEvent(nil, &admin, "hub.pool.created", `{"hub_id":"`+otherHub.String()+`","name":"De outro Hub"}`, now)
+	// a company that ALSO has a contract with the other hub: what is attributed to the other hub stays out; what carries no attribution is the company's own
+	w.exec(`INSERT INTO hub_tenant_service_contracts (id, hub_id, tenant_id, valid_from) VALUES ($1, $2, $3, now() - interval '1 day')`, uuid.New(), otherHub, tA)
+	w.auditEvent(&tA, &otherAdmin, "hub.grant.granted", `{"hub_id":"`+otherHub.String()+`","mode":"reply","name":"SO-DO-OUTRO-HUB"}`, now.Add(-30*time.Second))
+	w.auditEvent(&tA, &admin, "channel.connection_created", `{"provider":"waha","name":"proprio-da-empresa"}`, now.Add(-90*time.Second))
+	// a foreign company carrying THIS hub's id in its metadata is this hub's own history, but a foreign company's unattributed event is not ours
+	w.auditEvent(&foreign, &admin, "channel.connection_created", `{"provider":"waha","name":"empresa-alheia"}`, now.Add(-45*time.Second))
 
 	for name, who := range map[string]uuid.UUID{"agent": agent, "admin of another hub": otherAdmin, "anonymous": uuid.Nil} {
 		want := http.StatusNotFound
@@ -121,12 +127,26 @@ func TestAudit_OnlyAnAdminOfTheHubSeesItsInstancesConfigurationChanges(t *testin
 	for _, it := range page.Items {
 		actions = append(actions, it.Action)
 	}
-	want := []string{"hub.grant.granted", "channel.connection_created", "platform.company.status_changed", "hub.pool.created"}
+	want := []string{"hub.grant.granted", "channel.connection_created", "channel.connection_created", "platform.company.status_changed", "hub.pool.created"} // newest first
 	if strings.Join(actions, ",") != strings.Join(want, ",") {
 		t.Fatalf("events = %v, want exactly %v (newest first, this hub's instances only, no message/conversation traffic)", actions, want)
 	}
-	if page.Items[1].Via != "hub" || page.Items[1].Facts["provider"] != "k3g_crm" || page.Items[1].TenantName == "" || page.Items[1].ActorEmail == "" {
-		t.Errorf("the connection event must say it came through the hub, with its facts, instance and actor: %+v", page.Items[1])
+	var viaHub = -1
+	for i, it := range page.Items {
+		if it.Facts["provider"] == "k3g_crm" {
+			viaHub = i
+		}
+	}
+	if viaHub < 0 || page.Items[viaHub].Via != "hub" || page.Items[viaHub].TenantName == "" || page.Items[viaHub].ActorEmail == "" {
+		t.Errorf("the connection event must say it came through the hub, with its facts, instance and actor: %+v", page.Items)
+	} else if page.Items[viaHub].Facts["host"] != "crm.example.com" {
+		t.Errorf("the host fact is missing: %+v", page.Items[viaHub])
+	}
+	if strings.Contains(body, "SO-DO-OUTRO-HUB") || strings.Contains(body, "empresa-alheia") {
+		t.Fatalf("an event attributed to ANOTHER hub, or a foreign company's own event, reached this hub's administrator: %s", body)
+	}
+	if !strings.Contains(body, "proprio-da-empresa") {
+		t.Fatalf("the company's own unattributed event must be visible to a hub that serves it: %s", body)
 	}
 	if strings.Contains(body, "nao-sai") || strings.Contains(body, `"secret"`) || strings.Contains(body, `"token"`) {
 		t.Fatalf("metadata that is not whitelisted leaked: %s", body)
@@ -151,16 +171,57 @@ func TestAudit_OnlyAnAdminOfTheHubSeesItsInstancesConfigurationChanges(t *testin
 	}
 
 	// paging: limit 2 -> next cursor -> the rest, no overlap
-	_, body = api.get(admin, w.hub, "?limit=2")
-	w.must(json.Unmarshal([]byte(body), &page))
-	if len(page.Items) != 2 || page.Next == "" {
-		t.Fatalf("page 1: %s", body)
+	var seen []string
+	next := ""
+	for i := 0; i < 10; i++ {
+		_, body = api.get(admin, w.hub, "?limit=2&before="+next)
+		page = auditPage{} // Unmarshal leaves a field the JSON omits untouched: start from nothing
+		w.must(json.Unmarshal([]byte(body), &page))
+		for _, it := range page.Items {
+			seen = append(seen, it.Action+"@"+it.TenantName)
+		}
+		if page.Next == "" {
+			break
+		}
+		next = page.Next
 	}
-	first := page.Items[0].Action
-	_, body = api.get(admin, w.hub, "?limit=2&before="+page.Next)
-	page = auditPage{} // Unmarshal leaves a field the JSON omits untouched: start from nothing
-	w.must(json.Unmarshal([]byte(body), &page))
-	if len(page.Items) != 2 || page.Items[0].Action == first || page.Next != "" {
-		t.Fatalf("page 2: %s", body)
+	if len(seen) != 5 {
+		t.Fatalf("paging 2 at a time must give each event exactly once (%d of 5): %v", len(seen), seen)
+	}
+}
+
+// Events that share a timestamp must be neither repeated nor skipped across pages (the cursor is (time, id)).
+func TestAudit_PagingIsStableForEventsSharingATimestamp(t *testing.T) {
+	w := newWorld(t)
+	api := newAuditAPI(t, w)
+	admin := w.hubAdmin("admin")
+	tA := w.tenant["A"]
+	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	for i := 0; i < 5; i++ {
+		w.auditEvent(&tA, &admin, "hub.grant.granted", `{"hub_id":"`+w.hub.String()+`","name":"n`+string(rune('a'+i))+`"}`, at)
+	}
+	seen := map[string]bool{}
+	next := ""
+	for i := 0; i < 10; i++ {
+		_, body := api.get(admin, w.hub, "?limit=2&before="+next)
+		var page auditPage
+		w.must(json.Unmarshal([]byte(body), &page))
+		for _, it := range page.Items {
+			n, _ := it.Facts["name"].(string)
+			if seen[n] {
+				t.Fatalf("event %s repeated across pages", n)
+			}
+			seen[n] = true
+		}
+		if page.Next == "" {
+			break
+		}
+		next = page.Next
+	}
+	if len(seen) != 5 {
+		t.Fatalf("an event sharing a timestamp was skipped: saw %d of 5", len(seen))
+	}
+	if code, _ := api.get(admin, w.hub, "?before=garbage"); code != http.StatusBadRequest {
+		t.Errorf("a malformed cursor: %d", code)
 	}
 }

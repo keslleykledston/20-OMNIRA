@@ -198,3 +198,11 @@ Local (commit `8398b7b`), **não implantado**. Evidência:
 - **HIGH** o guarda do E2E ainda passava por um shell (um valor com `;` escaparia): agora **sem shell** (`execFileSync` com argv fixo; o script só entrega três valores validados por regex: contêiner, URL de aplicação e binário do hubctl) e a verificação do banco semeado vale para cada combinação.
 - **MEDIUM** editar equipe (membros, capacidade, instâncias, modo, remover) agora toma o **mesmo lock por Hub** da distribuição (uma edição não é ultrapassada por uma atribuição que já leu os membros antigos) e a atualização do rodízio confere `RowsAffected == 1` (senão a atribuição inteira desfaz); testes de espera e três mutantes novos.
 
+**Auditoria (aba nova) e a passada do Codex sobre ela (task-mv0wfcq4-nzqmcg):** 0 CRITICAL, **1 HIGH**, 1 MEDIUM, 1 LOW — corrigidos:
+- **HIGH** uma empresa com contrato com **dois Hubs** deixava o administrador de um ver os eventos atribuídos ao outro: agora só entram (1) eventos atribuídos a **este** Hub (`metadata.hub_id`) e (2) eventos de uma instância deste Hub **sem nenhuma atribuição** (as mudanças da própria empresa); o que é de outro Hub nunca sai, nem para empresa compartilhada (teste com empresa compartilhada e com empresa alheia).
+- **MEDIUM** varredura da tabela inteira: consulta em dois ramos com índices parciais novos (migration **106**: `(metadata->>'hub_id', created_at, id)` e `(tenant_id, created_at, id)`).
+- **LOW** cursor só por horário pulava eventos com o mesmo instante: cursor `(horário, id)` (teste com cinco eventos no mesmo microssegundo).
+Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutations.sh` (13 mortos), migrations 093..106 sobe/desce/sobe idêntico.
+
+**Rodada final de mutantes (código final):** `manage` 38, `distribution` 37, `audit` 13, `suspension` (inclui 3 mutantes de "pânico dentro do portão"), `reply` (inclui "conta inativa"), `access`, `admin`, `invite` — **todas PASS**. Mutantes que sobreviveram durante o caminho foram camadas redundantes (documentadas como "não-mutante" nos próprios scripts) ou lacunas de teste (corrigidas com teste novo).
+

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,14 +53,49 @@ type Service struct{ pool *pgxpool.Pool }
 
 func New(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
 
-// List returns the configuration events of the hub's instances, newest first. tenant (optional) narrows to one instance of THIS hub; before (optional)
-// is the cursor of the previous page.
-func (s *Service) List(ctx context.Context, actor, hub uuid.UUID, tenant *uuid.UUID, before *time.Time, limit int) (Page, error) {
+// Cursor is where the previous page ended: the (time, id) of its last event, so events sharing a timestamp are neither repeated nor skipped.
+type Cursor struct {
+	At time.Time
+	ID uuid.UUID
+}
+
+// Token is the opaque text of the cursor ("<RFC3339Nano>,<uuid>").
+func (c Cursor) Token() string { return c.At.UTC().Format(time.RFC3339Nano) + "," + c.ID.String() }
+
+// ParseCursor reads Token's output; anything else is an error (the caller answers 400).
+func ParseCursor(token string) (*Cursor, error) {
+	at, id, ok := strings.Cut(token, ",")
+	if !ok {
+		return nil, errors.New("auditlog: malformed cursor")
+	}
+	t, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return nil, err
+	}
+	u, err := uuid.Parse(id)
+	if err != nil {
+		return nil, err
+	}
+	return &Cursor{At: t, ID: u}, nil
+}
+
+// List returns the configuration events of the hub's instances, newest first. tenant (optional) narrows to one instance; after (optional) is the
+// cursor of the previous page.
+//
+// Which events belong to THIS hub (Codex review: a company may have a contract with several hubs): (1) every event the writer attributed to this hub
+// (metadata hub_id = this hub), whatever the company; (2) events about one of the hub's instances that carry NO hub attribution at all (the company's
+// own channel and status changes). An event attributed to ANOTHER hub is never returned, even for a shared company.
+func (s *Service) List(ctx context.Context, actor, hub uuid.UUID, tenant *uuid.UUID, after *Cursor, limit int) (Page, error) {
 	if actor == uuid.Nil || hub == uuid.Nil {
 		return Page{}, ErrForbidden
 	}
 	if limit < 1 || limit > MaxLimit {
 		limit = DefaultLimit
+	}
+	var at *time.Time
+	var cid *uuid.UUID
+	if after != nil {
+		at, cid = &after.At, &after.ID
 	}
 	out := Page{Items: []Event{}}
 	err := platformdb.WithTenantSession(ctx, s.pool, uuid.Nil, true, func(c context.Context) error {
@@ -71,19 +107,24 @@ func (s *Service) List(ctx context.Context, actor, hub uuid.UUID, tenant *uuid.U
 		if !ok {
 			return ErrForbidden
 		}
+		const kinds = `(e.action LIKE 'hub.%' OR e.action LIKE 'platform.%' OR e.action LIKE 'channel.connection_%' OR e.action LIKE 'channel.session_%')
+			  AND e.action NOT LIKE 'hub.message.%' AND e.action NOT LIKE 'hub.conversation.%'
+			  AND ($2::uuid IS NULL OR e.tenant_id = $2)
+			  AND ($3::timestamptz IS NULL OR (e.created_at, e.id) < ($3::timestamptz, $4::uuid))`
 		rows, err := q.Query(c, `
 			SELECT e.id, e.created_at, e.action, e.tenant_id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name, ''),
 			       e.actor_id, COALESCE(u.email, ''), COALESCE(u.display_name, ''), COALESCE(e.metadata, '{}'::jsonb)
-			FROM audit_events e
+			FROM (
+			  (SELECT e.* FROM audit_events e WHERE e.metadata ->> 'hub_id' = $1::text AND `+kinds+` ORDER BY e.created_at DESC, e.id DESC LIMIT $5)
+			  UNION ALL
+			  (SELECT e.* FROM audit_events e
+			    WHERE NOT (e.metadata ? 'hub_id') AND e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = $1::uuid) AND `+kinds+`
+			    ORDER BY e.created_at DESC, e.id DESC LIMIT $5)
+			) e
 			LEFT JOIN tenants t ON t.id = e.tenant_id
 			LEFT JOIN users u ON u.id = e.actor_id
-			WHERE (e.tenant_id IN (SELECT tenant_id FROM hub_tenant_service_contracts WHERE hub_id = $1) OR e.metadata ->> 'hub_id' = $1::text)
-			  AND (e.action LIKE 'hub.%' OR e.action LIKE 'platform.%' OR e.action LIKE 'channel.connection_%' OR e.action LIKE 'channel.session_%')
-			  AND e.action NOT LIKE 'hub.message.%' AND e.action NOT LIKE 'hub.conversation.%'
-			  AND ($2::uuid IS NULL OR e.tenant_id = $2)
-			  AND ($3::timestamptz IS NULL OR e.created_at < $3)
 			ORDER BY e.created_at DESC, e.id DESC
-			LIMIT $4`, hub, tenant, before, limit+1)
+			LIMIT $5`, hub, tenant, at, cid, limit+1)
 		if err != nil {
 			return err
 		}
@@ -117,7 +158,8 @@ func (s *Service) List(ctx context.Context, actor, hub uuid.UUID, tenant *uuid.U
 	}
 	if len(out.Items) > limit {
 		out.Items = out.Items[:limit]
-		out.Next = out.Items[limit-1].At.UTC().Format(time.RFC3339Nano)
+		last := out.Items[limit-1]
+		out.Next = Cursor{At: last.At, ID: last.ID}.Token()
 	}
 	return out, nil
 }

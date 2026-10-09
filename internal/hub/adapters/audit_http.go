@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,14 +32,14 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		tenant = &t
 	}
-	var before *time.Time
+	var before *auditlog.Cursor
 	if v := r.URL.Query().Get("before"); v != "" {
-		t, err := time.Parse(time.RFC3339Nano, v)
+		c, err := auditlog.ParseCursor(v)
 		if err != nil {
 			httpError(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		before = &t
+		before = c
 	}
 	limit := 0
 	if v := r.URL.Query().Get("limit"); v != "" {
