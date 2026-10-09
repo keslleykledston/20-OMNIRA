@@ -138,10 +138,11 @@ func (s *Service) Distribute(ctx context.Context, hub, item uuid.UUID) (assigned
 			return err
 		}
 		// Capacity is checked against what each person holds NOW, and two workers (or two replicas) must not both see room for the last
-		// slot: the assignments of one pool are serialized on the pool row until this transaction ends (Codex review). Manual claims and
-		// transfers are deliberately not counted against this soft limit: it only decides who the AUTOMATIC distribution picks.
-		var locked uuid.UUID
-		if err := q.QueryRow(c, `SELECT id FROM work_pools WHERE id = $1 FOR UPDATE`, pool).Scan(&locked); err != nil {
+		// slot - not even through DIFFERENT pools that share a person (Codex review): the automatic assignments of one hub are serialized
+		// on a per-hub lock until this transaction ends. Manual claims and transfers are deliberately not counted against this soft limit
+		// and do not take the lock: capacity only decides who the AUTOMATIC distribution picks, and at the very instant of a manual claim a
+		// person may hold one more than their capacity until the next round sees it.
+		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended('hub-distribution:' || $1::text, 0))`, hub); err != nil {
 			return err
 		}
 		// candidates in rotation order; the authorization of each one is re-proven (pinned) before anybody is chosen

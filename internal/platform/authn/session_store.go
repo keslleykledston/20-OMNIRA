@@ -51,7 +51,7 @@ func (s *PostgresSessionStore) ResolveSession(ctx context.Context, sessionID str
 
 	err := s.pool.QueryRow(ctx, `
 		SELECT user_id FROM auth_sessions
-		WHERE id=$1 AND revoked_at IS NULL AND expires_at > NOW() AND user_is_active(user_id)
+		WHERE id=$1 AND revoked_at IS NULL AND expires_at > NOW() AND session_account_active(id)
 	`, sessionID).Scan(&userID)
 
 	if err == pgx.ErrNoRows {

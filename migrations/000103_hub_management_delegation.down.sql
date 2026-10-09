@@ -13,5 +13,6 @@ DROP POLICY IF EXISTS channel_connections_hub_manage_read ON channel_connections
 DROP FUNCTION IF EXISTS channel_connection_scope(TEXT);
 DROP FUNCTION IF EXISTS has_hub_manage_access(UUID, UUID, TEXT, UUID);
 DROP FUNCTION IF EXISTS user_is_active(UUID);
+DROP FUNCTION IF EXISTS session_account_active(TEXT);
 ALTER TABLE effective_access_grants DROP COLUMN IF EXISTS can_manage;
 ALTER TABLE hub_tenant_service_contracts DROP COLUMN IF EXISTS management_scopes;

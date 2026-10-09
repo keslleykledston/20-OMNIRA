@@ -545,3 +545,34 @@ func TestDistribute_CapacityIsNotOvershotByConcurrentWorkers(t *testing.T) {
 		t.Fatalf("a member with capacity 2 must hold exactly 2 after eight concurrent distributions, holds %d", n)
 	}
 }
+
+// Codex review (round 2): the same person may belong to SEVERAL pools; workers on different pools must not both see room for the last slot.
+func TestDistribute_CapacityHoldsAcrossPoolsThatShareAPerson(t *testing.T) {
+	w := newWorld(t)
+	a := w.agent("a")
+	w.grant(a, "A", true)
+	w.grant(a, "B", true)
+	w.pool("round_robin", []string{"A"}, a)
+	w.pool("round_robin", []string{"B"}, a)
+	w.exec(`UPDATE work_pool_members SET max_open = 1 WHERE user_id = $1`, a)
+	var items []uuid.UUID
+	for i := 0; i < 10; i++ {
+		_, ia := w.item("A", true)
+		_, ib := w.item("B", true)
+		items = append(items, ia, ib)
+	}
+	var wg sync.WaitGroup
+	for _, item := range items {
+		wg.Add(1)
+		go func(item uuid.UUID) {
+			defer wg.Done()
+			if _, err := w.svc.Distribute(w.ctx, w.hub, item); err != nil {
+				t.Error(err)
+			}
+		}(item)
+	}
+	wg.Wait()
+	if n := w.count(`SELECT count(*) FROM conversations WHERE assigned_to_user_id = $1 AND status <> 'closed'`, a); n != 1 {
+		t.Fatalf("a person with capacity 1 in two pools must hold exactly 1 after twenty concurrent distributions, holds %d", n)
+	}
+}

@@ -15,13 +15,22 @@ ALTER TABLE hub_tenant_service_contracts
 ALTER TABLE effective_access_grants
   ADD COLUMN can_manage BOOLEAN NOT NULL DEFAULT false;
 
--- An account that is not active manages (and answers) nothing through a Hub, whatever rows it still has (Codex review): a definer function,
--- because the users table is not readable by an arbitrary session. It answers only whether ONE given account is active.
+-- An account that is not active manages (and answers) nothing through a Hub, whatever rows it still has (Codex review). Two definer functions,
+-- because the users table is not readable by an arbitrary session, and deliberately NOT one general-purpose predicate:
+--   * user_is_active(user)         internal helper of the other definer functions below and in 000105; NOT executable by the application role,
+--                                  so no session can use it to ask about somebody else's account;
+--   * session_account_active(sid)  the only door for session resolution: it answers about the owner of ONE session id (knowing the id is
+--                                  already what makes a session resolvable), never about a user id.
 CREATE OR REPLACE FUNCTION user_is_active(p_user_id UUID) RETURNS BOOLEAN AS $$
   SELECT EXISTS (SELECT 1 FROM public.users WHERE id = p_user_id AND status = 'active');
 $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 REVOKE EXECUTE ON FUNCTION user_is_active(UUID) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION user_is_active(UUID) TO omnira_app;
+
+CREATE OR REPLACE FUNCTION session_account_active(p_session_id TEXT) RETURNS BOOLEAN AS $$
+  SELECT EXISTS (SELECT 1 FROM public.auth_sessions s JOIN public.users u ON u.id = s.user_id WHERE s.id = p_session_id AND u.status = 'active');
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+REVOKE EXECUTE ON FUNCTION session_account_active(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION session_account_active(TEXT) TO omnira_app;
 
 -- p_scope NULL = "any delegated scope". Every condition is evaluated at query time (now()), like has_active_hub_access.
 CREATE OR REPLACE FUNCTION has_hub_manage_access(p_tenant_id UUID, p_user_id UUID, p_scope TEXT DEFAULT NULL, p_hub_id UUID DEFAULT NULL)
