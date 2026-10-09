@@ -109,6 +109,7 @@ func main() {
 			srv.SetupPresence(valkeyClient)
 		}
 	}
+	tenancyadapters.EnableDelegatedServing(cfg.HubServeEnabled) // ADR-0040 phase 02; off by default
 	srv.ConfigureRateLimits(cfg.RateLimitUserPerMin, cfg.RateLimitTenantPerMin)
 	srv.SetupRateLimiting()
 	srv.SetupRequestMeta() // outermost: request id on every response, opt-in error envelope (see httpserver/requestmeta.go)

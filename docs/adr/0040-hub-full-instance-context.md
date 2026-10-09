@@ -136,7 +136,7 @@ Testes indispensáveis (parecer §12.1) viram a lista de aceite de cada fase, to
 ## 9. Interface (decisão de produto já tomada e implementada na parte de front)
 
 "Conversas" tem abas por instância na mesma aba do navegador (`6e670d3`): **Todas** e uma por instância. Revogado o acesso, a aba borra com a mensagem de contato com o administrador do Hub,
-o cache da instância é descartado e a aba some na próxima leitura. Até a fase 03 concluir, quem tem acesso **só** pelo Hub continua com a visão de texto (aviso na aba).
+o cache da instância é descartado e a aba some na próxima leitura. A **administração** (agentes, empresas, contratos, teto de capacidades, equipes) é tema do ADR-0041 (console independente, proposta). Até a fase 03 concluir, quem tem acesso **só** pelo Hub continua com a visão de texto (aviso na aba).
 
 ## 10. Divergências conscientes em relação ao parecer
 

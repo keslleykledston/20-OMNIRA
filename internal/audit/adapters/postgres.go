@@ -10,6 +10,7 @@ import (
 	"github.com/omnira/omnira/internal/audit/domain"
 	"github.com/omnira/omnira/internal/audit/ports"
 	"github.com/omnira/omnira/internal/platform/db"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
 // PostgresAuditEventRepository — implementação PostgreSQL.
@@ -23,7 +24,7 @@ func NewPostgresAuditEventRepository(pool *pgxpool.Pool) ports.AuditEventReposit
 }
 
 func (r *PostgresAuditEventRepository) Store(ctx context.Context, event *domain.AuditEvent) error {
-	metadataJSON, _ := json.Marshal(event.Metadata)
+	metadataJSON, _ := json.Marshal(withDelegatedContext(ctx, event.Metadata))
 
 	const query = `
 		INSERT INTO audit_events (id, tenant_id, actor_id, action, resource_type, resource_id, outcome, correlation_id, causation_id, metadata, created_at)
@@ -44,6 +45,35 @@ func (r *PostgresAuditEventRepository) Store(ctx context.Context, event *domain.
 		event.CreatedAt,
 	)
 	return err
+}
+
+// withDelegatedContext — an action taken by a Hub agent attending an instance (ADR-0040) always says so: who acted through which hub,
+// under which contract and grant. Done here, in the one place every audit event passes, so no module can forget it. Keys the caller
+// already set are kept. Members' events are returned untouched.
+func withDelegatedContext(ctx context.Context, meta map[string]any) map[string]any {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc == nil || tc.Source != tenancydomain.AccessSourceHubServe || tc.HubID == nil {
+		return meta
+	}
+	merged := make(map[string]any, len(meta)+5)
+	for k, v := range meta {
+		merged[k] = v
+	}
+	set := func(k string, v any) {
+		if _, ok := merged[k]; !ok {
+			merged[k] = v
+		}
+	}
+	set("via", "hub")
+	set("acting_as", tc.ActingAs())
+	set("hub_id", tc.HubID.String())
+	if tc.ServiceContractID != nil {
+		set("contract_id", tc.ServiceContractID.String())
+	}
+	if tc.EffectiveGrantID != nil {
+		set("grant_id", tc.EffectiveGrantID.String())
+	}
+	return merged
 }
 
 func (r *PostgresAuditEventRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.AuditEvent, error) {

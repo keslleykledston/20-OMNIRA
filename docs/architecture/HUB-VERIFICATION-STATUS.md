@@ -243,3 +243,23 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
   mutação de gestão 39/39 (o mutante novo morre por 1 teste).
 - **Decisões do dono:** grupos de WhatsApp ficam só para membros; a granularidade do banco para delegados será avaliada pela análise do ADR-0040 §4.1 (domínio no banco, capacidade fina no serviço).
 - **Sem revisão Codex** desta migration: `CODEX_PLUGIN_NOT_EXECUTED`.
+
+## 2026-10-09 (noite, 2) — ADR-0040 Fase 02: núcleo do serviço delegado (migration 108)
+
+- **IMPLEMENTED (local, NÃO implantado; flag `OMNIRA_HUB_SERVE_ENABLED` desligada por padrão):**
+  - `000108_hub_delegated_serving_core`: teto do contrato (`delegable_permissions`), permissões da concessão (`permissions`), 4 chaves novas de permissão (`conversation.read/reply`, `media.read`, `contact.read`; nenhum papel as recebe),
+    `permission_domains` (chave → domínio + ler/escrever; chave sem linha NUNCA é delegável), `delegated_permissions` (concessão ∩ teto ∩ delegável, ao vivo), `lock_served_tenant` (única porta para o contexto delegado: valida, trava as linhas, define `app.acting_hub`),
+    `actor_has_permission` (uma só definição de "pode?", sem união de contextos), `has_delegated_access` (predicado de domínio para a Fase 03), política de leitura das PRÓPRIAS linhas de `audit_events` no contexto delegado.
+  - Go: `X-Omnira-Acting-As` (`member` | `hub:<id>`; inválido = 400, nunca vira "member"), `AccessSourceHubServe`, ramo delegado do `AuthorizationMiddleware` (404 uniforme, sem membership), `ActorHasPermission`, auditoria central com `via/acting_as/hub_id/contract_id/grant_id`.
+  - **NOT WIRED:** nenhuma política de linha chama os predicados ainda (Fase 03); nenhum módulo usa `actor_has_permission` ainda (cada um migra na sua fase); sem mudança para membros.
+- **UNIT:** parser do cabeçalho, contexto delegado, enriquecimento da auditoria (3 pacotes).
+- **POSTGRES VERIFIED (papel real `omnira_app`):** 14 testes novos em `serving_integration_test.go`: concessão ∩ teto ∩ delegável; nenhuma chave de equipe/contrato/segredo é delegável (estrutural); vivacidade de CADA elo (concessão revogada/suspensa/expirada/futura, contrato suspenso/revogado/expirado/futuro,
+  instância e hub suspensos, conta inativa, teto reduzido, vínculo ao Hub removido) com efeito imediato; só para o chamador, uma instância, um hub; a porta só define o contexto se vivo e ele não vaza para a próxima requisição;
+  contexto de membro × delegado sem soma; contexto forjado não confere nada; domínio (escrever implica ler); middleware real (404 uniforme, 400, 403 com a flag desligada, membro inalterado, revogação/suspensão/teto na requisição seguinte);
+  o pedido em andamento SEGURA as linhas de que depende; auditoria nomeia hub/contrato/concessão e o agente lê só os próprios eventos.
+- **Mutação:** `scripts/test-hub-serve-mutations.sh` **38/38 mortos**. Encontrei e corrigi duas lacunas de teste (oráculo de "fulano pode X" sobre outra pessoa; testes fora do filtro do script).
+  Não mutantes documentados no script: guarda do chamador de `lock_served_tenant` (redundante com a de `delegated_permissions`), JOIN do vínculo ao Hub (a FK da concessão já o garante), um dos dois checks de vivacidade da porta, `acting IS NOT NULL` de `has_delegated_access`.
+- **Gate:** migrations 093..108 sobem/descem/sobem idênticas; integração completa **33 pacotes ok**.
+- **Gate da fase (ADR-0040 §8) — "sem união de privilégios, `tenant_id` nunca autoriza": provado em banco e no middleware.** Item deixado explícito para a Fase 03: no banco, o ramo de membro das políticas (`has_active_membership`) ainda vale no contexto delegado; ao anexar o ramo delegado às políticas, `has_active_membership` precisa passar a negar quando `app.acting_hub` está definido, senão uma pessoa membro+delegada somaria os dois no nível de linha.
+- **Sem revisão Codex** desta fase: `CODEX_PLUGIN_NOT_EXECUTED`.
+- **ADR-0041 (proposta):** console de administração independente (decisão de produto do dono); só documento.

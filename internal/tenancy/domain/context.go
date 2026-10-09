@@ -21,6 +21,10 @@ type TenantContext struct {
 	EffectiveGrantID  *uuid.UUID // which grant
 	WorkPoolID        *uuid.UUID // grant's work pool, when it has one
 	CanReply          bool       // hub access only: the grant allows claiming and replying, not just reading
+	// Permissions — delegated serving only (AccessSourceHubServe): the permission keys the grant AND the contract's ceiling hold at the
+	// moment the request was admitted. A snapshot for display and logging; every decision is still asked of the database
+	// (actor_has_permission), live.
+	Permissions []string
 
 	// Audit trail
 	CorrelationID string // trace requests across system
@@ -37,6 +41,10 @@ const (
 	// PRÓPRIA de propósito: todo código que exige AccessSourceDirect (envio de mensagem, tickets, roteamento...) continua recusando
 	// este contexto; só os serviços de gestão de canal o aceitam, e cada permissão é revalidada no banco.
 	AccessSourceHubManage AccessSource = "hub_manage"
+	// AccessSourceHubServe — a Hub agent ATTENDS an instance with its operational context (ADR-0040): the request declared
+	// `X-Omnira-Acting-As: hub:<id>` and the server proved hub -> contract -> grant -> permissions. Own source on purpose, like HubManage:
+	// code that requires AccessSourceDirect keeps refusing it, and it never carries a member's privileges.
+	AccessSourceHubServe AccessSource = "hub_serve"
 )
 
 // NewTenantContext — factory. Exige tenant_id e, para acesso humano,
@@ -97,6 +105,27 @@ func NewHubManageTenantContext(tenantID, actorID, hubID, contractID uuid.UUID, g
 		TenantID: tenantID, ActorID: actorID, Source: AccessSourceHubManage,
 		HubID: &hubID, ServiceContractID: &contractID, EffectiveGrantID: grantID, CorrelationID: correlationID,
 	}, nil
+}
+
+// NewHubServeTenantContext — context of a Hub agent attending an instance (ADR-0040). Every ID comes from the server's own validation
+// (lock_served_tenant), never from the client. permissions is a snapshot (see TenantContext.Permissions).
+func NewHubServeTenantContext(tenantID, actorID, hubID, contractID, grantID uuid.UUID, permissions []string, correlationID string) (*TenantContext, error) {
+	if tenantID == uuid.Nil || actorID == uuid.Nil || hubID == uuid.Nil || contractID == uuid.Nil || grantID == uuid.Nil {
+		return nil, errors.New("tenant_id, actor_id, hub_id, contract_id, grant_id required for delegated serving")
+	}
+	return &TenantContext{
+		TenantID: tenantID, ActorID: actorID, Source: AccessSourceHubServe,
+		HubID: &hubID, ServiceContractID: &contractID, EffectiveGrantID: &grantID,
+		Permissions: append([]string(nil), permissions...), CorrelationID: correlationID,
+	}, nil
+}
+
+// ActingAs — the context this request acts in, as the audit trail names it.
+func (tc *TenantContext) ActingAs() string {
+	if tc != nil && tc.Source == AccessSourceHubServe && tc.HubID != nil {
+		return ActingAs{HubID: *tc.HubID}.String()
+	}
+	return "member"
 }
 
 // MayManageAsTenant — o contexto pode chegar a um serviço de gestão de canal? Direto (membership) ou gestão delegada pelo Hub com

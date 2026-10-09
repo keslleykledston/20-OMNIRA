@@ -72,6 +72,17 @@ func AuthorizationMiddleware(pool *pgxpool.Pool, authzSvc *application.Authoriza
 				return
 			}
 
+			// The context the request ACTS in (ADR-0040). A malformed value is refused, never read as "member".
+			acting, aerr := domain.ParseActingAs(r.Header.Get(domain.ActingAsHeader))
+			if aerr != nil {
+				http.Error(w, "invalid acting context", http.StatusBadRequest)
+				return
+			}
+			if acting.IsHub() {
+				serveDelegated(w, r, next, pool, principal, tenantUUID, acting.HubID)
+				return
+			}
+
 			tw := &trackedResponseWriter{ResponseWriter: w}
 			sessionErr := platformdb.WithTenantSession(r.Context(), pool, principal.UserID, false, func(ctx context.Context) error {
 				// Autorizar acesso (já roda com app.current_user_id setado)

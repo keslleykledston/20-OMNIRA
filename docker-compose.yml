@@ -49,6 +49,8 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_HUB_API_ENABLED: ${OMNIRA_HUB_API_ENABLED-}
   OMNIRA_HUB_ADMIN_API_ENABLED: ${OMNIRA_HUB_ADMIN_API_ENABLED-}
   OMNIRA_HUB_ACCESS_API_ENABLED: ${OMNIRA_HUB_ACCESS_API_ENABLED-}
+  # ADR-0040 phase 02: tenant routes accept `X-Omnira-Acting-As: hub:<id>` (needs migration 108). Phase 03 lets the data layer answer it.
+  OMNIRA_HUB_SERVE_ENABLED: ${OMNIRA_HUB_SERVE_ENABLED-}
   OMNIRA_HUB_PROJECTOR_ENABLED: ${OMNIRA_HUB_PROJECTOR_ENABLED-}
   OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS: ${OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS-}
   # ADR-0038 phase 4: the worker hands new conversations to the members of round-robin work pools (needs migration 104; harmless with no pool).

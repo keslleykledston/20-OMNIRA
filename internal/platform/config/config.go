@@ -42,7 +42,10 @@ type Config struct {
 	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
 	HubAdminAPIEnabled bool
 	// HubAccessAPIEnabled mounts the people-and-permissions routes of ADR-0039 (hub admins only). Needs HubAPIEnabled.
-	HubAccessAPIEnabled         bool
+	HubAccessAPIEnabled bool
+	// HubServeEnabled admits requests that declare `X-Omnira-Acting-As: hub:<id>` on the tenant routes (ADR-0040 phase 02). The data layer
+	// does not accept the delegated context yet (phase 03), so turning it on changes nothing for people today; it exists to be tested.
+	HubServeEnabled             bool
 	HubProjectorIntervalSeconds int
 	// HubDistributorEnabled makes the worker give new conversations to the least loaded member of a round-robin work pool
 	// (ADR-0038 phase 4) every HubDistributorIntervalSeconds. Off by default; needs migration 104.
@@ -155,6 +158,7 @@ func Load() *Config {
 		HubProjectorEnabled:           getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
 		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
 		HubAccessAPIEnabled:           getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
+		HubServeEnabled:               getEnv("OMNIRA_HUB_SERVE_ENABLED", "false") == "true",
 		HubProjectorIntervalSeconds:   getEnvInt("OMNIRA_HUB_PROJECTOR_INTERVAL_SECONDS", 60),
 		HubDistributorEnabled:         getEnv("OMNIRA_HUB_DISTRIBUTOR_ENABLED", "false") == "true",
 		HubDistributorIntervalSeconds: getEnvInt("OMNIRA_HUB_DISTRIBUTOR_INTERVAL_SECONDS", 15),
