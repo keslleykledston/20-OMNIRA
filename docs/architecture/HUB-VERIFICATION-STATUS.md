@@ -194,3 +194,7 @@ Local (commit `8398b7b`), **não implantado**. Evidência:
 - **MEDIUM capacidade entre equipes:** a mesma pessoa em várias equipes burlava o lock por equipe; agora há **um lock por Hub** para a distribuição automática (teste com 20 distribuições concorrentes em duas equipes que compartilham uma pessoa). Limite declarado: assumir/transferir à mão não toma o lock (a capacidade é um limite brando da distribuição **automática**).
 - **MEDIUM oráculo de status:** `user_is_active(uuid)` deixou de ser executável pela aplicação (só as funções DEFINER a usam); a sessão usa `session_account_active(session_id)`, que só responde sobre o dono de **uma** sessão (conhecer o id já é o que a torna resolvível).
 
+**Terceira passada do Codex (task-mv0sd1iu-780lx4, sobre `a7aa6f2..400b46c`):** 0 CRITICAL, 1 HIGH, 1 MEDIUM; confirmou o oráculo de status fechado e a corrida de capacidade entre equipes. Corrigidos:
+- **HIGH** o guarda do E2E ainda passava por um shell (um valor com `;` escaparia): agora **sem shell** (`execFileSync` com argv fixo; o script só entrega três valores validados por regex: contêiner, URL de aplicação e binário do hubctl) e a verificação do banco semeado vale para cada combinação.
+- **MEDIUM** editar equipe (membros, capacidade, instâncias, modo, remover) agora toma o **mesmo lock por Hub** da distribuição (uma edição não é ultrapassada por uma atribuição que já leu os membros antigos) e a atualização do rodízio confere `RowsAffected == 1` (senão a atribuição inteira desfaz); testes de espera e três mutantes novos.
+

@@ -576,3 +576,60 @@ func TestDistribute_CapacityHoldsAcrossPoolsThatShareAPerson(t *testing.T) {
 		t.Fatalf("a person with capacity 1 in two pools must hold exactly 1 after twenty concurrent distributions, holds %d", n)
 	}
 }
+
+// Codex review (round 3): an edit of a pool must wait for an automatic assignment in progress (and vice versa), so the assignment can never be
+// committed on the authority of members/capacity that an administrator has just changed.
+func TestPools_EditsWaitForTheHubLockOfAnAssignmentInProgress(t *testing.T) {
+	w := newWorld(t)
+	a := w.agent("a")
+	p := w.pool("round_robin", []string{"A"}, a)
+	tx, err := w.owner.Begin(w.ctx)
+	w.must(err)
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) }) // never leave the lock parked if an assertion fails
+	_, err = tx.Exec(w.ctx, `SELECT pg_advisory_xact_lock(hashtextextended('hub-distribution:' || $1::text, 0))`, w.hub)
+	w.must(err)
+
+	edits := map[string]func() error{
+		"members":   func() error { return w.svc.SetMembers(w.ctx, w.admin, w.hub, p, nil) },
+		"instances": func() error { return w.svc.SetInstances(w.ctx, w.admin, w.hub, p, nil) },
+		"mode":      func() error { m := "manual"; return w.svc.Update(w.ctx, w.admin, w.hub, p, nil, &m) },
+	}
+	done := map[string]chan error{}
+	for name, edit := range edits {
+		ch := make(chan error, 1)
+		done[name] = ch
+		go func(edit func() error) { ch <- edit() }(edit)
+	}
+	select {
+	case <-time.After(700 * time.Millisecond):
+	case err := <-done["members"]:
+		t.Fatalf("an edit did not wait for the assignment in progress (%v)", err)
+	case err := <-done["instances"]:
+		t.Fatalf("an edit did not wait for the assignment in progress (%v)", err)
+	case err := <-done["mode"]:
+		t.Fatalf("an edit did not wait for the assignment in progress (%v)", err)
+	}
+	w.must(tx.Commit(w.ctx))
+	for name, ch := range done {
+		if err := <-ch; err != nil {
+			t.Errorf("%s edit after the lock was released: %v", name, err)
+		}
+	}
+	// and deleting a pool waits for an assignment in progress too
+	tx2, err := w.owner.Begin(w.ctx)
+	w.must(err)
+	t.Cleanup(func() { _ = tx2.Rollback(context.Background()) })
+	_, err = tx2.Exec(w.ctx, `SELECT pg_advisory_xact_lock(hashtextextended('hub-distribution:' || $1::text, 0))`, w.hub)
+	w.must(err)
+	del := make(chan error, 1)
+	go func() { del <- w.svc.Delete(w.ctx, w.admin, w.hub, p) }()
+	select {
+	case err := <-del:
+		t.Fatalf("a delete did not wait for the assignment in progress (%v)", err)
+	case <-time.After(700 * time.Millisecond):
+	}
+	w.must(tx2.Commit(w.ctx))
+	if err := <-del; err != nil {
+		t.Errorf("delete after the lock was released: %v", err)
+	}
+}

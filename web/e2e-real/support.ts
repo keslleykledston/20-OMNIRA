@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { expect, type Page } from '@playwright/test';
 
 // Helpers of the real-stack browser E2E (scripts/e2e-hub-browser.sh sets E2E_* and starts the API, the database and the web app).
@@ -29,39 +29,46 @@ export async function signIn(page: Page, email: string): Promise<{ id: string; e
   return user;
 }
 
-let verified = false;
+const CONTAINER_RE = /^omnira-hubbrowser-\d+-pg$/;
+const APPDB_RE = /^postgres:\/\/omnira_app:omnira_app@127\.0\.0\.1:\d+\/hubbrowser\?sslmode=disable$/;
+const HUBCTL_RE = /^\/[A-Za-z0-9_./-]+\/bin\/hubctl$/;
+let verifiedFor = '';
 
 /**
  * These helpers write with the database owner's rights (sessions, seed data, hubctl). They run ONLY against the throwaway database that
- * scripts/e2e-hub-browser.sh creates, and refuse anything else (Codex review): the connection command must name that script's own container,
- * and the database must be the seeded one, holding nobody but the five seeded e2e.test people.
+ * scripts/e2e-hub-browser.sh creates (Codex review): no shell is involved (fixed argv, the script only supplies three validated values: the
+ * container name, the application URL of that database and the hubctl binary), and every new combination is verified against the database
+ * itself - it must be the seeded one, holding nobody but the five seeded e2e.test people - before the first write.
  */
-function assertThrowawayDatabase(): void {
-  if (verified) return;
-  const cmd = process.env.E2E_PSQL ?? '';
-  if (!/^docker exec -i omnira-hubbrowser-\d+-pg psql -U omnira -d hubbrowser /.test(cmd)) {
-    throw new Error('E2E_PSQL is not the throwaway database of scripts/e2e-hub-browser.sh: refusing to write anywhere else');
+function target(): { container: string; appdb: string; hubctlBin: string } {
+  const container = process.env.E2E_PG_CONTAINER ?? '';
+  const appdb = process.env.E2E_APPDB ?? '';
+  const hubctlBin = process.env.E2E_HUBCTL_BIN ?? '';
+  if (!CONTAINER_RE.test(container)) throw new Error('E2E_PG_CONTAINER is not the throwaway database of scripts/e2e-hub-browser.sh: refusing to write anywhere else');
+  if (!APPDB_RE.test(appdb)) throw new Error('E2E_APPDB does not point at the throwaway database: refusing to run');
+  if (!HUBCTL_RE.test(hubctlBin)) throw new Error('E2E_HUBCTL_BIN is not the hubctl built by the script: refusing to run');
+  const key = `${container}|${appdb}|${hubctlBin}`;
+  if (verifiedFor !== key) {
+    const probe = psql(container, `SELECT current_database() || '|' || (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM users WHERE email LIKE '%@e2e.test')`);
+    if (probe !== 'hubbrowser|5|5') throw new Error(`the database is not the seeded throwaway one (${probe}): refusing to write`);
+    verifiedFor = key;
   }
-  if (!/^env OMNIRA_DATABASE_URL=postgres:\/\/omnira_app:omnira_app@127\.0\.0\.1:\d+\/hubbrowser\?sslmode=disable \S+\/hubctl --operator e2e$/.test(process.env.E2E_HUBCTL ?? '')) {
-    throw new Error('E2E_HUBCTL does not point at the throwaway database: refusing to run');
-  }
-  const probe = execSync(cmd, {
-    input: `SELECT current_database() || '|' || (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM users WHERE email LIKE '%@e2e.test')`,
-    encoding: 'utf8',
-  }).trim();
-  if (probe !== 'hubbrowser|5|5') throw new Error(`the database is not the seeded throwaway one (${probe}): refusing to write`);
-  verified = true;
+  return { container, appdb, hubctlBin };
+}
+
+function psql(container: string, statement: string): string {
+  return execFileSync('docker', ['exec', '-i', container, 'psql', '-U', 'omnira', '-d', 'hubbrowser', '-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1'], { input: statement, encoding: 'utf8' }).trim(); // statement via stdin
 }
 
 /** One SQL statement against the throwaway database, as its owner (for setting up and for checking what really happened). */
 export function sql(statement: string): string {
-  assertThrowawayDatabase();
-  return execSync(`${process.env.E2E_PSQL}`, { input: statement, encoding: 'utf8' }).trim(); // via stdin: no shell quoting of the statement
+  return psql(target().container, statement);
 }
 
+/** Runs omnira-hubctl (one command, e.g. "reconcile") against the throwaway database. */
 export function hubctl(args: string): string {
-  assertThrowawayDatabase();
-  return execSync(`${process.env.E2E_HUBCTL} ${args}`, { encoding: 'utf8' }).trim();
+  const t = target();
+  return execFileSync(t.hubctlBin, ['--operator', 'e2e', ...args.split(' ').filter(Boolean)], { env: { ...process.env, OMNIRA_DATABASE_URL: t.appdb }, encoding: 'utf8' }).trim();
 }
 
 /** GETs a hub API path with the person's own session (the same cookie/headers the page uses). */

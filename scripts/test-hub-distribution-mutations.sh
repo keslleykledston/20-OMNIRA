@@ -93,6 +93,9 @@ mut "the queue scope of the contract is ignored"           $DI '$2 AND status = 
 	                           AND has_active_hub_access($2, $1, NULL, $4, false, true)`, tenant, person, queue, hub)'
 mut "an inactive account receives"                         $DI "SELECT EXISTS (SELECT 1 FROM users WHERE id = \$2 AND status = 'active')" "SELECT EXISTS (SELECT 1 FROM users WHERE id = \$2)"
 mut "the grant is not pinned (a racing revocation loses)"  $DI '		{`SELECT 1 FROM effective_access_grants WHERE hub_id = $1 AND tenant_id = $2 AND user_id = $3 FOR SHARE`, []any{hub, tenant, person}},' ''
+mut "distribution does not take the hub lock"              $DI '		if err := lockHub(c, q, hub); err != nil {' '		if err := error(nil); err != nil {'
+mut "pool edits do not take the hub lock"                  $DS '	if err := lockHub(c, q, hub); err != nil {' '	if err := error(nil); err != nil {'
+mut "a vanished member does not undo the assignment"       $DI 'if tag.RowsAffected() != 1 {' 'if false && tag.RowsAffected() != 1 {'
 mut "capacity is ignored"                                  $DI 'WHERE m.work_pool_id = $1 AND l.load < m.max_open' 'WHERE m.work_pool_id = $1'
 mut "the MOST loaded goes first"                           $DI 'ORDER BY l.load, m.last_assigned_at NULLS FIRST, m.user_id`, pool, hub)' 'ORDER BY l.load DESC, m.last_assigned_at NULLS FIRST, m.user_id`, pool, hub)'
 mut "the rotation is not updated"                          $DI 'UPDATE work_pool_members SET last_assigned_at = now() WHERE work_pool_id = $1 AND user_id = $2' 'UPDATE work_pool_members SET max_open = max_open WHERE work_pool_id = $1 AND user_id = $2'

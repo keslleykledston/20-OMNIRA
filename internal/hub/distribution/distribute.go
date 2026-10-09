@@ -139,10 +139,10 @@ func (s *Service) Distribute(ctx context.Context, hub, item uuid.UUID) (assigned
 		}
 		// Capacity is checked against what each person holds NOW, and two workers (or two replicas) must not both see room for the last
 		// slot - not even through DIFFERENT pools that share a person (Codex review): the automatic assignments of one hub are serialized
-		// on a per-hub lock until this transaction ends. Manual claims and transfers are deliberately not counted against this soft limit
-		// and do not take the lock: capacity only decides who the AUTOMATIC distribution picks, and at the very instant of a manual claim a
-		// person may hold one more than their capacity until the next round sees it.
-		if _, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended('hub-distribution:' || $1::text, 0))`, hub); err != nil {
+		// on a per-hub lock until this transaction ends, and so is every edit of a pool (lockHub). Manual claims and transfers are
+		// deliberately not counted against this soft limit and do not take the lock: capacity only decides who the AUTOMATIC distribution
+		// picks, and at the very instant of a manual claim a person may hold one more than their capacity until the next round sees it.
+		if err := lockHub(c, q, hub); err != nil {
 			return err
 		}
 		// candidates in rotation order; the authorization of each one is re-proven (pinned) before anybody is chosen
@@ -187,8 +187,12 @@ func (s *Service) Distribute(ctx context.Context, hub, item uuid.UUID) (assigned
 			                        VALUES ($1, $2, NULL, $3, NULL, 'hub_pool', 'system')`, tenant, conversation, person); err != nil {
 				return fmt.Errorf("assignment history: %w", err)
 			}
-			if _, err := q.Exec(c, `UPDATE work_pool_members SET last_assigned_at = now() WHERE work_pool_id = $1 AND user_id = $2`, pool, person); err != nil {
+			tag, err := q.Exec(c, `UPDATE work_pool_members SET last_assigned_at = now() WHERE work_pool_id = $1 AND user_id = $2`, pool, person)
+			if err != nil {
 				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return fmt.Errorf("work pool member vanished during the assignment") // the whole assignment rolls back
 			}
 			raw, err := json.Marshal(map[string]any{"hub_id": hub, "conversation_id": conversation, "work_pool_id": pool, "via": "omnira-work-pools"})
 			if err != nil {

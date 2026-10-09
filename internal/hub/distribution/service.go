@@ -256,8 +256,20 @@ func (s *Service) Create(ctx context.Context, actor, hub uuid.UUID, name, distri
 	return out, err
 }
 
-// lockPool takes the pool row (of THIS hub) so two edits of one pool serialize.
+// lockHub serializes everything that decides WHO gets automatic conversations in this hub: the distribution itself and every edit of a pool's
+// members, capacities and instances take the same per-hub lock for the rest of their transaction, so an edit can neither be overtaken by an
+// assignment that already read the old members (Codex review) nor overshoot a capacity that was just lowered. Manual claims and transfers do
+// not take it: capacity is a soft limit of the AUTOMATIC distribution.
+func lockHub(c context.Context, q platformdb.Querier, hub uuid.UUID) error {
+	_, err := q.Exec(c, `SELECT pg_advisory_xact_lock(hashtextextended('hub-distribution:' || $1::text, 0))`, hub)
+	return err
+}
+
+// lockPool takes the hub lock and then the pool row (of THIS hub), so two edits of one pool serialize with each other and with distribution.
 func lockPool(c context.Context, q platformdb.Querier, hub, pool uuid.UUID) error {
+	if err := lockHub(c, q, hub); err != nil {
+		return err
+	}
 	var id uuid.UUID
 	err := q.QueryRow(c, `SELECT id FROM work_pools WHERE id = $1 AND hub_id = $2 FOR UPDATE`, pool, hub).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -91,8 +91,7 @@ curl -sf --max-time 2 "http://127.0.0.1:$WEBPORT/" >/dev/null || { echo "web did
 
 echo "== browser"
 export E2E_BASE_URL="http://127.0.0.1:$WEBPORT" E2E_HUB="$HUB" E2E_TA="$TA" E2E_TB="$TB" E2E_TC="$TC"
-export E2E_PSQL="docker exec -i $PG psql -U omnira -d hubbrowser -X -q -At -v ON_ERROR_STOP=1"
-export E2E_HUBCTL="env OMNIRA_DATABASE_URL=$APPDB $WORK/bin/hubctl --operator e2e"
+export E2E_PG_CONTAINER="$PG" E2E_APPDB="$APPDB" E2E_HUBCTL_BIN="$WORK/bin/hubctl"
 set +e
 (cd web && npx playwright test -c playwright.real.config.ts "$@")
 STATUS=$?
