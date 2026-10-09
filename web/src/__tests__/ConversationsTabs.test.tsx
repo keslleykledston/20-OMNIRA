@@ -10,7 +10,9 @@ import { renderAt } from './testUtils';
 
 vi.mock('axios');
 const switchTenant = vi.hoisted(() => vi.fn());
-vi.mock('../lib/tenants', async (orig) => ({ ...(await orig<typeof import('../lib/tenants')>()), switchTenant }));
+const enterDelegatedInstance = vi.hoisted(() => vi.fn());
+const leaveDelegatedInstance = vi.hoisted(() => vi.fn());
+vi.mock('../lib/tenants', async (orig) => ({ ...(await orig<typeof import('../lib/tenants')>()), switchTenant, enterDelegatedInstance, leaveDelegatedInstance }));
 // The two screens the tabs host are tested on their own; here they are markers.
 vi.mock('../pages/InboxWorkspace', () => ({ default: () => <div>Caixa completa da instância</div> }));
 vi.mock('../pages/HubInboxPage', () => ({
@@ -23,7 +25,7 @@ vi.mock('../pages/HubInboxPage', () => ({
 }));
 
 let mine: { id: string; legal_name: string; trade_name?: string }[] = [];
-let companies: { id: string; name: string }[] = [];
+let companies: { id: string; name: string; full_context?: boolean }[] = [];
 let hubs: { id: string; name: string; role: string }[] = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent' }];
 let probeFails = false;
 
@@ -53,6 +55,8 @@ beforeEach(() => {
   hubs = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent' }];
   probeFails = false;
   switchTenant.mockReset();
+  enterDelegatedInstance.mockReset();
+  leaveDelegatedInstance.mockReset();
   serve();
 });
 afterEach(() => {
@@ -134,7 +138,7 @@ describe('Conversas tabs', () => {
     mine = [T1, T2];
     hubs = [];
     localStorage.setItem('tenantId', 'GONE');
-    sessionStorage.setItem('omnira.conversas.switchTried', 'T1');
+    sessionStorage.setItem('omnira.conversas.navTried', 'switch:T1');
     renderAt(<ConversationsEntry />);
     expect(await screen.findByRole('button', { name: 'Abrir a instância' })).toBeInTheDocument();
     expect(switchTenant).not.toHaveBeenCalled();
@@ -191,5 +195,94 @@ describe('Conversas tabs', () => {
     renderAt(<ConversationsEntry />, '/inbox?modo=empresa');
     expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).toBeNull();
+  });
+
+  describe('attending an instance through the Hub with the full context (ADR-0040)', () => {
+    const hubName = 'hub-1';
+    beforeEach(() => {
+      mine = [T1];
+      companies = [{ id: 'T1', name: 'Alfa' }, { id: 'B', name: 'Beta Hub', full_context: true }];
+    });
+
+    it('clicking such an instance enters the delegated context (a full navigation), not the text view', async () => {
+      renderAt(<ConversationsEntry />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Beta Hub' }));
+      expect(enterDelegatedInstance).toHaveBeenCalledWith('B', hubName, 'Beta Hub');
+      expect(switchTenant).not.toHaveBeenCalled();
+    });
+
+    it('an instance WITHOUT the full context keeps the text view and never enters the delegated context', async () => {
+      companies = [{ id: 'T1', name: 'Alfa' }, { id: 'B', name: 'Beta Hub', full_context: false }];
+      renderAt(<ConversationsEntry />);
+      await userEvent.click(await screen.findByRole('tab', { name: 'Beta Hub' }));
+      expect(enterDelegatedInstance).not.toHaveBeenCalled();
+      expect(await screen.findByTestId('hub-inbox')).toHaveTextContent('only:B');
+    });
+
+    it('a link to such an instance enters the context once on its own', async () => {
+      renderAt(<ConversationsEntry />, '/inbox?instancia=B');
+      await waitFor(() => expect(enterDelegatedInstance).toHaveBeenCalledTimes(1));
+      expect(enterDelegatedInstance).toHaveBeenCalledWith('B', hubName, 'Beta Hub');
+    });
+
+    it('does not keep entering if the first entry did not take (no reload loop): offers a button instead', async () => {
+      sessionStorage.setItem('omnira.conversas.navTried', 'enter:B');
+      renderAt(<ConversationsEntry />, '/inbox?instancia=B');
+      expect(await screen.findByRole('button', { name: 'Abrir a instância' })).toBeInTheDocument();
+      expect(enterDelegatedInstance).not.toHaveBeenCalled();
+    });
+
+    it('once the session acts for the hub on that instance, the SAME workspace opens (not the text view)', async () => {
+      localStorage.setItem('tenantId', 'B');
+      localStorage.setItem('actingHub', hubName);
+      localStorage.setItem('actingName', 'Beta Hub');
+      renderAt(<ConversationsEntry />, '/inbox?instancia=B');
+      expect(await screen.findByText('Caixa completa da instância')).toBeInTheDocument();
+      expect(screen.queryByTestId('hub-inbox')).toBeNull();
+      expect(enterDelegatedInstance).not.toHaveBeenCalled();
+      expect(leaveDelegatedInstance).not.toHaveBeenCalled();
+    });
+
+    it('while acting, a member tab switches to the person\'s own instance (which also drops the acting context)', async () => {
+      localStorage.setItem('tenantId', 'B');
+      localStorage.setItem('actingHub', hubName);
+      renderAt(<ConversationsEntry />, '/inbox?instancia=B');
+      await screen.findByText('Caixa completa da instância');
+      await userEvent.click(screen.getByRole('tab', { name: 'Alfa' }));
+      expect(switchTenant).toHaveBeenCalledWith('T1', expect.any(Function));
+    });
+
+    it('a stale acting context on one of the person\'s OWN instances is dropped by switching to it (the session never acts for a hub on an own instance)', async () => {
+      mine = [T1, T2];
+      companies = [];
+      hubs = [];
+      localStorage.setItem('tenantId', 'T1');
+      localStorage.setItem('actingHub', hubName);
+      renderAt(<ConversationsEntry />, '/inbox?instancia=T1');
+      await waitFor(() => expect(switchTenant).toHaveBeenCalledTimes(1));
+      expect(switchTenant.mock.calls[0][0]).toBe('T1');
+    });
+
+    it('while acting, leaving for "Todas" or a text-only instance drops the acting context once', async () => {
+      companies = [{ id: 'T1', name: 'Alfa' }, { id: 'B', name: 'Beta Hub', full_context: true }, { id: 'C', name: 'Gama', full_context: false }];
+      localStorage.setItem('tenantId', 'B');
+      localStorage.setItem('actingHub', hubName);
+      renderAt(<ConversationsEntry />, '/inbox?instancia=C');
+      await waitFor(() => expect(leaveDelegatedInstance).toHaveBeenCalledTimes(1));
+      expect(leaveDelegatedInstance).toHaveBeenCalledWith([expect.objectContaining({ id: 'T1' })]);
+    });
+
+    it('a delegated session whose access ends shows the notice and drops nothing else it should keep', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      localStorage.setItem('tenantId', 'B');
+      localStorage.setItem('actingHub', hubName);
+      renderAt(<ConversationsEntry />, '/inbox?instancia=B');
+      await screen.findByText('Caixa completa da instância');
+      companies = [{ id: 'T1', name: 'Alfa' }];
+      await vi.advanceTimersByTimeAsync(16_000);
+      await waitFor(() => expect(screen.queryByRole('alert')).not.toBeNull(), { timeout: 3000 });
+      expect(screen.getByRole('alert')).toHaveTextContent('Você não tem mais acesso a esta instância');
+      expect(screen.queryByText('Caixa completa da instância')).toBeNull();
+    });
   });
 });

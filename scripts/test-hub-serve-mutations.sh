@@ -68,6 +68,7 @@ PY
 }
 SV=internal/tenancy/adapters/serving.go; HT=internal/tenancy/adapters/http.go; AC=internal/tenancy/domain/acting.go; DM=internal/tenancy/domain/context.go; AU=internal/audit/adapters/postgres.go
 M=000108_hub_delegated_serving_core.up.sql
+M9=000109_hub_delegated_serving_reads.up.sql   # the functions and the audit policy that 109 redefines (acting_hub()) are mutated THERE, or the override would hide the mutant
 
 # --- Go
 mut "the flag does not gate the delegated path"             $SV '	if !delegatedServing.Load() {' '	if false {'
@@ -144,20 +145,20 @@ sqlmut "the hub membership is not pinned for the request"   $M "  PERFORM 1 FROM
 sqlmut "the account is not pinned for the request"          $M "  PERFORM 1 FROM public.users WHERE id = p_user_id FOR SHARE;" "  NULL;"
 sqlmut "the grant is not pinned for the request"            $M "  PERFORM 1 FROM public.effective_access_grants WHERE hub_id = p_hub_id AND tenant_id = p_tenant_id AND user_id = p_user_id FOR SHARE;" "  NULL;"
 # --- SQL: one context at a time
-sqlmut "the member context is used while acting for a hub"  $M "           WHEN NULLIF(current_setting('app.acting_hub', true), '') IS NULL THEN" "           WHEN true THEN"
-sqlmut "the delegated context is used when not acting"      $M "           WHEN NULLIF(current_setting('app.acting_hub', true), '') IS NULL THEN" "           WHEN false THEN"
-sqlmut "anyone may ask about anyone (actor_has_permission)" $M "SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+sqlmut "the member context is used while acting for a hub"  $M9 "           WHEN NULLIF(current_setting('app.acting_hub', true), '') IS NULL THEN" "           WHEN true THEN"
+sqlmut "the delegated context is used when not acting"      $M9 "           WHEN NULLIF(current_setting('app.acting_hub', true), '') IS NULL THEN" "           WHEN false THEN"
+sqlmut "anyone may ask about anyone (actor_has_permission)" $M9 "SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
      AND CASE" "SELECT true
      AND CASE"
-sqlmut "write is not required for domain write"             $M "WHERE d.domain = p_domain AND (d.need = 'write' OR p_need = 'read'));" "WHERE d.domain = p_domain);"
-sqlmut "write does not imply read inside a domain"          $M "WHERE d.domain = p_domain AND (d.need = 'write' OR p_need = 'read'));" "WHERE d.domain = p_domain AND d.need = p_need);"
+sqlmut "write is not required for domain write"             $M9 "WHERE d.domain = p_domain AND (d.need = 'write' OR p_need = 'read'));" "WHERE d.domain = p_domain);"
+sqlmut "write does not imply read inside a domain"          $M9 "WHERE d.domain = p_domain AND (d.need = 'write' OR p_need = 'read'));" "WHERE d.domain = p_domain AND d.need = p_need);"
 sqlmut "classify is mapped to a read"                       $M "  ('contact.classify',   'contact',      'write')," "  ('contact.classify',   'contact',      'read'),"
 # --- SQL: the audit policy
-sqlmut "the audit read policy is closed (delegated insert refused)" $M "         AND cardinality(delegated_permissions(tenant_id, current_user_id(), NULLIF(current_setting('app.acting_hub', true), '')::UUID)) > 0);" "         AND false);"
-sqlmut "a delegated agent reads every actor's audit events" $M "  USING (tenant_id IS NOT NULL AND actor_id = current_user_id()
+sqlmut "the audit read policy is closed (delegated insert refused)" $M9 "         AND cardinality(delegated_permissions(tenant_id, current_user_id(), public.acting_hub())) > 0);" "         AND false);"
+sqlmut "a delegated agent reads every actor's audit events" $M9 "  USING (tenant_id IS NOT NULL AND actor_id = current_user_id()
          AND cardinality(delegated_permissions(tenant_id" "  USING (tenant_id IS NOT NULL
          AND cardinality(delegated_permissions(tenant_id"
-sqlmut "the audit policy ignores the delegated context"     $M "         AND cardinality(delegated_permissions(tenant_id, current_user_id(), NULLIF(current_setting('app.acting_hub', true), '')::UUID)) > 0);" "         AND true);"
+sqlmut "the audit policy ignores the delegated context"     $M9 "         AND cardinality(delegated_permissions(tenant_id, current_user_id(), public.acting_hub())) > 0);" "         AND true);"
 # NOT mutants (redundant layers, documented): (0) the caller guard of lock_served_tenant alone: delegated_permissions, which it calls first,
 # carries the same guard and answers nothing about somebody else (the test asserts the behaviour, whichever layer provides it); (1) the hub-membership JOIN of delegated_permissions: the grant's foreign key to the
 # membership already removes the grant with it (proven by the "hub membership removed" case); (2) the FIRST or the SECOND liveness check in

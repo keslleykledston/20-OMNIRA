@@ -4,6 +4,7 @@ import { Avatar, Icon } from './primitives'
 import type { IconName } from './primitives/Icon'
 import { useTenantDisplay } from '../lib/tenantContext'
 import { isDevSurface } from './UnavailableSurface'
+import { isActing } from '../lib/acting'
 import { useMyHubs } from '../hooks/useMyHubs'
 
 // Only routes that exist in App.tsx. Spec items without a route (Automação, o
@@ -52,7 +53,9 @@ export default function Sidebar() {
   // There is no separate "Hub" entry: "Conversas" is the one inbox, and it widens to every authorized company by itself (ADR-0039 revisão).
   const withAccess = canAccess ? [...base.slice(0, 2), accessItem, ...base.slice(2)] : base
   const channelsAt = withAccess.findIndex((i) => i.path === '/channels')
-  const visibleNavItems = canManage ? [...withAccess.slice(0, channelsAt + 1), manageItem, ...withAccess.slice(channelsAt + 1)] : withAccess
+  const allItems = canManage ? [...withAccess.slice(0, channelsAt + 1), manageItem, ...withAccess.slice(channelsAt + 1)] : withAccess
+  // Attending an instance through the Hub (ADR-0040): only the conversations are available there for now, nothing else of the instance is offered.
+  const visibleNavItems = isActing() ? allItems.filter((i) => i.path === '/inbox') : allItems
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(path + '/')

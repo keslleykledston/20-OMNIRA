@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import { api, env, hubctl, signIn, sql } from './support';
 
 // ADR-0038 phase 5: the Hub in a real browser, real API, real RLS. Serial: each scenario builds on the data the previous one left.
@@ -245,4 +246,86 @@ test('auditoria: o administrador vê quem mudou o quê, e só ele', async ({ pag
   await signIn(p2, 'agent1@e2e.test');
   expect((await api(p2, `/hubs/${env.hub}/audit`)).status).toBe(404);
   await other.close();
+});
+
+test('contexto completo (ADR-0040): quem só tem o Hub atende a NorteNet na caixa completa (mídia, cartão do contato, assumir e responder) e o resto continua fechado', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const fabio = await signIn(page, 'serve@e2e.test');
+  const acting: { url: string; header: string | undefined }[] = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (u.pathname.startsWith(`/api/v1/tenants/${env.tb}/`)) acting.push({ url: u.pathname, header: r.headers()['x-omnira-acting-as'] });
+  });
+
+  await page.goto('/inbox');
+  const bar = page.getByRole('tablist', { name: 'Instâncias' });
+  await expect(bar.getByRole('tab', { name: 'NorteNet' })).toBeVisible();
+  await expect(bar.getByRole('tab', { name: 'ISP Roraima' })).toBeVisible();
+
+  // ISP Roraima: só leitura e sem chaves delegadas -> a visão de texto do Hub, sem mudar de contexto
+  await bar.getByRole('tab', { name: 'ISP Roraima' }).click();
+  await expect(page.getByRole('note').first()).toContainText('chegam na próxima etapa');
+  expect(await page.evaluate(() => localStorage.getItem('actingHub'))).toBeNull();
+
+  // NorteNet: contexto completo -> a MESMA caixa da instância, agindo como agente do Hub
+  await bar.getByRole('tab', { name: 'NorteNet' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('actingHub'))).toBe(env.hub);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('tenantId'))).toBe(env.tb);
+  await expect(page.getByText('Maria Souza').first()).toBeVisible();
+  await page.getByText('Maria Souza').first().click();
+  await expect(page.getByRole('paragraph').filter({ hasText: 'Mensagem de Maria Souza' })).toBeVisible(); // a bolha do chat (a lista tem só a prévia)
+  // a mídia: o arquivo liberado pelo antivírus, servido pelo caminho do Hub
+  const img = page.getByRole('img', { name: 'Imagem recebida' });
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  expect(await img.getAttribute('src')).toBe(`/api/v1/hubs/${env.hub}/serve/${env.tb}/messages/${sql(`SELECT message_id FROM message_media WHERE tenant_id = '${env.tb}'`)}/media`);
+  // o cartão do contato (contact.read) e o menu reduzido
+  const card = page.getByRole('complementary', { name: 'Detalhes do atendimento' });
+  await expect(card).toContainText('Maria Souza');
+  await expect(card).toContainText('+5592911110002');
+  const menu = page.getByRole('navigation').first();
+  await expect(menu.getByRole('link', { name: 'Conversas' })).toBeVisible();
+  for (const hidden of ['Tickets', 'Contatos', 'Canais', 'Pessoas', 'Configurações', 'Acessos']) await expect(menu.getByRole('link', { name: hidden })).toHaveCount(0);
+
+  // todo pedido da instância declarou o contexto
+  expect(acting.length).toBeGreaterThan(3);
+  expect(acting.filter((a) => a.header !== `hub:${env.hub}`)).toEqual([]);
+
+  // assumir e responder pelas mesmas rotas da instância (a escrita passa pelo caminho do Hub: nada é escrito direto pelo agente)
+  await page.getByRole('button', { name: 'Assumir' }).first().click();
+  await expect.poll(() => sql(`SELECT u.email FROM conversations c JOIN users u ON u.id = c.assigned_to_user_id WHERE c.tenant_id = '${env.tb}'`)).toBe('serve@e2e.test');
+  await page.getByRole('textbox').fill('Já vamos verificar a sua conexão (contexto completo)');
+  await page.getByRole('button', { name: 'Enviar mensagem' }).click();
+  await expect.poll(() => sql(`SELECT count(*) FROM messages WHERE tenant_id = '${env.tb}' AND direction = 'outbound' AND body LIKE 'Já vamos verificar%'`)).toBe('1');
+  // a auditoria da escrita nomeia a pessoa
+  expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND actor_id = '${fabio.id}'`))).toBeGreaterThan(0);
+
+  // o que continua fechado, pelo navegador real e pela API real
+  const call = async (method: 'get' | 'post', path: string, headers: Record<string, string> = {}, data?: unknown) => {
+    const res = await page.request[method](`/api/v1${path}`, { headers, data });
+    return res.status();
+  };
+  const hubHeader = { 'X-Omnira-Acting-As': `hub:${env.hub}` };
+  // sem declarar o contexto: o caminho de membro (que ele não tem) recusa
+  expect([403, 404]).toContain(await call('get', `/tenants/${env.tb}/inbox/conversations`));
+  // com o contexto, mas em uma instância sem chaves delegadas, ou em outra empresa: 404 uniforme
+  expect(await call('get', `/tenants/${env.ta}/inbox/conversations`, hubHeader)).toBe(404);
+  expect(await call('get', `/tenants/${env.tc}/inbox/conversations`, hubHeader)).toBe(404);
+  // uma rota que não faz parte do contexto delegado (equipe, chamados, integrações...) nunca responde
+  for (const p of ['/team', '/tickets', '/integrations/ai', '/channels/lines', '/groups']) {
+    expect([403, 404], p).toContain(await call('get', `/tenants/${env.tb}${p}`, hubHeader));
+  }
+  // cabeçalho malformado: 400, nunca "membro"
+  expect(await call('get', `/tenants/${env.tb}/inbox/conversations`, { 'X-Omnira-Acting-As': 'hub:xyz' })).toBe(400);
+  // a mídia de outra instância pelo caminho do Hub: 404
+  expect(await call('get', `/hubs/${env.hub}/serve/${env.ta}/messages/${randomUUID()}/media`)).toBe(404);
+
+  // o Hub encerra o acesso: o servidor recusa o próximo pedido e a tela vira o aviso
+  sql(`UPDATE effective_access_grants SET status = 'revoked' WHERE tenant_id = '${env.tb}' AND user_id = '${fabio.id}'`);
+  expect(await call('get', `/tenants/${env.tb}/inbox/conversations`, hubHeader)).toBe(404);
+  expect(await call('get', `/hubs/${env.hub}/serve/${env.tb}/messages/${randomUUID()}/media`)).toBe(404);
+  await page.reload();
+  await expect(page.getByRole('alert')).toContainText('Você não tem mais acesso a esta instância');
+  await expect(page.getByText('Mensagem de Maria Souza')).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('actingHub'))).toBeNull();
 });

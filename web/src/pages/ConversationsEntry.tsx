@@ -5,34 +5,38 @@ import { hubAPI, type HubCompanyOption } from '../lib/hub';
 import { useMyHubs } from '../hooks/useMyHubs';
 import { useMyTenants } from '../hooks/useMyTenants';
 import { getTenantId } from '../lib/session';
-import { switchTenant, tenantDisplayName } from '../lib/tenants';
+import { enterDelegatedInstance, leaveDelegatedInstance, switchTenant, tenantDisplayName } from '../lib/tenants';
+import { getActingHub, isActing } from '../lib/acting';
 import { LoadingState, Tabs } from '../components/primitives';
 import AccessLostNotice from '../components/hub/AccessLostNotice';
 import HubInboxPage from './HubInboxPage';
 import InboxWorkspace from './InboxWorkspace';
 
-// "Conversas" (ADR-0039, ADR-0040). A person who serves ONE company keeps the full workspace of that company, unchanged. A person
-// who can serve TWO OR MORE instances (their own memberships plus whatever the Hub authorized) gets one tab per instance and, when a
-// Hub serves them in 2+ instances, an "Todas" tab with every instance's conversations in one inbox. Which instances those are is
-// decided by the server from live access, never by this page, and the lists are re-read every few seconds: an instance that
-// disappears from them while its tab is open is replaced by a notice and its cached data is dropped.
-// An instance the person belongs to opens the full workspace of that instance (a full navigation, the way the instance switcher
-// works: caches, realtime streams and per-tenant state start clean). An instance reachable only through the Hub shows the Hub's
-// text view of that instance until ADR-0040 gives it the full context.
+// "Conversas" (ADR-0039, ADR-0040). A person who serves ONE company keeps the full workspace of that company, unchanged. A person who can serve TWO OR
+// MORE instances (their own memberships plus whatever the Hub authorized) gets one tab per instance and, when a Hub serves them in 2+ instances, an
+// "Todas" tab with every instance's conversations in one inbox. Which instances those are is decided by the server from live access, never by this
+// page, and the lists are re-read every few seconds: an instance that disappears from them while its tab is open is replaced by a notice and its cached
+// data is dropped.
+//   - An instance the person belongs to opens the full workspace of that instance (a full navigation, the way the instance switcher works).
+//   - An instance reached only through the Hub opens, when the server says the full context is available (full_context, ADR-0040), the SAME workspace
+//     acting as a Hub agent (a full navigation that also marks the session as acting for that hub); otherwise the Hub's text view of that instance.
 // If the Hub is off or anything about it fails, the classic workspace is shown: this entry can never make "Conversas" unavailable.
 // `?modo=empresa` asks for the classic, single-company workspace (kept for old links).
 const REFRESH_MS = 15_000;
 const ALL = 'all';
-// One automatic switch per instance: if storage refuses the switch the page would otherwise reload forever.
-const SWITCH_TRIED = 'omnira.conversas.switchTried';
-const switchTarget = (id: string) => `/inbox?instancia=${encodeURIComponent(id)}`;
+// One automatic navigation per target: if storage refuses it the page would otherwise reload forever.
+const NAV_TRIED = 'omnira.conversas.navTried';
+const targetUrl = (id: string) => `/inbox?instancia=${encodeURIComponent(id)}`;
 
 interface Instance {
   id: string;
   name: string;
   member: boolean;
   hubId?: string;
+  fullContext?: boolean;
 }
+
+type Nav = { kind: 'switch'; id: string } | { kind: 'enter'; id: string; hub: string; name: string } | { kind: 'leave' } | null;
 
 export default function ConversationsEntry() {
   const [params, setParams] = useSearchParams();
@@ -66,8 +70,11 @@ export default function ConversationsEntry() {
       if (!many && companies.length >= 2) many = h.id;
       for (const c of companies) {
         const known = byId.get(c.id);
-        if (known) known.hubId = known.hubId ?? h.id;
-        else byId.set(c.id, { id: c.id, name: c.name, member: false, hubId: h.id });
+        if (known) {
+          known.hubId = known.hubId ?? h.id;
+        } else {
+          byId.set(c.id, { id: c.id, name: c.name, member: false, hubId: h.id, fullContext: !!c.full_context });
+        }
       }
     });
     return { instances: [...byId.values()], hubWithMany: many };
@@ -75,38 +82,59 @@ export default function ConversationsEntry() {
 
   const requested = params.get('instancia') ?? '';
   const current = getTenantId();
+  const acting = isActing();
+  const actingHub = getActingHub();
   const hasAllTab = !!hubWithMany;
   const fallbackTab = hasAllTab ? ALL : instances.some((i) => i.id === current) ? current : (instances[0]?.id ?? ALL);
   const active = requested || fallbackTab;
   const activeInstance = active === ALL ? undefined : instances.find((i) => i.id === active);
   const lost = !loading && listsTrusted && active !== ALL && !activeInstance;
+  const delegated = !!activeInstance && !activeInstance.member && !!activeInstance.fullContext && !!activeInstance.hubId;
 
-  // The tab to show is one of the person's own instances but not the one the session is on (a deep link, or the session's instance
-  // is no longer theirs): switch once, the way a click on the tab does.
-  const tabsShown = !wantsClassic && !loading && instances.length >= 2;
-  const needsSwitch = tabsShown && !!activeInstance?.member && active !== current;
-  const autoSwitchBlocked = (() => {
+  // What the session has to be, for the tab on screen, and the one navigation that gets it there (see the header of this file).
+  // Tabs for two or more instances; also for a person whose ONLY instance is one they attend through the Hub with the full context (they have no workspace
+  // of their own to fall back to, and that instance has to be entered in the delegated context).
+  const tabsShown = !wantsClassic && !loading && (instances.length >= 2 || instances.some((i) => !i.member && !!i.fullContext));
+  let nav: Nav = null;
+  if (!wantsClassic && !loading && listsTrusted) {
+    if (activeInstance?.member && (acting || active !== current) && tabsShown) nav = { kind: 'switch', id: active };
+    else if (delegated && tabsShown && (!acting || actingHub !== activeInstance!.hubId || active !== current)) nav = { kind: 'enter', id: active, hub: activeInstance!.hubId!, name: activeInstance!.name };
+    else if (!delegated && !(activeInstance?.member && tabsShown) && acting) nav = { kind: 'leave' };
+  }
+  const navKey = nav ? (nav.kind === 'leave' ? 'leave' : `${nav.kind}:${nav.id}`) : '';
+  const navBlocked = (() => {
+    if (!navKey) return false;
     try {
-      return sessionStorage.getItem(SWITCH_TRIED) === active;
+      return sessionStorage.getItem(NAV_TRIED) === navKey;
     } catch {
       return true;
     }
   })();
+  const own = mine.data ?? [];
+  const run = (n: NonNullable<Nav>) => {
+    if (n.kind === 'switch') switchTenant(n.id, () => window.location.assign(targetUrl(n.id)));
+    else if (n.kind === 'enter') enterDelegatedInstance(n.id, n.hub, n.name);
+    else {
+      leaveDelegatedInstance(own);
+      window.location.assign(`${window.location.pathname}${window.location.search}`);
+    }
+  };
   useEffect(() => {
     try {
-      // forgotten only once the tabs are on screen and the session already is on the shown instance (not while loading)
-      if (tabsShown && !needsSwitch) sessionStorage.removeItem(SWITCH_TRIED);
+      // forgotten only once nothing is left to do (not while loading)
+      if (!loading && listsTrusted && !nav) sessionStorage.removeItem(NAV_TRIED);
     } catch {
       /* storage blocked: the button below is the way */
     }
-    if (!needsSwitch || autoSwitchBlocked) return;
+    if (!nav || navBlocked) return;
     try {
-      sessionStorage.setItem(SWITCH_TRIED, active);
+      sessionStorage.setItem(NAV_TRIED, navKey);
     } catch {
       return;
     }
-    switchTenant(active, () => window.location.assign(switchTarget(active)));
-  }, [tabsShown, needsSwitch, autoSwitchBlocked, active]);
+    run(nav);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navKey, navBlocked, loading, listsTrusted]);
 
   // Access ended while the tab was open: nothing of that instance stays in the client cache.
   useEffect(() => {
@@ -119,9 +147,10 @@ export default function ConversationsEntry() {
 
   // One instance (or none the Hub knows): no tabs. This is the behaviour before the tabs existed.
   // (unless the person is looking at an instance they just lost: then the notice must be seen, even if one instance is all that is left)
-  if (instances.length < 2 && !lost) {
+  if (!tabsShown && !lost) {
     const needed = (mine.data?.length ?? 0) === 0 ? 1 : 2;
     const winner = list.findIndex((_, i) => (probes[i]?.data?.companies?.length ?? 0) >= needed);
+    if (acting) return <div className="p-6"><LoadingState message="Voltando ao seu ambiente…" /></div>;
     return winner >= 0 ? <HubInboxPage hubId={list[winner].id} /> : <InboxWorkspace />;
   }
 
@@ -131,35 +160,40 @@ export default function ConversationsEntry() {
   ];
   const select = (id: string) => {
     const target = instances.find((i) => i.id === id);
-    if (target?.member && id !== current) {
+    if (target?.member && (id !== current || acting)) {
       // another instance of one's own: a full navigation, as the instance switcher does
-      switchTenant(id, () => window.location.assign(switchTarget(id)));
+      switchTenant(id, () => window.location.assign(targetUrl(id)));
+      return;
+    }
+    if (target && !target.member && target.fullContext && target.hubId && (id !== current || actingHub !== target.hubId)) {
+      enterDelegatedInstance(id, target.hubId, target.name);
       return;
     }
     setParams(id === ALL ? {} : { instancia: id });
   };
 
+  const stuck = (
+    <div className="p-6 text-center text-sm text-text-secondary">
+      Esta instância não está ativa nesta sessão.{' '}
+      <button type="button" className="font-medium text-accent-primary underline-offset-2 hover:underline" onClick={() => select(active)}>
+        Abrir a instância
+      </button>
+    </div>
+  );
+
   let body: React.ReactNode;
   if (lost) {
     body = <AccessLostNotice />;
   } else if (active === ALL) {
-    body = <HubInboxPage key="all" hubId={hubWithMany} embedded />;
+    body = nav ? <LoadingState message="Voltando ao seu ambiente…" /> : <HubInboxPage key="all" hubId={hubWithMany} embedded />;
   } else if (activeInstance?.member) {
-    body =
-      active === current ? (
-        <InboxWorkspace key={active} />
-      ) : autoSwitchBlocked ? (
-        <div className="p-6 text-center text-sm text-text-secondary">
-          Esta instância não está ativa nesta sessão.{' '}
-          <button type="button" className="font-medium text-accent-primary underline-offset-2 hover:underline" onClick={() => select(active)}>
-            Abrir a instância
-          </button>
-        </div>
-      ) : (
-        <LoadingState message="Abrindo a instância…" />
-      );
+    body = !nav ? <InboxWorkspace key={active} /> : navBlocked ? stuck : <LoadingState message="Abrindo a instância…" />;
+  } else if (delegated) {
+    body = !nav ? <InboxWorkspace key={`${active}:${actingHub}`} /> : navBlocked ? stuck : <LoadingState message="Abrindo a instância…" />;
   } else if (activeInstance?.hubId) {
-    body = (
+    body = nav ? (
+      <LoadingState message="Voltando ao seu ambiente…" />
+    ) : (
       <HubInboxPage
         key={active}
         hubId={activeInstance.hubId}

@@ -17,13 +17,14 @@ const ITEMS = [
   item(3, 'tenant-a', 'ISP Roraima', { status: 'closed' }),
 ];
 
-async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; writes?: { path: string; body: any; key?: string }[]; revoked?: { tenant: string } } = {}) {
+async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; writes?: { path: string; body: any; key?: string }[]; revoked?: { tenant: string }; fullContext?: string[]; delegated?: { calls: { path: string; acting: string | undefined; method: string; key?: string }[]; denyTenant?: boolean } } = {}) {
   const seen: string[] = [];
   let assignment: 'none' | 'me' = 'none';
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   await page.addInitScript(([t]) => {
     localStorage.setItem('token', 'mock-token');
-    localStorage.setItem('tenantId', t);
+    // only the FIRST page load seeds the session tenant: a later full navigation (switching instance) must keep what the app stored
+    if (!localStorage.getItem('tenantId')) localStorage.setItem('tenantId', t);
     localStorage.setItem('sessionActive', 'true');
     localStorage.setItem('user', JSON.stringify({ id: 'u1', email: 'maria@k3g.example', name: 'Maria' }));
   }, [TENANT]);
@@ -39,7 +40,7 @@ async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; w
       // the server narrows by the instances asked for; the offered companies are always the whole authorized set
       const asked = (url.searchParams.get('companies') ?? '').split(',').filter(Boolean);
       const shown = asked.length ? visible.filter((i) => asked.includes(i.tenant_id)) : visible;
-      const companies = [...new Map(visible.map((i) => [i.tenant_id, { id: i.tenant_id, name: i.tenant_name }])).values()];
+      const companies = [...new Map(visible.map((i) => [i.tenant_id, { id: i.tenant_id, name: i.tenant_name, full_context: !!opts.fullContext?.includes(i.tenant_id) }])).values()];
       return json(route, { items: shown, companies, has_more: false, count: shown.length, limit: 30 });
     }
     const w = p.match(new RegExp(`^/hubs/${HUB}/inbox/([^/]+)/(claim|messages)$`));
@@ -67,6 +68,34 @@ async function install(page: Page, opts: { hubs?: unknown; canReply?: boolean; w
           { id: 'm3', direction: 'inbound', message_type: 'image', body: '', status: 'received', created_at: now },
         ],
       });
+    }
+    // delegated serving (ADR-0040): the SAME tenant routes, answered for an agent who has no membership there, with the acting header declared
+    if (opts.delegated) {
+      const dm = p.match(/^\/tenants\/(tenant-[ab])\/(.*)$/);
+      const media = p.match(/^\/hubs\/([^/]+)\/serve\/(tenant-[ab])\/messages\/([^/]+)\/media$/);
+      if (dm || media) {
+        const acting = route.request().headers()['x-omnira-acting-as'];
+        opts.delegated.calls.push({ path: p, acting, method: route.request().method(), key: route.request().headers()['idempotency-key'] });
+        if (opts.delegated.denyTenant) return route.fulfill({ status: 404, body: 'not found' });
+        if (media) {
+          const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+          return route.fulfill({ status: 200, contentType: 'image/png', body: png });
+        }
+        const sub = dm![2];
+        const conv = { id: 'cccccccc-0000-0000-0000-000000000002', contact_name: 'Maria Souza', contact_phone: '+5592999990002', status: 'open', contact_id: 'k-2', message_count: 3, updated_at: now, last_message_at: now, last_message_direction: 'inbound', last_message_preview: 'Foto da instalação', waiting_since: now };
+        if (sub === 'inbox/conversations') return json(route, { items: [conv], has_more: false });
+        if (sub.startsWith('inbox/conversations/') && sub.endsWith('/messages') && route.request().method() === 'GET') {
+          return json(route, { items: [
+            { id: 'm1', direction: 'inbound', message_type: 'text', body: 'Estou sem internet desde ontem à noite', status: 'received', created_at: now },
+            { id: 'm-img', direction: 'inbound', message_type: 'image', body: '', status: 'received', created_at: now, mime_type: 'image/png', media_status: 'clean', size_bytes: 70 },
+          ], has_more: false });
+        }
+        if (sub.endsWith('/messages') && route.request().method() === 'POST') return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ id: 'out-1', conversation_id: conv.id, direction: 'outbound', body: 'ok', status: 'queued', created_at: now }) });
+        if (sub.endsWith('/assign')) return json(route, { conversation_id: conv.id, changed: true });
+        if (sub.startsWith('inbox/conversations/')) return json(route, conv);
+        if (sub === 'contacts/k-2') return json(route, { id: 'k-2', display_name: 'Maria Souza', whatsapp_name: 'Maria S', phone_e164: '+5592999990002', kind: 'customer', channels: ['whatsapp'], open_conversation_count: 1 });
+        return json(route, {}, 404);
+      }
     }
     if (p === '/tenants') return json(route, [{ id: TENANT, legal_name: 'K3G' }]);
     if (p.endsWith('/me/access')) return json(route, { permissions: [], role_key: 'tenant_agent' });
@@ -194,4 +223,62 @@ test('abas por instância: Todas, uma aba por instância, e a perda de acesso co
   await expect(page.getByText('Maria Souza')).toHaveCount(0);
   await expect(bar.getByRole('tab', { name: 'NorteNet' })).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('hub-abas-acesso-perdido.png') });
+});
+
+test('NorteNet com contexto completo: a MESMA caixa da instância, agindo como agente do Hub (cabeçalho, mídia pelo caminho do Hub, menu reduzido) e a perda de acesso', async ({ page }, info) => {
+  const delegated = { calls: [] as { path: string; acting: string | undefined; method: string; key?: string }[] };
+  const opts = { revoked: { tenant: '' }, fullContext: ['tenant-b'], delegated };
+  await page.setViewportSize({ width: 1600, height: 900 }); // three panes: the details card is a column from 1440px
+  await page.clock.install();
+  await install(page, opts);
+  await page.goto('/inbox');
+  const bar = page.getByRole('tablist', { name: 'Instâncias' });
+  await expect(bar.getByRole('tab', { name: 'NorteNet' })).toBeVisible();
+
+  // entra no contexto delegado (navegação completa para a instância, marcada como "agindo pelo Hub")
+  await bar.getByRole('tab', { name: 'NorteNet' }).click();
+  await expect(page).toHaveURL(/instancia=tenant-b/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('actingHub'))).toBe(HUB);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('tenantId'))).toBe('tenant-b');
+
+  // a caixa completa da instância (a lista, o chat, a mídia e o cartão do contato), não a visão de texto do Hub
+  await expect(page.getByText('Foto da instalação')).toBeVisible();
+  await page.getByText('Foto da instalação').click();
+  await expect(page.getByText('Estou sem internet desde ontem à noite')).toBeVisible();
+  const img = page.getByRole('img', { name: 'Imagem recebida' });
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  expect(await img.getAttribute('src')).toBe(`/api/v1/hubs/${HUB}/serve/tenant-b/messages/m-img/media`);
+  const card = page.getByRole('complementary', { name: 'Detalhes do atendimento' });
+  await expect(card).toContainText('Maria Souza');
+  await expect(card).toContainText('Cliente');
+  await expect(card).toContainText('chegam na próxima etapa');
+  await expect(page.getByText('Respondendo como')).toHaveCount(0); // não é a visão de texto do Hub
+
+  // o menu lateral só tem as conversas e nomeia a instância; nenhum seletor de instância
+  const nav = page.getByRole('navigation').first();
+  await expect(nav.getByRole('link', { name: 'Conversas' })).toBeVisible();
+  for (const hidden of ['Tickets', 'Contatos', 'Canais', 'Pessoas', 'Configurações']) await expect(nav.getByRole('link', { name: hidden })).toHaveCount(0);
+  await expect(page.getByText('Atendendo pelo Hub').first()).toBeVisible();
+  await expect(page.getByLabel('Trocar de instância')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('hub-delegado.png') });
+
+  // todo pedido da instância declarou o contexto; a mídia vai pelo caminho do Hub (um <img> não envia cabeçalho)
+  const tenantCalls = delegated.calls.filter((c) => c.path.startsWith('/tenants/'));
+  expect(tenantCalls.length).toBeGreaterThan(2);
+  expect(tenantCalls.every((c) => c.acting === `hub:${HUB}`)).toBe(true);
+  expect(delegated.calls.some((c) => c.path === `/hubs/${HUB}/serve/tenant-b/messages/m-img/media`)).toBe(true);
+  // nenhuma chamada a rotas que não fazem parte do contexto delegado (realtime, linhas de canal, painel de contexto completo...)
+  expect(tenantCalls.some((c) => /\/events$|\/topics|\/tickets|\/notes/.test(c.path))).toBe(false);
+
+  // responder: a mesma rota da instância, com o cabeçalho e a Idempotency-Key
+  await page.getByRole('button', { name: 'Assumir' }).first().click();
+  await expect.poll(() => delegated.calls.some((c) => c.path.endsWith('/assign') && c.method === 'POST')).toBe(true);
+
+  // o Hub encerra o acesso: na próxima leitura periódica a tela vira o aviso e nada da instância fica nela
+  opts.revoked.tenant = 'tenant-b';
+  opts.delegated.denyTenant = true;
+  await page.clock.fastForward(16_000);
+  await expect(page.getByRole('alert')).toContainText('Você não tem mais acesso a esta instância');
+  await expect(page.getByText('Estou sem internet desde ontem à noite')).toHaveCount(0);
 });

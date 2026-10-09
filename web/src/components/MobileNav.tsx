@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import { Icon } from './primitives'
 import type { IconName } from './primitives/Icon'
 import { useMyHubs } from '../hooks/useMyHubs'
+import { isActing } from '../lib/acting'
 
 // Real operational surfaces only (FRONTEND.2). Dashboard/Tickets were mock-
 // backed and are gone from here entirely, in dev too — mocks stay reachable
@@ -17,8 +18,8 @@ export default function MobileNav() {
   const location = useLocation()
   const hubs = useMyHubs()
   // Same rule as the desktop sidebar: no separate Hub entry; admins of a Hub also get the Access panel (ADR-0039)
-  const shown = [...items]
-  if ((hubs.data ?? []).some((h) => h.can_manage_access)) shown.splice(1, 0, { label: 'Acessos', path: '/acessos', icon: 'key' as IconName })
+  const shown = isActing() ? items.filter((i) => i.path === '/inbox') : [...items]
+  if (!isActing() && (hubs.data ?? []).some((h) => h.can_manage_access)) shown.splice(1, 0, { label: 'Acessos', path: '/acessos', icon: 'key' as IconName })
   // startsWith keeps child routes (e.g. /contacts/:id, /channels/whatsapp/new)
   // active under their parent item.
   const isActive = (path: string) => location.pathname.startsWith(path)

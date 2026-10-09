@@ -96,3 +96,20 @@ No painel `/acessos`, aba "Agentes e permissões", caixa **Adicionar pessoa ao H
 5. **Desligar:** `OMNIRA_HUB_DISTRIBUTOR_ENABLED=false` para a distribuição; tirar os escopos do contrato corta a gestão na hora (são dados, valem no servidor).
 6. **Rollback das migrations:** `000104` e `000103` têm `down` (testados por `scripts/test-hub-migrations.sh`); desfazer 103 apaga `management_scopes` e `can_manage`.
 
+
+## Atendimento com contexto completo (ADR-0040 fases 02-03, migrations 108 e 109)
+
+Quem atende uma instância **só pelo Hub** pode abrir a caixa completa dela (mídia, cartão do contato, assumir e responder) no mesmo navegador. É preciso, **nesta ordem**:
+
+1. **Teto do contrato** (decisão da plataforma, com o consentimento da instância; só pelo `hubctl`, não pelo painel do Hub):
+   `omnira-hubctl --operator NOME serving ceiling --hub HUB --tenant EMPRESA --preset atendimento`
+   (`atendimento` = ler, assumir, responder, abrir arquivos, ler o contato; `leitura` = sem assumir/responder; ou `--keys a,b,...`; `--keys none` retira tudo).
+2. **Chaves de cada pessoa**, dentro do teto: `omnira-hubctl --operator NOME serving grant --hub HUB --tenant EMPRESA --email PESSOA --preset atendimento`.
+   Responder exige assumir, assumir exige ler; `can_reply` acompanha a chave `conversation.reply` (as duas formas de "pode responder" não divergem depois deste comando).
+   A pessoa precisa já ter a concessão (`grant add`). O que ela pode usar é sempre **concessão ∩ teto**, calculado a cada pedido: baixar o teto corta na hora.
+3. **Ligar** `OMNIRA_HUB_SERVE_ENABLED=true` (api). Desligada, o cabeçalho de contexto é recusado (403) e as instâncias não anunciam o contexto completo; a visão de texto do Hub continua.
+
+Chaves que **nunca** são delegáveis (não existem em `permission_domains`): equipe, contrato, credenciais de canal/ERP, chaves de IA, segurança e todo o restante administrativo.
+O que a pessoa vê em cada tabela segue o **escopo de filas do contrato** (`contract create --queues ...`): contatos e arquivos de filas fora do contrato não aparecem.
+Limites desta fase: sem anexos ao responder, sem classificar/editar contato nem chamado no ERP (fase 04), sem tempo real (a tela atualiza a cada 15 s).
+Rollback: `serving ceiling ... --keys none` (efeito imediato) ou desligar a flag.

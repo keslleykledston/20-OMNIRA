@@ -31,7 +31,8 @@ export function hasSession(): boolean {
 }
 
 export function clearSession(): void {
-	[TOKEN_KEY, TENANT_KEY, USER_KEY, SESSION_KEY, 'jwtToken'].forEach((k) => localStorage.removeItem(k));
+	// 'actingHub'/'actingName': the delegated context (lib/acting.ts) never survives a sign-out
+	[TOKEN_KEY, TENANT_KEY, USER_KEY, SESSION_KEY, 'jwtToken', 'actingHub', 'actingName'].forEach((k) => localStorage.removeItem(k));
 }
 
 // A 401 from the API means the token is missing/expired (the backend keys are per process):

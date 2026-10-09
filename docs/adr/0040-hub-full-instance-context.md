@@ -149,3 +149,21 @@ o cache da instância é descartado e a aba some na próxima leitura. A **admini
 
 RLS permanece (nenhuma política removida), `tenant_id` do payload/URL nunca autoriza, nada de segredo em fila, nenhuma membership fictícia, delegação não dá acesso implícito a equipe/segurança/chaves de IA,
 suspensão continua esperando o trabalho já admitido, e membros mantêm o comportamento atual.
+
+## 12. Fase 03 (piloto de atendimento) — estado em 2026-10-09 (local, NÃO implantada)
+
+IMPLEMENTADO: migration 109 (predicados de membro falsos enquanto se age por um Hub; `acting_hub()` com leitura segura; políticas de leitura delegada de **contatos** e **mídia**),
+rotas delegáveis em **lista de permissão** (`Delegable`: tudo o que não foi marcado é 404 no contexto delegado, para que quem é membro e delegado não alcance rotas ainda não migradas pelo caminho da membership),
+mídia por caminho do Hub (`/api/v1/hubs/{hub}/serve/{tenant}/messages/{id}/media`, porque `<img>`/`<audio>` não enviam cabeçalho), **escrita** (assumir e responder) pelo caminho de escrita do Hub já revisado
+(`DelegatedWrites`; exige a chave da rota **e** `can_reply`), `hubctl serving ceiling|grant`, `full_context` por empresa no inbox do Hub, e o modo "atendendo pelo Hub" no front (mesma caixa da instância, cabeçalho
+só para a instância em que a sessão age, menu reduzido, sem tempo real, cartão de detalhes somente leitura).
+
+Achados do próprio trabalho: (1) as políticas legadas de conversa e mensagem aplicam o **escopo de filas do contrato**; uma política nova que o ignorasse abriria filas fora do contrato, por isso conversa/mensagem ficam
+com as legadas e contato/mídia **herdam a visibilidade da conversa**; (2) as políticas legadas liberam leitura a **qualquer concessão viva**, independente das chaves novas; a chave `conversation.read` é cobrada na rota e a
+convergência (predicado de concessão consciente das chaves + preenchimento retroativo) é item da fase 04; (3) há ~20 módulos com checagem de permissão própria contra `memberships`, por isso a lista de permissão por rota.
+
+Revisão Codex (2026-10-09): CRITICAL 0, HIGH 1, MEDIUM 4, LOW 1. **H-01 improcedente** (`hub_memberships` não tem estado: sair do Hub apaga a linha e a FK apaga as concessões; coberto por teste), **M-03 falso** (a 109 real já usa `NULLIF(...,'')`),
+**M-04 corrigido** (`SetServing` segura o contrato com `FOR SHARE` enquanto confere o teto; teste de espera), **L-01 corrigido** (`acting_hub()`; valor malformado = sem contexto, nunca erro; teste), **M-02 aceito** (o catálogo
+`permission_domains` só muda por migration; cada decisão é avaliada ao vivo, não há janela útil), **M-01 aceito** (o agente só lê as PRÓPRIAS linhas de auditoria, que ele mesmo gerou).
+
+Pendente para a fase 04: classificar/editar contato, vincular cliente, chamado no ERP (cada um com chave e rota próprias, mediado por serviço), diretório de atendentes, anexos, convergência do predicado legado, tempo real/SSE delegado (fase 05), consulta de desempenho (`EXPLAIN`) das políticas.

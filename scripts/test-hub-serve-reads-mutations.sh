@@ -27,7 +27,7 @@ run() { # the host toolchain with its warm caches
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -p 1 -run 'TestDelegated|TestEverySecret|TestTheDoor|TestARequestActs|TestAForged|TestPermissionQuestions|TestDomainAccess|TestNothingCanBeWritten|TestOneHub|TestAMember|TestAnInstanceAdmin|TestProvisioningThe|TestAuditNames' \
+    go test -count=1 -p 1 -run 'TestDelegated|TestEverySecret|TestTheDoor|TestARequestActs|TestAForged|TestPermissionQuestions|TestDomainAccess|TestNothingCanBeWritten|TestOneHub|TestAMember|TestAnInstanceAdmin|TestProvisioningThe|TestAuditNames|TestAMalformedActing|TestSetServingWaits' \
       ./internal/hub/adapters 2>&1
 }
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 1 ]; }
@@ -112,6 +112,9 @@ mut "a revoked grant can be edited"                         $PV '		if status != 
 			return invalid("the grant is %s: give the person access first", status)
 		}
 		inCeiling'
+mut "the contract is not held while the keys are checked"   $PV 'FOR UPDATE OF g FOR SHARE OF k`' 'FOR UPDATE OF g`'
+# --- SQL: the safe reading of the acting setting (acting_hub())
+sqlmut "a malformed acting setting raises an error"          $M "  SELECT CASE WHEN v ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN v::UUID END" "  SELECT CASE WHEN true THEN v::UUID END"
 # --- SQL: one context at a time, in the data layer
 sqlmut "a member predicate answers while acting for a hub"  $M "  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
      AND NULLIF(current_setting('app.acting_hub', true), '') IS NULL

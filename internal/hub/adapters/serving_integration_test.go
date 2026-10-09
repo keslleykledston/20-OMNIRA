@@ -865,3 +865,80 @@ func sortedCopy(in []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// A value in app.acting_hub that is not a UUID is "no valid acting context", never an error (Codex review, LOW): the application role can write the
+// setting, and a bad value must not turn into a 500 in a policy or a predicate.
+func TestAMalformedActingSettingIsNoContextAndNeverAnError(t *testing.T) {
+	w := newWorld(t)
+	w.mediaOf("A", "A")
+	agent := w.hubAgent("agent")
+	g := w.grant(agent, "A")
+	w.ceiling("A", "conversation.read", "media.read", "contact.read")
+	w.grantKeys(g, "conversation.read", "media.read", "contact.read")
+	member := w.user("member")
+	w.directMember(member, "A")
+	for _, bad := range []string{"not-a-uuid", "00000000-0000-0000-0000-00000000000z", "'; DROP TABLE users; --", " ", "hub:" + w.hub.String()} {
+		for _, user := range []uuid.UUID{agent, member} {
+			w.inSession(user, func(ctx context.Context, q platformdb.Querier) {
+				_, err := q.Exec(ctx, `SELECT set_config('app.acting_hub', $1, true)`, bad)
+				w.must(err)
+				var perm, access bool
+				if err := q.QueryRow(ctx, `SELECT actor_has_permission($1,$2,'conversation.read'), has_delegated_access($1,$2,'conversation','read')`, w.tenant["A"], user).Scan(&perm, &access); err != nil {
+					t.Errorf("%q: the predicates must answer, not fail: %v", bad, err)
+				}
+				if perm || access {
+					t.Errorf("%q: a malformed setting conferred something (perm=%v access=%v)", bad, perm, access)
+				}
+				for _, table := range []string{"contacts", "message_media", "message_media_analysis", "audit_events"} {
+					var n int
+					if err := q.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, w.tenant["A"]).Scan(&n); err != nil {
+						t.Errorf("%q: reading %s must not fail: %v", bad, table, err)
+					} else if n != 0 {
+						t.Errorf("%q: %s showed %d row(s) under a malformed acting setting", bad, table, n)
+					}
+				}
+			})
+		}
+	}
+}
+
+// SetServing checks the keys against the contract's ceiling while HOLDING the contract row, so a ceiling change running at the same moment waits
+// (Codex review, MEDIUM): otherwise a grant could be written above a ceiling that was lowered a moment earlier.
+func TestSetServingWaitsForAConcurrentCeilingChange(t *testing.T) {
+	w := newWorld(t)
+	svc := w.provisioner(t)
+	agent := w.hubAgent("agent")
+	w.grant(agent, "A")
+	preset := provisioning.ServingPresets["atendimento"]
+	w.must(svc.SetCeiling(w.ctx, w.hub, w.tenant["A"], preset))
+
+	// another transaction is changing the contract right now (it holds the row until it commits)
+	tx, err := w.owner.Begin(w.ctx)
+	w.must(err)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(w.ctx)
+		}
+	}()
+	_, err = tx.Exec(w.ctx, `UPDATE hub_tenant_service_contracts SET delegable_permissions = ARRAY['conversation.read'] WHERE id = $1`, w.contract["A"])
+	w.must(err)
+
+	short, cancel := context.WithTimeout(w.ctx, 700*time.Millisecond)
+	err = svc.SetServing(short, w.hub, w.tenant["A"], agent, preset)
+	cancel()
+	if err == nil {
+		t.Fatal("SetServing must wait for the concurrent ceiling change instead of reading the old ceiling")
+	}
+	w.must(tx.Commit(w.ctx))
+	committed = true
+	// the ceiling is now narrow: the same keys are refused, and nothing was written by the attempt that waited
+	if err := svc.SetServing(w.ctx, w.hub, w.tenant["A"], agent, preset); err == nil {
+		t.Error("with the lowered ceiling the keys above it must be refused")
+	}
+	var keys []string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT permissions FROM effective_access_grants WHERE tenant_id = $1 AND user_id = $2`, w.tenant["A"], agent).Scan(&keys))
+	if len(keys) != 0 {
+		t.Errorf("a grant above the ceiling was written: %v", keys)
+	}
+}

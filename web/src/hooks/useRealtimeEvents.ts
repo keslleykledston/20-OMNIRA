@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { RealtimeEvent } from '../types/api';
 import { API_BASE } from '../lib/config';
 import { authHeaders, handleUnauthorized } from '../lib/session';
+import { isActing } from '../lib/acting';
 
 interface UseRealtimeEventsOptions {
   tenantId: string;
@@ -32,6 +33,8 @@ export function useRealtimeEvents({ tenantId, conversationId, onEvent, onError, 
 
   useEffect(() => {
     if (!tenantId) return;
+    // Attending through a Hub: the realtime streams are not part of the delegated context yet (ADR-0040 phase 05), the screen polls instead.
+    if (isActing()) return;
     const url = conversationId
       ? `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/events`
       : `${API_BASE}/tenants/${tenantId}/inbox/events`;

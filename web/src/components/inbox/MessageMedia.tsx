@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import clsx from 'clsx';
 import { MessageItem } from '../../types/api';
 import { Icon } from '../primitives';
+import { messageMediaUrl } from '../../lib/acting';
 
 interface MessageMediaProps {
   message: MessageItem;
@@ -21,7 +22,7 @@ export default function MessageMedia({ message, tenantId }: MessageMediaProps) {
 
   if (!message.mime_type) return null;
 
-  const url = `/api/v1/tenants/${tenantId}/messages/${message.id}/media`;
+  const url = messageMediaUrl(tenantId, message.id);
   const status = message.media_status;
 
   // Older servers send no media_status: keep the previous behaviour of trying to load it.

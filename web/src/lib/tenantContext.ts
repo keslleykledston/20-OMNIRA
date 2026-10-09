@@ -1,3 +1,4 @@
+import { getActingName, isActing } from './acting'
 import { useMyTenants } from '../hooks/useMyTenants'
 import { getTenantId } from './session'
 import { useAuthStore } from './store'
@@ -29,6 +30,10 @@ export function useTenantDisplay(): TenantDisplay {
   const role = user?.roles?.[0] ?? ''
   const mine = useMyTenants().data
   const current = mine?.find((t) => t.id === tenantId)
+  // Attending an instance through the Hub: it is not one of the person's own, so the name comes from the context they entered it with.
+  if (isActing()) {
+    return { tenantId, tenantName: getActingName() || PLACEHOLDER_TENANT_NAME, roleLabel: 'Atendendo pelo Hub', isPlaceholderName: !getActingName() }
+  }
 
   return {
     tenantId,

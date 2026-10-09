@@ -24,13 +24,44 @@ CREATE OR REPLACE FUNCTION has_active_admin_membership(p_tenant_id UUID, p_user_
      );
 $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
+-- 1b. Reading the acting hub safely (Codex review, LOW): app.acting_hub is a text setting the application role can write, so a value that is not a UUID
+--     must mean "no valid acting context", never a cast error. acting_hub() is the one place that reads it as a UUID; every delegated predicate uses it.
+CREATE OR REPLACE FUNCTION acting_hub() RETURNS UUID AS $$
+  SELECT CASE WHEN v ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN v::UUID END
+  FROM (SELECT NULLIF(current_setting('app.acting_hub', true), '') AS v) s;
+$$ LANGUAGE SQL STABLE SET search_path = pg_catalog, public, pg_temp;
+
+CREATE OR REPLACE FUNCTION actor_has_permission(p_tenant_id UUID, p_user_id UUID, p_permission TEXT) RETURNS BOOLEAN AS $$
+  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+     AND CASE
+           WHEN NULLIF(current_setting('app.acting_hub', true), '') IS NULL THEN
+             EXISTS (SELECT 1 FROM public.memberships m JOIN public.role_permissions rp ON rp.role_id = m.role_id
+                     WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND rp.permission_key = p_permission)
+           ELSE COALESCE(p_permission = ANY (public.delegated_permissions(p_tenant_id, p_user_id, public.acting_hub())), false)
+         END;
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+
+CREATE OR REPLACE FUNCTION has_delegated_access(p_tenant_id UUID, p_user_id UUID, p_domain TEXT, p_need TEXT) RETURNS BOOLEAN AS $$
+  SELECT public.acting_hub() IS NOT NULL
+     AND EXISTS (
+       SELECT 1
+       FROM unnest(public.delegated_permissions(p_tenant_id, p_user_id, public.acting_hub())) k
+       JOIN public.permission_domains d ON d.permission_key = k
+       WHERE d.domain = p_domain AND (d.need = 'write' OR p_need = 'read'));
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+
+DROP POLICY IF EXISTS audit_events_hub_serve_read_own ON audit_events;
+CREATE POLICY audit_events_hub_serve_read_own ON audit_events FOR SELECT
+  USING (tenant_id IS NOT NULL AND actor_id = current_user_id()
+         AND cardinality(delegated_permissions(tenant_id, current_user_id(), public.acting_hub())) > 0);
+
 -- 2. The instances the CURRENT request may use, for one data domain at one level, in the delegated context. An uncorrelated list, so the
 --    policies below evaluate it ONCE per statement (a hashed sub-plan) instead of once per row. Answers nothing outside the delegated context.
 CREATE OR REPLACE FUNCTION delegated_tenants(p_domain TEXT, p_need TEXT) RETURNS SETOF UUID AS $$
   SELECT c.tenant_id
   FROM public.hub_tenant_service_contracts c
-  WHERE NULLIF(current_setting('app.acting_hub', true), '') IS NOT NULL
-    AND c.hub_id = NULLIF(current_setting('app.acting_hub', true), '')::UUID
+  WHERE public.acting_hub() IS NOT NULL
+    AND c.hub_id = public.acting_hub()
     AND public.has_delegated_access(c.tenant_id, public.current_user_id(), p_domain, p_need);
 $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 REVOKE EXECUTE ON FUNCTION delegated_tenants(TEXT, TEXT) FROM PUBLIC;

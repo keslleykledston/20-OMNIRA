@@ -4,6 +4,7 @@ import { useAuthStore } from '../lib/store'
 import { authAPI } from '../lib/api'
 import { Button, Avatar } from './primitives'
 import TenantSwitcher from './TenantSwitcher'
+import { isActing } from '../lib/acting'
 import clsx from 'clsx'
 
 export default function Header() {
@@ -55,7 +56,7 @@ export default function Header() {
       </div>
 
       <div className="flex min-w-0 items-center gap-2 sm:gap-4">
-        <TenantSwitcher />
+        {!isActing() && <TenantSwitcher />}
         {user && (
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="hidden sm:block">

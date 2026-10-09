@@ -36,6 +36,8 @@ export interface HubInboxItem {
 export interface HubCompanyOption {
   id: string
   name: string
+  // The full workspace of this company may be opened for this person (ADR-0040). Display only: the server decides every request again.
+  full_context?: boolean
 }
 
 export interface HubInboxPage {

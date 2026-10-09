@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2E of the Service Hub in a REAL BROWSER against the REAL binaries (ADR-0038 phase 5): omnira-api (dev login, every Hub flag ON),
+# E2E of the Service Hub in a REAL BROWSER against the REAL binaries (ADR-0038 phase 5): omnira-api (dev login, every Hub flag ON, including the delegated serving),
 # omnira-hubctl (provisioning, reconcile, distribute), the built web app served by `vite preview` and proxying /api to that API, and a
 # throwaway PostgreSQL (production migrator, non-superuser application role, RLS on) + NATS. Nothing here touches omnira_dev, the
 # deployed stack, a real channel or Keycloak.
@@ -48,7 +48,7 @@ chmod 0700 "$WORK/bin" "$WORK/bin/api" "$WORK/bin/hubctl"   # the browser helper
 APPDB="postgres://omnira_app:omnira_app@127.0.0.1:$PGPORT/hubbrowser?sslmode=disable"
 ctl() { OMNIRA_DATABASE_URL="$APPDB" "$WORK/bin/hubctl" --operator e2e "$@"; }
 
-echo "== seed: 3 instances with one WhatsApp line and one conversation each; five people"
+echo "== seed: 3 instances with one WhatsApp line and one conversation each; six people"
 TA=a0000000-0000-0000-0000-00000000000a; TB=b0000000-0000-0000-0000-00000000000b; TC=c0000000-0000-0000-0000-00000000000c
 psql_o <<SQL
 INSERT INTO users (id, external_subject, email, display_name) VALUES
@@ -56,7 +56,8 @@ INSERT INTO users (id, external_subject, email, display_name) VALUES
   (gen_random_uuid(), 'e2e-agent1',   'agent1@e2e.test',   'Bruno Agente'),
   (gen_random_uuid(), 'e2e-agent2',   'agent2@e2e.test',   'Carla Agente'),
   (gen_random_uuid(), 'e2e-reader',   'reader@e2e.test',   'Davi Leitor'),
-  (gen_random_uuid(), 'e2e-stranger', 'stranger@e2e.test', 'Elisa Fora');
+  (gen_random_uuid(), 'e2e-stranger', 'stranger@e2e.test', 'Elisa Fora'),
+  (gen_random_uuid(), 'e2e-serve',    'serve@e2e.test',    'Fabio Atendimento');
 INSERT INTO tenants (id, legal_name, trade_name, status) VALUES ('$TA','ISP Roraima Ltda','ISP Roraima','active'), ('$TB','NorteNet Telecom','NorteNet','active'), ('$TC','Terceira Empresa','','active');
 SQL
 for t in "$TA:Jose Carlos:+5592911110001" "$TB:Maria Souza:+5592911110002" "$TC:Ana Lima:+5592911110003"; do
@@ -74,6 +75,7 @@ ctl member add --hub "$HUB" --email admin@e2e.test  --role hub_admin >/dev/null
 ctl member add --hub "$HUB" --email agent1@e2e.test >/dev/null
 ctl member add --hub "$HUB" --email agent2@e2e.test >/dev/null
 ctl member add --hub "$HUB" --email reader@e2e.test >/dev/null
+ctl member add --hub "$HUB" --email serve@e2e.test >/dev/null
 for T in "$TA" "$TB" "$TC"; do ctl contract create --hub "$HUB" --tenant "$T" >/dev/null; done
 ctl platform-operator add --email admin@e2e.test >/dev/null
 # agent1: answers A and B; agent2: answers A; reader: only reads A
@@ -81,12 +83,26 @@ ctl grant add --hub "$HUB" --tenant "$TA" --email agent1@e2e.test --reply >/dev/
 ctl grant add --hub "$HUB" --tenant "$TB" --email agent1@e2e.test --reply >/dev/null
 ctl grant add --hub "$HUB" --tenant "$TA" --email agent2@e2e.test --reply >/dev/null
 ctl grant add --hub "$HUB" --tenant "$TA" --email reader@e2e.test >/dev/null
+# serve: read-only on A (no delegated keys: the Hub's text view) and, on B, the full context (ADR-0040): ceiling by the platform, then the person's keys
+ctl grant add --hub "$HUB" --tenant "$TA" --email serve@e2e.test >/dev/null
+ctl grant add --hub "$HUB" --tenant "$TB" --email serve@e2e.test --reply >/dev/null
+ctl serving ceiling --hub "$HUB" --tenant "$TB" --preset atendimento >/dev/null
+ctl serving grant --hub "$HUB" --tenant "$TB" --email serve@e2e.test --preset atendimento >/dev/null
+# a cleared image on B's conversation (the media store the API reads)
+MEDIA="$WORK/media"; mkdir -p "$MEDIA/clean/$TB" "$MEDIA/quarantine"; chmod -R 0700 "$MEDIA"
+MID=$(cat /proc/sys/kernel/random/uuid)
+printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' | base64 -d > "$MEDIA/clean/$TB/$MID"
+psql_o <<SQL
+INSERT INTO message_media (id, tenant_id, message_id, status, kind, mime, size_bytes, sha256)
+SELECT '$MID', '$TB', m.id, 'clean', 'image', 'image/png', 70, '$(printf 'b%.0s' $(seq 1 64))' FROM messages m WHERE m.tenant_id = '$TB' LIMIT 1;
+UPDATE messages SET media_ref = 'e2e', mime_type = 'image/png', size_bytes = 70 WHERE tenant_id = '$TB';
+SQL
 ctl reconcile >/dev/null
 
 echo "== the real omnira-api (dev login, every Hub flag ON) and the built web app proxying to it"
 OMNIRA_DATABASE_URL="$APPDB" OMNIRA_ENV=test OMNIRA_AUTH_MODE=mock OMNIRA_DEV_AUTH_ENABLED=true OMNIRA_NATS_URL="nats://127.0.0.1:$NATSPORT" \
   OMNIRA_CREDENTIALS_KEY="$(head -c32 /dev/urandom | base64)" OMNIRA_HTTP_ADDR=127.0.0.1:$APIPORT \
-  OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=true OMNIRA_HUB_ACCESS_API_ENABLED=true \
+  OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=true OMNIRA_HUB_ACCESS_API_ENABLED=true OMNIRA_HUB_SERVE_ENABLED=true OMNIRA_MEDIA_DIR="$MEDIA" \
   "$WORK/bin/api" >"$WORK/api.log" 2>&1 &
 echo $! >"$WORK/api.pid"
 for i in $(seq 1 60); do curl -sf --max-time 2 "http://127.0.0.1:$APIPORT/internal/health/live" >/dev/null 2>&1 && break; sleep 0.5; done

@@ -38,7 +38,7 @@ export async function signIn(page: Page, email: string): Promise<{ id: string; e
  * the container is named from it AND carries the script's own run label and image; the database URL is built from that container's real
  * published port (so SQL and hubctl reach the same database by construction); the hubctl binary must be a regular file, not a link, owned by
  * this user, not writable by others, inside this run's private work directory. No shell is involved anywhere, and the seeded database is
- * checked (five e2e.test people and nobody else) before EVERY write.
+ * checked (six e2e.test people and nobody else) before EVERY write.
  */
 function target(): { container: string; appdb: string; hubctlBin: string } {
   const run = process.env.E2E_RUN ?? '';
@@ -64,9 +64,9 @@ function target(): { container: string; appdb: string; hubctlBin: string } {
   const bst = fs.lstatSync(hubctlBin);
   if (!bst.isFile() || bst.isSymbolicLink() || bst.uid !== process.getuid!() || (bst.mode & 0o022) !== 0) throw new Error('hubctl must be a regular file of this user, not writable by others');
 
-  // the database itself must carry the marker only this run wrote (and hold exactly the five seeded e2e.test people): checked every call
+  // the database itself must carry the marker only this run wrote (and hold exactly the six seeded e2e.test people): checked every call
   const probe = psql(container, `SELECT current_database() || '|' || coalesce(current_setting('omnira.e2e_run', true), '') || '|' || (SELECT count(*) FROM users) || '|' || (SELECT count(*) FROM users WHERE email LIKE '%@e2e.test')`);
-  if (probe !== `hubbrowser|${nonce}|5|5`) throw new Error(`the database is not the seeded throwaway one of this run (${probe.replace(nonce, '<nonce>')}): refusing to write`);
+  if (probe !== `hubbrowser|${nonce}|6|6`) throw new Error(`the database is not the seeded throwaway one of this run (${probe.replace(nonce, '<nonce>')}): refusing to write`);
   return { container, appdb, hubctlBin };
 }
 

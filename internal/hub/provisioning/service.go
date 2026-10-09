@@ -611,7 +611,8 @@ func (s *Service) SetCeiling(ctx context.Context, hub, tenant uuid.UUID, keys []
 
 // SetServing replaces the permission keys of one live grant. They must lie inside the contract's ceiling. Replying needs claiming and claiming
 // needs reading (an agent cannot answer what they may not take, nor take what they may not see); can_reply follows the key 'conversation.reply',
-// so the two ways the system knows "may answer" cannot disagree after this call.
+// so the two ways the system knows "may answer" cannot disagree after this call. The contract row is held (FOR SHARE) while the keys are checked against
+// its ceiling, so a SetCeiling running at the same moment waits instead of leaving a grant above the ceiling (Codex review).
 func (s *Service) SetServing(ctx context.Context, hub, tenant, user uuid.UUID, keys []string) error {
 	return s.tx(ctx, func(c context.Context, q platformdb.Querier) error {
 		if err := s.guard(c, q, hub); err != nil {
@@ -641,7 +642,7 @@ func (s *Service) SetServing(ctx context.Context, hub, tenant, user uuid.UUID, k
 		err = q.QueryRow(c, `
 			SELECT g.id, g.status, k.delegable_permissions
 			FROM effective_access_grants g JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id
-			WHERE g.hub_id = $1 AND g.tenant_id = $2 AND g.user_id = $3 FOR UPDATE OF g`, hub, tenant, user).Scan(&grant, &status, &ceiling)
+			WHERE g.hub_id = $1 AND g.tenant_id = $2 AND g.user_id = $3 FOR UPDATE OF g FOR SHARE OF k`, hub, tenant, user).Scan(&grant, &status, &ceiling)
 		if err != nil {
 			return mapNoRows(err, "user %s has no grant on tenant %s in hub %s", user, tenant, hub)
 		}

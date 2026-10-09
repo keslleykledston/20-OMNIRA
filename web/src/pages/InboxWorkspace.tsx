@@ -16,6 +16,8 @@ import { useMediaQuery } from '../hooks/useMediaQuery';
 import { Drawer } from '../components/primitives';
 import type { ConversationItem } from '../types/api';
 import { useChannelLines } from '../lib/channelLines';
+import { isActing } from '../lib/acting';
+import DelegatedContextPane from '../components/inbox/DelegatedContextPane';
 
 // PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
 // <uuid> — never /inbox/:id (that path pattern is dead, see InboxPage.tsx/
@@ -95,6 +97,8 @@ export default function InboxWorkspace() {
     },
     getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
     enabled: !!tenantId,
+    // attending through a Hub there is no realtime stream yet (ADR-0040 phase 05): the list is refreshed by polling
+    refetchInterval: isActing() ? 15_000 : false,
   });
 
   const conversations: ConversationItem[] = conversationsData?.pages.flatMap((page) => page.items ?? []) ?? [];
@@ -175,6 +179,8 @@ export default function InboxWorkspace() {
   // subscriptions, and duplicate accessible text that breaks any query keyed
   // by role/text (getByText('Maria Souza') would match both copies at once).
   const hasSelection = !!selectedConversationId;
+  // Attending through a Hub the full context pane (tickets, topics, notes, memory...) is not available yet: a small read-only card takes its place.
+  const Context = isActing() ? DelegatedContextPane : ContextPane;
   return (
     <div className="inbox-workspace">
       <div
@@ -236,7 +242,7 @@ export default function InboxWorkspace() {
         {/* Details: a third column when there is room, otherwise a drawer opened from the conversation header */}
         {wide && showContext && selectedConversationId && (
           <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-border-subtle">
-            <ContextPane conversationId={selectedConversationId} onOpenConversation={setSelectedConversationId} />
+            <Context conversationId={selectedConversationId} onOpenConversation={setSelectedConversationId} />
           </div>
         )}
       </div>
@@ -244,7 +250,7 @@ export default function InboxWorkspace() {
       {!wide && (
         <Drawer open={drawerOpen && !!selectedConversationId} title="Detalhes do atendimento" onClose={() => setDrawerOpen(false)}>
           {selectedConversationId && (
-            <ContextPane
+            <Context
               conversationId={selectedConversationId}
               onOpenConversation={(id) => {
                 setSelectedConversationId(id);

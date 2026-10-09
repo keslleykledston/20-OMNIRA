@@ -1,4 +1,5 @@
-import { Outlet, useNavigate } from 'react-router-dom'
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { isActing } from '../lib/acting'
 import Sidebar from './Sidebar'
 import Header from './Header'
 import MobileNav from './MobileNav'
@@ -9,6 +10,7 @@ import { usePresenceHeartbeat } from '../hooks/usePresenceHeartbeat'
 
 export default function Layout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const authenticated = hasSession()
 
   useEffect(() => {
@@ -37,6 +39,9 @@ export default function Layout() {
       </div>
     )
   }
+
+  // Attending an instance through the Hub, only the conversations exist (ADR-0040 phase 03): any other address goes back to them.
+  if (isActing() && location.pathname !== '/inbox') return <Navigate to="/inbox" replace />
 
   return (
     <div className="h-dvh overflow-clip bg-canvas flex flex-col lg:flex-row">

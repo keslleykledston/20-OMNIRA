@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders, TENANT_KEY } from './session'
+import { clearActing, setActing } from './acting'
 
 // Mirrors MyTenant in contracts/openapi/omnira-v1.yaml (GET /tenants): the
 // tenants the signed-in user has an active membership in, already ordered.
@@ -47,6 +48,7 @@ export async function resolveSessionTenant(serverDefault: string | undefined): P
 // A full navigation (not a client-side route change): caches, open realtime
 // streams and per-tenant state all start clean in the new tenant.
 export function switchTenant(id: string, go: (path: string) => void = (p) => window.location.assign(p)): void {
+  clearActing() // an instance of one's own is never entered as a hub agent
   try {
     localStorage.setItem(TENANT_KEY, id)
     localStorage.setItem(PREFERRED_KEY, id)
@@ -54,6 +56,33 @@ export function switchTenant(id: string, go: (path: string) => void = (p) => win
     // Storage blocked: the tenant cannot be switched; the page reloads unchanged.
   }
   go('/')
+}
+
+// An instance the person reaches only through the Hub, opened with its full workspace (ADR-0040): the session is pointed at that instance AND
+// marked as acting for the hub, so every request for it declares the context. It is NOT remembered as a preferred own tenant. Full navigation, for the
+// same reason as switchTenant.
+export function enterDelegatedInstance(id: string, hubId: string, name: string, go: (path: string) => void = (p) => window.location.assign(p)): void {
+  setActing(hubId, name)
+  try {
+    localStorage.setItem(TENANT_KEY, id)
+  } catch {
+    // Storage blocked: the context cannot be entered; the page reloads unchanged.
+  }
+  go(`/inbox?instancia=${encodeURIComponent(id)}`)
+}
+
+// Back to the person's own world: the delegated context is dropped and the session tenant becomes one of THEIR OWN (the one they last chose when it is
+// still theirs, else the first), or none for someone who has no instance of their own. Without this a hub-only instance would stay as the session tenant.
+export function leaveDelegatedInstance(own: MyTenant[]): void {
+  clearActing()
+  const preferred = readPreferred()
+  const next = own.find((t) => t.id === preferred)?.id ?? own[0]?.id ?? ''
+  try {
+    if (next) localStorage.setItem(TENANT_KEY, next)
+    else localStorage.removeItem(TENANT_KEY)
+  } catch {
+    // nothing more to do
+  }
 }
 
 // Short code shown beside a company name so operators who serve several companies can tell them apart at a glance.
