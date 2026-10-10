@@ -406,3 +406,27 @@ test('contexto completo (ADR-0040): quem só tem o Hub atende a NorteNet na caix
   await expect(page.getByText('Mensagem de Maria Souza')).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem('actingHub'))).toBeNull();
 });
+
+test('finalizar o atendimento pelo Hub (fase 05b): só quem tem a chave e está com a conversa, e o efeito é o do membro', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  hubctl(`serving ceiling --hub ${env.hub} --tenant ${env.tb} --preset completo_fin`);
+  hubctl(`serving grant --hub ${env.hub} --tenant ${env.tb} --email agent1@e2e.test --preset completo_fin`);
+  const bruno = await signIn(page, 'agent1@e2e.test');
+  sql(`UPDATE conversations SET assigned_to_user_id = '${bruno.id}', status = 'open' WHERE tenant_id = '${env.tb}'`);
+  await page.goto('/inbox');
+  await page.getByRole('tablist', { name: 'Instâncias' }).getByRole('tab', { name: 'NorteNet' }).click();
+  await page.getByText('Maria Souza').first().click();
+  await expect(page.getByRole('complementary', { name: 'Detalhes do atendimento' })).toContainText('Maria Souza');
+  await page.getByRole('button', { name: 'Finalizar', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Finalizar atendimento' });
+  await expect(dialog.getByRole('button', { name: 'Sugerir com IA' })).toHaveCount(0); // a sugestão por IA não faz parte do contexto delegado
+  await dialog.getByLabel('Resumo do atendimento').fill('Cliente voltou a navegar (E2E 05b)');
+  await dialog.getByRole('button', { name: 'Finalizar atendimento' }).click();
+  await expect.poll(() => sql(`SELECT status FROM conversations WHERE tenant_id = '${env.tb}'`)).toBe('closed');
+  expect(sql(`SELECT closed_by_user_id || '|' || source FROM conversation_closures WHERE tenant_id = '${env.tb}'`)).toBe(`${bruno.id}|agent`);
+  expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND actor_id = '${bruno.id}' AND action = 'hub.conversation.finalized' AND metadata->>'hub_id' = '${env.hub}'`))).toBe(1);
+  // repetir a chamada é idempotente (a mesma ficha de encerramento, sem segunda linha nem segunda auditoria)
+  const res = await page.request.post(`/api/v1/tenants/${env.tb}/inbox/conversations/${sql(`SELECT id FROM conversations WHERE tenant_id = '${env.tb}'`)}/finalize`, { headers: { 'X-Omnira-Acting-As': `hub:${env.hub}` }, data: { reason: 'resolved' } });
+  expect(res.status()).toBe(200);
+  expect(Number(sql(`SELECT count(*) FROM conversation_closures WHERE tenant_id = '${env.tb}'`))).toBe(1);
+});

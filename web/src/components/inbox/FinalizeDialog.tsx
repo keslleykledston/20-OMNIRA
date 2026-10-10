@@ -13,6 +13,8 @@ import {
 } from '../../lib/attendance'
 import { API_BASE } from '../../lib/config'
 import { authHeaders, getTenantId } from '../../lib/session'
+import { isActing } from '../../lib/acting'
+import { useAccess } from '../../lib/useAccess'
 import { useConversationChannel } from '../../lib/channelLines'
 import type { ConversationItem } from '../../types/api'
 
@@ -50,11 +52,15 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   const [aiNote, setAiNote] = useState<string | null>(null)
   // Closing message to the customer. Offered only when free text can actually go out right now: the attendance must have an
   // owner (sending requires it) and, on the official line, the 24 h window must be open.
-  const channel = useConversationChannel(open ? conversationId : null)
-  const cached = qc.getQueryData<ConversationItem>(['inbox-context', tenantId, conversationId])
+  // Attending through a Hub (ADR-0040 phase 05b): the channel lookup and the AI suggestion are not part of the delegated context, so the closing notice is offered
+  // whenever the person may reply (a closed 24 h window comes back as an error and the person can finalize without notifying), and the suggestion is not offered.
+  const delegated = isActing()
+  const { can } = useAccess()
+  const channel = useConversationChannel(open && !delegated ? conversationId : null)
+  const cached = qc.getQueryData<ConversationItem>(['inbox-context', tenantId, conversationId]) ?? qc.getQueryData<ConversationItem>(['inbox-conversation-detail', tenantId, conversationId])
   const hasOwner = !!cached?.assigned_to_user_id
-  const windowClosed = !!channel.data && channel.data.window_required && !channel.data.window_open
-  const canNotify = hasOwner && !windowClosed && channel.data?.can_send_text !== false
+  const windowClosed = !delegated && !!channel.data && channel.data.window_required && !channel.data.window_open
+  const canNotify = hasOwner && !windowClosed && (delegated ? can('conversation.reply') : channel.data?.can_send_text !== false)
   const [notify, setNotify] = useState(true)
   const [farewell, setFarewell] = useState(DEFAULT_FAREWELL)
   // One Idempotency-Key per dialog and one send per attendance: a retry after a failed finalize must not message twice.
@@ -145,7 +151,11 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
           </select>
         </label>
         <div className="flex items-center justify-between gap-2">
-          <Button variant="secondary" size="sm" isLoading={suggest.isPending} disabled={suggest.isPending || finalize.isPending} onClick={() => suggest.mutate()}>Sugerir com IA</Button>
+          {!delegated ? (
+            <Button variant="secondary" size="sm" isLoading={suggest.isPending} disabled={suggest.isPending || finalize.isPending} onClick={() => suggest.mutate()}>Sugerir com IA</Button>
+          ) : (
+            <span />
+          )}
           {aiNote && <p role="status" className="m-0 text-xs text-text-secondary">{aiNote}</p>}
         </div>
         <TextArea

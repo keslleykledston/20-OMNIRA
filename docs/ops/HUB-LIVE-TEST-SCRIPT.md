@@ -81,3 +81,12 @@ Pré-requisitos: `serving ceiling ... --preset completo` e `serving grant ... --
 4. Com `ai.assist`: o cartão mostra **Resumo por IA**; clicar gera o resumo (consome o provedor de IA da plataforma; no máximo 5 por minuto por pessoa). Sem a chave o bloco não existe e a API responde 403.
 5. Auditoria: os dois eventos `ai.conversation.summarize` (antes e depois da chamada) trazem `acting_as = hub:<id>` e a pessoa.
 
+## M. Finalizar o atendimento pelo Hub (fase 05b; precisa do preset `completo_fin`)
+Pré-requisitos: `serving ceiling ... --preset completo_fin` e `serving grant ... --preset completo_fin`. **Fecha a conversa de verdade e, com "Avisar o cliente" marcado, manda a mensagem de encerramento ao cliente por WhatsApp** — use um número de teste.
+1. Assuma uma conversa da instância pelo Hub. Aparece **Finalizar** (sem a chave ele não aparece).
+2. Preencha motivo e resumo, adicione uma pendência (o responsável, se escolhido, tem de ser da equipe da empresa), e finalize. A conversa sai da lista de abertas e vai para "Finalizadas".
+3. Conferir: chamado local da conversa fechado; chamado ligado ao ERP intacto; a ficha de encerramento (com você como autor) e a pendência aparecem para quem atender esse contato depois (membros da empresa).
+4. Repita a chamada (recarregue e finalize de novo por API): mesma ficha, sem duplicar.
+5. Outra pessoa do Hub, ou você numa conversa solta, **não** consegue finalizar (403).
+6. Auditoria: `hub.conversation.finalized` com seu nome e o Hub; o texto do resumo nunca aparece.
+

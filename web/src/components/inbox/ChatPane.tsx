@@ -64,7 +64,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       }
     },
     enabled: !!tenantId && !!conversationId,
-    refetchInterval: isActing() ? 15_000 : false, // no realtime stream while attending through a Hub (ADR-0040 phase 05)
+    refetchInterval: isActing() ? 15_000 : false, // a slow poll as a net for a dropped stream while attending through a Hub (ADR-0040 phase 05)
   });
 
   // Fetch messages: the API pages newest-first; older pages load when the user scrolls to the top.
@@ -257,7 +257,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
               {claiming ? 'Assumindo…' : 'Assumir atendimento'}
             </button>
           )}
-          {mine && conversation.status !== 'closed' && conversation.conversation_kind !== 'internal' && (
+          {mine && conversation.status !== 'closed' && conversation.conversation_kind !== 'internal' && (!isActing() || can('conversation.finalize')) && (
             <button type="button" onClick={() => setShowFinalize(true)} className="ml-auto rounded-control px-1.5 py-0.5 font-medium text-text-secondary hover:bg-surface-muted hover:text-text-primary">
               Finalizar
             </button>
