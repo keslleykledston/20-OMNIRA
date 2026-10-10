@@ -24,6 +24,12 @@ type ClosingSuggester interface {
 	SuggestClosing(ctx context.Context, conversationID uuid.UUID) (domain.ClosingSuggestion, error)
 }
 
+// HolderBoundClosingSuggester is a ClosingSuggester that reads the conversation only while `holder` holds it, proved by the statement that reads the text (ADR-0040
+// phase 07). A Hub agent's draft needs it: a suggester that cannot bind the holder is not used for a delegate at all.
+type HolderBoundClosingSuggester interface {
+	SuggestClosingHeldBy(ctx context.Context, conversationID, holder uuid.UUID) (domain.ClosingSuggestion, error)
+}
+
 type Repository interface {
 	// ReadConversation is LockConversation without the lock: for read-only paths that wait on something slow.
 	ReadConversation(ctx context.Context, conversationID uuid.UUID) (*ConversationFacts, error)

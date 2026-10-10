@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/attendance/application"
 	"github.com/omnira/omnira/internal/attendance/domain"
+	"github.com/omnira/omnira/internal/platform/ratelimit"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -26,6 +27,8 @@ type Handler struct {
 	// canReadAsHubAgent, when set, lets a Hub agent ask for the AI closing draft (ADR-0040 phase 07): it answers whether the person holds conversation.read in the
 	// context (ai.assist alone must never send text the person cannot see to the provider). Unset = the draft is not delegable at all.
 	canReadAsHubAgent func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error)
+	// draftLimiter bounds the paid provider calls one Hub agent can make through the delegated draft (per person, like the AI summary of the conversation).
+	draftLimiter *ratelimit.Limiter
 }
 
 func NewHandler(svc *application.Service) *Handler { return &Handler{svc: svc} }
@@ -33,9 +36,12 @@ func NewHandler(svc *application.Service) *Handler { return &Handler{svc: svc} }
 // Service is the attendance service this handler serves (the Hub's write path runs the same rules).
 func (h *Handler) Service() *application.Service { return h.svc }
 
-// WithDelegatedSuggest enables the AI closing draft for a Hub agent; check says whether the person holds conversation.read in the delegated context.
-func (h *Handler) WithDelegatedSuggest(check func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error)) *Handler {
+// WithDelegatedSuggest enables the AI closing draft for a Hub agent; check says whether the person holds conversation.read in the delegated context, and perMinute
+// bounds the drafts one person can ask for (every draft is a paid call to the platform's AI provider).
+func (h *Handler) WithDelegatedSuggest(check func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error), perMinute int) *Handler {
 	h.canReadAsHubAgent = check
+	h.draftLimiter = ratelimit.NewLimiter()
+	h.draftLimiter.SetQuota(ratelimit.QuotaTypeUser, perMinute, time.Minute)
 	return h
 }
 
@@ -256,6 +262,11 @@ func (h *Handler) suggest(w http.ResponseWriter, r *http.Request) {
 		}
 		if !readable {
 			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
+			return
+		}
+		if allowed, _, reset := h.draftLimiter.Allow(r.Context(), ratelimit.QuotaTypeUser, "closing-draft:"+tc.ActorID.String()); !allowed {
+			w.Header().Set("Retry-After", reset.UTC().Format(time.RFC1123))
+			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many draft requests, try again shortly")
 			return
 		}
 		suggest = h.svc.SuggestClosingAsHubAgent

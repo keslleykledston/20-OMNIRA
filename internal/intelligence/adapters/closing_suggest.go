@@ -24,11 +24,21 @@ func NewPostgresClosingReader(pool *pgxpool.Pool) *PostgresClosingReader {
 }
 
 func (r *PostgresClosingReader) RecentMessages(ctx context.Context, tenantID, conversationID uuid.UUID, limit int) ([]ports.ClosingMessage, error) {
+	return r.recent(ctx, tenantID, conversationID, nil, limit)
+}
+
+func (r *PostgresClosingReader) RecentMessagesHeldBy(ctx context.Context, tenantID, conversationID, holder uuid.UUID, limit int) ([]ports.ClosingMessage, error) {
+	return r.recent(ctx, tenantID, conversationID, &holder, limit)
+}
+
+func (r *PostgresClosingReader) recent(ctx context.Context, tenantID, conversationID uuid.UUID, holder *uuid.UUID, limit int) ([]ports.ClosingMessage, error) {
 	rows, err := platformdb.QuerierFromContext(ctx, r.pool).Query(ctx, `
 		SELECT direction, sent_by_user_id IS NULL, body, created_at
 		FROM messages
 		WHERE tenant_id = $1 AND conversation_id = $2 AND message_type = 'text' AND btrim(body) <> ''
-		ORDER BY created_at DESC, id DESC LIMIT $3`, tenantID, conversationID, limit)
+		  AND ($4::uuid IS NULL OR EXISTS (SELECT 1 FROM conversations c
+		        WHERE c.tenant_id = $1 AND c.id = $2 AND c.assigned_to_user_id = $4 AND c.status <> 'closed'))
+		ORDER BY created_at DESC, id DESC LIMIT $3`, tenantID, conversationID, limit, holder)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +81,15 @@ func NewClosingSuggestAdapter(svc *application.ClosingSuggester) *ClosingSuggest
 }
 
 func (a *ClosingSuggestAdapter) SuggestClosing(ctx context.Context, conversationID uuid.UUID) (attendancedomain.ClosingSuggestion, error) {
-	res, err := a.svc.Suggest(ctx, conversationID)
+	return translateClosing(a.svc.Suggest(ctx, conversationID))
+}
+
+// SuggestClosingHeldBy drafts only while `holder` holds the open conversation, proved by the very statement that reads the text (ADR-0040 phase 07).
+func (a *ClosingSuggestAdapter) SuggestClosingHeldBy(ctx context.Context, conversationID, holder uuid.UUID) (attendancedomain.ClosingSuggestion, error) {
+	return translateClosing(a.svc.SuggestHeldBy(ctx, conversationID, holder))
+}
+
+func translateClosing(res *application.ClosingResult, err error) (attendancedomain.ClosingSuggestion, error) {
 	switch {
 	case errors.Is(err, application.ErrClosingDisabled):
 		return attendancedomain.ClosingSuggestion{}, attendancedomain.ErrSuggestionDisabled

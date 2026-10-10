@@ -23,6 +23,7 @@ import (
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
+	intelligenceports "github.com/omnira/omnira/internal/intelligence/ports"
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
@@ -36,22 +37,43 @@ type fakeDrafter struct {
 	reader  *intelligenceadapters.PostgresClosingReader
 	calls   atomic.Int32
 	sources atomic.Value // the access source of the last call
+	// betweenCheckAndRead runs after the service's check and before the text is read: the window in which the conversation can change hands
+	betweenCheckAndRead func()
+	provider            atomic.Int32 // how many times text was actually handed to the "provider"
 }
 
 func (f *fakeDrafter) SuggestClosing(ctx context.Context, conversationID uuid.UUID) (attendancedomain.ClosingSuggestion, error) {
+	return f.draft(ctx, conversationID, nil)
+}
+
+// SuggestClosingHeldBy is the holder-bound variant the Hub agent's route requires of the suggester.
+func (f *fakeDrafter) SuggestClosingHeldBy(ctx context.Context, conversationID, holder uuid.UUID) (attendancedomain.ClosingSuggestion, error) {
+	return f.draft(ctx, conversationID, &holder)
+}
+
+func (f *fakeDrafter) draft(ctx context.Context, conversationID uuid.UUID, holder *uuid.UUID) (attendancedomain.ClosingSuggestion, error) {
 	f.calls.Add(1)
 	tc, err := tenancydomain.FromContext(ctx)
 	if err != nil {
 		return attendancedomain.ClosingSuggestion{}, err
 	}
 	f.sources.Store(string(tc.Source))
-	msgs, err := f.reader.RecentMessages(ctx, tc.TenantID, conversationID, 20)
+	if f.betweenCheckAndRead != nil {
+		f.betweenCheckAndRead()
+	}
+	var msgs []intelligenceports.ClosingMessage
+	if holder != nil {
+		msgs, err = f.reader.RecentMessagesHeldBy(ctx, tc.TenantID, conversationID, *holder, 20)
+	} else {
+		msgs, err = f.reader.RecentMessages(ctx, tc.TenantID, conversationID, 20)
+	}
 	if err != nil {
 		return attendancedomain.ClosingSuggestion{}, err
 	}
 	if len(msgs) == 0 {
 		return attendancedomain.ClosingSuggestion{}, attendancedomain.ErrNothingToSuggest
 	}
+	f.provider.Add(1)
 	var seen []string
 	for _, m := range msgs {
 		seen = append(seen, m.Text)
@@ -64,14 +86,14 @@ func TestDelegatedClosingDraftThroughTheRealAttendanceRoute(t *testing.T) {
 	tenancyadapters.EnableDelegatedServing(true)
 	t.Cleanup(func() { tenancyadapters.EnableDelegatedServing(false) })
 	drafter := &fakeDrafter{w: w, reader: intelligenceadapters.NewPostgresClosingReader(w.app)}
-	build := func(wired bool) http.Handler {
+	build := func(wired bool, perMinute int) http.Handler {
 		svc := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(w.app), attendanceadapters.NewAuthorizer(w.app),
 			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(w.app))).WithSuggester(drafter)
 		handler := attendanceadapters.NewHandler(svc)
 		if wired {
 			handler.WithDelegatedSuggest(func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error) {
 				return tenancyadapters.ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, w.app), tenantID, userID, "conversation.read")
-			})
+			}, perMinute)
 		}
 		authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(w.app), tenancyadapters.NewPostgresTenantRepository(w.app))
 		session := tenancyadapters.AuthorizationMiddleware(w.app, authz)
@@ -87,7 +109,7 @@ func TestDelegatedClosingDraftThroughTheRealAttendanceRoute(t *testing.T) {
 		handler.Routes(mux, func(fn http.HandlerFunc) http.Handler { return who(session(fn)) })
 		return mux
 	}
-	mux := build(true)
+	mux := build(true, 1000)
 	suggest := func(mux http.Handler, user uuid.UUID, tenantKey, convKey, acting string) (int, string) {
 		req := httptest.NewRequest("POST", "/api/v1/tenants/"+w.tenant[tenantKey].String()+"/inbox/conversations/"+w.conv[convKey].String()+"/finalize/suggest", strings.NewReader("{}"))
 		req.Header.Set("X-Test-User", user.String())
@@ -192,6 +214,53 @@ func TestDelegatedClosingDraftThroughTheRealAttendanceRoute(t *testing.T) {
 		}
 	})
 
+	t.Run("a conversation that changes hands between the check and the read never reaches the provider", func(t *testing.T) {
+		hold("A", &agent)
+		before, provided := calls(), drafter.provider.Load()
+		drafter.betweenCheckAndRead = func() { hold("A", &other) } // a supervisor reassigns it right after the service's check
+		t.Cleanup(func() { drafter.betweenCheckAndRead = nil })
+		if code, body := suggest(mux, agent, "A", "A", hub); code != 422 || strings.Contains(body, "Minha conexão") {
+			t.Errorf("a draft after the conversation changed hands: %d %s, want 422 and no text", code, body)
+		}
+		if drafter.provider.Load() != provided {
+			t.Error("the text of a conversation the person no longer held was handed to the provider")
+		}
+		if calls() != before+1 {
+			t.Errorf("the suggester was reached %d times, want once", calls()-before)
+		}
+		drafter.betweenCheckAndRead = func() { w.exec(`UPDATE conversations SET status = 'closed' WHERE id = $1`, w.conv["A"]) }
+		hold("A", &agent)
+		drafter.betweenCheckAndRead = func() { w.exec(`UPDATE conversations SET status = 'closed' WHERE id = $1`, w.conv["A"]) }
+		if code, _ := suggest(mux, agent, "A", "A", hub); code != 422 {
+			t.Errorf("a draft after the conversation was closed: %d, want 422", code)
+		}
+		if drafter.provider.Load() != provided {
+			t.Error("the text of a closed conversation was handed to the provider")
+		}
+		drafter.betweenCheckAndRead = nil
+		hold("A", &agent)
+	})
+
+	t.Run("each person has a limit of drafts, because every draft is a paid call", func(t *testing.T) {
+		hold("A", &agent)
+		limited := build(true, 2)
+		before := calls()
+		for i, want := range []int{200, 200, 429} {
+			if code, _ := suggest(limited, agent, "A", "A", hub); code != want {
+				t.Errorf("draft %d: %d, want %d", i+1, code, want)
+			}
+		}
+		if calls() != before+2 {
+			t.Errorf("the provider was reached %d times, want 2", calls()-before)
+		}
+		// the limit is per person: the colleague is not limited by it
+		hold("A", &other)
+		if code, _ := suggest(limited, other, "A", "A", hub); code != 200 {
+			t.Errorf("another person: %d, want 200", code)
+		}
+		hold("A", &agent)
+	})
+
 	t.Run("the walls of the instance: outside the contract's queues, another instance, a revoked grant", func(t *testing.T) {
 		before := calls()
 		hold("A2", &agent)
@@ -231,7 +300,7 @@ func TestDelegatedClosingDraftThroughTheRealAttendanceRoute(t *testing.T) {
 		if drafter.sources.Load() == string(tenancydomain.AccessSourceHubServe) {
 			t.Error("the member's request ran in the delegated context")
 		}
-		closed := build(false)
+		closed := build(false, 0)
 		hold("A", &agent)
 		if code, _ := suggest(closed, agent, "A", "A", hub); code != 404 {
 			t.Errorf("a delegate on a server that does not wire it: %d, want 404 (not delegable)", code)

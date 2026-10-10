@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=omnira-hubsugmut-$$; DB=omnira_test_sugmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/attendance/application/service.go internal/attendance/adapters/http.go"
+FILES="internal/attendance/application/service.go internal/attendance/adapters/http.go internal/intelligence/adapters/closing_suggest.go internal/intelligence/application/closing_suggester.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -67,7 +67,7 @@ PY
 # NOT mutants (equivalent by construction):
 #   - the "no check wired" branch of the handler and the source guard of SuggestClosingAsHubAgent: a delegate only reaches them through a route that is Delegable, which exists
 #     only when the check is wired, and a member's request never selects the Hub variant (the handler chooses by the access source).
-AS=internal/attendance/application/service.go; AH=internal/attendance/adapters/http.go
+AS=internal/attendance/application/service.go; AH=internal/attendance/adapters/http.go; IR=internal/intelligence/adapters/closing_suggest.go; IA=internal/intelligence/application/closing_suggester.go
 
 mut "the route asks a key every delegate has instead of ai.assist" $AH 'suggestRoute = tenancyadapters.Delegable("ai.assist", wrap(h.suggest))' 'suggestRoute = tenancyadapters.Delegable("conversation.read", wrap(h.suggest))'
 mut "the handler does not ask for conversation.read" $AH '		if !readable {
@@ -104,4 +104,11 @@ mut "a conversation with no contact or an internal one is drafted" $AS '	if fact
 		return domain.ClosingSuggestion{}, domain.ErrNotAContact
 	}
 	if owner'
+mut "the delegate's draft is not bound to the holder (service)" $AS '	return bound.SuggestClosingHeldBy(ctx, conversationID, tc.ActorID)' '	_ = bound
+	return s.suggester.SuggestClosing(ctx, conversationID)'
+mut "the reading statement does not require the holder" $IR '($4::uuid IS NULL OR EXISTS (SELECT 1 FROM conversations c' '(true OR EXISTS (SELECT 1 FROM conversations c'
+mut "the suggester reads without the holder even when asked to bind it" $IA '	if holder != nil {
+		msgs, err = s.reader.RecentMessagesHeldBy' '	if false && holder != nil {
+		msgs, err = s.reader.RecentMessagesHeldBy'
+mut "a delegate has no limit of paid drafts" $AH 'allowed, _, reset := h.draftLimiter.Allow(r.Context(), ratelimit.QuotaTypeUser, "closing-draft:"+tc.ActorID.String()); !allowed {' 'allowed, _, reset := h.draftLimiter.Allow(r.Context(), ratelimit.QuotaTypeUser, "closing-draft:"+tc.ActorID.String()); false && !allowed {'
 echo "PASS: all $N mutants killed"

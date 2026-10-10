@@ -876,7 +876,7 @@ func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendancea
 	// ADR-0040 phase 07: the AI closing draft for a Hub agent needs ai.assist on the route and conversation.read proved by the handler
 	h.WithDelegatedSuggest(func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error) {
 		return tenancyadapters.ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, dbPool), tenantID, userID, "conversation.read")
-	})
+	}, 5) // 5 drafts a minute per person, like the AI summary
 	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) })
 }
 

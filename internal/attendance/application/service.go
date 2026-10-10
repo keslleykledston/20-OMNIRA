@@ -84,24 +84,40 @@ func (s *Service) SuggestClosingAsHubAgent(ctx context.Context, conversationID u
 	if s.suggester == nil {
 		return domain.ClosingSuggestion{}, domain.ErrSuggestionDisabled
 	}
-	return s.suggestFor(ctx, tc, conversationID, false)
+	bound, ok := s.suggester.(ports.HolderBoundClosingSuggester)
+	if !ok {
+		return domain.ClosingSuggestion{}, domain.ErrSuggestionUnavailable // a suggester that cannot bind the holder is never used for a delegate
+	}
+	if err := s.checkDraftable(ctx, tc, conversationID, false); err != nil {
+		return domain.ClosingSuggestion{}, err
+	}
+	// the clear answers above come from a read; what guarantees that the text of a conversation the person no longer holds never reaches the provider is that the
+	// statement that reads the text carries the same condition
+	return bound.SuggestClosingHeldBy(ctx, conversationID, tc.ActorID)
 }
 
 func (s *Service) suggestFor(ctx context.Context, tc *tenancydomain.TenantContext, conversationID uuid.UUID, supervisor bool) (domain.ClosingSuggestion, error) {
-	facts, err := s.repo.ReadConversation(ctx, conversationID)
-	if err != nil {
+	if err := s.checkDraftable(ctx, tc, conversationID, supervisor); err != nil {
 		return domain.ClosingSuggestion{}, err
 	}
+	return s.suggester.SuggestClosing(ctx, conversationID)
+}
+
+func (s *Service) checkDraftable(ctx context.Context, tc *tenancydomain.TenantContext, conversationID uuid.UUID, supervisor bool) error {
+	facts, err := s.repo.ReadConversation(ctx, conversationID)
+	if err != nil {
+		return err
+	}
 	if facts.ContactID == nil || facts.Kind == "internal" {
-		return domain.ClosingSuggestion{}, domain.ErrNotAContact
+		return domain.ErrNotAContact
 	}
 	if owner := facts.AssignedTo != nil && *facts.AssignedTo == tc.ActorID; !owner && !supervisor {
-		return domain.ClosingSuggestion{}, domain.ErrForbidden
+		return domain.ErrForbidden
 	}
 	if facts.Status == "closed" {
-		return domain.ClosingSuggestion{}, domain.ErrNothingToSuggest
+		return domain.ErrNothingToSuggest
 	}
-	return s.suggester.SuggestClosing(ctx, conversationID)
+	return nil
 }
 
 type FinalizeResult struct {

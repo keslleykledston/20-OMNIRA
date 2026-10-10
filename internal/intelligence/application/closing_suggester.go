@@ -127,6 +127,16 @@ func renderClosing(msgs []ports.ClosingMessage, nonce string) string {
 }
 
 func (s *ClosingSuggester) Suggest(ctx context.Context, conversationID uuid.UUID) (*ClosingResult, error) {
+	return s.suggest(ctx, conversationID, nil)
+}
+
+// SuggestHeldBy is Suggest for a Hub agent: the text is read only while `holder` holds the open conversation (checked by the reading statement itself), so nothing
+// of a conversation the person lost between the caller's check and the read reaches the provider.
+func (s *ClosingSuggester) SuggestHeldBy(ctx context.Context, conversationID, holder uuid.UUID) (*ClosingResult, error) {
+	return s.suggest(ctx, conversationID, &holder)
+}
+
+func (s *ClosingSuggester) suggest(ctx context.Context, conversationID uuid.UUID, holder *uuid.UUID) (*ClosingResult, error) {
 	if !s.flags.CopilotEnabled {
 		return nil, ErrClosingDisabled
 	}
@@ -138,7 +148,12 @@ func (s *ClosingSuggester) Suggest(ctx context.Context, conversationID uuid.UUID
 	if err != nil {
 		return nil, ErrClosingUnavailable
 	}
-	msgs, err := s.reader.RecentMessages(ctx, tc.TenantID, conversationID, closingMessages)
+	var msgs []ports.ClosingMessage
+	if holder != nil {
+		msgs, err = s.reader.RecentMessagesHeldBy(ctx, tc.TenantID, conversationID, *holder, closingMessages)
+	} else {
+		msgs, err = s.reader.RecentMessages(ctx, tc.TenantID, conversationID, closingMessages)
+	}
 	if err != nil {
 		return nil, err
 	}
