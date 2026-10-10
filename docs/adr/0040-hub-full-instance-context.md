@@ -299,3 +299,5 @@ O dono mandou seguir na fase 05 sem responder às três perguntas que ficaram em
 
 **Não provado:** login real do Keycloak; aviso real ao cliente por WhatsApp; implantação.
 
+**Revisão do Codex (somente leitura, não executou testes) da fase 05b:** CRITICAL 0, HIGH 0, MEDIUM 1, LOW 0. O MEDIUM: o diálogo manda o aviso de encerramento ao cliente ANTES de finalizar; se a conversa for fechada por outro lado entre as duas chamadas, o aviso sai e a finalização falha. **Aceito, é o desenho do diálogo do membro (ADR-0020), não algo introduzido aqui:** depois de fechada a conversa o envio é recusado, então o aviso precisa vir antes; a chave de idempotência e o "um envio por atendimento" evitam duplicar na repetição, e o erro oferece "finalizar sem avisar". Tornar o aviso uma ação de servidor com retentativa por outbox é melhoria do fluxo do membro e dos delegados juntos, fora desta fatia.
+
