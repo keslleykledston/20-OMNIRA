@@ -545,8 +545,8 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetConversation)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages)))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", tenancyadapters.Delegable("conversation.read", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents)))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", tenancyadapters.Delegable("conversation.read", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents)))))
 	// Media retrieval: GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media
 	// Only wired if WAHA is enabled; otherwise media endpoint is not registered.
 	// ADR-0016: when a media directory is configured the file comes from the quarantine-and-scan pipeline
@@ -1046,6 +1046,15 @@ func (a sessionStreamAuthorizer) Authorize(ctx context.Context, userID, tenantID
 		return authErr
 	})
 	return tc, err
+}
+
+// AuthorizeServing / ConversationVisibleServing: the delegated face of the stream authorizer (ADR-0040 phase 05).
+func (a sessionStreamAuthorizer) AuthorizeServing(ctx context.Context, userID, tenantID, hubID uuid.UUID, keys []string) (*tenancydomain.TenantContext, error) {
+	return tenancyadapters.AuthorizeServing(ctx, a.pool, userID, tenantID, hubID, keys)
+}
+
+func (a sessionStreamAuthorizer) ConversationVisibleServing(ctx context.Context, userID, tenantID, hubID, conversationID uuid.UUID) (bool, error) {
+	return tenancyadapters.ServingConversationVisible(ctx, a.pool, userID, tenantID, hubID, conversationID)
 }
 
 // ConversationVisible reports whether the conversation exists in the tenant for the user (RLS applies).

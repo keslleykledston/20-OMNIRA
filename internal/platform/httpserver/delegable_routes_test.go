@@ -63,6 +63,9 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		"GET " + tn + "/contacts/{contact_id}/company-suggestions": "account.read",
 		"GET " + tn + "/conversations/{conversation_id}/ticket":    "ticket.create|ticket.read",
 		"POST " + tn + "/conversations/{conversation_id}/ticket":   "ticket.create",
+		// phase 05: the realtime streams (admitted in a short transaction, rechecked every 15 s)
+		"GET " + tn + "/inbox/events":                                 "conversation.read",
+		"GET " + tn + "/inbox/conversations/{conversation_id}/events": "conversation.read",
 		// phase 04c: hand over / give back a conversation the agent holds, and the notes of a contact
 		"POST " + tn + "/inbox/conversations/{conversation_id}/unassign":           "conversation.claim",
 		"POST " + tn + "/inbox/conversations/{conversation_id}/transfer":           "conversation.transfer",

@@ -174,3 +174,68 @@ func DelegatedPath(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// ErrServeDenied — the same answer for a stranger, a revoked grant and an instance that does not exist.
+var ErrServeDenied = errServeDenied
+
+// DelegableKeys — the keys the route in this request's context declared (empty when the route is not delegable). A stream middleware, which cannot run the
+// handler inside the admission transaction, reads them to ask the same question AuthorizationMiddleware asks.
+func DelegableKeys(ctx context.Context) []string {
+	keys, _ := ctx.Value(delegableKey{}).([]string)
+	return append([]string(nil), keys...)
+}
+
+// AuthorizeServing — the delegated admission of a long-lived stream (ADR-0040 phase 05): the SAME door as a request (lock_served_tenant, then the key asked
+// live in the delegated context), but in a short transaction that ends before the stream starts, so no transaction or connection is held while streaming.
+// It is asked again every few seconds; a revoked grant, a suspended instance or a lost key ends the stream there. Refused (ErrServeDenied) when the process
+// switch is off, when no key is declared, or when none of them is held.
+func AuthorizeServing(ctx context.Context, pool *pgxpool.Pool, userID, tenantID, hubID uuid.UUID, keys []string) (*domain.TenantContext, error) {
+	if !delegatedServing.Load() || len(keys) == 0 {
+		return nil, errServeDenied
+	}
+	var tc *domain.TenantContext
+	err := platformdb.WithTenantSession(ctx, pool, userID, false, func(c context.Context) error {
+		resolved, err := resolveServeContext(c, pool, hubID, tenantID, userID)
+		if err != nil {
+			return err
+		}
+		for _, key := range keys {
+			ok, err := ActorHasPermission(c, platformdb.QuerierFromContext(c, pool), tenantID, userID, key)
+			if err != nil {
+				return err
+			}
+			if ok {
+				tc = resolved
+				return nil
+			}
+		}
+		return errServeForbid
+	})
+	if errors.Is(err, errServeForbid) {
+		return nil, errServeDenied
+	}
+	return tc, err
+}
+
+// ServingConversationVisible — whether the conversation is visible to the person in the delegated context (queue scope of the contract included, by RLS),
+// in a short delegated transaction. Used to refuse a conversation stream and to filter the events of the instance stream.
+func ServingConversationVisible(ctx context.Context, pool *pgxpool.Pool, userID, tenantID, hubID, conversationID uuid.UUID) (bool, error) {
+	if !delegatedServing.Load() {
+		return false, nil
+	}
+	var visible bool
+	err := platformdb.WithTenantSession(ctx, pool, userID, false, func(c context.Context) error {
+		if _, err := resolveServeContext(c, pool, hubID, tenantID, userID); err != nil {
+			return err
+		}
+		held, err := ActorHasPermission(c, platformdb.QuerierFromContext(c, pool), tenantID, userID, "conversation.read")
+		if err != nil || !held {
+			return err
+		}
+		return platformdb.QuerierFromContext(c, pool).QueryRow(c, `SELECT EXISTS(SELECT 1 FROM conversations WHERE tenant_id = $1 AND id = $2)`, tenantID, conversationID).Scan(&visible)
+	})
+	if errors.Is(err, errServeDenied) {
+		return false, nil
+	}
+	return visible, err
+}
