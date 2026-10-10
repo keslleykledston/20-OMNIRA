@@ -57,6 +57,9 @@ type StreamAuthorizer interface {
 	ConversationVisible(ctx context.Context, userID, tenantID, conversationID uuid.UUID) (bool, error)
 }
 
+// streamAdmissionTimeout bounds every lookup made before a stream starts (a stalled database must not hold the request).
+const streamAdmissionTimeout = 10 * time.Second
+
 // DelegatedStreamAuthorizer is the optional second face of a StreamAuthorizer: admission for a person who attends the instance as a Hub agent
 // (`X-Omnira-Acting-As: hub:<id>`, ADR-0040 phase 05). Same rules as a delegated request, in short transactions that end before the stream starts.
 type DelegatedStreamAuthorizer interface {
@@ -183,7 +186,9 @@ func StreamMiddleware(auth StreamAuthorizer) func(http.Handler) http.Handler {
 					http.Error(w, "not found", http.StatusNotFound)
 					return
 				}
-				tc, err := da.AuthorizeServing(r.Context(), principal.UserID, tenantID, acting.HubID, keys)
+				admit, cancel := context.WithTimeout(r.Context(), streamAdmissionTimeout)
+				tc, err := da.AuthorizeServing(admit, principal.UserID, tenantID, acting.HubID, keys)
+				cancel()
 				if err != nil {
 					if !errors.Is(err, tenancyadapters.ErrServeDenied) {
 						log.Printf("inbox realtime: delegated admission: %v", err)
@@ -255,7 +260,9 @@ func (h *RealtimeHandler) conversationVisible(ctx context.Context, user uuid.UUI
 		if !ok {
 			return false, nil
 		}
-		return da.ConversationVisibleServing(ctx, user, tc.TenantID, *tc.HubID, conversationID)
+		c, cancel := context.WithTimeout(ctx, streamAdmissionTimeout)
+		defer cancel()
+		return da.ConversationVisibleServing(c, user, tc.TenantID, *tc.HubID, conversationID)
 	}
 	return h.auth.ConversationVisible(ctx, user, tc.TenantID, conversationID)
 }
@@ -340,7 +347,11 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 	// The server-wide WriteTimeout would cut a long-lived stream, so it is replaced by a deadline armed before EVERY write: a client that stops reading
 	// cannot hold the goroutine (and with it the recheck) for ever, and the watchdog can force a blocked write to fail at once by moving the deadline to now.
 	rc := http.NewResponseController(w)
+	var closing atomic.Bool // set the moment the watchdog ends the stream: nothing is written after it
 	write := func(b []byte) bool {
+		if closing.Load() {
+			return false
+		}
 		_ = rc.SetWriteDeadline(time.Now().Add(h.opts.WriteTimeout))
 		if _, err := w.Write(b); err != nil {
 			return false
@@ -357,6 +368,8 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 	defer func() { _ = sub.Unsubscribe() }()
 
 	// streamCtx ends when the client goes away OR when the watchdog (Hub agents) finds the access gone.
+	var watchdog sync.WaitGroup
+	defer watchdog.Wait() // runs AFTER stop(): the watchdog never touches the response once the handler has returned
 	streamCtx, stop := context.WithCancel(r.Context())
 	defer stop()
 
@@ -364,9 +377,11 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 	var unrestricted atomic.Bool
 	var filter *seenFilter
 	if isDelegated {
-		if open, err := da.ScopeUnrestricted(streamCtx, principal.UserID, tc.TenantID, *tc.HubID); err == nil {
+		first, cancelFirst := context.WithTimeout(streamCtx, h.opts.DatabaseTimeout)
+		if open, err := da.ScopeUnrestricted(first, principal.UserID, tc.TenantID, *tc.HubID); err == nil {
 			unrestricted.Store(open)
 		}
+		cancelFirst()
 		if onlyConversation == nil { // the instance stream: tell the agent only about conversations they may see
 			filter = newSeenFilter(h.opts.VisibilityTTL, func(id uuid.UUID) (bool, error) {
 				c, cancel := context.WithTimeout(streamCtx, h.opts.DatabaseTimeout)
@@ -375,7 +390,9 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 			})
 		}
 		// The watchdog runs APART from the event loop, so a slow write or a stalled lookup in the loop cannot postpone the revocation (Codex 05).
+		watchdog.Add(1)
 		go func() {
+			defer watchdog.Done()
 			tick := time.NewTicker(h.opts.DelegatedRecheck)
 			defer tick.Stop()
 			for {
@@ -388,6 +405,7 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 					cancel()
 					if !alive && streamCtx.Err() == nil {
 						log.Printf("inbox realtime: closing delegated stream, authorization lost")
+						closing.Store(true)
 						stop()
 						_ = rc.SetWriteDeadline(time.Now()) // a write blocked on a client that is not reading fails now
 						return
@@ -417,6 +435,9 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 	defer keepalive.Stop()
 
 	for {
+		if streamCtx.Err() != nil { // the select below picks among ready cases at random: a stopped stream must not deliver a queued event
+			return
+		}
 		select {
 		case <-streamCtx.Done():
 			return

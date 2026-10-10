@@ -59,4 +59,17 @@ describe('useRealtimeEvents while acting for a hub', () => {
     unmount()
     vi.useRealTimers()
   })
+
+  it('keeps retrying a refused stream for an instance it does not act on (no acting header was sent)', async () => {
+    vi.useFakeTimers()
+    localStorage.setItem('tenantId', 'T-B')
+    setActing('hub-1', 'Beta')
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue({ status: 404, ok: false, body: null })
+    const { unmount } = renderHook(() => useRealtimeEvents({ tenantId: 'T-OTHER', onEvent: () => undefined }))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1)
+    unmount()
+    vi.useRealTimers()
+  })
 })

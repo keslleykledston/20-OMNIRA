@@ -251,6 +251,11 @@ func ServingScopeUnrestricted(ctx context.Context, pool *pgxpool.Pool, userID, t
 		if _, err := resolveServeContext(c, pool, hubID, tenantID, userID); err != nil {
 			return err
 		}
+		// without the key nothing is unrestricted: the stream filters every event (and its own recheck is about to end it)
+		held, err := ActorHasPermission(c, platformdb.QuerierFromContext(c, pool), tenantID, userID, "conversation.read")
+		if err != nil || !held {
+			return err
+		}
 		return platformdb.QuerierFromContext(c, pool).QueryRow(c, `SELECT unrestricted FROM acting_scope()`).Scan(&open)
 	})
 	if errors.Is(err, errServeDenied) {

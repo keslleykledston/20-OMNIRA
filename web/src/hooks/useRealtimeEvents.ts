@@ -38,7 +38,8 @@ export function useRealtimeEvents({ tenantId, conversationId, onEvent, onError, 
     // in a short transaction, only tells about conversations the contract lets this person see, and ends it within seconds if the access is withdrawn
     // (the reconnect then gets a 404 and the screen shows the notice). The screens keep a slow poll as a net for a dropped stream.
     const hub = getActingHub();
-    const actingHeaders: Record<string, string> = hub && tenantId === getTenantId() ? { [ACTING_HEADER]: `hub:${hub}` } : {};
+    const declaresActing = !!hub && tenantId === getTenantId();
+    const actingHeaders: Record<string, string> = declaresActing ? { [ACTING_HEADER]: `hub:${hub}` } : {};
     const url = conversationId
       ? `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/events`
       : `${API_BASE}/tenants/${tenantId}/inbox/events`;
@@ -60,7 +61,7 @@ export function useRealtimeEvents({ tenantId, conversationId, onEvent, onError, 
           }
           // Attending through a Hub: 404/403 means the access was withdrawn (the server answers both the same way); retrying only produces refused requests.
           // The screens' own access check (/me/access, every 15 s) drives re-entry and the notice.
-          if (hub && (res.status === 404 || res.status === 403)) return;
+          if (declaresActing && (res.status === 404 || res.status === 403)) return;
           if (!res.ok || !res.body) throw new Error(`SSE connection failed (HTTP ${res.status})`);
           attempt = 0;
           if (dropped) onReconnectRef.current?.();

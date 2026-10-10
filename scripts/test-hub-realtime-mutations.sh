@@ -72,6 +72,9 @@ PY
 # NOT mutants (equivalent by construction):
 #   - the instance-stream filter failing OPEN on a lookup error or over budget: the code fails closed and says so (the stalled-lookup test covers the timeout);
 #   - the per-stream lookup budget (50/s): a rate, not a rule;
+#   - `closing` / the loop's `streamCtx.Err()` check / joining the watchdog: they close a RACE between the watchdog and a queued event (Codex 05, second pass); the
+#     outcome depends on goroutine scheduling, so no deterministic test can tell the mutant apart; they are covered by review and by the race detector run;
+#   - the key check inside ServingScopeUnrestricted: AuthorizeServing, asked in the same tick, ends the stream first;
 #   - ServingConversationVisible without its own conversation.read check: AuthorizeServing already asked for it at admission and asks again at every recheck;
 #   - the delegated branch asking the member visibility for a conversation stream: the legacy policies give the same answer for one hub (the multi-hub case is
 #     covered by the cost test, which compares the policies with the original predicate).
