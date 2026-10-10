@@ -98,3 +98,10 @@ Pré-requisitos: `serving ceiling ... --preset completo_hist` e `serving grant .
 3. Com um preset sem `followup.resolve` (ex.: só `attendance.history` via `--keys`), os botões não aparecem.
 4. Um contato sem conversa nas filas do contrato não mostra memória.
 5. Auditoria: `followup.resolved` com seu nome e o Hub; o texto da pendência nunca aparece.
+
+## O. Rascunho de encerramento por IA pelo Hub (fase 07; precisa do preset `completo_pleno` ou das chaves `conversation.finalize` + `ai.assist`)
+Pré-requisitos: `serving ceiling ... --preset completo_pleno` e `serving grant ... --preset completo_pleno`. **O texto da conversa vai ao provedor de IA da plataforma (Gemini) e a chamada gasta cota/custo real.** Use uma conversa de teste.
+1. Assuma uma conversa da instância pelo Hub e abra **Finalizar**. Aparece **Sugerir com IA** (sem `ai.assist` o botão não aparece).
+2. Clique: o resumo e as pendências sugeridas aparecem marcados "Sugerido pela IA: confira antes de finalizar"; **nada é gravado** até você finalizar.
+3. Num preset sem `conversation.read` (ex.: `--keys ai.assist,contact.read`) o servidor recusa (403) e nada sai para o provedor.
+4. Uma conversa que outra pessoa segura, ou solta, **não** gera rascunho para você (403).
