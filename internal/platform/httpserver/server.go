@@ -716,7 +716,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		}
 	}
 	aiHandler := aiadapters.NewSummaryHandler(dbPool, aiGenerator, auditadapters.NewPostgresAuditEventRepository(dbPool), 300)
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ai/summary", authnMiddleware(tenantSession(http.HandlerFunc(aiHandler.Summarize))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ai/summary", tenancyadapters.Delegable("ai.assist", authnMiddleware(tenantSession(http.HandlerFunc(aiHandler.Summarize)))))
 
 	return crmHandler
 }

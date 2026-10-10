@@ -3,7 +3,7 @@ import { renderHook } from '@testing-library/react'
 import { useRealtimeEvents } from '../hooks/useRealtimeEvents'
 import { clearActing, setActing } from '../lib/acting'
 
-// Attending through a Hub the realtime streams are not part of the delegated context yet (ADR-0040 phase 05): the screen polls, it must not open them.
+// Attending through a Hub (ADR-0040 phase 05) the stream opens like any other, declaring the acting context for the instance being attended and for no other.
 describe('useRealtimeEvents while acting for a hub', () => {
   const fetchMock = vi.fn()
   beforeEach(() => {
@@ -24,10 +24,26 @@ describe('useRealtimeEvents while acting for a hub', () => {
     unmount()
   })
 
-  it('does not open any stream while acting', () => {
+  it('opens the stream with the acting context while attending the instance', () => {
+    localStorage.setItem('tenantId', 'T-B')
     setActing('hub-1', 'Beta')
     const { unmount } = renderHook(() => useRealtimeEvents({ tenantId: 'T-B', conversationId: 'c1', onEvent: () => undefined }))
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/tenants/T-B/inbox/conversations/c1/events')
+    expect(fetchMock.mock.calls[0][1].headers['X-Omnira-Acting-As']).toBe('hub:hub-1')
     unmount()
+  })
+
+  it('never declares the acting context for another instance, nor when not acting', () => {
+    localStorage.setItem('tenantId', 'T-B')
+    setActing('hub-1', 'Beta')
+    const other = renderHook(() => useRealtimeEvents({ tenantId: 'T-OTHER', onEvent: () => undefined }))
+    expect(fetchMock.mock.calls[0][1].headers['X-Omnira-Acting-As']).toBeUndefined()
+    other.unmount()
+    clearActing()
+    fetchMock.mockClear()
+    const plain = renderHook(() => useRealtimeEvents({ tenantId: 'T-B', onEvent: () => undefined }))
+    expect(fetchMock.mock.calls[0][1].headers['X-Omnira-Acting-As']).toBeUndefined()
+    plain.unmount()
   })
 })

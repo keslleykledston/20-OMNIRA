@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react';
 import { RealtimeEvent } from '../types/api';
 import { API_BASE } from '../lib/config';
 import { authHeaders, handleUnauthorized } from '../lib/session';
-import { isActing } from '../lib/acting';
+import { ACTING_HEADER, getActingHub } from '../lib/acting';
+import { getTenantId } from '../lib/session';
 
 interface UseRealtimeEventsOptions {
   tenantId: string;
@@ -33,8 +34,11 @@ export function useRealtimeEvents({ tenantId, conversationId, onEvent, onError, 
 
   useEffect(() => {
     if (!tenantId) return;
-    // Attending through a Hub: the realtime streams are not part of the delegated context yet (ADR-0040 phase 05), the screen polls instead.
-    if (isActing()) return;
+    // Attending through a Hub (ADR-0040 phase 05) the stream declares the same acting context as every other request for the instance; the server admits it
+    // in a short transaction, only tells about conversations the contract lets this person see, and ends it within seconds if the access is withdrawn
+    // (the reconnect then gets a 404 and the screen shows the notice). The screens keep a slow poll as a net for a dropped stream.
+    const hub = getActingHub();
+    const actingHeaders: Record<string, string> = hub && tenantId === getTenantId() ? { [ACTING_HEADER]: `hub:${hub}` } : {};
     const url = conversationId
       ? `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/events`
       : `${API_BASE}/tenants/${tenantId}/inbox/events`;
@@ -47,7 +51,7 @@ export function useRealtimeEvents({ tenantId, conversationId, onEvent, onError, 
       while (!stopped) {
         try {
           const res = await fetch(url, {
-            headers: { ...authHeaders(), Accept: 'text/event-stream' },
+            headers: { ...authHeaders(), ...actingHeaders, Accept: 'text/event-stream' },
             signal: controller.signal,
           });
           if (res.status === 401) {

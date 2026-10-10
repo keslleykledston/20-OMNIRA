@@ -555,12 +555,14 @@ func (s *Service) SetManage(ctx context.Context, hub, tenant, user uuid.UUID, ca
 // open the files, read the contact card); "classificacao" is that plus saying who the contact is (kind, companies, name and e-mail: contact.classify,
 // account.read; phase 04a); "chamados" is that plus opening the ERP ticket of a conversation the agent holds (ticket.read, ticket.create; phase 04b);
 // "completo" is that plus handing a conversation over to a colleague and the notes of the contact (conversation.transfer, contact.note; phase 04c);
-// "leitura" is the read-only part, without claiming or replying.
+// "completo_ia" is that plus the AI summary of a conversation (ai.assist; phase 05): the conversation text goes to the platform's AI provider, so it is never in
+// a preset by default; "leitura" is the read-only part, without claiming or replying.
 var ServingPresets = map[string][]string{
 	"atendimento":   {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read"},
 	"classificacao": {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read"},
 	"chamados":      {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create"},
 	"completo":      {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create", "conversation.transfer", "contact.note"},
+	"completo_ia":   {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create", "conversation.transfer", "contact.note", "ai.assist"},
 	"leitura":       {"conversation.read", "media.read", "contact.read"},
 }
 
