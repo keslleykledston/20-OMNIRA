@@ -90,11 +90,12 @@ sqlmut "a resolved item may be rewritten" $M "         AND status = 'open'
 " "" 
 sqlmut "a resolution may leave the item open or reopen it" $M "AND status IN ('done', 'dropped')" "AND true"
 sqlmut "with the administrator flag a reader resolves without the key" $M "CREATE POLICY follow_up_items_acting_resolve ON follow_up_items AS RESTRICTIVE FOR UPDATE
-  USING (acting_hub() IS NULL OR actor_has_permission(tenant_id, current_user_id(), 'followup.resolve'));" "SELECT 1;"
+  USING ((SELECT acting_hub()) IS NULL OR actor_has_permission(tenant_id, current_user_id(), 'followup.resolve'));" "SELECT 1;"
 sqlmut "with the administrator flag a delegate inserts closures" $M "CREATE POLICY conversation_closures_acting_no_insert ON conversation_closures AS RESTRICTIVE FOR INSERT
-  WITH CHECK (acting_hub() IS NULL);" "SELECT 1;"
+  WITH CHECK ((SELECT acting_hub()) IS NULL);" "SELECT 1;"
 sqlmut "with the administrator flag a delegate inserts follow-ups" $M "CREATE POLICY follow_up_items_acting_no_insert ON follow_up_items AS RESTRICTIVE FOR INSERT
-  WITH CHECK (acting_hub() IS NULL);" "SELECT 1;"
+  WITH CHECK ((SELECT acting_hub()) IS NULL);" "SELECT 1;"
+sqlmut "a delegate rewrites more than the resolution" $M "CREATE TRIGGER follow_up_items_acting_columns BEFORE UPDATE ON follow_up_items FOR EACH ROW EXECUTE FUNCTION follow_up_items_acting_columns();" "SELECT 1;"
 sqlmut "the key has no data domain (not delegable)" $M "INSERT INTO permission_domains (permission_key, domain, need) VALUES
   ('attendance.history', 'contact', 'read'),
   ('followup.resolve',   'contact', 'read');" "SELECT 1;"

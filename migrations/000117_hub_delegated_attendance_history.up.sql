@@ -44,16 +44,30 @@ CREATE POLICY follow_up_items_resolve_delegated ON follow_up_items FOR UPDATE
 
 -- the key, asked of the database in the acting context, for every command; and one instance at a time
 CREATE POLICY conversation_closures_acting_history ON conversation_closures AS RESTRICTIVE
-  USING (acting_hub() IS NULL
+  USING ((SELECT acting_hub()) IS NULL
          OR (tenant_id = acting_tenant() AND actor_has_permission(tenant_id, current_user_id(), 'attendance.history')));
 CREATE POLICY follow_up_items_acting_history ON follow_up_items AS RESTRICTIVE
-  USING (acting_hub() IS NULL
+  USING ((SELECT acting_hub()) IS NULL
          OR (tenant_id = acting_tenant() AND actor_has_permission(tenant_id, current_user_id(), 'attendance.history')));
 -- resolving needs its own key even for a person who is also a member of the instance
 CREATE POLICY follow_up_items_acting_resolve ON follow_up_items AS RESTRICTIVE FOR UPDATE
-  USING (acting_hub() IS NULL OR actor_has_permission(tenant_id, current_user_id(), 'followup.resolve'));
+  USING ((SELECT acting_hub()) IS NULL OR actor_has_permission(tenant_id, current_user_id(), 'followup.resolve'));
+-- the policy controls rows and the final state, not columns: in the acting context only the resolution itself may change (status, who, when, the note); the text, the
+-- contact, the conversation, the closure, the owner, the due date and the origin of an item stay what they were
+CREATE FUNCTION follow_up_items_acting_columns() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
+BEGIN
+  IF public.acting_hub() IS NOT NULL
+     AND (NEW.id, NEW.tenant_id, NEW.contact_id, NEW.conversation_id, NEW.closure_id, NEW.kind, NEW.text, NEW.owner_user_id, NEW.due_at, NEW.truth, NEW.created_by_user_id, NEW.created_at)
+         IS DISTINCT FROM
+         (OLD.id, OLD.tenant_id, OLD.contact_id, OLD.conversation_id, OLD.closure_id, OLD.kind, OLD.text, OLD.owner_user_id, OLD.due_at, OLD.truth, OLD.created_by_user_id, OLD.created_at) THEN
+    RAISE EXCEPTION 'a delegated context may only resolve a follow-up item' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER follow_up_items_acting_columns BEFORE UPDATE ON follow_up_items FOR EACH ROW EXECUTE FUNCTION follow_up_items_acting_columns();
+
 -- a delegate never inserts a closure or an item: closing goes through the write path (system session)
 CREATE POLICY conversation_closures_acting_no_insert ON conversation_closures AS RESTRICTIVE FOR INSERT
-  WITH CHECK (acting_hub() IS NULL);
+  WITH CHECK ((SELECT acting_hub()) IS NULL);
 CREATE POLICY follow_up_items_acting_no_insert ON follow_up_items AS RESTRICTIVE FOR INSERT
-  WITH CHECK (acting_hub() IS NULL);
+  WITH CHECK ((SELECT acting_hub()) IS NULL);

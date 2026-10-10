@@ -1,3 +1,5 @@
+DROP TRIGGER IF EXISTS follow_up_items_acting_columns ON follow_up_items;
+DROP FUNCTION IF EXISTS follow_up_items_acting_columns();
 DROP POLICY IF EXISTS follow_up_items_acting_no_insert ON follow_up_items;
 DROP POLICY IF EXISTS conversation_closures_acting_no_insert ON conversation_closures;
 DROP POLICY IF EXISTS follow_up_items_acting_resolve ON follow_up_items;

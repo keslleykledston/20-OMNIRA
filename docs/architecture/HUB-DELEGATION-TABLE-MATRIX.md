@@ -158,6 +158,6 @@ contrato e concessão DESSE Hub (escopo de fila incluído). Corrige a soma entre
 | Tabela | SELECT | INSERT | UPDATE | DELETE | Observação |
 |---|---|---|---|---|---|
 | `conversation_closures` | **chave** `attendance.history` (+ contato visível) | — (restritiva `*_acting_no_insert`) | — (sem grant) | — | fechar continua no caminho de escrita do Hub (116). Restritiva `*_acting_history`: no contexto delegado a chave é exigida do banco até de quem também é membro, e uma instância por vez. |
-| `follow_up_items` | **chave** `attendance.history` (+ contato visível) | — (restritiva `*_acting_no_insert`) | chaves `followup.resolve` + `attendance.history`, só pendência ABERTA, só para `done`/`dropped` assinada por quem pede (restritiva `*_acting_resolve` exige a chave de resolver também de membro) | — | UPDATE controla linhas e estados, não colunas; só o handler chega a ela. |
+| `follow_up_items` | **chave** `attendance.history` (+ contato visível) | — (restritiva `*_acting_no_insert`) | chaves `followup.resolve` + `attendance.history`, só pendência ABERTA, só para `done`/`dropped` assinada por quem pede (restritiva `*_acting_resolve` exige a chave de resolver também de membro) | — | a política controla linhas e estado final; o gatilho `follow_up_items_acting_columns` trava as colunas (só status, quem, quando e nota mudam no contexto delegado). |
 
 Chaves novas (sem papel de empresa que as receba): `attendance.history` e `followup.resolve`, ambas no domínio `contact` com LEITURA, de propósito (ver ADR-0040 §20).

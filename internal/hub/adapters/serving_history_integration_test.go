@@ -313,7 +313,22 @@ func TestDelegatedAttendanceHistoryAndFollowUpsThroughTheRealRoutes(t *testing.T
 			if changed(ctx, q, w, `UPDATE follow_up_items SET text='reescrito' WHERE id=$1`, fresh) {
 				t.Error("a delegate edited the text of an open item")
 			}
-			// signing it as their own does not turn an edit into a resolution: the item has to leave the open state
+			// resolving while rewriting anything else is refused too: only the resolution itself may change
+			for name, set := range map[string]string{
+				"the text":         `text='reescrito'`,
+				"the contact":      `contact_id='` + contactB.String() + `'`,
+				"the conversation": `conversation_id='` + w.conv["A0"].String() + `'`,
+				"the owner":        `owner_user_id='` + resolver.String() + `'`,
+				"the due date":     `due_at=now()`,
+			} {
+				if changed(ctx, q, w, `UPDATE follow_up_items SET status='done', resolved_at=now(), resolved_by_user_id=$2, `+set+` WHERE id=$1`, fresh, resolver) {
+					t.Errorf("a delegate rewrote %s while resolving", name)
+				}
+			}
+			// signing an open item is not a resolution: the item has to leave the open state
+			if changed(ctx, q, w, `UPDATE follow_up_items SET resolved_by_user_id=$2 WHERE id=$1`, fresh, resolver) {
+				t.Error("a delegate signed an item without resolving it")
+			}
 			if changed(ctx, q, w, `UPDATE follow_up_items SET text='reescrito', resolved_by_user_id=$2 WHERE id=$1`, fresh, resolver) {
 				t.Error("a delegate edited an open item by signing it")
 			}
