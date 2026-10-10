@@ -399,7 +399,7 @@ func (w *world) contactsAPI(t *testing.T) *contactsAPI {
 	mux.Handle("POST "+t0+"/contacts/{contact_id}/accounts/{link_id}/primary", route("contact.classify", classification.SetPrimary))
 	mux.Handle("GET "+t0+"/accounts", route("account.read", accounts.ListAccounts))
 	mux.Handle("GET "+t0+"/me/access", route("conversation.read", team.MyAccess))
-	// not marked delegable: notes have no key in the catalog yet
+	// a route that is not marked delegable (any such route behaves like this one)
 	mux.Handle("GET "+t0+"/contacts/{contact_id}/notes", who(session(http.HandlerFunc(contacts.ListNotes))))
 	return &contactsAPI{w: w, h: mux}
 }
@@ -566,9 +566,9 @@ func TestDelegatedClassificationThroughTheRealHandlers(t *testing.T) {
 		w.grantKeys(g, "conversation.read", "contact.read", "contact.classify", "account.read")
 	})
 
-	t.Run("an unmarked route (notes) is a 404 for the delegate", func(t *testing.T) {
+	t.Run("an unmarked route is a 404 for the delegate", func(t *testing.T) {
 		if code, _ := api.do("GET", contact+"/notes", "", agent, hub); code != 404 {
-			t.Errorf("notes in the delegated context: %d, want 404", code)
+			t.Errorf("an unmarked route in the delegated context: %d, want 404", code)
 		}
 	})
 

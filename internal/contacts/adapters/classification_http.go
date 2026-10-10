@@ -32,6 +32,7 @@ const directoryProvider = accountsdomain.ProviderK3G
 
 const (
 	permClassify    = "contact.classify"
+	permNote        = "contact.note"
 	permAccountRead = "account.read"
 )
 

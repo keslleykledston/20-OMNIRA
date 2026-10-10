@@ -63,6 +63,14 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		"GET " + tn + "/contacts/{contact_id}/company-suggestions": "account.read",
 		"GET " + tn + "/conversations/{conversation_id}/ticket":    "ticket.create|ticket.read",
 		"POST " + tn + "/conversations/{conversation_id}/ticket":   "ticket.create",
+		// phase 04c: hand over / give back a conversation the agent holds, and the notes of a contact
+		"POST " + tn + "/inbox/conversations/{conversation_id}/unassign":           "conversation.claim",
+		"POST " + tn + "/inbox/conversations/{conversation_id}/transfer":           "conversation.transfer",
+		"GET " + tn + "/inbox/conversations/{conversation_id}/transfer-candidates": "conversation.transfer",
+		"GET " + tn + "/contacts/{contact_id}/notes":                               "contact.note",
+		"POST " + tn + "/contacts/{contact_id}/notes":                              "contact.note",
+		"PUT " + tn + "/contacts/{contact_id}/notes/{note_id}":                     "contact.note",
+		"DELETE " + tn + "/contacts/{contact_id}/notes/{note_id}":                  "contact.note",
 	}
 	var problems []string
 	for route, key := range want {

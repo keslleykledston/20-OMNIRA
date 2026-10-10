@@ -95,6 +95,82 @@ func (d *DelegatedWrites) Claim(original http.Handler) http.Handler {
 	})
 }
 
+// Release wraps POST /tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign: the holder gives the conversation back to the queue. Only the
+// current holder may (the Hub path locks the row and proves it), and it needs nothing beyond what holding it took (conversation.claim + the reply grant).
+func (d *DelegatedWrites) Release(original http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tc, delegated := delegatedContext(r)
+		if !delegated {
+			original.ServeHTTP(w, r)
+			return
+		}
+		t, ok := d.target(w, r, tc)
+		if !ok {
+			return
+		}
+		if err := d.reply.Transfer(r.Context(), tc.ActorID, t, nil); err != nil {
+			writeReplyError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"conversation_id": t.Item.ConversationID, "assigned_to_user_id": nil, "changed": true})
+	})
+}
+
+type delegatedTransferRequest struct {
+	TargetUserID uuid.UUID `json:"target_user_id"`
+}
+
+// Transfer wraps POST /tenants/{tenant_id}/inbox/conversations/{conversation_id}/transfer: the holder hands the conversation to another person of the
+// hub. The member's route needs conversation.manage and may move any conversation; this one needs the key conversation.transfer AND the holding of the
+// conversation, and the person chosen must be able to take it (a reply-capable grant for the instance and the queue, proven again inside the
+// transaction), so the directory of the instance's own members is not reachable from here.
+func (d *DelegatedWrites) Transfer(original http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tc, delegated := delegatedContext(r)
+		if !delegated {
+			original.ServeHTTP(w, r)
+			return
+		}
+		var req delegatedTransferRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil || req.TargetUserID == uuid.Nil {
+			httpError(w, "target_user_id required", http.StatusBadRequest)
+			return
+		}
+		t, ok := d.target(w, r, tc)
+		if !ok {
+			return
+		}
+		if err := d.reply.Transfer(r.Context(), tc.ActorID, t, &req.TargetUserID); err != nil {
+			writeReplyError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"previous_assignee": tc.ActorID, "new_assignee": req.TargetUserID, "changed": true})
+	})
+}
+
+// TransferCandidates serves GET /tenants/{tenant_id}/inbox/conversations/{conversation_id}/transfer-candidates: who the holder may hand THIS conversation to
+// right now (the people of the hub with a live, reply-capable grant for the instance and the conversation's queue). It exists only for the delegated
+// context; a member's request is a 404.
+func (d *DelegatedWrites) TransferCandidates() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tc, delegated := delegatedContext(r)
+		if !delegated {
+			httpError(w, "not found", http.StatusNotFound)
+			return
+		}
+		t, ok := d.target(w, r, tc)
+		if !ok {
+			return
+		}
+		items, err := d.reply.Candidates(r.Context(), tc.ActorID, t)
+		if err != nil {
+			writeReplyError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"items": items})
+	})
+}
+
 type delegatedReplyRequest struct {
 	Text         string     `json:"text"`
 	AttachmentID *uuid.UUID `json:"attachment_id,omitempty"`

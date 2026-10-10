@@ -3356,6 +3356,8 @@ paths:
         Moves ownership to `target_user_id`. The target must be an eligible agent of this tenant (else `422`).
         Transferring to the current assignee is an idempotent no-op (`changed:false`).
         Audit `conversation.transferred`.
+        As a Hub agent (delegated context, key `conversation.transfer`) only the current holder may hand the conversation over, and only to a person of the
+        hub who can take it (else `409`); history `hub_transfer` and audit `hub.conversation.transferred`.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/ConversationId' }
@@ -3376,6 +3378,42 @@ paths:
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "Conflicting participant state", content: { text/plain: { schema: { type: string } } } }
         '422': { description: "Target is not an eligible agent of this tenant", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/transfer-candidates:
+    get:
+      operationId: listDelegatedTransferCandidates
+      tags: [Co-attendance]
+      summary: Who a Hub agent may hand the conversation to (delegated context only)
+      description: |
+        Exists only for a request that attends the instance as a Hub agent (`X-Omnira-Acting-As: hub:<id>`, ADR-0040 phase 04c); any other request is a `404`.
+        Needs the delegated key `conversation.transfer` and the conversation held by the caller (else `409`). Lists the people of the same hub with a live,
+        reply-capable grant for this instance and the conversation's queue (never the instance's own members), least loaded first. The choice is proven again
+        when the transfer is made.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      responses:
+        '200':
+          description: "Candidates"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [user_id, name, email, load]
+                      properties:
+                        user_id: { type: string, format: uuid }
+                        name: { type: string }
+                        email: { type: string }
+                        load: { type: integer, description: "Open conversations the person holds across the hub's instances" }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "The conversation is not held by the caller, or is finalized", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/accept-invite:
     post:
       operationId: acceptParticipantInvite

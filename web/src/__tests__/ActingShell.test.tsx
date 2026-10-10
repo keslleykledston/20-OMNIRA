@@ -127,7 +127,7 @@ describe('the delegated details card', () => {
     expect(screen.getByText('Maria')).toBeInTheDocument()
     expect(screen.getByText('9')).toBeInTheDocument()
     expect(screen.getByText(/Atendendo Beta Hub pelo Hub/)).toBeInTheDocument()
-    expect(screen.getByRole('note')).toHaveTextContent('chegam nas próximas etapas')
+    expect(screen.getByRole('note')).toHaveTextContent('chega na próxima etapa')
     // read-only: no edit, no classify, no ticket buttons
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })

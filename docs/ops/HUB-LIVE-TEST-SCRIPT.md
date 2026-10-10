@@ -64,3 +64,13 @@ Pré-requisitos: `serving ceiling ... --preset chamados` e `serving grant ... --
 5. Repita o envio: "já vinculado", sem segundo chamado nem segunda mensagem.
 6. Retire `ticket.create` (`serving grant ... --preset classificacao`) e recarregue: o painel de chamado some; a API responde 403 à mão.
 7. Nada do que você vê (rede do navegador, respostas) contém o token ou o endereço do ERP.
+
+## K. Transferir, devolver e anotações pelo Hub (fase 04c; precisa do preset `completo` para duas pessoas do Hub na mesma instância)
+Pré-requisitos: `serving ceiling ... --preset completo` e `serving grant ... --preset completo` para a pessoa A **e** para a pessoa B (B precisa também de `grant add` com capacidade de responder). Não cria chamado nem manda mensagem ao cliente.
+1. Como A, **assuma** uma conversa da instância. No cartão aparece **Transferir ou devolver**.
+2. Abra: a lista mostra B (e ninguém da equipe da empresa). Escolha B e **Transferir**: a conversa some da sua lista e o responsável passa a ser B.
+3. Como B, **Transferir ou devolver → Devolver à fila**: a conversa volta sem responsável. Tentar devolver de novo (ou A tentar transferir) é recusado.
+4. Retire `conversation.transfer` de A (`serving grant ... --preset chamados`): o diálogo só oferece **Devolver à fila**; a API de candidatos responde 403.
+5. Com `contact.note`: bloco **Anotações** no cartão; adicione, edite e remova a sua; as anotações da equipe da empresa aparecem, sem botões de edição. Sem `contact.note` o bloco não existe e a API responde 403.
+6. Auditoria: transferência e devolução ficam com `acting_as = hub:<id>` e o autor real; o texto das anotações nunca aparece na trilha.
+

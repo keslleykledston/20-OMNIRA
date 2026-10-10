@@ -108,6 +108,15 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 Total: 81 tabelas com RLS.
 
 
+## Atualização (fase 04c, migration 113)
+
+| Tabela | SELECT | INSERT | UPDATE | DELETE | Observação |
+|---|---|---|---|---|---|
+| `contact_notes` | **chave** `contact.note` (+ contato visível) | chave `contact.note`, só em nome próprio (+ contato visível) | chave `contact.note`, só a própria nota | chave `contact.note`, só a própria nota | única tabela cuja política delegada pergunta pela CHAVE (`actor_has_permission`) e não pelo domínio: quem só lê ou classifica o contato não lê as anotações internas da empresa. Presa à instância (`contact_notes_acting_one_instance`, camada redundante como em 111). |
+| `conversations` | (inalterada) | — | — | — | continua sem escrita delegada: transferir e devolver passam pelo caminho de escrita do Hub (ADR-0037), em sessão de sistema da instância |
+
+Chaves novas (sem papel de empresa que as receba): `conversation.transfer` (domínio `conversation`, escrita) e `contact.note` (domínio `contact`, escrita).
+
 ## Atualização (fase 04b, migration 112)
 
 | Tabela | SELECT | INSERT | UPDATE | DELETE | Observação |

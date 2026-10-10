@@ -554,11 +554,13 @@ func (s *Service) SetManage(ctx context.Context, hub, tenant, user uuid.UUID, ca
 // ServingPresets are named sets of permission keys. "atendimento" is what an agent needs to attend an instance end to end (read, claim, reply,
 // open the files, read the contact card); "classificacao" is that plus saying who the contact is (kind, companies, name and e-mail: contact.classify,
 // account.read; phase 04a); "chamados" is that plus opening the ERP ticket of a conversation the agent holds (ticket.read, ticket.create; phase 04b);
+// "completo" is that plus handing a conversation over to a colleague and the notes of the contact (conversation.transfer, contact.note; phase 04c);
 // "leitura" is the read-only part, without claiming or replying.
 var ServingPresets = map[string][]string{
 	"atendimento":   {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read"},
 	"classificacao": {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read"},
 	"chamados":      {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create"},
+	"completo":      {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create", "conversation.transfer", "contact.note"},
 	"leitura":       {"conversation.read", "media.read", "contact.read"},
 }
 

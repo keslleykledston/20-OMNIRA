@@ -22,12 +22,26 @@ import (
 const maxNoteRunes = 4000
 
 func (h *ContactsAPIHandler) editor(w http.ResponseWriter, r *http.Request) (*tenancydomain.TenantContext, uuid.UUID, bool) {
+	return h.editorWith(w, r, permClassify, permClassify)
+}
+
+// noteEditor — the notes of a contact. A member needs what edits the contact (contact.classify); a Hub agent attending the instance needs the key that
+// exists for notes alone (contact.note, ADR-0040 phase 04c): reading the card or classifying must not open the internal notes of the company.
+func (h *ContactsAPIHandler) noteEditor(w http.ResponseWriter, r *http.Request) (*tenancydomain.TenantContext, uuid.UUID, bool) {
+	return h.editorWith(w, r, permClassify, permNote)
+}
+
+func (h *ContactsAPIHandler) editorWith(w http.ResponseWriter, r *http.Request, memberKey, delegatedKey string) (*tenancydomain.TenantContext, uuid.UUID, bool) {
 	tc, err := tenancydomain.FromContext(r.Context())
 	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return nil, uuid.Nil, false
 	}
-	ok, err := h.hasPermission(r, tc, permClassify)
+	needed := memberKey
+	if actingForHub(tc) {
+		needed = delegatedKey
+	}
+	ok, err := h.hasPermission(r, tc, needed)
 	if err != nil {
 		http.Error(w, "failed to check permission", http.StatusInternalServerError)
 		return nil, uuid.Nil, false
@@ -145,7 +159,7 @@ func (h *ContactsAPIHandler) scanNote(row pgx.Row, actor uuid.UUID) (noteDTO, er
 
 // ListNotes: GET .../contacts/{contact_id}/notes (newest first).
 func (h *ContactsAPIHandler) ListNotes(w http.ResponseWriter, r *http.Request) {
-	tc, id, ok := h.editor(w, r)
+	tc, id, ok := h.noteEditor(w, r)
 	if !ok {
 		return
 	}
@@ -192,7 +206,7 @@ func validNote(w http.ResponseWriter, body string) (string, bool) {
 
 // AddNote: POST .../contacts/{contact_id}/notes
 func (h *ContactsAPIHandler) AddNote(w http.ResponseWriter, r *http.Request) {
-	tc, id, ok := h.editor(w, r)
+	tc, id, ok := h.noteEditor(w, r)
 	if !ok {
 		return
 	}
@@ -229,7 +243,7 @@ func (h *ContactsAPIHandler) AddNote(w http.ResponseWriter, r *http.Request) {
 
 // EditNote: PUT .../contacts/{contact_id}/notes/{note_id} — only the author.
 func (h *ContactsAPIHandler) EditNote(w http.ResponseWriter, r *http.Request) {
-	tc, id, ok := h.editor(w, r)
+	tc, id, ok := h.noteEditor(w, r)
 	if !ok {
 		return
 	}
@@ -267,7 +281,7 @@ func (h *ContactsAPIHandler) EditNote(w http.ResponseWriter, r *http.Request) {
 
 // DeleteNote: DELETE .../contacts/{contact_id}/notes/{note_id} — only the author.
 func (h *ContactsAPIHandler) DeleteNote(w http.ResponseWriter, r *http.Request) {
-	tc, id, ok := h.editor(w, r)
+	tc, id, ok := h.noteEditor(w, r)
 	if !ok {
 		return
 	}

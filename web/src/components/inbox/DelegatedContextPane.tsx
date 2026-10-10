@@ -1,11 +1,15 @@
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { API_BASE } from '../../lib/config'
-import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session'
+import { authHeaders, currentUserId, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session'
 import { getActingName } from '../../lib/acting'
 import { useAccess } from '../../lib/useAccess'
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor'
 import { ContactKindControl } from '../contacts/ContactKindControl'
+import { ContactNotes } from '../contacts/ContactNotes'
+import { Button } from '../primitives'
+import DelegatedTransferDialog from './DelegatedTransferDialog'
 import { TicketPanel } from '../TicketPanel'
 import type { ConversationItem } from '../../types/api'
 
@@ -25,13 +29,15 @@ const KIND: Record<string, string> = { customer: 'Cliente', internal: 'Interno',
 // The details of an attendance for a person attending an instance through the Hub (ADR-0040): who the customer is and where the conversation stands, and,
 // with the key contact.classify, the same controls a member has to say who the contact is (kind, companies, name and e-mail; phase 04a) and, with
 // ticket.create / ticket.read, the instance's ERP ticket of the conversation (phase 04b: open it and see it; refreshing and changing the ERP status are not
-// part of the delegated context yet). Notes and memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
+// part of the delegated context yet), with conversation.transfer / conversation.claim handing over or giving back a conversation the person holds, and with
+// contact.note the notes of the contact (phase 04c). The history and the memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
 // context), so the controls are only offered when the server will accept them; the server still decides every request. It reads the same conversation
 // query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
 export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void }) {
   const tenantId = getTenantId()
   const queryClient = useQueryClient()
   const { can } = useAccess()
+  const [transferOpen, setTransferOpen] = useState(false)
   const conversation = useQuery({
     queryKey: ['inbox-conversation-detail', tenantId, conversationId],
     queryFn: async () => {
@@ -69,6 +75,8 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
     void queryClient.invalidateQueries({ queryKey: ['contact', tenantId, contactId] })
     void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] })
   }
+  const me = currentUserId()
+  const heldByMe = !!me && c?.assigned_to_user_id === me && c?.status !== 'closed'
   const owner = !c?.assigned_to_user_id ? 'Sem responsável' : c.assigned_to_name?.trim() || 'Outro atendente'
   return (
     <aside aria-label="Detalhes do atendimento" className="flex h-full min-h-0 flex-col overflow-y-auto bg-surface">
@@ -100,6 +108,11 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
               </>
             )}
           </dl>
+          {heldByMe && (can('conversation.transfer') || can('conversation.claim')) && (
+            <div className="mt-2 flex justify-end">
+              <Button variant="secondary" size="sm" onClick={() => setTransferOpen(true)}>Transferir ou devolver</Button>
+            </div>
+          )}
         </section>
         {contactId && can('contact.classify') && (
           <section aria-label="Classificar o contato" className="-mx-4 border-t border-border-subtle">
@@ -119,10 +132,25 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
             <TicketPanel conversationId={conversationId} delegated conversationUnassigned={!c?.assigned_to_user_id} />
           </section>
         )}
+        {contactId && can('contact.note') && (
+          <section aria-label="Anotações" className="-mx-4 border-t border-border-subtle">
+            <ContactNotes contactId={contactId} />
+          </section>
+        )}
         <p role="note" className="rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
-          Notas e histórico chegam nas próximas etapas.
+          O histórico do contato chega na próxima etapa.
         </p>
       </div>
+      <DelegatedTransferDialog
+        conversationId={conversationId}
+        open={transferOpen}
+        canTransfer={can('conversation.transfer')}
+        onClose={() => setTransferOpen(false)}
+        onDone={() => {
+          setTransferOpen(false)
+          refreshAll()
+        }}
+      />
     </aside>
   )
 }
