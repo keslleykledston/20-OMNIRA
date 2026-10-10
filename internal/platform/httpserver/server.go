@@ -873,6 +873,10 @@ func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendancea
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	// ADR-0040 phase 05b: a Hub agent finalizes through the Hub's write path (key conversation.finalize); members reach the handler as before.
 	h.WithDelegatedFinalize(hubadapters.NewDelegatedWrites(dbPool).WithAttendance(h.Service()).Finalize)
+	// ADR-0040 phase 07: the AI closing draft for a Hub agent needs ai.assist on the route and conversation.read proved by the handler
+	h.WithDelegatedSuggest(func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error) {
+		return tenancyadapters.ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, dbPool), tenantID, userID, "conversation.read")
+	})
 	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) })
 }
 

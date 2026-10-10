@@ -10,7 +10,7 @@ import { getTenantId } from '../lib/session'
 import { setSession } from './testUtils'
 
 // Phase 05b: ending the attendance while attending an instance through the Hub. The dialog is the member's, minus what is not part of the delegated context
-// (the channel lookup and the AI suggestion); the closing notice goes out through the reply route when the person may reply.
+// (the channel lookup; the AI draft only with ai.assist, phase 07); the closing notice goes out through the reply route when the person may reply.
 const get = vi.spyOn(axios, 'get')
 const post = vi.spyOn(axios, 'post')
 
@@ -40,7 +40,7 @@ beforeEach(() => {
 afterEach(() => clearActing())
 
 describe('finalizing the attendance through the Hub (phase 05b)', () => {
-  it('does not offer the AI suggestion, never asks for the channel, and finalizes through the instance route', async () => {
+  it('does not offer the AI draft without ai.assist, never asks for the channel, and finalizes through the instance route', async () => {
     show(['conversation.read', 'conversation.reply', 'conversation.finalize'])
     post.mockResolvedValue({ data: { changed: true } })
     const user = userEvent.setup()
@@ -74,5 +74,17 @@ describe('finalizing the attendance through the Hub (phase 05b)', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
     await waitFor(() => expect(get).toHaveBeenCalled())
     expect(within(dialog).queryByRole('checkbox', { name: /Avisar o cliente/ })).not.toBeInTheDocument()
+  })
+
+  it('with ai.assist offers the draft, asks the instance route and fills the summary and the items for the person to check', async () => {
+    show(['conversation.read', 'conversation.reply', 'conversation.finalize', 'ai.assist'])
+    post.mockResolvedValue({ data: { summary: 'Cliente relatou queda de conexão.', summary_truth: 'ai_inferred', follow_ups: [{ kind: 'pending', text: 'confirmar visita' }], model: 'fake', based_on_messages: 3 } })
+    const user = userEvent.setup()
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    await user.click(await within(dialog).findByRole('button', { name: 'Sugerir com IA' }))
+    await waitFor(() => expect(post.mock.calls.some((c) => String(c[0]).endsWith('/inbox/conversations/c1/finalize/suggest'))).toBe(true))
+    expect(await within(dialog).findByDisplayValue('Cliente relatou queda de conexão.')).toBeInTheDocument()
+    expect(within(dialog).getByText(/Sugerido pela IA: confira antes de finalizar/)).toBeInTheDocument()
+    expect(post.mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(false) // a draft never finalizes
   })
 })

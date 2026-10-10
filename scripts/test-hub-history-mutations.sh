@@ -96,6 +96,8 @@ sqlmut "with the administrator flag a delegate inserts closures" $M "CREATE POLI
 sqlmut "with the administrator flag a delegate inserts follow-ups" $M "CREATE POLICY follow_up_items_acting_no_insert ON follow_up_items AS RESTRICTIVE FOR INSERT
   WITH CHECK ((SELECT acting_hub()) IS NULL);" "SELECT 1;"
 sqlmut "a delegate rewrites more than the resolution" $M "CREATE TRIGGER follow_up_items_acting_columns BEFORE UPDATE ON follow_up_items FOR EACH ROW EXECUTE FUNCTION follow_up_items_acting_columns();" "SELECT 1;"
+sqlmut "with the administrator flag a delegate deletes items" $M "CREATE POLICY follow_up_items_acting_no_delete ON follow_up_items AS RESTRICTIVE FOR DELETE
+  USING ((SELECT acting_hub()) IS NULL);" "SELECT 1;"
 sqlmut "the key has no data domain (not delegable)" $M "INSERT INTO permission_domains (permission_key, domain, need) VALUES
   ('attendance.history', 'contact', 'read'),
   ('followup.resolve',   'contact', 'read');" "SELECT 1;"

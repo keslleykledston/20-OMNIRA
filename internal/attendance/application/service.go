@@ -67,6 +67,27 @@ func (s *Service) SuggestClosing(ctx context.Context, conversationID uuid.UUID) 
 	if !claim && !manage {
 		return domain.ClosingSuggestion{}, domain.ErrForbidden
 	}
+	return s.suggestFor(ctx, tc, conversationID, manage)
+}
+
+// SuggestClosingAsHubAgent is SuggestClosing for a Hub agent attending the instance (ADR-0040 phase 07): there is no role matrix to consult for someone who is not a
+// member, so the route is Delegable with the key ai.assist (the text of the conversation goes to the platform's AI provider) and the handler proved conversation.read;
+// like finalizing, only the person who HOLDS the conversation gets a draft (a delegate has no supervisor path).
+func (s *Service) SuggestClosingAsHubAgent(ctx context.Context, conversationID uuid.UUID) (domain.ClosingSuggestion, error) {
+	tc, err := actor(ctx)
+	if err != nil {
+		return domain.ClosingSuggestion{}, err
+	}
+	if tc.Source != tenancydomain.AccessSourceHubServe || tc.HubID == nil {
+		return domain.ClosingSuggestion{}, domain.ErrForbidden
+	}
+	if s.suggester == nil {
+		return domain.ClosingSuggestion{}, domain.ErrSuggestionDisabled
+	}
+	return s.suggestFor(ctx, tc, conversationID, false)
+}
+
+func (s *Service) suggestFor(ctx context.Context, tc *tenancydomain.TenantContext, conversationID uuid.UUID, supervisor bool) (domain.ClosingSuggestion, error) {
 	facts, err := s.repo.ReadConversation(ctx, conversationID)
 	if err != nil {
 		return domain.ClosingSuggestion{}, err
@@ -74,7 +95,7 @@ func (s *Service) SuggestClosing(ctx context.Context, conversationID uuid.UUID) 
 	if facts.ContactID == nil || facts.Kind == "internal" {
 		return domain.ClosingSuggestion{}, domain.ErrNotAContact
 	}
-	if owner := facts.AssignedTo != nil && *facts.AssignedTo == tc.ActorID; !owner && !manage {
+	if owner := facts.AssignedTo != nil && *facts.AssignedTo == tc.ActorID; !owner && !supervisor {
 		return domain.ClosingSuggestion{}, domain.ErrForbidden
 	}
 	if facts.Status == "closed" {

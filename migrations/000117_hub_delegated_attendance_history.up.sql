@@ -52,14 +52,14 @@ CREATE POLICY follow_up_items_acting_history ON follow_up_items AS RESTRICTIVE
 -- resolving needs its own key even for a person who is also a member of the instance
 CREATE POLICY follow_up_items_acting_resolve ON follow_up_items AS RESTRICTIVE FOR UPDATE
   USING ((SELECT acting_hub()) IS NULL OR actor_has_permission(tenant_id, current_user_id(), 'followup.resolve'));
--- the policy controls rows and the final state, not columns: in the acting context only the resolution itself may change (status, who, when, the note); the text, the
--- contact, the conversation, the closure, the owner, the due date and the origin of an item stay what they were
+-- the policy controls rows and the final state, not columns: in the acting context only the resolution itself may change (status, who, when, the note); every other
+-- column of the item (the text, the contact, the conversation, the closure, the owner, the due date, the origin, and any column added later) stays what it was
 CREATE FUNCTION follow_up_items_acting_columns() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
   IF public.acting_hub() IS NOT NULL
-     AND (NEW.id, NEW.tenant_id, NEW.contact_id, NEW.conversation_id, NEW.closure_id, NEW.kind, NEW.text, NEW.owner_user_id, NEW.due_at, NEW.truth, NEW.created_by_user_id, NEW.created_at)
+     AND (to_jsonb(NEW) - ARRAY['status', 'resolved_at', 'resolved_by_user_id', 'resolution_note'])
          IS DISTINCT FROM
-         (OLD.id, OLD.tenant_id, OLD.contact_id, OLD.conversation_id, OLD.closure_id, OLD.kind, OLD.text, OLD.owner_user_id, OLD.due_at, OLD.truth, OLD.created_by_user_id, OLD.created_at) THEN
+         (to_jsonb(OLD) - ARRAY['status', 'resolved_at', 'resolved_by_user_id', 'resolution_note']) THEN
     RAISE EXCEPTION 'a delegated context may only resolve a follow-up item' USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN NEW;
@@ -69,5 +69,8 @@ CREATE TRIGGER follow_up_items_acting_columns BEFORE UPDATE ON follow_up_items F
 -- a delegate never inserts a closure or an item: closing goes through the write path (system session)
 CREATE POLICY conversation_closures_acting_no_insert ON conversation_closures AS RESTRICTIVE FOR INSERT
   WITH CHECK ((SELECT acting_hub()) IS NULL);
+-- nor deletes an item (the application role holds DELETE on this table, and the member policy also opens it to the platform-administrator flag)
+CREATE POLICY follow_up_items_acting_no_delete ON follow_up_items AS RESTRICTIVE FOR DELETE
+  USING ((SELECT acting_hub()) IS NULL);
 CREATE POLICY follow_up_items_acting_no_insert ON follow_up_items AS RESTRICTIVE FOR INSERT
   WITH CHECK ((SELECT acting_hub()) IS NULL);

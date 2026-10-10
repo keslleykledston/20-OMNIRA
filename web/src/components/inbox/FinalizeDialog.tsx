@@ -52,8 +52,9 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   const [aiNote, setAiNote] = useState<string | null>(null)
   // Closing message to the customer. Offered only when free text can actually go out right now: the attendance must have an
   // owner (sending requires it) and, on the official line, the 24 h window must be open.
-  // Attending through a Hub (ADR-0040 phase 05b): the channel lookup and the AI suggestion are not part of the delegated context, so the closing notice is offered
-  // whenever the person may reply (a closed 24 h window comes back as an error and the person can finalize without notifying), and the suggestion is not offered.
+  // Attending through a Hub (ADR-0040 phase 05b): the channel lookup is not part of the delegated context, so the closing notice is offered whenever the person may
+  // reply (a closed 24 h window comes back as an error and the person can finalize without notifying). The AI draft (phase 07) is offered only with the key ai.assist:
+  // the text of the conversation goes to the platform's AI provider.
   const delegated = isActing()
   const { can } = useAccess()
   const channel = useConversationChannel(open && !delegated ? conversationId : null)
@@ -151,7 +152,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
           </select>
         </label>
         <div className="flex items-center justify-between gap-2">
-          {!delegated ? (
+          {!delegated || can('ai.assist') ? (
             <Button variant="secondary" size="sm" isLoading={suggest.isPending} disabled={suggest.isPending || finalize.isPending} onClick={() => suggest.mutate()}>Sugerir com IA</Button>
           ) : (
             <span />

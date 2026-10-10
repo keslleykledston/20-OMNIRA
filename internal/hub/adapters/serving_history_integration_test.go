@@ -307,7 +307,13 @@ func TestDelegatedAttendanceHistoryAndFollowUpsThroughTheRealRoutes(t *testing.T
 			if err := w.try(ctx, q, `INSERT INTO conversation_closures (tenant_id, conversation_id, contact_id, source, reason) VALUES ($1,$2,$3,'agent','resolved')`, w.tenant["A"], w.conv["A"], contactA); err == nil {
 				t.Error("with the administrator flag a delegate inserted a closure")
 			}
+			if changed(ctx, q, w, `DELETE FROM follow_up_items WHERE id = $1`, fresh) {
+				t.Error("with the administrator flag a delegate deleted an item")
+			}
 		})
+		if n := w.count(`SELECT count(*) FROM follow_up_items WHERE id = $1`, fresh); n != 1 {
+			t.Error("the item was deleted")
+		}
 		// an agent who may resolve does not edit an item either: the only change a delegate can make is open -> done/dropped
 		w.attend(resolver, "A", func(ctx context.Context, q platformdb.Querier) {
 			if changed(ctx, q, w, `UPDATE follow_up_items SET text='reescrito' WHERE id=$1`, fresh) {

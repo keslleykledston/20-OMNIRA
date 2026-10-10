@@ -43,6 +43,10 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		if m := regexp.MustCompile(`tenancyadapters\.Delegable\("([^"]+)", wrap\(h\.delegatedFinalize\(`).FindStringSubmatch(string(att)); m != nil {
 			got["POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/finalize"] = m[1]
 		}
+		// phase 07: the AI closing draft, made delegable only when the server wires the conversation.read check (otherwise the route stays closed)
+		if m := regexp.MustCompile(`suggestRoute = tenancyadapters\.Delegable\("([^"]+)", wrap\(h\.suggest\)\)`).FindStringSubmatch(string(att)); m != nil {
+			got["POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/finalize/suggest"] = m[1]
+		}
 		for _, m := range regexp.MustCompile(`mux\.Handle\("([A-Z]+) "\+base\+"([^"]+)", tenancyadapters\.Delegable\("([^"]+)"`).FindAllStringSubmatch(string(att), -1) {
 			got[m[1]+" /api/v1/tenants/{tenant_id}"+m[2]] = m[3]
 		}
@@ -92,6 +96,8 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		"GET " + tn + "/inbox/conversations/{conversation_id}/attendance-context": "attendance.history",
 		"GET " + tn + "/contacts/{contact_id}/attendance-history":                 "attendance.history",
 		"POST " + tn + "/follow-ups/{follow_up_id}/resolve":                       "followup.resolve",
+		// phase 07: the AI draft of the closing (summary and follow-ups); the handler also needs conversation.read, and only the holder gets it
+		"POST " + tn + "/inbox/conversations/{conversation_id}/finalize/suggest": "ai.assist",
 	}
 	var problems []string
 	for route, key := range want {

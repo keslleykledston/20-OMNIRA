@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -22,12 +23,21 @@ type Handler struct {
 	svc *application.Service
 	// delegatedFinalize, when set, decorates the finalize route for a Hub agent attending the instance (ADR-0040): the Hub's write path does the work.
 	delegatedFinalize func(http.Handler) http.Handler
+	// canReadAsHubAgent, when set, lets a Hub agent ask for the AI closing draft (ADR-0040 phase 07): it answers whether the person holds conversation.read in the
+	// context (ai.assist alone must never send text the person cannot see to the provider). Unset = the draft is not delegable at all.
+	canReadAsHubAgent func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error)
 }
 
 func NewHandler(svc *application.Service) *Handler { return &Handler{svc: svc} }
 
 // Service is the attendance service this handler serves (the Hub's write path runs the same rules).
 func (h *Handler) Service() *application.Service { return h.svc }
+
+// WithDelegatedSuggest enables the AI closing draft for a Hub agent; check says whether the person holds conversation.read in the delegated context.
+func (h *Handler) WithDelegatedSuggest(check func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error)) *Handler {
+	h.canReadAsHubAgent = check
+	return h
+}
 
 // WithDelegatedFinalize installs the decorator that hands a delegated finalize to the Hub's write path; members' requests reach the original handler untouched.
 func (h *Handler) WithDelegatedFinalize(d func(http.Handler) http.Handler) *Handler {
@@ -63,7 +73,12 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 		finalizeRoute = tenancyadapters.Delegable("conversation.finalize", wrap(h.delegatedFinalize(http.HandlerFunc(h.finalize)).ServeHTTP))
 	}
 	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize", finalizeRoute)
-	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize/suggest", wrap(h.suggest))
+	suggestRoute := wrap(h.suggest)
+	if h.canReadAsHubAgent != nil {
+		// ADR-0040 phase 07: a Hub agent gets the AI draft only with the key ai.assist AND conversation.read, for a conversation they hold
+		suggestRoute = tenancyadapters.Delegable("ai.assist", wrap(h.suggest))
+	}
+	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize/suggest", suggestRoute)
 	// ADR-0040 phase 06: a Hub agent reads the memory of the contact with the key attendance.history and resolves an item with followup.resolve (the database asks for
 	// both again, migration 117). The search over earlier messages (history-search) stays closed to a delegate: it is not on the delegable list.
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/attendance-context", tenancyadapters.Delegable("attendance.history", wrap(h.contextOfConversation)))
@@ -228,7 +243,24 @@ func (h *Handler) suggest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sg, err := h.svc.SuggestClosing(r.Context(), id)
+	suggest := h.svc.SuggestClosing
+	if tc, err := tenancydomain.FromContext(r.Context()); err == nil && tc.Source == tenancydomain.AccessSourceHubServe {
+		if h.canReadAsHubAgent == nil {
+			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
+			return
+		}
+		readable, err := h.canReadAsHubAgent(r.Context(), tc.TenantID, tc.ActorID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", "unexpected error")
+			return
+		}
+		if !readable {
+			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
+			return
+		}
+		suggest = h.svc.SuggestClosingAsHubAgent
+	}
+	sg, err := suggest(r.Context(), id)
 	if err != nil {
 		fail(w, err)
 		return
