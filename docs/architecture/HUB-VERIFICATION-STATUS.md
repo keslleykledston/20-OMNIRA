@@ -405,3 +405,9 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - Estado segue `LAB`.
 - **Codex (somente leitura, NÃO executou testes), 3 passadas sobre a fase 05:** (1) HIGH 2 + MEDIUM 1 + LOW 1: resumo por IA sem `conversation.read` (**corrigido** no handler, com teste; a tentativa de fechar no banco foi DESFEITA porque quebrava o desenho "banco por relação/escopo, chave na rota" já provado nas fases 03-04 — decisão registrada na migration 115), escrita bloqueada e consulta travada adiando o recheck (**vigia separado, prazos**), custo por evento (**atalho "sem lista de filas" + orçamento**), retry infinito em 404 (**corrigido**); (2) HIGH 2 + MEDIUM 2: corrida evento-enfileirado × encerramento, atalho sem a chave, consultas sem prazo, guarda do front (**todos corrigidos**); (3) MEDIUM 2: TOCTOU da escrita e prazo de 15 s ponta a ponta (**corrigidos**). CRITICAL: nenhum em nenhuma passada. Uma quarta passada, curta, confere o último commit (resultado no relatório final).
 
+
+## 2026-10-10 (noite) — migration 115 / fase 05 IMPLANTADA em produção e main enviado ao GitHub (a pedido do dono)
+
+- **Feito:** backup (`omnira_dev_20261010T183652Z`, cópia externa e na nuvem conferidas), tags de rollback `rollback-pre-phase05-20261010-1437` (api, worker, web), imagens construídas de worktree limpo (ids em execução = ids das imagens), migration **115** aplicada (ledger em 115), `api worker web` recriados (healthy, 0 erros nos logs). A rota de stream responde 401 sem sessão. Ninguém tem `ai.assist` nem as chaves 113 ainda.
+- **NÃO provado em produção:** stream delegado com sessão real do Keycloak; resumo real pelo provedor de IA. Estado segue `LAB`.
+- **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase05-20261010-1437 20-omnira-<svc>:latest` + recriar (imagens antigas funcionam com o esquema novo; `down` da 115 testado).
