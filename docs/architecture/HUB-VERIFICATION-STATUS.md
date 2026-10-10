@@ -388,3 +388,11 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Codex (somente leitura, leu o diff `0e95165..HEAD`, NÃO executou testes):** CRITICAL 0, HIGH 0, MEDIUM 0, LOW 0.
 - **NÃO provado:** carga/volume reais de produção; `EXPLAIN` da aba do próprio Hub (políticas legadas, fora do contexto delegado, não otimizadas); implantação (migrations 113 e 114 não aplicadas em produção).
 - Estado segue `LAB`.
+
+## 2026-10-10 (noite) — migrations 113 e 114 IMPLANTADAS em produção (a pedido do dono)
+
+- **Feito:** backup (`omnira_dev_20261010T164849Z`, cópia externa e na nuvem conferidas), tags de rollback `rollback-pre-phase04cd-20261010-1249` (api, worker, web), imagens construídas de worktree limpo em `383651f` (`sha-383651f`; ids em execução = ids das imagens), migrations **113 e 114** aplicadas (ledger em 114), `api worker web` recriados (healthy, 0 erros nos logs). Worktree removido. Nada enviado ao GitHub (o push destes commits não foi ordenado).
+- **Provado em produção (só leitura, papel da aplicação, ROLLBACK):** no contexto delegado de Test Company a conta vê 1 conversa, 2 mensagens e 1 contato, todos dessa instância (igual a antes da 114); `acting_scope()` = vivo e sem lista de filas; `jit` = off na transação delegada; chaves = as 7 do preset `classificacao`; 0 anotações visíveis (a conta não tem `contact.note`); a aba do próprio Hub (fora do contexto delegado) segue lendo pelas políticas legadas (197 conversas).
+- **Ninguém recebeu as chaves novas** (`conversation.transfer`, `contact.note`): para usar, `hubctl serving ceiling/grant --preset completo` (roteiro seção K).
+- **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase04cd-20261010-1249 20-omnira-<svc>:latest` + recriar; as imagens antigas funcionam com o esquema novo; `down` de 114 e 113 testados.
+- **NÃO provado:** login real do Keycloak; carga real. Estado segue `LAB`.
