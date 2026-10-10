@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	"github.com/omnira/omnira/internal/contacts/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -51,14 +53,9 @@ func phoneDigits(q string) (string, bool) {
 // hasPermission reads the permission from the role matrix of an ACTIVE membership (never a role
 // name), the same rule as authorizeTicketRead.
 func (h *ContactsAPIHandler) hasPermission(r *http.Request, tc *tenancydomain.TenantContext, key string) (bool, error) {
-	var ok bool
-	err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
-		SELECT EXISTS(
-		  SELECT 1 FROM memberships m
-		  JOIN role_permissions rp ON rp.role_id = m.role_id
-		  WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND rp.permission_key=$3)`,
-		tc.TenantID, tc.ActorID, key).Scan(&ok)
-	return ok, err
+	// Asked of the database in the context THIS request acts in: the member's role permissions, or only the delegated keys when a Hub agent
+	// attends the instance (ADR-0040). Never both.
+	return tenancyadapters.ActorHasPermission(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc.TenantID, tc.ActorID, key)
 }
 
 // SetKind reclassifies a contact: customer | other | spam. Anyone who attends (conversation.claim,
@@ -77,7 +74,12 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	allowed, err := h.hasPermission(r, tc, "conversation.claim")
+	// Members: anyone who attends (conversation.claim). A Hub agent: the delegated key that exists for exactly this (contact.classify).
+	needed := "conversation.claim"
+	if actingForHub(tc) {
+		needed = permClassify
+	}
+	allowed, err := h.hasPermission(r, tc, needed)
 	if err != nil {
 		http.Error(w, "failed to check permission", http.StatusInternalServerError)
 		return
@@ -117,6 +119,9 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, domain.ErrCustomerNeedsAccount):
 		http.Error(w, "a customer needs at least one linked company", http.StatusUnprocessableEntity)
 		return
+	case errors.Is(err, domain.ErrInternalIsTheInstancesCall):
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	case err != nil:
 		http.Error(w, "failed to save contact", http.StatusInternalServerError)
 		return
@@ -125,15 +130,12 @@ func (h *ContactsAPIHandler) SetKind(w http.ResponseWriter, r *http.Request) {
 	if change.Changed {
 		dequeued := int64(0)
 		if next == KindSpam { // not customer service work: out of the queue
-			tag, err := q.Exec(r.Context(), `
-				UPDATE conversations SET queue_id = NULL, routing_retry_at = NULL, updated_at = now()
-				WHERE tenant_id = $1 AND contact_id = $2 AND status = 'open' AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL`,
-				tc.TenantID, contactID)
+			n, err := dequeueSpam(r.Context(), q, tc, contactID)
 			if err != nil {
 				http.Error(w, "failed to save contact", http.StatusInternalServerError)
 				return
 			}
-			dequeued = tag.RowsAffected()
+			dequeued = n
 		}
 		h.recordKind(r, tc, contactID, prev, next, dequeued)
 		if change.ConversationsRecomputed > 0 || change.GroupsRecomputed > 0 {
@@ -165,4 +167,27 @@ func (h *ContactsAPIHandler) recordKind(r *http.Request, tc *tenancydomain.Tenan
 	ev.SetMetadata("classification_source", string(domain.SourceManual))
 	ev.SetMetadata("conversations_dequeued", dequeued)
 	_ = h.audit.Store(r.Context(), ev)
+}
+
+// actingForHub — this request attends the instance as a Hub agent (the delegated context), not as one of its members.
+func actingForHub(tc *tenancydomain.TenantContext) bool {
+	return tc != nil && tc.Source == tenancydomain.AccessSourceHubServe
+}
+
+// dequeueSpam takes a spam contact's open, UNASSIGNED conversations out of their queue (no automatic assignment may reach a scam). A Hub agent
+// cannot write conversations, so for them the same effect goes through the narrow function of migration 110, which checks the key itself.
+func dequeueSpam(ctx context.Context, q platformdb.Querier, tc *tenancydomain.TenantContext, contactID uuid.UUID) (int64, error) {
+	if actingForHub(tc) {
+		var n int64
+		err := q.QueryRow(ctx, `SELECT delegated_dequeue_spam($1, $2)`, tc.TenantID, contactID).Scan(&n)
+		return n, err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE conversations SET queue_id = NULL, routing_retry_at = NULL, updated_at = now()
+		WHERE tenant_id = $1 AND contact_id = $2 AND status = 'open' AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL`,
+		tc.TenantID, contactID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

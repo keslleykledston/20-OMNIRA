@@ -167,3 +167,32 @@ Revisão Codex (2026-10-09): CRITICAL 0, HIGH 1, MEDIUM 4, LOW 1. **H-01 improce
 `permission_domains` só muda por migration; cada decisão é avaliada ao vivo, não há janela útil), **M-01 aceito** (o agente só lê as PRÓPRIAS linhas de auditoria, que ele mesmo gerou).
 
 Pendente para a fase 04: classificar/editar contato, vincular cliente, chamado no ERP (cada um com chave e rota próprias, mediado por serviço), diretório de atendentes, anexos, convergência do predicado legado, tempo real/SSE delegado (fase 05), consulta de desempenho (`EXPLAIN`) das políticas.
+
+## 13. Fase 04a (classificar e editar o contato) — estado em 2026-10-09 (local, NÃO implantada)
+
+Fatiamento da fase 04 (cada fatia com seus testes, mutantes e passada do Codex): **04a** classificar/editar contato e vincular a empresas já cadastradas (esta); **04b** chamado no ERP e diretório de empresas
+do ERP (credencial só no executor); **04c** diretório de atendentes e transferência, notas; **04d** convergência do predicado legado de concessão + `EXPLAIN`; leitura do canal da conversa.
+
+IMPLEMENTADO: migration 110 (política de **UPDATE** de `contacts` por domínio `contact`/escrita, herdando a visibilidade da conversa; `contact_account_links` leitura/inclusão/alteração; `customer_accounts` só
+**leitura**; nada de INSERT/DELETE de contato nem de escrita em contas; duas funções `SECURITY DEFINER` estreitas para os dois efeitos da reclassificação que tocam conversas, `delegated_recompute_contact_kinds` e
+`delegated_dequeue_spam`, que conferem elas mesmas o contexto delegado **e** a chave). Handlers de contato, classificação e contas passam a perguntar `actor_has_permission` (membro: papéis; delegado: só as chaves
+delegadas; nunca os dois). Rotas delegáveis (lista de permissão): `PATCH contacts/{id}` e `PUT .../details` e `PUT/POST .../classification|accounts...` com `contact.classify`; `GET .../classification` e
+`GET accounts` com `account.read`; `GET me/access` (devolve as chaves DELEGADAS, `role_key: hub_delegate`, nunca as do papel de membro). Recusas deliberadas no contexto delegado: o tipo **interno** (decisão da própria
+instância) e **empresa do diretório do ERP** (fase 04b); notas não têm chave no catálogo (rota não delegável). A lista de rotas delegáveis e suas chaves agora é conferida por teste
+(`internal/platform/httpserver/delegable_routes_test.go`). Presets do `hubctl`: `classificacao`. Front: o cartão de detalhes oferece "Editar contato" e "Tipo de contato" só se `/me/access` traz `contact.classify`
+(sem "Interno", só contas já cadastradas); o batimento de presença não é enviado enquanto se atende pelo Hub.
+
+Decisão de modelagem: a leitura de `customer_accounts` é por domínio no nível da instância (a lista de clientes da empresa não é dado de conversa, então não herda a fila do contrato); a **rota** é que exige `account.read`.
+
+Revisão Codex da 04a (2026-10-10): CRITICAL 0, **HIGH 2**, MEDIUM 0, LOW 1 — todos tratados antes de seguir.
+- **HIGH-1 corrigido (e já existia na fase 03):** as políticas legadas de conversa/mensagem (000095) aceitam QUALQUER concessão viva da pessoa, de qualquer Hub; quem é servido por dois Hubs na mesma instância, com escopos de fila
+  diferentes, alcançaria (também por contato e arquivo, que herdam essa visibilidade) a fila do outro Hub enquanto age por um. Corrigido na 110 com políticas **RESTRITIVAS** (`conversations_acting_hub_only`,
+  `messages_acting_hub_only`: ao agir por um Hub só vale o contrato e a concessão DELE, escopo de fila incluído; fora do contexto delegado nada muda). Teste de duas hubs/uma instância/filas disjuntas
+  (`TestAPersonServedByTwoHubsActsForOneAtATime`) e mutante. A política de mensagens só repete o que a de conversas já garante (a de mensagens exige a conversa visível): mantida como segunda barreira, não é mutante.
+  Em produção só existe um Hub, então não houve exposição real.
+- **HIGH-2 corrigido em parte, parte ACEITA com decisão registrada:** as duas funções `SECURITY DEFINER` agora exigem que o contato tenha conversa DENTRO do escopo do Hub que age (não dá para apontá-las para um contato que o
+  delegado não enxerga). O efeito delas continua sendo o do próprio ato de classificar, no contato inteiro: recalcular o tipo derivado das conversas/grupos do contato e, no spam, tirar da fila as conversas abertas sem dono.
+  Restringir isso ao escopo deixaria o tipo derivado desatualizado nas conversas de fora e o golpista roteável em outra fila; nada é lido nem devolvido de fora do escopo. É o mesmo efeito de quando um membro classifica.
+- **LOW:** o cache de 30 s de `/me/access` deixava os controles visíveis após revogar; no modo Hub o front agora consulta de novo a cada 15 s (o servidor já recusava).
+Achado próprio durante a revisão: um agente do Hub podia desfazer um contato que a instância marcou como **interno**; agora é 403 (`ErrInternalIsTheInstancesCall`), com teste e mutante.
+O teste da fase 03 `TestNothingCanBeWrittenThroughTheDelegatedReadPolicies` concedia `contact.classify` e esperava UPDATE de contato = 0 linhas; a 110 muda isso de propósito, então o teste passou a conceder só chaves de leitura (a prova do que `contact.classify` permite está em `serving_contacts_integration_test.go`).

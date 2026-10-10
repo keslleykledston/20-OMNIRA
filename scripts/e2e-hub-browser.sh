@@ -86,8 +86,8 @@ ctl grant add --hub "$HUB" --tenant "$TA" --email reader@e2e.test >/dev/null
 # serve: read-only on A (no delegated keys: the Hub's text view) and, on B, the full context (ADR-0040): ceiling by the platform, then the person's keys
 ctl grant add --hub "$HUB" --tenant "$TA" --email serve@e2e.test >/dev/null
 ctl grant add --hub "$HUB" --tenant "$TB" --email serve@e2e.test --reply >/dev/null
-ctl serving ceiling --hub "$HUB" --tenant "$TB" --preset atendimento >/dev/null
-ctl serving grant --hub "$HUB" --tenant "$TB" --email serve@e2e.test --preset atendimento >/dev/null
+ctl serving ceiling --hub "$HUB" --tenant "$TB" --preset classificacao >/dev/null
+ctl serving grant --hub "$HUB" --tenant "$TB" --email serve@e2e.test --preset classificacao >/dev/null
 # a cleared image on B's conversation (the media store the API reads)
 MEDIA="$WORK/media"; mkdir -p "$MEDIA/clean/$TB" "$MEDIA/quarantine"; chmod -R 0700 "$MEDIA"
 MID=$(cat /proc/sys/kernel/random/uuid)

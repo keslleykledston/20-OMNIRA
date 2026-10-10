@@ -107,3 +107,18 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 
 Total: 81 tabelas com RLS.
 
+
+## Atualização (fase 04a, migration 110)
+
+Políticas delegadas acrescentadas (todas permissivas, só valem no contexto delegado, por domínio; `delegated_tenants(domínio, necessidade)`):
+
+| Tabela | SELECT | INSERT | UPDATE | DELETE | Observação |
+|---|---|---|---|---|---|
+| `contacts` | `contact`/leitura (+ conversa visível) — 109 | — | `contact`/escrita (+ conversa visível) | — | contato nunca é criado nem apagado por delegado |
+| `contact_account_links` | `contact`/leitura (+ contato visível) | `contact`/escrita (+ contato visível) | `contact`/escrita (+ contato visível) | — | vínculo é encerrado, nunca apagado |
+| `customer_accounts` | `contact`/leitura | — | — | — | só leitura; criar/editar conta é fase 04b |
+
+Funções `SECURITY DEFINER` novas: `delegated_recompute_contact_kinds(tenant, contato)` e `delegated_dequeue_spam(tenant, contato)` (exigem contexto delegado **e** `contact.classify`; a segunda só age sobre contato `spam`).
+
+Políticas **restritivas** acrescentadas na 110 (AND com as permissivas; só mudam algo no contexto delegado): `conversations_acting_hub_only` e `messages_acting_hub_only` — ao agir por um Hub, a conversa só é visível pelo
+contrato e concessão DESSE Hub (escopo de fila incluído). Corrige a soma entre Hubs (Codex HIGH-1 da 04a).

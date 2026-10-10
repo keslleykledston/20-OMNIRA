@@ -162,8 +162,11 @@ func TestNothingCanBeWrittenThroughTheDelegatedReadPolicies(t *testing.T) {
 	w.mediaOf("A", "A")
 	agent := w.hubAgent("agent")
 	g := w.grant(agent, "A")
+	// Only READ keys (and reply, which writes through the Hub's own service, not through these tables): the read policies must write nothing.
+	// contact.classify is deliberately not here: since 000110 it DOES allow updating a contact (serving_contacts_integration_test.go proves exactly
+	// what it allows and what it does not).
 	w.ceiling("A", "conversation.read", "conversation.reply", "media.read", "contact.read", "contact.classify")
-	w.grantKeys(g, "conversation.read", "conversation.reply", "media.read", "contact.read", "contact.classify")
+	w.grantKeys(g, "conversation.read", "conversation.reply", "media.read", "contact.read")
 	statements := map[string]string{
 		"UPDATE conversations": `UPDATE conversations SET status = 'closed' WHERE tenant_id = $1`,
 		"DELETE conversations": `DELETE FROM conversations WHERE tenant_id = $1`,

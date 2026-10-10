@@ -12,6 +12,7 @@ import (
 
 	"github.com/omnira/omnira/internal/contacts/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
 // ClassificationRepository changes a contact's classification and its account links. It runs inside the caller's tenant
@@ -60,6 +61,10 @@ type Change struct {
 // recomputeKinds re-derives conversation_kind for the contact's 1:1 conversations and for the groups it takes part in.
 // It runs in the SAME transaction as the reclassification: nothing observes a customer contact with stale kinds.
 func (r *ClassificationRepository) recomputeKinds(ctx context.Context, tenantID, contactID uuid.UUID, ch *Change) error {
+	if tc, err := tenancydomain.FromContext(ctx); err == nil && actingForHub(tc) {
+		// a Hub agent cannot write conversations: the same two recomputations through the narrow function of migration 110 (it checks the key)
+		return r.q(ctx).QueryRow(ctx, `SELECT conversations, groups FROM delegated_recompute_contact_kinds($1,$2)`, tenantID, contactID).Scan(&ch.ConversationsRecomputed, &ch.GroupsRecomputed)
+	}
 	if err := r.q(ctx).QueryRow(ctx, `SELECT recompute_contact_conversation_kinds($1,$2)`, tenantID, contactID).Scan(&ch.ConversationsRecomputed); err != nil {
 		return err
 	}
@@ -119,6 +124,10 @@ func (r *ClassificationRepository) ClassifyWithRole(ctx context.Context, tenantI
 	prev, prevRole, err := r.lockContactFull(ctx, tenantID, contactID)
 	if err != nil {
 		return Change{}, err
+	}
+	if tc, terr := tenancydomain.FromContext(ctx); terr == nil && actingForHub(tc) && prev == domain.KindInternal {
+		// the instance decided this person is internal (no bot, ticket or SLA): that is not a Hub agent's call to undo either
+		return Change{}, domain.ErrInternalIsTheInstancesCall
 	}
 	for _, in := range links {
 		if _, err := r.upsertLink(ctx, tenantID, actorID, contactID, in, source); err != nil {

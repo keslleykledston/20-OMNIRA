@@ -44,3 +44,13 @@ Pré-requisitos: uma conta de administrador do Hub e uma segunda conta (agente) 
 21. Suspender a instância de teste: o agente perde acesso; reativar restaura.
 
 Resultado esperado de qualquer FALHOU: me enviar o passo, a tela e a hora aproximada; os logs do servidor são consultados por mim.
+
+## I. Classificar o contato pelo Hub (fase 04a; precisa do preset `classificacao`)
+
+Pré-requisito: `serving ceiling ... --preset classificacao` e `serving grant ... --preset classificacao` para a pessoa (os presets `atendimento` e `leitura` NÃO trazem `contact.classify`).
+1. Abra `/inbox` → aba da instância atendida só pelo Hub → abra uma conversa. No cartão "Detalhes do atendimento" devem aparecer **Editar contato** e **Tipo de contato** (Cliente / Outros; sem "Interno").
+2. Marque **Outros**: o botão fica marcado e a conversa muda de lista conforme o tipo. Marque **Spam** num contato de teste: a conversa sai da fila (só se ninguém a assumiu) e **Não é spam** desfaz.
+3. **Cliente** → "Empresa do cliente": só aparecem empresas **já cadastradas** na instância (o diretório do ERP é a fase 04b). Sem nenhuma empresa cadastrada não dá para marcar cliente.
+4. **Editar contato**: mude o apelido e o e-mail e salve.
+5. Retire `contact.classify` da pessoa (`serving grant ... --preset atendimento`) e recarregue: os dois controles somem, e a API responde 403 se chamada à mão.
+6. Auditoria: cada mudança fica com `acting_as = hub:<id>` e o autor real (aba Auditoria do Hub ou `audit_events`).

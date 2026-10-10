@@ -13,7 +13,8 @@ import { setActing, clearActing } from '../lib/acting'
 import { setSession } from './testUtils'
 
 // not a module mock: the shell imports the app's own axios instance (lib/api) at load, which an automock would break
-vi.mock('../hooks/usePresenceHeartbeat', () => ({ usePresenceHeartbeat: () => {} }))
+const heartbeat = vi.hoisted(() => vi.fn())
+vi.mock('../hooks/usePresenceHeartbeat', () => ({ usePresenceHeartbeat: heartbeat }))
 const get = vi.spyOn(axios, 'get')
 
 function wrap(ui: React.ReactElement, path = '/inbox') {
@@ -85,6 +86,32 @@ describe('the shell while attending an instance through the Hub', () => {
   })
 })
 
+describe('presence while acting', () => {
+  const inLayout = () =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={['/inbox']}>
+          <Routes>
+            <Route path="/" element={<Layout />}>
+              <Route path="inbox" element={<div>inbox</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  it('beats as usual for a member', () => {
+    heartbeat.mockClear()
+    inLayout()
+    expect(heartbeat).toHaveBeenLastCalledWith(true)
+  })
+  it('does not beat while attending through the Hub (the member presence is not the delegate\'s)', () => {
+    setActing('hub-1', 'Beta Hub')
+    heartbeat.mockClear()
+    inLayout()
+    expect(heartbeat).toHaveBeenLastCalledWith(false)
+  })
+})
+
 describe('the delegated details card', () => {
   it('shows who the customer is and where the attendance stands, read-only, and says what comes next', async () => {
     setActing('hub-1', 'Beta Hub')
@@ -100,7 +127,7 @@ describe('the delegated details card', () => {
     expect(screen.getByText('Maria')).toBeInTheDocument()
     expect(screen.getByText('9')).toBeInTheDocument()
     expect(screen.getByText(/Atendendo Beta Hub pelo Hub/)).toBeInTheDocument()
-    expect(screen.getByRole('note')).toHaveTextContent('chegam na próxima etapa')
+    expect(screen.getByRole('note')).toHaveTextContent('chegam nas próximas etapas')
     // read-only: no edit, no classify, no ticket buttons
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })

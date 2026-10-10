@@ -287,6 +287,20 @@ test('contexto completo (ADR-0040): quem só tem o Hub atende a NorteNet na caix
   await expect(menu.getByRole('link', { name: 'Conversas' })).toBeVisible();
   for (const hidden of ['Tickets', 'Contatos', 'Canais', 'Pessoas', 'Configurações', 'Acessos']) await expect(menu.getByRole('link', { name: hidden })).toHaveCount(0);
 
+  // classificar o contato (fase 04a, chave contact.classify): "Outros" e "Spam", sem a opção "Interno", gravado e auditado com o contexto do Hub
+  const kinds = card.getByRole('group', { name: 'Tipo de contato' });
+  await expect(kinds).toBeVisible();
+  await expect(kinds.getByRole('button', { name: 'Interno' })).toHaveCount(0);
+  await kinds.getByRole('button', { name: 'Outros' }).click();
+  await expect.poll(() => sql(`SELECT kind FROM contacts WHERE tenant_id = '${env.tb}' AND phone_e164 = '+5592911110002'`)).toBe('other');
+  await expect(kinds.getByRole('button', { name: 'Outros' })).toHaveAttribute('aria-pressed', 'true');
+  expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND actor_id = '${fabio.id}' AND metadata->>'acting_as' = 'hub:${env.hub}' AND action LIKE 'contact.%'`))).toBeGreaterThan(0);
+  // editar o nome e o e-mail
+  await card.getByRole('button', { name: 'Editar contato' }).click();
+  await card.getByLabel('Apelido do contato').fill('Maria Souza (obra)');
+  await card.getByRole('button', { name: 'Salvar' }).click();
+  await expect.poll(() => sql(`SELECT COALESCE(alias, '') FROM contacts WHERE tenant_id = '${env.tb}' AND phone_e164 = '+5592911110002'`)).toBe('Maria Souza (obra)'); // por telefone: o gatilho copia o apelido para display_name
+
   // todo pedido da instância declarou o contexto
   expect(acting.length).toBeGreaterThan(3);
   expect(acting.filter((a) => a.header !== `hub:${env.hub}`)).toEqual([]);

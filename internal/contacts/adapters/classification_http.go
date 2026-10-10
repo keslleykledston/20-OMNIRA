@@ -22,6 +22,7 @@ import (
 	auditports "github.com/omnira/omnira/internal/audit/ports"
 	"github.com/omnira/omnira/internal/contacts/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketsports "github.com/omnira/omnira/internal/tickets/ports"
 )
@@ -75,12 +76,8 @@ func (h *ClassificationHandler) SetCompanyDirectoryResolver(r ticketsports.Ticke
 }
 
 func memberHas(ctx context.Context, pool *pgxpool.Pool, tc *tenancydomain.TenantContext, key string) (bool, error) {
-	var ok bool
-	err := platformdb.QuerierFromContext(ctx, pool).QueryRow(ctx, `
-		SELECT EXISTS(SELECT 1 FROM memberships m JOIN role_permissions rp ON rp.role_id = m.role_id
-		              WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND rp.permission_key=$3)`,
-		tc.TenantID, tc.ActorID, key).Scan(&ok)
-	return ok, err
+	// the member's role permissions, or only the delegated keys when a Hub agent attends the instance (ADR-0040): never both
+	return tenancyadapters.ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, pool), tc.TenantID, tc.ActorID, key)
 }
 
 func (h *ClassificationHandler) authorize(w http.ResponseWriter, r *http.Request, permission string) (*tenancydomain.TenantContext, uuid.UUID, bool) {
@@ -205,6 +202,8 @@ func failDomain(w http.ResponseWriter, err error) {
 		http.Error(w, "account not found or archived", http.StatusUnprocessableEntity)
 	case errors.Is(err, domain.ErrCustomerNeedsAccount):
 		http.Error(w, "a customer needs at least one linked company", http.StatusUnprocessableEntity)
+	case errors.Is(err, domain.ErrInternalIsTheInstancesCall):
+		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, domain.ErrInternalNeedsRole):
 		http.Error(w, "an internal contact needs a role: team, partner or supplier", http.StatusUnprocessableEntity)
 	case errors.Is(err, domain.ErrLastLink):
@@ -238,6 +237,10 @@ func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomai
 	case ref.AccountID != nil:
 		in.AccountID = *ref.AccountID
 		return in, nil
+	}
+	if actingForHub(tc) {
+		// the company directory is the instance's ERP, read with its credentials: a Hub agent reaches it only through its own key and route (phase 04b)
+		return in, &directoryError{http.StatusForbidden, "the company directory is not available through the Hub yet"}
 	}
 	if h.resolver == nil {
 		return in, &directoryError{http.StatusServiceUnavailable, "company directory is not configured"}
@@ -451,6 +454,11 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 		http.Error(w, "kind must be unclassified, customer, internal, other or spam", http.StatusBadRequest)
 		return
 	}
+	if kind == domain.KindInternal && actingForHub(tc) {
+		// an internal contact gets no bot, ticket or SLA: that is the instance's own call, never a Hub agent's
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	var change Change
 	err := atomically(r.Context(), h.pool, func(ctx context.Context) error {
 		inputs, err := h.resolveRefs(ctx, tc, contactID, req.Accounts)
@@ -467,9 +475,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 	h.countChange(r.Context(), change, domain.SourceManual)
 	if change.Changed {
 		if kind == domain.KindSpam {
-			_, _ = platformdb.QuerierFromContext(r.Context(), h.pool).Exec(r.Context(), `
-				UPDATE conversations SET queue_id = NULL, routing_retry_at = NULL, updated_at = now()
-				WHERE tenant_id = $1 AND contact_id = $2 AND status = 'open' AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL`, tc.TenantID, contactID)
+			_, _ = dequeueSpam(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc, contactID)
 		}
 		action := auditdomain.ActionContactReclassified
 		if change.PreviousKind == domain.KindUnclassified {

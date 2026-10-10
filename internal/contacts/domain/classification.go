@@ -85,6 +85,9 @@ var (
 	// ErrInternalNeedsRole: an internal contact must say whether it is team, partner or supplier.
 	ErrInternalNeedsRole = errors.New("contacts: an internal contact needs a role (team, partner or supplier)")
 	ErrInvalidInput      = errors.New("contacts: invalid classification input")
+	// ErrInternalIsTheInstancesCall: a contact the instance declared internal is not reclassified by a Hub agent (ADR-0040 phase 04a).
+	ErrInternalIsTheInstancesCall = errors.New("contacts: an internal contact is the instance's own call")
+
 	// ErrCustomerNeedsAccount: customer needs >= 1 active account link (atomic with the transition).
 	ErrCustomerNeedsAccount = errors.New("contacts: a customer needs at least one active account link")
 	// ErrLastLink: removing the last active link of a customer without reclassifying in the same transaction.

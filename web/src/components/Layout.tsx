@@ -20,8 +20,9 @@ export default function Layout() {
   }, [authenticated, navigate])
 
   // ADR-0010: any authenticated session heartbeats; the backend silently
-  // ignores it (403) when the user has no active AgentProfile.
-  usePresenceHeartbeat(authenticated)
+  // ignores it (403) when the user has no active AgentProfile. Not while attending an instance through the Hub (ADR-0040): presence is the
+  // member's own, and a Hub agent has none in that instance (the request would only be refused).
+  usePresenceHeartbeat(authenticated && !isActing())
 
   // The shell is exactly one screen tall and scrolls INSIDE its panes. Without this lock the document itself can become
   // scrollable (anything appended to <body>, an overscroll, a focus jump), and scrolling it slides the whole app up and

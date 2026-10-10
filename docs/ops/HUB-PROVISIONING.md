@@ -103,7 +103,7 @@ Quem atende uma instância **só pelo Hub** pode abrir a caixa completa dela (m�
 
 1. **Teto do contrato** (decisão da plataforma, com o consentimento da instância; só pelo `hubctl`, não pelo painel do Hub):
    `omnira-hubctl --operator NOME serving ceiling --hub HUB --tenant EMPRESA --preset atendimento`
-   (`atendimento` = ler, assumir, responder, abrir arquivos, ler o contato; `leitura` = sem assumir/responder; ou `--keys a,b,...`; `--keys none` retira tudo).
+   (`atendimento` = ler, assumir, responder, abrir arquivos, ler o contato; `classificacao` = `atendimento` + classificar/editar o contato e ler as empresas cadastradas (`contact.classify`, `account.read`; ADR-0040 fase 04a); `leitura` = sem assumir/responder; ou `--keys a,b,...`; `--keys none` retira tudo).
 2. **Chaves de cada pessoa**, dentro do teto: `omnira-hubctl --operator NOME serving grant --hub HUB --tenant EMPRESA --email PESSOA --preset atendimento`.
    Responder exige assumir, assumir exige ler; `can_reply` acompanha a chave `conversation.reply` (as duas formas de "pode responder" não divergem depois deste comando).
    A pessoa precisa já ter a concessão (`grant add`). O que ela pode usar é sempre **concessão ∩ teto**, calculado a cada pedido: baixar o teto corta na hora.

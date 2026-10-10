@@ -552,10 +552,12 @@ func (s *Service) SetManage(ctx context.Context, hub, tenant, user uuid.UUID, ca
 // ---------------------------------------------------------------- delegated serving (ADR-0040)
 
 // ServingPresets are named sets of permission keys. "atendimento" is what an agent needs to attend an instance end to end (read, claim, reply,
-// open the files, read the contact card); "leitura" is the same without claiming or replying.
+// open the files, read the contact card); "classificacao" is that plus saying who the contact is (kind, companies, name and e-mail: contact.classify,
+// account.read; phase 04a); "leitura" is the read-only part, without claiming or replying.
 var ServingPresets = map[string][]string{
-	"atendimento": {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read"},
-	"leitura":     {"conversation.read", "media.read", "contact.read"},
+	"atendimento":   {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read"},
+	"classificacao": {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read"},
+	"leitura":       {"conversation.read", "media.read", "contact.read"},
 }
 
 // cleanKeys sorts, de-duplicates and checks that every key can be delegated at all (it has a row in permission_domains).

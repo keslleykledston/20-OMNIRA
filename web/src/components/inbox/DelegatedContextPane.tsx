@@ -1,8 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { API_BASE } from '../../lib/config'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session'
 import { getActingName } from '../../lib/acting'
+import { useAccess } from '../../lib/useAccess'
+import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor'
+import { ContactKindControl } from '../contacts/ContactKindControl'
 import type { ConversationItem } from '../../types/api'
 
 interface ContactCard {
@@ -18,11 +21,15 @@ interface ContactCard {
 
 const KIND: Record<string, string> = { customer: 'Cliente', internal: 'Interno', other: 'Outro', spam: 'Spam ou golpe', unclassified: 'Ainda não classificado' }
 
-// The details of an attendance for a person attending an instance through the Hub (ADR-0040 phase 03): who the customer is and where the conversation
-// stands. Read-only on purpose: classifying or editing the contact, opening a ticket in the ERP, notes and memory arrive with phase 04, each with its own
-// permission. It reads the same conversation query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
+// The details of an attendance for a person attending an instance through the Hub (ADR-0040): who the customer is and where the conversation stands, and,
+// with the key contact.classify, the same controls a member has to say who the contact is (kind, companies, name and e-mail; phase 04a). Opening a ticket in
+// the ERP, notes and memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
+// context), so the controls are only offered when the server will accept them; the server still decides every request. It reads the same conversation
+// query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
 export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void }) {
   const tenantId = getTenantId()
+  const queryClient = useQueryClient()
+  const { can } = useAccess()
   const conversation = useQuery({
     queryKey: ['inbox-conversation-detail', tenantId, conversationId],
     queryFn: async () => {
@@ -54,6 +61,12 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
   const name = card?.alias || card?.display_name || c?.contact_name || 'Sem nome'
   const whatsapp = card?.whatsapp_name && card.whatsapp_name !== name ? card.whatsapp_name : ''
   const kind = card?.kind || c?.contact_kind || ''
+  const refreshAll = () => {
+    void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] })
+    void queryClient.invalidateQueries({ queryKey: ['delegated-contact', tenantId, contactId] })
+    void queryClient.invalidateQueries({ queryKey: ['contact', tenantId, contactId] })
+    void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] })
+  }
   const owner = !c?.assigned_to_user_id ? 'Sem responsável' : c.assigned_to_name?.trim() || 'Outro atendente'
   return (
     <aside aria-label="Detalhes do atendimento" className="flex h-full min-h-0 flex-col overflow-y-auto bg-surface">
@@ -86,8 +99,21 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
             )}
           </dl>
         </section>
+        {contactId && can('contact.classify') && (
+          <section aria-label="Classificar o contato" className="-mx-4 border-t border-border-subtle">
+            <ContactDetailsEditor contactId={contactId} onChanged={refreshAll} />
+            <ContactKindControl
+              contactId={contactId}
+              kind={c?.contact_kind || 'unclassified'}
+              internalRole={c?.contact_internal_role}
+              contactName={c?.contact_name}
+              delegated
+              onChanged={refreshAll}
+            />
+          </section>
+        )}
         <p role="note" className="rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
-          Classificar ou editar o contato, abrir chamado no ERP, notas e histórico chegam na próxima etapa.
+          Chamado no ERP, notas e histórico chegam nas próximas etapas.
         </p>
       </div>
     </aside>

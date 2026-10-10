@@ -25,6 +25,8 @@ interface Props {
   /** The role of an internal contact; when absent it is read from the classification endpoint. */
   internalRole?: InternalRole | null
   contactName?: string
+  /** A Hub agent attending the instance (ADR-0040): no "Interno" (the instance's own call), and companies only from the accounts that already exist (the ERP directory is phase 04b). */
+  delegated?: boolean
   /** Called after the API accepted the change, so the parent can refresh what depends on it. */
   onChanged: (kind: ContactKind) => void
 }
@@ -43,7 +45,7 @@ const FIELD =
 // Lets whoever attends say who this contact is (ADR-0018). "Cliente" needs at least one company: it is chosen from the
 // tenant's company directory (the server revalidates it) or from existing accounts, and the contact may belong to several.
 // Spam asks first; it is never deleted, it has its own Inbox, and "Não é spam" there undoes a false positive.
-export function ContactKindControl({ contactId, kind, internalRole, contactName, onChanged }: Props) {
+export function ContactKindControl({ contactId, kind, internalRole, contactName, delegated = false, onChanged }: Props) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmSpam, setConfirmSpam] = useState(false)
@@ -148,7 +150,7 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
       ) : (
         <>
           <div className="flex gap-1.5">
-            {(['customer', 'internal', 'other'] as const).map((k) => (
+            {(delegated ? (['customer', 'other'] as const) : (['customer', 'internal', 'other'] as const)).map((k) => (
               <button
                 key={k}
                 type="button"
@@ -169,7 +171,10 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
               Ainda não classificado: o atendimento é limitado até você dizer se é cliente, interno ou outro contato.
             </p>
           )}
-          {kind === 'internal' && (
+          {kind === 'internal' && delegated && (
+            <p className="mt-2 text-xs text-text-tertiary">Contato interno: quem define isso é a própria empresa.</p>
+          )}
+          {kind === 'internal' && !delegated && (
             <div className="mt-3" role="group" aria-label="Tipo de contato interno">
               <div className="flex gap-1.5">
                 {INTERNAL_ROLES.map((r) => (
@@ -225,6 +230,7 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
       {picking && (
         <CompanyPicker
           contactId={contactId}
+          delegated={delegated}
           title={picking === 'add' ? 'Adicionar empresa' : 'Empresa do cliente'}
           hasCompanies={links.length > 0}
           pending={pending}
@@ -334,6 +340,7 @@ function CompanyList({
 // Picks ONE company. Directory companies are sent by id only: the server re-reads name, CNPJ and status itself.
 function CompanyPicker({
   contactId,
+  delegated,
   title,
   hasCompanies,
   pending,
@@ -341,6 +348,7 @@ function CompanyPicker({
   onConfirm,
 }: {
   contactId: string
+  delegated: boolean
   title: string
   hasCompanies: boolean
   pending: boolean
@@ -360,22 +368,23 @@ function CompanyPicker({
   useEffect(() => {
     let alive = true
     void (async () => {
+      // through the Hub only the accounts that already exist: the company directory is the instance's ERP (phase 04b)
       const [d, a, s] = await Promise.allSettled([
-        accountDirectoryAPI.directory(),
+        delegated ? Promise.reject(new Error('delegated')) : accountDirectoryAPI.directory(),
         accountDirectoryAPI.localAccounts(),
-        classificationAPI.suggestions(contactId),
+        delegated ? Promise.reject(new Error('delegated')) : classificationAPI.suggestions(contactId),
       ])
       if (!alive) return
       if (s.status === 'fulfilled') setSuggestions((s.value.items ?? []).filter((x) => !x.already_linked))
       if (d.status === 'fulfilled') setDirectory(d.value.items ?? [])
-      else setDirectoryDown(true)
+      else setDirectoryDown(!delegated)
       if (a.status === 'fulfilled') setAccounts(a.value.items ?? [])
       setLoading(false)
     })()
     return () => {
       alive = false
     }
-  }, [contactId])
+  }, [contactId, delegated])
 
   const options = useMemo<Option[]>(() => {
     const seen = new Set(directory.map((c) => c.name.trim().toLowerCase()))
@@ -412,6 +421,7 @@ function CompanyPicker({
       ) : (
         <>
           {directoryDown && <p className="text-xs text-status-warning">Diretório de empresas indisponível: só contas já existentes aparecem.</p>}
+          {delegated && <p className="text-xs text-text-tertiary">Pelo Hub, só as empresas já cadastradas na instância aparecem.</p>}
           <ul className="max-h-40 overflow-auto rounded-control border border-border-subtle bg-surface" role="listbox" aria-label="Empresas">
             {options.length === 0 && <li className="px-2 py-2 text-xs text-text-tertiary">Nenhuma empresa encontrada.</li>}
             {options.map((o) => (

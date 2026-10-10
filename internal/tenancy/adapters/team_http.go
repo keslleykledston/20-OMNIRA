@@ -112,6 +112,22 @@ func (h *TeamHandler) MyAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if tc.Source == domain.AccessSourceHubServe {
+		// A Hub agent attending the instance (ADR-0040): the keys the grant and the contract's ceiling both hold, asked live. Never the
+		// membership's role: a person who is also a member gets only what THIS context gives.
+		var keys []string
+		if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
+			`SELECT delegated_permissions($1, $2, acting_hub())`, tc.TenantID, tc.ActorID).Scan(&keys); err != nil {
+			http.Error(w, "failed to load permissions", http.StatusInternalServerError)
+			return
+		}
+		if keys == nil {
+			keys = []string{}
+		}
+		writeTeamJSON(w, map[string]any{"role_key": "hub_delegate", "permissions": keys, "invitation_delivery_available": false})
+		return
+	}
+
 	var roleKey string
 	if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
 		SELECT r.key FROM memberships m JOIN roles r ON r.id = m.role_id

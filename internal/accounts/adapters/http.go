@@ -14,6 +14,7 @@ import (
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	auditports "github.com/omnira/omnira/internal/audit/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketsdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
@@ -55,10 +56,9 @@ func (h *Handler) authorize(r *http.Request, permission string) (*tenancydomain.
 	if err != nil || tc.TenantID == uuid.Nil || tc.ActorID == uuid.Nil {
 		return nil, http.StatusUnauthorized
 	}
-	var ok bool
-	if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
-		SELECT EXISTS(SELECT 1 FROM memberships m JOIN role_permissions rp ON rp.role_id = m.role_id
-		              WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND rp.permission_key=$3)`, tc.TenantID, tc.ActorID, permission).Scan(&ok); err != nil {
+	// the member's role permissions, or only the delegated keys when a Hub agent attends the instance (ADR-0040): never both
+	ok, err := tenancyadapters.ActorHasPermission(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc.TenantID, tc.ActorID, permission)
+	if err != nil {
 		return nil, http.StatusInternalServerError
 	}
 	if !ok {
