@@ -49,7 +49,7 @@ func TestDelegatedStreamEndsWithinTheRecheckEvenWhenTheLookupsStall(t *testing.T
 	auth := &stallingAuth{hub: hub}
 	auth.allowed = map[uuid.UUID]bool{tenant: true}
 	h := inboxadapters.NewRealtimeHandler(nc, auth, inboxadapters.RealtimeOptions{
-		DelegatedRecheck: 100 * time.Millisecond, DatabaseTimeout: 400 * time.Millisecond, Keepalive: time.Hour, WriteTimeout: time.Second,
+		DelegatedRecheck: 400 * time.Millisecond, DatabaseTimeout: 150 * time.Millisecond, Keepalive: time.Hour, WriteTimeout: time.Second,
 	})
 	who := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

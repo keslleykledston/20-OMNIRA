@@ -116,6 +116,9 @@ func NewRealtimeHandler(nc *nats.Conn, auth StreamAuthorizer, opts RealtimeOptio
 	if opts.DelegatedRecheck <= 0 {
 		opts.DelegatedRecheck = 15 * time.Second
 	}
+	if opts.DatabaseTimeout >= opts.DelegatedRecheck { // the bound is end to end: a lookup must fit inside the recheck interval
+		opts.DatabaseTimeout = opts.DelegatedRecheck / 2
+	}
 	if opts.VisibilityTTL <= 0 {
 		opts.VisibilityTTL = 10 * time.Second
 	}
@@ -353,6 +356,8 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 			return false
 		}
 		_ = rc.SetWriteDeadline(time.Now().Add(h.opts.WriteTimeout))
+		// What is left after this check is irreducible concurrency, not a window: a write that has already started when the watchdog closes the stream either
+		// completes (it happened before the closure) or fails on the "now" deadline; one that starts later is refused by closing.
 		if closing.Load() { // the watchdog closed the stream between the check and the arming: its "now" deadline must win, not this one
 			_ = rc.SetWriteDeadline(time.Now())
 			return false
