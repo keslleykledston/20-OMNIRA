@@ -379,6 +379,24 @@ func TestDelegatedNotesFollowTheKeyTheAuthorAndTheInstance(t *testing.T) {
 		})
 	})
 
+	t.Run("a note-only agent holds no contact write at all: the key gives the notes and the sight of the contact, nothing else", func(t *testing.T) {
+		noteOnly := w.colleague("noteonly", "A", "conversation.read", "contact.read", "contact.note")
+		w.attend(noteOnly, "A", func(ctx context.Context, q platformdb.Querier) {
+			if w.domainAccess(ctx, q, noteOnly, "A", "contact", "write") {
+				t.Error("contact.note opened the contact WRITE domain")
+			}
+			tag, err := q.Exec(ctx, `UPDATE contacts SET alias = 'x' WHERE tenant_id = $1 AND id = $2`, w.tenant["A"], contactA)
+			if err == nil && tag.RowsAffected() != 0 {
+				t.Error("a note-only agent updated a contact")
+			}
+			var n int
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM contact_notes`).Scan(&n))
+			if n == 0 {
+				t.Error("a note-only agent cannot read the notes")
+			}
+		})
+	})
+
 	t.Run("the database refuses what the handler never asks: a note in another author's name, in another instance, or on a contact out of scope", func(t *testing.T) {
 		w.attend(writer, "A", func(ctx context.Context, q platformdb.Querier) {
 			if err := w.try(ctx, q, `INSERT INTO contact_notes (tenant_id, contact_id, body, created_by_user_id) VALUES ($1,$2,'x',$3)`, w.tenant["A"], contactA, member); err == nil {

@@ -113,9 +113,10 @@ mut "transfer: the chosen person is not proven again" $RP '			ok, err := distrib
 
 M=000113_hub_delegated_transfer_and_notes.up.sql
 sqlmut "keys: contact.note has no data domain (not delegable)" $M "  ('conversation.transfer', 'conversation', 'write'),
-  ('contact.note',          'contact',      'write');" "  ('conversation.transfer', 'conversation', 'write');"
+  ('contact.note',          'contact',      'read');" "  ('conversation.transfer', 'conversation', 'write');"
 sqlmut "keys: conversation.transfer has no data domain (not delegable)" $M "  ('conversation.transfer', 'conversation', 'write'),
-  ('contact.note',          'contact',      'write');" "  ('contact.note',          'contact',      'write');"
+  ('contact.note',          'contact',      'read');" "  ('contact.note',          'contact',      'read');"
+sqlmut "keys: contact.note maps to the contact WRITE domain (hands note holders the contact UPDATE policies)" $M "  ('contact.note',          'contact',      'read');" "  ('contact.note',          'contact',      'write');"
 sqlmut "notes read: any contact reader reads them (the key is not asked)" $M "CREATE POLICY contact_notes_read_delegated ON contact_notes FOR SELECT
   USING (acting_hub() IS NOT NULL
          AND actor_has_permission(tenant_id, current_user_id(), 'contact.note')" "CREATE POLICY contact_notes_read_delegated ON contact_notes FOR SELECT

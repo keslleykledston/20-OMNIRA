@@ -2,7 +2,9 @@
 -- queue, and (b) read and write the notes of a contact. Two new keys, both optional per grant (no role of any company receives them):
 --   conversation.transfer : hand over / give back a conversation the person holds. Data domain `conversation`, write. The write itself goes through the
 --                           Hub's own write path (ADR-0037, replying.Service.Transfer), so no policy opens `conversations` for writing.
---   contact.note          : read, add, edit and remove the person's OWN notes of the contacts of the instance. Data domain `contact`, write.
+--   contact.note          : read the notes of the contacts of the instance, and add, edit and remove the person's OWN. Data domain `contact`, READ: the key only
+--                           has to be delegable and let the person see the contact the note hangs from; the notes policies below ask for the key itself, and
+--                           mapping it to write would hand every note holder the UPDATE/INSERT policies of the contact domain (110) at the database layer.
 -- (Giving a conversation back to the queue needs only conversation.claim, like releasing one's own conversation does for a member.)
 --
 -- Notes are the one table here where a domain answer is too coarse: a contact reader must not read the internal notes of the company. So the
@@ -17,7 +19,7 @@ ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO permission_domains (permission_key, domain, need) VALUES
   ('conversation.transfer', 'conversation', 'write'),
-  ('contact.note',          'contact',      'write');
+  ('contact.note',          'contact',      'read');
 
 CREATE POLICY contact_notes_read_delegated ON contact_notes FOR SELECT
   USING (acting_hub() IS NOT NULL
