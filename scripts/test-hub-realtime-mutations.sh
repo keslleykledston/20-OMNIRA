@@ -81,8 +81,8 @@ mut "recheck of a Hub stream uses the members' interval (an hour)" $SSE 'interva
 mut "the instance stream is not filtered by visibility" $SSE 'if filter != nil && !filter.allow(event.ID, time.Now()) {' 'if false && filter != nil && !filter.allow(event.ID, time.Now()) {'
 mut "the visibility answer is reused forever" $SSE 'if e, hit := f.cache[id]; hit && now.Sub(e.at) < f.ttl {' 'if e, hit := f.cache[id]; hit {'
 mut "a conversation stream does not recheck the queue scope" $SSE 'if visible, err := da.ConversationVisibleServing(r.Context(), principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil || !visible {' 'if false {'
-mut "a malformed acting header is read as a member" $SSE 'if aerr != nil {' 'if false {'
-mut "the acting header is ignored (every stream is a member stream)" $SSE 'if acting.IsHub() {' 'if false {'
+mut "a malformed acting header is read as a member" $SSE 'if aerr != nil {' 'if false && aerr != nil {'
+mut "the acting header is ignored (every stream is a member stream)" $SSE 'if acting.IsHub() {' 'if false && acting.IsHub() {'
 mut "admission accepts a person who holds none of the keys" $SV '			if ok {
 				tc = resolved
 				return nil
