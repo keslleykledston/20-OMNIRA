@@ -346,3 +346,8 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase04a-20261010-0907 20-omnira-<svc>:latest` + recriar; a 110 tem `down` testado e as imagens antigas funcionam com o esquema novo (as políticas só valem com `app.acting_hub`).
 - **NÃO provado:** a classificação pela tela do dono com login real do Keycloak (roteiro seção I).
 - Estado segue `LAB`.
+
+## 2026-10-10 — migration 111 (contexto preso a uma instância) — LOCAL, NÃO implantada
+
+- **IMPLEMENTED + POSTGRES VERIFIED:** ver ADR-0040 §14. `TestTheDelegatedContextIsPinnedToOneInstance`; mutação `scripts/test-hub-pin-mutations.sh` 4/4; migrations 093..111 idênticas; E2E real 9/9; pacotes afetados verdes.
+- **NÃO implantada** (sobe junto da próxima entrega). Estado segue `LAB`.

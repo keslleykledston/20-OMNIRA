@@ -108,6 +108,10 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 Total: 81 tabelas com RLS.
 
 
+## Atualização (migration 111) — contexto preso a uma instância
+
+Políticas restritivas `*_acting_one_instance` em `conversations`, `customer_accounts`, `contacts` e `contact_account_links`: ao agir por um Hub, só a instância travada por `lock_served_tenant` (`acting_tenant()`) é visível/escrevível. `messages` e a mídia herdam pela conversa. Ver ADR-0040 §14.
+
 ## Atualização (fase 04a, migration 110)
 
 Políticas delegadas acrescentadas (todas permissivas, só valem no contexto delegado, por domínio; `delegated_tenants(domínio, necessidade)`):
