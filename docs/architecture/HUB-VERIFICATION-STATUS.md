@@ -336,3 +336,13 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Codex (2026-10-10):** CRITICAL 0, HIGH 2, MEDIUM 0, LOW 1 — todos tratados (ver ADR-0040 §13). O HIGH-1 (soma entre Hubs) já existia na fase 03 implantada; sem exposição real hoje (um só Hub em produção).
 - **NÃO provado:** com login real do Keycloak e dado real em produção; `EXPLAIN` das políticas novas (as restritivas rodam por linha só quando se age por um Hub); recarregar `/me/access` a cada 15 s não foi medido; a classificação "Cliente" pelo Hub depende de haver empresas cadastradas na instância (o diretório do ERP é a 04b).
 - Estado segue `LAB`; nada implantado, sem push, sem tag.
+
+## 2026-10-10 (manhã) — fase 04a IMPLANTADA em produção (a pedido do dono)
+
+- **Feito:** backup (`omnira_dev_20261010T130745Z`, cópia externa e na nuvem conferidas), tags de rollback `rollback-pre-phase04a-20261010-0907` (api, web, worker), imagens construídas de worktree limpo em `aafaa95` (`sha-aafaa95`), migration **110** aplicada (ledger em 110), `api worker web` recriados (healthy, bundle servido = `index-CTLTRKrd.js`, 0 erros nos logs). Worktree removido.
+- **Concessão (a pedido):** `serving ceiling` e `serving grant --preset classificacao` para `keslley@k3gsolutions.com.br` em **Test Company** (atendimento + `contact.classify` + `account.read`; operador `claude-keslley-test`).
+- **Provado em produção (só leitura, papel da aplicação, ROLLBACK):** no contexto delegado a conta tem as 7 chaves, `contact.classify` = verdadeiro, `membership.manage` = falso; a membership não vale (`has_active_membership` = falso com o Hub no contexto).
+- **ACHADO (a corrigir na migration 111):** no contexto delegado de Test Company a sessão ainda enxerga `conversations` das outras instâncias servidas pelo MESMO Hub (172 + 20 linhas), pela política legada `conversations_read_hub_delegation` (acesso de Hub da fase ≤02, que a conta já tem pela aba do Hub). Não é acesso novo nem de outra pessoa; o código sempre filtra pela instância do contexto. Mas a barreira do banco deveria prender o contexto a UMA instância (`app.acting_tenant`), e não prende. Plano: `lock_served_tenant` fixa a instância e políticas RESTRITIVAS exigem `tenant_id = acting_tenant()` nas tabelas com política legada de Hub.
+- **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase04a-20261010-0907 20-omnira-<svc>:latest` + recriar; a 110 tem `down` testado e as imagens antigas funcionam com o esquema novo (as políticas só valem com `app.acting_hub`).
+- **NÃO provado:** a classificação pela tela do dono com login real do Keycloak (roteiro seção I).
+- Estado segue `LAB`.
