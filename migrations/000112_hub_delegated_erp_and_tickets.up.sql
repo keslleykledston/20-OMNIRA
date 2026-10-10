@@ -3,6 +3,7 @@
 -- What this opens, and how (the same shape as 000109/110: the data layer answers by DOMAIN, the route and the handler answer by KEY):
 --   * `tickets` (read; update) and `ticket_external_create_attempts` (read, insert, update) by the `ticket` domain, each narrowed to conversations the caller
 --     can see (so a contract limited to some queues never reaches the tickets of the others) and pinned to the instance the request acts for (000111).
+--     An UPDATE re-checks the scope of the NEW conversation/contact (WITH CHECK), so a row cannot be re-pointed at a conversation outside the contract.
 --     A delegate gets NO insert on `tickets` (the local ticket of a conversation is made by the platform), no delete, and no access to the status-attempt table
 --     (changing the ERP status is a later step).
 --   * `crm_contact_company_evidence` (read; insert; update): the best-effort fact "this contact was tied to this company by an operator", made after a ticket is
@@ -22,7 +23,8 @@ CREATE POLICY tickets_read_delegated ON tickets FOR SELECT
 CREATE POLICY tickets_update_delegated ON tickets FOR UPDATE
   USING (tenant_id IN (SELECT delegated_tenants('ticket', 'write'))
          AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = tickets.conversation_id AND c.tenant_id = tickets.tenant_id))
-  WITH CHECK (tenant_id IN (SELECT delegated_tenants('ticket', 'write')));
+  WITH CHECK (tenant_id IN (SELECT delegated_tenants('ticket', 'write'))
+              AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = tickets.conversation_id AND c.tenant_id = tickets.tenant_id));
 CREATE POLICY tickets_acting_one_instance ON tickets AS RESTRICTIVE
   USING (acting_hub() IS NULL OR tenant_id = acting_tenant());
 
@@ -36,7 +38,8 @@ CREATE POLICY ticket_external_create_attempts_insert_delegated ON ticket_externa
 CREATE POLICY ticket_external_create_attempts_update_delegated ON ticket_external_create_attempts FOR UPDATE
   USING (tenant_id IN (SELECT delegated_tenants('ticket', 'write'))
          AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = ticket_external_create_attempts.conversation_id AND c.tenant_id = ticket_external_create_attempts.tenant_id))
-  WITH CHECK (tenant_id IN (SELECT delegated_tenants('ticket', 'write')));
+  WITH CHECK (tenant_id IN (SELECT delegated_tenants('ticket', 'write'))
+              AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = ticket_external_create_attempts.conversation_id AND c.tenant_id = ticket_external_create_attempts.tenant_id));
 CREATE POLICY ticket_external_create_attempts_acting_one_instance ON ticket_external_create_attempts AS RESTRICTIVE
   USING (acting_hub() IS NULL OR tenant_id = acting_tenant());
 
@@ -50,13 +53,17 @@ CREATE POLICY crm_contact_company_evidence_insert_delegated ON crm_contact_compa
 CREATE POLICY crm_contact_company_evidence_update_delegated ON crm_contact_company_evidence FOR UPDATE
   USING (tenant_id IN (SELECT delegated_tenants('ticket', 'write'))
          AND EXISTS (SELECT 1 FROM contacts ct WHERE ct.id = crm_contact_company_evidence.contact_id AND ct.tenant_id = crm_contact_company_evidence.tenant_id))
-  WITH CHECK (tenant_id IN (SELECT delegated_tenants('ticket', 'write')));
+  WITH CHECK (tenant_id IN (SELECT delegated_tenants('ticket', 'write'))
+              AND EXISTS (SELECT 1 FROM contacts ct WHERE ct.id = crm_contact_company_evidence.contact_id AND ct.tenant_id = crm_contact_company_evidence.tenant_id));
 CREATE POLICY crm_contact_company_evidence_acting_one_instance ON crm_contact_company_evidence AS RESTRICTIVE
   USING (acting_hub() IS NULL OR tenant_id = acting_tenant());
 
 -- 3b. account_external_links: READ only (which local account stands for which ERP company; the company-suggestions list joins it). Written only by the function in 5.
 CREATE POLICY account_external_links_read_delegated ON account_external_links FOR SELECT
   USING (tenant_id IN (SELECT delegated_tenants('contact', 'read')));
+-- its visibility hangs from no other table, so it carries the one-instance pin itself (Codex review of 04b, HIGH): like customer_accounts in 000111.
+CREATE POLICY account_external_links_acting_one_instance ON account_external_links AS RESTRICTIVE
+  USING (acting_hub() IS NULL OR tenant_id = acting_tenant());
 
 -- 4. The ERP connection(s) of the instance and the ENCRYPTED credential. Mirrors what the resolver reads for a member (every k3g_crm/erp connection of the
 --    tenant, the credential row its secret_ref names); the server counts them, decrypts and builds the client. Nothing is returned for another instance.

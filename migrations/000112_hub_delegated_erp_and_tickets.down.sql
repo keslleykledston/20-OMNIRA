@@ -1,5 +1,6 @@
 DROP FUNCTION IF EXISTS delegated_materialize_company_account(UUID, UUID, TEXT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS delegated_erp_connections(UUID);
+DROP POLICY IF EXISTS account_external_links_acting_one_instance ON account_external_links;
 DROP POLICY IF EXISTS account_external_links_read_delegated ON account_external_links;
 DROP POLICY IF EXISTS crm_contact_company_evidence_acting_one_instance ON crm_contact_company_evidence;
 DROP POLICY IF EXISTS crm_contact_company_evidence_update_delegated ON crm_contact_company_evidence;

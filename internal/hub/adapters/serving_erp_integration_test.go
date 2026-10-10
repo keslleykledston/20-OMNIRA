@@ -571,6 +571,15 @@ func TestDelegatedTicketTablesFollowTheirDomainTheScopeAndTheInstance(t *testing
 			if err := attempt(ctx, q, w.tenant["B"], w.conv["B"], writer, "other-instance-attempt"); err == nil {
 				t.Error("an attempt was inserted in another instance while acting for this one")
 			}
+			// a row cannot be RE-POINTED at a conversation outside the contract (the scope is re-checked on the new value)
+			// (the target conversation's own open ticket is closed first: otherwise the one-active-ticket-per-conversation index would refuse the move for another reason)
+			w.exec(`UPDATE tickets SET status = 'closed', closed_at = now() WHERE conversation_id = $1`, w.conv["A2"])
+			if err := w.try(ctx, q, `UPDATE tickets SET conversation_id = $2 WHERE id = $1`, ticketOf("A"), w.conv["A2"]); err == nil {
+				t.Error("a ticket was re-pointed at a conversation outside the contract's queues")
+			}
+			if err := w.try(ctx, q, `UPDATE ticket_external_create_attempts SET conversation_id = $2 WHERE idempotency_key = 'write-key-attempt'`, w.conv["A"], w.conv["A2"]); err == nil {
+				t.Error("an attempt was re-pointed at a conversation outside the contract's queues")
+			}
 			var n int
 			w.must(q.QueryRow(ctx, `SELECT count(*) FROM ticket_external_status_attempts`).Scan(&n))
 			if n != 0 {
@@ -608,6 +617,9 @@ func TestDelegatedTicketTablesFollowTheirDomainTheScopeAndTheInstance(t *testing
 			if err := ins(ctx, q, w.tenant["A"], onlyQ2, connA); err == nil {
 				t.Error("evidence for a contact outside the contract's queues")
 			}
+			if err := w.try(ctx, q, `UPDATE crm_contact_company_evidence SET contact_id = $1 WHERE external_company_id = 'co-1'`, onlyQ2); err == nil {
+				t.Error("evidence was re-pointed at a contact outside the contract's queues")
+			}
 			if err := ins(ctx, q, w.tenant["B"], contact("B"), connB); err == nil {
 				t.Error("evidence in another instance while acting for this one")
 			}
@@ -617,6 +629,22 @@ func TestDelegatedTicketTablesFollowTheirDomainTheScopeAndTheInstance(t *testing
 			w.must(q.QueryRow(ctx, `SELECT count(*) FROM crm_contact_company_evidence`).Scan(&n))
 			if n != 1 {
 				t.Errorf("evidence readable with contact.read: %d, want 1", n)
+			}
+		})
+	})
+
+	t.Run("account links: only the instance the request acts for, even with the same key on the other instance", func(t *testing.T) {
+		for _, k := range []string{"A", "B"} {
+			acc := w.account(k, "Conta "+k)
+			conn := map[string]uuid.UUID{"A": connA, "B": connB}[k]
+			w.exec(`INSERT INTO account_external_links (tenant_id, account_id, provider, connection_id, external_company_id, source) VALUES ($1,$2,'k3g',$3,'co-'||$4,'ticket_flow')`, w.tenant[k], acc, conn, k)
+		}
+		w.attend(writer, "A", func(ctx context.Context, q platformdb.Querier) {
+			var mine, theirs int
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM account_external_links WHERE tenant_id = $1`, w.tenant["A"]).Scan(&mine))
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM account_external_links WHERE tenant_id = $1`, w.tenant["B"]).Scan(&theirs))
+			if mine == 0 || theirs != 0 {
+				t.Errorf("links seen: this instance %d (want > 0), the other instance %d (want 0)", mine, theirs)
 			}
 		})
 	})

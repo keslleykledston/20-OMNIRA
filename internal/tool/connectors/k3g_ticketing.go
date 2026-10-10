@@ -264,9 +264,9 @@ func (c *K3GTicketingConnector) doOnce(ctx context.Context, method, path string,
 		// the provider before the transport failed, so the write outcome
 		// is unknown, not "unavailable" (which implies safe-to-retry).
 		if mutating {
-			return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "transport error during a mutating request; write outcome unknown", Err: err}
+			return nil, &TicketingError{Code: TicketingWriteOutcomeUnknown, Message: "transport error during a mutating request; write outcome unknown", Err: transportCause(err)}
 		}
-		return nil, &TicketingError{Code: TicketingProviderUnavailable, Message: "transport error", Err: err}
+		return nil, &TicketingError{Code: TicketingProviderUnavailable, Message: "transport error", Err: transportCause(err)}
 	}
 	defer res.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(res.Body, 1<<20))

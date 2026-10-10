@@ -73,6 +73,8 @@ PY
 #     invalid) and the same HTTP 503;
 #   - materialize "source not validated": an unknown source would reach the CHECK constraint on account_external_links.source and fail there;
 #   - tickets update "queue scope ignored": an UPDATE needs the row to be visible, and the SELECT policy (tested) already carries the scope;
+#   - the explicit scope re-check in the UPDATE WITH CHECK of tickets / attempts / evidence (Codex 04b HIGH): PostgreSQL also checks the NEW row of an UPDATE
+#     against the SELECT policy, which already carries the scope, so removing it changes nothing observable (the re-point tests prove the behaviour);
 #   - the acting_one_instance pins on tickets / attempts / evidence: second layer on writable tables (the permissive policies hang from a pinned conversation
 #     or contact), like contacts / contact_account_links in migration 111.
 RS=internal/tickets/adapters/k3g_runtime_resolver.go; CK=internal/channels/adapters/management.go; TS=internal/tickets/application/create_external_ticket.go
@@ -129,4 +131,7 @@ sqlmut "evidence read: removed" $M "CREATE POLICY crm_contact_company_evidence_r
 sqlmut "account links read: removed" $M "CREATE POLICY account_external_links_read_delegated ON account_external_links FOR SELECT
   USING (tenant_id IN (SELECT delegated_tenants('contact', 'read')));" "CREATE POLICY account_external_links_read_delegated ON account_external_links FOR SELECT
   USING (false);"
+sqlmut "account links: the one-instance pin is removed" $M "CREATE POLICY account_external_links_acting_one_instance ON account_external_links AS RESTRICTIVE
+  USING (acting_hub() IS NULL OR tenant_id = acting_tenant());" "CREATE POLICY account_external_links_acting_one_instance ON account_external_links AS RESTRICTIVE
+  USING (true);"
 echo "PASS: all $N mutants killed"

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -105,7 +106,7 @@ func (c *K3GCRMClient) get(ctx context.Context, path string) ([]byte, error) {
 	req.Header.Set("Accept", "application/json")
 	res, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCRMUnavailable, err)
+		return nil, fmt.Errorf("%w: %v", ErrCRMUnavailable, transportCause(err))
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
@@ -137,7 +138,7 @@ func (c *K3GCRMClient) post(ctx context.Context, path string, payload any) ([]by
 	req.Header.Set("Accept", "application/json")
 	res, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCRMUnavailable, err)
+		return nil, fmt.Errorf("%w: %v", ErrCRMUnavailable, transportCause(err))
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
@@ -386,4 +387,14 @@ func (c *K3GCRMClient) CreateActivity(ctx context.Context, actType, subject, con
 		CompanyID: strings.TrimSpace(resp.CompanyID),
 		CreatedAt: strings.TrimSpace(resp.CreatedAt),
 	}, nil
+}
+
+// transportCause drops the request URL that net/http puts in its errors: the ERP address is the instance's configuration and has no business in logs or in
+// the errors that travel up to them (Codex review of phase 04b). The underlying cause (timeout, refused, DNS...) is kept.
+func transportCause(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err
+	}
+	return err
 }
