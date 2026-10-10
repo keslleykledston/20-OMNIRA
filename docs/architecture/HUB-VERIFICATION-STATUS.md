@@ -379,3 +379,12 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Gate de integração:** pacotes afetados verdes quando cada pacote usa o seu banco (hub/adapters, provisioning, distribution, contacts, inbox, tenancy, routing, tickets, httpserver após documentar a rota nova no OpenAPI).
 - **NÃO provado:** login real do Keycloak; `EXPLAIN` das políticas novas; duas pessoas reais do Hub no mesmo atendimento em produção; implantação (migration 113 não aplicada em produção).
 - Estado segue `LAB`.
+
+## 2026-10-10 (noite) — fase 04d: custo das políticas do contexto delegado (migration 114) — LOCAL, NÃO implantada
+
+- **ACHADO MEDIDO (`scripts/bench-hub-policies.sh`, sintético: 2 instâncias × 30 mil conversas × 10 mensagens, papel `omnira_app`):** com as políticas das 108-113 a lista da caixa no contexto delegado levava **10,3 s** (membro 0,46 s) e a contagem de abertas 3,7 s (membro 0,14 s). Causa: uma função `SECURITY DEFINER` de seis tabelas por linha, até 3×, e o JIT do PostgreSQL ligando por causa do custo estimado (1,2 s por consulta). **Produção hoje não é afetada** (172+20 conversas); o risco era uma instância grande.
+- **IMPLEMENTED + POSTGRES VERIFIED:** ADR-0040 §17. `acting_scope()` uma vez por comando; legado da 095 só fora do contexto delegado; políticas `*_read_acting`; pinos e leituras de membro em forma barata; `ROWS 1`; JIT desligado na transação delegada. **Mesma resposta:** `serving_policy_cost_integration_test.go` compara com o predicado original em 17 estados + membership removida + dois Hubs na mesma instância; `TestTheDelegatedTransactionDoesNotJITCompile`. Resultado medido: lista **178 ms**, contagem **10 ms** (membro 405/80 ms); pontuais ~5-6 ms (custo fixo da relação).
+- **Mutação:** `scripts/test-hub-cost-mutations.sh` 8/8 mortos. **Migrations** 093..114 sobem, descem e sobem idênticas. **Gate de integração:** 32 pacotes `ok` (hub/\*, contacts, inbox, tenancy, routing, httpserver, tickets, messages, accounts, channels, crmevidence, tool). **E2E em navegador real: 10/10.**
+- **Codex (somente leitura, leu o diff `0e95165..HEAD`, NÃO executou testes):** CRITICAL 0, HIGH 0, MEDIUM 0, LOW 0.
+- **NÃO provado:** carga/volume reais de produção; `EXPLAIN` da aba do próprio Hub (políticas legadas, fora do contexto delegado, não otimizadas); implantação (migrations 113 e 114 não aplicadas em produção).
+- Estado segue `LAB`.
