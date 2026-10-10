@@ -239,6 +239,25 @@ func TestDelegatedRealtimeStreams(t *testing.T) {
 		}
 	})
 
+	t.Run("with a limited contract the visibility answer is reused only briefly: a conversation that leaves the scope stops being announced", func(t *testing.T) {
+		narrow(w.queue1["A"], w.queue2["A"])
+		t.Cleanup(open)
+		s := api.open(t, agent, inbox, hub)
+		if s.status != 200 {
+			t.Fatalf("status %d", s.status)
+		}
+		api.publish(w.tenant["A"], w.conv["A2"], "message_received")
+		if got := s.next(3 * time.Second); !strings.Contains(got, w.conv["A2"].String()) {
+			t.Fatalf("inside the scope: %q", got)
+		}
+		narrow(w.queue1["A"])
+		time.Sleep(120 * time.Millisecond) // beyond the 50 ms visibility TTL, before the next watchdog tick would matter
+		api.publish(w.tenant["A"], w.conv["A2"], "message_received")
+		if extra := s.next(500 * time.Millisecond); extra != "" {
+			t.Errorf("a conversation that left the scope was still announced: %s", extra)
+		}
+	})
+
 	t.Run("the conversation stream: inside the scope yes, outside or in another instance no", func(t *testing.T) {
 		narrow(w.queue1["A"])
 		t.Cleanup(open)
