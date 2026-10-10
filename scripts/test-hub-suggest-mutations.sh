@@ -27,6 +27,8 @@ run() { # the host toolchain with its warm caches
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
     go test -count=1 -p 1 -run 'TestDelegatedClosingDraft' \
       ./internal/hub/adapters 2>&1
+  # the real suggester's holder-bound branch (a unit test: its reader and provider are fakes)
+  GOFLAGS=-buildvcs=false go test -count=1 -run 'TestSuggest' ./internal/intelligence/application 2>&1
 }
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 1 ]; }
 
@@ -66,42 +68,29 @@ PY
 }
 # NOT mutants (equivalent by construction):
 #   - the "no check wired" branch of the handler and the source guard of SuggestClosingAsHubAgent: a delegate only reaches them through a route that is Delegable, which exists
-#     only when the check is wired, and a member's request never selects the Hub variant (the handler chooses by the access source).
+#     only when the check is wired, and a member's request never selects the Hub variant (the handler chooses by the access source);
+#   - the "closed" rule of the service alone: the reading statement of the Hub variant carries the same condition (status <> 'closed'), so each layer alone is covered by the other
+#     (both answer 422); the holder condition of the statement IS mutated, and the race test goes red without it.
 AS=internal/attendance/application/service.go; AH=internal/attendance/adapters/http.go; IR=internal/intelligence/adapters/closing_suggest.go; IA=internal/intelligence/application/closing_suggester.go
 
 mut "the route asks a key every delegate has instead of ai.assist" $AH 'suggestRoute = tenancyadapters.Delegable("ai.assist", wrap(h.suggest))' 'suggestRoute = tenancyadapters.Delegable("conversation.read", wrap(h.suggest))'
-mut "the handler does not ask for conversation.read" $AH '		if !readable {
-			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
-			return
-		}
-		suggest = h.svc.SuggestClosingAsHubAgent' '		if false && !readable {
-			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
-			return
-		}
-		suggest = h.svc.SuggestClosingAsHubAgent'
+mut "the handler does not ask for conversation.read" $AH '		if !readable {' '		if false && !readable {'
 mut "a delegate is routed through the member's role matrix" $AH '		suggest = h.svc.SuggestClosingAsHubAgent' '		_ = h.svc.SuggestClosingAsHubAgent'
 mut "the route is delegable even when the server does not wire the check" $AH 'if h.canReadAsHubAgent != nil {
 		// ADR-0040 phase 07' 'if true {
 		// ADR-0040 phase 07'
-mut "a delegate has the supervisor path (any conversation, not only the held one)" $AS 'return s.suggestFor(ctx, tc, conversationID, false)
-}
-
-func (s *Service) suggestFor' 'return s.suggestFor(ctx, tc, conversationID, true)
-}
-
-func (s *Service) suggestFor'
-mut "a closed conversation is still drafted" $AS '	if facts.Status == "closed" {
-		return domain.ClosingSuggestion{}, domain.ErrNothingToSuggest
+mut "a delegate has the supervisor path (any conversation, not only the held one)" $AS '	if err := s.checkDraftable(ctx, tc, conversationID, false); err != nil {
+		return domain.ClosingSuggestion{}, err
 	}
-	return s.suggester.SuggestClosing(ctx, conversationID)' '	if false && facts.Status == "closed" {
-		return domain.ClosingSuggestion{}, domain.ErrNothingToSuggest
+	// the clear answers above' '	if err := s.checkDraftable(ctx, tc, conversationID, true); err != nil {
+		return domain.ClosingSuggestion{}, err
 	}
-	return s.suggester.SuggestClosing(ctx, conversationID)'
+	// the clear answers above'
 mut "a conversation with no contact or an internal one is drafted" $AS '	if facts.ContactID == nil || facts.Kind == "internal" {
-		return domain.ClosingSuggestion{}, domain.ErrNotAContact
+		return domain.ErrNotAContact
 	}
 	if owner' '	if false && (facts.ContactID == nil || facts.Kind == "internal") {
-		return domain.ClosingSuggestion{}, domain.ErrNotAContact
+		return domain.ErrNotAContact
 	}
 	if owner'
 mut "the delegate's draft is not bound to the holder (service)" $AS '	return bound.SuggestClosingHeldBy(ctx, conversationID, tc.ActorID)' '	_ = bound
