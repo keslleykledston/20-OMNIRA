@@ -46,4 +46,17 @@ describe('useRealtimeEvents while acting for a hub', () => {
     expect(fetchMock.mock.calls[0][1].headers['X-Omnira-Acting-As']).toBeUndefined()
     plain.unmount()
   })
+
+  it('stops retrying when the server refuses the delegated stream (access withdrawn)', async () => {
+    vi.useFakeTimers()
+    localStorage.setItem('tenantId', 'T-B')
+    setActing('hub-1', 'Beta')
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue({ status: 404, ok: false, body: null })
+    const { unmount } = renderHook(() => useRealtimeEvents({ tenantId: 'T-B', onEvent: () => undefined }))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    unmount()
+    vi.useRealTimers()
+  })
 })

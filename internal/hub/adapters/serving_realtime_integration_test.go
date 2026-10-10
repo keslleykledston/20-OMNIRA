@@ -58,6 +58,10 @@ func (a streamAuth) AuthorizeServing(ctx context.Context, userID, tenantID, hubI
 	return tenancyadapters.AuthorizeServing(ctx, a.w.app, userID, tenantID, hubID, keys)
 }
 
+func (a streamAuth) ScopeUnrestricted(ctx context.Context, userID, tenantID, hubID uuid.UUID) (bool, error) {
+	return tenancyadapters.ServingScopeUnrestricted(ctx, a.w.app, userID, tenantID, hubID)
+}
+
 func (a streamAuth) ConversationVisibleServing(ctx context.Context, userID, tenantID, hubID, conversationID uuid.UUID) (bool, error) {
 	return tenancyadapters.ServingConversationVisible(ctx, a.w.app, userID, tenantID, hubID, conversationID)
 }
@@ -228,7 +232,7 @@ func TestDelegatedRealtimeStreams(t *testing.T) {
 			t.Fatalf("before narrowing: %q", got)
 		}
 		narrow(w.queue1["A"])
-		time.Sleep(150 * time.Millisecond) // beyond the visibility TTL
+		time.Sleep(600 * time.Millisecond) // beyond the visibility TTL and the watchdog interval (the contract was open: no per-event filter until the recheck sees the new scope)
 		api.publish(w.tenant["A"], w.conv["A2"], "message_received")
 		if extra := s.next(500 * time.Millisecond); extra != "" {
 			t.Errorf("an event of a conversation that left the scope still arrived: %s", extra)

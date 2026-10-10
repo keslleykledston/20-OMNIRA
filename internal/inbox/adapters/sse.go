@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,6 +64,8 @@ type DelegatedStreamAuthorizer interface {
 	AuthorizeServing(ctx context.Context, userID, tenantID, hubID uuid.UUID, keys []string) (*tenancydomain.TenantContext, error)
 	// ConversationVisibleServing reports whether the conversation is visible in the delegated context (the contract's queue scope included).
 	ConversationVisibleServing(ctx context.Context, userID, tenantID, hubID, conversationID uuid.UUID) (bool, error)
+	// ScopeUnrestricted reports whether the contract names no queue list (every queue of the instance), so the instance stream needs no per-event filter.
+	ScopeUnrestricted(ctx context.Context, userID, tenantID, hubID uuid.UUID) (bool, error)
 }
 
 // RealtimeOptions tunes the stream timing; zero values use production defaults.
@@ -70,6 +73,9 @@ type RealtimeOptions struct {
 	Recheck time.Duration // membership re-authorization interval (default 30s)
 	// DelegatedRecheck is the same for a Hub agent (default 15s): the longest a stream outlives a revoked grant, a lost key or a suspended instance.
 	DelegatedRecheck time.Duration
+	// WriteTimeout bounds every write to the client (default 15s); DatabaseTimeout bounds each lookup the stream makes (default 5s).
+	WriteTimeout    time.Duration
+	DatabaseTimeout time.Duration
 	// VisibilityTTL is how long the answer "this conversation is visible to the Hub agent" is reused on the instance stream (default 10s).
 	VisibilityTTL time.Duration
 	Keepalive     time.Duration // heartbeat comment interval (default 20s)
@@ -97,6 +103,12 @@ type RealtimeHandler struct {
 func NewRealtimeHandler(nc *nats.Conn, auth StreamAuthorizer, opts RealtimeOptions) *RealtimeHandler {
 	if opts.Recheck <= 0 {
 		opts.Recheck = 30 * time.Second
+	}
+	if opts.WriteTimeout <= 0 {
+		opts.WriteTimeout = 15 * time.Second
+	}
+	if opts.DatabaseTimeout <= 0 {
+		opts.DatabaseTimeout = 5 * time.Second
 	}
 	if opts.DelegatedRecheck <= 0 {
 		opts.DelegatedRecheck = 15 * time.Second
@@ -249,22 +261,45 @@ func (h *RealtimeHandler) conversationVisible(ctx context.Context, user uuid.UUI
 }
 
 // seenFilter decides, per event of the instance stream, whether a Hub agent may be told about it: the event names a conversation, and a contract limited to some
-// queues must not leak the existence of the others. The answer is reused for VisibilityTTL (bounded memory); members are not filtered.
+// queues must not leak the existence of the others. The answer is reused for VisibilityTTL (bounded memory) and the number of lookups per second is bounded
+// (a burst beyond the budget is dropped, never shown: the client polls and refetches on reconnect); members and unrestricted contracts are not filtered.
 type seenFilter struct {
-	ttl   time.Duration
-	check func(conversationID uuid.UUID) (bool, error)
-	cache map[uuid.UUID]seenEntry
+	ttl    time.Duration
+	check  func(conversationID uuid.UUID) (bool, error)
+	cache  map[uuid.UUID]seenEntry
+	tokens float64
+	last   time.Time
 }
+
+const (
+	filterBurst      = 100.0 // lookups available at once
+	filterRefillPerS = 50.0  // lookups regained per second
+)
 
 type seenEntry struct {
 	ok bool
 	at time.Time
 }
 
+func newSeenFilter(ttl time.Duration, check func(uuid.UUID) (bool, error)) *seenFilter {
+	return &seenFilter{ttl: ttl, check: check, cache: map[uuid.UUID]seenEntry{}, tokens: filterBurst}
+}
+
 func (f *seenFilter) allow(id uuid.UUID, now time.Time) bool {
 	if e, hit := f.cache[id]; hit && now.Sub(e.at) < f.ttl {
 		return e.ok
 	}
+	if !f.last.IsZero() {
+		f.tokens += now.Sub(f.last).Seconds() * filterRefillPerS
+		if f.tokens > filterBurst {
+			f.tokens = filterBurst
+		}
+	}
+	f.last = now
+	if f.tokens < 1 {
+		return false // over budget: fail closed
+	}
+	f.tokens--
 	ok, err := f.check(id)
 	if err != nil {
 		return false // fail closed: an event is better dropped than shown to someone who may not see it (the client refetches on reconnect)
@@ -286,9 +321,13 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 		http.Error(w, "realtime unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	da, isDelegated := h.delegated(tc)
+	if tc.Source == tenancydomain.AccessSourceHubServe && !isDelegated {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	if !h.acquire(principal.UserID) {
@@ -297,8 +336,17 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 		return
 	}
 	defer h.release(principal.UserID)
-	// The server-wide WriteTimeout would cut a long-lived stream.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	// The server-wide WriteTimeout would cut a long-lived stream, so it is replaced by a deadline armed before EVERY write: a client that stops reading
+	// cannot hold the goroutine (and with it the recheck) for ever, and the watchdog can force a blocked write to fail at once by moving the deadline to now.
+	rc := http.NewResponseController(w)
+	write := func(b []byte) bool {
+		_ = rc.SetWriteDeadline(time.Now().Add(h.opts.WriteTimeout))
+		if _, err := w.Write(b); err != nil {
+			return false
+		}
+		return rc.Flush() == nil
+	}
 
 	msgs := make(chan *nats.Msg, 64)
 	sub, err := h.nc.ChanSubscribe(subject, msgs)
@@ -308,38 +356,69 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 	}
 	defer func() { _ = sub.Unsubscribe() }()
 
+	// streamCtx ends when the client goes away OR when the watchdog (Hub agents) finds the access gone.
+	streamCtx, stop := context.WithCancel(r.Context())
+	defer stop()
+
+	// A Hub agent: is the contract limited to some queues? (an instance stream is filtered per event only then). Asked at admission and at every recheck.
+	var unrestricted atomic.Bool
+	var filter *seenFilter
+	if isDelegated {
+		if open, err := da.ScopeUnrestricted(streamCtx, principal.UserID, tc.TenantID, *tc.HubID); err == nil {
+			unrestricted.Store(open)
+		}
+		if onlyConversation == nil { // the instance stream: tell the agent only about conversations they may see
+			filter = newSeenFilter(h.opts.VisibilityTTL, func(id uuid.UUID) (bool, error) {
+				c, cancel := context.WithTimeout(streamCtx, h.opts.DatabaseTimeout)
+				defer cancel()
+				return da.ConversationVisibleServing(c, principal.UserID, tc.TenantID, *tc.HubID, id)
+			})
+		}
+		// The watchdog runs APART from the event loop, so a slow write or a stalled lookup in the loop cannot postpone the revocation (Codex 05).
+		go func() {
+			tick := time.NewTicker(h.opts.DelegatedRecheck)
+			defer tick.Stop()
+			for {
+				select {
+				case <-streamCtx.Done():
+					return
+				case <-tick.C:
+					c, cancel := context.WithTimeout(streamCtx, h.opts.DatabaseTimeout)
+					alive := h.delegatedStillHolds(c, da, principal, tc, onlyConversation, &unrestricted)
+					cancel()
+					if !alive && streamCtx.Err() == nil {
+						log.Printf("inbox realtime: closing delegated stream, authorization lost")
+						stop()
+						_ = rc.SetWriteDeadline(time.Now()) // a write blocked on a client that is not reading fails now
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // nginx: do not buffer the stream
-	fmt.Fprint(w, ": connected\n\n")
-	flusher.Flush()
+	if !write([]byte(": connected\n\n")) {
+		return
+	}
 
 	lifetime := time.NewTimer(h.opts.MaxLifetime)
 	defer lifetime.Stop()
-	da, isDelegated := h.delegated(tc)
-	if tc.Source == tenancydomain.AccessSourceHubServe && !isDelegated {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	var recheckC <-chan time.Time
+	if !isDelegated { // members: rechecked in the loop, as before
+		recheck := time.NewTicker(h.opts.Recheck)
+		defer recheck.Stop()
+		recheckC = recheck.C
 	}
-	interval := h.opts.Recheck
-	var filter *seenFilter
-	if isDelegated {
-		interval = h.opts.DelegatedRecheck
-		if onlyConversation == nil { // the instance stream: tell the agent only about conversations they may see
-			filter = &seenFilter{ttl: h.opts.VisibilityTTL, cache: map[uuid.UUID]seenEntry{}, check: func(id uuid.UUID) (bool, error) {
-				return da.ConversationVisibleServing(r.Context(), principal.UserID, tc.TenantID, *tc.HubID, id)
-			}}
-		}
-	}
-	recheck := time.NewTicker(interval)
-	defer recheck.Stop()
 	keepalive := time.NewTicker(h.opts.Keepalive)
 	defer keepalive.Stop()
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-streamCtx.Done():
 			return
 		case <-lifetime.C:
 			return // bounded lifetime: the client reconnects (and refetches) with backoff
@@ -349,37 +428,23 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 				log.Printf("inbox realtime: dropping malformed event on %s", msg.Subject)
 				continue
 			}
-			if filter != nil && !filter.allow(event.ID, time.Now()) {
+			if filter != nil && !unrestricted.Load() && !filter.allow(event.ID, time.Now()) {
 				continue
 			}
-			_, _ = w.Write(sseFrame(event))
-			flusher.Flush()
+			if !write(sseFrame(event)) {
+				return
+			}
 		case <-keepalive.C:
-			fmt.Fprint(w, ": keepalive\n\n")
-			flusher.Flush()
-		case <-recheck.C:
+			if !write([]byte(": keepalive\n\n")) {
+				return
+			}
+		case <-recheckC:
 			// A logged-out / revoked session or device ends the stream (R-3), then membership is re-authorized in a short transaction.
 			if h.opts.SessionRecheck != nil {
 				if err := h.opts.SessionRecheck(r.Context(), principal); err != nil && !errors.Is(err, context.Canceled) {
 					log.Printf("inbox realtime: closing stream, session revoked or expired")
 					return
 				}
-			}
-			if isDelegated {
-				// A Hub agent: the relationship (grant, contract, hub, instance, account) and the key are asked again, live, in a short delegated
-				// transaction; a conversation stream also asks whether the conversation is still inside the contract's queue scope.
-				if _, err := da.AuthorizeServing(r.Context(), principal.UserID, tc.TenantID, *tc.HubID, []string{"conversation.read"}); err != nil {
-					if !errors.Is(err, context.Canceled) {
-						log.Printf("inbox realtime: closing delegated stream, authorization lost")
-					}
-					return
-				}
-				if onlyConversation != nil {
-					if visible, err := da.ConversationVisibleServing(r.Context(), principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil || !visible {
-						return
-					}
-				}
-				continue
 			}
 			// Re-authorize in a short transaction; revoked membership / inactive tenant ends the stream.
 			if _, err := h.auth.Authorize(r.Context(), principal.UserID, tc.TenantID); err != nil {
@@ -390,4 +455,29 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 			}
 		}
 	}
+}
+
+// delegatedStillHolds asks again, live, in short delegated transactions: the credential of the session, the relationship (grant, contract, hub, instance,
+// account) with the key, and for a conversation stream whether the conversation is still inside the contract's queue scope. Any error ends the stream (fail closed).
+func (h *RealtimeHandler) delegatedStillHolds(ctx context.Context, da DelegatedStreamAuthorizer, principal *authn.Principal, tc *tenancydomain.TenantContext, onlyConversation *uuid.UUID, unrestricted *atomic.Bool) bool {
+	if h.opts.SessionRecheck != nil {
+		if err := h.opts.SessionRecheck(ctx, principal); err != nil {
+			return false
+		}
+	}
+	if _, err := da.AuthorizeServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, []string{"conversation.read"}); err != nil {
+		return false
+	}
+	if onlyConversation != nil {
+		if visible, err := da.ConversationVisibleServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil || !visible {
+			return false
+		}
+		return true
+	}
+	open, err := da.ScopeUnrestricted(ctx, principal.UserID, tc.TenantID, *tc.HubID)
+	if err != nil {
+		return false
+	}
+	unrestricted.Store(open)
+	return true
 }

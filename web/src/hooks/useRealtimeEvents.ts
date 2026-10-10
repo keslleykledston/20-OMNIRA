@@ -58,6 +58,9 @@ export function useRealtimeEvents({ tenantId, conversationId, onEvent, onError, 
             handleUnauthorized();
             return;
           }
+          // Attending through a Hub: 404/403 means the access was withdrawn (the server answers both the same way); retrying only produces refused requests.
+          // The screens' own access check (/me/access, every 15 s) drives re-entry and the notice.
+          if (hub && (res.status === 404 || res.status === 403)) return;
           if (!res.ok || !res.body) throw new Error(`SSE connection failed (HTTP ${res.status})`);
           attempt = 0;
           if (dropped) onReconnectRef.current?.();

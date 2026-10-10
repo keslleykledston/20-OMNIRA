@@ -70,19 +70,22 @@ PY
   killed "$1" "$(run || true)"
 }
 # NOT mutants (equivalent by construction):
-#   - the instance-stream filter failing OPEN on a lookup error: needs a database error injected between two statements; the code fails closed and says so;
+#   - the instance-stream filter failing OPEN on a lookup error or over budget: the code fails closed and says so (the stalled-lookup test covers the timeout);
+#   - the per-stream lookup budget (50/s): a rate, not a rule;
 #   - ServingConversationVisible without its own conversation.read check: AuthorizeServing already asked for it at admission and asks again at every recheck;
 #   - the delegated branch asking the member visibility for a conversation stream: the legacy policies give the same answer for one hub (the multi-hub case is
 #     covered by the cost test, which compares the policies with the original predicate).
 SSE=internal/inbox/adapters/sse.go; SV=internal/tenancy/adapters/serving.go
 
-mut "recheck of a Hub stream is skipped (a revoked grant keeps streaming)" $SSE 'if _, err := da.AuthorizeServing(r.Context(), principal.UserID, tc.TenantID, *tc.HubID, []string{"conversation.read"}); err != nil {' 'if false {'
-mut "recheck of a Hub stream uses the members' interval (an hour)" $SSE 'interval = h.opts.DelegatedRecheck' 'interval = h.opts.Recheck'
-mut "the instance stream is not filtered by visibility" $SSE 'if filter != nil && !filter.allow(event.ID, time.Now()) {' 'if false && filter != nil && !filter.allow(event.ID, time.Now()) {'
+mut "the watchdog finds the access gone but does not end the stream" $SSE 'if !alive && streamCtx.Err() == nil {' 'if false && !alive && streamCtx.Err() == nil {'
+mut "the relationship is not asked again at the recheck (a revoked grant keeps streaming)" $SSE 'if _, err := da.AuthorizeServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, []string{"conversation.read"}); err != nil {' 'if false {'
+mut "the watchdog uses the members' interval (an hour)" $SSE 'tick := time.NewTicker(h.opts.DelegatedRecheck)' 'tick := time.NewTicker(h.opts.Recheck)'
+mut "the instance stream is not filtered by visibility" $SSE 'if filter != nil && !unrestricted.Load() && !filter.allow(event.ID, time.Now()) {' 'if false && filter != nil && !unrestricted.Load() && !filter.allow(event.ID, time.Now()) {'
 mut "the visibility answer is reused forever" $SSE 'if e, hit := f.cache[id]; hit && now.Sub(e.at) < f.ttl {' 'if e, hit := f.cache[id]; hit {'
-mut "a conversation stream does not recheck the queue scope" $SSE 'if visible, err := da.ConversationVisibleServing(r.Context(), principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil || !visible {' 'if false {'
+mut "a conversation stream does not recheck the queue scope" $SSE 'if visible, err := da.ConversationVisibleServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil || !visible {' 'if visible, err := da.ConversationVisibleServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil && !visible && false {'
 mut "a malformed acting header is read as a member" $SSE 'if aerr != nil {' 'if false && aerr != nil {'
 mut "the acting header is ignored (every stream is a member stream)" $SSE 'if acting.IsHub() {' 'if false && acting.IsHub() {'
+mut "every contract is read as unrestricted (the filter is skipped for a limited one)" $SV 'SELECT unrestricted FROM acting_scope()' 'SELECT true FROM acting_scope()'
 mut "admission accepts a person who holds none of the keys" $SV '			if ok {
 				tc = resolved
 				return nil

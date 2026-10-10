@@ -239,3 +239,22 @@ func ServingConversationVisible(ctx context.Context, pool *pgxpool.Pool, userID,
 	}
 	return visible, err
 }
+
+// ServingScopeUnrestricted — whether the contract names no queue list for this person's relationship (every queue of the instance is allowed), read from
+// acting_scope() in a short delegated transaction. An instance stream skips its per-event filter only then.
+func ServingScopeUnrestricted(ctx context.Context, pool *pgxpool.Pool, userID, tenantID, hubID uuid.UUID) (bool, error) {
+	if !delegatedServing.Load() {
+		return false, nil
+	}
+	var open bool
+	err := platformdb.WithTenantSession(ctx, pool, userID, false, func(c context.Context) error {
+		if _, err := resolveServeContext(c, pool, hubID, tenantID, userID); err != nil {
+			return err
+		}
+		return platformdb.QuerierFromContext(c, pool).QueryRow(c, `SELECT unrestricted FROM acting_scope()`).Scan(&open)
+	})
+	if errors.Is(err, errServeDenied) {
+		return false, nil
+	}
+	return open, err
+}

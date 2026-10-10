@@ -1057,6 +1057,10 @@ func (a sessionStreamAuthorizer) ConversationVisibleServing(ctx context.Context,
 	return tenancyadapters.ServingConversationVisible(ctx, a.pool, userID, tenantID, hubID, conversationID)
 }
 
+func (a sessionStreamAuthorizer) ScopeUnrestricted(ctx context.Context, userID, tenantID, hubID uuid.UUID) (bool, error) {
+	return tenancyadapters.ServingScopeUnrestricted(ctx, a.pool, userID, tenantID, hubID)
+}
+
 // ConversationVisible reports whether the conversation exists in the tenant for the user (RLS applies).
 func (a sessionStreamAuthorizer) ConversationVisible(ctx context.Context, userID, tenantID, conversationID uuid.UUID) (bool, error) {
 	var visible bool
