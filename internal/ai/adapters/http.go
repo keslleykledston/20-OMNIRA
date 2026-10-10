@@ -17,6 +17,7 @@ import (
 	auditports "github.com/omnira/omnira/internal/audit/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -65,6 +66,20 @@ func (h *SummaryHandler) Summarize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "invalid conversation_id", http.StatusBadRequest)
 		return
+	}
+
+	// A Hub agent attending the instance (ADR-0040 phase 05) needs to be able to READ the conversation it asks to have summarized: ai.assist alone must never
+	// send text the person cannot see to the provider. The database refuses the rows as well; this is the clear answer and a second layer.
+	if tc.Source == tenancydomain.AccessSourceHubServe {
+		readable, rerr := tenancyadapters.ActorHasPermission(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc.TenantID, tc.ActorID, "conversation.read")
+		if rerr != nil {
+			http.Error(w, "failed to check permission", http.StatusInternalServerError)
+			return
+		}
+		if !readable {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Fail closed unconditionally when AI is disabled/unconfigured — no

@@ -90,6 +90,18 @@ func TestDelegatedAISummaryNeedsTheKeyAndOnlyReadsWhatTheAgentSees(t *testing.T)
 		}
 	})
 
+	t.Run("ai.assist alone never sends text the agent cannot read: without conversation.read the handler refuses before anything is read or sent", func(t *testing.T) {
+		w.grantKeys(g, "ai.assist", "contact.read")
+		before := provider.calls()
+		if code, _ := post(agent, "A", "A", hub); code != 403 {
+			t.Errorf("ai.assist without conversation.read: %d, want 403", code)
+		}
+		if provider.calls() != before {
+			t.Errorf("the provider was called")
+		}
+		w.grantKeys(g, withAI...)
+	})
+
 	t.Run("a key in the grant is not enough when the contract's ceiling does not carry it", func(t *testing.T) {
 		w.grantKeys(g, withAI...)
 		w.ceiling("A", provisioning.ServingPresets["completo"]...)

@@ -6,3 +6,6 @@ INSERT INTO permissions (key, description) VALUES
   ('ai.assist', 'Ask the AI for a summary of a conversation you can see (delegated serving)')
 ON CONFLICT (key) DO NOTHING;
 INSERT INTO permission_domains (permission_key, domain, need) VALUES ('ai.assist', 'ai', 'read');
+-- NOTE (Codex review of phase 05, HIGH): the database does NOT ask for conversation.read on conversations/messages, by design (ADR-0040 4.1: the database answers
+-- by relationship, instance and queue scope, the KEY is asked by the route/handler; contact.read or media.read alone legitimately read the contact or the file of a
+-- visible conversation). ai.assist therefore asks for conversation.read itself, in the handler (internal/ai/adapters/http.go), before anything is read or sent.
