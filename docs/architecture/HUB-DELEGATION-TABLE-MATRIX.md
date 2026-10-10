@@ -108,6 +108,10 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 Total: 81 tabelas com RLS.
 
 
+## Atualização (fase 04d, migration 114) — só custo, mesma visibilidade
+
+`conversations` e `messages`: as políticas legadas da 095 valem só FORA do contexto delegado; dentro dele, `conversations_read_acting` e `messages_read_acting` (mesma visibilidade, para a instância do contexto, consultando `acting_scope()` uma vez por comando). As restritivas `*_acting_hub_only` (110) e `*_acting_one_instance` (111-113) mantêm o papel, com o predicado barato. As leituras de membro de `conversations`, `messages`, `contacts`, `tickets`, `message_media` e `contact_notes` ganham a checagem de contexto em linha antes de `has_active_membership()`. Nenhuma tabela nova, nenhum acesso novo. Ver ADR-0040 §17.
+
 ## Atualização (fase 04c, migration 113)
 
 | Tabela | SELECT | INSERT | UPDATE | DELETE | Observação |
