@@ -72,5 +72,5 @@ Pré-requisitos: `serving ceiling ... --preset completo` e `serving grant ... --
 3. Como B, **Transferir ou devolver → Devolver à fila**: a conversa volta sem responsável. Tentar devolver de novo (ou A tentar transferir) é recusado.
 4. Retire `conversation.transfer` de A (`serving grant ... --preset chamados`): o diálogo só oferece **Devolver à fila**; a API de candidatos responde 403.
 5. Com `contact.note`: bloco **Anotações** no cartão; adicione, edite e remova a sua; as anotações da equipe da empresa aparecem, sem botões de edição. Sem `contact.note` o bloco não existe e a API responde 403.
-6. Auditoria: transferência e devolução ficam com `acting_as = hub:<id>` e o autor real; o texto das anotações nunca aparece na trilha.
+6. Auditoria: transferência e devolução (`hub.conversation.transferred` / `hub.conversation.released`) ficam com o `hub_id` e o autor real; o texto das anotações nunca aparece na trilha.
 

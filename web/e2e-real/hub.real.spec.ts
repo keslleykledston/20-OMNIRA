@@ -248,6 +248,69 @@ test('auditoria: o administrador vê quem mudou o quê, e só ele', async ({ pag
   await other.close();
 });
 
+test('contexto completo, fase 04c: anotações, transferir a um colega do Hub e devolver à fila pela caixa da instância', async ({ page, browser }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  // o teto da NorteNet passa a cobrir o preset completo; Bruno recebe as chaves todas, Fabio continua só com as de classificação
+  hubctl(`serving ceiling --hub ${env.hub} --tenant ${env.tb} --preset completo`);
+  hubctl(`serving grant --hub ${env.hub} --tenant ${env.tb} --email agent1@e2e.test --preset completo`);
+  sql(`UPDATE conversations SET assigned_to_user_id = NULL WHERE tenant_id = '${env.tb}'`);
+
+  const bruno = await signIn(page, 'agent1@e2e.test');
+  await page.goto('/inbox');
+  await page.getByRole('tablist', { name: 'Instâncias' }).getByRole('tab', { name: 'NorteNet' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('actingHub'))).toBe(env.hub);
+  await page.getByText('Maria Souza').first().click();
+  const card = page.getByRole('complementary', { name: 'Detalhes do atendimento' });
+  await expect(card).toContainText('Maria Souza');
+
+  // anotações (contact.note): adiciona, grava em nome de Bruno e aparece com o botão de remover
+  const notes = card.getByRole('region', { name: 'Anotações do contato' });
+  await notes.getByLabel('Nova anotação').fill('Prefere atendimento à tarde (E2E 04c)');
+  await notes.getByRole('button', { name: 'Adicionar anotação' }).click();
+  await expect(notes).toContainText('Prefere atendimento à tarde (E2E 04c)');
+  await expect(notes.getByRole('button', { name: 'Remover anotação' })).toBeVisible();
+  expect(sql(`SELECT created_by_user_id FROM contact_notes WHERE tenant_id = '${env.tb}'`)).toBe(bruno.id);
+
+  // só quem assumiu transfere: antes de assumir não há o botão
+  await expect(card.getByRole('button', { name: 'Transferir ou devolver' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Assumir' }).first().click();
+  await expect.poll(() => sql(`SELECT u.email FROM conversations c JOIN users u ON u.id = c.assigned_to_user_id WHERE c.tenant_id = '${env.tb}'`)).toBe('agent1@e2e.test');
+  await card.getByRole('button', { name: 'Transferir ou devolver' }).click();
+  const dialog = page.getByRole('dialog');
+  // só colegas do Hub com direito a responder a NorteNet: Fabio sim; Carla (só ISP Roraima), Davi (só leitura) e a equipe da empresa não
+  await expect(dialog.getByRole('radio', { name: 'Fabio Atendimento' })).toBeVisible();
+  for (const nobody of ['Carla Agente', 'Davi Leitor', 'Aline Admin', 'Elisa Fora']) await expect(dialog.getByRole('radio', { name: nobody })).toHaveCount(0);
+  await dialog.getByRole('radio', { name: 'Fabio Atendimento' }).check();
+  await dialog.getByRole('button', { name: 'Transferir', exact: true }).click();
+  await expect.poll(() => sql(`SELECT u.email FROM conversations c JOIN users u ON u.id = c.assigned_to_user_id WHERE c.tenant_id = '${env.tb}'`)).toBe('serve@e2e.test');
+  expect(Number(sql(`SELECT count(*) FROM assignment_events WHERE tenant_id = '${env.tb}' AND reason = 'hub_transfer' AND changed_by = '${bruno.id}'`))).toBe(1);
+  expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND actor_id = '${bruno.id}' AND action = 'hub.conversation.transferred' AND metadata->>'hub_id' = '${env.hub}'`))).toBe(1);
+  // Bruno já não é o titular: o botão some do cartão dele
+  await expect(card.getByRole('button', { name: 'Transferir ou devolver' })).toHaveCount(0);
+
+  // Fabio recebeu: só tem a chave de assumir/soltar, então o diálogo só devolve à fila, e as anotações não existem para ele
+  const other = await browser.newContext();
+  const p2 = await other.newPage();
+  await p2.setViewportSize({ width: 1600, height: 900 });
+  const fabio = await signIn(p2, 'serve@e2e.test');
+  await p2.goto('/inbox');
+  await p2.getByRole('tablist', { name: 'Instâncias' }).getByRole('tab', { name: 'NorteNet' }).click();
+  await p2.getByText('Maria Souza').first().click();
+  const card2 = p2.getByRole('complementary', { name: 'Detalhes do atendimento' });
+  await expect(card2).toContainText('Maria Souza');
+  await expect(card2.getByRole('region', { name: 'Anotações do contato' })).toHaveCount(0);
+  const hubHeader = { 'X-Omnira-Acting-As': `hub:${env.hub}` };
+  const contact = sql(`SELECT id FROM contacts WHERE tenant_id = '${env.tb}'`);
+  expect((await p2.request.get(`/api/v1/tenants/${env.tb}/contacts/${contact}/notes`, { headers: hubHeader })).status()).toBe(403);
+  expect((await p2.request.get(`/api/v1/tenants/${env.tb}/inbox/conversations/${sql(`SELECT id FROM conversations WHERE tenant_id = '${env.tb}'`)}/transfer-candidates`, { headers: hubHeader })).status()).toBe(403);
+  await card2.getByRole('button', { name: 'Transferir ou devolver' }).click();
+  await expect(p2.getByRole('dialog')).toContainText('não escolher quem a recebe');
+  await p2.getByRole('dialog').getByRole('button', { name: 'Devolver à fila' }).click();
+  await expect.poll(() => sql(`SELECT assigned_to_user_id IS NULL FROM conversations WHERE tenant_id = '${env.tb}'`)).toBe('t');
+  expect(Number(sql(`SELECT count(*) FROM assignment_events WHERE tenant_id = '${env.tb}' AND reason = 'hub_release' AND changed_by = '${fabio.id}'`))).toBe(1);
+  await other.close();
+});
+
 test('contexto completo (ADR-0040): quem só tem o Hub atende a NorteNet na caixa completa (mídia, cartão do contato, assumir e responder) e o resto continua fechado', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const fabio = await signIn(page, 'serve@e2e.test');

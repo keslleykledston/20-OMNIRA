@@ -380,7 +380,7 @@ func TestDelegatedNotesFollowTheKeyTheAuthorAndTheInstance(t *testing.T) {
 	})
 
 	t.Run("a note-only agent holds no contact write at all: the key gives the notes and the sight of the contact, nothing else", func(t *testing.T) {
-		noteOnly := w.colleague("noteonly", "A", "conversation.read", "contact.read", "contact.note")
+		noteOnly := w.colleague("noteonly", "A", "conversation.read", "contact.note")
 		w.attend(noteOnly, "A", func(ctx context.Context, q platformdb.Querier) {
 			if w.domainAccess(ctx, q, noteOnly, "A", "contact", "write") {
 				t.Error("contact.note opened the contact WRITE domain")
@@ -395,6 +395,21 @@ func TestDelegatedNotesFollowTheKeyTheAuthorAndTheInstance(t *testing.T) {
 				t.Error("a note-only agent cannot read the notes")
 			}
 		})
+		// the whole note cycle works with that key alone (no contact.read, no contact.classify)
+		code, body := api.do("POST", notes("A", contactA), `{"body":"só a chave de anotações"}`, noteOnly, hub)
+		if code != 201 {
+			t.Fatalf("a note-only agent adds a note: %d %s", code, body)
+		}
+		own := w.ownerOne(`SELECT id::text FROM contact_notes WHERE tenant_id = $1 AND created_by_user_id = $2`, w.tenant["A"], noteOnly)
+		if code, _ := api.do("GET", notes("A", contactA), "", noteOnly, hub); code != 200 {
+			t.Errorf("a note-only agent lists the notes: %d", code)
+		}
+		if code, _ := api.do("PUT", notes("A", contactA)+"/"+own, `{"body":"editada"}`, noteOnly, hub); code != 200 {
+			t.Errorf("a note-only agent edits their note: %d", code)
+		}
+		if code, _ := api.do("DELETE", notes("A", contactA)+"/"+own, "", noteOnly, hub); code != 204 {
+			t.Errorf("a note-only agent removes their note: %d", code)
+		}
 	})
 
 	t.Run("the database refuses what the handler never asks: a note in another author's name, in another instance, or on a contact out of scope", func(t *testing.T) {
