@@ -871,6 +871,8 @@ func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendancea
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
 	)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	// ADR-0040 phase 05b: a Hub agent finalizes through the Hub's write path (key conversation.finalize); members reach the handler as before.
+	h.WithDelegatedFinalize(hubadapters.NewDelegatedWrites(dbPool).WithAttendance(h.Service()).Finalize)
 	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) })
 }
 

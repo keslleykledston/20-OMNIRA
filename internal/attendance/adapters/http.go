@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/attendance/application"
 	"github.com/omnira/omnira/internal/attendance/domain"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -17,9 +18,37 @@ const maxBody = 64 << 10
 
 // Handler is the HTTP surface of ADR-0020. The tenant always comes from the TenantContext (the authenticated session),
 // never from the path or the body; permissions are re-checked by the service from the role matrix.
-type Handler struct{ svc *application.Service }
+type Handler struct {
+	svc *application.Service
+	// delegatedFinalize, when set, decorates the finalize route for a Hub agent attending the instance (ADR-0040): the Hub's write path does the work.
+	delegatedFinalize func(http.Handler) http.Handler
+}
 
 func NewHandler(svc *application.Service) *Handler { return &Handler{svc: svc} }
+
+// Service is the attendance service this handler serves (the Hub's write path runs the same rules).
+func (h *Handler) Service() *application.Service { return h.svc }
+
+// WithDelegatedFinalize installs the decorator that hands a delegated finalize to the Hub's write path; members' requests reach the original handler untouched.
+func (h *Handler) WithDelegatedFinalize(d func(http.Handler) http.Handler) *Handler {
+	h.delegatedFinalize = d
+	return h
+}
+
+// FinalizeBody is the JSON the finalize route answers with (shared with the Hub's write path).
+func FinalizeBody(res application.FinalizeResult) map[string]any {
+	body := map[string]any{"changed": res.Changed}
+	if res.Closure != nil {
+		body["closure"] = closure(res.Closure, res.FollowUps)
+	}
+	return body
+}
+
+// WriteError answers with the attendance error mapping (shared with the Hub's write path).
+func WriteError(w http.ResponseWriter, err error) { fail(w, err) }
+
+// WriteOK answers 200 with a JSON body.
+func WriteOK(w http.ResponseWriter, v any) { writeJSON(w, http.StatusOK, v) }
 
 type Registrar interface {
 	Handle(pattern string, handler http.Handler)
@@ -28,7 +57,12 @@ type Registrar interface {
 // Routes mounts the API. wrap adds authn + the tenant session (see httpserver.RegisterAttendanceHandlers).
 func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler) {
 	const base = "/api/v1/tenants/{tenant_id}"
-	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize", wrap(h.finalize))
+	finalizeRoute := wrap(h.finalize)
+	if h.delegatedFinalize != nil {
+		// ADR-0040: a Hub agent finalizes only with the key conversation.finalize, through the Hub's write path; the original handler never runs for it
+		finalizeRoute = tenancyadapters.Delegable("conversation.finalize", wrap(h.delegatedFinalize(http.HandlerFunc(h.finalize)).ServeHTTP))
+	}
+	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize", finalizeRoute)
 	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize/suggest", wrap(h.suggest))
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/attendance-context", wrap(h.contextOfConversation))
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/history-search", wrap(h.searchHistory))

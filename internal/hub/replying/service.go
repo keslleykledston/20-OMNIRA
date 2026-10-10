@@ -202,6 +202,24 @@ func (s *Service) Claim(ctx context.Context, actor uuid.UUID, t *Target) (change
 	return changed, err
 }
 
+// Act is the door for a delegated write that belongs to another module (finalizing the attendance): it runs fn in the same system tenant session the other
+// writes use, with the delegation re-proven inside the transaction and the conversation row LOCKED, and audits the action naming the hub, grant and contract.
+// fn receives who holds the conversation and whether it is closed, and returns the audit metadata (ids, counts, enums: never text), or nil when nothing changed
+// (an idempotent repeat, which is not audited again). The caller has already authorized the agent in the caller's own RLS session (Authorize) and checked the key.
+func (s *Service) Act(ctx context.Context, actor uuid.UUID, t *Target, action string, fn func(c context.Context, assigned *uuid.UUID, closed bool) (map[string]any, error)) error {
+	return platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
+		assigned, closed, err := s.delegationHolds(c, t, actor, "FOR UPDATE")
+		if err != nil {
+			return err
+		}
+		meta, err := fn(c, assigned, closed)
+		if err != nil || meta == nil {
+			return err
+		}
+		return s.audit(c, t, actor, action, "conversation", t.Item.ConversationID, meta)
+	})
+}
+
 // Send queues the agent's text. The conversation must already be theirs (explicit claim).
 func (s *Service) Send(ctx context.Context, actor uuid.UUID, t *Target, text, key string) (messagesapp.SendResult, error) {
 	var res messagesapp.SendResult

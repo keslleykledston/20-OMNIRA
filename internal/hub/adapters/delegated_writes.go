@@ -11,6 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
+	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
+	attendancedomain "github.com/omnira/omnira/internal/attendance/domain"
 	"github.com/omnira/omnira/internal/hub/application"
 	"github.com/omnira/omnira/internal/hub/replying"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
@@ -28,8 +31,15 @@ import (
 // Two independent conditions must both hold: the new permission key (checked by Delegable before this runs: conversation.claim /
 // conversation.reply) and the legacy reply-capable grant (can_reply, checked by replying.Authorize with RequireReply). Provisioning sets both together.
 type DelegatedWrites struct {
-	pool  *pgxpool.Pool
-	reply *replying.Service
+	pool       *pgxpool.Pool
+	reply      *replying.Service
+	attendance *attendanceapplication.Service // the attendance rules a delegated finalize runs (nil: the route does not exist for a delegate)
+}
+
+// WithAttendance gives the Hub's write path the attendance service (ADR-0040 phase 05b: finalizing the attendance).
+func (d *DelegatedWrites) WithAttendance(svc *attendanceapplication.Service) *DelegatedWrites {
+	d.attendance = svc
+	return d
 }
 
 func NewDelegatedWrites(pool *pgxpool.Pool) *DelegatedWrites {
@@ -168,6 +178,56 @@ func (d *DelegatedWrites) TransferCandidates() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]any{"items": items})
+	})
+}
+
+// Finalize wraps POST /tenants/{tenant_id}/inbox/conversations/{conversation_id}/finalize: the holder ends the attendance (conversation closed, local tickets
+// closed, closure and follow-ups recorded). Needs the key conversation.finalize (checked by Delegable before this runs) AND the reply-capable grant. The
+// attendance rules are the member's (attendance.Service.FinalizeAsHubAgent), run inside the Hub's write path with the delegation re-proven under the row lock.
+func (d *DelegatedWrites) Finalize(original http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tc, delegated := delegatedContext(r)
+		if !delegated {
+			original.ServeHTTP(w, r)
+			return
+		}
+		if d.attendance == nil {
+			httpError(w, "not found", http.StatusNotFound)
+			return
+		}
+		var in attendancedomain.FinalizeInput
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil {
+			httpError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		t, ok := d.target(w, r, tc)
+		if !ok {
+			return
+		}
+		in.ConversationID = t.Item.ConversationID // the conversation of the persisted item, never a body field
+		var res attendanceapplication.FinalizeResult
+		err := d.reply.Act(r.Context(), tc.ActorID, t, "hub.conversation.finalized", func(c context.Context, _ *uuid.UUID, _ bool) (map[string]any, error) {
+			out, err := d.attendance.FinalizeAsHubAgent(c, tc.ActorID, in)
+			if err != nil {
+				return nil, err
+			}
+			res = out
+			if !out.Changed {
+				return nil, nil
+			}
+			return map[string]any{"reason": string(in.Reason), "source": string(attendancedomain.SourceAgent),
+				"local_tickets_closed": out.Closure.LocalTicketsClosed, "tickets_kept": out.Closure.TicketsKept, "follow_ups": len(out.FollowUps)}, nil
+		})
+		switch {
+		case err == nil:
+			attendanceadapters.WriteOK(w, attendanceadapters.FinalizeBody(res))
+		case errors.Is(err, attendancedomain.ErrForbidden), errors.Is(err, attendancedomain.ErrNotFound), errors.Is(err, attendancedomain.ErrNotAContact), errors.Is(err, attendancedomain.ErrInvalid):
+			attendanceadapters.WriteError(w, err)
+		default:
+			writeReplyError(w, err)
+		}
 	})
 }
 

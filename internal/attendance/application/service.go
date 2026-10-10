@@ -202,6 +202,87 @@ func (s *Service) Finalize(ctx context.Context, raw domain.FinalizeInput) (Final
 	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true}, nil
 }
 
+// FinalizeAsHubAgent finalizes the attendance for a Hub agent attending the instance (ADR-0040). The caller is the Hub's write path (hub/replying.Act), which
+// has already authorized the agent (live grant, contract, key conversation.finalize, reply capability) and runs this in a tenant-scoped SYSTEM session with the
+// conversation row locked. What stays here is the attendance rule: only the person who HOLDS the conversation closes it (a delegate has no supervisor path),
+// follow-up owners must be active members of the instance, and an already finalized conversation returns its existing closure. The audit row is written by the
+// caller (it names the Hub); nothing is audited here because the system session has no actor.
+func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw domain.FinalizeInput) (FinalizeResult, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil || tc.Source != tenancydomain.AccessSourceSystem || agent == uuid.Nil {
+		return FinalizeResult{}, domain.ErrForbidden
+	}
+	in, err := raw.Normalize()
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	facts, err := s.repo.LockConversation(ctx, in.ConversationID)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	if facts.ContactID == nil || facts.Kind == "internal" {
+		return FinalizeResult{}, domain.ErrNotAContact
+	}
+	if facts.AssignedTo == nil || *facts.AssignedTo != agent {
+		return FinalizeResult{}, domain.ErrForbidden
+	}
+	if facts.Status == "closed" {
+		existing, err := s.repo.ClosureByConversation(ctx, in.ConversationID)
+		if err != nil {
+			return FinalizeResult{}, err
+		}
+		res := FinalizeResult{Closure: existing}
+		if existing != nil {
+			if res.FollowUps, err = s.repo.FollowUpsOfClosure(ctx, existing.ID); err != nil {
+				return FinalizeResult{}, err
+			}
+		}
+		return res, nil
+	}
+	for _, f := range in.FollowUps {
+		if f.OwnerUserID == nil {
+			continue
+		}
+		ok, err := s.repo.IsActiveMember(ctx, *f.OwnerUserID)
+		if err != nil {
+			return FinalizeResult{}, err
+		}
+		if !ok {
+			return FinalizeResult{}, errors.Join(domain.ErrInvalid, errors.New("a follow-up owner is not an active member of this tenant"))
+		}
+	}
+	closed, kept, err := s.repo.CloseLocalTickets(ctx, in.ConversationID)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	if err := s.repo.MarkClosed(ctx, in.ConversationID); err != nil {
+		return FinalizeResult{}, err
+	}
+	by := agent
+	now := s.now()
+	closure := &domain.Closure{
+		ID: uuid.New(), TenantID: tc.TenantID, ConversationID: in.ConversationID, ContactID: *facts.ContactID, ClosedBy: &by,
+		Source: domain.SourceAgent, Reason: in.Reason, Note: in.Note, Summary: in.Summary, SummaryTruth: in.SummaryTruth,
+		LocalTicketsClosed: closed, TicketsKept: kept, CreatedAt: now,
+	}
+	if err := s.repo.InsertClosure(ctx, closure); err != nil {
+		return FinalizeResult{}, err
+	}
+	items := make([]domain.FollowUp, 0, len(in.FollowUps))
+	for _, f := range in.FollowUps {
+		cid := closure.ID
+		items = append(items, domain.FollowUp{
+			ID: uuid.New(), TenantID: tc.TenantID, ContactID: *facts.ContactID, ConversationID: in.ConversationID, ClosureID: &cid,
+			Kind: f.Kind, Text: f.Text, OwnerUserID: f.OwnerUserID, DueAt: f.DueAt, Status: domain.StatusOpen,
+			Truth: domain.TruthAgentConfirmed, CreatedBy: &by, CreatedAt: now,
+		})
+	}
+	if err := s.repo.InsertFollowUps(ctx, items); err != nil {
+		return FinalizeResult{}, err
+	}
+	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true}, nil
+}
+
 // FinalizeBySystem ends the attendance because the CONTACT asked for it (the flow engine is the actor, with a system
 // TenantContext). Same effects as an agent's finalize (conversation closed, local tickets closed, ERP and topic tickets left
 // alone) but recorded with source "system", no author, reason "other" and the command in the note. Idempotent: an already
