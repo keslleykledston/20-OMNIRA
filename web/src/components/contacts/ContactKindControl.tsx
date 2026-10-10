@@ -230,7 +230,6 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
       {picking && (
         <CompanyPicker
           contactId={contactId}
-          delegated={delegated}
           title={picking === 'add' ? 'Adicionar empresa' : 'Empresa do cliente'}
           hasCompanies={links.length > 0}
           pending={pending}
@@ -340,7 +339,6 @@ function CompanyList({
 // Picks ONE company. Directory companies are sent by id only: the server re-reads name, CNPJ and status itself.
 function CompanyPicker({
   contactId,
-  delegated,
   title,
   hasCompanies,
   pending,
@@ -348,7 +346,6 @@ function CompanyPicker({
   onConfirm,
 }: {
   contactId: string
-  delegated: boolean
   title: string
   hasCompanies: boolean
   pending: boolean
@@ -368,23 +365,24 @@ function CompanyPicker({
   useEffect(() => {
     let alive = true
     void (async () => {
-      // through the Hub only the accounts that already exist: the company directory is the instance's ERP (phase 04b)
+      // the same three sources through the Hub (phase 04b): the instance's ERP directory is read by the server with the instance's own credential, and a
+      // source the person's keys or the instance's setup do not offer simply comes back empty
       const [d, a, s] = await Promise.allSettled([
-        delegated ? Promise.reject(new Error('delegated')) : accountDirectoryAPI.directory(),
+        accountDirectoryAPI.directory(),
         accountDirectoryAPI.localAccounts(),
-        delegated ? Promise.reject(new Error('delegated')) : classificationAPI.suggestions(contactId),
+        classificationAPI.suggestions(contactId),
       ])
       if (!alive) return
       if (s.status === 'fulfilled') setSuggestions((s.value.items ?? []).filter((x) => !x.already_linked))
       if (d.status === 'fulfilled') setDirectory(d.value.items ?? [])
-      else setDirectoryDown(!delegated)
+      else setDirectoryDown(true)
       if (a.status === 'fulfilled') setAccounts(a.value.items ?? [])
       setLoading(false)
     })()
     return () => {
       alive = false
     }
-  }, [contactId, delegated])
+  }, [contactId])
 
   const options = useMemo<Option[]>(() => {
     const seen = new Set(directory.map((c) => c.name.trim().toLowerCase()))
@@ -421,7 +419,6 @@ function CompanyPicker({
       ) : (
         <>
           {directoryDown && <p className="text-xs text-status-warning">Diretório de empresas indisponível: só contas já existentes aparecem.</p>}
-          {delegated && <p className="text-xs text-text-tertiary">Pelo Hub, só as empresas já cadastradas na instância aparecem.</p>}
           <ul className="max-h-40 overflow-auto rounded-control border border-border-subtle bg-surface" role="listbox" aria-label="Empresas">
             {options.length === 0 && <li className="px-2 py-2 text-xs text-text-tertiary">Nenhuma empresa encontrada.</li>}
             {options.map((o) => (

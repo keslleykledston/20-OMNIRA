@@ -1,0 +1,14 @@
+DROP FUNCTION IF EXISTS delegated_materialize_company_account(UUID, UUID, TEXT, TEXT, TEXT);
+DROP FUNCTION IF EXISTS delegated_erp_connections(UUID);
+DROP POLICY IF EXISTS account_external_links_read_delegated ON account_external_links;
+DROP POLICY IF EXISTS crm_contact_company_evidence_acting_one_instance ON crm_contact_company_evidence;
+DROP POLICY IF EXISTS crm_contact_company_evidence_update_delegated ON crm_contact_company_evidence;
+DROP POLICY IF EXISTS crm_contact_company_evidence_insert_delegated ON crm_contact_company_evidence;
+DROP POLICY IF EXISTS crm_contact_company_evidence_read_delegated ON crm_contact_company_evidence;
+DROP POLICY IF EXISTS ticket_external_create_attempts_acting_one_instance ON ticket_external_create_attempts;
+DROP POLICY IF EXISTS ticket_external_create_attempts_update_delegated ON ticket_external_create_attempts;
+DROP POLICY IF EXISTS ticket_external_create_attempts_insert_delegated ON ticket_external_create_attempts;
+DROP POLICY IF EXISTS ticket_external_create_attempts_read_delegated ON ticket_external_create_attempts;
+DROP POLICY IF EXISTS tickets_acting_one_instance ON tickets;
+DROP POLICY IF EXISTS tickets_update_delegated ON tickets;
+DROP POLICY IF EXISTS tickets_read_delegated ON tickets;

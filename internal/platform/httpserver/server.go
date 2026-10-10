@@ -597,7 +597,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	classificationHandler := contactsadapters.NewClassificationHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool)).WithEnabled(identityFlags.ContactClassificationEnabled)
 	s.contactClassification = classificationHandler
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/classification", tenancyadapters.Delegable("account.read", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.GetClassification)))))
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/company-suggestions", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.ListCompanySuggestions))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/contacts/{contact_id}/company-suggestions", tenancyadapters.Delegable("account.read", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.ListCompanySuggestions)))))
 	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/contacts/{contact_id}/classification", tenancyadapters.Delegable("contact.classify", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.PutClassification)))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/contacts/{contact_id}/accounts", tenancyadapters.Delegable("contact.classify", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.LinkAccount)))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/contacts/{contact_id}/accounts/{link_id}/end", tenancyadapters.Delegable("contact.classify", authnMiddleware(tenantSession(http.HandlerFunc(classificationHandler.EndLink)))))
@@ -676,9 +676,11 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 		noticeStore := messagesadapters.NewPostgresOutboundStore(dbPool)
 		crmHandler.SetTicketOpenNotifier(messagesapplication.NewTicketOpenedNotice(
 			messagesapplication.NewSender(noticeStore, channeladapters.NewPostgresPermissionChecker(dbPool)), noticeStore))
+		// A Hub agent attending the instance tells the customer through the Hub's own write path (ADR-0037), never through the member sender.
+		crmHandler.SetDelegatedTicketOpenNotifier(delegatedWrites.TicketOpenedNotice(noticeStore))
 	}
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetCurrentTicket))))
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateTicket))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", tenancyadapters.DelegableAny(authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetCurrentTicket))), "ticket.read", "ticket.create"))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket", tenancyadapters.Delegable("ticket.create", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CreateTicket)))))
 	// PRODUCT.6-O1R: explicit provider projection refresh (a command, never
 	// a GET). Registered before the {ticket_id} wildcard route below —
 	// net/http's ServeMux resolves the more specific literal segment first
@@ -698,7 +700,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// client. Moved under /tenants/{tenant_id}/ so tenantSession
 	// authorizes the path tenant against the caller's membership before
 	// the handler ever resolves a K3G credential.
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/crm/companies", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.ListCompanies))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/crm/companies", tenancyadapters.DelegableAny(authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.ListCompanies))), "ticket.create", "contact.classify"))
 
 	// PRODUCT.7C1: AI conversation summary. generator is nil whenever AI is
 	// disabled or incompletely configured (config.Config.AIReady()) — the

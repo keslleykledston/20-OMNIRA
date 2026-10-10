@@ -52,16 +52,35 @@ describe('classifying the contact while attending through the Hub', () => {
     expect(kinds).not.toHaveTextContent('Interno')
   })
 
-  it('offers only existing accounts when becoming a customer (the ERP directory is not asked)', async () => {
+  it("offers the instance's ERP companies, the suggestions and the existing accounts when becoming a customer (phase 04b)", async () => {
     serve(['conversation.read', 'contact.read', 'contact.classify', 'account.read'])
+    const base = get.getMockImplementation()!
+    get.mockImplementation(async (url: string, ...rest: unknown[]) => {
+      const u = String(url)
+      if (u.endsWith('/crm/companies')) return { data: { items: [{ id: 'co-1', name: 'Acme Telecom' }] } }
+      if (u.includes('company-suggestions')) return { data: { items: [] } }
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest)
+    })
+    show()
+    const customer = await screen.findByRole('button', { name: 'Cliente' })
+    await act(async () => customer.click())
+    expect(await screen.findByText('Acme Telecom')).toBeInTheDocument()
+    expect(await screen.findByText('Empresa A')).toBeInTheDocument()
+    const asked = get.mock.calls.map((c) => String(c[0]))
+    expect(asked.some((u) => u.endsWith('/crm/companies'))).toBe(true)
+  })
+
+  it('still offers the existing accounts when the instance has no ERP (the directory answers 503)', async () => {
+    serve(['conversation.read', 'contact.read', 'contact.classify', 'account.read'])
+    const base = get.getMockImplementation()!
+    get.mockImplementation(async (url: string, ...rest: unknown[]) => {
+      if (String(url).endsWith('/crm/companies')) return Promise.reject({ response: { status: 503 } })
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest)
+    })
     show()
     const customer = await screen.findByRole('button', { name: 'Cliente' })
     await act(async () => customer.click())
     expect(await screen.findByText('Empresa A')).toBeInTheDocument()
-    expect(screen.getByText(/só as empresas já cadastradas/)).toBeInTheDocument()
-    const asked = get.mock.calls.map((c) => String(c[0]))
-    expect(asked.some((u) => u.includes('company-suggestions'))).toBe(false)
-    expect(asked.some((u) => u.includes('/crm/companies'))).toBe(false)
   })
 
   it('shows no editing control with only the read keys', async () => {
@@ -81,5 +100,33 @@ describe('classifying the contact while attending through the Hub', () => {
     show()
     expect(await screen.findByText('Berjon Brito')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Editar contato' })).not.toBeInTheDocument()
+  })
+})
+
+describe('the ERP ticket while attending through the Hub (phase 04b)', () => {
+  it('offers the ticket panel, without refresh or status change, to a person who holds ticket.create', async () => {
+    serve(['conversation.read', 'contact.read', 'ticket.create', 'ticket.read'])
+    const base = get.getMockImplementation()!
+    get.mockImplementation(async (url: string, ...rest: unknown[]) => {
+      const u = String(url)
+      if (u.endsWith('/conversations/c1/ticket')) {
+        return { data: { local_ticket_id: 't1', linked: true, provider: 'k3g', external_ticket_id: '28180', external_status_label: 'Novo', sync_status: 'synced' } }
+      }
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest)
+    })
+    show()
+    expect(await screen.findByText('Chamado vinculado')).toBeInTheDocument()
+    expect(screen.getByText('28180')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Alterar status' })).not.toBeInTheDocument()
+  })
+
+  it('shows no ticket panel without a ticket key', async () => {
+    serve(['conversation.read', 'contact.read', 'contact.classify', 'account.read'])
+    show()
+    expect(await screen.findByText('Berjon Brito')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Chamado' })).not.toBeInTheDocument()
+    const asked = get.mock.calls.map((c) => String(c[0]))
+    expect(asked.some((u) => u.endsWith('/ticket'))).toBe(false)
   })
 })

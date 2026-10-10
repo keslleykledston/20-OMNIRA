@@ -205,7 +205,7 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 	}
 
 	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || tc.Source != tenancydomain.AccessSourceDirect {
+	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || !servesTickets(tc) {
 		return nil, ErrForbidden
 	}
 
@@ -333,6 +333,12 @@ func (s *Service) CreateExternalTicket(ctx context.Context, cmd CreateExternalTi
 		}
 	}
 	return result, err
+}
+
+// servesTickets: the contexts that may work a conversation's ticket — a member of the instance, or a Hub agent attending it (ADR-0040 phase 04b;
+// what the agent may do is decided by the permission key, asked of the database, and by the rows the database lets them see).
+func servesTickets(tc *tenancydomain.TenantContext) bool {
+	return tc.Source == tenancydomain.AccessSourceDirect || tc.Source == tenancydomain.AccessSourceHubServe
 }
 
 func validateCommand(cmd CreateExternalTicketCommand) error {

@@ -75,7 +75,7 @@ func NewReadConversationTicketService(perms ports.PermissionChecker, conversatio
 // then read the local projection only.
 func (s *ReadConversationTicketService) ReadConversationTicket(ctx context.Context, cmd ReadConversationTicketCommand) (*TicketReadResult, error) {
 	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || tc.Source != tenancydomain.AccessSourceDirect {
+	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || !servesTickets(tc) {
 		return nil, ErrForbidden
 	}
 

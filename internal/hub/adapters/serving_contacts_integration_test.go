@@ -456,12 +456,13 @@ func TestDelegatedClassificationThroughTheRealHandlers(t *testing.T) {
 		}
 	})
 
-	t.Run("customer needs an account: through the existing-account reference, never through the directory", func(t *testing.T) {
+	t.Run("customer needs an account: through the existing-account reference (the ERP directory is phase 04b)", func(t *testing.T) {
 		if code, _ := api.do("PUT", contact+"/classification", `{"kind":"customer"}`, agent, hub); code != 422 {
 			t.Errorf("customer without an account: %d, want 422", code)
 		}
-		if code, body := api.do("PUT", contact+"/classification", `{"kind":"customer","accounts":[{"directory_company_id":"123"}]}`, agent, hub); code != 403 {
-			t.Errorf("a directory (ERP) company through the hub: %d %s, want 403", code, body)
+		// the directory exists only where the instance has an ERP (phase 04b; see serving_erp_integration_test.go): this handler has none wired
+		if code, body := api.do("PUT", contact+"/classification", `{"kind":"customer","accounts":[{"directory_company_id":"123"}]}`, agent, hub); code != 503 {
+			t.Errorf("a directory (ERP) company with no directory configured: %d %s, want 503", code, body)
 		}
 		if code, body := api.do("PUT", contact+"/classification", `{"kind":"customer","accounts":[{"account_id":"`+accA.String()+`","primary":true}]}`, agent, hub); code != 200 {
 			t.Fatalf("customer with an existing account: %d %s", code, body)

@@ -65,3 +65,10 @@ type CredentialStore interface {
 	// ChannelConnection.SecretRef a cada rotação de token).
 	Rotate(ctx context.Context, secretRef string, credential Credential) error
 }
+
+// CiphertextResolver — decrypts a credential the caller already holds as ciphertext. It exists for the Hub-delegated ERP path (ADR-0040 phase
+// 04b): a Hub agent cannot read channel_credentials, so a narrow database function hands the SERVER the encrypted row for the instance it serves and the
+// server decrypts it in memory with its own key, exactly as it does for a member. The clear text still never leaves the process.
+type CiphertextResolver interface {
+	ResolveCiphertext(ciphertext []byte) (Credential, error)
+}

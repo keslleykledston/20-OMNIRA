@@ -108,6 +108,19 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 Total: 81 tabelas com RLS.
 
 
+## Atualização (fase 04b, migration 112)
+
+| Tabela | SELECT | INSERT | UPDATE | DELETE | Observação |
+|---|---|---|---|---|---|
+| `tickets` | `ticket`/leitura (+ conversa visível) | — | `ticket`/escrita (+ conversa visível) | — | o ticket local é criado pela plataforma; delegado só enriquece |
+| `ticket_external_create_attempts` | `ticket`/leitura (+ conversa visível) | `ticket`/escrita (+ conversa visível) | `ticket`/escrita (+ conversa visível) | — | registro durável da tentativa de criação no ERP |
+| `ticket_external_status_attempts` | — | — | — | — | fechada (mudar status no ERP é fase seguinte) |
+| `crm_contact_company_evidence` | `contact`/leitura (+ contato visível) | `ticket`/escrita (+ contato visível) | `ticket`/escrita (+ contato visível) | — | evidência contato ↔ empresa |
+| `account_external_links` | `contact`/leitura | — | — | — | escrita só pela função abaixo |
+| `channel_connections`, `channel_credentials` | — | — | — | — | continuam ilegíveis ao delegado |
+
+Funções `SECURITY DEFINER` novas: `delegated_erp_connections(tenant)` (devolve ao servidor a conexão do ERP e a credencial CIFRADA da instância servida; exige contexto delegado nesta instância e `ticket.create` ou `contact.classify`) e `delegated_materialize_company_account(tenant, conexão, empresa, nome, origem)` (conta + vínculo de uma empresa validada no diretório; chave por origem). Políticas restritivas `*_acting_one_instance` em `tickets`, `ticket_external_create_attempts` e `crm_contact_company_evidence`. ADR-0040 §15.
+
 ## Atualização (migration 111) — contexto preso a uma instância
 
 Políticas restritivas `*_acting_one_instance` em `conversations`, `customer_accounts`, `contacts` e `contact_account_links`: ao agir por um Hub, só a instância travada por `lock_served_tenant` (`acting_tenant()`) é visível/escrevível. `messages` e a mídia herdam pela conversa. Ver ADR-0040 §14.

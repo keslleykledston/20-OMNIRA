@@ -6,6 +6,7 @@ import { getActingName } from '../../lib/acting'
 import { useAccess } from '../../lib/useAccess'
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor'
 import { ContactKindControl } from '../contacts/ContactKindControl'
+import { TicketPanel } from '../TicketPanel'
 import type { ConversationItem } from '../../types/api'
 
 interface ContactCard {
@@ -22,8 +23,9 @@ interface ContactCard {
 const KIND: Record<string, string> = { customer: 'Cliente', internal: 'Interno', other: 'Outro', spam: 'Spam ou golpe', unclassified: 'Ainda não classificado' }
 
 // The details of an attendance for a person attending an instance through the Hub (ADR-0040): who the customer is and where the conversation stands, and,
-// with the key contact.classify, the same controls a member has to say who the contact is (kind, companies, name and e-mail; phase 04a). Opening a ticket in
-// the ERP, notes and memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
+// with the key contact.classify, the same controls a member has to say who the contact is (kind, companies, name and e-mail; phase 04a) and, with
+// ticket.create / ticket.read, the instance's ERP ticket of the conversation (phase 04b: open it and see it; refreshing and changing the ERP status are not
+// part of the delegated context yet). Notes and memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
 // context), so the controls are only offered when the server will accept them; the server still decides every request. It reads the same conversation
 // query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
 export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void }) {
@@ -112,8 +114,13 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
             />
           </section>
         )}
+        {(can('ticket.create') || can('ticket.read')) && (
+          <section aria-label="Chamado no ERP" className="-mx-4 border-t border-border-subtle">
+            <TicketPanel conversationId={conversationId} delegated conversationUnassigned={!c?.assigned_to_user_id} />
+          </section>
+        )}
         <p role="note" className="rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
-          Chamado no ERP, notas e histórico chegam nas próximas etapas.
+          Notas e histórico chegam nas próximas etapas.
         </p>
       </div>
     </aside>

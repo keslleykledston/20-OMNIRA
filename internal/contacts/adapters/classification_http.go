@@ -238,10 +238,6 @@ func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomai
 		in.AccountID = *ref.AccountID
 		return in, nil
 	}
-	if actingForHub(tc) {
-		// the company directory is the instance's ERP, read with its credentials: a Hub agent reaches it only through its own key and route (phase 04b)
-		return in, &directoryError{http.StatusForbidden, "the company directory is not available through the Hub yet"}
-	}
 	if h.resolver == nil {
 		return in, &directoryError{http.StatusServiceUnavailable, "company directory is not configured"}
 	}
@@ -280,6 +276,16 @@ func (h *ClassificationHandler) resolveRef(ctx context.Context, tc *tenancydomai
 			return in, &directoryError{http.StatusUnprocessableEntity, "evidence does not match this contact and company"}
 		}
 		in.Source = domain.SourceTicketFlow
+	}
+	if actingForHub(tc) {
+		// a Hub agent attending the instance has no direct insert on accounts or links: the database function does the find-or-create for contact.classify,
+		// after THIS handler validated the company against the instance's own directory
+		id, err := h.accounts.MaterializeDelegatedCompanyAccount(ctx, tc.TenantID, rt.ConnectionID, picked.ExternalID, picked.Name, accountsdomain.SourceDirectorySelection)
+		if err != nil {
+			return in, err
+		}
+		in.AccountID = id
+		return in, nil
 	}
 	existing, err := h.accounts.FindByExternal(ctx, tc.TenantID, directoryProvider, rt.ConnectionID, picked.ExternalID)
 	if err != nil {

@@ -211,3 +211,17 @@ func (r *PostgresRepository) SetLinkStatus(ctx context.Context, tenantID, linkID
 	}
 	return nil
 }
+
+// MaterializeDelegatedCompanyAccount is find-or-create-and-activate for the account of a provider company, for a Hub agent attending the instance
+// (ADR-0040 phase 04b). The agent has no INSERT on accounts or links: delegated_materialize_company_account does exactly this, after checking the key that
+// matches the reason (source ticket_flow -> ticket.create, directory_selection -> contact.classify). The caller has ALREADY validated the company against the
+// instance's own directory; this only records it.
+func (r *PostgresRepository) MaterializeDelegatedCompanyAccount(ctx context.Context, tenantID, connectionID uuid.UUID, externalCompanyID, name string, source domain.LinkSource) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := r.q(ctx).QueryRow(ctx, `SELECT delegated_materialize_company_account($1,$2,$3,$4,$5)`, tenantID, connectionID, externalCompanyID, name, string(source)).Scan(&id)
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && (pg.Code == "42501" || pg.Code == "22023") {
+		return uuid.Nil, domain.ErrInvalidAccount
+	}
+	return id, err
+}

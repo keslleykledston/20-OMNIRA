@@ -351,3 +351,10 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 
 - **IMPLEMENTED + POSTGRES VERIFIED:** ver ADR-0040 §14. `TestTheDelegatedContextIsPinnedToOneInstance`; mutação `scripts/test-hub-pin-mutations.sh` 4/4; migrations 093..111 idênticas; E2E real 9/9; pacotes afetados verdes.
 - **NÃO implantada** (sobe junto da próxima entrega). Estado segue `LAB`.
+
+## 2026-10-10 — fase 04b: diretório do ERP e chamado no ERP pelo Hub (migration 112) — LOCAL, NÃO implantada
+
+- **IMPLEMENTED:** ADR-0040 §15 (credencial do ERP lida só pelo servidor via função; conta da empresa validada via função; políticas por domínio `ticket` com escopo de fila e instância; aviso ao cliente pelo caminho de escrita do Hub; rotas `crm/companies`, `conversations/{id}/ticket`, `company-suggestions`; preset `chamados`; painel de chamado no cartão do atendimento, sem Atualizar/Alterar status).
+- **POSTGRES + HTTP VERIFIED** contra um **ERP DE MENTIRA** (servidor HTTP do teste): `serving_erp_integration_test.go`. **Nenhum ERP real foi chamado e nenhum chamado real foi criado.**
+- **NÃO provado:** ERP real; login real do Keycloak; `EXPLAIN` das políticas novas; implantação.
+- Estado segue `LAB`.

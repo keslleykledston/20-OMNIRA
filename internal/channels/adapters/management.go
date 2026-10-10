@@ -54,6 +54,18 @@ func (c *PostgresPermissionChecker) HasPermission(ctx context.Context, userID uu
 		}
 		return ok, nil
 	}
+	// A Hub agent attending the instance (ADR-0040): only the keys the grant AND the contract's ceiling hold, asked of the database now. The person's
+	// tenant role (if they even have one) means nothing here, and a key that is not delegable is simply never held.
+	if tc.Source == tenancydomain.AccessSourceHubServe {
+		if userID != tc.ActorID {
+			return false, nil
+		}
+		var ok bool
+		if err := q.QueryRow(ctx, `SELECT actor_has_permission($1, $2, $3)`, tc.TenantID, userID, permission).Scan(&ok); err != nil {
+			return false, fmt.Errorf("channel: check delegated permission: %w", err)
+		}
+		return ok, nil
+	}
 	// Members: managing an ERP/CRM connection is the same role permission as managing a channel (nothing changed for them).
 	if permission == application.PermissionIntegrationManage {
 		permission = application.PermissionChannelManage

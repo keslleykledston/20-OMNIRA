@@ -25,6 +25,11 @@ interface TicketPanelProps {
   crmContactId?: string;
   /** The API only shows the ticket to whoever holds the conversation (or can manage it). */
   conversationUnassigned?: boolean;
+  /**
+   * A person attending the instance through the Hub (ADR-0040 phase 04b): they open the ERP ticket and see it, but refreshing the projection and changing
+   * the ERP status are not part of the delegated context yet, so those two controls are not offered (the server would answer 404 to them).
+   */
+  delegated?: boolean;
 }
 
 const FIELD =
@@ -161,7 +166,7 @@ function saveStatusIntent(conversationId: string, intent: PendingStatusIntent | 
   }
 }
 
-export function TicketPanel({ conversationId, crmContactId, conversationUnassigned }: TicketPanelProps) {
+export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated = false }: TicketPanelProps) {
   const tenantId = getTenantId();
 
   const [state, setState] = useState<PersistedState>(() => loadState(conversationId));
@@ -760,15 +765,17 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
           <div className="rounded-control border border-border-subtle bg-surface p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="font-semibold text-text-primary">Chamado vinculado</p>
-              <Button
-                type="button"
-                size="sm"
-                isLoading={refreshState === 'pending'}
-                disabled={refreshState === 'pending'}
-                onClick={() => void refreshTicket()}
-              >
-                Atualizar
-              </Button>
+              {!delegated && (
+                <Button
+                  type="button"
+                  size="sm"
+                  isLoading={refreshState === 'pending'}
+                  disabled={refreshState === 'pending'}
+                  onClick={() => void refreshTicket()}
+                >
+                  Atualizar
+                </Button>
+              )}
             </div>
             <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
               <dt className="text-text-tertiary">ID externo</dt>
@@ -796,7 +803,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                 external_ticket_id), never for the projection-read
                 loading/unlinked/404/inconsistent branches (those never
                 reach this JSX branch at all). */}
-            {hasLinkedIdentity && (
+            {hasLinkedIdentity && !delegated && (
               <div className="mt-3 border-t border-border-subtle pt-3">
                 <p className={SECTION_TITLE}>Status externo</p>
 

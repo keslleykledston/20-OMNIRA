@@ -59,6 +59,10 @@ func (r *K3GTicketingRuntimeResolver) Resolve(ctx context.Context, tenantID uuid
 		return nil, errors.New("tickets: tenant context does not match requested tenant for runtime resolution")
 	}
 
+	if tc.Source == tenancydomain.AccessSourceHubServe {
+		return r.resolveDelegated(ctx, tenantID)
+	}
+
 	connections, err := r.conns.FindByTenant(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("tickets: load channel connections: %w", err)
@@ -113,6 +117,62 @@ func (r *K3GTicketingRuntimeResolver) Resolve(ctx context.Context, tenantID uuid
 		// never returns secret material inside its own error.
 		return nil, &ports.ResolutionError{Code: ports.ResolutionCredentialInvalid, Message: "credential could not be decrypted"}
 	}
+	return buildTicketingRuntime(conn.ID, credential)
+}
+
+// resolveDelegated is Resolve for a Hub agent attending the instance (ADR-0040 phase 04b). The agent cannot read channel_connections or
+// channel_credentials; delegated_erp_connections (a SECURITY DEFINER function that checks, right now, that the request acts for a hub in THIS
+// instance and that the person holds ticket.create or contact.classify) hands the server the ERP connection(s) and the ENCRYPTED credential, and the
+// server decrypts it in memory with its own key. The decision logic is the member's, line for line: none / ambiguous / no credential / unusable.
+func (r *K3GTicketingRuntimeResolver) resolveDelegated(ctx context.Context, tenantID uuid.UUID) (*ports.TicketingRuntime, error) {
+	decryptor, ok := r.creds.(channelports.CiphertextResolver)
+	if !ok {
+		return nil, &ports.ResolutionError{Code: ports.ResolutionNoConfiguration, Message: "delegated ERP access is not available in this build"}
+	}
+	rows, err := platformdb.QuerierFromContext(ctx, r.pool).Query(ctx, `SELECT connection_id, secret_ref, ciphertext FROM delegated_erp_connections($1)`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("tickets: load delegated ERP connections: %w", err)
+	}
+	defer rows.Close()
+	type candidate struct {
+		id         uuid.UUID
+		secretRef  *uuid.UUID
+		ciphertext []byte
+	}
+	var found []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.secretRef, &c.ciphertext); err != nil {
+			return nil, fmt.Errorf("tickets: scan delegated ERP connection: %w", err)
+		}
+		found = append(found, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tickets: load delegated ERP connections: %w", err)
+	}
+	switch len(found) {
+	case 0:
+		return nil, &ports.ResolutionError{Code: ports.ResolutionNoConfiguration, Message: "no K3G connection configured for this tenant"}
+	case 1:
+	default:
+		return nil, &ports.ResolutionError{Code: ports.ResolutionAmbiguousConfiguration, Message: fmt.Sprintf("%d applicable K3G connections found, expected exactly 1", len(found))}
+	}
+	c := found[0]
+	if c.secretRef == nil {
+		return nil, &ports.ResolutionError{Code: ports.ResolutionCredentialNotFound, Message: "connection has no credential reference"}
+	}
+	if len(c.ciphertext) == 0 {
+		return nil, &ports.ResolutionError{Code: ports.ResolutionCredentialNotFound, Message: "referenced credential row does not exist"}
+	}
+	credential, err := decryptor.ResolveCiphertext(c.ciphertext)
+	if err != nil {
+		return nil, &ports.ResolutionError{Code: ports.ResolutionCredentialInvalid, Message: "credential could not be decrypted"}
+	}
+	return buildTicketingRuntime(c.id, credential)
+}
+
+// buildTicketingRuntime turns a decrypted credential into the CompanyDirectory/TicketingConnector pair (shared by the member and delegated paths).
+func buildTicketingRuntime(connectionID uuid.UUID, credential channelports.Credential) (*ports.TicketingRuntime, error) {
 	baseURL := strings.TrimSpace(credential.Fields["base_url"])
 	token := strings.TrimSpace(credential.Fields["token"])
 	if baseURL == "" || token == "" {
@@ -133,6 +193,6 @@ func (r *K3GTicketingRuntimeResolver) Resolve(ctx context.Context, tenantID uuid
 		TicketingConnector: ticketingConnector,
 		// PRODUCT.7B2B: the exact connection this runtime was built from —
 		// never re-derived later, never assumed to still be "the same one".
-		ConnectionID: conn.ID,
+		ConnectionID: connectionID,
 	}, nil
 }

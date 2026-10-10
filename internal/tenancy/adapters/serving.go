@@ -43,8 +43,15 @@ type delegableKey struct{}
 // memberships, and without this a person who is both a member and a delegate would reach them with their membership while acting for a hub.
 // Members' requests are not affected in any way.
 func Delegable(permission string, next http.Handler) http.Handler {
+	return DelegableAny(next, permission)
+}
+
+// DelegableAny — the same marking for a route that serves more than one purpose (the ERP company directory is read to open a ticket AND to classify a
+// contact): it is reachable when the person holds ANY of the keys. Still default-deny, still asked of the database in the request's own transaction.
+func DelegableAny(next http.Handler, permissions ...string) http.Handler {
+	keys := append([]string(nil), permissions...)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), delegableKey{}, permission)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), delegableKey{}, keys)))
 	})
 }
 
@@ -82,8 +89,8 @@ func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, p
 		http.Error(w, "delegated context is not enabled", http.StatusForbidden)
 		return
 	}
-	permission, delegable := r.Context().Value(delegableKey{}).(string)
-	if !delegable {
+	permissions, delegable := r.Context().Value(delegableKey{}).([]string)
+	if !delegable || len(permissions) == 0 {
 		log.Printf("tenancy: delegated context refused: route %q is not delegable (tenant=%s hub=%s actor=%s)", r.Pattern, tenantID, hubID, principal.UserID)
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -97,10 +104,18 @@ func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, p
 		if !ratelimit.EnforceTenantUser(tw, r, tc.TenantID, tc.ActorID) {
 			return errServeHandled
 		}
-		// the key THIS route needs, asked of the database in this very transaction (live), in the delegated context
-		held, err := ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, pool), tc.TenantID, tc.ActorID, permission)
-		if err != nil {
-			return err
+		// the key THIS route needs (any of them, for a route that serves more than one purpose), asked of the database in this very transaction
+		// (live), in the delegated context
+		held := false
+		for _, permission := range permissions {
+			ok, err := ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, pool), tc.TenantID, tc.ActorID, permission)
+			if err != nil {
+				return err
+			}
+			if ok {
+				held = true
+				break
+			}
 		}
 		if !held {
 			return errServeForbid

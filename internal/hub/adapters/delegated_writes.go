@@ -1,9 +1,11 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +14,7 @@ import (
 	"github.com/omnira/omnira/internal/hub/application"
 	"github.com/omnira/omnira/internal/hub/replying"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
+	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -136,4 +139,57 @@ func (d *DelegatedWrites) Reply(original http.Handler) http.Handler {
 			"status": res.Message.Status, "created_at": res.Message.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	})
+}
+
+// TicketOpenedNotice returns the "your ticket was opened" notice for a Hub agent (ADR-0040 phase 04b): the same text, key and once-per-ticket guarantee as
+// the member's notice, sent through the Hub's own write path (authorize in the caller's session, execute in a tenant-scoped system session that re-checks the
+// delegation, audit). It needs BOTH the conversation.reply key and the legacy reply-capable grant, like any reply; without them it is skipped and the
+// caller (which treats the notice as best-effort) only logs.
+func (d *DelegatedWrites) TicketOpenedNotice(store messagesapplication.NoticeStore) *DelegatedTicketNotice {
+	return &DelegatedTicketNotice{writes: d, store: store}
+}
+
+type DelegatedTicketNotice struct {
+	writes *DelegatedWrites
+	store  messagesapplication.NoticeStore
+}
+
+func (n *DelegatedTicketNotice) NotifyTicketOpened(ctx context.Context, conversationID, localTicketID uuid.UUID, ticketNumber string) error {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc == nil || tc.Source != tenancydomain.AccessSourceHubServe || tc.HubID == nil {
+		return messagesapplication.ErrNoticeSkipped
+	}
+	if localTicketID == uuid.Nil || strings.TrimSpace(ticketNumber) == "" {
+		return messagesapplication.ErrNoticeSkipped
+	}
+	q := platformdb.QuerierFromContext(ctx, n.writes.pool)
+	var mayReply bool
+	if err := q.QueryRow(ctx, `SELECT actor_has_permission($1, $2, 'conversation.reply')`, tc.TenantID, tc.ActorID).Scan(&mayReply); err != nil {
+		return err
+	}
+	if !mayReply {
+		return messagesapplication.ErrNoticeSkipped
+	}
+	var itemID uuid.UUID
+	err = q.QueryRow(ctx, `SELECT id FROM hub_inbox_items WHERE hub_id = $1 AND tenant_id = $2 AND conversation_id = $3`, *tc.HubID, tc.TenantID, conversationID).Scan(&itemID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return messagesapplication.ErrNoticeSkipped
+	}
+	if err != nil {
+		return err
+	}
+	key := "ticket-opened-" + localTicketID.String()
+	if sent, err := n.store.NoticeAlreadySent(ctx, conversationID, key); err != nil || sent {
+		return err
+	}
+	name, err := n.store.ContactName(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+	t, err := n.writes.reply.Authorize(ctx, tc.ActorID, *tc.HubID, itemID, tc.TenantID, tc.CorrelationID)
+	if err != nil {
+		return err
+	}
+	_, err = n.writes.reply.Send(ctx, tc.ActorID, t, messagesapplication.RenderTicketOpened(name, ticketNumber), key)
+	return err
 }

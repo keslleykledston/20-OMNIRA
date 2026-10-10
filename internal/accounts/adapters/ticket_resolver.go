@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/omnira/omnira/internal/accounts/domain"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	"github.com/omnira/omnira/internal/tickets/ports"
 )
 
@@ -29,6 +30,10 @@ func (r *TicketAccountResolver) ResolveForCompany(ctx context.Context, tenantID,
 	ext := strings.TrimSpace(company.ExternalID)
 	if tenantID == uuid.Nil || connectionID == uuid.Nil || ext == "" {
 		return uuid.Nil, domain.ErrInvalidAccount
+	}
+	if tc, err := tenancydomain.FromContext(ctx); err == nil && tc.Source == tenancydomain.AccessSourceHubServe {
+		// a Hub agent attending the instance: no direct insert on accounts or links; the database function does the same find-or-create, for ticket.create
+		return r.repo.MaterializeDelegatedCompanyAccount(ctx, tenantID, connectionID, ext, company.Name, domain.SourceTicketFlow)
 	}
 	existing, err := r.repo.FindByExternal(ctx, tenantID, domain.ProviderK3G, connectionID, ext)
 	if err != nil {

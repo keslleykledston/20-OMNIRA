@@ -54,3 +54,13 @@ Pré-requisito: `serving ceiling ... --preset classificacao` e `serving grant ..
 4. **Editar contato**: mude o apelido e o e-mail e salve.
 5. Retire `contact.classify` da pessoa (`serving grant ... --preset atendimento`) e recarregue: os dois controles somem, e a API responde 403 se chamada à mão.
 6. Auditoria: cada mudança fica com `acting_as = hub:<id>` e o autor real (aba Auditoria do Hub ou `audit_events`).
+
+## J. Chamado no ERP pelo Hub (fase 04b; precisa do preset `chamados` e de uma conexão de ERP na instância) — CRIA CHAMADO DE VERDADE
+Pré-requisitos: `serving ceiling ... --preset chamados` e `serving grant ... --preset chamados`; a instância precisa ter a conexão **K3G CRM** configurada em Integrações (sem ela tudo abaixo responde "chamado indisponível"). **Só faça com uma empresa de teste do ERP e avisando o cliente de teste: o passo 4 abre um chamado real e manda uma mensagem de WhatsApp.**
+1. Abra uma conversa da instância atendida pelo Hub e **assuma** (o chamado só é do atendente que a assumiu).
+2. No cartão aparece **Chamado**. Sem chamado: formulário com **Empresa** (lista do ERP da instância), assunto e descrição.
+3. **Cliente** → "Empresa do cliente" agora mostra também as empresas do ERP (e "sugeridas por chamado anterior").
+4. Abra o chamado: aparece "Chamado vinculado" com o ID externo; **não** há botão Atualizar nem Alterar status (ficam para depois). O cliente recebe o aviso com o protocolo, **uma vez**.
+5. Repita o envio: "já vinculado", sem segundo chamado nem segunda mensagem.
+6. Retire `ticket.create` (`serving grant ... --preset classificacao`) e recarregue: o painel de chamado some; a API responde 403 à mão.
+7. Nada do que você vê (rede do navegador, respostas) contém o token ou o endereço do ERP.

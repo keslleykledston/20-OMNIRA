@@ -81,6 +81,21 @@ func (s *PostgresCredentialStore) Resolve(ctx context.Context, secretRef string)
 	return ports.Credential{Fields: fields}, nil
 }
 
+// ResolveCiphertext implements ports.CiphertextResolver: the same decryption and decoding Resolve does, for a row the caller already holds.
+func (s *PostgresCredentialStore) ResolveCiphertext(ciphertext []byte) (ports.Credential, error) {
+	payload, err := s.cipher.Decrypt(ciphertext)
+	if err != nil {
+		return ports.Credential{}, fmt.Errorf("channel: decrypt credential: %w", err)
+	}
+	var fields map[string]string
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return ports.Credential{}, fmt.Errorf("channel: decode credential: %w", err)
+	}
+	return ports.Credential{Fields: fields}, nil
+}
+
+var _ ports.CiphertextResolver = (*PostgresCredentialStore)(nil)
+
 func (s *PostgresCredentialStore) Rotate(ctx context.Context, secretRef string, credential ports.Credential) error {
 	id, err := uuid.Parse(secretRef)
 	if err != nil {

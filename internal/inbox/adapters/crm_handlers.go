@@ -70,6 +70,8 @@ type CRMHandlers struct {
 	// openNotice, when wired, tells the customer in the conversation that the ticket was opened and under which number.
 	// Nil is a valid state (feature off): the ticket flow is then exactly what it was.
 	openNotice ticketOpenNotifier
+	// delegatedOpenNotice is the same notice for a Hub agent attending the instance: it goes out through the Hub's own write path, never the member sender.
+	delegatedOpenNotice ticketOpenNotifier
 	// readTicketService is the real, conversation-scoped, LOCAL-ONLY
 	// ticket read path (PRODUCT.6-O1). Nil until server.go wires it.
 	readTicketService conversationTicketReader
@@ -179,6 +181,11 @@ type ticketOpenNotifier interface {
 // SetTicketOpenNotifier wires the customer notice sent after an external ticket is opened. Nil turns it off.
 func (h *CRMHandlers) SetTicketOpenNotifier(n ticketOpenNotifier) {
 	h.openNotice = n
+}
+
+// SetDelegatedTicketOpenNotifier wires the notice for a Hub agent attending the instance (ADR-0040 phase 04b). Nil: the agent's tickets send no notice.
+func (h *CRMHandlers) SetDelegatedTicketOpenNotifier(n ticketOpenNotifier) {
+	h.delegatedOpenNotice = n
 }
 
 // SetReadTicketService wires the real, conversation-scoped ticket read
@@ -695,14 +702,18 @@ func (h *CRMHandlers) CreateTicket(w http.ResponseWriter, r *http.Request) {
 // sent twice. A savepoint keeps a database failure in the notice from aborting the request transaction that holds the
 // ticket itself.
 func (h *CRMHandlers) notifyTicketOpened(ctx context.Context, tenantID, conversationID uuid.UUID, result *ticketsapplication.Result) {
-	if h.openNotice == nil || result == nil || result.ExternalTicketID == "" {
+	notifier := h.openNotice
+	if tc, err := tenancydomain.FromContext(ctx); err == nil && tc.Source == tenancydomain.AccessSourceHubServe {
+		notifier = h.delegatedOpenNotice
+	}
+	if notifier == nil || result == nil || result.ExternalTicketID == "" {
 		return
 	}
 	if result.Outcome != ticketsapplication.OutcomeCreated && result.Outcome != ticketsapplication.OutcomeReplaySuccess {
 		return
 	}
 	err := platformdb.WithSavepoint(ctx, h.dbPool, func(ctx context.Context) error {
-		return h.openNotice.NotifyTicketOpened(ctx, conversationID, result.LocalTicketID, result.ExternalTicketID)
+		return notifier.NotifyTicketOpened(ctx, conversationID, result.LocalTicketID, result.ExternalTicketID)
 	})
 	if err != nil {
 		// identifiers only: no customer name, no message text
