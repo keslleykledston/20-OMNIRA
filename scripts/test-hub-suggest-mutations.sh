@@ -79,13 +79,7 @@ mut "a delegate is routed through the member's role matrix" $AH '		suggest = h.s
 mut "the route is delegable even when the server does not wire the check" $AH 'if h.canReadAsHubAgent != nil {
 		// ADR-0040 phase 07' 'if true {
 		// ADR-0040 phase 07'
-mut "a delegate has the supervisor path (any conversation, not only the held one)" $AS '	if err := s.checkDraftable(ctx, tc, conversationID, false); err != nil {
-		return domain.ClosingSuggestion{}, err
-	}
-	// the clear answers above' '	if err := s.checkDraftable(ctx, tc, conversationID, true); err != nil {
-		return domain.ClosingSuggestion{}, err
-	}
-	// the clear answers above'
+mut "a delegate has the supervisor path (any conversation, not only the held one)" $AS '	if err := s.checkDraftable(ctx, tc, conversationID, false); err != nil {' '	if err := s.checkDraftable(ctx, tc, conversationID, true); err != nil {'
 mut "a conversation with no contact or an internal one is drafted" $AS '	if facts.ContactID == nil || facts.Kind == "internal" {
 		return domain.ErrNotAContact
 	}
@@ -99,5 +93,5 @@ mut "the reading statement does not require the holder" $IR '($4::uuid IS NULL O
 mut "the suggester reads without the holder even when asked to bind it" $IA '	if holder != nil {
 		msgs, err = s.reader.RecentMessagesHeldBy' '	if false && holder != nil {
 		msgs, err = s.reader.RecentMessagesHeldBy'
-mut "a delegate has no limit of paid drafts" $AH 'allowed, _, reset := h.draftLimiter.Allow(r.Context(), ratelimit.QuotaTypeUser, "closing-draft:"+tc.ActorID.String()); !allowed {' 'allowed, _, reset := h.draftLimiter.Allow(r.Context(), ratelimit.QuotaTypeUser, "closing-draft:"+tc.ActorID.String()); false && !allowed {'
+mut "a delegate has no limit of paid drafts" $AS 'if s.draftAllowed != nil && !s.draftAllowed(ctx, tc.ActorID) {' 'if false && s.draftAllowed != nil && !s.draftAllowed(ctx, tc.ActorID) {'
 echo "PASS: all $N mutants killed"

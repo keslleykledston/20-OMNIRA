@@ -88,6 +88,7 @@ var (
 	ErrSuggestionDisabled    = errors.New("attendance: the AI closing suggestion is not enabled")
 	ErrSuggestionUnavailable = errors.New("attendance: the AI closing suggestion is not available right now")
 	ErrNothingToSuggest      = errors.New("attendance: there is nothing in the conversation to summarize")
+	ErrDraftRateLimited      = errors.New("attendance: too many closing drafts requested, try again shortly")
 )
 
 // FollowUpInput is one item the person lists while finalizing.

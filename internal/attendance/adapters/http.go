@@ -27,8 +27,6 @@ type Handler struct {
 	// canReadAsHubAgent, when set, lets a Hub agent ask for the AI closing draft (ADR-0040 phase 07): it answers whether the person holds conversation.read in the
 	// context (ai.assist alone must never send text the person cannot see to the provider). Unset = the draft is not delegable at all.
 	canReadAsHubAgent func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error)
-	// draftLimiter bounds the paid provider calls one Hub agent can make through the delegated draft (per person, like the AI summary of the conversation).
-	draftLimiter *ratelimit.Limiter
 }
 
 func NewHandler(svc *application.Service) *Handler { return &Handler{svc: svc} }
@@ -40,8 +38,15 @@ func (h *Handler) Service() *application.Service { return h.svc }
 // bounds the drafts one person can ask for (every draft is a paid call to the platform's AI provider).
 func (h *Handler) WithDelegatedSuggest(check func(ctx context.Context, tenantID, userID uuid.UUID) (bool, error), perMinute int) *Handler {
 	h.canReadAsHubAgent = check
-	h.draftLimiter = ratelimit.NewLimiter()
-	h.draftLimiter.SetQuota(ratelimit.QuotaTypeUser, perMinute, time.Minute)
+	limiter := ratelimit.NewLimiter()
+	limiter.SetQuota(ratelimit.QuotaTypeUser, perMinute, time.Minute)
+	// the draft is counted by the service once the request is valid (a refused request costs nothing)
+	if h.svc != nil {
+		h.svc.WithDraftLimit(func(ctx context.Context, actor uuid.UUID) bool {
+			allowed, _, _ := limiter.Allow(ctx, ratelimit.QuotaTypeUser, "closing-draft:"+actor.String())
+			return allowed
+		})
+	}
 	return h
 }
 
@@ -121,6 +126,8 @@ func fail(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusServiceUnavailable, "ai_disabled", "the AI suggestion is not enabled")
 	case errors.Is(err, domain.ErrSuggestionUnavailable):
 		writeErr(w, http.StatusServiceUnavailable, "ai_unavailable", "the AI suggestion is not available right now")
+	case errors.Is(err, domain.ErrDraftRateLimited):
+		writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many draft requests, try again shortly")
 	case errors.Is(err, domain.ErrNothingToSuggest):
 		writeErr(w, http.StatusUnprocessableEntity, "nothing_to_suggest", "there is nothing in the conversation to summarize")
 	case errors.Is(err, domain.ErrAlreadyHandled):
@@ -262,11 +269,6 @@ func (h *Handler) suggest(w http.ResponseWriter, r *http.Request) {
 		}
 		if !readable {
 			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
-			return
-		}
-		if allowed, _, reset := h.draftLimiter.Allow(r.Context(), ratelimit.QuotaTypeUser, "closing-draft:"+tc.ActorID.String()); !allowed {
-			w.Header().Set("Retry-After", reset.UTC().Format(time.RFC1123))
-			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many draft requests, try again shortly")
 			return
 		}
 		suggest = h.svc.SuggestClosingAsHubAgent

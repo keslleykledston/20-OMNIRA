@@ -33,6 +33,14 @@ type Service struct {
 	now   func() time.Time
 	// suggester is optional (the intelligence module); nil means the AI suggestion is not offered.
 	suggester ports.ClosingSuggester
+	// draftAllowed bounds the paid drafts of a Hub agent (ADR-0040 phase 07); nil = no bound. It is asked AFTER the request was validated, right before the provider.
+	draftAllowed func(ctx context.Context, actor uuid.UUID) bool
+}
+
+// WithDraftLimit installs the per-person bound on the drafts a Hub agent asks for; allow reports (and counts) one draft.
+func (s *Service) WithDraftLimit(allow func(ctx context.Context, actor uuid.UUID) bool) *Service {
+	s.draftAllowed = allow
+	return s
 }
 
 func NewService(repo ports.Repository, authz ports.Authorizer, audit ports.Auditor) *Service {
@@ -90,6 +98,9 @@ func (s *Service) SuggestClosingAsHubAgent(ctx context.Context, conversationID u
 	}
 	if err := s.checkDraftable(ctx, tc, conversationID, false); err != nil {
 		return domain.ClosingSuggestion{}, err
+	}
+	if s.draftAllowed != nil && !s.draftAllowed(ctx, tc.ActorID) {
+		return domain.ClosingSuggestion{}, domain.ErrDraftRateLimited // only a request that would reach the provider spends one of the person's drafts
 	}
 	// the clear answers above come from a read; what guarantees that the text of a conversation the person no longer holds never reaches the provider is that the
 	// statement that reads the text carries the same condition

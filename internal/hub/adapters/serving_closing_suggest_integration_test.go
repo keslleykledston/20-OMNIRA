@@ -242,9 +242,16 @@ func TestDelegatedClosingDraftThroughTheRealAttendanceRoute(t *testing.T) {
 	})
 
 	t.Run("each person has a limit of drafts, because every draft is a paid call", func(t *testing.T) {
-		hold("A", &agent)
 		limited := build(true, 2)
 		before := calls()
+		// requests that are refused before the provider (a conversation of a colleague) cost nothing
+		hold("A", &other)
+		for i := 0; i < 5; i++ {
+			if code, _ := suggest(limited, agent, "A", "A", hub); code != 403 {
+				t.Fatalf("a draft for a colleague's conversation: %d, want 403", code)
+			}
+		}
+		hold("A", &agent)
 		for i, want := range []int{200, 200, 429} {
 			if code, _ := suggest(limited, agent, "A", "A", hub); code != want {
 				t.Errorf("draft %d: %d, want %d", i+1, code, want)
