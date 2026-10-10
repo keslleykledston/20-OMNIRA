@@ -37,6 +37,14 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		sort.Strings(names)
 		got[m[1]] = strings.Join(names, "|")
 	}
+	// the one delegable route declared outside server.go: the attendance module's finalize, whose decorator is installed by RegisterAttendanceHandlers
+	if att, err := os.ReadFile("../../attendance/adapters/http.go"); err == nil {
+		if m := regexp.MustCompile(`tenancyadapters\.Delegable\("([^"]+)", wrap\(h\.delegatedFinalize\(`).FindStringSubmatch(string(att)); m != nil {
+			got["POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/finalize"] = m[1]
+		}
+	} else {
+		t.Fatal(err)
+	}
 	const tn = "/api/v1/tenants/{tenant_id}"
 	want := map[string]string{
 		// phase 03: attend the conversation
