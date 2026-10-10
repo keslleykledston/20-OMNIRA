@@ -82,7 +82,7 @@ SSE=internal/inbox/adapters/sse.go; SV=internal/tenancy/adapters/serving.go
 
 mut "the watchdog finds the access gone but does not end the stream" $SSE 'if !alive && streamCtx.Err() == nil {' 'if false && !alive && streamCtx.Err() == nil {'
 mut "the relationship is not asked again at the recheck (a revoked grant keeps streaming)" $SSE 'if _, err := da.AuthorizeServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, []string{"conversation.read"}); err != nil {' 'if false {'
-mut "the watchdog uses the members' interval (an hour)" $SSE 'tick := time.NewTicker(h.opts.DelegatedRecheck)' 'tick := time.NewTicker(h.opts.Recheck)'
+mut "the watchdog uses the members' interval (an hour)" $SSE 'tick := time.NewTicker(every)' 'tick := time.NewTicker(h.opts.Recheck)'
 mut "the instance stream is not filtered by visibility" $SSE 'if filter != nil && !unrestricted.Load() && !filter.allow(event.ID, time.Now()) {' 'if false && filter != nil && !unrestricted.Load() && !filter.allow(event.ID, time.Now()) {'
 mut "the visibility answer is reused forever" $SSE 'if e, hit := f.cache[id]; hit && now.Sub(e.at) < f.ttl {' 'if e, hit := f.cache[id]; hit {'
 mut "a conversation stream does not recheck the queue scope" $SSE 'if visible, err := da.ConversationVisibleServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil || !visible {' 'if visible, err := da.ConversationVisibleServing(ctx, principal.UserID, tc.TenantID, *tc.HubID, *onlyConversation); err != nil && !visible && false {'

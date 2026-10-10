@@ -353,6 +353,10 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 			return false
 		}
 		_ = rc.SetWriteDeadline(time.Now().Add(h.opts.WriteTimeout))
+		if closing.Load() { // the watchdog closed the stream between the check and the arming: its "now" deadline must win, not this one
+			_ = rc.SetWriteDeadline(time.Now())
+			return false
+		}
 		if _, err := w.Write(b); err != nil {
 			return false
 		}
@@ -393,7 +397,12 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 		watchdog.Add(1)
 		go func() {
 			defer watchdog.Done()
-			tick := time.NewTicker(h.opts.DelegatedRecheck)
+			// The promise is END TO END: a check may take up to DatabaseTimeout, so the checks start that much earlier than DelegatedRecheck.
+			every := h.opts.DelegatedRecheck - h.opts.DatabaseTimeout
+			if every <= 0 {
+				every = h.opts.DelegatedRecheck / 2
+			}
+			tick := time.NewTicker(every)
 			defer tick.Stop()
 			for {
 				select {
