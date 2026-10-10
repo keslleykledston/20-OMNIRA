@@ -74,3 +74,10 @@ Pré-requisitos: `serving ceiling ... --preset completo` e `serving grant ... --
 5. Com `contact.note`: bloco **Anotações** no cartão; adicione, edite e remova a sua; as anotações da equipe da empresa aparecem, sem botões de edição. Sem `contact.note` o bloco não existe e a API responde 403.
 6. Auditoria: transferência e devolução (`hub.conversation.transferred` / `hub.conversation.released`) ficam com o `hub_id` e o autor real; o texto das anotações nunca aparece na trilha.
 
+## L. Tempo real e resumo por IA pelo Hub (fase 05; o resumo precisa do preset `completo_ia` e da IA da plataforma ligada)
+1. Atenda uma instância pelo Hub e deixe a conversa aberta. Peça a outra pessoa (ou um número de teste) para mandar uma mensagem: ela aparece **sem recarregar** (antes só aparecia no polling de 15 s). Na aba Rede do navegador há uma conexão `inbox/events` com o cabeçalho `X-Omnira-Acting-As`.
+2. Com o teto do contrato limitado a algumas filas (`service_scope`), mensagens de conversas de OUTRAS filas não geram nenhum evento para você.
+3. Retire a concessão (`serving grant ... --keys none`): em até ~15 s o stream cai e a tela mostra o aviso de acesso encerrado.
+4. Com `ai.assist`: o cartão mostra **Resumo por IA**; clicar gera o resumo (consome o provedor de IA da plataforma; no máximo 5 por minuto por pessoa). Sem a chave o bloco não existe e a API responde 403.
+5. Auditoria: os dois eventos `ai.conversation.summarize` (antes e depois da chamada) trazem `acting_as = hub:<id>` e a pessoa.
+

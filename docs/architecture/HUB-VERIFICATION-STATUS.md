@@ -396,3 +396,10 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Ninguém recebeu as chaves novas** (`conversation.transfer`, `contact.note`): para usar, `hubctl serving ceiling/grant --preset completo` (roteiro seção K).
 - **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase04cd-20261010-1249 20-omnira-<svc>:latest` + recriar; as imagens antigas funcionam com o esquema novo; `down` de 114 e 113 testados.
 - **NÃO provado:** login real do Keycloak; carga real. Estado segue `LAB`.
+
+## 2026-10-10 (noite) — fase 05: tempo real delegado e resumo por IA (migration 115) — LOCAL, NÃO implantada
+
+- **IMPLEMENTED:** ADR-0040 §18 (decisões adotadas no padrão mais conservador porque o dono mandou seguir sem responder às três perguntas: revogação em até 15 s, filtro de visibilidade por evento, `ai.assist` fora de todo preset antigo, fluxos/tópicos/copiloto/finalizar atendimento fora do escopo). Streams SSE com admissão delegada em transação curta (`AuthorizeServing`), recheck a cada 15 s, filtro por evento com cache de 10 s; chave `ai.assist` (migration 115) e preset `completo_ia`.
+- **POSTGRES + NATS + HTTP VERIFIED:** `serving_realtime_integration_test.go` (9 casos) e `serving_ai_integration_test.go` (5). **Mutação:** `scripts/test-hub-realtime-mutations.sh` 9/9 mortos (equivalentes documentados); o mutante da migration 115 (chave sem domínio) quebra o teste de IA. **Migrations** 093..115 sobem, descem e sobem idênticas. **Gate de integração:** 31 pacotes `ok`. **Vitest:** 852/853 (só a `SettingsShell` de sempre; mais o arquivo Playwright coletado). **E2E em navegador real: 10/10** (o fluxo de tempo real delegado ainda não tem cenário próprio no navegador; coberto no nível HTTP com NATS real).
+- **NÃO provado:** carga com muitos streams delegados; chamada real ao provedor de IA (gerador de mentira); login real do Keycloak; implantação.
+- Estado segue `LAB`.
