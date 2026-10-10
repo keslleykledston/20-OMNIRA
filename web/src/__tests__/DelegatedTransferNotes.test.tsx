@@ -137,3 +137,22 @@ describe('the notes of the contact while attending through the Hub (phase 04c)',
     expect(get.mock.calls.map((c) => String(c[0])).some((u) => u.endsWith('/notes'))).toBe(false)
   })
 })
+
+describe('the AI summary while attending through the Hub (phase 05)', () => {
+  it('offers the summary only with ai.assist, and asks the server for it', async () => {
+    serve(['conversation.read', 'contact.read', 'ai.assist'])
+    post.mockResolvedValue({ data: { summary: 'Cliente sem internet desde ontem.' } })
+    show()
+    const button = await screen.findByRole('button', { name: /resum/i })
+    await act(async () => button.click())
+    expect(await screen.findByText('Cliente sem internet desde ontem.')).toBeInTheDocument()
+    expect(String(post.mock.calls[0][0])).toMatch(/\/conversations\/c1\/ai\/summary$/)
+  })
+
+  it('shows nothing about it without ai.assist', async () => {
+    serve(['conversation.read', 'contact.read', 'contact.classify'])
+    show()
+    expect(await screen.findByText('Berjon Brito')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /resum/i })).not.toBeInTheDocument()
+  })
+})

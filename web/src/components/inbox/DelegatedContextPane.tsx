@@ -10,6 +10,7 @@ import { ContactKindControl } from '../contacts/ContactKindControl'
 import { ContactNotes } from '../contacts/ContactNotes'
 import { Button } from '../primitives'
 import DelegatedTransferDialog from './DelegatedTransferDialog'
+import ConversationSummary from './ConversationSummary'
 import { TicketPanel } from '../TicketPanel'
 import type { ConversationItem } from '../../types/api'
 
@@ -30,7 +31,7 @@ const KIND: Record<string, string> = { customer: 'Cliente', internal: 'Interno',
 // with the key contact.classify, the same controls a member has to say who the contact is (kind, companies, name and e-mail; phase 04a) and, with
 // ticket.create / ticket.read, the instance's ERP ticket of the conversation (phase 04b: open it and see it; refreshing and changing the ERP status are not
 // part of the delegated context yet), with conversation.transfer / conversation.claim handing over or giving back a conversation the person holds, and with
-// contact.note the notes of the contact (phase 04c). The history and the memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
+// contact.note the notes of the contact (phase 04c), and with ai.assist the AI summary of the conversation (phase 05; the text goes to the platform's AI provider, so it is only offered with that key). The history and the memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
 // context), so the controls are only offered when the server will accept them; the server still decides every request. It reads the same conversation
 // query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
 export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void }) {
@@ -130,6 +131,11 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
         {(can('ticket.create') || can('ticket.read')) && (
           <section aria-label="Chamado no ERP" className="-mx-4 border-t border-border-subtle">
             <TicketPanel conversationId={conversationId} delegated conversationUnassigned={!c?.assigned_to_user_id} />
+          </section>
+        )}
+        {can('ai.assist') && (
+          <section aria-label="Resumo por IA" className="-mx-4 border-t border-border-subtle">
+            <ConversationSummary conversationId={conversationId} />
           </section>
         )}
         {contactId && can('contact.note') && (
