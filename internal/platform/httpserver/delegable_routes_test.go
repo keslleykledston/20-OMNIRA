@@ -37,10 +37,14 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		sort.Strings(names)
 		got[m[1]] = strings.Join(names, "|")
 	}
-	// the one delegable route declared outside server.go: the attendance module's finalize, whose decorator is installed by RegisterAttendanceHandlers
+	// the delegable routes declared outside server.go: the attendance module's (finalize, whose decorator is installed by RegisterAttendanceHandlers, and the
+	// history/follow-up routes of phase 06, registered with `base` = the tenant prefix)
 	if att, err := os.ReadFile("../../attendance/adapters/http.go"); err == nil {
 		if m := regexp.MustCompile(`tenancyadapters\.Delegable\("([^"]+)", wrap\(h\.delegatedFinalize\(`).FindStringSubmatch(string(att)); m != nil {
 			got["POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/finalize"] = m[1]
+		}
+		for _, m := range regexp.MustCompile(`mux\.Handle\("([A-Z]+) "\+base\+"([^"]+)", tenancyadapters\.Delegable\("([^"]+)"`).FindAllStringSubmatch(string(att), -1) {
+			got[m[1]+" /api/v1/tenants/{tenant_id}"+m[2]] = m[3]
 		}
 	} else {
 		t.Fatal(err)
@@ -84,6 +88,10 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		"POST " + tn + "/contacts/{contact_id}/notes":                              "contact.note",
 		"PUT " + tn + "/contacts/{contact_id}/notes/{note_id}":                     "contact.note",
 		"DELETE " + tn + "/contacts/{contact_id}/notes/{note_id}":                  "contact.note",
+		// phase 06: the memory of the contact (earlier attendances, open follow-ups) and resolving an item
+		"GET " + tn + "/inbox/conversations/{conversation_id}/attendance-context": "attendance.history",
+		"GET " + tn + "/contacts/{contact_id}/attendance-history":                 "attendance.history",
+		"POST " + tn + "/follow-ups/{follow_up_id}/resolve":                       "followup.resolve",
 	}
 	var problems []string
 	for route, key := range want {

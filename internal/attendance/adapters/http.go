@@ -64,10 +64,12 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	}
 	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize", finalizeRoute)
 	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize/suggest", wrap(h.suggest))
-	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/attendance-context", wrap(h.contextOfConversation))
+	// ADR-0040 phase 06: a Hub agent reads the memory of the contact with the key attendance.history and resolves an item with followup.resolve (the database asks for
+	// both again, migration 117). The search over earlier messages (history-search) stays closed to a delegate: it is not on the delegable list.
+	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/attendance-context", tenancyadapters.Delegable("attendance.history", wrap(h.contextOfConversation)))
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/history-search", wrap(h.searchHistory))
-	mux.Handle("GET "+base+"/contacts/{contact_id}/attendance-history", wrap(h.historyOfContact))
-	mux.Handle("POST "+base+"/follow-ups/{follow_up_id}/resolve", wrap(h.resolveFollowUp))
+	mux.Handle("GET "+base+"/contacts/{contact_id}/attendance-history", tenancyadapters.Delegable("attendance.history", wrap(h.historyOfContact)))
+	mux.Handle("POST "+base+"/follow-ups/{follow_up_id}/resolve", tenancyadapters.Delegable("followup.resolve", wrap(h.resolveFollowUp)))
 }
 
 type apiError struct {
@@ -336,7 +338,11 @@ func (h *Handler) resolveFollowUp(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	item, err := h.svc.ResolveFollowUp(r.Context(), id, in)
+	resolve := h.svc.ResolveFollowUp
+	if tc, err := tenancydomain.FromContext(r.Context()); err == nil && tc.Source == tenancydomain.AccessSourceHubServe {
+		resolve = h.svc.ResolveFollowUpAsHubAgent // the role matrix has nothing to say about a Hub agent: the key was proven by the route and the database
+	}
+	item, err := resolve(r.Context(), id, in)
 	if err != nil {
 		fail(w, err)
 		return

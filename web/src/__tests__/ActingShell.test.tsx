@@ -113,7 +113,7 @@ describe('presence while acting', () => {
 })
 
 describe('the delegated details card', () => {
-  it('shows who the customer is and where the attendance stands, read-only, and says what comes next', async () => {
+  it('shows who the customer is and where the attendance stands, read-only, and says the history is not released', async () => {
     setActing('hub-1', 'Beta Hub')
     get.mockImplementation(async (url: string) => {
       const u = String(url)
@@ -127,7 +127,7 @@ describe('the delegated details card', () => {
     expect(screen.getByText('Maria')).toBeInTheDocument()
     expect(screen.getByText('9')).toBeInTheDocument()
     expect(screen.getByText(/Atendendo Beta Hub pelo Hub/)).toBeInTheDocument()
-    expect(screen.getByRole('note')).toHaveTextContent('chega na próxima etapa')
+    expect(screen.getByRole('note')).toHaveTextContent('não está liberado para você')
     // read-only: no edit, no classify, no ticket buttons
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })

@@ -152,3 +152,12 @@ Funções `SECURITY DEFINER` novas: `delegated_recompute_contact_kinds(tenant, c
 
 Políticas **restritivas** acrescentadas na 110 (AND com as permissivas; só mudam algo no contexto delegado): `conversations_acting_hub_only` e `messages_acting_hub_only` — ao agir por um Hub, a conversa só é visível pelo
 contrato e concessão DESSE Hub (escopo de fila incluído). Corrige a soma entre Hubs (Codex HIGH-1 da 04a).
+
+## Atualização (fase 06, migration 117)
+
+| Tabela | SELECT | INSERT | UPDATE | DELETE | Observação |
+|---|---|---|---|---|---|
+| `conversation_closures` | **chave** `attendance.history` (+ contato visível) | — (restritiva `*_acting_no_insert`) | — (sem grant) | — | fechar continua no caminho de escrita do Hub (116). Restritiva `*_acting_history`: no contexto delegado a chave é exigida do banco até de quem também é membro, e uma instância por vez. |
+| `follow_up_items` | **chave** `attendance.history` (+ contato visível) | — (restritiva `*_acting_no_insert`) | chaves `followup.resolve` + `attendance.history`, só pendência ABERTA, só para `done`/`dropped` assinada por quem pede (restritiva `*_acting_resolve` exige a chave de resolver também de membro) | — | UPDATE controla linhas e estados, não colunas; só o handler chega a ela. |
+
+Chaves novas (sem papel de empresa que as receba): `attendance.history` e `followup.resolve`, ambas no domínio `contact` com LEITURA, de propósito (ver ADR-0040 §20).

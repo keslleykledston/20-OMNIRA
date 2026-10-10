@@ -8,6 +8,7 @@ import { useAccess } from '../../lib/useAccess'
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor'
 import { ContactKindControl } from '../contacts/ContactKindControl'
 import { ContactNotes } from '../contacts/ContactNotes'
+import AttendanceMemoryPanel from './AttendanceMemoryPanel'
 import { Button } from '../primitives'
 import DelegatedTransferDialog from './DelegatedTransferDialog'
 import ConversationSummary from './ConversationSummary'
@@ -31,7 +32,7 @@ const KIND: Record<string, string> = { customer: 'Cliente', internal: 'Interno',
 // with the key contact.classify, the same controls a member has to say who the contact is (kind, companies, name and e-mail; phase 04a) and, with
 // ticket.create / ticket.read, the instance's ERP ticket of the conversation (phase 04b: open it and see it; refreshing and changing the ERP status are not
 // part of the delegated context yet), with conversation.transfer / conversation.claim handing over or giving back a conversation the person holds, and with
-// contact.note the notes of the contact (phase 04c), and with ai.assist the AI summary of the conversation (phase 05; the text goes to the platform's AI provider, so it is only offered with that key). The history and the memory arrive in the next steps, each with its own key. The keys come from the server (/me/access answers with the DELEGATED keys in this
+// contact.note the notes of the contact (phase 04c), and with ai.assist the AI summary of the conversation (phase 05; the text goes to the platform's AI provider, so it is only offered with that key)., with attendance.history the memory of the contact (earlier attendances and open items) and with followup.resolve marking an item done or dropped (phase 06). The keys come from the server (/me/access answers with the DELEGATED keys in this
 // context), so the controls are only offered when the server will accept them; the server still decides every request. It reads the same conversation
 // query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
 export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void }) {
@@ -143,9 +144,15 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
             <ContactNotes contactId={contactId} />
           </section>
         )}
-        <p role="note" className="rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
-          O histórico do contato chega na próxima etapa.
-        </p>
+        {can('attendance.history') ? (
+          <div className="-mx-4 border-t border-border-subtle">
+            <AttendanceMemoryPanel conversationId={conversationId} delegated canResolve={can('followup.resolve')} />
+          </div>
+        ) : (
+          <p role="note" className="rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
+            O histórico dos atendimentos anteriores não está liberado para você nesta empresa.
+          </p>
+        )}
       </div>
       <DelegatedTransferDialog
         conversationId={conversationId}

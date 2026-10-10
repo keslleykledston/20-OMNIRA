@@ -430,3 +430,35 @@ test('finalizar o atendimento pelo Hub (fase 05b): só quem tem a chave e está 
   expect(res.status()).toBe(200);
   expect(Number(sql(`SELECT count(*) FROM conversation_closures WHERE tenant_id = '${env.tb}'`))).toBe(1);
 });
+
+test('memória do contato pelo Hub (fase 06): histórico e pendências só com a chave, concluir pendência como o próprio agente, e sem a chave nada aparece', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  hubctl(`serving ceiling --hub ${env.hub} --tenant ${env.tb} --preset completo_hist`);
+  hubctl(`serving grant --hub ${env.hub} --tenant ${env.tb} --email agent1@e2e.test --preset completo_hist`);
+  const bruno = await signIn(page, 'agent1@e2e.test');
+  // um atendimento anterior com resumo e uma pendência aberta, no contato da conversa da NorteNet (a ficha pode já existir se a fase 05b rodou antes)
+  sql(`UPDATE conversations SET assigned_to_user_id = '${bruno.id}', status = 'open' WHERE tenant_id = '${env.tb}'`);
+  sql(`INSERT INTO conversation_closures (tenant_id, conversation_id, contact_id, source, reason, summary)
+       SELECT tenant_id, id, contact_id, 'agent', 'resolved', 'Resumo do atendimento anterior (E2E 06)' FROM conversations WHERE tenant_id = '${env.tb}'
+       ON CONFLICT (tenant_id, conversation_id) DO NOTHING`);
+  sql(`INSERT INTO follow_up_items (tenant_id, contact_id, conversation_id, kind, text)
+       SELECT tenant_id, contact_id, id, 'pending', 'ligar de volta (E2E 06)' FROM conversations WHERE tenant_id = '${env.tb}'`);
+  await page.goto('/inbox');
+  await page.getByRole('tablist', { name: 'Instâncias' }).getByRole('tab', { name: 'NorteNet' }).click();
+  await page.getByText('Maria Souza').first().click();
+  const memory = page.getByRole('region', { name: 'Histórico do contato' });
+  await expect(memory).toContainText('ligar de volta (E2E 06)');
+  await expect(memory).toContainText('Atendimentos anteriores');
+  await memory.getByRole('button', { name: 'Concluir: ligar de volta (E2E 06)' }).click();
+  await expect.poll(() => sql(`SELECT status || '|' || resolved_by_user_id FROM follow_up_items WHERE text = 'ligar de volta (E2E 06)' AND tenant_id = '${env.tb}'`)).toBe(`done|${bruno.id}`);
+  expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND actor_id = '${bruno.id}' AND action = 'followup.resolved' AND metadata->>'acting_as' = 'hub:${env.hub}'`))).toBe(1);
+  // sem as chaves de memória (preset completo) a tela diz que não está liberado e o servidor recusa a rota
+  hubctl(`serving grant --hub ${env.hub} --tenant ${env.tb} --email agent1@e2e.test --preset completo`);
+  await page.reload();
+  await page.getByRole('tablist', { name: 'Instâncias' }).getByRole('tab', { name: 'NorteNet' }).click();
+  await page.getByText('Maria Souza').first().click();
+  await expect(page.getByText('O histórico dos atendimentos anteriores não está liberado para você nesta empresa.')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Histórico do contato' })).toHaveCount(0);
+  const res = await page.request.get(`/api/v1/tenants/${env.tb}/inbox/conversations/${sql(`SELECT id FROM conversations WHERE tenant_id = '${env.tb}'`)}/attendance-context`, { headers: { 'X-Omnira-Acting-As': `hub:${env.hub}` } });
+  expect(res.status()).toBe(403);
+});

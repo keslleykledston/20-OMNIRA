@@ -14,20 +14,21 @@ const when = (iso: string) => new Date(iso).toLocaleDateString('pt-BR', { day: '
 const overdue = (f: FollowUp) => !!f.due_at && new Date(f.due_at).getTime() < Date.now()
 
 // O que aconteceu antes com o contato desta conversa (ADR-0020): atendimentos anteriores com resumo e o que ficou pendente ou
-// foi prometido. Só leitura, exceto concluir/descartar uma pendência. `exclude` deixa de fora a própria conversa.
-export default function AttendanceMemoryPanel({ conversationId }: { conversationId: string }) {
+// foi prometido. Só leitura, exceto concluir/descartar uma pendência. `canResolve` esconde os botões para quem atende pelo Hub sem a chave
+// followup.resolve (o servidor recusaria); `delegated` separa o cache do contexto de membro (ADR-0040, fase 06).
+export default function AttendanceMemoryPanel({ conversationId, canResolve = true, delegated = false }: { conversationId: string; canResolve?: boolean; delegated?: boolean }) {
   const tenantId = getTenantId()
   const qc = useQueryClient()
   const [error, setError] = useState<string | null>(null)
   const q = useQuery({
-    queryKey: ['attendance-context', tenantId, conversationId],
+    queryKey: [delegated ? 'attendance-context-delegated' : 'attendance-context', tenantId, conversationId],
     queryFn: () => attendanceAPI.contextOf(conversationId),
     enabled: !!tenantId && !!conversationId,
     retry: false,
   })
   const resolve = useMutation({
     mutationFn: (v: { id: string; status: 'done' | 'dropped' }) => attendanceAPI.resolveFollowUp(v.id, { status: v.status }),
-    onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: ['attendance-context', tenantId] }) },
+    onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: [delegated ? 'attendance-context-delegated' : 'attendance-context', tenantId] }) },
     onError: (err) => setError(attendanceErrorMessage(err)),
   })
 
@@ -47,10 +48,10 @@ export default function AttendanceMemoryPanel({ conversationId }: { conversation
                   {f.due_at && <span className={overdue(f) ? 'font-semibold text-status-danger' : 'text-text-tertiary'}>{overdue(f) ? 'Atrasada · ' : 'Até '}{when(f.due_at)}</span>}
                 </div>
                 <p className="my-1 text-text-primary">{f.text}</p>
-                <div className="flex gap-2">
+                {canResolve && <div className="flex gap-2">
                   <button type="button" className="text-accent-primary" disabled={resolve.isPending} aria-label={`Concluir: ${f.text}`} onClick={() => resolve.mutate({ id: f.id, status: 'done' })}>Concluir</button>
                   <button type="button" className="text-text-secondary" disabled={resolve.isPending} aria-label={`Descartar: ${f.text}`} onClick={() => resolve.mutate({ id: f.id, status: 'dropped' })}>Descartar</button>
-                </div>
+                </div>}
               </li>
             ))}
           </ul>

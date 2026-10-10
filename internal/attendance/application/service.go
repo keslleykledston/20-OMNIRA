@@ -454,6 +454,28 @@ func (s *Service) ResolveFollowUp(ctx context.Context, id uuid.UUID, raw domain.
 	if !claim && !manage {
 		return nil, domain.ErrForbidden
 	}
+	return s.resolve(ctx, tc, id, in)
+}
+
+// ResolveFollowUpAsHubAgent is ResolveFollowUp for a Hub agent attending the instance (ADR-0040 phase 06). A Hub agent has no membership, so the role matrix has
+// nothing to say about them: the key followup.resolve is what lets the request reach this point (the route is Delegable with it) and the database asks for it again
+// (migration 117), together with attendance.history and the visibility of the contact. The audit trail names the hub the person acts for (the audit repository adds it).
+func (s *Service) ResolveFollowUpAsHubAgent(ctx context.Context, id uuid.UUID, raw domain.ResolveFollowUpInput) (*domain.FollowUp, error) {
+	tc, err := actor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if tc.Source != tenancydomain.AccessSourceHubServe || tc.HubID == nil {
+		return nil, domain.ErrForbidden
+	}
+	in, err := raw.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	return s.resolve(ctx, tc, id, in)
+}
+
+func (s *Service) resolve(ctx context.Context, tc *tenancydomain.TenantContext, id uuid.UUID, in domain.ResolveFollowUpInput) (*domain.FollowUp, error) {
 	item, err := s.repo.LockFollowUp(ctx, id)
 	if err != nil {
 		return nil, err

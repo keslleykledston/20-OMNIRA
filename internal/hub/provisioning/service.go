@@ -563,6 +563,7 @@ var ServingPresets = map[string][]string{
 	"chamados":      {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create"},
 	"completo":      {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create", "conversation.transfer", "contact.note"},
 	"completo_fin":  {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create", "conversation.transfer", "contact.note", "conversation.finalize"},
+	"completo_hist": {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create", "conversation.transfer", "contact.note", "attendance.history", "followup.resolve"},
 	"completo_ia":   {"conversation.read", "conversation.claim", "conversation.reply", "media.read", "contact.read", "contact.classify", "account.read", "ticket.read", "ticket.create", "conversation.transfer", "contact.note", "ai.assist"},
 	"leitura":       {"conversation.read", "media.read", "contact.read"},
 }

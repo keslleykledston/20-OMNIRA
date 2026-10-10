@@ -90,3 +90,11 @@ Pré-requisitos: `serving ceiling ... --preset completo_fin` e `serving grant ..
 5. Outra pessoa do Hub, ou você numa conversa solta, **não** consegue finalizar (403).
 6. Auditoria: `hub.conversation.finalized` com seu nome e o Hub; o texto do resumo nunca aparece.
 
+
+## N. Memória do contato pelo Hub (fase 06; precisa do preset `completo_hist`)
+Pré-requisitos: `serving ceiling ... --preset completo_hist` e `serving grant ... --preset completo_hist`. Precisa de um contato que já tenha um atendimento finalizado (de preferência com uma pendência aberta); **concluir uma pendência altera dado real da empresa**.
+1. Abra uma conversa desse contato pelo Hub: o painel mostra **Pendências do contato** e **Atendimentos anteriores** (resumo, motivo, data). Sem `attendance.history` o painel diz que o histórico não está liberado.
+2. Clique **Concluir** (ou Descartar) numa pendência: some da lista de abertas; um membro da empresa vê a pendência concluída por você.
+3. Com um preset sem `followup.resolve` (ex.: só `attendance.history` via `--keys`), os botões não aparecem.
+4. Um contato sem conversa nas filas do contrato não mostra memória.
+5. Auditoria: `followup.resolved` com seu nome e o Hub; o texto da pendência nunca aparece.
