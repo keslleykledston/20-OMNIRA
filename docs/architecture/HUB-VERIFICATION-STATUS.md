@@ -412,10 +412,16 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **NÃO provado em produção:** stream delegado com sessão real do Keycloak; resumo real pelo provedor de IA. Estado segue `LAB`.
 - **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase05-20261010-1437 20-omnira-<svc>:latest` + recriar (imagens antigas funcionam com o esquema novo; `down` da 115 testado).
 
-## 2026-10-10 (noite) — fase 05b: finalizar o atendimento pelo Hub (migration 116) — LOCAL, NÃO implantada
+## 2026-10-10 (noite) — fase 05b: finalizar o atendimento pelo Hub (migration 116) — IMPLANTADA (ver bloco seguinte)
 
 - **IMPLEMENTED:** ADR-0040 §19. Chave `conversation.finalize` (preset `completo_fin`); `DelegatedWrites.Finalize` → `replying.Service.Act` (sessão de sistema da instância, delegação reprovada na transação, linha travada) → `attendance.Service.FinalizeAsHubAgent`; só quem segura a conversa; auditoria `hub.conversation.finalized` sem texto; diálogo sem a sugestão por IA.
 - **POSTGRES + HTTP VERIFIED:** `serving_finalize_integration_test.go` (rotas e serviço de atendimento reais). **Mutação:** `scripts/test-hub-finalize-mutations.sh` 10/10 mortos. **Migrations** 093..116 sobem, descem e sobem idênticas. **Gate de integração:** pacotes afetados verdes (a lista fechada de rotas delegáveis passou a ler também a rota declarada no módulo de atendimento). **Vitest:** 857/858 (só a `SettingsShell` de sempre; mais o arquivo Playwright coletado). **E2E em navegador real: 11/11** (cenário novo: finalizar pela tela).
 - **Codex (somente leitura, não executou testes):** CRITICAL 0, HIGH 0, MEDIUM 1 (aviso ao cliente enviado antes de finalizar — desenho do diálogo do membro, aceito e justificado no ADR §19), LOW 0.
 - **NÃO provado:** aviso real ao cliente por WhatsApp; login real do Keycloak; implantação (migration 116 não aplicada em produção).
 - Estado segue `LAB`.
+
+## 2026-10-10 (noite) — migration 116 / fase 05b IMPLANTADA em produção e main enviado ao GitHub (a pedido do dono)
+
+- **Feito:** backup (`omnira_dev_20261010T202306Z`, cópia externa e na nuvem conferidas), tags de rollback `rollback-pre-phase05b-*` (api, worker, web; nome em `/data/cafegpt/tmp/rb116.txt` na máquina), imagens `sha-24bb4d3` construídas de worktree limpo (ids em execução = ids das imagens), migration **116** aplicada (ledger em 116; chave `conversation.finalize` com domínio `conversation`/escrita), `api worker web` recriados (healthy, 0 erros nos logs). A rota de finalizar responde 401 sem sessão. Ninguém tem `conversation.finalize` ainda (preset `completo_fin`).
+- **NÃO provado em produção:** finalização por uma pessoa do Hub com sessão real; aviso de despedida real por WhatsApp; o ticket do ERP no encerramento. Estado continua `LAB`.
+- **Rollback:** `docker tag 20-omnira-<svc>:rollback-pre-phase05b-<data> 20-omnira-<svc>:latest` + recriar (imagens antigas funcionam com o esquema novo; `down` da 116 testado).
