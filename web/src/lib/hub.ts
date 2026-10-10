@@ -172,6 +172,7 @@ export function describeHubWriteError(err: unknown): string {
       if (body.includes('claim')) return 'Assuma esta conversa antes de responder.'
       if (body.includes('window')) return 'Janela de 24 h fechada: só mensagem de template até o cliente escrever de novo.'
       if (body.includes('finalized')) return 'Este atendimento foi finalizado.'
+      if (body.includes('no active text channel')) return 'Esta conversa não tem um canal ativo para enviar (a empresa não tem uma linha conectada).'
       if (body.includes('company')) return 'A instância exibida não é a desta conversa. Recarregue a tela.'
       return 'A conversa mudou, tente novamente.'
     case 400:

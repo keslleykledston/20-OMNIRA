@@ -421,6 +421,8 @@ function describeSendError(err: any): string {
   const body = typeof err?.response?.data === 'string' ? err.response.data : '';
   if (status === 409) {
     if (body.includes('window')) return 'Janela de 24 h da Meta fechada: só mensagem de template até o cliente escrever de novo.';
+    if (body.includes('no active text channel')) return 'Esta conversa não tem um canal ativo para enviar (a empresa não tem uma linha conectada).';
+    if (body.includes('finalized')) return 'Este atendimento foi finalizado.';
     return body.includes('assigned')
       ? 'Assuma esta conversa antes de responder.'
       : 'A conversa mudou, tente novamente.';
