@@ -70,19 +70,30 @@ PY
   killed "$1" "$(run || true)"
 }
 M=000118_session_context_signed.up.sql; SC=internal/platform/sessionctx/sessionctx.go
-# NOT mutants (equivalent by construction): the length check of ctx_install_key (the table's CHECK (octet_length(key) >= 32) refuses a short key as well: two layers for one rule); the
-# `NOT (SELECT ctx_acting_present())` term of the six read policies (has_active_membership already answers false while acting: the term is redundancy and a planner hint); the shape checks of ctx_begin on the pid number and the system flag (they only run on content that already passed the HMAC, which only the
-# application can produce; a malformed value can come from nowhere an attacker reaches); removing ENABLE ROW LEVEL SECURITY from the three registry tables (the privilege revoke already refuses the application role; RLS is only the second wall);
-# the iat/clock window of ctx_begin tightened or loosened by a few seconds (tolerances, not rules); the order of the two keys tried by ctx_signed; the tag check and the field-count check of
-# ctx_signed (both are covered by the signature itself: the tag and every field are part of the signed payload, so a different tag or count can only fail the HMAC, which the 'any signature' mutant
-# proves is tested); hashing both sides before comparing signatures (constant-time property: a timing difference is not observable by a test).
+# NOT mutants (equivalent by construction, so nothing can kill them):
+#  - clearing the nonce when ctx_begin consumes it: the once-per-transaction rule (base_set) already refuses a second token in that transaction, and the next transaction is issued a new nonce;
+#  - the shape checks of ctx_begin on the flag, the nonce and the user, and the tag and field-count checks of ctx_signed: they only run on content that already passed the HMAC, which only the
+#    application (or whoever holds the key) can produce; TestAHolderOfTheKeyCannotSendAnythingButTheProtocol proves the protocol is exact even for a holder of the key, and the mutants below
+#    that weaken the HMAC itself prove the signature is tested;
+#  - hashing both sides before comparing signatures (a constant-time property: a timing difference is not observable by a test);
+#  - the length check of ctx_install_key (the table's CHECK (octet_length(key) >= 32) refuses a short key as well: two layers for one rule);
+#  - the `NOT (SELECT ctx_acting_present())` term of the six read policies (has_active_membership already answers false while acting: redundancy and a planner hint);
+#  - removing ENABLE ROW LEVEL SECURITY from the three registry tables (the privilege revoke already refuses the application role; RLS is only the second wall).
 
 # --- the signature -----------------------------------------------------------------------------------------------------------------------------
 sqlmut "any signature is accepted" $M "WHERE sha256(decode(sig, 'hex')) = sha256(public.hmac(convert_to(payload, 'UTF8'), k.key, 'sha256'))" "WHERE true"
-sqlmut "a context from the future is accepted" $M "to_timestamp(p[5]::BIGINT) > now() + interval '15 seconds' OR " ""
-sqlmut "a stale context is accepted" $M " OR to_timestamp(p[5]::BIGINT) < now() - interval '30 seconds'" ""
-sqlmut "a context signed for another backend is accepted (replay)" $M "  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN public.ctx_refused(); END IF;
-" ""
+sqlmut "a token over a nonce the database did not issue to this transaction is accepted" $M "AND NOT v.base_set AND v.nonce = p[4];" "AND NOT v.base_set;"
+sqlmut "a token is accepted against the registry row of an earlier transaction" $M "WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND NOT v.base_set AND v.nonce = p[4];" "WHERE v.pid = pg_backend_pid() AND NOT v.base_set AND v.nonce = p[4];"
+sqlmut "a challenge forgets a context already accepted in the transaction" $M "    base_set      = CASE WHEN v.txstart = now() THEN v.base_set ELSE false END,
+    acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END,
+    acting_tenant = CASE WHEN v.txstart = now() THEN v.acting_tenant END,
+    txstart       = now(),
+    nonce         = n;" "    base_set      = false,
+    acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END,
+    acting_tenant = CASE WHEN v.txstart = now() THEN v.acting_tenant END,
+    txstart       = now(),
+    nonce         = n;"
+sqlmut "the challenge nonce is predictable (constant)" $M "n TEXT := replace(gen_random_uuid()::TEXT, '-', '');" "n TEXT := repeat('a', 32);"
 sqlmut "a second context in the same transaction is accepted" $M "IF EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.base_set) THEN" "IF false THEN"
 sqlmut "a refusal does not raise in enforce" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF false THEN"
 sqlmut "a refusal raises in every mode" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF true THEN"
@@ -129,9 +140,9 @@ mut "the signer always says not-system" $SC 'flag := "0"
 	if system {
 		flag = "1"
 	}' 'flag := "0"'
-mut "the signer leaves the pid out" $SC 'user, flag, pid, at.Unix())' 'user, flag, uint32(0), at.Unix())'
-mut "the signer leaves the user out" $SC 'user := userID.String()' 'user := ""'
-mut "the signer sends an empty user for the nil UUID (system sessions would diverge from the legacy setting)" $SC 'user := userID.String()' 'user := ""; if userID != uuid.Nil { user = userID.String() }'
+mut "the signer leaves the user out" $SC 'b1|%s|%s|%s", userID.String(), flag, nonce)' 'b1|%s|%s|%s", "", flag, nonce)'
+mut "the signer leaves the nonce out" $SC 'b1|%s|%s|%s", userID.String(), flag, nonce)' 'b1|%s|%s|%s", userID.String(), flag, "")'
+mut "the application does not ask for a challenge" $SC 'SELECT public.ctx_challenge()' "SELECT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
 mut "a short key is accepted by the application" $SC 'if len(b) < 32 {' 'if len(b) < 1 {'
 mut "a malformed key is silently ignored" $SC 'return nil, fmt.Errorf("%s must be hex: %w", KeyEnv, err)' 'return nil, nil'
 mut "a refused context is not counted" $SC '	if !ok {

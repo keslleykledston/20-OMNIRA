@@ -34,7 +34,7 @@ case "${1:-status}" in
     if [ "$ls" != "none" ] && [ -z "${FORCE:-}" ]; then
       echo "log_statement is '$ls': the key would be written to the database log. Set it to none (or FORCE=1 and rotate the key afterwards)." >&2; exit 2
     fi
-    printf "SELECT public.ctx_install_key(decode('%s','hex'));\n" "$k" | owner -tA ;;
+    printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$k" | owner -tA ;;
   drop-previous) owner -tA -c "SELECT public.ctx_drop_previous_key()" | sed 's/^/previous keys dropped: /' ;;
   mode)
     m="${2:-}"; case "$m" in off|measure|enforce) ;; *) echo "usage: $0 mode off|measure|enforce" >&2; exit 2 ;; esac

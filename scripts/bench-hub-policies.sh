@@ -31,9 +31,9 @@ docker run --rm --network "container:$NAME" -v "$PWD/migrations:/migrations:ro" 
 docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 own() { docker exec -i "$NAME" psql -U omnira -d $DB -X -q -At -v ON_ERROR_STOP=1 "$@"; }
 CTX_KEY=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
-ctx_begin_sql() { # ctx_begin_sql <user uuid> -> a statement that signs a context for THIS backend (the key is the bench's own) and hands it to ctx_begin; empty without CTX_MODE
+ctx_begin_sql() { # ctx_begin_sql <user uuid> -> the challenge and the answer signed over it with the bench's own key; empty without CTX_MODE
   [ -n "${CTX_MODE:-}" ] || return 0
-  printf "SELECT ctx_begin(p || '|' || encode(hmac(convert_to(p, 'UTF8'), decode('%s','hex'), 'sha256'), 'hex')) FROM (SELECT format('b1|%%s|0|%%s|%%s', '%s', pg_backend_pid(), extract(epoch FROM now())::bigint) AS p) x;" "$CTX_KEY" "$1"
+  printf "\nSELECT ctx_challenge() AS nonce \\gset\nSELECT ctx_begin(p || '|' || encode(hmac(convert_to(p, 'UTF8'), decode('%s','hex'), 'sha256'), 'hex')) FROM (SELECT format('b1|%%s|0|%%s', '%s', :'nonce') AS p) x;\n" "$CTX_KEY" "$1"
 }
 if [ -n "${CTX_MODE:-}" ]; then
   own -c "SELECT ctx_install_key(decode('$CTX_KEY','hex'))" >/dev/null; own -c "SELECT ctx_set_mode('$CTX_MODE')" >/dev/null

@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -132,9 +134,14 @@ func (l *ctxLab) forge(tx pgx.Tx, user uuid.UUID, system bool) {
 	}
 }
 
-// sign signs a context for THIS transaction's backend (the database refuses a context signed for another one).
-func (l *ctxLab) sign(tx pgx.Tx, key []byte, user uuid.UUID, system bool, at time.Time) string {
-	return sessionctx.Sign(key, user, system, tx.Conn().PgConn().PID(), at)
+// signFor asks the database for THIS transaction's challenge and answers it with a token signed with key (what the application's sessionctx.Set does).
+func (l *ctxLab) signFor(tx pgx.Tx, key []byte, user uuid.UUID, system bool) string {
+	l.t.Helper()
+	var nonce string
+	if err := tx.QueryRow(l.ctx, `SELECT ctx_challenge()`).Scan(&nonce); err != nil {
+		l.t.Fatal(err)
+	}
+	return sessionctx.Sign(key, user, system, nonce)
 }
 
 func otherKey() []byte {
@@ -158,7 +165,7 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 
 	t.Run("a context signed with another key is refused", func(t *testing.T) {
 		l.tx(func(tx pgx.Tx) {
-			if l.begin(tx, l.sign(tx, otherKey(), user, true, time.Now())) {
+			if l.begin(tx, l.signFor(tx, otherKey(), user, true)) {
 				t.Fatal("a context signed with a key the database does not know was accepted")
 			}
 			if u, sys := l.identity(tx); u != nil || sys {
@@ -169,7 +176,7 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 
 	t.Run("a genuine context is believed, and only for what it says", func(t *testing.T) {
 		l.tx(func(tx pgx.Tx) {
-			if !l.begin(tx, l.sign(tx, l.key, user, false, time.Now())) {
+			if !l.begin(tx, l.signFor(tx, l.key, user, false)) {
 				t.Fatal("a genuine context was refused")
 			}
 			l.forge(tx, uuid.New(), true) // forging on top of a genuine, non-system context changes nothing
@@ -178,7 +185,7 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 			}
 		})
 		l.tx(func(tx pgx.Tx) {
-			if !l.begin(tx, l.sign(tx, l.key, uuid.Nil, true, time.Now())) {
+			if !l.begin(tx, l.signFor(tx, l.key, uuid.Nil, true)) {
 				t.Fatal("a genuine system context was refused")
 			}
 			if u, sys := l.identity(tx); u == nil || *u != uuid.Nil || !sys {
@@ -189,23 +196,19 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 
 	t.Run("tampering with a signed context breaks it", func(t *testing.T) {
 		cases := map[string]func(parts []string, good string) string{
-			"system flag flipped": func(p []string, _ string) string { p[2] = "1"; return strings.Join(p, "|") },
-			"another user":        func(p []string, _ string) string { p[1] = uuid.NewString(); return strings.Join(p, "|") },
-			"another backend":     func(p []string, _ string) string { p[3] = "1"; return strings.Join(p, "|") },
-			"issued later": func(p []string, _ string) string {
-				p[4] = fmt.Sprint(time.Now().Add(time.Second).Unix())
-				return strings.Join(p, "|")
-			},
+			"system flag flipped":  func(p []string, _ string) string { p[2] = "1"; return strings.Join(p, "|") },
+			"another user":         func(p []string, _ string) string { p[1] = uuid.NewString(); return strings.Join(p, "|") },
+			"another nonce":        func(p []string, _ string) string { p[3] = strings.Repeat("a", 32); return strings.Join(p, "|") },
 			"signature truncated":  func(_ []string, g string) string { return g[:len(g)-2] },
-			"signature uppercased": func(p []string, _ string) string { p[5] = strings.ToUpper(p[5]); return strings.Join(p, "|") },
+			"signature uppercased": func(p []string, _ string) string { p[4] = strings.ToUpper(p[4]); return strings.Join(p, "|") },
 			"extra field":          func(_ []string, g string) string { return g + "|x" },
 			"empty":                func(_ []string, _ string) string { return "" },
-			"garbage":              func(_ []string, _ string) string { return "b1||||" },
+			"garbage":              func(_ []string, _ string) string { return "b1|||" },
 			"wrong tag":            func(_ []string, g string) string { return "b2" + g[2:] },
 		}
 		for name, mutate := range cases {
 			l.tx(func(tx pgx.Tx) {
-				good := l.sign(tx, l.key, user, false, time.Now())
+				good := l.signFor(tx, l.key, user, false)
 				raw := mutate(strings.Split(good, "|"), good)
 				if l.begin(tx, raw) {
 					t.Errorf("%s: a tampered context was accepted", name)
@@ -217,41 +220,93 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 		}
 	})
 
-	t.Run("a context signed for another connection cannot be replayed from this one", func(t *testing.T) {
+	t.Run("a token is good for the transaction that was challenged, and nowhere else", func(t *testing.T) {
 		var captured string
-		l.tx(func(tx pgx.Tx) { captured = l.sign(tx, l.key, uuid.Nil, true, time.Now()) }) // what a different, genuine session sent
-		hold, err := l.app.Acquire(l.ctx)                                                  // keeps the first backend busy so the next transaction runs on another
+		l.tx(func(tx pgx.Tx) { captured = l.signFor(tx, l.key, uuid.Nil, true) }) // a genuine system token, signed and never used (the request died, say)
+		l.tx(func(tx pgx.Tx) {
+			if l.begin(tx, captured) {
+				t.Error("a token signed over another transaction's nonce was accepted")
+			}
+			if _, sys := l.identity(tx); sys {
+				t.Error("replaying a captured system token made the session an administrator")
+			}
+		})
+		one, err := pgxpool.ParseConfig(l.app.Config().ConnString())
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer hold.Release()
-		l.tx(func(tx pgx.Tx) {
-			if hold.Conn().PgConn().PID() == tx.Conn().PgConn().PID() {
-				t.Skip("could not get two distinct backends")
+		one.MaxConns = 1 // the same backend serves every transaction below
+		pool, err := pgxpool.NewWithConfig(l.ctx, one)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		for _, commit := range []bool{true, false} { // a request that finished and one that rolled back: the captured token is dead either way
+			tx, err := pool.Begin(l.ctx)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if l.begin(tx, captured) {
-				t.Error("a context captured from another session was accepted (replay)")
+			tok := l.signFor(tx, l.key, uuid.Nil, true)
+			if !l.begin(tx, tok) {
+				t.Fatal("the genuine token was refused")
 			}
-			if _, sys := l.identity(tx); sys {
-				t.Error("replay made the session an administrator")
+			if commit {
+				_ = tx.Commit(l.ctx)
+			} else {
+				_ = tx.Rollback(l.ctx)
 			}
-		})
+			again, err := pool.Begin(l.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if l.begin(again, tok) {
+				t.Errorf("commit=%v: the same token was accepted in a later transaction of the same backend", commit)
+			}
+			if _, sys := l.identity(again); sys {
+				t.Errorf("commit=%v: replay made the session an administrator", commit)
+			}
+			_ = again.Rollback(l.ctx)
+		}
 	})
 
-	t.Run("a stale or future context is refused", func(t *testing.T) {
-		for name, at := range map[string]time.Time{"two minutes old": time.Now().Add(-2 * time.Minute), "a minute ahead": time.Now().Add(time.Minute)} {
-			l.tx(func(tx pgx.Tx) {
-				if l.begin(tx, l.sign(tx, l.key, user, true, at)) {
-					t.Errorf("%s: accepted", name)
-				}
-			})
+	t.Run("a challenge that was answered by nobody does not linger into the next transaction", func(t *testing.T) {
+		one, err := pgxpool.ParseConfig(l.app.Config().ConnString())
+		if err != nil {
+			t.Fatal(err)
 		}
-		l.tx(func(tx pgx.Tx) { // inside the tolerance
-			if !l.begin(tx, l.sign(tx, l.key, user, false, time.Now().Add(-20*time.Second))) {
-				t.Error("a context issued twenty seconds ago must still be accepted")
+		one.MaxConns = 1
+		pool, err := pgxpool.NewWithConfig(l.ctx, one)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		first, err := pool.Begin(l.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := l.signFor(first, l.key, uuid.Nil, true) // challenged and signed, never presented
+		if err := first.Commit(l.ctx); err != nil {      // the registry row with that nonce is now committed
+			t.Fatal(err)
+		}
+		next, err := pool.Begin(l.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = next.Rollback(l.ctx) }()
+		if l.begin(next, stale) {
+			t.Error("a token for the registry row of an earlier transaction was accepted")
+		}
+	})
+
+	t.Run("a holder of the key still needs the database's challenge", func(t *testing.T) {
+		l.tx(func(tx pgx.Tx) {
+			if l.begin(tx, signRaw(l.key, "b1|"+user.String()+"|1|"+strings.Repeat("0", 32))) {
+				t.Error("a token over a nonce the database never issued was accepted")
 			}
-			if u, _ := l.identity(tx); u == nil || *u != user {
-				t.Error("and it must establish its identity")
+		})
+		l.tx(func(tx pgx.Tx) { // no challenge at all
+			if l.begin(tx, signRaw(l.key, "b1|"+user.String()+"|0|"+strings.Repeat("a", 32))) {
+				t.Error("a token without any challenge in this transaction was accepted")
 			}
 		})
 	})
@@ -307,11 +362,48 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 			}
 		})
 		l.tx(func(tx pgx.Tx) {
-			l.begin(tx, l.sign(tx, l.key, uuid.Nil, true, time.Now()))
+			l.begin(tx, l.signFor(tx, l.key, uuid.Nil, true))
 			if n := count(tx); n != 1 {
 				t.Errorf("a genuine system context read %d tenant(s), want 1", n)
 			}
 		})
+	})
+}
+
+// signRaw signs ANY payload with the key, the way a holder of the key could: the database must still refuse what is not exactly the protocol.
+func signRaw(key []byte, payload string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(payload))
+	return payload + "|" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestAHolderOfTheKeyCannotSendAnythingButTheProtocol(t *testing.T) {
+	l := newCtxLab(t)
+	l.withMode("enforce")
+	user := uuid.New()
+	l.tx(func(tx pgx.Tx) {
+		var nonce string
+		if err := tx.QueryRow(l.ctx, `SELECT ctx_challenge()`).Scan(&nonce); err != nil {
+			t.Fatal(err)
+		}
+		cases := map[string]string{
+			"another tag":         fmt.Sprintf("b2|%s|0|%s", user, nonce),
+			"an extra field":      fmt.Sprintf("b1|%s|0|%s|x", user, nonce),
+			"a missing field":     fmt.Sprintf("b1|%s|0", user),
+			"a system flag of 2":  fmt.Sprintf("b1|%s|2|%s", user, nonce),
+			"a user that is not":  fmt.Sprintf("b1|not-a-uuid|0|%s", nonce),
+			"an empty user":       fmt.Sprintf("b1||0|%s", nonce),
+			"a short nonce":       fmt.Sprintf("b1|%s|0|%s", user, nonce[:30]),
+			"an uppercased nonce": fmt.Sprintf("b1|%s|0|%s", user, strings.ToUpper(nonce)),
+		}
+		for name, payload := range cases {
+			if l.begin(tx, signRaw(l.key, payload)) {
+				t.Errorf("%s: accepted", name)
+			}
+		}
+		if !l.begin(tx, signRaw(l.key, fmt.Sprintf("b1|%s|0|%s", user, nonce))) {
+			t.Error("the exact protocol, signed with the key, was refused")
+		}
 	})
 }
 
@@ -322,11 +414,11 @@ func TestAContextIsAcceptedOncePerTransactionAndARefusalIsLoudInEnforce(t *testi
 	t.Run("a second genuine context cannot change who the session is", func(t *testing.T) {
 		l.withMode("enforce")
 		l.tx(func(tx pgx.Tx) {
-			if !l.begin(tx, l.sign(tx, l.key, user, false, time.Now())) {
+			if !l.begin(tx, l.signFor(tx, l.key, user, false)) {
 				t.Fatal("the first context was refused")
 			}
-			// a perfectly valid context for this very backend (say, one captured earlier): refused, the identity stays
-			if l.begin(tx, l.sign(tx, l.key, admin, true, time.Now())) {
+			// a perfectly valid context for this very backend (a fresh challenge, a genuine signature): refused, the identity stays
+			if l.begin(tx, l.signFor(tx, l.key, admin, true)) { // a fresh challenge, a perfectly valid signature
 				t.Fatal("a second context in the same transaction was accepted")
 			}
 			if u, sys := l.identity(tx); u == nil || *u != user || sys {
@@ -338,7 +430,7 @@ func TestAContextIsAcceptedOncePerTransactionAndARefusalIsLoudInEnforce(t *testi
 	t.Run("enforce: a refused context is an error (the request must not run)", func(t *testing.T) {
 		l.withMode("enforce")
 		l.tx(func(tx pgx.Tx) {
-			ok, err := l.beginErr(tx, l.sign(tx, otherKey(), user, true, time.Now()))
+			ok, err := l.beginErr(tx, l.signFor(tx, otherKey(), user, true))
 			if ok || err == nil {
 				t.Fatalf("a refused context must raise in enforce: ok=%v err=%v", ok, err)
 			}
@@ -353,7 +445,7 @@ func TestAContextIsAcceptedOncePerTransactionAndARefusalIsLoudInEnforce(t *testi
 		for _, mode := range []string{"off", "measure"} {
 			l.withMode(mode)
 			l.tx(func(tx pgx.Tx) {
-				ok, err := l.beginErr(tx, l.sign(tx, otherKey(), user, true, time.Now()))
+				ok, err := l.beginErr(tx, l.signFor(tx, otherKey(), user, true))
 				if ok || err != nil {
 					t.Errorf("%s: ok=%v err=%v; want false and no error (the legacy settings still decide)", mode, ok, err)
 				}
@@ -434,7 +526,7 @@ func TestTheApplicationRoleCannotReachTheKeyTheRegistryOrTheInternals(t *testing
 			if _, err := tx.Exec(l.ctx, `CREATE FUNCTION pg_temp.sha256(bytea) RETURNS bytea AS $$ SELECT '\x00'::bytea $$ LANGUAGE sql`); err != nil {
 				t.Skipf("cannot create temp functions here: %v", err)
 			}
-			if l.begin(tx, l.sign(tx, otherKey(), uuid.New(), true, time.Now())) {
+			if l.begin(tx, l.signFor(tx, otherKey(), uuid.New(), true)) {
 				t.Error("a temp function shadowing sha256 made a forged signature pass")
 			}
 		})
@@ -573,7 +665,7 @@ func TestKeyRotationNeverLogsAnybodyOutAndRetiresTheOldKey(t *testing.T) {
 	third, _ := hex.DecodeString(strings.Repeat("d4", 32))
 	accepts := func(key []byte) bool {
 		ok := false
-		l.tx(func(tx pgx.Tx) { ok = l.begin(tx, l.sign(tx, key, user, false, time.Now())) })
+		l.tx(func(tx pgx.Tx) { ok = l.begin(tx, l.signFor(tx, key, user, false)) })
 		return ok
 	}
 	install := func(key []byte) {
@@ -651,7 +743,7 @@ func TestADelegatedContextCannotBeForgedOnlyGranted(t *testing.T) {
 	l.withMode("enforce")
 	user, hub, tenant := uuid.New(), uuid.New(), uuid.New()
 	l.tx(func(tx pgx.Tx) {
-		l.begin(tx, l.sign(tx, l.key, user, false, time.Now()))
+		l.begin(tx, l.signFor(tx, l.key, user, false))
 		// a user without any delegation asks for one: refused, and nothing is recorded
 		var ok bool
 		if err := tx.QueryRow(l.ctx, `SELECT lock_served_tenant($1, $2, $3)`, tenant, user, hub).Scan(&ok); err != nil {

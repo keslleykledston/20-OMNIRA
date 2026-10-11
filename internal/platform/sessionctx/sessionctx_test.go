@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -19,16 +18,15 @@ func TestSignMatchesTheIndependentVectors(t *testing.T) {
 	cases := []struct {
 		user   uuid.UUID
 		system bool
-		pid    uint32
-		at     int64
+		nonce  string
 		want   string
 	}{
-		{uuid.MustParse("11111111-2222-3333-4444-555555555555"), false, 4242, 1700000000, "b1|11111111-2222-3333-4444-555555555555|0|4242|1700000000|86fdee3b8d7069cdef53351e1519718a1e39cc8d0bef733ef6f5e863db077617"},
-		{uuid.Nil, true, 7, 1700000001, "b1|00000000-0000-0000-0000-000000000000|1|7|1700000001|59c31b05e42b94f8c989ad2a233e2455e559e800532c4a6db27153bbe3d6c01f"},
+		{uuid.MustParse("11111111-2222-3333-4444-555555555555"), false, "00112233445566778899aabbccddeeff", "b1|11111111-2222-3333-4444-555555555555|0|00112233445566778899aabbccddeeff|601f8693cd910a41eadca19592e30f6805091e2297ab017114edc92087c852b0"},
+		{uuid.Nil, true, "ffeeddccbbaa99887766554433221100", "b1|00000000-0000-0000-0000-000000000000|1|ffeeddccbbaa99887766554433221100|82176c9ea4120baee4334ee94e469fb6e634ed4d489eeb0f7e547fa8254e8f30"},
 	}
 	for _, c := range cases {
-		if got := Sign(key, c.user, c.system, c.pid, time.Unix(c.at, 0)); got != c.want {
-			t.Errorf("Sign(%s,%v,%d,%d)\n got %s\nwant %s", c.user, c.system, c.pid, c.at, got, c.want)
+		if got := Sign(key, c.user, c.system, c.nonce); got != c.want {
+			t.Errorf("Sign(%s,%v,%s)\n got %s\nwant %s", c.user, c.system, c.nonce, got, c.want)
 		}
 	}
 }
@@ -37,14 +35,13 @@ func TestAnotherKeyOrAnotherFieldGivesAnotherSignature(t *testing.T) {
 	k1 := []byte(strings.Repeat("a", 32))
 	k2 := []byte(strings.Repeat("b", 32))
 	u := uuid.New()
-	at := time.Unix(1700000000, 0)
-	base := Sign(k1, u, false, 1, at)
+	n := "00112233445566778899aabbccddeeff"
+	base := Sign(k1, u, false, n)
 	for name, other := range map[string]string{
-		"key":    Sign(k2, u, false, 1, at),
-		"system": Sign(k1, u, true, 1, at),
-		"user":   Sign(k1, uuid.New(), false, 1, at),
-		"time":   Sign(k1, u, false, 1, at.Add(time.Second)),
-		"pid":    Sign(k1, u, false, 2, at),
+		"key":    Sign(k2, u, false, n),
+		"system": Sign(k1, u, true, n),
+		"user":   Sign(k1, uuid.New(), false, n),
+		"nonce":  Sign(k1, u, false, "ffffffffffffffffffffffffffffffff"),
 	} {
 		if other == base {
 			t.Errorf("changing the %s did not change the signed context", name)
@@ -76,7 +73,12 @@ func TestParseKey(t *testing.T) {
 
 type fakeRow struct{ ok bool }
 
+// Scan answers like the two statements Set runs: the challenge (one string) and the answer (a bool and the two settings).
 func (r fakeRow) Scan(dest ...any) error {
+	if len(dest) == 1 {
+		*(dest[0].(*string)) = "00112233445566778899aabbccddeeff"
+		return nil
+	}
 	*(dest[0].(*bool)) = r.ok
 	return nil
 }
@@ -86,8 +88,6 @@ type fakeQuerier struct {
 	sql   []string
 	calls int
 }
-
-func (f *fakeQuerier) PID() uint32 { return 1234 }
 
 func (f *fakeQuerier) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
 	f.sql = append(f.sql, sql)
@@ -130,7 +130,7 @@ func TestWithoutAKeyOnlyTheLegacySettingsAreSetAndNothingIsAskedOfTheDatabase(t 
 		t.Fatal(err)
 	}
 	if f.calls != 0 {
-		t.Error("ctx_begin was called without a key (it does not exist before migration 000118)")
+		t.Error("the database was asked for a challenge without a key (ctx_challenge does not exist before migration 000118)")
 	}
 	if len(f.sql) != 2 || !strings.Contains(f.sql[0], "app.current_user_id") || !strings.Contains(f.sql[1], "app.is_system_admin") {
 		t.Errorf("legacy settings not set: %v", f.sql)

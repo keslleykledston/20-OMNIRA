@@ -3,11 +3,12 @@
 -- Until now every RLS decision trusted four settings the application role can write with set_config(): app.current_user_id, app.is_system_admin,
 -- app.acting_hub and app.acting_tenant. Anyone able to run arbitrary SQL in an application session could turn the administrator flag on or clear the
 -- acting hub. From here the trusted values live in a table only the owner can write (session_ctx_verified, one row per backend, valid for the transaction that
--- wrote it) and are put there by two owner-rights functions:
---   ctx_begin(raw)        the application calls it first in every transaction with a context it SIGNED with a key from its environment
---                         (b1|<user uuid or empty>|<0|1 system>|<backend pid>|<issued at, epoch seconds>|<hmac-sha256 hex>); the HMAC is checked ONCE per transaction.
---                         The context names the backend it was signed for (a copy captured from another session cannot be replayed from a different one), is valid for
---                         thirty seconds, and is accepted once per transaction. In enforce a refused context is an ERROR (the request does not run); in off/measure it is a `false`.
+-- wrote it) and are put there by owner-rights functions:
+--   ctx_challenge()       the application asks for a challenge as the first statement of a transaction: a fresh random nonce, kept in the registry row of THIS transaction
+--   ctx_begin(raw)        the application answers with a context it SIGNED, with a key from its environment, over that nonce
+--                         (b1|<user uuid>|<0|1 system>|<nonce>|<hmac-sha256 hex>); the HMAC is checked ONCE per transaction. The token is good for exactly the transaction that
+--                         issued the nonce, once: a copy captured anywhere else (another session, an earlier transaction of the same backend, a rolled-back request) is useless,
+--                         and nothing depends on clocks. In enforce a refused context is an ERROR (the request does not run); in off/measure it is a `false`.
 --   lock_served_tenant    records the acting hub and tenant (it already proves the delegation); nothing to sign, it runs inside the database
 -- The HMAC key lives in a table the application role cannot read, so arbitrary SQL cannot produce a context that ctx_begin accepts, and cannot write the table.
 -- Reading the verified context in a policy is one primary-key lookup (the first design verified the HMAC on every call: 36 us per call against ~3 us, measured).
@@ -15,7 +16,7 @@
 -- Three modes (table session_ctx_mode, changed only by the owner through ctx_set_mode):
 --   off      the legacy settings decide (what ran until now); the verified context is ignored
 --   measure  the legacy settings still decide, but every divergence from the verified value raises a WARNING (to find any code path that does not sign)
---   enforce  ONLY the verified context counts; a missing, forged, expired or wrongly-signed one is "no context" (no access); the legacy settings are ignored
+--   enforce  ONLY the verified context counts; a missing, forged or wrongly-signed one is "no context" (no access); the legacy settings are ignored
 -- This migration leaves the mode at 'off': nothing changes until an operator installs a key and moves the mode.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -78,6 +79,7 @@ REVOKE ALL ON FUNCTION ctx_install_key(BYTEA), ctx_drop_previous_key() FROM PUBL
 CREATE UNLOGGED TABLE session_ctx_verified (
   pid            INTEGER PRIMARY KEY,
   txstart        TIMESTAMPTZ NOT NULL,
+  nonce          TEXT,                             -- the challenge issued to this transaction, until ctx_begin consumes it
   base_set       BOOLEAN NOT NULL DEFAULT false,   -- ctx_begin already accepted a context in this transaction (a second one is refused)
   uid            UUID,
   sys            BOOLEAN NOT NULL DEFAULT false,
@@ -122,34 +124,41 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
--- Called by the application as the FIRST statement of each transaction. Accepts a context signed with an installed key FOR THIS BACKEND (pid), issued within the last
--- thirty seconds (fifteen of tolerance for the clocks; a transaction's now() is its start and the application signs right after opening it), ONCE per transaction (a second
--- context in the same transaction is refused: it could only be somebody trying to change who the session is), and records it for this transaction.
-CREATE FUNCTION ctx_begin(p_raw TEXT) RETURNS BOOLEAN AS $$
+-- The first statement of every transaction of the application: a fresh random nonce, remembered in the registry row of THIS transaction. Anyone can ask for one (and learn
+-- nothing: only the holder of the key can sign it). Asking again replaces the nonce but never touches a context already accepted in this transaction.
+CREATE FUNCTION ctx_challenge() RETURNS TEXT AS $$
 DECLARE
-  p TEXT[] := public.ctx_signed(p_raw, 'b1', 4);   -- [tag, user, system, pid, issued-at, sig]
+  n TEXT := replace(gen_random_uuid()::TEXT, '-', '');
 BEGIN
-  IF p IS NULL THEN RETURN public.ctx_refused(); END IF;
-  IF p[5] !~ '^[0-9]{1,11}$' OR p[4] !~ '^[0-9]{1,10}$' OR p[3] NOT IN ('0', '1')
-     OR (p[2] <> '' AND p[2] !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') THEN
-    RETURN public.ctx_refused();
-  END IF;
-  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN public.ctx_refused(); END IF;
-  IF to_timestamp(p[5]::BIGINT) > now() + interval '15 seconds' OR to_timestamp(p[5]::BIGINT) < now() - interval '30 seconds' THEN
-    RETURN public.ctx_refused();
-  END IF;
-  IF EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.base_set) THEN
-    RETURN public.ctx_refused();
-  END IF;
-  INSERT INTO public.session_ctx_verified AS v (pid, txstart, base_set, uid, sys)
-  VALUES (pg_backend_pid(), now(), true, NULLIF(p[2], '')::UUID, p[3] = '1')
+  INSERT INTO public.session_ctx_verified AS v (pid, txstart, nonce) VALUES (pg_backend_pid(), now(), n)
   ON CONFLICT (pid) DO UPDATE SET
+    uid           = CASE WHEN v.txstart = now() THEN v.uid END,
+    sys           = CASE WHEN v.txstart = now() THEN v.sys ELSE false END,
+    base_set      = CASE WHEN v.txstart = now() THEN v.base_set ELSE false END,
     acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END,
     acting_tenant = CASE WHEN v.txstart = now() THEN v.acting_tenant END,
     txstart       = now(),
-    base_set      = true,
-    uid           = EXCLUDED.uid,
-    sys           = EXCLUDED.sys;
+    nonce         = n;
+  RETURN n;
+END;
+$$ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+
+-- Called by the application right after ctx_challenge, with a context signed with an installed key over THAT nonce. Accepted only if the nonce is the one issued to this very transaction
+-- (so a token is good for one transaction of one backend, once: a captured copy is useless anywhere else, whatever happens to the request that carried it) and no context was accepted in
+-- this transaction yet (a second one could only be somebody trying to change who the session is). Records the identity for this transaction.
+CREATE FUNCTION ctx_begin(p_raw TEXT) RETURNS BOOLEAN AS $$
+DECLARE
+  p TEXT[] := public.ctx_signed(p_raw, 'b1', 3);   -- [tag, user, system, nonce, sig]
+BEGIN
+  IF p IS NULL THEN RETURN public.ctx_refused(); END IF;
+  IF p[3] NOT IN ('0', '1') OR p[4] !~ '^[0-9a-f]{32}$'
+     OR p[2] !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    RETURN public.ctx_refused();
+  END IF;
+  UPDATE public.session_ctx_verified v
+     SET base_set = true, nonce = NULL, uid = p[2]::UUID, sys = (p[3] = '1')
+   WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND NOT v.base_set AND v.nonce = p[4];
+  IF NOT FOUND THEN RETURN public.ctx_refused(); END IF;
   RETURN true;
 END;
 $$ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
@@ -162,6 +171,7 @@ CREATE FUNCTION ctx_set_acting(p_hub_id UUID, p_tenant_id UUID) RETURNS VOID AS 
     uid           = CASE WHEN v.txstart = now() THEN v.uid END,
     sys           = CASE WHEN v.txstart = now() THEN v.sys ELSE false END,
     base_set      = CASE WHEN v.txstart = now() THEN v.base_set ELSE false END,
+    nonce         = CASE WHEN v.txstart = now() THEN v.nonce END,
     txstart       = now(),
     acting_hub    = EXCLUDED.acting_hub,
     acting_tenant = EXCLUDED.acting_tenant;

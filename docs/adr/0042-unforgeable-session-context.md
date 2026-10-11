@@ -45,10 +45,12 @@ contra ~3 µs da definição antiga: dez vezes, e as políticas legadas chamam a
 1. **Chave.** `session_ctx_keys` (`current` e `previous`; sem nenhum privilégio para `omnira_app`, RLS ligada sem política como segunda parede). A aplicação lê a mesma chave de `OMNIRA_SESSION_CTX_KEY` (hex, ≥ 32 bytes); o migrador
    (`tools/migrate-sql.sh`) a instala a partir da mesma variável, por stdin (nunca aparece na lista de processos). A rotação instala a nova como `current` e a antiga vira `previous` (continua aceita: nenhuma instância ainda
    não reiniciada perde acesso); `ctx_drop_previous_key()` a aposenta.
-2. **Contexto assinado.** `b1|<usuário ou vazio>|<0|1 sistema>|<pid do backend>|<emitido em, epoch s>|<hmac-sha256 hex>`. A aplicação o monta em `internal/platform/sessionctx` e o entrega a `ctx_begin(raw)` como
-   **primeiro comando de cada transação**, na mesma ida ao banco que grava as GUCs legadas (`sessionctx.Set`, chamado por `WithTenantSession`, que é o único ponto do código de produção que abre sessão).
-   `ctx_begin` aceita só se: tag e número de campos certos, assinatura válida com uma das chaves instaladas (comparada pelo SHA-256 das duas assinaturas, para o tempo não revelar quantos bytes iniciais de uma assinatura falsa estão certos),
-   **o pid é o do backend atual** (uma cópia capturada em outra sessão não serve), emitido há no máximo 5 minutos e não mais de 1 minuto no futuro. Aceito, grava uma linha em `session_ctx_verified` (UNLOGGED, uma por backend).
+2. **Desafio e resposta.** Como **primeiro comando de cada transação** a aplicação (`internal/platform/sessionctx`, chamado por `WithTenantSession`, o único ponto do código de produção que abre sessão) pede ao banco
+   `ctx_challenge()`: um nonce aleatório (128 bits), guardado no registro **desta** transação. Responde com `ctx_begin('b1|<usuário>|<0|1 sistema>|<nonce>|<hmac-sha256 hex>')`, assinado com a chave do seu ambiente, na mesma ida ao banco que grava as GUCs legadas.
+   `ctx_begin` aceita só se: tag e número de campos certos, **assinatura válida** com uma das chaves instaladas (comparada pelo SHA-256 das duas assinaturas, para o tempo não revelar quantos bytes iniciais de uma assinatura falsa estão certos),
+   **o nonce é exatamente o emitido para esta transação deste backend** e nenhum contexto foi aceito nesta transação ainda. Consequência: **um token vale para uma transação, uma vez**; uma cópia capturada em outra sessão, em outra transação do mesmo backend, ou de um pedido que
+   terminou em rollback não serve para nada, e **nada depende de relógio**. (Primeiros desenhos, descartados: janela de 5 minutos; depois pid + sequência por backend, que o teste derrubou: a marca de "token já usado" se perde no rollback do próprio pedido.)
+   Aceito, o registro (`session_ctx_verified`, UNLOGGED, uma linha por backend) ganha o usuário e o indicador de sistema. Custo: **uma ida ao banco a mais por transação** (a assinatura precisa do nonce).
 3. **A linha só vale para a transação que a gravou** (`txstart = now()`): a próxima transação da mesma conexão de pool não herda nada.
 4. **Contexto delegado.** `lock_served_tenant` (que já prova a delegação sob trava) grava o hub e a empresa que está servindo no mesmo registro por `ctx_set_acting` (só ele chama). Não há o que assinar: roda dentro do banco.
 5. **Leitores.** `current_user_id()`, `is_system_admin()`, `acting_hub()`, `acting_tenant()` e o novo `ctx_acting_present()` (que substitui as 9 leituras diretas) leem do registro. As funções e as políticas continuam as mesmas; só o que
@@ -63,21 +65,38 @@ contra ~3 µs da definição antiga: dez vezes, e as políticas legadas chamam a
 ## 5. Garantias e limites (honestos)
 
 **Garante, no modo `enforce`:** SQL arbitrário na sessão da aplicação, sem a chave, **não** consegue (a) virar administrador de sistema, (b) escolher outro usuário, (c) forjar nem limpar o contexto delegado,
-(d) reaproveitar o contexto de outra transação ou de outro backend, (e) ler, escrever ou apagar a chave, o registro ou o modo, (f) chamar as funções internas, (g) sombrear as funções do verificador (`search_path` fixo com `pg_catalog` primeiro; teste com função temporária).
+(d) reaproveitar o contexto de outra transação ou de outro backend, ou um token capturado (nem em transação posterior do mesmo backend, nem de pedido que deu rollback), (e) ler, escrever ou apagar a chave, o registro ou o modo, (f) chamar as funções internas, (g) sombrear as funções do verificador (`search_path` fixo com `pg_catalog` primeiro; teste com função temporária).
 Cada item é um teste contra o PostgreSQL real como o papel da aplicação (§8).
 
 **Não garante:**
 - Quem **lê a memória do processo** `api`/`worker` ou o `.env` tem a chave e assina o que quiser. A chave é segredo da aplicação, no mesmo nível das outras (`OMNIRA_CREDENTIALS_KEY`); a combinação "injeção de SQL + vazamento da chave" volta ao estado anterior.
 - O dono do banco (`omnira`, superusuário) está fora do modelo, como sempre esteve.
-- Um contexto assinado que vaze por log de statements com parâmetros inlinados (protocolo simples) só vale 5 minutos e só no backend para o qual foi assinado: a captura não é reproduzível de outra sessão. O `pgx` usa o protocolo estendido (valores não aparecem em `pg_stat_activity`).
-- O vínculo ao pid pressupõe **conexão direta ao PostgreSQL** (ou pooler em modo de sessão). Um pooler em modo de transação (PgBouncer) mudaria o backend entre comandos e quebraria `ctx_begin`; o compose atual não tem pooler.
+- Um token que vaze (log de statements, captura de tráfego) não é reproduzível: só vale para a transação que recebeu aquele nonce, e uma vez. A **chave**, sim, valeria tudo: ela vai ao banco como parâmetro ligado (`\bind`, nunca em linha de comando), e o instalador **recusa** instalar se `log_statement` não for `none` (a chave iria para o log).
+- O registro é por backend (`pg_backend_pid()`), então o desenho pressupõe **conexão direta ao PostgreSQL** (ou pooler em modo de sessão). Um pooler em modo de transação (PgBouncer) trocaria o backend entre o desafio e a resposta e quebraria `ctx_begin`; o compose atual não tem pooler.
+- A leitura do contexto vale `pid + início da transação (now())`; não é um identificador formal de transação (`pg_current_xact_id()` atribuiria um xid a cada pedido de leitura: um registro de commit e um flush de WAL por requisição). Uma linha velha só seria confundida com a atual se duas transações do mesmo backend começassem no mesmo microssegundo, e ela só guarda a identidade que aquele backend recebeu legitimamente (Codex 1ª passada, M-3, aceito).
 - `hubctl` e qualquer ferramenta que abra sessão pelo `WithTenantSession` precisa da mesma variável no ambiente quando o modo for `enforce` (sem ela, sessões sem contexto = sem acesso).
 - Scripts que gravam as GUCs com `psql` (`tools/test-isolation.sh`, `scripts/w3-smoke.sh`) rodam em bancos descartáveis em modo `off`; contra um banco em `enforce` seriam "sem contexto".
 - Custo: ver §6. A direção B (papéis separados) continua mais forte e continua sendo a etapa futura se o dono quiser defesa em profundidade.
 
 ## 6. Custo medido
 
-[PREENCHER com a saída de `scripts/bench-hub-policies.sh` nos três modos]
+`scripts/bench-hub-policies.sh` (banco descartável, papel `omnira_app`, 2 instâncias × 30 000 conversas × 10 mensagens = 600 000 mensagens; mediana de 5 execuções do `EXPLAIN ANALYZE`, ms). `CTX_MODE` roda as mesmas sessões com o contexto assinado.
+
+| consulta (30 000 conversas por instância) | off (= antes) | **enforce** | measure |
+|---|---|---|---|
+| LIST como membro | 402 | **427** | 5 594 |
+| COUNT como membro | 88 | **93** | 1 083 |
+| LIST como delegado | 165 | **164** | 174 |
+| COUNT como delegado | 8,4 | **8,0** | 10 |
+| leituras pontuais (MSGS, CONTACT, NOTES) | 0,3–7 | **0,4–7** | 0,5–10 |
+
+O PASS do bench (delegado ≤ 3× o membro e dentro dos limites absolutos) vale em `off` e `enforce`. **`measure` é caro em tabelas grandes** (as funções passam a ser plpgsql e cada uma consulta o registro): é um modo de observação de poucos minutos, não de operação.
+
+O caminho até aqui, para registro: verificar o HMAC a cada leitura custava 36 µs/chamada (10× a definição antiga); o registro verificado uma vez por transação baixou para ~10 µs/chamada, e ainda deixava o membro 5× (LIST) e 14× (COUNT) mais lento porque a política do membro chama cinco leitores por linha; o que fechou a conta foi (a) `has_active_membership`, `has_active_admin_membership` e `actor_has_permission`
+lerem o registro **uma vez** por chamada em `enforce` e (b) as seis políticas de leitura quentes (`conversations`, `messages`, `contacts`, `tickets`, `message_media`, `contact_notes`) tomarem `(SELECT current_user_id())` e `(SELECT is_system_admin())` como InitPlan (lidos uma vez por consulta).
+Números medidos na revisão anterior à passada do Codex; as mudanças dela tocam só `ctx_begin` (uma vez por transação).
+
+Volume real hoje (produção): a maior tabela com RLS tem ~19 mil linhas, `messages` ~3 mil e `conversations` ~170; o bench acima é um cenário de estresse de 600 mil mensagens.
 
 ## 7. Rollback
 

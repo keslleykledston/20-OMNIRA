@@ -7,7 +7,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -68,23 +67,22 @@ func parseSessionKey(raw string) ([]byte, error) {
 // Rejections is how many contexts the database refused since the process started.
 func Rejections() int64 { return rejected.Load() }
 
-// Sign builds "b1|<user>|<0|1>|<backend pid>|<issued at>|<hmac-sha256 hex>", the exact format ctx_begin verifies. The pid ties the context to the connection it is
-// sent on: a copy captured from another session is useless.
-func Sign(key []byte, userID uuid.UUID, system bool, pid uint32, at time.Time) string {
-	user := userID.String() // a system session carries the nil UUID exactly as the legacy setting did, so both representations agree
+// Sign builds "b1|<user>|<0|1>|<nonce>|<hmac-sha256 hex>", the exact format ctx_begin verifies. The nonce is the one the database issued to THIS transaction (ctx_challenge): the token is
+// good for that transaction only, once.
+func Sign(key []byte, userID uuid.UUID, system bool, nonce string) string {
 	flag := "0"
 	if system {
 		flag = "1"
 	}
-	payload := fmt.Sprintf("b1|%s|%s|%d|%d", user, flag, pid, at.Unix())
+	payload := fmt.Sprintf("b1|%s|%s|%s", userID.String(), flag, nonce) // the nil UUID for a system session, exactly as the legacy setting said
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(payload))
 	return payload + "|" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // Set is the ONE place that establishes who a transaction acts as. It must be the first thing run in the transaction (the verified context is valid
-// for the transaction that recorded it). It sets the legacy settings (still read in database modes off and measure) and, when a key is configured, has the
-// database verify and record the signed context in the same round trip.
+// for the transaction that recorded it). It sets the legacy settings (still read in database modes off and measure) and, when a key is configured, answers the database's
+// challenge with a signed context.
 func Set(ctx context.Context, q Querier, userID uuid.UUID, isSystemAdmin bool) error {
 	key, err := Key()
 	if err != nil {
@@ -101,14 +99,15 @@ func Set(ctx context.Context, q Querier, userID uuid.UUID, isSystemAdmin bool) e
 		}
 		return nil
 	}
-	pid, found := backendPID(q)
-	if !found {
-		return errors.New("session context: cannot tell which database backend this transaction runs on")
+	// 1. the database's challenge for THIS transaction; 2. our answer, signed over it. Two round trips, because the signature needs the nonce.
+	var nonce string
+	if err := q.QueryRow(ctx, `SELECT public.ctx_challenge()`).Scan(&nonce); err != nil {
+		return err
 	}
 	var ok bool
 	err = q.QueryRow(ctx,
 		`SELECT public.ctx_begin($1), pg_catalog.set_config('app.current_user_id', $2, true), CASE WHEN $3::boolean THEN pg_catalog.set_config('app.is_system_admin', 'true', true) END`,
-		Sign(key, userID, isSystemAdmin, pid, time.Now()), userID.String(), isSystemAdmin,
+		Sign(key, userID, isSystemAdmin, nonce), userID.String(), isSystemAdmin,
 	).Scan(&ok, new(string), new(*string))
 	if err != nil {
 		return err
@@ -119,24 +118,11 @@ func Set(ctx context.Context, q Querier, userID uuid.UUID, isSystemAdmin bool) e
 	return nil
 }
 
-// backendPID is the PostgreSQL backend a transaction (or connection) runs on. pgx transactions expose their connection; the second form lets a test double say it.
-func backendPID(q Querier) (uint32, bool) {
-	switch c := q.(type) {
-	case interface{ Conn() *pgx.Conn }:
-		if cc := c.Conn(); cc != nil && cc.PgConn() != nil {
-			return cc.PgConn().PID(), true
-		}
-	case interface{ PID() uint32 }:
-		return c.PID(), true
-	}
-	return 0, false
-}
-
 func noteRejected() {
 	rejected.Add(1)
 	now := time.Now().Unix()
 	if last := lastWarnAt.Load(); now-last >= 30 && lastWarnAt.CompareAndSwap(last, now) {
-		log.Printf("session context: the database REFUSED a signed context (key mismatch with the migrator, or clock skew over 60 s); in mode enforce these sessions have no access")
+		log.Printf("session context: the database REFUSED a signed context (a key different from the one the migrator installed); in mode enforce these sessions have no access")
 	}
 }
 

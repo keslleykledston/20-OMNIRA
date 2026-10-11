@@ -72,8 +72,13 @@ case "$CMD" in
         *[!0-9a-fA-F]*) echo "OMNIRA_SESSION_CTX_KEY must be hex" >&2; exit 2 ;;
       esac
       [ "${#OMNIRA_SESSION_CTX_KEY}" -ge 64 ] || { echo "OMNIRA_SESSION_CTX_KEY must have at least 64 hex characters (32 bytes)" >&2; exit 2; }
-      # through stdin: the key never appears in a process listing
-      res=$(printf "SELECT public.ctx_install_key(decode('%s','hex'));\n" "$OMNIRA_SESSION_CTX_KEY" | psql_run -tA)
+      # the key travels inside a statement: refuse when the server logs statements (it would end up in the log), unless the operator accepts that and rotates afterwards
+      ls=$(q "SHOW log_statement")
+      if [ "$ls" != "none" ] && [ -z "${SESSION_CTX_ALLOW_LOGGED_KEY:-}" ]; then
+        echo "log_statement is '$ls': installing OMNIRA_SESSION_CTX_KEY would write the key to the database log (set it to none, or SESSION_CTX_ALLOW_LOGGED_KEY=1 and rotate the key afterwards)" >&2; exit 2
+      fi
+      # through stdin as a BOUND parameter (psql \bind: extended protocol): the key is neither in a process listing nor in the statement text
+      res=$(printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$OMNIRA_SESSION_CTX_KEY" | psql_run -tA)
       echo "session context key: $res"
     fi
     if [ -n "${SESSION_CTX_MODE:-}" ]; then
