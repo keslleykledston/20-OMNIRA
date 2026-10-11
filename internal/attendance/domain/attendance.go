@@ -74,6 +74,7 @@ const (
 	MaxNote       = 1000
 	MaxSummary    = 4000
 	MaxFollowUp   = 500
+	MaxFarewell   = 1000
 	MaxResolution = 500
 	MaxFollowUps  = 20
 )
@@ -107,7 +108,22 @@ type FinalizeInput struct {
 	Summary        string          `json:"summary"`
 	SummaryTruth   Truth           `json:"summary_truth"`
 	FollowUps      []FollowUpInput `json:"follow_ups"`
+	// Farewell, when not empty, is the closing notice for the customer. The server queues it in the SAME transaction that closes the conversation (so it is never
+	// sent for an attendance that was not finalized) and says what happened in FinalizeResult.Farewell; it is never a precondition of finalizing.
+	Farewell string `json:"farewell"`
 }
+
+// FarewellState is what became of the closing notice a finalize asked for (never the text).
+type FarewellState string
+
+const (
+	FarewellNotRequested FarewellState = "not_requested"
+	FarewellQueued       FarewellState = "queued"
+	FarewellWindowClosed FarewellState = "window_closed" // the provider's customer-service window is closed: nothing was sent
+	FarewellNoChannel    FarewellState = "no_channel"    // the conversation has no usable text line: nothing was sent
+	FarewellNotAllowed   FarewellState = "not_permitted" // the person may finalize but may not message the customer in this conversation: nothing was sent
+	FarewellUnavailable  FarewellState = "unavailable"   // this deployment cannot queue the notice from here
+)
 
 func invalid(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, a...))
@@ -150,6 +166,9 @@ func (in FinalizeInput) Normalize() (FinalizeInput, error) {
 		return out, err
 	}
 	if out.Summary, err = checkText("summary", in.Summary, MaxSummary, false); err != nil {
+		return out, err
+	}
+	if out.Farewell, err = checkText("farewell", in.Farewell, MaxFarewell, false); err != nil {
 		return out, err
 	}
 	if len(in.FollowUps) > MaxFollowUps {

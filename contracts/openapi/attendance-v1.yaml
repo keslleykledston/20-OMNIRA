@@ -147,6 +147,7 @@ components:
           type: array
           maxItems: 20
           items: { $ref: '#/components/schemas/FollowUpInput' }
+        farewell: { type: string, maxLength: 1000, description: 'Closing notice for the customer. Queued by the server in the same transaction that closes the conversation (never sent for an attendance that was not finalized); the answer says what became of it. Needs the same permission to message the customer as a reply.' }
     FollowUpInput:
       type: object
       required: [kind, text]
@@ -169,6 +170,7 @@ components:
       properties:
         changed: { type: boolean }
         closure: { $ref: '#/components/schemas/Closure' }
+        farewell: { type: string, enum: [not_requested, queued, window_closed, no_channel, not_permitted, unavailable], description: 'What became of the closing notice asked for in the request (absent on an idempotent replay).' }
     Closure:
       type: object
       properties:

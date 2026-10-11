@@ -62,6 +62,9 @@ func FinalizeBody(res application.FinalizeResult) map[string]any {
 	if res.Closure != nil {
 		body["closure"] = closure(res.Closure, res.FollowUps)
 	}
+	if res.Farewell != "" {
+		body["farewell"] = string(res.Farewell)
+	}
 	return body
 }
 
@@ -230,11 +233,7 @@ func (h *Handler) finalize(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	body := map[string]any{"changed": res.Changed}
-	if res.Closure != nil {
-		body["closure"] = closure(res.Closure, res.FollowUps)
-	}
-	writeJSON(w, http.StatusOK, body)
+	writeJSON(w, http.StatusOK, FinalizeBody(res))
 }
 
 type suggestionDTO struct {

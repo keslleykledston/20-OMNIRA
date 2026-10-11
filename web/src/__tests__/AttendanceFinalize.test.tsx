@@ -264,14 +264,11 @@ describe('Sugestão da IA ao finalizar (ADR-0020)', () => {
 })
 
 describe('Finalize — closing message to the customer', () => {
-  it('sends the closing message first, then finalizes; and a failed message stops the finalize with an explanation', async () => {
+  it('sends the closing message WITH the finalize request (the server queues it in the same transaction), never as a separate call', async () => {
     const user = userEvent.setup()
     serve()
     renderAt(<ContextPane conversationId={CONV} />)
-    vi.mocked(axios.post).mockImplementation(async (url: string) => {
-      if (String(url).endsWith('/messages')) return { data: { id: 'm1' } }
-      return { data: { changed: true } }
-    })
+    vi.mocked(axios.post).mockImplementation(async () => ({ data: { changed: true, farewell: 'queued' } }))
     const dialog = await (async () => {
       await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
       return screen.findByRole('dialog', { name: 'Finalizar atendimento' })
@@ -279,11 +276,22 @@ describe('Finalize — closing message to the customer', () => {
     expect(within(dialog).getByRole('checkbox', { name: /Avisar o cliente/ })).toBeChecked()
     await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
     await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
-    const order = vi.mocked(axios.post).mock.calls.map((c) => String(c[0]).split('/').pop())
-    expect(order.indexOf('messages')).toBeGreaterThanOrEqual(0)
-    expect(order.indexOf('messages')).toBeLessThan(order.indexOf('finalize'))
-    const sent = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/messages'))!
-    expect((sent[1] as any).text).toMatch(/atendimento foi encerrado/)
-    expect((sent[2] as any).headers['Idempotency-Key']).toBeTruthy()
+    expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/messages'))).toBe(false)
+    const fin = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize'))!
+    expect((fin[1] as any).farewell).toMatch(/atendimento foi encerrado/)
+  })
+
+  it('asks for no notice when the person unticks it', async () => {
+    const user = userEvent.setup()
+    serve()
+    renderAt(<ContextPane conversationId={CONV} />)
+    vi.mocked(axios.post).mockImplementation(async () => ({ data: { changed: true } }))
+    await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    await user.click(within(dialog).getByRole('checkbox', { name: /Avisar o cliente/ }))
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
+    const fin = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize'))!
+    expect(fin[1]).not.toHaveProperty('farewell')
   })
 })

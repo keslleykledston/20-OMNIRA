@@ -1,5 +1,4 @@
-import { useRef, useState } from 'react'
-import axios from 'axios'
+import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button, Input, Modal, TextArea } from '../primitives'
 import {
@@ -9,10 +8,10 @@ import {
   FOLLOW_UP_KIND_LABEL,
   type CloseReason,
   type FollowUpInput,
+  type FarewellState,
   type FollowUpKind,
 } from '../../lib/attendance'
-import { API_BASE } from '../../lib/config'
-import { authHeaders, getTenantId } from '../../lib/session'
+import { getTenantId } from '../../lib/session'
 import { isActing } from '../../lib/acting'
 import { useAccess } from '../../lib/useAccess'
 import { useConversationChannel } from '../../lib/channelLines'
@@ -23,7 +22,8 @@ interface Props {
   conversationId: string
   contactName?: string
   onClose: () => void
-  onFinalized?: () => void
+  // farewell: what became of the closing notice when one was asked for (undefined when none was)
+  onFinalized?: (farewell?: FarewellState) => void
 }
 
 interface DraftItem {
@@ -64,33 +64,24 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   const canNotify = hasOwner && !windowClosed && (delegated ? can('conversation.reply') : channel.data?.can_send_text !== false)
   const [notify, setNotify] = useState(true)
   const [farewell, setFarewell] = useState(DEFAULT_FAREWELL)
-  // One Idempotency-Key per dialog and one send per attendance: a retry after a failed finalize must not message twice.
-  const farewellSent = useRef(false)
-  const farewellKey = useRef(crypto.randomUUID())
+  // The closing notice travels WITH the finalize request: the server queues it in the same transaction that closes the conversation, so it never goes out for an
+  // attendance that was not finalized, and a refusal (closed 24 h window, no line) does not stop the finalize; the answer says what happened.
+  const wantsNotice = () => canNotify && notify && farewell.trim() !== ''
 
   const finalize = useMutation({
     mutationFn: async () => {
-      if (canNotify && notify && farewell.trim() && !farewellSent.current) {
-        try {
-          await axios.post(
-            `${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/messages`,
-            { text: farewell.trim() },
-            { headers: { ...authHeaders(), 'Idempotency-Key': farewellKey.current } },
-          )
-          farewellSent.current = true
-        } catch {
-          // nothing was finalized: the person decides whether to finalize without notifying
-          throw new Error('farewell_failed')
-        }
-      }
       const follow_ups: FollowUpInput[] = items
         .filter((i) => i.text.trim() !== '')
         .map((i) => ({ kind: i.kind, text: i.text.trim(), due_at: i.due ? new Date(`${i.due}T12:00:00`).toISOString() : null }))
       // O resumo só vale como "da IA" enquanto estiver exatamente como a IA o escreveu; se a pessoa editou, ela o confirmou.
       const summary_truth = aiDraft !== null && summary.trim() === aiDraft.trim() && summary.trim() !== '' ? 'ai_inferred' : 'agent_confirmed'
-      return attendanceAPI.finalize(conversationId, { reason, note: note.trim(), summary: summary.trim(), summary_truth, follow_ups })
+      const asked = wantsNotice()
+      const res = await attendanceAPI.finalize(conversationId, {
+        reason, note: note.trim(), summary: summary.trim(), summary_truth, follow_ups, ...(asked ? { farewell: farewell.trim() } : {}),
+      })
+      return { asked, farewell: res.farewell }
     },
-    onSuccess: () => {
+    onSuccess: (out) => {
       void qc.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] })
       for (const key of ['inbox-context', 'inbox-conversation-detail', 'inbox-messages', 'attendance-context']) {
         void qc.invalidateQueries({ queryKey: [key, tenantId, conversationId] })
@@ -101,15 +92,10 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       setAiDraft(null)
       setAiNote(null)
       setError(null)
-      onFinalized?.()
+      onFinalized?.(out.asked ? out.farewell ?? 'unavailable' : undefined)
       onClose()
     },
-    onError: (err) =>
-      setError(
-        err instanceof Error && err.message === 'farewell_failed'
-          ? 'Não foi possível avisar o cliente (a janela pode ter fechado ou outra pessoa assumiu). Desmarque "Avisar o cliente" para finalizar mesmo assim.'
-          : attendanceErrorMessage(err),
-      ),
+    onError: (err) => setError(attendanceErrorMessage(err)),
   })
 
   const suggest = useMutation({

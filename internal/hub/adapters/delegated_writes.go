@@ -207,9 +207,18 @@ func (d *DelegatedWrites) Finalize(original http.Handler) http.Handler {
 			return
 		}
 		in.ConversationID = t.Item.ConversationID // the conversation of the persisted item, never a body field
+		// the closing notice for the customer is a reply: it needs the key conversation.reply, proven HERE, in the delegated session (the write below runs in a system
+		// session that cannot see delegated keys). Without it the finalize still goes on and answers "not_permitted".
+		mayNotify := false
+		if in.Farewell != "" {
+			if err := platformdb.QuerierFromContext(r.Context(), d.pool).QueryRow(r.Context(), `SELECT actor_has_permission($1, $2, 'conversation.reply')`, tc.TenantID, tc.ActorID).Scan(&mayNotify); err != nil {
+				writeReplyError(w, err)
+				return
+			}
+		}
 		var res attendanceapplication.FinalizeResult
 		err := d.reply.Act(r.Context(), tc.ActorID, t, "hub.conversation.finalized", func(c context.Context, _ *uuid.UUID, _ bool) (map[string]any, error) {
-			out, err := d.attendance.FinalizeAsHubAgent(c, tc.ActorID, in)
+			out, err := d.attendance.FinalizeAsHubAgent(c, tc.ActorID, in, mayNotify)
 			if err != nil {
 				return nil, err
 			}
@@ -218,7 +227,7 @@ func (d *DelegatedWrites) Finalize(original http.Handler) http.Handler {
 				return nil, nil
 			}
 			return map[string]any{"reason": string(in.Reason), "source": string(attendancedomain.SourceAgent),
-				"local_tickets_closed": out.Closure.LocalTicketsClosed, "tickets_kept": out.Closure.TicketsKept, "follow_ups": len(out.FollowUps)}, nil
+				"local_tickets_closed": out.Closure.LocalTicketsClosed, "tickets_kept": out.Closure.TicketsKept, "follow_ups": len(out.FollowUps), "farewell": string(out.Farewell)}, nil
 		})
 		switch {
 		case err == nil:

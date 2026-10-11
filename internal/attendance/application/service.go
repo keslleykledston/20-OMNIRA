@@ -35,7 +35,24 @@ type Service struct {
 	suggester ports.ClosingSuggester
 	// draftAllowed bounds the paid drafts of a Hub agent (ADR-0040 phase 07); nil = no bound. It is asked AFTER the request was validated, right before the provider.
 	draftAllowed func(ctx context.Context, actor uuid.UUID) bool
+	// memberNotice / agentNotice queue the closing notice for the customer INSIDE the finalize transaction (before the conversation is marked closed, because a
+	// closed conversation refuses outbound text). They return the state to report; a transient error aborts the whole finalize (nothing is closed, nothing queued).
+	// nil = this deployment cannot send it (the state says so, finalizing still works).
+	memberNotice func(ctx context.Context, conversationID uuid.UUID, text, key string) (domain.FarewellState, error)
+	agentNotice  func(ctx context.Context, agent, conversationID uuid.UUID, text, key string) (domain.FarewellState, error)
 }
+
+// WithClosingNotice installs how the closing notice is queued: member for a tenant member finalizing, agent for a Hub agent (ADR-0040). Either may be nil.
+func (s *Service) WithClosingNotice(
+	member func(ctx context.Context, conversationID uuid.UUID, text, key string) (domain.FarewellState, error),
+	agent func(ctx context.Context, agent, conversationID uuid.UUID, text, key string) (domain.FarewellState, error),
+) *Service {
+	s.memberNotice, s.agentNotice = member, agent
+	return s
+}
+
+// farewellKey is the idempotency key of the closing notice: one per conversation (the contact's next message starts a NEW conversation), so a replay can never message twice.
+func farewellKey(conversationID uuid.UUID) string { return "farewell-" + conversationID.String() }
 
 // WithDraftLimit installs the per-person bound on the drafts a Hub agent asks for; allow reports (and counts) one draft.
 func (s *Service) WithDraftLimit(allow func(ctx context.Context, actor uuid.UUID) bool) *Service {
@@ -136,6 +153,8 @@ type FinalizeResult struct {
 	FollowUps []domain.FollowUp
 	// Changed is false when the conversation was already finalized (the call is idempotent and returns the original).
 	Changed bool
+	// Farewell is what became of the closing notice the person asked for (FarewellNotRequested when none was asked, and always on an idempotent replay).
+	Farewell domain.FarewellState
 }
 
 func actor(ctx context.Context) (*tenancydomain.TenantContext, error) {
@@ -210,6 +229,15 @@ func (s *Service) Finalize(ctx context.Context, raw domain.FinalizeInput) (Final
 			return FinalizeResult{}, errors.Join(domain.ErrInvalid, errors.New("a follow-up owner is not an active member of this tenant"))
 		}
 	}
+	farewell := domain.FarewellNotRequested
+	if in.Farewell != "" {
+		farewell = domain.FarewellUnavailable
+		if s.memberNotice != nil {
+			if farewell, err = s.memberNotice(ctx, in.ConversationID, in.Farewell, farewellKey(in.ConversationID)); err != nil {
+				return FinalizeResult{}, err
+			}
+		}
+	}
 	closed, kept, err := s.repo.CloseLocalTickets(ctx, in.ConversationID)
 	if err != nil {
 		return FinalizeResult{}, err
@@ -245,17 +273,18 @@ func (s *Service) Finalize(ctx context.Context, raw domain.FinalizeInput) (Final
 		return FinalizeResult{}, err
 	}
 	s.audit.Record(ctx, ActionConversationClosed, ResourceConversation, in.ConversationID, map[string]any{
-		"reason": string(in.Reason), "source": string(source), "local_tickets_closed": closed, "tickets_kept": kept, "follow_ups": len(items),
+		"reason": string(in.Reason), "source": string(source), "local_tickets_closed": closed, "tickets_kept": kept, "follow_ups": len(items), "farewell": string(farewell),
 	})
-	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true}, nil
+	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true, Farewell: farewell}, nil
 }
 
 // FinalizeAsHubAgent finalizes the attendance for a Hub agent attending the instance (ADR-0040). The caller is the Hub's write path (hub/replying.Act), which
 // has already authorized the agent (live grant, contract, key conversation.finalize, reply capability) and runs this in a tenant-scoped SYSTEM session with the
 // conversation row locked. What stays here is the attendance rule: only the person who HOLDS the conversation closes it (a delegate has no supervisor path),
 // follow-up owners must be active members of the instance, and an already finalized conversation returns its existing closure. The audit row is written by the
-// caller (it names the Hub); nothing is audited here because the system session has no actor.
-func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw domain.FinalizeInput) (FinalizeResult, error) {
+// caller (it names the Hub); nothing is audited here because the system session has no actor. mayNotify says whether the caller proved, in the delegated session, that
+// the agent holds the key conversation.reply: only then is the closing notice for the customer queued (otherwise the state is not_permitted and the finalize goes on).
+func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw domain.FinalizeInput, mayNotify bool) (FinalizeResult, error) {
 	tc, err := tenancydomain.FromContext(ctx)
 	if err != nil || tc.TenantID == uuid.Nil || tc.Source != tenancydomain.AccessSourceSystem || agent == uuid.Nil {
 		return FinalizeResult{}, domain.ErrForbidden
@@ -299,6 +328,17 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 			return FinalizeResult{}, errors.Join(domain.ErrInvalid, errors.New("a follow-up owner is not an active member of this tenant"))
 		}
 	}
+	farewell := domain.FarewellNotRequested
+	if in.Farewell != "" {
+		farewell = domain.FarewellUnavailable
+		if !mayNotify {
+			farewell = domain.FarewellNotAllowed // the key conversation.reply is proven by the caller in the delegated session (a system session cannot see delegated keys)
+		} else if s.agentNotice != nil {
+			if farewell, err = s.agentNotice(ctx, agent, in.ConversationID, in.Farewell, farewellKey(in.ConversationID)); err != nil {
+				return FinalizeResult{}, err
+			}
+		}
+	}
 	closed, kept, err := s.repo.CloseLocalTickets(ctx, in.ConversationID)
 	if err != nil {
 		return FinalizeResult{}, err
@@ -328,7 +368,7 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 	if err := s.repo.InsertFollowUps(ctx, items); err != nil {
 		return FinalizeResult{}, err
 	}
-	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true}, nil
+	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true, Farewell: farewell}, nil
 }
 
 // FinalizeBySystem ends the attendance because the CONTACT asked for it (the flow engine is the actor, with a system

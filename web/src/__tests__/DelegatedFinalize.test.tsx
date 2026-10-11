@@ -57,16 +57,17 @@ describe('finalizing the attendance through the Hub (phase 05b)', () => {
     expect(body).toMatchObject({ reason: 'resolved', summary: 'Cliente voltou a navegar' })
   })
 
-  it('sends the closing notice through the reply route first, once', async () => {
+  it('sends the closing notice inside the finalize request (the server queues it with the closing), not through the reply route', async () => {
     show(['conversation.read', 'conversation.reply', 'conversation.finalize'])
-    post.mockResolvedValue({ data: { changed: true } })
+    post.mockResolvedValue({ data: { changed: true, farewell: 'queued' } })
     const user = userEvent.setup()
     const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
     await within(dialog).findByRole('checkbox', { name: /Avisar o cliente/ })
     await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
     await waitFor(() => expect(post.mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
-    const urls = post.mock.calls.map((c) => String(c[0]))
-    expect(urls.findIndex((u) => u.endsWith('/messages'))).toBeLessThan(urls.findIndex((u) => u.endsWith('/finalize')))
+    expect(post.mock.calls.some((c) => String(c[0]).endsWith('/messages'))).toBe(false)
+    const body = post.mock.calls.find((c) => String(c[0]).endsWith('/finalize'))![1] as Record<string, unknown>
+    expect(String(body.farewell)).toMatch(/atendimento foi encerrado/)
   })
 
   it('offers no closing notice without the reply key', async () => {

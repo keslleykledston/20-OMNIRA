@@ -256,7 +256,10 @@ else
   # RequireIntegrationDatabase/RequireIntegrationNATS with literal fake
   # connection strings (t.Setenv) purely to unit-test the guard's parsing
   # logic — they never need or want provisioned infrastructure.
-  mapfile -t PACKAGES < <(grep -rl "testhelpers.RequireIntegrationDatabase\|testhelpers.RequireIntegrationNATS" --include="*_test.go" internal | grep -v '^internal/testhelpers/' | xargs -n1 dirname | sort -u | sed 's#^#./#')
+  # Packages that reach the guard through the flowstest helper (internal/flows/flowstest/env.go calls RequireIntegrationDatabase for them) never
+  # name the guard in their own test files, so they are found by importing the helper: attendance/adapters, flows/adapters, flows/application and
+  # worker/flows were silently outside this gate until that was added.
+  mapfile -t PACKAGES < <( { grep -rl "testhelpers.RequireIntegrationDatabase\|testhelpers.RequireIntegrationNATS" --include="*_test.go" internal | grep -v '^internal/testhelpers/'; grep -rl '"github.com/omnira/omnira/internal/flows/flowstest"' --include="*_test.go" internal; } | xargs -n1 dirname | sort -u | sed 's#^#./#')
 fi
 echo "== ${#PACKAGES[@]} integration package(s) to run"
 
@@ -265,7 +268,20 @@ for pkg in "${PACKAGES[@]}"; do
   pkghash=$(printf '%s' "${pkg}" | md5sum | cut -c1-8)
   dbname="omnira_test_${RUNSHORT}_${pkghash}"
 
-  psql_owner -d postgres -c "CREATE DATABASE ${dbname} TEMPLATE ${TEMPLATE_DB}" >/dev/null
+  # The disposable cluster sometimes drops the connection ("server closed the connection unexpectedly") right after a heavy run; that is the
+  # infrastructure, not the code under test, so the clone is retried a few times (waiting for pg_isready) before the run is declared failed.
+  cloned=0
+  for attempt in 1 2 3 4 5; do
+    if psql_owner -d postgres -c "CREATE DATABASE ${dbname} TEMPLATE ${TEMPLATE_DB}" >/dev/null 2>&1; then cloned=1; break; fi
+    echo "   (clone of ${dbname} failed, attempt ${attempt}/5; waiting for the cluster)" >&2
+    psql_owner -d postgres -c "DROP DATABASE IF EXISTS ${dbname}" >/dev/null 2>&1 || true
+    for i in $(seq 1 30); do docker exec "${CONTAINER}" pg_isready -U "${PG_USER}" >/dev/null 2>&1 && break; sleep 1; done
+  done
+  if [ "$cloned" != "1" ]; then
+    echo "FATAL: could not clone the template for ${pkg} after 5 attempts" >&2
+    FAILED+=("${pkg} (infrastructure: template clone)")
+    continue
+  fi
   psql_owner -d postgres -c "GRANT CONNECT ON DATABASE ${dbname} TO omnira_app" >/dev/null
 
   OWNER_URL="postgres://${PG_USER}:${PG_PASSWORD}@127.0.0.1:${PORT}/${dbname}?sslmode=disable"

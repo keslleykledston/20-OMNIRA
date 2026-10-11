@@ -871,6 +871,11 @@ func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendancea
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
 	)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	// ADR-0040 phase 08: the closing notice for the customer is queued inside the finalize transaction (member and Hub agent alike)
+	memberNotice, agentNotice := ClosingNoticeSenders(dbPool)
+	if svc := h.Service(); svc != nil {
+		svc.WithClosingNotice(memberNotice, agentNotice)
+	}
 	// ADR-0040 phase 05b: a Hub agent finalizes through the Hub's write path (key conversation.finalize); members reach the handler as before.
 	h.WithDelegatedFinalize(hubadapters.NewDelegatedWrites(dbPool).WithAttendance(h.Service()).Finalize)
 	// ADR-0040 phase 07: the AI closing draft for a Hub agent needs ai.assist on the route and conversation.read proved by the handler

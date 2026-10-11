@@ -82,12 +82,23 @@ export interface FollowUpInput {
   due_at?: string | null
 }
 
+// O que foi feito do aviso de encerramento ao cliente (nunca o texto).
+export type FarewellState = 'not_requested' | 'queued' | 'window_closed' | 'no_channel' | 'not_permitted' | 'unavailable'
+
+export const FAREWELL_NOT_SENT_LABEL: Record<Exclude<FarewellState, 'not_requested' | 'queued'>, string> = {
+  window_closed: 'a janela de 24 h do WhatsApp fechou',
+  no_channel: 'o canal da conversa não está disponível',
+  not_permitted: 'você não tem permissão para escrever ao cliente nesta conversa',
+  unavailable: 'o envio não está disponível agora',
+}
+
 export interface FinalizeBody {
   reason: CloseReason
   note?: string
   summary?: string
   summary_truth?: Truth
   follow_ups?: FollowUpInput[]
+  farewell?: string
 }
 
 const base = () => `${API_BASE}/tenants/${getTenantId()}`
@@ -104,7 +115,7 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 
 export const attendanceAPI = {
   finalize: (conversationId: string, body: FinalizeBody) =>
-    call<{ changed: boolean; closure?: Closure }>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize`, body, h())),
+    call<{ changed: boolean; closure?: Closure; farewell?: FarewellState }>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize`, body, h())),
   suggestClosing: (conversationId: string) =>
     call<ClosingSuggestion>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize/suggest`, {}, h())),
   contextOf: (conversationId: string, limit = 5) =>
