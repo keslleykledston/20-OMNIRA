@@ -40,13 +40,13 @@ mkdb "$PWD/migrations"
 out=$(run || true); verdict_green "$out" || { echo "$out" | tail -25; echo "FAIL: baseline is red"; exit 1; }
 echo "== baseline green"
 killed() {
-  if verdict_green "$2"; then echo "SURVIVED: $1"; [ -n "${REPORT:-}" ] && return 0; echo "FAIL: mutation survived"; exit 1; fi
+  if verdict_green "$2"; then echo "SURVIVED: $1"; [ -n "${REPORT:-}" ] && { SURVIVORS=$(( ${SURVIVORS:-0} + 1 )); return 0; }; echo "FAIL: mutation survived"; exit 1; fi
   [ "$(echo "$2" | grep -c -- '--- FAIL')" -ge 1 ] || { echo "$2" | tail -12; echo "FAIL: mutation '$1' was inconclusive (no failing test; build error?)"; exit 1; }
   echo "   killed: $1 ($(echo "$2" | grep -c -- '--- FAIL') failing tests)"
 }
 N=0
 mut() { # mut <name> <file> <from> <to>
-  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ]; then echo "   skipped: $1"; return 0; fi
+  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ] || { [ -n "${ONLY:-}" ] && [ "$N" -ne "$ONLY" ]; }; then echo "   skipped: $1"; return 0; fi
   python3 - "$WORK/orig" "$2" "$3" "$4" <<'PY'
 import sys
 orig,f,a,b=sys.argv[1:5]
@@ -58,7 +58,7 @@ PY
   cp "$WORK/orig/$2" "$2"
 }
 sqlmut() { # sqlmut <name> <migration file> <from> <to> [all]   (all: replace every occurrence, for a rule written in two layers)
-  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ]; then echo "   skipped: $1"; return 0; fi
+  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ] || { [ -n "${ONLY:-}" ] && [ "$N" -ne "$ONLY" ]; }; then echo "   skipped: $1"; return 0; fi
   rm -rf "$WORK/mig"; mkdir -p "$WORK/mig"; cp migrations/*.sql "$WORK/mig/"
   python3 - "$WORK/mig/$2" "$3" "$4" "${5:-}" <<'PY'
 import sys
@@ -152,4 +152,5 @@ mut "the application does not ask the database to verify" $SC "SELECT public.ctx
 mut "the legacy settings are not set next to the signed context (measure would diverge)" $SC "pg_catalog.set_config('app.current_user_id', \$2, true), CASE" "pg_catalog.set_config('app.x', \$2, true), CASE"
 mut "the legacy user setting is not set when there is no key" $SC "SELECT set_config('app.current_user_id', \$1, true)" "SELECT set_config('app.x', \$1, true)"
 mut "the legacy administrator setting is not set when there is no key" $SC "SELECT set_config('app.is_system_admin', 'true', true)" "SELECT set_config('app.x', 'true', true)"
+if [ "${SURVIVORS:-0}" -gt 0 ]; then echo "== $SURVIVORS of $N mutants SURVIVED"; exit 1; fi
 echo "== all $N mutants killed"

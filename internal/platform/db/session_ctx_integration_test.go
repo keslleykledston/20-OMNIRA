@@ -144,6 +144,16 @@ func (l *ctxLab) signFor(tx pgx.Tx, key []byte, user uuid.UUID, system bool) str
 	return sessionctx.Sign(key, user, system, nonce)
 }
 
+// challenge asks the database for this transaction's nonce (and nothing else).
+func (l *ctxLab) challenge(tx pgx.Tx) string {
+	l.t.Helper()
+	var n string
+	if err := tx.QueryRow(l.ctx, `SELECT ctx_challenge()`).Scan(&n); err != nil {
+		l.t.Fatal(err)
+	}
+	return n
+}
+
 func otherKey() []byte {
 	k, _ := hex.DecodeString(strings.Repeat("c3", 32))
 	return k
@@ -224,6 +234,7 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 		var captured string
 		l.tx(func(tx pgx.Tx) { captured = l.signFor(tx, l.key, uuid.Nil, true) }) // a genuine system token, signed and never used (the request died, say)
 		l.tx(func(tx pgx.Tx) {
+			l.challenge(tx) // this transaction has its own challenge; the captured token answers another one
 			if l.begin(tx, captured) {
 				t.Error("a token signed over another transaction's nonce was accepted")
 			}
@@ -259,6 +270,7 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			l.challenge(again)
 			if l.begin(again, tok) {
 				t.Errorf("commit=%v: the same token was accepted in a later transaction of the same backend", commit)
 			}
@@ -300,6 +312,7 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 
 	t.Run("a holder of the key still needs the database's challenge", func(t *testing.T) {
 		l.tx(func(tx pgx.Tx) {
+			l.challenge(tx)
 			if l.begin(tx, signRaw(l.key, "b1|"+user.String()+"|1|"+strings.Repeat("0", 32))) {
 				t.Error("a token over a nonce the database never issued was accepted")
 			}
