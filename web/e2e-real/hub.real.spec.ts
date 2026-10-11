@@ -429,6 +429,9 @@ test('finalizar o atendimento pelo Hub (fase 05b): só quem tem a chave e está 
   const res = await page.request.post(`/api/v1/tenants/${env.tb}/inbox/conversations/${sql(`SELECT id FROM conversations WHERE tenant_id = '${env.tb}'`)}/finalize`, { headers: { 'X-Omnira-Acting-As': `hub:${env.hub}` }, data: { reason: 'resolved' } });
   expect(res.status()).toBe(200);
   expect(Number(sql(`SELECT count(*) FROM conversation_closures WHERE tenant_id = '${env.tb}'`))).toBe(1);
+  // fase 08: o aviso de encerramento ("Avisar o cliente" vem marcado) foi enfileirado PELO SERVIDOR junto com o fechamento: uma mensagem do agente, sob a chave por conversa, e a repetição não a duplicou
+  expect(sql(`SELECT count(*) || '|' || min(sent_by_user_id::text) FROM messages WHERE tenant_id = '${env.tb}' AND direction = 'outbound' AND idempotency_key LIKE 'farewell-%'`)).toBe(`1|${bruno.id}`);
+  expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND action = 'hub.conversation.finalized' AND metadata->>'farewell' = 'queued'`))).toBe(1);
 });
 
 test('memória do contato pelo Hub (fase 06): histórico e pendências só com a chave, concluir pendência como o próprio agente, e sem a chave nada aparece', async ({ page }) => {

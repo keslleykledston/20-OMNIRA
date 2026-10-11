@@ -370,6 +370,11 @@ já tinha sido avisado de um encerramento que não houve; e uma falha transitór
 `failed` seria devolvida como `queued`): **corrigido** (checagem entre remetentes; chave tomada = `unavailable`). LOW (a repetição idempotente aparecia como "aviso não enviado" na tela): **corrigido**. LOW (a repetição do
 clone no script engolia o erro): **corrigido** (só repete erro de conexão e mostra a mensagem).
 
+**2ª passada do Codex (sobre as correções):** CRITICAL 0, HIGH 0, MEDIUM 1, LOW 0. Confirmou: a trava consultiva vem DEPOIS do `FOR UPDATE` da conversa (sem ciclo de deadlock entre duas finalizações simultâneas), `NoticeAlreadySent` é
+seguro na sessão de sistema do Hub, e o replay não afirma mais "aviso não enviado". **MEDIUM — o prefixo `farewell-` da chave não é reservado:** quem enviar uma mensagem comum com a chave exata `farewell-<id da conversa>`
+faz a cortesia ser pulada na finalização (estado `unavailable`, dito na resposta). **Aceito:** exige montar a chave com o UUID da conversa, o efeito é só não avisar (nenhum ganho de acesso, nenhum dado), e o mesmo desenho já
+vale para `ticket-opened-<chamado>`; reservar o prefixo na rota de mensagens mudaria a semântica de uma API existente. O teste de concorrência que o Codex notou faltar foi acrescentado (oito finalizações simultâneas com aviso: exatamente um fecha, uma mensagem, um job, todos veem a mesma ficha).
+
 **Provas (POSTGRES + HTTP, papel real `omnira_app`):** `internal/attendance/adapters/closing_notice_integration_test.go` (membro: mensagem + job + fechamento juntos, repetição sem segunda mensagem, sem pedido nada sai, janela
 fechada e sem linha seguem finalizando, supervisor avisa e conversa solta não, falha DEPOIS do enfileiramento desfaz mensagem e job, chave já usada por outra pessoa, credencial/texto longo = 400, quem não pode finalizar
 não enfileira) e `internal/hub/adapters/serving_closing_notice_integration_test.go` (rotas REAIS de atendimento: com a chave a mensagem sai com o fechamento e a auditoria só traz o estado; sem `conversation.reply` finaliza e

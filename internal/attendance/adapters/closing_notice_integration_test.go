@@ -8,6 +8,7 @@ package adapters_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -229,6 +230,45 @@ func TestTheClosingNoticeIsQueuedWithTheClosingAndNeverWithoutIt(t *testing.T) {
 		}
 		if s.queuedNotices(conv) != 0 {
 			t.Error("a refused finalize queued the notice")
+		}
+	})
+
+	t.Run("eight finalizes at once: exactly one closes, exactly one notice and one job, everybody sees the same closure", func(t *testing.T) {
+		conv, _ := s.conversation(&s.agent)
+		s.channel(conv, "waha")
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		changed, queued := 0, 0
+		ids := map[uuid.UUID]bool{}
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				res, err := finalize(s.agent, conv, text)
+				if err != nil {
+					t.Errorf("finalize: %v", err)
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				ids[res.Closure.ID] = true
+				if res.Changed {
+					changed++
+				}
+				if res.Farewell == domain.FarewellQueued {
+					queued++
+				}
+			}()
+		}
+		wg.Wait()
+		if changed != 1 || queued != 1 || len(ids) != 1 {
+			t.Fatalf("closers=%d notices-reported=%d distinct closures=%d, want 1/1/1", changed, queued, len(ids))
+		}
+		if n := s.queuedNotices(conv); n != 1 {
+			t.Fatalf("queued notices = %d, want 1", n)
+		}
+		if n := s.count(`SELECT count(*) FROM outbox_events o JOIN messages m ON m.id::text = o.aggregate_id WHERE m.conversation_id=$1 AND o.event_type='job.channel.send_text.v1'`, conv); n != 1 {
+			t.Fatalf("delivery jobs = %d, want 1", n)
 		}
 	})
 }
