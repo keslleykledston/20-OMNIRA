@@ -24,7 +24,7 @@ func TestSignMatchesTheIndependentVectors(t *testing.T) {
 		want   string
 	}{
 		{uuid.MustParse("11111111-2222-3333-4444-555555555555"), false, 4242, 1700000000, "b1|11111111-2222-3333-4444-555555555555|0|4242|1700000000|86fdee3b8d7069cdef53351e1519718a1e39cc8d0bef733ef6f5e863db077617"},
-		{uuid.Nil, true, 7, 1700000001, "b1||1|7|1700000001|bba261eceb6fea13b9bb6b196248d4125eb5b8fda86e6d112bcc156aa76e1163"},
+		{uuid.Nil, true, 7, 1700000001, "b1|00000000-0000-0000-0000-000000000000|1|7|1700000001|59c31b05e42b94f8c989ad2a233e2455e559e800532c4a6db27153bbe3d6c01f"},
 	}
 	for _, c := range cases {
 		if got := Sign(key, c.user, c.system, c.pid, time.Unix(c.at, 0)); got != c.want {

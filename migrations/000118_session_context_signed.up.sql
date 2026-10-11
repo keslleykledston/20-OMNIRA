@@ -6,7 +6,8 @@
 -- wrote it) and are put there by two owner-rights functions:
 --   ctx_begin(raw)        the application calls it first in every transaction with a context it SIGNED with a key from its environment
 --                         (b1|<user uuid or empty>|<0|1 system>|<backend pid>|<issued at, epoch seconds>|<hmac-sha256 hex>); the HMAC is checked ONCE per transaction.
---                         The context names the backend it was signed for: a copy captured from another session cannot be replayed from a different one.
+--                         The context names the backend it was signed for (a copy captured from another session cannot be replayed from a different one), is valid for
+--                         thirty seconds, and is accepted once per transaction. In enforce a refused context is an ERROR (the request does not run); in off/measure it is a `false`.
 --   lock_served_tenant    records the acting hub and tenant (it already proves the delegation); nothing to sign, it runs inside the database
 -- The HMAC key lives in a table the application role cannot read, so arbitrary SQL cannot produce a context that ctx_begin accepts, and cannot write the table.
 -- Reading the verified context in a policy is one primary-key lookup (the first design verified the HMAC on every call: 36 us per call against ~3 us, measured).
@@ -77,6 +78,7 @@ REVOKE ALL ON FUNCTION ctx_install_key(BYTEA), ctx_drop_previous_key() FROM PUBL
 CREATE UNLOGGED TABLE session_ctx_verified (
   pid            INTEGER PRIMARY KEY,
   txstart        TIMESTAMPTZ NOT NULL,
+  base_set       BOOLEAN NOT NULL DEFAULT false,   -- ctx_begin already accepted a context in this transaction (a second one is refused)
   uid            UUID,
   sys            BOOLEAN NOT NULL DEFAULT false,
   acting_hub     UUID,
@@ -109,27 +111,43 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
--- Called by the application as the FIRST statement of each transaction. Accepts a context signed with an installed key FOR THIS BACKEND (pid), issued within the last five
--- minutes (a minute of tolerance for the clocks), and records it for this transaction. Anything else records nothing and returns false: the session then has no verified context.
+-- What a refused context means: in enforce, an error (the application must not run a transaction that has no identity, and a misconfigured key must be loud);
+-- in off and measure, false (the legacy settings still decide, so the rollout cannot break requests).
+CREATE FUNCTION ctx_refused() RETURNS BOOLEAN AS $$
+BEGIN
+  IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN
+    RAISE EXCEPTION 'session_ctx: the session context was refused' USING ERRCODE = '28000';
+  END IF;
+  RETURN false;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+
+-- Called by the application as the FIRST statement of each transaction. Accepts a context signed with an installed key FOR THIS BACKEND (pid), issued within the last
+-- thirty seconds (fifteen of tolerance for the clocks; a transaction's now() is its start and the application signs right after opening it), ONCE per transaction (a second
+-- context in the same transaction is refused: it could only be somebody trying to change who the session is), and records it for this transaction.
 CREATE FUNCTION ctx_begin(p_raw TEXT) RETURNS BOOLEAN AS $$
 DECLARE
   p TEXT[] := public.ctx_signed(p_raw, 'b1', 4);   -- [tag, user, system, pid, issued-at, sig]
 BEGIN
-  IF p IS NULL THEN RETURN false; END IF;
+  IF p IS NULL THEN RETURN public.ctx_refused(); END IF;
   IF p[5] !~ '^[0-9]{1,11}$' OR p[4] !~ '^[0-9]{1,10}$' OR p[3] NOT IN ('0', '1')
      OR (p[2] <> '' AND p[2] !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') THEN
-    RETURN false;
+    RETURN public.ctx_refused();
   END IF;
-  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN false; END IF;
-  IF to_timestamp(p[5]::BIGINT) > now() + interval '60 seconds' OR to_timestamp(p[5]::BIGINT) < now() - interval '5 minutes' THEN
-    RETURN false;
+  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN public.ctx_refused(); END IF;
+  IF to_timestamp(p[5]::BIGINT) > now() + interval '15 seconds' OR to_timestamp(p[5]::BIGINT) < now() - interval '30 seconds' THEN
+    RETURN public.ctx_refused();
   END IF;
-  INSERT INTO public.session_ctx_verified AS v (pid, txstart, uid, sys)
-  VALUES (pg_backend_pid(), now(), NULLIF(p[2], '')::UUID, p[3] = '1')
+  IF EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.base_set) THEN
+    RETURN public.ctx_refused();
+  END IF;
+  INSERT INTO public.session_ctx_verified AS v (pid, txstart, base_set, uid, sys)
+  VALUES (pg_backend_pid(), now(), true, NULLIF(p[2], '')::UUID, p[3] = '1')
   ON CONFLICT (pid) DO UPDATE SET
     acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END,
     acting_tenant = CASE WHEN v.txstart = now() THEN v.acting_tenant END,
     txstart       = now(),
+    base_set      = true,
     uid           = EXCLUDED.uid,
     sys           = EXCLUDED.sys;
   RETURN true;
@@ -143,12 +161,13 @@ CREATE FUNCTION ctx_set_acting(p_hub_id UUID, p_tenant_id UUID) RETURNS VOID AS 
   ON CONFLICT (pid) DO UPDATE SET
     uid           = CASE WHEN v.txstart = now() THEN v.uid END,
     sys           = CASE WHEN v.txstart = now() THEN v.sys ELSE false END,
+    base_set      = CASE WHEN v.txstart = now() THEN v.base_set ELSE false END,
     txstart       = now(),
     acting_hub    = EXCLUDED.acting_hub,
     acting_tenant = EXCLUDED.acting_tenant;
 $$ LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
-REVOKE ALL ON FUNCTION ctx_signed(TEXT, TEXT, INTEGER), ctx_set_acting(UUID, UUID) FROM PUBLIC, omnira_app;
+REVOKE ALL ON FUNCTION ctx_signed(TEXT, TEXT, INTEGER), ctx_set_acting(UUID, UUID), ctx_refused() FROM PUBLIC, omnira_app;
 -- ctx_begin stays callable by the application role: calling it with anything but a context signed with the key changes nothing.
 
 -- ---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -242,6 +261,79 @@ BEGIN
       SELECT EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.acting_hub IS NOT NULL);
     $b$ LANGUAGE sql STABLE%s$q$, sdef);
   END IF;
+
+  -- The three predicates that read the session identity several times per call. off = the definitions of migrations 000097/000109 (raw setting); measure = through the
+  -- readers (so a divergence is reported); enforce = ONE read of the verified registry per call (the readers would each look it up: five lookups per row measured at 36 us, one at ~10 us).
+  IF p_mode = 'off' THEN
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.has_active_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+         AND NULLIF(current_setting('app.acting_hub', true), '') IS NULL
+         AND EXISTS (SELECT 1 FROM public.memberships WHERE tenant_id = p_tenant_id AND user_id = p_user_id AND status = 'active');
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.has_active_admin_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+         AND NULLIF(current_setting('app.acting_hub', true), '') IS NULL
+         AND EXISTS (SELECT 1 FROM public.memberships m JOIN public.roles r ON m.role_id = r.id
+                     WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND r.key = 'tenant_admin');
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.actor_has_permission(p_tenant_id UUID, p_user_id UUID, p_permission TEXT) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+         AND CASE
+               WHEN NULLIF(current_setting('app.acting_hub', true), '') IS NULL THEN
+                 EXISTS (SELECT 1 FROM public.memberships m JOIN public.role_permissions rp ON rp.role_id = m.role_id
+                         WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND rp.permission_key = p_permission)
+               ELSE COALESCE(p_permission = ANY (public.delegated_permissions(p_tenant_id, p_user_id, public.acting_hub())), false)
+             END;
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+
+  ELSIF p_mode = 'measure' THEN
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.has_active_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+         AND NOT public.ctx_acting_present()
+         AND EXISTS (SELECT 1 FROM public.memberships WHERE tenant_id = p_tenant_id AND user_id = p_user_id AND status = 'active');
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.has_active_admin_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+         AND NOT public.ctx_acting_present()
+         AND EXISTS (SELECT 1 FROM public.memberships m JOIN public.roles r ON m.role_id = r.id
+                     WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND r.key = 'tenant_admin');
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.actor_has_permission(p_tenant_id UUID, p_user_id UUID, p_permission TEXT) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
+         AND CASE
+               WHEN NOT public.ctx_acting_present() THEN
+                 EXISTS (SELECT 1 FROM public.memberships m JOIN public.role_permissions rp ON rp.role_id = m.role_id
+                         WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND rp.permission_key = p_permission)
+               ELSE COALESCE(p_permission = ANY (public.delegated_permissions(p_tenant_id, p_user_id, public.acting_hub())), false)
+             END;
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+
+  ELSE
+    -- c = the verified row of THIS transaction (all NULL when there is none): same three-valued logic as current_user_id() / is_system_admin() / ctx_acting_present() in this mode
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.has_active_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = c.uid OR COALESCE(c.sys, false))
+         AND NOT (c.acting_hub IS NOT NULL)
+         AND EXISTS (SELECT 1 FROM public.memberships WHERE tenant_id = p_tenant_id AND user_id = p_user_id AND status = 'active')
+      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.txstart = now();
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.has_active_admin_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = c.uid OR COALESCE(c.sys, false))
+         AND NOT (c.acting_hub IS NOT NULL)
+         AND EXISTS (SELECT 1 FROM public.memberships m JOIN public.roles r ON m.role_id = r.id
+                     WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND r.key = 'tenant_admin')
+      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.txstart = now();
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+    EXECUTE $q$CREATE OR REPLACE FUNCTION public.actor_has_permission(p_tenant_id UUID, p_user_id UUID, p_permission TEXT) RETURNS BOOLEAN AS $b$
+      SELECT (p_user_id = c.uid OR COALESCE(c.sys, false))
+         AND CASE
+               WHEN NOT (c.acting_hub IS NOT NULL) THEN
+                 EXISTS (SELECT 1 FROM public.memberships m JOIN public.role_permissions rp ON rp.role_id = m.role_id
+                         WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND rp.permission_key = p_permission)
+               ELSE COALESCE(p_permission = ANY (public.delegated_permissions(p_tenant_id, p_user_id, c.acting_hub)), false)
+             END
+      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.txstart = now();
+    $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
+  END IF;
 END;
 $fn$ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 REVOKE ALL ON FUNCTION ctx_install_readers(TEXT) FROM PUBLIC, omnira_app;
@@ -270,42 +362,15 @@ REVOKE ALL ON FUNCTION ctx_set_mode(TEXT) FROM PUBLIC, omnira_app;
 -- ---------------------------------------------------------------------------------------------------------------------------------------------------
 -- 5. The places that read app.acting_hub directly now ask for "is there an acting context" through the same door
 -- ---------------------------------------------------------------------------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION has_active_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
-     AND NOT public.ctx_acting_present()
-     AND EXISTS (
-       SELECT 1 FROM public.memberships
-       WHERE tenant_id = p_tenant_id AND user_id = p_user_id AND status = 'active'
-     );
-$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+-- (has_active_membership, has_active_admin_membership and actor_has_permission are defined per mode by ctx_install_readers, above)
 
-CREATE OR REPLACE FUNCTION has_active_admin_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
-     AND NOT public.ctx_acting_present()
-     AND EXISTS (
-       SELECT 1 FROM public.memberships m
-       JOIN public.roles r ON m.role_id = r.id
-       WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id
-         AND m.status = 'active' AND r.key = 'tenant_admin'
-     );
-$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
-
-CREATE OR REPLACE FUNCTION actor_has_permission(p_tenant_id UUID, p_user_id UUID, p_permission TEXT) RETURNS BOOLEAN AS $$
-  SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
-     AND CASE
-           WHEN NOT public.ctx_acting_present() THEN
-             EXISTS (SELECT 1 FROM public.memberships m JOIN public.role_permissions rp ON rp.role_id = m.role_id
-                     WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND rp.permission_key = p_permission)
-           ELSE COALESCE(p_permission = ANY (public.delegated_permissions(p_tenant_id, p_user_id, public.acting_hub())), false)
-         END;
-$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
-
-ALTER POLICY conversations_read_tenant  ON conversations  USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, current_user_id())) OR is_system_admin());
-ALTER POLICY messages_read_tenant       ON messages       USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, current_user_id())) OR is_system_admin());
-ALTER POLICY contacts_read_tenant       ON contacts       USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, current_user_id())) OR is_system_admin());
-ALTER POLICY tickets_read_tenant        ON tickets        USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, current_user_id())) OR is_system_admin());
-ALTER POLICY message_media_read_tenant  ON message_media  USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, current_user_id())) OR is_system_admin());
-ALTER POLICY contact_notes_read_tenant  ON contact_notes  USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, current_user_id())) OR is_system_admin());
+-- The six hot read policies take the session's identity as an InitPlan: it is read ONCE per query instead of once per row (the per-row call of has_active_membership remains).
+ALTER POLICY conversations_read_tenant  ON conversations  USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, (SELECT current_user_id()))) OR (SELECT is_system_admin()));
+ALTER POLICY messages_read_tenant       ON messages       USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, (SELECT current_user_id()))) OR (SELECT is_system_admin()));
+ALTER POLICY contacts_read_tenant       ON contacts       USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, (SELECT current_user_id()))) OR (SELECT is_system_admin()));
+ALTER POLICY tickets_read_tenant        ON tickets        USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, (SELECT current_user_id()))) OR (SELECT is_system_admin()));
+ALTER POLICY message_media_read_tenant  ON message_media  USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, (SELECT current_user_id()))) OR (SELECT is_system_admin()));
+ALTER POLICY contact_notes_read_tenant  ON contact_notes  USING ((NOT (SELECT public.ctx_acting_present()) AND has_active_membership(tenant_id, (SELECT current_user_id()))) OR (SELECT is_system_admin()));
 
 -- ---------------------------------------------------------------------------------------------------------------------------------------------------
 -- 6. The only writer of the acting context records it in the verified table (everything else in the function is unchanged from migration 114)

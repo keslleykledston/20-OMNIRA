@@ -68,13 +68,10 @@ func parseSessionKey(raw string) ([]byte, error) {
 // Rejections is how many contexts the database refused since the process started.
 func Rejections() int64 { return rejected.Load() }
 
-// Sign builds "b1|<user or empty>|<0|1>|<backend pid>|<issued at>|<hmac-sha256 hex>", the exact format ctx_begin verifies. The pid ties the context to the connection it is
+// Sign builds "b1|<user>|<0|1>|<backend pid>|<issued at>|<hmac-sha256 hex>", the exact format ctx_begin verifies. The pid ties the context to the connection it is
 // sent on: a copy captured from another session is useless.
 func Sign(key []byte, userID uuid.UUID, system bool, pid uint32, at time.Time) string {
-	user := ""
-	if userID != uuid.Nil {
-		user = userID.String()
-	}
+	user := userID.String() // a system session carries the nil UUID exactly as the legacy setting did, so both representations agree
 	flag := "0"
 	if system {
 		flag = "1"
@@ -110,7 +107,7 @@ func Set(ctx context.Context, q Querier, userID uuid.UUID, isSystemAdmin bool) e
 	}
 	var ok bool
 	err = q.QueryRow(ctx,
-		`SELECT ctx_begin($1), set_config('app.current_user_id', $2, true), CASE WHEN $3::boolean THEN set_config('app.is_system_admin', 'true', true) END`,
+		`SELECT public.ctx_begin($1), pg_catalog.set_config('app.current_user_id', $2, true), CASE WHEN $3::boolean THEN pg_catalog.set_config('app.is_system_admin', 'true', true) END`,
 		Sign(key, userID, isSystemAdmin, pid, time.Now()), userID.String(), isSystemAdmin,
 	).Scan(&ok, new(string), new(*string))
 	if err != nil {
@@ -141,4 +138,12 @@ func noteRejected() {
 	if last := lastWarnAt.Load(); now-last >= 30 && lastWarnAt.CompareAndSwap(last, now) {
 		log.Printf("session context: the database REFUSED a signed context (key mismatch with the migrator, or clock skew over 60 s); in mode enforce these sessions have no access")
 	}
+}
+
+// UseKeyForTesting replaces the signing key of the process until the returned function is called. Tests only: production reads the key from the environment once.
+func UseKeyForTesting(key []byte) (restore func()) {
+	keyOnce.Do(func() {}) // make sure a later Key() does not overwrite the replacement
+	prev, prevErr := keyVal, keyErr
+	keyVal, keyErr = key, nil
+	return func() { keyVal, keyErr = prev, prevErr }
 }

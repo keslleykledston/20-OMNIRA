@@ -29,6 +29,11 @@ case "${1:-status}" in
   gen-key) openssl rand -hex 32 ;;
   install-key)
     k=$(load_key)
+    # the key travels inside a statement (through stdin, never in a process listing): refuse when the server logs statements, unless told otherwise
+    ls=$(owner -tA -c "SHOW log_statement")
+    if [ "$ls" != "none" ] && [ -z "${FORCE:-}" ]; then
+      echo "log_statement is '$ls': the key would be written to the database log. Set it to none (or FORCE=1 and rotate the key afterwards)." >&2; exit 2
+    fi
     printf "SELECT public.ctx_install_key(decode('%s','hex'));\n" "$k" | owner -tA ;;
   drop-previous) owner -tA -c "SELECT public.ctx_drop_previous_key()" | sed 's/^/previous keys dropped: /' ;;
   mode)

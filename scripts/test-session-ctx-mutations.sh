@@ -27,7 +27,7 @@ run() { # the attack tests (as the application role, mode enforce), the signer's
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -p 1 -run 'TestArbitrarySQL|TestTheApplicationRole|TestTheModes|TestKeyRotation|TestSessionsOpened|TestADelegatedContext|TestSecurityDefinerFunctionsPinPgTempLast|TestRLSHelpersSurviveConnectionReuse|TestMembershipHelpers' ./internal/platform/db 2>&1
+    go test -count=1 -p 1 -run 'TestArbitrarySQL|TestAContextIsAccepted|TestTheApplicationRole|TestTheModes|TestKeyRotation|TestSessionsOpened|TestADelegatedContext|TestSecurityDefinerFunctionsPinPgTempLast|TestRLSHelpersSurviveConnectionReuse|TestMembershipHelpers' ./internal/platform/db 2>&1
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
@@ -78,11 +78,14 @@ sqlmut "any signature is accepted" $M "WHERE sha256(decode(sig, 'hex')) = sha256
 sqlmut "the tag is not checked" $M "OR parts[1] <> p_tag THEN RETURN NULL" "THEN RETURN NULL"
 sqlmut "the number of fields is not checked" $M "IF cardinality(parts) <> p_fields + 2 OR parts[1] <> p_tag THEN" "IF parts[1] <> p_tag THEN"
 sqlmut "the signature is compared without hashing both sides (timing)" $M "sha256(decode(sig, 'hex')) = sha256(public.hmac(" "decode(sig, 'hex') = (public.hmac(" 
-sqlmut "a context from the future is accepted" $M "to_timestamp(p[5]::BIGINT) > now() + interval '60 seconds' OR " ""
-sqlmut "a stale context is accepted" $M " OR to_timestamp(p[5]::BIGINT) < now() - interval '5 minutes'" ""
+sqlmut "a context from the future is accepted" $M "to_timestamp(p[5]::BIGINT) > now() + interval '15 seconds' OR " ""
+sqlmut "a stale context is accepted" $M " OR to_timestamp(p[5]::BIGINT) < now() - interval '30 seconds'" ""
 sqlmut "a context signed for another backend is accepted (replay)" $M "  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN false; END IF;
 " ""
 sqlmut "the backend pid field is not validated as a number" $M "p[4] !~ '^[0-9]{1,10}$' OR " ""
+sqlmut "a second context in the same transaction is accepted" $M "IF EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.base_set) THEN" "IF false THEN"
+sqlmut "a refusal does not raise in enforce" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF false THEN"
+sqlmut "a refusal raises in every mode" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF true THEN"
 sqlmut "the system flag is not validated" $M "OR p[3] NOT IN ('0', '1')" ""
 # --- the registry ---------------------------------------------------------------------------------------------------------------------------------
 sqlmut "the verified context outlives its transaction (current_user_id)" $M "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();

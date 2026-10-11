@@ -31,14 +31,9 @@ docker run --rm --network "container:$NAME" -v "$PWD/migrations:/migrations:ro" 
 docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 own() { docker exec -i "$NAME" psql -U omnira -d $DB -X -q -At -v ON_ERROR_STOP=1 "$@"; }
 CTX_KEY=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
-ctx_begin_sql() { # ctx_begin_sql <user uuid> -> "SELECT ctx_begin('<signed>');" when CTX_MODE is set (a fresh signature each call)
+ctx_begin_sql() { # ctx_begin_sql <user uuid> -> a statement that signs a context for THIS backend (the key is the bench's own) and hands it to ctx_begin; empty without CTX_MODE
   [ -n "${CTX_MODE:-}" ] || return 0
-  python3 - "$CTX_KEY" "$1" <<'PY'
-import hmac,hashlib,sys,time
-key=bytes.fromhex(sys.argv[1]); u=sys.argv[2]
-p="b1|%s|0|%d" % (u,int(time.time()))
-print("SELECT ctx_begin('%s|%s');" % (p, hmac.new(key,p.encode(),hashlib.sha256).hexdigest()))
-PY
+  printf "SELECT ctx_begin(p || '|' || encode(hmac(convert_to(p, 'UTF8'), decode('%s','hex'), 'sha256'), 'hex')) FROM (SELECT format('b1|%%s|0|%%s|%%s', '%s', pg_backend_pid(), extract(epoch FROM now())::bigint) AS p) x;" "$CTX_KEY" "$1"
 }
 if [ -n "${CTX_MODE:-}" ]; then
   own -c "SELECT ctx_install_key(decode('$CTX_KEY','hex'))" >/dev/null; own -c "SELECT ctx_set_mode('$CTX_MODE')" >/dev/null
@@ -128,7 +123,9 @@ set_scope() { # set_scope narrow|none
 echo "== sanity: what each session sees (conversations of A / of B)"
 for mode in "member $MEMBER 0" "delegate $DELEGATE 1"; do
   set -- $mode
-  printf '   %-9s' "$1"; printf "BEGIN; $(ctx_begin_sql "$2") SELECT set_config('app.current_user_id','$2',true);%s SELECT count(*) FILTER (WHERE tenant_id='$TA') || ' / ' || count(*) FILTER (WHERE tenant_id<>'$TA') FROM conversations; ROLLBACK;" "$( [ "$3" = 1 ] && echo "SELECT lock_served_tenant('$TA','$2','$HUB');" )" | app | tail -1
+  lock=""; [ "$3" = 1 ] && lock="SELECT lock_served_tenant('$TA','$2','$HUB');"
+  printf '   %-9s' "$1"
+  printf '%s' "BEGIN; $(ctx_begin_sql "$2") SELECT set_config('app.current_user_id','$2',true); $lock SELECT count(*) FILTER (WHERE tenant_id='$TA') || ' / ' || count(*) FILTER (WHERE tenant_id<>'$TA') FROM conversations; ROLLBACK;" | app | tail -1
 done
 
 printf '\n%-22s %-10s %12s %12s\n' query session median_ms buffers

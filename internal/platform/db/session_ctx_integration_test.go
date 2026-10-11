@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -98,13 +99,30 @@ func (l *ctxLab) identity(tx pgx.Tx) (user *uuid.UUID, system bool) {
 	return user, system
 }
 
+// begin hands a context to ctx_begin and says whether the database accepted it. In enforce a refusal is an ERROR, so the call runs inside a savepoint: a refused context must not
+// poison the rest of the test's transaction.
 func (l *ctxLab) begin(tx pgx.Tx, raw string) bool {
 	l.t.Helper()
-	var ok bool
-	if err := tx.QueryRow(l.ctx, `SELECT ctx_begin($1)`, raw).Scan(&ok); err != nil {
+	ok, _ := l.beginErr(tx, raw)
+	return ok
+}
+
+func (l *ctxLab) beginErr(tx pgx.Tx, raw string) (bool, error) {
+	l.t.Helper()
+	if _, err := tx.Exec(l.ctx, `SAVEPOINT ctx_try`); err != nil {
 		l.t.Fatal(err)
 	}
-	return ok
+	var ok bool
+	if err := tx.QueryRow(l.ctx, `SELECT ctx_begin($1)`, raw).Scan(&ok); err != nil {
+		if _, rerr := tx.Exec(l.ctx, `ROLLBACK TO SAVEPOINT ctx_try`); rerr != nil {
+			l.t.Fatal(rerr)
+		}
+		return false, err
+	}
+	if _, err := tx.Exec(l.ctx, `RELEASE SAVEPOINT ctx_try`); err != nil {
+		l.t.Fatal(err)
+	}
+	return ok, nil
 }
 
 func (l *ctxLab) forge(tx pgx.Tx, user uuid.UUID, system bool) {
@@ -163,8 +181,8 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 			if !l.begin(tx, l.sign(tx, l.key, uuid.Nil, true, time.Now())) {
 				t.Fatal("a genuine system context was refused")
 			}
-			if u, sys := l.identity(tx); u != nil || !sys {
-				t.Fatalf("want system without a user; got user=%v system=%v", u, sys)
+			if u, sys := l.identity(tx); u == nil || *u != uuid.Nil || !sys {
+				t.Fatalf("want system with the nil user (as the legacy setting said); got user=%v system=%v", u, sys)
 			}
 		})
 	})
@@ -221,7 +239,7 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 	})
 
 	t.Run("a stale or future context is refused", func(t *testing.T) {
-		for name, at := range map[string]time.Time{"ten minutes old": time.Now().Add(-10 * time.Minute), "five minutes ahead": time.Now().Add(5 * time.Minute)} {
+		for name, at := range map[string]time.Time{"two minutes old": time.Now().Add(-2 * time.Minute), "a minute ahead": time.Now().Add(time.Minute)} {
 			l.tx(func(tx pgx.Tx) {
 				if l.begin(tx, l.sign(tx, l.key, user, true, at)) {
 					t.Errorf("%s: accepted", name)
@@ -229,8 +247,11 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 			})
 		}
 		l.tx(func(tx pgx.Tx) { // inside the tolerance
-			if !l.begin(tx, l.sign(tx, l.key, user, false, time.Now().Add(-4*time.Minute))) {
-				t.Error("a context issued four minutes ago must still be accepted")
+			if !l.begin(tx, l.sign(tx, l.key, user, false, time.Now().Add(-20*time.Second))) {
+				t.Error("a context issued twenty seconds ago must still be accepted")
+			}
+			if u, _ := l.identity(tx); u == nil || *u != user {
+				t.Error("and it must establish its identity")
 			}
 		})
 	})
@@ -291,6 +312,65 @@ func TestArbitrarySQLCannotForgeTheSessionIdentityInEnforceMode(t *testing.T) {
 				t.Errorf("a genuine system context read %d tenant(s), want 1", n)
 			}
 		})
+	})
+}
+
+func TestAContextIsAcceptedOncePerTransactionAndARefusalIsLoudInEnforce(t *testing.T) {
+	l := newCtxLab(t)
+	user, admin := uuid.New(), uuid.New()
+
+	t.Run("a second genuine context cannot change who the session is", func(t *testing.T) {
+		l.withMode("enforce")
+		l.tx(func(tx pgx.Tx) {
+			if !l.begin(tx, l.sign(tx, l.key, user, false, time.Now())) {
+				t.Fatal("the first context was refused")
+			}
+			// a perfectly valid context for this very backend (say, one captured earlier): refused, the identity stays
+			if l.begin(tx, l.sign(tx, l.key, admin, true, time.Now())) {
+				t.Fatal("a second context in the same transaction was accepted")
+			}
+			if u, sys := l.identity(tx); u == nil || *u != user || sys {
+				t.Fatalf("the session changed identity: user=%v system=%v", u, sys)
+			}
+		})
+	})
+
+	t.Run("enforce: a refused context is an error (the request must not run)", func(t *testing.T) {
+		l.withMode("enforce")
+		l.tx(func(tx pgx.Tx) {
+			ok, err := l.beginErr(tx, l.sign(tx, otherKey(), user, true, time.Now()))
+			if ok || err == nil {
+				t.Fatalf("a refused context must raise in enforce: ok=%v err=%v", ok, err)
+			}
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "28000" {
+				t.Errorf("want SQLSTATE 28000, got %v", err)
+			}
+		})
+	})
+
+	t.Run("off and measure: a refused context is a false, never an error", func(t *testing.T) {
+		for _, mode := range []string{"off", "measure"} {
+			l.withMode(mode)
+			l.tx(func(tx pgx.Tx) {
+				ok, err := l.beginErr(tx, l.sign(tx, otherKey(), user, true, time.Now()))
+				if ok || err != nil {
+					t.Errorf("%s: ok=%v err=%v; want false and no error (the legacy settings still decide)", mode, ok, err)
+				}
+			})
+		}
+	})
+
+	t.Run("the application does not run a session the database refused (enforce)", func(t *testing.T) {
+		l.withMode("enforce")
+		// a pool whose process signs with a key the database does not know
+		restore := sessionctx.UseKeyForTesting(otherKey())
+		defer restore()
+		ran := false
+		err := WithTenantSession(l.ctx, l.app, user, false, func(context.Context) error { ran = true; return nil })
+		if err == nil || ran {
+			t.Errorf("a session whose context was refused ran anyway: err=%v ran=%v", err, ran)
+		}
 	})
 }
 

@@ -119,6 +119,7 @@ ALTER POLICY message_media_read_tenant  ON message_media  USING ((NULLIF(current
 ALTER POLICY contact_notes_read_tenant  ON contact_notes  USING ((NULLIF(current_setting('app.acting_hub', true), '') IS NULL AND has_active_membership(tenant_id, current_user_id())) OR is_system_admin());
 
 DROP FUNCTION IF EXISTS ctx_set_mode(TEXT);
+DROP FUNCTION IF EXISTS ctx_refused();
 DROP FUNCTION IF EXISTS ctx_install_readers(TEXT);
 DROP FUNCTION IF EXISTS ctx_verified(TEXT);
 DROP FUNCTION IF EXISTS ctx_drop_previous_key();
