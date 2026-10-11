@@ -94,9 +94,15 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	}
 	mux.Handle("POST "+base+"/inbox/conversations/{conversation_id}/finalize/suggest", suggestRoute)
 	// ADR-0040 phase 06: a Hub agent reads the memory of the contact with the key attendance.history and resolves an item with followup.resolve (the database asks for
-	// both again, migration 117). The search over earlier messages (history-search) stays closed to a delegate: it is not on the delegable list.
+	// both again, migration 117). ADR-0040 phase 09: the search over earlier messages of the contact (history-search) opens to a Hub agent with the same key attendance.history;
+	// it runs in the request's RLS session (a plain SELECT over messages and conversations) for the instance and the scope of the grant, and the handler asks for conversation.read as the AI draft does.
 	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/attendance-context", tenancyadapters.Delegable("attendance.history", wrap(h.contextOfConversation)))
-	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/history-search", wrap(h.searchHistory))
+	searchRoute := wrap(h.searchHistory)
+	if h.canReadAsHubAgent != nil {
+		// the key opens the route; conversation.read (proved by the handler, like the draft) is what lets message text out, because the policies on messages answer to any live grant
+		searchRoute = tenancyadapters.Delegable("attendance.history", wrap(h.searchHistory))
+	}
+	mux.Handle("GET "+base+"/inbox/conversations/{conversation_id}/history-search", searchRoute)
 	mux.Handle("GET "+base+"/contacts/{contact_id}/attendance-history", tenancyadapters.Delegable("attendance.history", wrap(h.historyOfContact)))
 	mux.Handle("POST "+base+"/follow-ups/{follow_up_id}/resolve", tenancyadapters.Delegable("followup.resolve", wrap(h.resolveFollowUp)))
 }
@@ -247,6 +253,25 @@ type suggestionDTO struct {
 	BasedOnMessages int    `json:"based_on_messages"`
 }
 
+// hubAgentMayRead answers 403 (and false) unless the Hub agent holds conversation.read in the delegated context. The data layer lets any live grant read the rows of its instance
+// (the legacy policies), so a route that returns message text under another key (ai.assist, attendance.history) must ask for the reading key itself. Unwired = refused.
+func (h *Handler) hubAgentMayRead(w http.ResponseWriter, r *http.Request, tc *tenancydomain.TenantContext) bool {
+	if h.canReadAsHubAgent == nil {
+		writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
+		return false
+	}
+	readable, err := h.canReadAsHubAgent(r.Context(), tc.TenantID, tc.ActorID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "unexpected error")
+		return false
+	}
+	if !readable {
+		writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
+		return false
+	}
+	return true
+}
+
 func (h *Handler) suggest(w http.ResponseWriter, r *http.Request) {
 	if !authenticated(w, r) {
 		return
@@ -257,17 +282,7 @@ func (h *Handler) suggest(w http.ResponseWriter, r *http.Request) {
 	}
 	suggest := h.svc.SuggestClosing
 	if tc, err := tenancydomain.FromContext(r.Context()); err == nil && tc.Source == tenancydomain.AccessSourceHubServe {
-		if h.canReadAsHubAgent == nil {
-			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
-			return
-		}
-		readable, err := h.canReadAsHubAgent(r.Context(), tc.TenantID, tc.ActorID)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "internal", "unexpected error")
-			return
-		}
-		if !readable {
-			writeErr(w, http.StatusForbidden, "forbidden", "you do not have permission to do this")
+		if !h.hubAgentMayRead(w, r, tc) {
 			return
 		}
 		suggest = h.svc.SuggestClosingAsHubAgent
@@ -356,6 +371,9 @@ func (h *Handler) searchHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	id, ok := pathUUID(w, r, "conversation_id")
 	if !ok {
+		return
+	}
+	if tc, err := tenancydomain.FromContext(r.Context()); err == nil && tc.Source == tenancydomain.AccessSourceHubServe && !h.hubAgentMayRead(w, r, tc) {
 		return
 	}
 	hits, err := h.svc.SearchHistoryOfConversation(r.Context(), id, r.URL.Query().Get("q"), limitQuery(r))

@@ -167,10 +167,10 @@ func TestDelegatedAttendanceHistoryAndFollowUpsThroughTheRealRoutes(t *testing.T
 		w.exec(`UPDATE effective_access_grants SET status = 'active' WHERE id = $1`, g)
 	})
 
-	t.Run("the search over earlier messages stays closed to a delegate", func(t *testing.T) {
+	t.Run("the search over earlier messages is closed to a delegate when the server does not wire the read check", func(t *testing.T) {
 		code, _ := do("GET", tenantPath("A")+"/inbox/conversations/"+w.conv["A"].String()+"/history-search?q=boleto", "", resolver, hub)
 		if code != 404 && code != 403 {
-			t.Errorf("history-search by a delegate: %d, want a refusal", code)
+			t.Errorf("history-search by a delegate when the server does not wire the read check: %d, want a refusal (unwired = closed)", code)
 		}
 	})
 

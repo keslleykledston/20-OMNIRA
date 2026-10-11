@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import axios from 'axios'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -30,6 +30,7 @@ function serve(keys: string[]) {
     if (u.endsWith('/inbox/conversations/c1')) return { data: { id: 'c1', contact_name: 'Berjon Brito', status: 'open', contact_id: 'k1', contact_kind: 'customer', assigned_to_user_id: 'u-9' } }
     if (u.endsWith('/contacts/k1')) return { data: { id: 'k1', display_name: 'Berjon Brito', kind: 'customer' } }
     if (u.endsWith('/inbox/conversations/c1/attendance-context')) return { data: history }
+    if (u.endsWith('/inbox/conversations/c1/history-search')) return { data: { items: [{ at: '2026-09-20T12:00:00Z', role: 'customer', snippet: 'meu boleto de março não chegou', conversation_id: 'c0' }] } }
     return Promise.reject({ response: { status: 404 } })
   })
 }
@@ -84,5 +85,34 @@ describe('the memory of the contact while attending through the Hub (phase 06)',
     expect(await screen.findByRole('note')).toHaveTextContent('não está liberado para você')
     expect(asked().some((u) => u.includes('attendance-context') || u.includes('attendance-history'))).toBe(false)
     expect(screen.queryByText('Cliente pediu segunda via do boleto.')).not.toBeInTheDocument()
+  })
+
+  it('with attendance.history and conversation.read offers the search over the earlier messages of the contact (phase 09)', async () => {
+    serve(['conversation.read', 'contact.read', 'attendance.history'])
+    show()
+    const box = await screen.findByLabelText('Buscar no histórico do contato')
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'boleto' } })
+    })
+    await act(async () => screen.getByRole('button', { name: 'Buscar' }).click())
+    expect(await screen.findByText('meu boleto de março não chegou')).toBeInTheDocument()
+    const call = get.mock.calls.find((c) => String(c[0]).endsWith('/inbox/conversations/c1/history-search'))
+    expect(call).toBeTruthy()
+    expect((call![1] as { params: { q: string } }).params.q).toBe('boleto')
+  })
+
+  it('without conversation.read the search is not offered even with the memory key, and nothing is asked', async () => {
+    serve(['contact.read', 'attendance.history'])
+    show()
+    await screen.findByText('Cliente pediu segunda via do boleto.')
+    expect(screen.queryByLabelText('Buscar no histórico do contato')).not.toBeInTheDocument()
+    expect(asked().some((u) => u.includes('history-search'))).toBe(false)
+  })
+
+  it('without attendance.history there is no search either', async () => {
+    serve(['conversation.read', 'contact.read'])
+    show()
+    expect(await screen.findByRole('note')).toHaveTextContent('não está liberado')
+    expect(screen.queryByLabelText('Buscar no histórico do contato')).not.toBeInTheDocument()
   })
 })

@@ -26,7 +26,7 @@ run() { # the host toolchain with its warm caches
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -p 1 -run 'TestDelegatedAttendanceHistory' \
+    go test -count=1 -p 1 -run 'TestDelegatedAttendanceHistory|TestDelegatedHistorySearch' \
       ./internal/hub/adapters 2>&1
 }
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 1 ]; }
@@ -42,7 +42,7 @@ killed() {
 }
 N=0
 mut() { # mut <name> <file> <from> <to>
-  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ]; then echo "   skipped: $1"; return 0; fi
+  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ] || { [ -n "${ONLY:-}" ] && [ "$N" -ne "$ONLY" ]; }; then echo "   skipped: $1"; return 0; fi
   python3 - "$WORK/orig" "$2" "$3" "$4" <<'PY'
 import sys
 orig,f,a,b=sys.argv[1:5]
@@ -54,7 +54,7 @@ PY
   cp "$WORK/orig/$2" "$2"
 }
 sqlmut() { # sqlmut <name> <migration file> <from> <to> [all]   (all: replace every occurrence, for a rule written in two layers)
-  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ]; then echo "   skipped: $1"; return 0; fi
+  N=$((N+1)); if [ "$N" -le "${SKIP:-0}" ] || { [ -n "${ONLY:-}" ] && [ "$N" -ne "$ONLY" ]; }; then echo "   skipped: $1"; return 0; fi
   rm -rf "$WORK/mig"; mkdir -p "$WORK/mig"; cp migrations/*.sql "$WORK/mig/"
   python3 - "$WORK/mig/$2" "$3" "$4" "${5:-}" <<'PY'
 import sys
@@ -74,7 +74,15 @@ M=000117_hub_delegated_attendance_history.up.sql
 mut "attendance-history asks a key every delegate has" $AH 'tenancyadapters.Delegable("attendance.history", wrap(h.historyOfContact))' 'tenancyadapters.Delegable("conversation.read", wrap(h.historyOfContact))'
 mut "attendance-context asks a key every delegate has" $AH 'tenancyadapters.Delegable("attendance.history", wrap(h.contextOfConversation))' 'tenancyadapters.Delegable("conversation.read", wrap(h.contextOfConversation))'
 mut "resolving asks a key every delegate has" $AH 'tenancyadapters.Delegable("followup.resolve", wrap(h.resolveFollowUp))' 'tenancyadapters.Delegable("attendance.history", wrap(h.resolveFollowUp))'
-mut "the search over earlier messages becomes delegable" $AH 'wrap(h.searchHistory))' 'tenancyadapters.Delegable("attendance.history", wrap(h.searchHistory)))'
+mut "the search over earlier messages is not delegable" $AH 'searchRoute = tenancyadapters.Delegable("attendance.history", wrap(h.searchHistory))' 'searchRoute = wrap(h.searchHistory)'
+mut "the search asks a key every delegate has" $AH 'searchRoute = tenancyadapters.Delegable("attendance.history", wrap(h.searchHistory))' 'searchRoute = tenancyadapters.Delegable("conversation.read", wrap(h.searchHistory))'
+mut "the search lets message text out without conversation.read" $AH '&& !h.hubAgentMayRead(w, r, tc) {
+		return
+	}
+	hits, err := h.svc.SearchHistoryOfConversation' '&& false {
+		return
+	}
+	hits, err := h.svc.SearchHistoryOfConversation'
 mut "a Hub agent resolves through the member's role matrix" $AH '		resolve = h.svc.ResolveFollowUpAsHubAgent // the role matrix has nothing to say about a Hub agent: the key was proven by the route and the database' '		_ = h.svc.ResolveFollowUpAsHubAgent'
 sqlmut "the sight of the memory is not asked of the database (every layer)" $M "actor_has_permission(tenant_id, current_user_id(), 'attendance.history')" "true" all
 sqlmut "the resolving key is not asked of the database (every layer)" $M "actor_has_permission(tenant_id, current_user_id(), 'followup.resolve')" "true" all
