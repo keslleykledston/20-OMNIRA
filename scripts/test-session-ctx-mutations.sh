@@ -27,7 +27,7 @@ run() { # the attack tests (as the application role, mode enforce), the signer's
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -p 1 -run 'TestArbitrarySQL|TestAContextIsAccepted|TestTheApplicationRole|TestTheModes|TestKeyRotation|TestSessionsOpened|TestADelegatedContext|TestSecurityDefinerFunctionsPinPgTempLast|TestRLSHelpersSurviveConnectionReuse|TestMembershipHelpers' ./internal/platform/db 2>&1
+    go test -count=1 -p 1 -run 'TestArbitrarySQL|TestAContextIsAccepted|TestTheProcessCanRefuse|TestTheApplicationRole|TestTheModes|TestKeyRotation|TestSessionsOpened|TestADelegatedContext|TestSecurityDefinerFunctionsPinPgTempLast|TestRLSHelpersSurviveConnectionReuse|TestMembershipHelpers' ./internal/platform/db 2>&1
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
@@ -94,6 +94,9 @@ sqlmut "a challenge forgets a context already accepted in the transaction" $M " 
     xid           = pg_current_xact_id(),
     nonce         = n;"
 sqlmut "the challenge nonce is predictable (constant)" $M "n TEXT := replace(gen_random_uuid()::TEXT, '-', '');" "n TEXT := repeat('a', 32);"
+sqlmut "the public mode answer lies" $M "CREATE FUNCTION ctx_mode_public() RETURNS TEXT AS \$\$
+  SELECT COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce');" "CREATE FUNCTION ctx_mode_public() RETURNS TEXT AS \$\$
+  SELECT 'enforce';"
 sqlmut "a second context in the same transaction is accepted" $M "AND NOT v.base_set AND v.nonce = p[4];" "AND v.nonce = p[4];"
 sqlmut "a refusal does not raise in enforce" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF false THEN"
 sqlmut "a refusal raises in every mode" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF true THEN"

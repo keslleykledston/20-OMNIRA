@@ -103,9 +103,20 @@ Volume real hoje (produção): a maior tabela com RLS tem ~19 mil linhas, `messa
 `scripts/session-ctx.sh mode off` (instantâneo, sem reiniciar): os leitores voltam à definição antiga. A migration tem `.down.sql` gerado das definições anteriores (testado: sobe, desce, sobe).
 Retirar a variável do ambiente de `api`/`worker` com o banco em `off` ou `measure` também é seguro (voltam a gravar só as GUCs legadas); com o banco em `enforce` seria perder o acesso, por isso a ordem de operação da §9.
 
-## 8. Evidência
+## 8. Evidência (local, 2026-10-11; `LAB`)
 
-[PREENCHER ao final: gate, mutação, E2E, Codex]
+- **POSTGRES (papel real `omnira_app`, não superusuário, FORCE RLS):** `internal/platform/db/session_ctx_integration_test.go` — SQL arbitrário não vira administrador nem escolhe usuário (GUC forjada, token com outra chave, adulterado em cada campo, de outra
+  transação, de pedido que deu rollback, sem desafio, com assinatura válida mas protocolo errado); o papel da aplicação não alcança a chave, o registro, o modo nem as funções internas; a função temporária que sombreia `sha256` não vale; modos `off`/`measure`/`enforce`
+  (em `measure` o aviso de divergência sai, em `enforce` a recusa é erro 28000); rotação da chave sem derrubar ninguém; um contexto por transação; savepoint. `internal/hub/adapters/serving_membership_while_acting_integration_test.go` — a associação própria não fala dentro do contexto delegado.
+  Os testes de forja de GUC do Hub passaram a afirmar, em `enforce`, que forjar **não muda nada**.
+- **UNIT:** `internal/platform/sessionctx` (vetores de assinatura calculados à parte em Python, chave ausente/inválida/curta, contagem de recusas).
+- **Gate:** `scripts/test-integration.sh` agora roda com o banco em `enforce` e a chave instalada (padrão; `SESSION_CTX_MODE=off|measure` reproduz o legado): **37 de 37 pacotes `ok`**. Os pacotes de banco, tenancy, hub e atendimento também passaram em `off` e `measure`.
+- **Mutação:** `scripts/test-session-ctx-mutations.sh` — **40 de 40 mortos** (SQL da migration e assinador Go); os equivalentes estão documentados no cabeçalho do script. A suíte achou dois buracos de TESTE que foram corrigidos (o nonce nunca era exercido; a associação própria dentro do acting).
+- **Migrations:** `scripts/test-hub-migrations.sh` — 093..118 sobem, descem até o esquema anterior ao Hub e sobem de novo idênticas.
+- **E2E em navegador real contra os binários reais, banco em `enforce`:** 12 de 12.
+- **A chave não vai para o log:** `scripts/test-session-ctx-key-logging.sh` (servidor logando tudo; controle positivo).
+- **Custo:** §6. **Codex (somente leitura, não executou testes), 5 passadas:** 1ª HIGH 1 (replay no mesmo backend) + MEDIUM 4 + LOW 2; 2ª HIGH 1 (instalador sem a trava de log) + MEDIUM 1 + LOW 2; 3ª HIGH 1 (log por duração) + MEDIUM 1 + LOW 1; 4ª HIGH 1 (guarda incompleta) + LOW 1; todos corrigidos (a identidade por relógio virou xid, o replay virou desafio do banco, a trava virou sobreposição da sessão do instalador); [PASSADA 5].
+- **Não provado:** o tráfego real de usuários em `measure` (§10); login real do Keycloak; carga.
 
 ## 9. Operação (`scripts/session-ctx.sh`)
 

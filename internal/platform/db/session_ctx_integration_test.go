@@ -815,3 +815,31 @@ func TestADelegatedContextCannotBeForgedOnlyGranted(t *testing.T) {
 		}
 	})
 }
+
+func TestTheProcessCanRefuseToRunUnlessTheDatabaseEnforces(t *testing.T) {
+	l := newCtxLab(t)
+	for _, c := range []struct {
+		mode    string
+		require bool
+		wantErr bool
+	}{
+		{"off", false, false}, {"measure", false, false}, {"enforce", false, false},
+		{"off", true, true}, {"measure", true, true}, {"enforce", true, false},
+	} {
+		l.withMode(c.mode)
+		mode, err := CheckSessionContext(l.ctx, l.app, c.require)
+		if (err != nil) != c.wantErr || (err == nil && mode != c.mode) {
+			t.Errorf("mode %s require=%v: got mode %q err=%v; want error=%v", c.mode, c.require, mode, err, c.wantErr)
+		}
+	}
+	// enforce without a key in this process: every session would have no access, so a process that must enforce refuses to start
+	l.withMode("enforce")
+	restore := sessionctx.UseKeyForTesting(nil)
+	defer restore()
+	if _, err := CheckSessionContext(l.ctx, l.app, true); err == nil {
+		t.Error("a process without the signing key started against an enforcing database")
+	}
+	if _, err := CheckSessionContext(l.ctx, l.app, false); err != nil {
+		t.Errorf("without the requirement it only warns: %v", err)
+	}
+}

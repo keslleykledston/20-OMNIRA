@@ -352,6 +352,11 @@ REVOKE ALL ON FUNCTION ctx_install_readers(TEXT) FROM PUBLIC, omnira_app;
 CREATE FUNCTION ctx_acting_present() RETURNS BOOLEAN AS $$ SELECT false $$ LANGUAGE sql STABLE;
 DO $$ BEGIN PERFORM public.ctx_install_readers('off'); END $$;
 
+-- What the processes ask at startup (a mode is no secret: an attacker learning it gains nothing): the api and the worker can refuse to run unless it is 'enforce'.
+CREATE FUNCTION ctx_mode_public() RETURNS TEXT AS $$
+  SELECT COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce');
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+
 -- 'enforce' needs a key (without one nothing could ever be validated and every session would lose access).
 -- The mode and the readers change together (one transaction), only through here.
 CREATE FUNCTION ctx_set_mode(p_mode TEXT) RETURNS TEXT AS $$
