@@ -120,6 +120,7 @@ ALTER POLICY contact_notes_read_tenant  ON contact_notes  USING ((NULLIF(current
 
 DROP FUNCTION IF EXISTS ctx_set_mode(TEXT);
 DROP FUNCTION IF EXISTS ctx_refused();
+DROP FUNCTION IF EXISTS ctx_challenge();
 DROP FUNCTION IF EXISTS ctx_install_readers(TEXT);
 DROP FUNCTION IF EXISTS ctx_verified(TEXT);
 DROP FUNCTION IF EXISTS ctx_drop_previous_key();

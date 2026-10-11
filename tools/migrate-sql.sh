@@ -73,9 +73,9 @@ case "$CMD" in
       esac
       [ "${#OMNIRA_SESSION_CTX_KEY}" -ge 64 ] || { echo "OMNIRA_SESSION_CTX_KEY must have at least 64 hex characters (32 bytes)" >&2; exit 2; }
       # the key travels inside a statement: refuse when the server logs statements (it would end up in the log), unless the operator accepts that and rotates afterwards
-      ls=$(q "SHOW log_statement")
-      if [ "$ls" != "none" ] && [ -z "${SESSION_CTX_ALLOW_LOGGED_KEY:-}" ]; then
-        echo "log_statement is '$ls': installing OMNIRA_SESSION_CTX_KEY would write the key to the database log (set it to none, or SESSION_CTX_ALLOW_LOGGED_KEY=1 and rotate the key afterwards)" >&2; exit 2
+      logs=$(q "SELECT concat_ws(' ', current_setting('log_statement'), current_setting('log_min_duration_statement'), current_setting('log_min_duration_sample'), current_setting('log_parameter_max_length_on_error'))")
+      if [ "$logs" != "none -1 -1 0" ] && [ -z "${SESSION_CTX_ALLOW_LOGGED_KEY:-}" ]; then
+        echo "database logging could record the key (log_statement / log_min_duration_statement / log_min_duration_sample / log_parameter_max_length_on_error = '$logs', want 'none -1 -1 0'): turn statement, duration and parameter logging off, or SESSION_CTX_ALLOW_LOGGED_KEY=1 and rotate the key afterwards" >&2; exit 2
       fi
       # through stdin as a BOUND parameter (psql \bind: extended protocol): the key is neither in a process listing nor in the statement text
       res=$(printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$OMNIRA_SESSION_CTX_KEY" | psql_run -tA)

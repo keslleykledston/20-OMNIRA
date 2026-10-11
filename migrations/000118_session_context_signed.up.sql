@@ -74,11 +74,11 @@ REVOKE ALL ON FUNCTION ctx_install_key(BYTEA), ctx_drop_previous_key() FROM PUBL
 -- ---------------------------------------------------------------------------------------------------------------------------------------------------
 -- 3. The verified context of the current transaction (written only by the functions below)
 -- ---------------------------------------------------------------------------------------------------------------------------------------------------
--- One row per backend; a row counts only while txstart = now() (now() is the start of the current transaction), so nothing carries over to the next transaction of a pooled connection.
+-- One row per backend; a row counts only for the transaction that wrote it (xid), so nothing carries over to the next transaction of a pooled connection.
 -- UNLOGGED: it never needs to survive a crash (it only describes the transaction in flight).
 CREATE UNLOGGED TABLE session_ctx_verified (
   pid            INTEGER PRIMARY KEY,
-  txstart        TIMESTAMPTZ NOT NULL,
+  xid            xid8 NOT NULL,                    -- the TOP-LEVEL transaction the row belongs to (savepoints share it); a row of an earlier transaction never matches
   nonce          TEXT,                             -- the challenge issued to this transaction, until ctx_begin consumes it
   base_set       BOOLEAN NOT NULL DEFAULT false,   -- ctx_begin already accepted a context in this transaction (a second one is refused)
   uid            UUID,
@@ -130,14 +130,14 @@ CREATE FUNCTION ctx_challenge() RETURNS TEXT AS $$
 DECLARE
   n TEXT := replace(gen_random_uuid()::TEXT, '-', '');
 BEGIN
-  INSERT INTO public.session_ctx_verified AS v (pid, txstart, nonce) VALUES (pg_backend_pid(), now(), n)
+  INSERT INTO public.session_ctx_verified AS v (pid, xid, nonce) VALUES (pg_backend_pid(), pg_current_xact_id(), n)
   ON CONFLICT (pid) DO UPDATE SET
-    uid           = CASE WHEN v.txstart = now() THEN v.uid END,
-    sys           = CASE WHEN v.txstart = now() THEN v.sys ELSE false END,
-    base_set      = CASE WHEN v.txstart = now() THEN v.base_set ELSE false END,
-    acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END,
-    acting_tenant = CASE WHEN v.txstart = now() THEN v.acting_tenant END,
-    txstart       = now(),
+    uid           = CASE WHEN v.xid = pg_current_xact_id() THEN v.uid END,
+    sys           = CASE WHEN v.xid = pg_current_xact_id() THEN v.sys ELSE false END,
+    base_set      = CASE WHEN v.xid = pg_current_xact_id() THEN v.base_set ELSE false END,
+    acting_hub    = CASE WHEN v.xid = pg_current_xact_id() THEN v.acting_hub END,
+    acting_tenant = CASE WHEN v.xid = pg_current_xact_id() THEN v.acting_tenant END,
+    xid           = pg_current_xact_id(),
     nonce         = n;
   RETURN n;
 END;
@@ -157,7 +157,7 @@ BEGIN
   END IF;
   UPDATE public.session_ctx_verified v
      SET base_set = true, nonce = NULL, uid = p[2]::UUID, sys = (p[3] = '1')
-   WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND NOT v.base_set AND v.nonce = p[4];
+   WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned() AND NOT v.base_set AND v.nonce = p[4];
   IF NOT FOUND THEN RETURN public.ctx_refused(); END IF;
   RETURN true;
 END;
@@ -165,14 +165,14 @@ $$ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, publ
 
 -- Records the acting hub and tenant of this transaction (the caller, lock_served_tenant, has already proven the delegation). Keeps a base context recorded in the same transaction.
 CREATE FUNCTION ctx_set_acting(p_hub_id UUID, p_tenant_id UUID) RETURNS VOID AS $$
-  INSERT INTO public.session_ctx_verified AS v (pid, txstart, acting_hub, acting_tenant)
-  VALUES (pg_backend_pid(), now(), p_hub_id, p_tenant_id)
+  INSERT INTO public.session_ctx_verified AS v (pid, xid, acting_hub, acting_tenant)
+  VALUES (pg_backend_pid(), pg_current_xact_id(), p_hub_id, p_tenant_id)
   ON CONFLICT (pid) DO UPDATE SET
-    uid           = CASE WHEN v.txstart = now() THEN v.uid END,
-    sys           = CASE WHEN v.txstart = now() THEN v.sys ELSE false END,
-    base_set      = CASE WHEN v.txstart = now() THEN v.base_set ELSE false END,
-    nonce         = CASE WHEN v.txstart = now() THEN v.nonce END,
-    txstart       = now(),
+    uid           = CASE WHEN v.xid = pg_current_xact_id() THEN v.uid END,
+    sys           = CASE WHEN v.xid = pg_current_xact_id() THEN v.sys ELSE false END,
+    base_set      = CASE WHEN v.xid = pg_current_xact_id() THEN v.base_set ELSE false END,
+    nonce         = CASE WHEN v.xid = pg_current_xact_id() THEN v.nonce END,
+    xid           = pg_current_xact_id(),
     acting_hub    = EXCLUDED.acting_hub,
     acting_tenant = EXCLUDED.acting_tenant;
 $$ LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
@@ -195,7 +195,7 @@ END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 CREATE FUNCTION ctx_verified(p_col TEXT) RETURNS TEXT AS $$
   SELECT CASE p_col WHEN 'uid' THEN v.uid::TEXT WHEN 'sys' THEN v.sys::TEXT WHEN 'hub' THEN v.acting_hub::TEXT WHEN 'tenant' THEN v.acting_tenant::TEXT END
-  FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();
+  FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned();
 $$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 REVOKE ALL ON FUNCTION ctx_measure(TEXT, TEXT, TEXT), ctx_verified(TEXT) FROM PUBLIC, omnira_app;
 
@@ -256,19 +256,19 @@ BEGIN
 
   ELSE
     EXECUTE format($q$CREATE OR REPLACE FUNCTION public.current_user_id() RETURNS UUID AS $b$
-      SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();
+      SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned();
     $b$ LANGUAGE sql STABLE%s$q$, sdef);
     EXECUTE format($q$CREATE OR REPLACE FUNCTION public.is_system_admin() RETURNS BOOLEAN AS $b$
-      SELECT COALESCE((SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now()), false);
+      SELECT COALESCE((SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned()), false);
     $b$ LANGUAGE sql STABLE%s$q$, sdef);
     EXECUTE format($q$CREATE OR REPLACE FUNCTION public.acting_hub() RETURNS UUID AS $b$
-      SELECT v.acting_hub FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();
+      SELECT v.acting_hub FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned();
     $b$ LANGUAGE sql STABLE%s$q$, sdef);
     EXECUTE format($q$CREATE OR REPLACE FUNCTION public.acting_tenant() RETURNS UUID AS $b$
-      SELECT v.acting_tenant FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();
+      SELECT v.acting_tenant FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned();
     $b$ LANGUAGE sql STABLE%s$q$, sdef);
     EXECUTE format($q$CREATE OR REPLACE FUNCTION public.ctx_acting_present() RETURNS BOOLEAN AS $b$
-      SELECT EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.acting_hub IS NOT NULL);
+      SELECT EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned() AND v.acting_hub IS NOT NULL);
     $b$ LANGUAGE sql STABLE%s$q$, sdef);
   END IF;
 
@@ -324,14 +324,14 @@ BEGIN
       SELECT (p_user_id = c.uid OR COALESCE(c.sys, false))
          AND NOT (c.acting_hub IS NOT NULL)
          AND EXISTS (SELECT 1 FROM public.memberships WHERE tenant_id = p_tenant_id AND user_id = p_user_id AND status = 'active')
-      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.txstart = now();
+      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.xid = pg_current_xact_id_if_assigned();
     $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
     EXECUTE $q$CREATE OR REPLACE FUNCTION public.has_active_admin_membership(p_tenant_id UUID, p_user_id UUID) RETURNS BOOLEAN AS $b$
       SELECT (p_user_id = c.uid OR COALESCE(c.sys, false))
          AND NOT (c.acting_hub IS NOT NULL)
          AND EXISTS (SELECT 1 FROM public.memberships m JOIN public.roles r ON m.role_id = r.id
                      WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND r.key = 'tenant_admin')
-      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.txstart = now();
+      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.xid = pg_current_xact_id_if_assigned();
     $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
     EXECUTE $q$CREATE OR REPLACE FUNCTION public.actor_has_permission(p_tenant_id UUID, p_user_id UUID, p_permission TEXT) RETURNS BOOLEAN AS $b$
       SELECT (p_user_id = c.uid OR COALESCE(c.sys, false))
@@ -341,7 +341,7 @@ BEGIN
                          WHERE m.tenant_id = p_tenant_id AND m.user_id = p_user_id AND m.status = 'active' AND rp.permission_key = p_permission)
                ELSE COALESCE(p_permission = ANY (public.delegated_permissions(p_tenant_id, p_user_id, c.acting_hub)), false)
              END
-      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.txstart = now();
+      FROM (SELECT 1) one LEFT JOIN public.session_ctx_verified c ON c.pid = pg_backend_pid() AND c.xid = pg_current_xact_id_if_assigned();
     $b$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp$q$;
   END IF;
 END;

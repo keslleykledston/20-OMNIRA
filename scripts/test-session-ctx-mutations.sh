@@ -83,34 +83,34 @@ M=000118_session_context_signed.up.sql; SC=internal/platform/sessionctx/sessionc
 # --- the signature -----------------------------------------------------------------------------------------------------------------------------
 sqlmut "any signature is accepted" $M "WHERE sha256(decode(sig, 'hex')) = sha256(public.hmac(convert_to(payload, 'UTF8'), k.key, 'sha256'))" "WHERE true"
 sqlmut "a token over a nonce the database did not issue to this transaction is accepted" $M "AND NOT v.base_set AND v.nonce = p[4];" "AND NOT v.base_set;"
-sqlmut "a token is accepted against the registry row of an earlier transaction" $M "WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND NOT v.base_set AND v.nonce = p[4];" "WHERE v.pid = pg_backend_pid() AND NOT v.base_set AND v.nonce = p[4];"
-sqlmut "a challenge forgets a context already accepted in the transaction" $M "    base_set      = CASE WHEN v.txstart = now() THEN v.base_set ELSE false END,
-    acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END,
-    acting_tenant = CASE WHEN v.txstart = now() THEN v.acting_tenant END,
-    txstart       = now(),
+sqlmut "a token is accepted against the registry row of an earlier transaction" $M "WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned() AND NOT v.base_set AND v.nonce = p[4];" "WHERE v.pid = pg_backend_pid() AND NOT v.base_set AND v.nonce = p[4];"
+sqlmut "a challenge forgets a context already accepted in the transaction" $M "    base_set      = CASE WHEN v.xid = pg_current_xact_id() THEN v.base_set ELSE false END,
+    acting_hub    = CASE WHEN v.xid = pg_current_xact_id() THEN v.acting_hub END,
+    acting_tenant = CASE WHEN v.xid = pg_current_xact_id() THEN v.acting_tenant END,
+    xid           = pg_current_xact_id(),
     nonce         = n;" "    base_set      = false,
-    acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END,
-    acting_tenant = CASE WHEN v.txstart = now() THEN v.acting_tenant END,
-    txstart       = now(),
+    acting_hub    = CASE WHEN v.xid = pg_current_xact_id() THEN v.acting_hub END,
+    acting_tenant = CASE WHEN v.xid = pg_current_xact_id() THEN v.acting_tenant END,
+    xid           = pg_current_xact_id(),
     nonce         = n;"
 sqlmut "the challenge nonce is predictable (constant)" $M "n TEXT := replace(gen_random_uuid()::TEXT, '-', '');" "n TEXT := repeat('a', 32);"
-sqlmut "a second context in the same transaction is accepted" $M "IF EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.base_set) THEN" "IF false THEN"
+sqlmut "a second context in the same transaction is accepted" $M "AND NOT v.base_set AND v.nonce = p[4];" "AND v.nonce = p[4];"
 sqlmut "a refusal does not raise in enforce" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF false THEN"
 sqlmut "a refusal raises in every mode" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF true THEN"
 # --- the registry ---------------------------------------------------------------------------------------------------------------------------------
-sqlmut "the verified context outlives its transaction (current_user_id)" $M "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();
+sqlmut "the verified context outlives its transaction (current_user_id)" $M "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned();
     \$b\$ LANGUAGE sql STABLE%s" "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid();
     \$b\$ LANGUAGE sql STABLE%s"
-sqlmut "the verified system flag outlives its transaction" $M "(SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now())" "(SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid())"
-sqlmut "enforce still believes the legacy administrator setting" $M "SELECT COALESCE((SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now()), false);" "SELECT COALESCE((SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now()), COALESCE(NULLIF(current_setting('app.is_system_admin', TRUE), '')::BOOLEAN, FALSE));"
-sqlmut "enforce still believes the legacy user setting" $M "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();
+sqlmut "the verified system flag outlives its transaction" $M "(SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned())" "(SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid())"
+sqlmut "enforce still believes the legacy administrator setting" $M "SELECT COALESCE((SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned()), false);" "SELECT COALESCE((SELECT v.sys FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned()), COALESCE(NULLIF(current_setting('app.is_system_admin', TRUE), '')::BOOLEAN, FALSE));"
+sqlmut "enforce still believes the legacy user setting" $M "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned();
     \$b\$ LANGUAGE sql STABLE%s\$q\$, sdef);
     EXECUTE format(\$q\$CREATE OR REPLACE FUNCTION public.is_system_admin() RETURNS BOOLEAN AS \$b\$
-      SELECT COALESCE((SELECT v.sys" "SELECT COALESCE((SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now()), NULLIF(current_setting('app.current_user_id', TRUE), '')::UUID);
+      SELECT COALESCE((SELECT v.sys" "SELECT COALESCE((SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned()), NULLIF(current_setting('app.current_user_id', TRUE), '')::UUID);
     \$b\$ LANGUAGE sql STABLE%s\$q\$, sdef);
     EXECUTE format(\$q\$CREATE OR REPLACE FUNCTION public.is_system_admin() RETURNS BOOLEAN AS \$b\$
       SELECT COALESCE((SELECT v.sys"
-sqlmut "enforce still believes the legacy acting setting" $M "SELECT v.acting_hub FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();" "SELECT COALESCE((SELECT v.acting_hub FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now()), NULLIF(current_setting('app.acting_hub', true), '')::UUID);"
+sqlmut "enforce still believes the legacy acting setting" $M "SELECT v.acting_hub FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned();" "SELECT COALESCE((SELECT v.acting_hub FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.xid = pg_current_xact_id_if_assigned()), NULLIF(current_setting('app.acting_hub', true), '')::UUID);"
 sqlmut "the application role can read the key tables" $M "REVOKE ALL ON session_ctx_keys, session_ctx_mode FROM PUBLIC, omnira_app;" "GRANT SELECT ON session_ctx_keys, session_ctx_mode TO omnira_app;"
 sqlmut "the application role can write the verified registry" $M "REVOKE ALL ON session_ctx_verified FROM PUBLIC, omnira_app;" "GRANT INSERT, UPDATE, DELETE, SELECT ON session_ctx_verified TO omnira_app;"
 sqlmut "the application role can install a key" $M "REVOKE ALL ON FUNCTION ctx_install_key(BYTEA), ctx_drop_previous_key() FROM PUBLIC, omnira_app;" "REVOKE ALL ON FUNCTION ctx_drop_previous_key() FROM PUBLIC, omnira_app;"
@@ -134,7 +134,7 @@ sqlmut "lock_served_tenant does not record the acting context" $M "  PERFORM pub
 " ""
 sqlmut "membership still answers while acting" $M "AND NOT (c.acting_hub IS NOT NULL)
          AND EXISTS (SELECT 1 FROM public.memberships WHERE" "AND EXISTS (SELECT 1 FROM public.memberships WHERE"
-sqlmut "ctx_begin keeps the acting context of an earlier transaction" $M "acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END," "acting_hub    = v.acting_hub,"
+sqlmut "a challenge keeps the acting context of an earlier transaction" $M "acting_hub    = CASE WHEN v.xid = pg_current_xact_id() THEN v.acting_hub END," "acting_hub    = v.acting_hub,"
 # --- the Go signer ----------------------------------------------------------------------------------------------------------------------------------
 mut "the signer always says not-system" $SC 'flag := "0"
 	if system {

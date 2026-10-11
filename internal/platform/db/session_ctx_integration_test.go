@@ -490,7 +490,7 @@ func TestTheApplicationRoleCannotReachTheKeyTheRegistryOrTheInternals(t *testing
 
 	t.Run("cannot write the registry to make itself somebody", func(t *testing.T) {
 		l.tx(func(tx pgx.Tx) {
-			if _, err := tx.Exec(l.ctx, `INSERT INTO session_ctx_verified (pid, txstart, uid, sys) VALUES (pg_backend_pid(), now(), gen_random_uuid(), true)`); err == nil {
+			if _, err := tx.Exec(l.ctx, `INSERT INTO session_ctx_verified (pid, xid, uid, sys) VALUES (pg_backend_pid(), pg_current_xact_id(), gen_random_uuid(), true)`); err == nil {
 				t.Error("inserted into the verified registry")
 			}
 		})

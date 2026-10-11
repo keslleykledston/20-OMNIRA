@@ -30,9 +30,9 @@ case "${1:-status}" in
   install-key)
     k=$(load_key)
     # the key travels inside a statement (through stdin, never in a process listing): refuse when the server logs statements, unless told otherwise
-    ls=$(owner -tA -c "SHOW log_statement")
-    if [ "$ls" != "none" ] && [ -z "${FORCE:-}" ]; then
-      echo "log_statement is '$ls': the key would be written to the database log. Set it to none (or FORCE=1 and rotate the key afterwards)." >&2; exit 2
+    logs=$(owner -tA -c "SELECT concat_ws(' ', current_setting('log_statement'), current_setting('log_min_duration_statement'), current_setting('log_min_duration_sample'), current_setting('log_parameter_max_length_on_error'))")
+    if [ "$logs" != "none -1 -1 0" ] && [ -z "${FORCE:-}" ]; then
+      echo "database logging could record the key (log_statement / log_min_duration_statement / log_min_duration_sample / log_parameter_max_length_on_error = '$logs', want 'none -1 -1 0'). Turn statement, duration and parameter logging off (or FORCE=1 and rotate the key afterwards)." >&2; exit 2
     fi
     printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$k" | owner -tA ;;
   drop-previous) owner -tA -c "SELECT public.ctx_drop_previous_key()" | sed 's/^/previous keys dropped: /' ;;
