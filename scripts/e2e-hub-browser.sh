@@ -24,6 +24,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ADR-0042: the real api and hubctl sign their sessions and the database ENFORCES the signed context (E2E_CTX_MODE=off|measure to compare)
+export OMNIRA_SESSION_CTX_KEY=c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4
 docker run -d --name "$PG" "${LBL[@]}" -e POSTGRES_USER=omnira -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=hubbrowser -p 127.0.0.1::5432 postgres:16-alpine >/dev/null
 docker run -d --name "$NATS" "${LBL[@]}" -p 127.0.0.1::4222 nats:2.10-alpine -js >/dev/null
 for i in $(seq 1 90); do [ "$(docker logs "$PG" 2>&1 | grep -c 'database system is ready to accept connections')" -ge 2 ] && break; sleep 1; done
@@ -37,7 +39,7 @@ psql_o -c "ALTER DATABASE hubbrowser SET omnira.e2e_run = '$NONCE'" >/dev/null
 
 echo "== migrations (production migrator)"
 docker run --rm --network "container:$PG" -v "$PWD/migrations:/migrations:ro" -v "$PWD/tools:/tools:ro" \
-  -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=hubbrowser postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
+  -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=hubbrowser -e OMNIRA_SESSION_CTX_KEY="$OMNIRA_SESSION_CTX_KEY" -e SESSION_CTX_MODE="${E2E_CTX_MODE:-enforce}" postgres:16-alpine sh /tools/migrate-sql.sh up | tail -3
 
 echo "== build the real binaries (host toolchain) and the web bundle"
 mkdir -p "$WORK/bin"

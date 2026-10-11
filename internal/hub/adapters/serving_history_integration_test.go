@@ -23,7 +23,6 @@ import (
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	"github.com/omnira/omnira/internal/platform/authn"
-	"github.com/omnira/omnira/internal/platform/sessionctx"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 )
@@ -290,9 +289,12 @@ func TestDelegatedAttendanceHistoryAndFollowUpsThroughTheRealRoutes(t *testing.T
 		})
 		// even with the platform-administrator flag on in the session, the acting context keeps to the key and to one instance: the member policies of these tables
 		// (has_active_membership OR is_system_admin) would otherwise open them (has_active_membership alone is already false in the acting context, migration 109)
-		w.attend(reader, "A", func(ctx context.Context, q platformdb.Querier) {
-			err := sessionctx.Set(ctx, q, uuid.Nil, true)
-			w.must(err)
+		// (the flag is on from the first statement of the transaction: a session context is accepted once per transaction, so it cannot be raised half-way)
+		w.must(platformdb.WithTenantSession(w.ctx, w.app, uuid.Nil, true, func(c context.Context) error {
+			ctx, q := c, platformdb.QuerierFromContext(c, w.app)
+			if !w.enter(ctx, q, reader, "A") {
+				t.Fatal("could not enter the delegated context as a platform administrator session")
+			}
 			var n, m int
 			w.must(q.QueryRow(ctx, `SELECT count(*) FROM conversation_closures WHERE tenant_id = $1`, w.tenant["B"]).Scan(&n))
 			w.must(q.QueryRow(ctx, `SELECT count(*) FROM follow_up_items WHERE tenant_id = $1`, w.tenant["B"]).Scan(&m))
@@ -311,7 +313,8 @@ func TestDelegatedAttendanceHistoryAndFollowUpsThroughTheRealRoutes(t *testing.T
 			if changed(ctx, q, w, `DELETE FROM follow_up_items WHERE id = $1`, fresh) {
 				t.Error("with the administrator flag a delegate deleted an item")
 			}
-		})
+			return nil
+		}))
 		if n := w.count(`SELECT count(*) FROM follow_up_items WHERE id = $1`, fresh); n != 1 {
 			t.Error("the item was deleted")
 		}

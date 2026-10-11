@@ -133,3 +133,5 @@ DROP FUNCTION IF EXISTS ctx_mode();
 DROP TABLE IF EXISTS session_ctx_verified;
 DROP TABLE IF EXISTS session_ctx_mode;
 DROP TABLE IF EXISTS session_ctx_keys;
+-- the extension was created by the up migration (nothing else in this schema uses it)
+DROP EXTENSION IF EXISTS pgcrypto;
