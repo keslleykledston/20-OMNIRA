@@ -137,7 +137,8 @@ mut "a malformed key is silently ignored" $SC 'return nil, fmt.Errorf("%s must b
 mut "a refused context is not counted" $SC '	if !ok {
 		noteRejected()
 	}' '	_ = ok'
-mut "the application does not ask the database to verify" $SC 'SELECT ctx_begin($1), set_config' 'SELECT true, set_config'
-mut "the legacy settings are not set next to the signed context (measure would diverge)" $SC "set_config('app.current_user_id', \$2, true), CASE" "set_config('app.x', \$2, true), CASE"
-mut "the legacy settings are not set when there is no key" $SC "q.Exec(ctx, \`SELECT set_config('app.current_user_id', \$1, true)\`, userID.String())" "q.Exec(ctx, \`SELECT 1\`)"
+mut "the application does not ask the database to verify" $SC "SELECT public.ctx_begin(\$1), pg_catalog.set_config" "SELECT true, pg_catalog.set_config"
+mut "the legacy settings are not set next to the signed context (measure would diverge)" $SC "pg_catalog.set_config('app.current_user_id', \$2, true), CASE" "pg_catalog.set_config('app.x', \$2, true), CASE"
+mut "the legacy user setting is not set when there is no key" $SC "SELECT set_config('app.current_user_id', \$1, true)" "SELECT set_config('app.x', \$1, true)"
+mut "the legacy administrator setting is not set when there is no key" $SC "SELECT set_config('app.is_system_admin', 'true', true)" "SELECT set_config('app.x', 'true', true)"
 echo "== all $N mutants killed"

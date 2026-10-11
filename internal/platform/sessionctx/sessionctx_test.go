@@ -132,7 +132,7 @@ func TestWithoutAKeyOnlyTheLegacySettingsAreSetAndNothingIsAskedOfTheDatabase(t 
 	if f.calls != 0 {
 		t.Error("ctx_begin was called without a key (it does not exist before migration 000118)")
 	}
-	if len(f.sql) != 2 || !strings.Contains(f.sql[1], "is_system_admin") {
+	if len(f.sql) != 2 || !strings.Contains(f.sql[0], "app.current_user_id") || !strings.Contains(f.sql[1], "app.is_system_admin") {
 		t.Errorf("legacy settings not set: %v", f.sql)
 	}
 }
