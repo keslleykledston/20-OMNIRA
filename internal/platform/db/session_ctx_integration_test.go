@@ -412,7 +412,7 @@ func TestTheApplicationRoleCannotReachTheKeyTheRegistryOrTheInternals(t *testing
 	t.Run("cannot call the owner-only and internal functions", func(t *testing.T) {
 		for _, fn := range []string{
 			"ctx_install_key(bytea)", "ctx_drop_previous_key()", "ctx_set_mode(text)", "ctx_install_readers(text)", "ctx_signed(text,text,integer)",
-			"ctx_set_acting(uuid,uuid)", "ctx_measure(text,text,text)", "ctx_verified(text)",
+			"ctx_set_acting(uuid,uuid)", "ctx_measure(text,text,text)", "ctx_verified(text)", "ctx_refused()",
 		} {
 			var can bool
 			if err := l.app.QueryRow(l.ctx, `SELECT has_function_privilege(current_user, $1, 'EXECUTE')`, fn).Scan(&can); err != nil {

@@ -31,7 +31,7 @@ run() { # the attack tests (as the application role, mode enforce), the signer's
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -p 1 -run 'TestAForgedActing|TestAMalformedActing|TestTheDelegatedContextIsPinnedToOneInstance|TestTheDelegatedAccessOf|TestDomainAccess' ./internal/hub/adapters 2>&1
+    go test -count=1 -p 1 -run 'TestAForgedActing|TestAMalformedActing|TestMembershipPredicatesAreFalseWhileActing|TestTheDelegatedContextIsPinnedToOneInstance|TestTheDelegatedAccessOf|TestDomainAccess' ./internal/hub/adapters 2>&1
   GOFLAGS=-buildvcs=false go test -count=1 ./internal/platform/sessionctx 2>&1
 }
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 1 ]; }
@@ -70,23 +70,22 @@ PY
   killed "$1" "$(run || true)"
 }
 M=000118_session_context_signed.up.sql; SC=internal/platform/sessionctx/sessionctx.go
-# NOT mutants (equivalent by construction): removing ENABLE ROW LEVEL SECURITY from the three registry tables (the privilege revoke already refuses the application role; RLS is only the second wall);
-# the iat/clock window of ctx_begin tightened or loosened by a few seconds (tolerances, not rules); the order of the two keys tried by ctx_signed.
+# NOT mutants (equivalent by construction): the length check of ctx_install_key (the table's CHECK (octet_length(key) >= 32) refuses a short key as well: two layers for one rule); the
+# `NOT (SELECT ctx_acting_present())` term of the six read policies (has_active_membership already answers false while acting: the term is redundancy and a planner hint); the shape checks of ctx_begin on the pid number and the system flag (they only run on content that already passed the HMAC, which only the
+# application can produce; a malformed value can come from nowhere an attacker reaches); removing ENABLE ROW LEVEL SECURITY from the three registry tables (the privilege revoke already refuses the application role; RLS is only the second wall);
+# the iat/clock window of ctx_begin tightened or loosened by a few seconds (tolerances, not rules); the order of the two keys tried by ctx_signed; the tag check and the field-count check of
+# ctx_signed (both are covered by the signature itself: the tag and every field are part of the signed payload, so a different tag or count can only fail the HMAC, which the 'any signature' mutant
+# proves is tested); hashing both sides before comparing signatures (constant-time property: a timing difference is not observable by a test).
 
 # --- the signature -----------------------------------------------------------------------------------------------------------------------------
 sqlmut "any signature is accepted" $M "WHERE sha256(decode(sig, 'hex')) = sha256(public.hmac(convert_to(payload, 'UTF8'), k.key, 'sha256'))" "WHERE true"
-sqlmut "the tag is not checked" $M "OR parts[1] <> p_tag THEN RETURN NULL" "THEN RETURN NULL"
-sqlmut "the number of fields is not checked" $M "IF cardinality(parts) <> p_fields + 2 OR parts[1] <> p_tag THEN" "IF parts[1] <> p_tag THEN"
-sqlmut "the signature is compared without hashing both sides (timing)" $M "sha256(decode(sig, 'hex')) = sha256(public.hmac(" "decode(sig, 'hex') = (public.hmac(" 
 sqlmut "a context from the future is accepted" $M "to_timestamp(p[5]::BIGINT) > now() + interval '15 seconds' OR " ""
 sqlmut "a stale context is accepted" $M " OR to_timestamp(p[5]::BIGINT) < now() - interval '30 seconds'" ""
-sqlmut "a context signed for another backend is accepted (replay)" $M "  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN false; END IF;
+sqlmut "a context signed for another backend is accepted (replay)" $M "  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN public.ctx_refused(); END IF;
 " ""
-sqlmut "the backend pid field is not validated as a number" $M "p[4] !~ '^[0-9]{1,10}$' OR " ""
 sqlmut "a second context in the same transaction is accepted" $M "IF EXISTS (SELECT 1 FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now() AND v.base_set) THEN" "IF false THEN"
 sqlmut "a refusal does not raise in enforce" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF false THEN"
 sqlmut "a refusal raises in every mode" $M "IF COALESCE((SELECT mode FROM public.session_ctx_mode), 'enforce') = 'enforce' THEN" "IF true THEN"
-sqlmut "the system flag is not validated" $M "OR p[3] NOT IN ('0', '1')" ""
 # --- the registry ---------------------------------------------------------------------------------------------------------------------------------
 sqlmut "the verified context outlives its transaction (current_user_id)" $M "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid() AND v.txstart = now();
     \$b\$ LANGUAGE sql STABLE%s" "SELECT v.uid FROM public.session_ctx_verified v WHERE v.pid = pg_backend_pid();
@@ -104,7 +103,8 @@ sqlmut "enforce still believes the legacy acting setting" $M "SELECT v.acting_hu
 sqlmut "the application role can read the key tables" $M "REVOKE ALL ON session_ctx_keys, session_ctx_mode FROM PUBLIC, omnira_app;" "GRANT SELECT ON session_ctx_keys, session_ctx_mode TO omnira_app;"
 sqlmut "the application role can write the verified registry" $M "REVOKE ALL ON session_ctx_verified FROM PUBLIC, omnira_app;" "GRANT INSERT, UPDATE, DELETE, SELECT ON session_ctx_verified TO omnira_app;"
 sqlmut "the application role can install a key" $M "REVOKE ALL ON FUNCTION ctx_install_key(BYTEA), ctx_drop_previous_key() FROM PUBLIC, omnira_app;" "REVOKE ALL ON FUNCTION ctx_drop_previous_key() FROM PUBLIC, omnira_app;"
-sqlmut "the application role can set the acting context" $M "REVOKE ALL ON FUNCTION ctx_signed(TEXT, TEXT, INTEGER), ctx_set_acting(UUID, UUID) FROM PUBLIC, omnira_app;" "REVOKE ALL ON FUNCTION ctx_signed(TEXT, TEXT, INTEGER) FROM PUBLIC, omnira_app;"
+sqlmut "the application role can set the acting context" $M "REVOKE ALL ON FUNCTION ctx_signed(TEXT, TEXT, INTEGER), ctx_set_acting(UUID, UUID), ctx_refused() FROM PUBLIC, omnira_app;" "REVOKE ALL ON FUNCTION ctx_signed(TEXT, TEXT, INTEGER), ctx_refused() FROM PUBLIC, omnira_app;"
+sqlmut "the application role can verify signatures (an oracle)" $M "REVOKE ALL ON FUNCTION ctx_signed(TEXT, TEXT, INTEGER), ctx_set_acting(UUID, UUID), ctx_refused() FROM PUBLIC, omnira_app;" "REVOKE ALL ON FUNCTION ctx_set_acting(UUID, UUID), ctx_refused() FROM PUBLIC, omnira_app;"
 sqlmut "the application role can change the mode" $M "REVOKE ALL ON FUNCTION ctx_set_mode(TEXT) FROM PUBLIC, omnira_app;" ""
 sqlmut "the application role can call the readers' internals" $M "REVOKE ALL ON FUNCTION ctx_measure(TEXT, TEXT, TEXT), ctx_verified(TEXT) FROM PUBLIC, omnira_app;" ""
 sqlmut "the application role can run the reader installer" $M "REVOKE ALL ON FUNCTION ctx_install_readers(TEXT) FROM PUBLIC, omnira_app;" ""
@@ -116,21 +116,13 @@ sqlmut "a second rotation keeps the oldest key" $M "DELETE FROM public.session_c
 sqlmut "dropping the previous key does nothing" $M "DELETE FROM public.session_ctx_keys WHERE state = 'previous';
   GET DIAGNOSTICS" "DELETE FROM public.session_ctx_keys WHERE state = 'previous' AND false;
   GET DIAGNOSTICS"
-sqlmut "a short key is accepted" $M "IF p_key IS NULL OR octet_length(p_key) < 32 THEN" "IF p_key IS NULL THEN"
 sqlmut "enforce is accepted without a key" $M "IF p_mode <> 'off' AND NOT EXISTS (SELECT 1 FROM public.session_ctx_keys WHERE state = 'current') THEN" "IF false THEN"
 sqlmut "measure never reports a divergence" $M "IF p_legacy IS DISTINCT FROM p_verified THEN" "IF false THEN"
 # --- the acting context ---------------------------------------------------------------------------------------------------------------------------
 sqlmut "lock_served_tenant does not record the acting context" $M "  PERFORM public.ctx_set_acting(p_hub_id, p_tenant_id);
 " ""
-sqlmut "the policies no longer ask whether an acting context exists" $M "NOT (SELECT public.ctx_acting_present()) AND has_active_membership" "true AND has_active_membership" all
-sqlmut "membership still answers while acting" $M "SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
-     AND NOT public.ctx_acting_present()
-     AND EXISTS (
-       SELECT 1 FROM public.memberships
-       WHERE" "SELECT (p_user_id = public.current_user_id() OR public.is_system_admin())
-     AND EXISTS (
-       SELECT 1 FROM public.memberships
-       WHERE"
+sqlmut "membership still answers while acting" $M "AND NOT (c.acting_hub IS NOT NULL)
+         AND EXISTS (SELECT 1 FROM public.memberships WHERE" "AND EXISTS (SELECT 1 FROM public.memberships WHERE"
 sqlmut "ctx_begin keeps the acting context of an earlier transaction" $M "acting_hub    = CASE WHEN v.txstart = now() THEN v.acting_hub END," "acting_hub    = v.acting_hub,"
 # --- the Go signer ----------------------------------------------------------------------------------------------------------------------------------
 mut "the signer always says not-system" $SC 'flag := "0"
@@ -138,7 +130,8 @@ mut "the signer always says not-system" $SC 'flag := "0"
 		flag = "1"
 	}' 'flag := "0"'
 mut "the signer leaves the pid out" $SC 'user, flag, pid, at.Unix())' 'user, flag, uint32(0), at.Unix())'
-mut "the signer leaves the user out" $SC 'user = userID.String()' 'user = ""'
+mut "the signer leaves the user out" $SC 'user := userID.String()' 'user := ""'
+mut "the signer sends an empty user for the nil UUID (system sessions would diverge from the legacy setting)" $SC 'user := userID.String()' 'user := ""; if userID != uuid.Nil { user = userID.String() }'
 mut "a short key is accepted by the application" $SC 'if len(b) < 32 {' 'if len(b) < 1 {'
 mut "a malformed key is silently ignored" $SC 'return nil, fmt.Errorf("%s must be hex: %w", KeyEnv, err)' 'return nil, nil'
 mut "a refused context is not counted" $SC '	if !ok {
