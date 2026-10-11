@@ -313,7 +313,7 @@ O dono mandou seguir na fase 05 sem responder às três perguntas que ficaram em
 3. **Visibilidade herdada do contato** (e, portanto, das conversas dele, filas do contrato incluídas): um contato sem conversa nas filas do contrato não mostra memória nenhuma.
 4. **Concluir uma pendência é escrita pequena e direta, não o caminho de escrita do Hub:** `follow_up_items_resolve_delegated` só abre uma pendência ABERTA, só a deixa `done`/`dropped` e assinada pela própria pessoa, e exige as DUAS chaves (um UPDATE lê o que altera). O serviço ganhou `ResolveFollowUpAsHubAgent` (sem a matriz de papéis, que não diz nada sobre quem não é membro; a rota `Delegable("followup.resolve")` e o banco provam a chave); a auditoria `followup.resolved` já nomeia o Hub pelo repositório de auditoria.
 5. **Nenhum delegado insere fechamento ou pendência:** `*_acting_no_insert` (restritivas). Fechar continua no caminho de escrita do Hub (116, sessão de sistema).
-6. **A busca em mensagens anteriores (`history-search`) continua FECHADA ao delegado** (fora da lista de rotas delegáveis; teste prova a recusa): ela lê o texto das conversas, já coberto por `conversation.read`, e não faz parte desta fatia.
+6. **[SUPERADO pela fase 09, §23]** A busca em mensagens anteriores (`history-search`) ficou FECHADA ao delegado na fase 06 e foi aberta na fase 09 com `attendance.history` + `conversation.read` (as políticas de leitura de `messages` respondem a qualquer concessão viva, então a chave de leitura é cobrada no handler). Texto original desta decisão: **A busca em mensagens anteriores (`history-search`) continua FECHADA ao delegado** (fora da lista de rotas delegáveis; teste prova a recusa): ela lê o texto das conversas, já coberto por `conversation.read`, e não faz parte desta fatia.
 7. **Front:** o painel de memória (o mesmo do membro) aparece no painel delegado só com `attendance.history`; os botões Concluir/Descartar só com `followup.resolve`; sem a chave a tela diz que o histórico não está liberado. Cache de consulta separado do do membro.
 8. **Colunas travadas no banco (achado do Codex, corrigido):** a política de UPDATE controla linhas e estado final, não colunas; o gatilho `follow_up_items_acting_columns` recusa, no contexto delegado, qualquer mudança além da resolução (status, quem, quando, nota): texto, contato, conversa, fechamento, dono, prazo e origem ficam como estavam. As políticas restritivas leem `(SELECT acting_hub())` (InitPlan, como na 114) para que a leitura de um membro não pague uma chamada por linha.
 
@@ -382,3 +382,22 @@ diz `not_permitted`; janela fechada; falha depois do aviso; chave tomada; 400), 
 um mutante equivalente documentado no script).
 
 **Não provado:** entrega real por WhatsApp (o teste vai até a mensagem enfileirada e o job); login real do Keycloak; implantação.
+
+## 23. Fase 09 (busca no histórico do contato pelo Hub, sem migration) — local, ver o estado de implantação no HUB-VERIFICATION-STATUS
+
+**O que a pessoa do Hub passa a poder:** buscar trechos nas mensagens ANTERIORES do mesmo contato (`GET .../inbox/conversations/{id}/history-search`), com as chaves `attendance.history` (a rota) e `conversation.read` (provada pelo handler). Era a última rota de atendimento
+deliberadamente fechada ao delegado (fase 06).
+
+**Decisões e achado do teste**
+1. **A busca é um `SELECT` comum sobre `messages` ⨝ `conversations` na sessão RLS do pedido**, para UM contato derivado da conversa, excluindo a conversa atual. Então o que ela acha é, no máximo, o que as políticas delegadas já mostram àquela pessoa: instância
+   fixada, escopo de filas do contrato, outra instância invisível.
+2. **Achado do teste (por isso o handler checa `conversation.read`):** as políticas de leitura de `messages` respondem a QUALQUER concessão viva; a chave `conversation.read` é cobrada na aplicação. Uma pessoa com só `attendance.history` leu texto de outras conversas
+   (primeira versão do teste, vermelho). Corrigido: `hubAgentMayRead` (extraído do handler do rascunho de IA, comportamento do rascunho inalterado) exige `conversation.read` para a origem `hub_serve`; e a rota só é delegável quando o servidor injeta essa verificação (como o rascunho:
+   sem ela, fechada).
+3. **Tela:** o campo de busca aparece no painel do Hub só com `attendance.history` e `conversation.read` (a decisão é do servidor).
+
+**Provas (POSTGRES + HTTP, papel real `omnira_app`, rota real):** `serving_history_search_integration_test.go` — com a chave acha as conversas antigas do contato na instância e nada da outra, deixa a conversa atual de fora, 404/400 nos casos de borda; sem a chave 403; só com `attendance.history` 403 e nenhum texto;
+contrato restrito a uma fila não acha texto das conversas fora do escopo; o caminho do membro inalterado. **Mutação** (`scripts/test-hub-history-mutations.sh`, 21 mutantes, os 3 novos mortos): rota não delegável, chave que todo delegado tem, `conversation.read` não cobrada. **Vitest:** 868 de 869 (a falha de sempre,
+`SettingsShell`); `DelegatedHistory.test.tsx` cobre a busca com e sem as chaves. A lista exata das rotas delegáveis (`delegable_routes_test.go`) ganhou a rota.
+
+**Não provado:** uso por pessoa real do Hub; implantação.

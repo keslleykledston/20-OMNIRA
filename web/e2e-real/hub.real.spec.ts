@@ -452,6 +452,16 @@ test('memória do contato pelo Hub (fase 06): histórico e pendências só com a
   const memory = page.getByRole('region', { name: 'Histórico do contato' });
   await expect(memory).toContainText('ligar de volta (E2E 06)');
   await expect(memory).toContainText('Atendimentos anteriores');
+  // fase 09: a busca no histórico do contato acha o texto de uma conversa ANTERIOR do mesmo contato (a conversa antiga é criada agora e removida logo depois)
+  const olderId = randomUUID();
+  sql(`INSERT INTO conversations (id, tenant_id, contact_id, queue_id, status) SELECT '${olderId}', tenant_id, contact_id, queue_id, 'closed' FROM conversations WHERE tenant_id = '${env.tb}' LIMIT 1`);
+  sql(`INSERT INTO messages (tenant_id, conversation_id, direction, message_type, body) VALUES ('${env.tb}', '${olderId}', 'inbound', 'text', 'meu boleto antigo (E2E 09)')`);
+  const finder = page.getByRole('region', { name: 'Buscar no histórico' });
+  await finder.getByLabel('Buscar no histórico do contato').fill('boleto antigo');
+  await finder.getByRole('button', { name: 'Buscar' }).click();
+  await expect(finder).toContainText('meu boleto antigo (E2E 09)');
+  sql(`DELETE FROM messages WHERE conversation_id = '${olderId}'`);
+  sql(`DELETE FROM conversations WHERE id = '${olderId}'`);
   await memory.getByRole('button', { name: 'Concluir: ligar de volta (E2E 06)' }).click();
   await expect.poll(() => sql(`SELECT status || '|' || resolved_by_user_id FROM follow_up_items WHERE text = 'ligar de volta (E2E 06)' AND tenant_id = '${env.tb}'`)).toBe(`done|${bruno.id}`);
   expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND actor_id = '${bruno.id}' AND action = 'followup.resolved' AND metadata->>'acting_as' = 'hub:${env.hub}'`))).toBe(1);

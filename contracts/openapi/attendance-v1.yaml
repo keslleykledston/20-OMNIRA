@@ -78,7 +78,9 @@ paths:
         Text search over the messages of the SAME contact in its other conversations (the contact is derived from the
         conversation, never from the request). `q` has 2 to 100 characters and is literal (wildcards are not special);
         `limit` max 8, default 5. Snippets are short, cleaned, and replaced when they look like a credential. Any active
-        member may read.
+        member may read. A Hub agent attending the instance (header `X-Omnira-Acting-As`, ADR-0040 phase 09) needs the
+        delegated keys `attendance.history` AND `conversation.read`; the search then covers only what the delegated
+        policies show that person (the instance and the queue scope of the grant). Otherwise `403`.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/ConversationId' }
@@ -88,6 +90,7 @@ paths:
         '200': { description: Matches, newest first, content: { application/json: { schema: { $ref: '#/components/schemas/HistoryHits' } } } }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/contacts/{contact_id}/attendance-history:

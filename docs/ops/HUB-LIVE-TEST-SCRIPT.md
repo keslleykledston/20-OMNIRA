@@ -113,3 +113,10 @@ Pré-requisitos: o preset `completo_fin` (traz `conversation.reply`). **Com "Avi
 3. Com a janela de 24 h do WhatsApp oficial fechada (ou sem linha ativa), finalize com o aviso marcado: a conversa fecha mesmo assim e a tela diz "O aviso ao cliente não foi enviado: <motivo>".
 4. Com um preset **sem** `conversation.reply` (ex.: `--keys conversation.read,conversation.claim,conversation.finalize`) a conversa fecha, nada é enviado e o motivo é "você não tem permissão para escrever ao cliente".
 5. Auditoria: `hub.conversation.finalized` traz o estado do aviso (`queued`, ...), nunca o texto.
+
+## Q. Busca no histórico do contato (fase 09; chaves `attendance.history` + `conversation.read`)
+Pré-requisitos: uma pessoa do Hub com preset que traga as duas chaves (ex.: `completo_hist`), e um contato com mais de uma conversa na mesma instância (ex.: uma encerrada e uma aberta).
+1. Abra a conversa aberta pelo Hub; no painel de contexto, "Histórico do contato" → busque um trecho que só aparece na conversa antiga ("boleto"). O trecho aparece com data e quem falou; a conversa que você está olhando não aparece.
+2. Sem `attendance.history` (outro preset) o campo de busca não aparece e uma chamada direta à rota devolve 403.
+3. Com o contrato restrito a algumas filas, a busca não acha texto de conversas de filas fora do escopo.
+4. Nada de outra instância aparece, mesmo servindo as duas.
