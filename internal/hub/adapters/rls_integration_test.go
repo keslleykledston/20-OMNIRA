@@ -94,6 +94,14 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
+// enforced reports whether the database trusts ONLY signed session contexts (ADR-0042 mode "enforce"). In that mode the legacy settings are ignored, so the tests
+// that forge them assert that forging changes nothing; in the legacy modes they assert the older fail-closed behavior.
+func (w *world) enforced() bool {
+	var mode string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT mode FROM session_ctx_mode`).Scan(&mode))
+	return mode == "enforce"
+}
+
 func (w *world) conversation(tenant, contact uuid.UUID, queue *uuid.UUID) uuid.UUID {
 	id := uuid.New()
 	w.exec(`INSERT INTO conversations (id, tenant_id, contact_id, queue_id) VALUES ($1, $2, $3, $4)`, id, tenant, contact, queue)

@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"fmt"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"math/rand"
 	"sync"
 	"testing"
@@ -13,7 +14,7 @@ import (
 
 	"github.com/omnira/omnira/internal/media/application"
 	"github.com/omnira/omnira/internal/media/ports"
-	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	"github.com/omnira/omnira/internal/testhelpers"
 )
 
@@ -532,7 +533,7 @@ func TestClaimDoesNotRaceASuspensionInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(e.ctx) }()
-	if _, err := tx.Exec(e.ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+	if err := sessionctx.Set(e.ctx, tx, uuid.Nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, tenant); err != nil {

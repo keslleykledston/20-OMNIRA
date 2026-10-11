@@ -2,6 +2,7 @@ package testhelpers
 
 import (
 	"context"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,7 +21,7 @@ func CreateTenantWithRLS(ctx context.Context, seedPool *pgxpool.Pool, tenantID u
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+	if err := sessionctx.Set(ctx, tx, uuid.Nil, true); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tenantID, legalName); err != nil {
@@ -41,7 +42,7 @@ func ExecInTenant(ctx context.Context, seedPool *pgxpool.Pool, sql string, args 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+	if err := sessionctx.Set(ctx, tx, uuid.Nil, true); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, sql, args...); err != nil {
@@ -62,7 +63,7 @@ func QueryInTenant(ctx context.Context, seedPool *pgxpool.Pool, sql string, args
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+	if err := sessionctx.Set(ctx, tx, uuid.Nil, true); err != nil {
 		return nil, err
 	}
 	row := tx.QueryRow(ctx, sql, args...)

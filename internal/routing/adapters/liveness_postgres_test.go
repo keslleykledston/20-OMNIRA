@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	"testing"
 	"time"
 
@@ -418,7 +419,7 @@ func TestRetrigger_ASuspensionInFlightIsNotRaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+	if err := sessionctx.Set(ctx, tx, uuid.Nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, f.tenantID); err != nil {

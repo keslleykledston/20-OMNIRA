@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,7 +16,7 @@ import (
 	"github.com/omnira/omnira/internal/intelligence/application"
 	"github.com/omnira/omnira/internal/intelligence/domain"
 	"github.com/omnira/omnira/internal/intelligence/ports"
-	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -447,7 +448,7 @@ func TestAnAIJobClaimDoesNotRaceASuspensionInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(e.ctx) }()
-	if _, err := tx.Exec(e.ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+	if err := sessionctx.Set(e.ctx, tx, uuid.Nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, a.id); err != nil {

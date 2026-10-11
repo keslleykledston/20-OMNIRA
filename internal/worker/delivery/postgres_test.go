@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	"sync"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 			return 0, err
 		}
 		defer tx.Rollback(execCtx)
-		if _, err := tx.Exec(execCtx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		if err := sessionctx.Set(execCtx, tx, uuid.Nil, true); err != nil {
 			return 0, err
 		}
 		tag, err := tx.Exec(execCtx, sql, args...)
@@ -101,7 +102,7 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 			t.Fatalf("begin: %v", err)
 		}
 		defer tx.Rollback(ctx)
-		if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		if err := sessionctx.Set(ctx, tx, uuid.Nil, true); err != nil {
 			t.Fatalf("set_config: %v", err)
 		}
 		if _, err := tx.Exec(ctx, sql, args...); err != nil {
@@ -136,7 +137,7 @@ func TestPostgresDeliveryStateMachine(t *testing.T) {
 			t.Fatalf("begin for row: %v", err)
 		}
 		defer tx.Rollback(ctx)
-		if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		if err := sessionctx.Set(ctx, tx, uuid.Nil, true); err != nil {
 			t.Fatalf("set_config for row: %v", err)
 		}
 		if err := tx.QueryRow(ctx, `SELECT status, provider_message_id, failure_reason FROM messages WHERE id=$1`, id).Scan(&status, &provider, &reason); err != nil {
@@ -300,7 +301,7 @@ func TestReservedProviderMessageIDCommitsBeforeProviderCallIsVisibleIndependentl
 			t.Fatalf("begin: %v", err)
 		}
 		defer tx.Rollback(execCtx)
-		if _, err := tx.Exec(execCtx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		if err := sessionctx.Set(execCtx, tx, uuid.Nil, true); err != nil {
 			t.Fatalf("set_config: %v", err)
 		}
 		if _, err := tx.Exec(execCtx, sql, args...); err != nil {
@@ -369,7 +370,7 @@ func TestReservedProviderMessageIDCommitsBeforeProviderCallIsVisibleIndependentl
 			return err
 		}
 		defer tx.Rollback(independentCtx)
-		if _, err := tx.Exec(independentCtx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		if err := sessionctx.Set(independentCtx, tx, uuid.Nil, true); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(independentCtx, `SELECT reserved_provider_message_id FROM messages WHERE id=$1`, msgID).Scan(&seen); err != nil {

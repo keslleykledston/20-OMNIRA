@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"context"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 	"github.com/omnira/omnira/internal/outbox/adapters"
 	"github.com/omnira/omnira/internal/outbox/application"
 	"github.com/omnira/omnira/internal/outbox/domain"
-	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	"github.com/omnira/omnira/internal/testhelpers"
 )
 
@@ -71,7 +72,7 @@ func TestPublisherRuntimeRoleEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+	if err := sessionctx.Set(ctx, tx, uuid.Nil, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,'Publisher test','active')`, tenantID); err != nil {

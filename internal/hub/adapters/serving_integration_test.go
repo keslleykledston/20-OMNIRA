@@ -313,10 +313,42 @@ func TestAForgedActingContextConfersNothingItWasNotGranted(t *testing.T) {
 	g := w.grant(agent, "A")
 	w.ceiling("A", "conversation.read")
 	w.grantKeys(g, "conversation.read")
-	// the application role can write the setting itself (the trust limit documented in ADR-0040 section 7); the predicates still decide from the live relationship
-	w.inSession(member, func(ctx context.Context, q platformdb.Querier) {
+	keys := []string{"conversation.read", "conversation.claim", "ticket.create", "contact.classify", "membership.read", "conversation.reply"}
+	answers := func(ctx context.Context, q platformdb.Querier, user uuid.UUID, tenant string) map[string]bool {
+		out := map[string]bool{}
+		for _, k := range keys {
+			out[k] = w.hasPerm(ctx, q, user, tenant, k)
+		}
+		out["domain:read"] = w.domainAccess(ctx, q, user, tenant, "conversation", "read")
+		out["domain:write"] = w.domainAccess(ctx, q, user, tenant, "conversation", "write")
+		return out
+	}
+	forge := func(ctx context.Context, q platformdb.Querier) {
 		_, err := q.Exec(ctx, `SELECT set_config('app.acting_hub', $1, true)`, w.hub.String())
 		w.must(err)
+	}
+	if w.enforced() {
+		// ADR-0042: in mode enforce the legacy setting is not read at all, so forging it changes NOTHING about what the session may do (not even the member's own privileges)
+		for _, user := range []uuid.UUID{member, agent} {
+			for _, tenant := range []string{"A", "B"} {
+				var before, after map[string]bool
+				w.inSession(user, func(ctx context.Context, q platformdb.Querier) {
+					before = answers(ctx, q, user, tenant)
+					forge(ctx, q)
+					after = answers(ctx, q, user, tenant)
+				})
+				for k, v := range before {
+					if after[k] != v {
+						t.Errorf("enforce: forging app.acting_hub changed %s for %s on %s (%v -> %v)", k, user, tenant, v, after[k])
+					}
+				}
+			}
+		}
+		return
+	}
+	// the application role can write the setting itself (the trust limit documented in ADR-0040 section 7); in the legacy modes the predicates still decide from the live relationship
+	w.inSession(member, func(ctx context.Context, q platformdb.Querier) {
+		forge(ctx, q)
 		for _, k := range []string{"conversation.read", "conversation.claim", "ticket.create"} {
 			if w.hasPerm(ctx, q, member, "A", k) {
 				t.Errorf("a member forging the context must get nothing (and lose the member privileges, which is harmless): %q", k)
@@ -327,8 +359,7 @@ func TestAForgedActingContextConfersNothingItWasNotGranted(t *testing.T) {
 		}
 	})
 	w.inSession(agent, func(ctx context.Context, q platformdb.Querier) {
-		_, err := q.Exec(ctx, `SELECT set_config('app.acting_hub', $1, true)`, w.hub.String())
-		w.must(err)
+		forge(ctx, q)
 		if !w.hasPerm(ctx, q, agent, "A", "conversation.read") || w.hasPerm(ctx, q, agent, "A", "conversation.reply") {
 			t.Error("forging the context without the door still yields exactly the live grant, no more")
 		}
@@ -880,20 +911,42 @@ func TestAMalformedActingSettingIsNoContextAndNeverAnError(t *testing.T) {
 	for _, bad := range []string{"not-a-uuid", "00000000-0000-0000-0000-00000000000z", "'; DROP TABLE users; --", " ", "hub:" + w.hub.String()} {
 		for _, user := range []uuid.UUID{agent, member} {
 			w.inSession(user, func(ctx context.Context, q platformdb.Querier) {
+				observe := func() (bool, bool, map[string]int) {
+					var perm, access bool
+					if err := q.QueryRow(ctx, `SELECT actor_has_permission($1,$2,'conversation.read'), has_delegated_access($1,$2,'conversation','read')`, w.tenant["A"], user).Scan(&perm, &access); err != nil {
+						t.Errorf("%q: the predicates must answer, not fail: %v", bad, err)
+					}
+					rows := map[string]int{}
+					for _, table := range []string{"contacts", "message_media", "message_media_analysis", "audit_events"} {
+						var n int
+						if err := q.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, w.tenant["A"]).Scan(&n); err != nil {
+							t.Errorf("%q: reading %s must not fail: %v", bad, table, err)
+						}
+						rows[table] = n
+					}
+					return perm, access, rows
+				}
+				perm0, access0, rows0 := observe()
 				_, err := q.Exec(ctx, `SELECT set_config('app.acting_hub', $1, true)`, bad)
 				w.must(err)
-				var perm, access bool
-				if err := q.QueryRow(ctx, `SELECT actor_has_permission($1,$2,'conversation.read'), has_delegated_access($1,$2,'conversation','read')`, w.tenant["A"], user).Scan(&perm, &access); err != nil {
-					t.Errorf("%q: the predicates must answer, not fail: %v", bad, err)
+				perm, access, rows := observe()
+				if w.enforced() {
+					// mode enforce: the setting is not read, so a bad value changes nothing and is never an error
+					if perm != perm0 || access != access0 {
+						t.Errorf("%q: forging the setting changed the answers (perm %v->%v access %v->%v)", bad, perm0, perm, access0, access)
+					}
+					for table, n := range rows {
+						if n != rows0[table] {
+							t.Errorf("%q: forging the setting changed what %s shows (%d -> %d)", bad, table, rows0[table], n)
+						}
+					}
+					return
 				}
 				if perm || access {
 					t.Errorf("%q: a malformed setting conferred something (perm=%v access=%v)", bad, perm, access)
 				}
-				for _, table := range []string{"contacts", "message_media", "message_media_analysis", "audit_events"} {
-					var n int
-					if err := q.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, w.tenant["A"]).Scan(&n); err != nil {
-						t.Errorf("%q: reading %s must not fail: %v", bad, table, err)
-					} else if n != 0 {
+				for table, n := range rows {
+					if n != 0 {
 						t.Errorf("%q: %s showed %d row(s) under a malformed acting setting", bad, table, n)
 					}
 				}

@@ -15,6 +15,9 @@
 #                       running it. Use once to adopt a database whose schema was applied by hand.
 #   APP_DB_PASSWORD     if set, sets the password of the application role omnira_app after migrating
 #                       (migration 000006 creates it with the development password "omnira_app").
+#   OMNIRA_SESSION_CTX_KEY  ADR-0042: hex key (>= 64 hex characters) the application signs its session contexts with; installed in the database after migrating
+#                       (the previous key stays accepted until ctx_drop_previous_key, so a rotation never logs anybody out). Same variable the api and worker read.
+#   SESSION_CTX_MODE    off|measure|enforce: also set the verification mode (the gate uses it; operations use scripts/session-ctx.sh).
 set -eu
 export PGOPTIONS="${PGOPTIONS:-} -c client_min_messages=warning"
 
@@ -63,6 +66,18 @@ case "$CMD" in
     if [ -n "${APP_DB_PASSWORD:-}" ]; then
       printf "ALTER ROLE omnira_app PASSWORD :'pw';\n" | psql_run -v pw="$APP_DB_PASSWORD"
       echo "omnira_app password set from APP_DB_PASSWORD"
+    fi
+    if [ -n "${OMNIRA_SESSION_CTX_KEY:-}" ]; then
+      case "$OMNIRA_SESSION_CTX_KEY" in
+        *[!0-9a-fA-F]*) echo "OMNIRA_SESSION_CTX_KEY must be hex" >&2; exit 2 ;;
+      esac
+      [ "${#OMNIRA_SESSION_CTX_KEY}" -ge 64 ] || { echo "OMNIRA_SESSION_CTX_KEY must have at least 64 hex characters (32 bytes)" >&2; exit 2; }
+      # through stdin: the key never appears in a process listing
+      res=$(printf "SELECT public.ctx_install_key(decode('%s','hex'));\n" "$OMNIRA_SESSION_CTX_KEY" | psql_run -tA)
+      echo "session context key: $res"
+    fi
+    if [ -n "${SESSION_CTX_MODE:-}" ]; then
+      echo "session context mode: $(q "SELECT public.ctx_set_mode('$SESSION_CTX_MODE')")"
     fi
     ;;
   down)

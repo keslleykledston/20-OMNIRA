@@ -219,6 +219,13 @@ echo "== applying canonical migration chain to the template (tools/apply-migrati
 DATABASE_URL="postgres://${PG_USER}:${PG_PASSWORD}@127.0.0.1:${PORT}/${TEMPLATE_DB}" \
   bash tools/apply-migrations.sh up
 
+# ADR-0042: the suites run the way production runs (signed session contexts, mode enforce). SESSION_CTX_MODE=off|measure reproduces the legacy behavior
+# (the signing key is still installed and sent, which is what a rollback of the mode does).
+SESSION_CTX_KEY_TEST=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1
+SESSION_CTX_MODE="${SESSION_CTX_MODE:-enforce}"
+echo "== session context: key installed, mode ${SESSION_CTX_MODE} (ADR-0042)"
+psql_owner -d "${TEMPLATE_DB}" -tAc "SELECT ctx_install_key(decode('${SESSION_CTX_KEY_TEST}','hex')); SELECT ctx_set_mode('${SESSION_CTX_MODE}')" >/dev/null
+
 echo "== proving template state before freezing"
 # This repo tracks no schema_migrations ledger table (tools/apply-migrations.sh
 # just applies every *.up.sql in order) — the highest-numbered file actually
@@ -301,6 +308,7 @@ for pkg in "${PACKAGES[@]}"; do
   if docker run --rm --network host \
       -v "$(pwd)":/app -w /app -e GOCACHE=/tmp/gocache -e GOFLAGS=-buildvcs=false \
       -e OMNIRA_INTEGRATION_TEST=1 \
+      -e OMNIRA_SESSION_CTX_KEY="${SESSION_CTX_KEY_TEST}" \
       -e OMNIRA_INTEGRATION_RUN_ID="${RUN_ID}" \
       -e OMNIRA_DATABASE_URL="${OWNER_URL}" \
       -e OMNIRA_APP_DATABASE_URL="${APP_URL}" \

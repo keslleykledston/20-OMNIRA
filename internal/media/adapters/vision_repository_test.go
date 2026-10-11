@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"errors"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	"testing"
 	"time"
 
@@ -268,7 +269,7 @@ func TestAnalysisClaimAndEnqueueDoNotRaceASuspensionInFlight(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec(e.ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		if err := sessionctx.Set(e.ctx, tx, uuid.Nil, true); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := tx.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, tenant); err != nil {

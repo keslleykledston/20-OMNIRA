@@ -73,9 +73,19 @@ func TestTheDelegatedContextIsPinnedToOneInstance(t *testing.T) {
 	t.Run("fail closed: acting for a hub without a valid acting instance matches nothing", func(t *testing.T) {
 		for _, bad := range []string{"", "not-a-uuid"} {
 			w.attend(agent, "A", func(ctx context.Context, q platformdb.Querier) {
+				before := map[string]int{}
+				for _, table := range tables {
+					before[table] = count(ctx, q, table, w.tenant["A"])
+				}
 				w.must(q.QueryRow(ctx, `SELECT set_config('app.acting_tenant', $1, true)`, bad).Scan(new(string)))
 				for _, table := range tables {
-					if n := count(ctx, q, table, w.tenant["A"]); n != 0 {
+					n := count(ctx, q, table, w.tenant["A"])
+					if w.enforced() {
+						// ADR-0042: the legacy setting is not read; forging it neither widens nor narrows what the verified acting context sees
+						if n != before[table] {
+							t.Errorf("acting_tenant=%q: forging changed what %s shows (%d -> %d)", bad, table, before[table], n)
+						}
+					} else if n != 0 {
 						t.Errorf("acting_tenant=%q: %s still shows %d rows", bad, table, n)
 					}
 				}

@@ -11,6 +11,7 @@ package adapters_test
 import (
 	"context"
 	"encoding/json"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,7 +23,7 @@ import (
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	"github.com/omnira/omnira/internal/platform/authn"
-	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 )
@@ -290,7 +291,7 @@ func TestDelegatedAttendanceHistoryAndFollowUpsThroughTheRealRoutes(t *testing.T
 		// even with the platform-administrator flag on in the session, the acting context keeps to the key and to one instance: the member policies of these tables
 		// (has_active_membership OR is_system_admin) would otherwise open them (has_active_membership alone is already false in the acting context, migration 109)
 		w.attend(reader, "A", func(ctx context.Context, q platformdb.Querier) {
-			_, err := q.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`)
+			err := sessionctx.Set(ctx, q, uuid.Nil, true)
 			w.must(err)
 			var n, m int
 			w.must(q.QueryRow(ctx, `SELECT count(*) FROM conversation_closures WHERE tenant_id = $1`, w.tenant["B"]).Scan(&n))

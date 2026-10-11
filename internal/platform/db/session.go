@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -70,13 +71,8 @@ func WithTenantSession(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID
 	// Rollback é no-op se a transação já foi commitada.
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_user_id', $1, true)`, userID.String()); err != nil {
+	if err := sessionctx.Set(ctx, tx, userID, isSystemAdmin); err != nil {
 		return err
-	}
-	if isSystemAdmin {
-		if _, err := tx.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
-			return err
-		}
 	}
 
 	if err := fn(WithQuerier(ctx, tx)); err != nil {

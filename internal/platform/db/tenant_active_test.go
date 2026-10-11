@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"github.com/omnira/omnira/internal/platform/sessionctx"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func TestLockTenantActiveHoldsTheSuspensionBack(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = holder.Rollback(context.Background()) }()
-		if _, err := holder.Exec(ctx, `SELECT set_config('app.is_system_admin', 'true', true)`); err != nil {
+		if err := sessionctx.Set(ctx, holder, uuid.Nil, true); err != nil {
 			t.Fatal(err)
 		}
 		ok, err := LockTenantActive(ctx, holder, tenant)
