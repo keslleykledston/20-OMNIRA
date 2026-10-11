@@ -105,3 +105,11 @@ Pré-requisitos: `serving ceiling ... --preset completo_pleno` e `serving grant 
 2. Clique: o resumo e as pendências sugeridas aparecem marcados "Sugerido pela IA: confira antes de finalizar"; **nada é gravado** até você finalizar.
 3. Num preset sem `conversation.read` (ex.: `--keys ai.assist,contact.read`) o servidor recusa (403) e nada sai para o provedor.
 4. Uma conversa que outra pessoa segura, ou solta, **não** gera rascunho para você (403).
+
+## P. Aviso de encerramento ao cliente (fase 08; o aviso sai pelo servidor junto com a finalização)
+Pré-requisitos: o preset `completo_fin` (traz `conversation.reply`). **Com "Avisar o cliente" marcado a mensagem sai por WhatsApp de verdade** — use um número de teste.
+1. Assuma uma conversa, abra **Finalizar**, deixe "Avisar o cliente" marcado e finalize. O cliente recebe a mensagem de encerramento (uma vez) e a conversa fecha; na lista aparece "Atendimento encerrado".
+2. Repita a chamada de finalizar por API: a resposta diz `changed:false` e o cliente **não** recebe uma segunda mensagem.
+3. Com a janela de 24 h do WhatsApp oficial fechada (ou sem linha ativa), finalize com o aviso marcado: a conversa fecha mesmo assim e a tela diz "O aviso ao cliente não foi enviado: <motivo>".
+4. Com um preset **sem** `conversation.reply` (ex.: `--keys conversation.read,conversation.claim,conversation.finalize`) a conversa fecha, nada é enviado e o motivo é "você não tem permissão para escrever ao cliente".
+5. Auditoria: `hub.conversation.finalized` traz o estado do aviso (`queued`, ...), nunca o texto.

@@ -27,6 +27,8 @@ run() { # the host toolchain with its warm caches: the hub path (delegate) and t
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
     go test -count=1 -p 1 -run 'TestTheDelegatedClosingNotice|TestTheClosingNotice' \
       ./internal/hub/adapters ./internal/attendance/adapters 2>&1
+  # what the finalize does with each answer of the sender (a unit test: no database)
+  GOFLAGS=-buildvcs=false go test -count=1 -run 'TestClosingNoticeState|TestNoticeKeyTaken' ./internal/platform/httpserver 2>&1
 }
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 1 ]; }
 
@@ -65,14 +67,14 @@ PY
   killed "$1" "$(run || true)"
 }
 # NOT mutants (equivalent by construction): the sender's own "conversation closed" refusal when the notice is queued after the closing (a closed conversation refuses outbound text,
-# so the order is observable only as an error the whole suite already treats as a failure of the finalize).
+# so the order is observable only as an error the whole suite already treats as a failure of the finalize); and `mayNotify := true` in the handler (the variable is overwritten by the
+# permission query whenever a notice is asked for, and unused otherwise).
 AS=internal/attendance/application/service.go; AD=internal/attendance/domain/attendance.go; DW=internal/hub/adapters/delegated_writes.go; CN=internal/platform/httpserver/closing_notice.go
 
 mut "a member's notice is never queued" $AS '			if farewell, err = s.memberNotice(ctx, in.ConversationID, in.Farewell, farewellKey(in.ConversationID)); err != nil {
 				return FinalizeResult{}, err
 			}' '			farewell = domain.FarewellQueued'
 mut "a Hub agent's notice is queued without the key conversation.reply" $AS '		if !mayNotify {' '		if false && !mayNotify {'
-mut "the handler assumes the key conversation.reply" $DW '		mayNotify := false' '		mayNotify := true'
 mut "the key check of the handler is not asked" $DW 'if in.Farewell != "" {
 			if err := platformdb' 'if false && in.Farewell != "" {
 			if err := platformdb'
@@ -89,12 +91,23 @@ mut "a person who may not write to this conversation stops the finalize" $CN '	c
 mut "any other error is swallowed (the finalize goes on without the notice and without a rollback)" $CN '	return "", err
 }
 
-// ClosingNoticeSenders' '	return attendancedomain.FarewellUnavailable, nil
+// noticeKeyTaken' '	return attendancedomain.FarewellUnavailable, nil
 }
 
-// ClosingNoticeSenders'
+// noticeKeyTaken'
 mut "the text of the notice is not checked for credentials" $AD '	if out.Farewell, err = checkText("farewell", in.Farewell, MaxFarewell, false); err != nil {
 		return out, err
 	}' '	out.Farewell = strings.TrimSpace(in.Farewell)'
 mut "the audit does not name the state of the notice (member)" $AS '"follow_ups": len(items), "farewell": string(farewell),' '"follow_ups": len(items),'
+mut "a key used by another person is ignored (member): a second notice is queued" $CN '		if used, err := taken(ctx, conversationID, key); err != nil || used {
+			return noticeKeyTaken(used, err)
+		}
+		res, err := operator.Send' '		res, err := operator.Send'
+mut "a key used by another person is ignored (Hub agent): a second notice is queued" $CN '		if used, err := taken(ctx, conversationID, key); err != nil || used {
+			return noticeKeyTaken(used, err)
+		}
+		// the key conversation.reply' '		// the key conversation.reply'
+mut "a taken key is reported as queued" $CN '	if used {
+		return attendancedomain.FarewellUnavailable, nil' '	if used {
+		return attendancedomain.FarewellQueued, nil'
 echo "PASS: all $N mutants killed"

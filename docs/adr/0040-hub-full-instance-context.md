@@ -346,3 +346,34 @@ O dono mandou seguir na fase 05 sem responder às três perguntas que ficaram em
 **Provas (POSTGRES + HTTP, papel real `omnira_app`, handler e serviço de atendimento reais, leitor REAL das mensagens; o modelo é um dublê que devolve o que recebeu):** `serving_closing_suggest_integration_test.go` — titular com as duas chaves recebe o rascunho só desta conversa (nada de outra conversa, fila ou instância); sem `ai.assist` ou sem `conversation.read` o provedor nunca é alcançado; colega, solta, finalizada e interna recusadas; fora das filas e outra instância 404; concessão revogada 404; membro inalterado e servidor sem a verificação deixa a rota fechada. `scripts/test-hub-suggest-mutations.sh` (resultado no registro de verificação). Front: `DelegatedFinalize.test.tsx` (4).
 
 **Não provado:** chamada real ao provedor de IA; login real do Keycloak; implantação; custo sob carga.
+
+## 22. Fase 08 (o aviso de encerramento ao cliente como ação de servidor, sem migration) — decisões e estado em 2026-10-10 (local, NÃO implantada)
+
+**O problema (MEDIUM aceito na 05b):** o diálogo mandava o aviso ao cliente por uma chamada separada ANTES de finalizar (depois de fechada, a conversa recusa texto de saída). Se a finalização falhasse, o cliente
+já tinha sido avisado de um encerramento que não houve; e uma falha transitória do aviso impedia finalizar.
+
+**Decisões de desenho**
+1. **O aviso viaja DENTRO do pedido de finalizar** (`farewell`, opcional, até 1000 caracteres, mesma validação de texto livre: UTF-8 e sem credencial). O servidor enfileira a mensagem e o seu job de entrega **na mesma
+   transação que fecha a conversa** (antes do `MarkClosed`): ou existem os dois efeitos ou nenhum. A entrega continua com o worker de sempre; nenhuma tabela nova, nenhuma migration.
+2. **O aviso é cortesia, nunca pré-condição.** Recusa clara (janela de 24 h fechada, sem linha, a pessoa não pode escrever ao cliente nesta conversa) vira um ESTADO na resposta (`farewell`: `queued`,
+   `window_closed`, `no_channel`, `not_permitted`, `unavailable`, `not_requested`) e a finalização segue; qualquer outro erro desfaz tudo (nada fechado, nada enfileirado). O estado vai para a auditoria; o TEXTO nunca.
+3. **Membro:** pelo `Sender` de operador (mesma permissão, titular, canal e janela de qualquer resposta; o supervisor que finaliza conversa alheia também pode avisar). **Agente do Hub:** pelo remetente delegado, e a chave
+   `conversation.reply` é provada **na sessão delegada** (a escrita roda em sessão de sistema, que não enxerga chaves delegadas), antes do `Act`; sem a chave o estado é `not_permitted` e a finalização segue.
+4. **Uma chave por conversa** (`farewell-<conversa>`; a próxima mensagem do contato abre OUTRA conversa) e uma checagem entre remetentes (o índice de idempotência é por remetente): se a chave já foi usada na
+   conversa por qualquer pessoa, nenhuma segunda mensagem é criada e o estado é `unavailable`, nunca `queued`. A mesma consulta serializa finalizações simultâneas (trava consultiva por transação).
+5. **Contrato e tela:** `farewell` entra em `FinalizeRequest`/`FinalizeResponse` (OpenAPI). O diálogo deixou de chamar a rota de mensagens; depois de finalizar mostra "O aviso ao cliente não foi enviado: <motivo>"
+   quando foi pedido e não saiu; uma repetição idempotente (`changed:false`, a resposta anterior pode ter se perdido) não diz nada sobre o aviso.
+6. **Ferramenta do gate (`scripts/test-integration.sh`):** pacotes que chegam ao guard pelo ajudante `flowstest` (`attendance/adapters`, `flows/adapters`, `flows/application`, `worker/flows`) estavam fora do gate
+   sem ninguém perceber; a descoberta agora os inclui (33 → 37 pacotes). A criação do banco por clonagem do template é repetida (até 5 vezes) só quando o erro é de conexão derrubada; qualquer outro erro é falha real, com a mensagem.
+
+**Revisão do Codex (somente leitura, NÃO executou testes):** CRITICAL 0, HIGH 0, MEDIUM 1, LOW 2 — todos tratados. MEDIUM (a idempotência era por remetente: outra pessoa podia ter usado a chave, e uma mensagem anterior
+`failed` seria devolvida como `queued`): **corrigido** (checagem entre remetentes; chave tomada = `unavailable`). LOW (a repetição idempotente aparecia como "aviso não enviado" na tela): **corrigido**. LOW (a repetição do
+clone no script engolia o erro): **corrigido** (só repete erro de conexão e mostra a mensagem).
+
+**Provas (POSTGRES + HTTP, papel real `omnira_app`):** `internal/attendance/adapters/closing_notice_integration_test.go` (membro: mensagem + job + fechamento juntos, repetição sem segunda mensagem, sem pedido nada sai, janela
+fechada e sem linha seguem finalizando, supervisor avisa e conversa solta não, falha DEPOIS do enfileiramento desfaz mensagem e job, chave já usada por outra pessoa, credencial/texto longo = 400, quem não pode finalizar
+não enfileira) e `internal/hub/adapters/serving_closing_notice_integration_test.go` (rotas REAIS de atendimento: com a chave a mensagem sai com o fechamento e a auditoria só traz o estado; sem `conversation.reply` finaliza e
+diz `not_permitted`; janela fechada; falha depois do aviso; chave tomada; 400), `closing_notice_test.go` (unitário: só recusas claras viram estado, o resto propaga). **Mutação 13/13** (`scripts/test-hub-farewell-mutations.sh`;
+um mutante equivalente documentado no script).
+
+**Não provado:** entrega real por WhatsApp (o teste vai até a mensagem enfileirada e o job); login real do Keycloak; implantação.

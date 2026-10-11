@@ -79,7 +79,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       const res = await attendanceAPI.finalize(conversationId, {
         reason, note: note.trim(), summary: summary.trim(), summary_truth, follow_ups, ...(asked ? { farewell: farewell.trim() } : {}),
       })
-      return { asked, farewell: res.farewell }
+      return { asked, changed: res.changed, farewell: res.farewell }
     },
     onSuccess: (out) => {
       void qc.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] })
@@ -92,7 +92,8 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       setAiDraft(null)
       setAiNote(null)
       setError(null)
-      onFinalized?.(out.asked ? out.farewell ?? 'unavailable' : undefined)
+      // an idempotent replay (changed=false: the first call already finalized, maybe with the answer lost) says nothing about the notice: never claim it was not sent
+      onFinalized?.(out.asked && out.changed ? out.farewell ?? 'unavailable' : undefined)
       onClose()
     },
     onError: (err) => setError(attendanceErrorMessage(err)),

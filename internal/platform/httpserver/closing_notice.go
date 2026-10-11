@@ -30,6 +30,18 @@ func closingNoticeState(res messagesapplication.SendResult, err error) (attendan
 	return "", err
 }
 
+// noticeKeyTaken answers for a closing notice whose key is already in use in the conversation: an error stays an error, and a taken key is "unavailable" (the notice is
+// not queued now; the earlier message is not ours to vouch for).
+func noticeKeyTaken(used bool, err error) (attendancedomain.FarewellState, error) {
+	if err != nil {
+		return "", err
+	}
+	if used {
+		return attendancedomain.FarewellUnavailable, nil
+	}
+	return "", nil
+}
+
 // ClosingNoticeSenders builds the two ways the closing notice is queued inside a finalize (ADR-0040 phase 08): a member through the ordinary operator Sender (same
 // permission, assignee, channel and 24 h window rules as any reply), a Hub agent through the delegated sender (the key conversation.reply is proven by the Hub's write path before). The
 // message and its delivery job are inserted in the request's own transaction, so they commit or roll back together with the closing; delivery stays with the worker.
@@ -40,11 +52,22 @@ func ClosingNoticeSenders(dbPool *pgxpool.Pool) (
 	store := messagesadapters.NewPostgresOutboundStore(dbPool)
 	operator := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(dbPool))
 	delegated := messagesapplication.NewDelegatedSender(store)
+	// A key already used by ANYONE in this conversation (the idempotency index is per sender, so Send alone would not see another operator's) means a message with the
+	// notice's key exists: none is added, and nothing claims it is queued. It also serialises concurrent finalizes of the same conversation (advisory lock).
+	taken := func(ctx context.Context, conversationID uuid.UUID, key string) (bool, error) {
+		return store.NoticeAlreadySent(ctx, conversationID, key)
+	}
 	member = func(ctx context.Context, conversationID uuid.UUID, text, key string) (attendancedomain.FarewellState, error) {
+		if used, err := taken(ctx, conversationID, key); err != nil || used {
+			return noticeKeyTaken(used, err)
+		}
 		res, err := operator.Send(ctx, conversationID, text, key)
 		return closingNoticeState(res, err)
 	}
 	agent = func(ctx context.Context, agent, conversationID uuid.UUID, text, key string) (attendancedomain.FarewellState, error) {
+		if used, err := taken(ctx, conversationID, key); err != nil || used {
+			return noticeKeyTaken(used, err)
+		}
 		// the key conversation.reply was proven by the caller in the delegated session, and the Hub's write path (replying.Act) proved the delegation again under the
 		// conversation's row lock in this same transaction; the sender still requires the agent to HOLD the conversation, the line and the open window
 		res, err := delegated.Send(ctx, agent, conversationID, text, key, func(context.Context, *messagesports.SendContext) error { return nil })

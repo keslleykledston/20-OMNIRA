@@ -189,27 +189,18 @@ func TestTheClosingNoticeIsQueuedWithTheClosingAndNeverWithoutIt(t *testing.T) {
 		}
 	})
 
-	t.Run("an error that is not a clear refusal aborts the finalize: nothing is closed, nothing is swallowed", func(t *testing.T) {
+	t.Run("a key already used in the conversation (by anyone) gets no second message and the notice is not reported as queued", func(t *testing.T) {
 		conv, _ := s.conversation(&s.agent)
 		s.channel(conv, "waha")
-		// the key of this conversation's notice was already used by this person with another text: the sender answers an idempotency mismatch, which is not a "no"
+		// another person used the notice's key in this conversation: the idempotency index is per sender, so only a check across senders sees it
 		s.exec(`INSERT INTO messages(id, tenant_id, conversation_id, direction, message_type, body, status, idempotency_key, request_hash, sent_by_user_id)
-		        VALUES($1,$2,$3,'outbound','text','outro texto','queued',$4,'not-the-hash',$5)`, uuid.New(), s.env.TenantA, conv, "farewell-"+conv.String(), s.agent)
-		in := finalizeInput(conv)
-		in.Farewell = text
-		failed := platformdb.WithTenantSession(context.Background(), s.env.App, s.agent, false, func(sc context.Context) error {
-			tc, err := tenancydomain.NewTenantContext(s.env.TenantA, s.agent, tenancydomain.AccessSourceDirect)
-			if err != nil {
-				return err
-			}
-			_, err = s.svc.Finalize(tenancydomain.WithTenantContext(sc, tc), in)
-			return err
-		})
-		if failed == nil {
-			t.Fatal("the finalize must fail when the notice fails for a reason that is not a clear refusal")
+		        VALUES($1,$2,$3,'outbound','text','outro texto','failed',$4,'not-the-hash',$5)`, uuid.New(), s.env.TenantA, conv, "farewell-"+conv.String(), s.observer)
+		res, err := finalize(s.agent, conv, text)
+		if err != nil || !res.Changed || res.Farewell != domain.FarewellUnavailable {
+			t.Fatalf("finalize: %+v err=%v, want it to go on with the state unavailable", res, err)
 		}
-		if n := s.count(`SELECT count(*) FROM conversations WHERE id=$1 AND status='open'`, conv); n != 1 {
-			t.Error("the conversation was closed although the notice failed")
+		if n := s.count(`SELECT count(*) FROM messages WHERE conversation_id=$1 AND direction='outbound'`, conv); n != 1 {
+			t.Errorf("outbound messages = %d, want only the earlier one", n)
 		}
 	})
 

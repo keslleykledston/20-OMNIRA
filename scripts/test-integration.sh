@@ -272,14 +272,18 @@ for pkg in "${PACKAGES[@]}"; do
   # infrastructure, not the code under test, so the clone is retried a few times (waiting for pg_isready) before the run is declared failed.
   cloned=0
   for attempt in 1 2 3 4 5; do
-    if psql_owner -d postgres -c "CREATE DATABASE ${dbname} TEMPLATE ${TEMPLATE_DB}" >/dev/null 2>&1; then cloned=1; break; fi
-    echo "   (clone of ${dbname} failed, attempt ${attempt}/5; waiting for the cluster)" >&2
+    if clone_err=$(psql_owner -d postgres -c "CREATE DATABASE ${dbname} TEMPLATE ${TEMPLATE_DB}" 2>&1 >/dev/null); then cloned=1; break; fi
+    # only a dropped/refused connection is the infrastructure; anything else (permission, bad template, name clash) is a real failure and is reported as it is
+    if ! printf '%s' "${clone_err}" | grep -qiE "server closed the connection|connection refused|could not connect|terminating connection|the database system is (starting|shutting)|connection to server .* failed"; then
+      echo "FATAL: cloning the template for ${pkg} failed: ${clone_err}" >&2
+      break
+    fi
+    echo "   (clone of ${dbname} failed with a dropped connection, attempt ${attempt}/5: ${clone_err}; waiting for the cluster)" >&2
     psql_owner -d postgres -c "DROP DATABASE IF EXISTS ${dbname}" >/dev/null 2>&1 || true
     for i in $(seq 1 30); do docker exec "${CONTAINER}" pg_isready -U "${PG_USER}" >/dev/null 2>&1 && break; sleep 1; done
   done
   if [ "$cloned" != "1" ]; then
-    echo "FATAL: could not clone the template for ${pkg} after 5 attempts" >&2
-    FAILED+=("${pkg} (infrastructure: template clone)")
+    FAILED+=("${pkg} (could not clone the template)")
     continue
   fi
   psql_owner -d postgres -c "GRANT CONNECT ON DATABASE ${dbname} TO omnira_app" >/dev/null

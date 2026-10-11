@@ -68,7 +68,9 @@ func TestTheDelegatedClosingNoticeIsQueuedWithTheClosingAndNeverWithoutIt(t *tes
 	notices := func(convKey string) int {
 		return w.count(`SELECT count(*) FROM messages WHERE conversation_id = $1 AND direction = 'outbound'`, w.conv[convKey])
 	}
-	status := func(convKey string) string { return w.ownerOne(`SELECT status FROM conversations WHERE id = $1`, w.conv[convKey]) }
+	status := func(convKey string) string {
+		return w.ownerOne(`SELECT status FROM conversations WHERE id = $1`, w.conv[convKey])
+	}
 	const text = "Atendimento encerrado, obrigado pelo contato!"
 	body := func(farewell string) string {
 		return `{"reason":"resolved","summary":"Cliente voltou a navegar.","farewell":"` + farewell + `"}`
@@ -132,6 +134,23 @@ func TestTheDelegatedClosingNoticeIsQueuedWithTheClosingAndNeverWithoutIt(t *tes
 		}
 		if status("A0") != "closed" || notices("A0") != 0 {
 			t.Errorf("status=%s notices=%d, want closed and none queued", status("A0"), notices("A0"))
+		}
+	})
+
+	t.Run("a key already used in the conversation by somebody else gets no second message and is not reported as queued", func(t *testing.T) {
+		hold("A")
+		w.exec(`DELETE FROM conversation_closures WHERE conversation_id = $1`, w.conv["A"])
+		w.exec(`DELETE FROM messages WHERE conversation_id = $1`, w.conv["A"])
+		someone := w.user("someone")
+		w.directMember(someone, "A")
+		w.exec(`INSERT INTO messages(id, tenant_id, conversation_id, direction, message_type, body, status, idempotency_key, request_hash, sent_by_user_id)
+		        VALUES($1, $2, $3, 'outbound', 'text', 'outro texto', 'failed', $4, 'not-the-hash', $5)`, uuid.New(), w.tenant["A"], w.conv["A"], "farewell-"+w.conv["A"].String(), someone)
+		code, resp := post(agent, "A", body(text))
+		if code != 200 || !strings.Contains(resp, `"farewell":"unavailable"`) {
+			t.Fatalf("finalize: %d %s", code, resp)
+		}
+		if n := notices("A"); n != 1 {
+			t.Errorf("outbound messages = %d, want only the earlier one", n)
 		}
 	})
 

@@ -92,6 +92,13 @@ export const FAREWELL_NOT_SENT_LABEL: Record<Exclude<FarewellState, 'not_request
   unavailable: 'o envio não está disponível agora',
 }
 
+// The line shown after finalizing. farewell is what the server answered about the closing notice when one was asked for (undefined when none was, or on a replay).
+export function finalizedNotice(farewell?: FarewellState): string {
+  const base = 'Atendimento encerrado. O histórico foi preservado.'
+  if (!farewell || farewell === 'queued' || farewell === 'not_requested') return base
+  return `${base} O aviso ao cliente não foi enviado: ${FAREWELL_NOT_SENT_LABEL[farewell]}.`
+}
+
 export interface FinalizeBody {
   reason: CloseReason
   note?: string

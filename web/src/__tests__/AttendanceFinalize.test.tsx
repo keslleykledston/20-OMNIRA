@@ -5,8 +5,10 @@ import axios from 'axios'
 import ContextPane from '../components/inbox/ContextPane'
 import ChatPane from '../components/inbox/ChatPane'
 import { renderAt, setSession } from './testUtils'
+import { emitInboxNotice } from '../lib/inboxNotice'
 
 vi.mock('axios')
+vi.mock('../lib/inboxNotice', async (orig) => ({ ...(await orig<typeof import('../lib/inboxNotice')>()), emitInboxNotice: vi.fn() }))
 vi.mock('../hooks/useRealtimeEvents', () => ({ useRealtimeEvents: () => undefined }))
 
 const CONV = 'c-1'
@@ -293,5 +295,22 @@ describe('Finalize — closing message to the customer', () => {
     await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
     const fin = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize'))!
     expect(fin[1]).not.toHaveProperty('farewell')
+  })
+
+  it.each([
+    ['queued', { changed: true, farewell: 'queued' }, /^Atendimento encerrado\. O histórico foi preservado\.$/],
+    ['a refusal of the courtesy', { changed: true, farewell: 'window_closed' }, /O aviso ao cliente não foi enviado: a janela de 24 h do WhatsApp fechou/],
+    // the first call already finalized (its answer may have been lost): a replay says nothing about the notice and must never claim it was not sent
+    ['an idempotent replay', { changed: false }, /^Atendimento encerrado\. O histórico foi preservado\.$/],
+  ])('tells the person what became of the closing notice: %s', async (_name, answer, expected) => {
+    const user = userEvent.setup()
+    serve()
+    renderAt(<ContextPane conversationId={CONV} />)
+    vi.mocked(axios.post).mockImplementation(async () => ({ data: answer }))
+    await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(emitInboxNotice)).toHaveBeenCalled())
+    expect(vi.mocked(emitInboxNotice).mock.calls[0][1]).toMatch(expected)
   })
 })

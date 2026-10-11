@@ -18,6 +18,8 @@ import { ChannelSwitcher } from './ChannelSwitcher';
 import AttendanceMemoryPanel from './AttendanceMemoryPanel';
 import HistorySearch from './HistorySearch';
 import FinalizeDialog from './FinalizeDialog';
+import { finalizedNotice } from '../../lib/attendance';
+import { emitInboxNotice } from '../../lib/inboxNotice';
 import { CollapsibleSection } from './CollapsibleSection';
 import { useChannelLines } from '../../lib/channelLines';
 import { currentUserId } from '../../lib/session';
@@ -404,6 +406,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
         conversationId={conversationId}
         contactName={conversation?.contact_name}
         onClose={() => setShowFinalize(false)}
+        onFinalized={(farewell) => emitInboxNotice(conversationId, finalizedNotice(farewell))}
       />
 
       {/* Transfer Modal */}

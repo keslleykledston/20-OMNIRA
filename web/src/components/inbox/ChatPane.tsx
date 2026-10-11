@@ -19,7 +19,7 @@ import { ChannelBadge } from './ChannelBadge';
 import { ChannelOrigin } from './ChannelOrigin';
 import { TemplateSendDialog } from './TemplateSendDialog';
 import FinalizeDialog from './FinalizeDialog';
-import { FAREWELL_NOT_SENT_LABEL } from '../../lib/attendance';
+import { finalizedNotice } from '../../lib/attendance';
 import { emitInboxNotice, useInboxNotice } from '../../lib/inboxNotice';
 import { useAccess } from '../../lib/useAccess';
 import TenantContextBar from './TenantContextBar';
@@ -400,12 +400,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         conversationId={conversationId}
         contactName={conversation?.contact_name}
         onClose={() => setShowFinalize(false)}
-        onFinalized={(farewell) => {
-          const base = 'Atendimento encerrado. O histórico foi preservado.'
-          // the closing notice is a courtesy the server queues with the finalize; say so when it was asked for and did not go out
-          const why = farewell && farewell !== 'queued' && farewell !== 'not_requested' ? FAREWELL_NOT_SENT_LABEL[farewell] : null
-          emitInboxNotice(conversationId, why ? `${base} O aviso ao cliente não foi enviado: ${why}.` : base)
-        }}
+        onFinalized={(farewell) => emitInboxNotice(conversationId, finalizedNotice(farewell))}
       />
       {metaLine && (
         <TemplateSendDialog
