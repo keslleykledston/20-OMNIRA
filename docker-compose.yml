@@ -24,6 +24,9 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_AUTH_MOBILE_CLIENT_ID: ${OMNIRA_AUTH_MOBILE_CLIENT_ID-}
   OMNIRA_AUTH_MOBILE_REDIRECT_URIS: ${OMNIRA_AUTH_MOBILE_REDIRECT_URIS-}
   OMNIRA_CREDENTIALS_KEY: ${OMNIRA_CREDENTIALS_KEY-}
+  # ADR-0042: key the api and the worker sign their database session contexts with (hex, >= 64 chars; `scripts/session-ctx.sh gen-key`). The migrator installs the same
+  # value in the database. Empty = unsigned sessions (database mode off).
+  OMNIRA_SESSION_CTX_KEY: ${OMNIRA_SESSION_CTX_KEY-}
   OMNIRA_PUBLIC_BASE_URL: ${OMNIRA_PUBLIC_BASE_URL-}
   # Convites por e-mail (vazio = sem envio; em dev o admin copia o link). Dev: profile "dev" sobe o
   # Mailpit; use OMNIRA_SMTP_HOST=mailpit, OMNIRA_SMTP_PORT=1025, OMNIRA_SMTP_TLS=none.
@@ -311,6 +314,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-omnira}
       PGDATABASE: ${OMNIRA_DB_NAME:-omnira_dev}
       APP_DB_PASSWORD: ${OMNIRA_APP_DB_PASSWORD-}
+      OMNIRA_SESSION_CTX_KEY: ${OMNIRA_SESSION_CTX_KEY-}
       BASELINE_UP_TO: ${OMNIRA_MIGRATE_BASELINE-}
     volumes:
       - ./migrations:/migrations:ro

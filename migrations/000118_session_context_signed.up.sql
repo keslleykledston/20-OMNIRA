@@ -5,7 +5,8 @@
 -- acting hub. From here the trusted values live in a table only the owner can write (session_ctx_verified, one row per backend, valid for the transaction that
 -- wrote it) and are put there by two owner-rights functions:
 --   ctx_begin(raw)        the application calls it first in every transaction with a context it SIGNED with a key from its environment
---                         (b1|<user uuid or empty>|<0|1 system>|<issued at, epoch seconds>|<hmac-sha256 hex>); the HMAC is checked ONCE per transaction
+--                         (b1|<user uuid or empty>|<0|1 system>|<backend pid>|<issued at, epoch seconds>|<hmac-sha256 hex>); the HMAC is checked ONCE per transaction.
+--                         The context names the backend it was signed for: a copy captured from another session cannot be replayed from a different one.
 --   lock_served_tenant    records the acting hub and tenant (it already proves the delegation); nothing to sign, it runs inside the database
 -- The HMAC key lives in a table the application role cannot read, so arbitrary SQL cannot produce a context that ctx_begin accepts, and cannot write the table.
 -- Reading the verified context in a policy is one primary-key lookup (the first design verified the HMAC on every call: 36 us per call against ~3 us, measured).
@@ -108,18 +109,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 
--- Called by the application as the FIRST statement of each transaction. Accepts a context signed with an installed key, issued within the last five minutes (a minute of
--- tolerance for the clocks), and records it for this transaction. Anything else records nothing and returns false: the session then has no verified context.
+-- Called by the application as the FIRST statement of each transaction. Accepts a context signed with an installed key FOR THIS BACKEND (pid), issued within the last five
+-- minutes (a minute of tolerance for the clocks), and records it for this transaction. Anything else records nothing and returns false: the session then has no verified context.
 CREATE FUNCTION ctx_begin(p_raw TEXT) RETURNS BOOLEAN AS $$
 DECLARE
-  p TEXT[] := public.ctx_signed(p_raw, 'b1', 3);
+  p TEXT[] := public.ctx_signed(p_raw, 'b1', 4);   -- [tag, user, system, pid, issued-at, sig]
 BEGIN
   IF p IS NULL THEN RETURN false; END IF;
-  IF p[4] !~ '^[0-9]{1,11}$' OR p[3] NOT IN ('0', '1')
+  IF p[5] !~ '^[0-9]{1,11}$' OR p[4] !~ '^[0-9]{1,10}$' OR p[3] NOT IN ('0', '1')
      OR (p[2] <> '' AND p[2] !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') THEN
     RETURN false;
   END IF;
-  IF to_timestamp(p[4]::BIGINT) > now() + interval '60 seconds' OR to_timestamp(p[4]::BIGINT) < now() - interval '5 minutes' THEN
+  IF p[4]::BIGINT <> pg_backend_pid() THEN RETURN false; END IF;
+  IF to_timestamp(p[5]::BIGINT) > now() + interval '60 seconds' OR to_timestamp(p[5]::BIGINT) < now() - interval '5 minutes' THEN
     RETURN false;
   END IF;
   INSERT INTO public.session_ctx_verified AS v (pid, txstart, uid, sys)

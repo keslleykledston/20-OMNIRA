@@ -11,6 +11,9 @@
 # It proves cost, not correctness. Findings it made: with the policies of 108-113 the list took 10.3 s (30k conversations) because every row ran a six-table
 # function up to three times, and PostgreSQL then JIT-compiled the statement (1.2 s) because the nested calls made it look expensive; migration 114 fixes both.
 #
+# CTX_MODE=off|measure|enforce (ADR-0042) runs the same sessions with the database in that verification mode and every transaction opening with a SIGNED context (ctx_begin): compare
+# the three outputs to see what the signed context costs. Without it the sessions only set the legacy settings, as before.
+#
 # Usage: scripts/bench-hub-policies.sh        (CONV=30000 MSGS=10 FACTOR=5 ABS_MS=250 to change; KEEP=1 leaves the seeded database running to run EXPLAIN by hand)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -27,6 +30,20 @@ docker run --rm --network "container:$NAME" -v "$PWD/migrations:/migrations:ro" 
   -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=$DB postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
 docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 own() { docker exec -i "$NAME" psql -U omnira -d $DB -X -q -At -v ON_ERROR_STOP=1 "$@"; }
+CTX_KEY=b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+ctx_begin_sql() { # ctx_begin_sql <user uuid> -> "SELECT ctx_begin('<signed>');" when CTX_MODE is set (a fresh signature each call)
+  [ -n "${CTX_MODE:-}" ] || return 0
+  python3 - "$CTX_KEY" "$1" <<'PY'
+import hmac,hashlib,sys,time
+key=bytes.fromhex(sys.argv[1]); u=sys.argv[2]
+p="b1|%s|0|%d" % (u,int(time.time()))
+print("SELECT ctx_begin('%s|%s');" % (p, hmac.new(key,p.encode(),hashlib.sha256).hexdigest()))
+PY
+}
+if [ -n "${CTX_MODE:-}" ]; then
+  own -c "SELECT ctx_install_key(decode('$CTX_KEY','hex'))" >/dev/null; own -c "SELECT ctx_set_mode('$CTX_MODE')" >/dev/null
+  echo "== session context mode: $CTX_MODE (signed contexts)"
+fi
 app() { docker exec -i "$NAME" env PGPASSWORD=omnira_app psql -h 127.0.0.1 -U omnira_app -d $DB -X -q -At -v ON_ERROR_STOP=1 "$@"; }
 
 echo "== seed: 2 instances x $CONV conversations x $MSGS messages"
@@ -84,7 +101,7 @@ Q_NOTES="SELECT id,body FROM contact_notes WHERE tenant_id='$TA' AND contact_id=
 bench() {
   local mode=$1 user=$2 enter=$3 q=$4 sql="" i
   for i in 1 2 3 4 5 6; do
-    sql+="BEGIN; SELECT set_config('app.current_user_id','$user',true);"
+    sql+="BEGIN; $(ctx_begin_sql "$user") SELECT set_config('app.current_user_id','$user',true);"
     [ "$enter" = 1 ] && sql+="SELECT lock_served_tenant('$TA','$user','$HUB');"
     sql+="EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) $q; ROLLBACK;"$'\n'
   done
@@ -111,7 +128,7 @@ set_scope() { # set_scope narrow|none
 echo "== sanity: what each session sees (conversations of A / of B)"
 for mode in "member $MEMBER 0" "delegate $DELEGATE 1"; do
   set -- $mode
-  printf '   %-9s' "$1"; printf "BEGIN; SELECT set_config('app.current_user_id','$2',true);%s SELECT count(*) FILTER (WHERE tenant_id='$TA') || ' / ' || count(*) FILTER (WHERE tenant_id<>'$TA') FROM conversations; ROLLBACK;" "$( [ "$3" = 1 ] && echo "SELECT lock_served_tenant('$TA','$2','$HUB');" )" | app | tail -1
+  printf '   %-9s' "$1"; printf "BEGIN; $(ctx_begin_sql "$2") SELECT set_config('app.current_user_id','$2',true);%s SELECT count(*) FILTER (WHERE tenant_id='$TA') || ' / ' || count(*) FILTER (WHERE tenant_id<>'$TA') FROM conversations; ROLLBACK;" "$( [ "$3" = 1 ] && echo "SELECT lock_served_tenant('$TA','$2','$HUB');" )" | app | tail -1
 done
 
 printf '\n%-22s %-10s %12s %12s\n' query session median_ms buffers

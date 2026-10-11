@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -67,8 +68,9 @@ func parseSessionKey(raw string) ([]byte, error) {
 // Rejections is how many contexts the database refused since the process started.
 func Rejections() int64 { return rejected.Load() }
 
-// Sign builds "b1|<user or empty>|<0|1>|<issued at>|<hmac-sha256 hex>", the exact format ctx_begin verifies.
-func Sign(key []byte, userID uuid.UUID, system bool, at time.Time) string {
+// Sign builds "b1|<user or empty>|<0|1>|<backend pid>|<issued at>|<hmac-sha256 hex>", the exact format ctx_begin verifies. The pid ties the context to the connection it is
+// sent on: a copy captured from another session is useless.
+func Sign(key []byte, userID uuid.UUID, system bool, pid uint32, at time.Time) string {
 	user := ""
 	if userID != uuid.Nil {
 		user = userID.String()
@@ -77,7 +79,7 @@ func Sign(key []byte, userID uuid.UUID, system bool, at time.Time) string {
 	if system {
 		flag = "1"
 	}
-	payload := fmt.Sprintf("b1|%s|%s|%d", user, flag, at.Unix())
+	payload := fmt.Sprintf("b1|%s|%s|%d|%d", user, flag, pid, at.Unix())
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(payload))
 	return payload + "|" + hex.EncodeToString(mac.Sum(nil))
@@ -102,10 +104,14 @@ func Set(ctx context.Context, q Querier, userID uuid.UUID, isSystemAdmin bool) e
 		}
 		return nil
 	}
+	pid, found := backendPID(q)
+	if !found {
+		return errors.New("session context: cannot tell which database backend this transaction runs on")
+	}
 	var ok bool
 	err = q.QueryRow(ctx,
 		`SELECT ctx_begin($1), set_config('app.current_user_id', $2, true), CASE WHEN $3::boolean THEN set_config('app.is_system_admin', 'true', true) END`,
-		Sign(key, userID, isSystemAdmin, time.Now()), userID.String(), isSystemAdmin,
+		Sign(key, userID, isSystemAdmin, pid, time.Now()), userID.String(), isSystemAdmin,
 	).Scan(&ok, new(string), new(*string))
 	if err != nil {
 		return err
@@ -114,6 +120,19 @@ func Set(ctx context.Context, q Querier, userID uuid.UUID, isSystemAdmin bool) e
 		noteRejected()
 	}
 	return nil
+}
+
+// backendPID is the PostgreSQL backend a transaction (or connection) runs on. pgx transactions expose their connection; the second form lets a test double say it.
+func backendPID(q Querier) (uint32, bool) {
+	switch c := q.(type) {
+	case interface{ Conn() *pgx.Conn }:
+		if cc := c.Conn(); cc != nil && cc.PgConn() != nil {
+			return cc.PgConn().PID(), true
+		}
+	case interface{ PID() uint32 }:
+		return c.PID(), true
+	}
+	return 0, false
 }
 
 func noteRejected() {

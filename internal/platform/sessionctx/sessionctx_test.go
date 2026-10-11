@@ -1,12 +1,16 @@
 package sessionctx
 
 import (
+	"context"
 	"encoding/hex"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Vectors computed independently (Python hmac/hashlib) so the format the database verifies cannot drift unnoticed.
@@ -15,15 +19,16 @@ func TestSignMatchesTheIndependentVectors(t *testing.T) {
 	cases := []struct {
 		user   uuid.UUID
 		system bool
+		pid    uint32
 		at     int64
 		want   string
 	}{
-		{uuid.MustParse("11111111-2222-3333-4444-555555555555"), false, 1700000000, "b1|11111111-2222-3333-4444-555555555555|0|1700000000|2cbe1be1723fc1294c6a1f020315509bf0707a1017ab0f49e5601314f759688f"},
-		{uuid.Nil, true, 1700000001, "b1||1|1700000001|cd276cd7050a7c9ae052841d4e006dfe04d14335647462a861a4816c8cca0b6a"},
+		{uuid.MustParse("11111111-2222-3333-4444-555555555555"), false, 4242, 1700000000, "b1|11111111-2222-3333-4444-555555555555|0|4242|1700000000|86fdee3b8d7069cdef53351e1519718a1e39cc8d0bef733ef6f5e863db077617"},
+		{uuid.Nil, true, 7, 1700000001, "b1||1|7|1700000001|bba261eceb6fea13b9bb6b196248d4125eb5b8fda86e6d112bcc156aa76e1163"},
 	}
 	for _, c := range cases {
-		if got := Sign(key, c.user, c.system, time.Unix(c.at, 0)); got != c.want {
-			t.Errorf("Sign(%s,%v,%d)\n got %s\nwant %s", c.user, c.system, c.at, got, c.want)
+		if got := Sign(key, c.user, c.system, c.pid, time.Unix(c.at, 0)); got != c.want {
+			t.Errorf("Sign(%s,%v,%d,%d)\n got %s\nwant %s", c.user, c.system, c.pid, c.at, got, c.want)
 		}
 	}
 }
@@ -33,12 +38,13 @@ func TestAnotherKeyOrAnotherFieldGivesAnotherSignature(t *testing.T) {
 	k2 := []byte(strings.Repeat("b", 32))
 	u := uuid.New()
 	at := time.Unix(1700000000, 0)
-	base := Sign(k1, u, false, at)
+	base := Sign(k1, u, false, 1, at)
 	for name, other := range map[string]string{
-		"key":    Sign(k2, u, false, at),
-		"system": Sign(k1, u, true, at),
-		"user":   Sign(k1, uuid.New(), false, at),
-		"time":   Sign(k1, u, false, at.Add(time.Second)),
+		"key":    Sign(k2, u, false, 1, at),
+		"system": Sign(k1, u, true, 1, at),
+		"user":   Sign(k1, uuid.New(), false, 1, at),
+		"time":   Sign(k1, u, false, 1, at.Add(time.Second)),
+		"pid":    Sign(k1, u, false, 2, at),
 	} {
 		if other == base {
 			t.Errorf("changing the %s did not change the signed context", name)
@@ -65,5 +71,77 @@ func TestParseKey(t *testing.T) {
 		if _, err := parseSessionKey(raw); err == nil {
 			t.Errorf("%s: accepted (a bad key must be loud, never a silent downgrade to unsigned sessions)", name)
 		}
+	}
+}
+
+type fakeRow struct{ ok bool }
+
+func (r fakeRow) Scan(dest ...any) error {
+	*(dest[0].(*bool)) = r.ok
+	return nil
+}
+
+type fakeQuerier struct {
+	ok    bool
+	sql   []string
+	calls int
+}
+
+func (f *fakeQuerier) PID() uint32 { return 1234 }
+
+func (f *fakeQuerier) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	f.sql = append(f.sql, sql)
+	return pgconn.CommandTag{}, nil
+}
+
+func (f *fakeQuerier) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	f.calls++
+	f.sql = append(f.sql, sql)
+	return fakeRow{ok: f.ok}
+}
+
+func TestARefusedContextIsCountedAndAnAcceptedOneIsNot(t *testing.T) {
+	key := strings.Repeat("ab", 32)
+	t.Setenv(KeyEnv, key)
+	keyOnce, keyVal, keyErr = sync.Once{}, nil, nil // re-read the environment
+	defer func() { keyOnce, keyVal, keyErr = sync.Once{}, nil, nil }()
+
+	before := Rejections()
+	if err := Set(context.Background(), &fakeQuerier{ok: true}, uuid.New(), false); err != nil {
+		t.Fatal(err)
+	}
+	if Rejections() != before {
+		t.Error("an accepted context was counted as refused")
+	}
+	if err := Set(context.Background(), &fakeQuerier{ok: false}, uuid.New(), false); err != nil {
+		t.Fatalf("a refused context must not fail the request by itself (the database mode decides what it means): %v", err)
+	}
+	if Rejections() != before+1 {
+		t.Errorf("a refused context was not counted: %d -> %d", before, Rejections())
+	}
+}
+
+func TestWithoutAKeyOnlyTheLegacySettingsAreSetAndNothingIsAskedOfTheDatabase(t *testing.T) {
+	t.Setenv(KeyEnv, "")
+	keyOnce, keyVal, keyErr = sync.Once{}, nil, nil
+	defer func() { keyOnce, keyVal, keyErr = sync.Once{}, nil, nil }()
+	f := &fakeQuerier{}
+	if err := Set(context.Background(), f, uuid.New(), true); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 0 {
+		t.Error("ctx_begin was called without a key (it does not exist before migration 000118)")
+	}
+	if len(f.sql) != 2 || !strings.Contains(f.sql[1], "is_system_admin") {
+		t.Errorf("legacy settings not set: %v", f.sql)
+	}
+}
+
+func TestABadKeyInTheEnvironmentFailsEverySessionLoudly(t *testing.T) {
+	t.Setenv(KeyEnv, "nothex")
+	keyOnce, keyVal, keyErr = sync.Once{}, nil, nil
+	defer func() { keyOnce, keyVal, keyErr = sync.Once{}, nil, nil }()
+	if err := Set(context.Background(), &fakeQuerier{ok: true}, uuid.New(), false); err == nil {
+		t.Error("a misconfigured key must fail the session, not silently downgrade it to unsigned")
 	}
 }
