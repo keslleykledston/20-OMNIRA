@@ -427,6 +427,32 @@ func TestAContextIsAcceptedOncePerTransactionAndARefusalIsLoudInEnforce(t *testi
 		})
 	})
 
+	t.Run("a savepoint that is rolled back takes the identity with it (fail closed), never a different one", func(t *testing.T) {
+		l.withMode("enforce")
+		l.tx(func(tx pgx.Tx) {
+			token := l.signFor(tx, l.key, user, false)
+			if _, err := tx.Exec(l.ctx, `SAVEPOINT s`); err != nil {
+				t.Fatal(err)
+			}
+			if !l.begin(tx, token) {
+				t.Fatal("the genuine token was refused")
+			}
+			if _, err := tx.Exec(l.ctx, `ROLLBACK TO SAVEPOINT s`); err != nil {
+				t.Fatal(err)
+			}
+			if u, sys := l.identity(tx); u != nil || sys {
+				t.Errorf("the identity survived the rollback of the savepoint that established it: user=%v system=%v", u, sys)
+			}
+			// the guarantee is "once per transactional state": the genuine token could be presented again (that is the state before it was accepted); nothing forged can
+			if l.begin(tx, l.signFor(tx, otherKey(), admin, true)) {
+				t.Error("a token signed with another key was accepted after the savepoint was rolled back")
+			}
+			if u, sys := l.identity(tx); u != nil || sys {
+				t.Errorf("identity from a forged token: user=%v system=%v", u, sys)
+			}
+		})
+	})
+
 	t.Run("enforce: a refused context is an error (the request must not run)", func(t *testing.T) {
 		l.withMode("enforce")
 		l.tx(func(tx pgx.Tx) {

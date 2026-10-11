@@ -30,11 +30,16 @@ case "${1:-status}" in
   install-key)
     k=$(load_key)
     # the key travels inside a statement (through stdin, never in a process listing): refuse when the server logs statements, unless told otherwise
-    logs=$(owner -tA -c "SELECT concat_ws(' ', current_setting('log_statement'), current_setting('log_min_duration_statement'), current_setting('log_min_duration_sample'), current_setting('log_parameter_max_length_on_error'))")
-    if [ "$logs" != "none -1 -1 0" ] && [ -z "${FORCE:-}" ]; then
-      echo "database logging could record the key (log_statement / log_min_duration_statement / log_min_duration_sample / log_parameter_max_length_on_error = '$logs', want 'none -1 -1 0'). Turn statement, duration and parameter logging off (or FORCE=1 and rotate the key afterwards)." >&2; exit 2
-    fi
-    printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$k" | owner -tA ;;
+    libs=$(owner -tA -c "SELECT concat_ws(',', current_setting('shared_preload_libraries'), current_setting('session_preload_libraries'), current_setting('local_preload_libraries'))")
+    case "$libs" in
+      *pgaudit*|*auto_explain*)
+        if [ -z "${FORCE:-}" ]; then
+          echo "preloaded libraries ($libs) can log statement parameters: the key would be exposed (FORCE=1 and rotate the key afterwards)." >&2; exit 2
+        fi ;;
+    esac
+    # this session logs nothing about the statement or its parameter (the server's own settings are overridden for this session only); the key goes as a BOUND parameter through stdin
+    { printf "SET log_statement = 'none'; SET log_min_duration_statement = -1; SET log_min_duration_sample = -1; SET log_transaction_sample_rate = 0; SET log_statement_sample_rate = 0; SET log_parameter_max_length = 0; SET log_parameter_max_length_on_error = 0;\n"
+      printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$k"; } | owner -tA ;;
   drop-previous) owner -tA -c "SELECT public.ctx_drop_previous_key()" | sed 's/^/previous keys dropped: /' ;;
   mode)
     m="${2:-}"; case "$m" in off|measure|enforce) ;; *) echo "usage: $0 mode off|measure|enforce" >&2; exit 2 ;; esac

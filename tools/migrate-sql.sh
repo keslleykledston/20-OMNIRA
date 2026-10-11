@@ -72,13 +72,18 @@ case "$CMD" in
         *[!0-9a-fA-F]*) echo "OMNIRA_SESSION_CTX_KEY must be hex" >&2; exit 2 ;;
       esac
       [ "${#OMNIRA_SESSION_CTX_KEY}" -ge 64 ] || { echo "OMNIRA_SESSION_CTX_KEY must have at least 64 hex characters (32 bytes)" >&2; exit 2; }
-      # the key travels inside a statement: refuse when the server logs statements (it would end up in the log), unless the operator accepts that and rotates afterwards
-      logs=$(q "SELECT concat_ws(' ', current_setting('log_statement'), current_setting('log_min_duration_statement'), current_setting('log_min_duration_sample'), current_setting('log_parameter_max_length_on_error'))")
-      if [ "$logs" != "none -1 -1 0" ] && [ -z "${SESSION_CTX_ALLOW_LOGGED_KEY:-}" ]; then
-        echo "database logging could record the key (log_statement / log_min_duration_statement / log_min_duration_sample / log_parameter_max_length_on_error = '$logs', want 'none -1 -1 0'): turn statement, duration and parameter logging off, or SESSION_CTX_ALLOW_LOGGED_KEY=1 and rotate the key afterwards" >&2; exit 2
-      fi
-      # through stdin as a BOUND parameter (psql \bind: extended protocol): the key is neither in a process listing nor in the statement text
-      res=$(printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$OMNIRA_SESSION_CTX_KEY" | psql_run -tA)
+      # libraries that log statement parameters on their own (pgaudit, auto_explain) are out of the installer's reach: refuse, unless the operator accepts the risk and rotates afterwards
+      libs=$(q "SELECT concat_ws(',', current_setting('shared_preload_libraries'), current_setting('session_preload_libraries'), current_setting('local_preload_libraries'))")
+      case "$libs" in
+        *pgaudit*|*auto_explain*)
+          if [ -z "${SESSION_CTX_ALLOW_LOGGED_KEY:-}" ]; then
+            echo "preloaded libraries ($libs) can log statement parameters: installing OMNIRA_SESSION_CTX_KEY would expose it (SESSION_CTX_ALLOW_LOGGED_KEY=1 and rotate the key afterwards)" >&2; exit 2
+          fi ;;
+      esac
+      # the installing session itself logs nothing about the statement or its parameter (the server's own settings are overridden for this session only), and the key goes as a BOUND parameter
+      # through stdin (psql \bind: extended protocol): neither in a process listing nor in the statement text
+      res=$({ printf "SET log_statement = 'none'; SET log_min_duration_statement = -1; SET log_min_duration_sample = -1; SET log_transaction_sample_rate = 0; SET log_statement_sample_rate = 0; SET log_parameter_max_length = 0; SET log_parameter_max_length_on_error = 0;\n"
+        printf 'SELECT public.ctx_install_key(decode($1, %s)) \\bind %s \\g\n' "'hex'" "$OMNIRA_SESSION_CTX_KEY"; } | psql_run -tA)
       echo "session context key: $res"
     fi
     if [ -n "${SESSION_CTX_MODE:-}" ]; then
