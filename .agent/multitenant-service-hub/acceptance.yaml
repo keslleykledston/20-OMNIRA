@@ -6,7 +6,7 @@ acceptance_tests:
     severity: "P0"
     status: "verified"
     level: "POSTGRES"
-    evidence: "TestIsolation_TenantACannotReadTenantBData, TestRLSIsolation_TenantACannotReadTenantB (internal/tenancy/adapters); Hub matrix TestHubRLS_DirectAndDelegatedMatrix"
+    evidence: "TestHubRLS_DirectAndDelegatedMatrix (a direct member of A reads A and 0 rows of C and of B, as the real application role under FORCE RLS); TestHubRLS_QueueScope; TestHubAPI_ListAndOpen_AuthorizationMatrix"
     test: |
       Given user is member of Tenant A only
       When user queries conversations from Tenant B
@@ -19,7 +19,7 @@ acceptance_tests:
     severity: "P0"
     status: "verified"
     level: "POSTGRES+HTTP"
-    evidence: "TestIsolation_*; TestUpdateMembershipOfForeignTenantIs404; TestQueuesOfAnotherTenantAreUntouchable; TestHubAuthorization_ForgedIdentifiers; TestSSEConversationStreamRefusesUnknownOrForeignConversation"
+    evidence: "TestHubRLS_DirectAndDelegatedMatrix (known ids of another company read as 0 rows); TestHubAuthorization_ForgedIdentifiers; TestUpdateMembershipOfForeignTenantIs404; TestQueuesOfAnotherTenantAreUntouchable; TestSSEConversationStreamRefusesUnknownOrForeignConversation"
     test: |
       Given conversation C belongs to Tenant B
       Given user session is for Tenant A
@@ -33,7 +33,7 @@ acceptance_tests:
     severity: "P0"
     status: "verified"
     level: "POSTGRES+HTTP+E2E"
-    evidence: "TestHubAPI_ListAndOpen_AuthorizationMatrix; TestHubRLS_DirectAndDelegatedMatrix; e2e-real/hub.real.spec.ts (1-2)"
+    evidence: "TestHubAPI_ListAndOpen_AuthorizationMatrix; TestHubRLS_DirectAndDelegatedMatrix; e2e-real/hub.real.spec.ts 'Conversas junta as instâncias liberadas pelo Hub…' and 'assumir e responder pelo Hub…'"
     test: |
       Given Hub H with agent Alice
       Given Tenant T delegated to Hub H (active contract)
@@ -88,7 +88,7 @@ acceptance_tests:
     severity: "P0"
     status: "verified"
     level: "POSTGRES+HTTP"
-    evidence: "one statement per page/counter (ListHubInboxItems, CountHubInboxSegments), TestHubAPI_Pagination; scripts/bench-hub-policies.sh; TestHubInboxUnderLoad"
+    evidence: "TestHubInbox_TheNumberOfStatementsDoesNotGrowWithTheNumberOfCompanies (10-11 statements per request with 1, 2 or 3 companies); one statement per page/counter (ListHubInboxItems, CountHubInboxSegments). Latency is MT-AT-036, not this item"
     test: |
       Given Hub with 100 contracted Tenants
       When user queries Hub Inbox
@@ -114,9 +114,9 @@ acceptance_tests:
     title: "UI identifies Tenant by logo + shortcode + accent, not color alone"
     category: "ux"
     severity: "P0"
-    status: "verified"
-    level: "UNIT+E2E"
-    evidence: "HubLayoutContract.test.tsx (company named by code + full name in row, header, strip and details); TenantBadge never colour alone"
+    status: "partial"
+    level: "UNIT"
+    evidence: "TenantBadge shows a short code AND the full name as text, the accent only as a token (TenantBadge.test.tsx; HubLayoutContract.test.tsx names the company in row, header, strip and details). The company LOGO is NOT BUILT (Tenant Brand Settings)"
     test: |
       Given two tenants with same primary color
       When displayed side-by-side
@@ -290,7 +290,7 @@ acceptance_tests:
     severity: "P0"
     status: "verified"
     level: "POSTGRES+AUDIT"
-    evidence: "summary_integration_test.go; summary reads ONE conversation under the resolved tenant (Codex audit)"
+    evidence: "summary_integration_test.go; TestAISummary_Disabled_ZeroProviderCalls; the summary reads ONE conversation under the resolved tenant (Codex audit)"
     test: |
       Given conversations from Tenant A and B
       When AI summarizes agent's work
@@ -410,7 +410,7 @@ acceptance_tests:
     severity: "P0"
     status: "verified"
     level: "UNIT+POSTGRES+E2E"
-    evidence: "delegated_meta_test.go (via=hub, hub_id, contract, grant on every delegated event); TestAudit_*; E2E 'auditoria'"
+    evidence: "delegated_meta_test.go (via=hub, hub_id, contract, grant on every delegated event); TestAudit_OnlyAnAdminOfTheHubSeesItsInstancesConfigurationChanges; TestAudit_PagingIsStableForEventsSharingATimestamp; e2e-real/hub.real.spec.ts 'auditoria: o administrador vê quem mudou o quê, e só ele'"
     test: |
       Given direct Tenant member performs action
       Given Hub agent performs action on same Tenant
@@ -481,7 +481,7 @@ acceptance_tests:
     severity: "P1"
     status: "partial"
     level: "POSTGRES"
-    evidence: "Hub list at 10 000 items: 83 ms (bench, as the Hub agent, JIT off); counters 131 ms; at 30 000 items 284 ms / 962 ms. Under 16 concurrent clients at 20 000 items p95 is ~0.5 s for lists (TestHubInboxUnderLoad). The 100 ms target holds for the list at 10k single-statement, not under load and not for the counters"
+    evidence: "Hub list at 10 000 items: 83 ms (bench, as the Hub agent, JIT off); counters 131 ms; at 30 000 items 284 ms / 962 ms. Under 16 concurrent clients at 20 000 items p95 is ~0.5 s for lists and ~1.7 s for the counters (TestHubInboxUnderLoad). The 100 ms target holds for the list at 10k single-statement, not under load and not for the counters"
     test: |
       Given Hub with 10k inbox items
       When user queries first 50
@@ -533,8 +533,8 @@ acceptance_tests:
     category: "auth_security"
     severity: "P0"
     status: "verified"
-    level: "HTTP"
-    evidence: "TestEveryProtectedRouteRejectsAnonymousAndForgedCredentials; tenant resolved from membership by AuthorizationMiddleware, not from the token; TestIsolation_*"
+    level: "HTTP+POSTGRES"
+    evidence: "TestAValidTokenNamingAnotherCompanyGainsNothing (a VALID signed token carrying tenant_id/tid/tenants/roles/is_system_admin claims for company B: the effective context stays the person's own membership; path B, X-Tenant-ID and acting headers open nothing; a token signed by another key is 401); TestEveryProtectedRouteRejectsAnonymousAndForgedCredentials"
     test: |
       Given JWT for User in Tenant A
       When user claims Tenant B in JWT

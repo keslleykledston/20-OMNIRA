@@ -7,9 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/adapters"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
@@ -450,5 +454,58 @@ func TestHubInbox_TheListRunsWithoutJITAndTheSettingDoesNotLeak(t *testing.T) {
 		if server != "off" {
 			t.Error("the setting leaked out of the list's transaction")
 		}
+	}
+}
+
+// MT-AT-007: the Hub inbox never runs a query per company. The number of statements one request sends is the same whether the person serves one company or three.
+type statementCounter struct{ n atomic.Int64 }
+
+func (c *statementCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n.Add(1)
+	return ctx
+}
+func (c *statementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestHubInbox_TheNumberOfStatementsDoesNotGrowWithTheNumberOfCompanies(t *testing.T) {
+	w := newWorld(t)
+	cfg, err := pgxpool.ParseConfig(os.Getenv("OMNIRA_APP_DATABASE_URL"))
+	w.must(err)
+	counter := &statementCounter{}
+	cfg.ConnConfig.Tracer = counter
+	pool, err := pgxpool.NewWithConfig(w.ctx, cfg)
+	w.must(err)
+	t.Cleanup(pool.Close)
+
+	agent := w.hubAgent("agent")
+	h := adapters.NewHTTPHandler(pool)
+	session := tenancyadapters.UserSessionMiddleware(pool)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		session(http.HandlerFunc(h.ListInbox)).ServeHTTP(rw, r.WithContext(contextWithPrincipal(r, agent)))
+	}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	statements := func(query string) int64 {
+		counter.n.Store(0)
+		resp, err := http.Get(srv.URL + "/api/v1/hubs/" + w.hub.String() + "/inbox" + query)
+		w.must(err)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		return counter.n.Load()
+	}
+	for _, q := range []string{"", "?segment=waiting&include=counts", "?include=company_counts"} {
+		w.grant(agent, "A")
+		one := statements(q)
+		w.grant(agent, "B")
+		two := statements(q)
+		w.grant(agent, "C")
+		three := statements(q)
+		t.Logf("query %q: %d statements with 1, 2 and 3 companies: %d / %d / %d", q, one, one, two, three)
+		if one < 1 || one != two || two != three {
+			t.Errorf("query %q: %d statements with 1 company, %d with 2, %d with 3; they must not grow with the number of companies", q, one, two, three)
+		}
+		w.exec(`DELETE FROM effective_access_grants WHERE user_id = $1`, agent)
 	}
 }

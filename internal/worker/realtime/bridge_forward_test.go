@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -82,12 +83,15 @@ func TestForwardDropsAConversationThatIsNotTheTenants(t *testing.T) {
 	if len(pub.subjects) != 2 || pub.subjects[0] != Subject(tenantB, convOfB) {
 		t.Fatalf("the genuine pair was not published: %v", pub.subjects)
 	}
-	if asked != 2 { // the forged one and the first genuine one; the second genuine one is remembered
+	if asked != 2 { // the forged one and the first genuine one; the second genuine one is remembered (and the repeated forged one below too)
 		t.Errorf("the database was asked %d times, want 2 (a verified pair is remembered)", asked)
 	}
 	b.forward(context.Background(), forged)
 	if len(pub.subjects) != 2 {
 		t.Error("a negative answer must not be remembered as a positive one")
+	}
+	if asked != 2 {
+		t.Errorf("a refusal is remembered for a while: the database was asked %d times, want 2", asked)
 	}
 }
 
@@ -98,5 +102,56 @@ func TestForwardFailsClosedWhenTheVerificationFails(t *testing.T) {
 	b.forward(context.Background(), `{"tenant_id":"`+uuid.NewString()+`","conversation_id":"`+uuid.NewString()+`","type":"x","data":{}}`)
 	if len(pub.subjects) != 0 {
 		t.Fatal("an unverifiable notification was published")
+	}
+}
+
+// The verification is not a lever for whoever can run pg_notify: refusals are remembered, queries are bounded per second, and answers expire.
+func TestForwardCostsAtMostABoundedNumberOfQueriesPerSecond(t *testing.T) {
+	pub := &capturePublisher{}
+	b := NewBridge(nil, pub)
+	now := time.Unix(1_800_000_000, 0)
+	b.now = func() time.Time { return now }
+	asked := 0
+	b.verify = func(context.Context, uuid.UUID, uuid.UUID) (bool, error) { asked++; return false, nil }
+	for i := 0; i < 5000; i++ { // five thousand DISTINCT forged pairs in the same instant
+		b.forward(context.Background(), `{"tenant_id":"`+uuid.NewString()+`","conversation_id":"`+uuid.NewString()+`","type":"x","data":{}}`)
+	}
+	if asked > verifyBurst {
+		t.Fatalf("5000 forged pairs in one instant cost %d database queries; the burst bound is %d", asked, verifyBurst)
+	}
+	if len(pub.subjects) != 0 {
+		t.Fatal("a forged pair was published")
+	}
+	now = now.Add(time.Second) // a second later the bucket has refilled a little, not a flood
+	before := asked
+	for i := 0; i < 5000; i++ {
+		b.forward(context.Background(), `{"tenant_id":"`+uuid.NewString()+`","conversation_id":"`+uuid.NewString()+`","type":"x","data":{}}`)
+	}
+	if asked-before > verifiesPerSec+1 {
+		t.Fatalf("one more second of forgeries cost %d queries, want at most %d", asked-before, verifiesPerSec)
+	}
+}
+
+func TestForwardAnswersExpireAndAreAskedAgain(t *testing.T) {
+	tenant, conv := uuid.New(), uuid.New()
+	pub := &capturePublisher{}
+	b := NewBridge(nil, pub)
+	now := time.Unix(1_800_000_000, 0)
+	b.now = func() time.Time { return now }
+	truth := true
+	asked := 0
+	b.verify = func(context.Context, uuid.UUID, uuid.UUID) (bool, error) { asked++; return truth, nil }
+	msg := `{"tenant_id":"` + tenant.String() + `","conversation_id":"` + conv.String() + `","type":"x","data":{}}`
+	b.forward(context.Background(), msg)
+	now = now.Add(positiveTTL - time.Second)
+	b.forward(context.Background(), msg)
+	if asked != 1 || len(pub.subjects) != 2 {
+		t.Fatalf("before the lifetime ends the answer is reused: asked=%d published=%d", asked, len(pub.subjects))
+	}
+	truth = false // the relation changed (the row was removed or re-created elsewhere)
+	now = now.Add(2 * time.Second)
+	b.forward(context.Background(), msg)
+	if asked != 2 || len(pub.subjects) != 2 {
+		t.Fatalf("after the lifetime ends it is asked again and now refused: asked=%d published=%d", asked, len(pub.subjects))
 	}
 }

@@ -77,7 +77,7 @@ func (o *OutboundFiles) Remove(tenantID, id uuid.UUID) error {
 
 // ReadVerified returns the file only if it has exactly the recorded size and SHA-256: what is delivered is what was cleared.
 func (o *OutboundFiles) ReadVerified(tenantID, id uuid.UUID, size int64, sha256Hex string) ([]byte, error) {
-	f, err := os.Open(o.path(tenantID, id))
+	f, err := openUnder(o.dir, tenantID.String(), id.String()) // no symbolic link at the company directory or at the file
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +145,7 @@ func (o *OutboundFiles) Orphans(minAge time.Duration, limit int, exists func(ten
 
 // Open returns the file for serving it back to the operator that sent it.
 func (o *OutboundFiles) Open(tenantID, id uuid.UUID) (*os.File, error) {
-	return os.Open(o.path(tenantID, id))
+	return openUnder(o.dir, tenantID.String(), id.String())
 }
 
 // virusScanner adapts the inbound pipeline's clamd client to the messages module's scanner port.

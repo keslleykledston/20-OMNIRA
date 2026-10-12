@@ -32,7 +32,9 @@ export function useHubWaiting(hubs: HubSummary[], enabled = true): number {
       retry: false,
     })),
   })
-  const data = probes.map((p) => p.data?.companies)
+  // What a failed or switched-off read left in the cache is not shown: after a revocation (the read now fails) or while attending one instance the number is 0,
+  // never the last number that was true when the person still had the access.
+  const data = probes.map((p) => (enabled && !p.isError ? p.data?.companies : undefined))
   const key = JSON.stringify(data.map((d) => (d ?? []).map((c) => [c.id, c.unanswered ?? 0])))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   return useMemo(() => waitingAcross(data), [key])

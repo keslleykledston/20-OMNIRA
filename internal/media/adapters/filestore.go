@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -87,14 +88,40 @@ func (s *FileStore) Remove(w ports.Work) error {
 
 // OpenClean returns the cleared file for serving. It never looks in quarantine.
 func (s *FileStore) OpenClean(tenantID, id string) (*os.File, error) {
-	// O_NOFOLLOW: the final component is never followed, so a symlink planted in clean/<company>/ cannot turn a served file into another file.
-	return os.OpenFile(filepath.Join(s.root, "clean", tenantID, id), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	return openUnder(s.root, "clean", tenantID, id)
 }
 
 // OpenOutbound opens a file an operator sent (ADR-0024); the API only ever reads this area to show the operators their own sent files.
 func (s *FileStore) OpenOutbound(tenantID, id uuid.UUID) (*os.File, error) {
-	// O_NOFOLLOW: the area is written by the API, so a planted symlink must not turn this into a read of another file.
-	return os.OpenFile(filepath.Join(s.root, "outbound", tenantID.String(), id.String()), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	return openUnder(s.root, "outbound", tenantID.String(), id.String())
+}
+
+// openUnder opens <root>/<parts...> for reading WITHOUT following a symbolic link at ANY component below the root: the company directory as well as the file. A
+// link planted as clean/<company> (or as the file) would otherwise turn a served file into another company's file or into any file the process can read; with the
+// walk below it is an error. The root itself is configuration and may be a link (a mounted volume). Each part must be a plain name.
+func openUnder(root string, parts ...string) (*os.File, error) {
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." || strings.ContainsAny(p, "/\x00") {
+			return nil, fmt.Errorf("media store: %q is not a plain name", p)
+		}
+	}
+	fd, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: root, Err: err}
+	}
+	for i, p := range parts {
+		flags := syscall.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+		if i < len(parts)-1 {
+			flags |= syscall.O_DIRECTORY
+		}
+		next, err := syscall.Openat(fd, p, flags, 0)
+		_ = syscall.Close(fd)
+		if err != nil {
+			return nil, &fs.PathError{Op: "open", Path: filepath.Join(append([]string{root}, parts[:i+1]...)...), Err: err}
+		}
+		fd = next
+	}
+	return os.NewFile(uintptr(fd), filepath.Join(append([]string{root}, parts...)...)), nil
 }
 
 // ReadClean returns the bytes of a cleared file, refusing anything larger than maxBytes. It never reads quarantine.

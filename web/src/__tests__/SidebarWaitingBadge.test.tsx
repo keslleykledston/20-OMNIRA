@@ -83,4 +83,18 @@ describe('Sidebar — the number of conversations waiting, on "Conversas"', () =
     expect(inboxCalls).toHaveLength(0);
     expect(conversationsLink()).not.toHaveAttribute('aria-label');
   });
+
+  it('forgets the number when the read starts failing (access revoked) instead of showing the last true number', async () => {
+    companiesByHub = { h1: [{ id: 'a', name: 'A', unanswered: 9 }] };
+    serve();
+    const { queryClient } = (await import('./testUtils')).renderAtWithClient(<Sidebar />);
+    await waitFor(() => expect(conversationsLink()).toHaveAttribute('aria-label', 'Conversas, 9 aguardando resposta'));
+    // the Hub stops answering (revoked): the cached 9 must not stay on the menu
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/hubs')) return { data: { items: hubsList } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+    await queryClient.refetchQueries({ queryKey: ['hub-companies-probe'] });
+    await waitFor(() => expect(conversationsLink()).not.toHaveAttribute('aria-label'));
+  });
 });

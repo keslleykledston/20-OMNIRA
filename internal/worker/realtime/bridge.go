@@ -22,9 +22,24 @@ import (
 // So the bridge does not take the (tenant, conversation) pair from the payload on faith: it asks the database that the conversation belongs to that tenant (a pair
 // that never changes once true, so a verified pair is remembered). An unverifiable pair is dropped. Without this, anything able to run pg_notify could make
 // the events (identifiers, statuses) of one company's conversation appear on another company's live stream.
-var droppedMetric = opsmetrics.NewCounter("omnira_realtime_bridge_dropped_total", "Notifications the realtime bridge refused to publish, by reason", "reason", "malformed", "unverified_pair", "verify_error")
+var droppedMetric = opsmetrics.NewCounter("omnira_realtime_bridge_dropped_total", "Notifications the realtime bridge refused to publish, by reason", "reason", "malformed", "unverified_pair", "verify_error", "rate_limited")
 
-const verifiedCap = 20000
+// The verification must not become a lever: whoever can run pg_notify could otherwise make the bridge query the database for every forged pair and delay the
+// genuine events behind them. So an answer is remembered for a while IN BOTH DIRECTIONS (a refusal for 30 s, an acceptance for 10 min: relations that never change
+// in practice, re-asked anyway), a query is bounded in time, and the number of queries per second is bounded (events beyond it are dropped and counted, never queued).
+const (
+	cacheCap       = 20000
+	positiveTTL    = 10 * time.Minute
+	negativeTTL    = 30 * time.Second
+	verifyTimeout  = 3 * time.Second
+	verifiesPerSec = 100
+	verifyBurst    = 200
+)
+
+type pairAnswer struct {
+	ok    bool
+	until time.Time
+}
 
 const Channel = "omnira_inbox_events"
 
@@ -40,14 +55,17 @@ type Bridge struct {
 	MinBackoff, MaxBackoff time.Duration
 	// verify answers "does this conversation belong to this tenant?"; nil (no database: unit tests only) accepts every pair.
 	verify func(ctx context.Context, tenant, conversation uuid.UUID) (bool, error)
+	now    func() time.Time // the clock (tests move it)
 	mu     sync.Mutex
-	known  map[[2]uuid.UUID]struct{}
+	known  map[[2]uuid.UUID]pairAnswer
+	tokens float64   // token bucket for database verifications
+	refill time.Time // when tokens was last refilled
 }
 
 var _ Publisher = (*nats.Conn)(nil)
 
 func NewBridge(pool *pgxpool.Pool, nc Publisher) *Bridge {
-	b := &Bridge{pool: pool, nc: nc, MinBackoff: time.Second, MaxBackoff: 15 * time.Second, known: map[[2]uuid.UUID]struct{}{}}
+	b := &Bridge{pool: pool, nc: nc, MinBackoff: time.Second, MaxBackoff: 15 * time.Second, known: map[[2]uuid.UUID]pairAnswer{}, now: time.Now, tokens: verifyBurst}
 	if pool != nil {
 		b.verify = func(ctx context.Context, tenant, conversation uuid.UUID) (bool, error) {
 			var ok bool
@@ -60,36 +78,62 @@ func NewBridge(pool *pgxpool.Pool, nc Publisher) *Bridge {
 	return b
 }
 
-// pairBelongs is true when the conversation is the tenant's. A positive answer is remembered (bounded); a negative or failed one is not.
+// pairBelongs is true when the conversation is the tenant's. Answers are remembered with a lifetime; a failed or rate-limited verification is not (the event is
+// dropped and the next one asks again).
 func (b *Bridge) pairBelongs(ctx context.Context, tenant, conversation uuid.UUID) bool {
 	if b.verify == nil {
 		return true
 	}
 	key := [2]uuid.UUID{tenant, conversation}
+	now := b.now()
 	b.mu.Lock()
-	_, hit := b.known[key]
-	b.mu.Unlock()
-	if hit {
-		return true
+	if a, hit := b.known[key]; hit && now.Before(a.until) {
+		b.mu.Unlock()
+		if !a.ok {
+			droppedMetric.Inc("unverified_pair")
+		}
+		return a.ok
 	}
-	ok, err := b.verify(ctx, tenant, conversation)
+	// a database query is allowed only while the bucket has a token
+	if b.refill.IsZero() {
+		b.refill = now
+	}
+	b.tokens += now.Sub(b.refill).Seconds() * verifiesPerSec
+	if b.tokens > verifyBurst {
+		b.tokens = verifyBurst
+	}
+	b.refill = now
+	if b.tokens < 1 {
+		b.mu.Unlock()
+		droppedMetric.Inc("rate_limited")
+		return false
+	}
+	b.tokens--
+	b.mu.Unlock()
+
+	vctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	defer cancel()
+	ok, err := b.verify(vctx, tenant, conversation)
 	if err != nil {
 		droppedMetric.Inc("verify_error")
 		log.Printf("realtime bridge: could not verify a notification (dropped): %v", err)
 		return false
 	}
+	b.mu.Lock()
+	if len(b.known) >= cacheCap {
+		b.known = map[[2]uuid.UUID]pairAnswer{}
+	}
+	ttl := positiveTTL
+	if !ok {
+		ttl = negativeTTL
+	}
+	b.known[key] = pairAnswer{ok: ok, until: now.Add(ttl)}
+	b.mu.Unlock()
 	if !ok {
 		droppedMetric.Inc("unverified_pair")
 		log.Printf("realtime bridge: dropping a notification whose conversation does not belong to its tenant")
-		return false
 	}
-	b.mu.Lock()
-	if len(b.known) >= verifiedCap {
-		b.known = map[[2]uuid.UUID]struct{}{}
-	}
-	b.known[key] = struct{}{}
-	b.mu.Unlock()
-	return true
+	return ok
 }
 
 type notification struct {

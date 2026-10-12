@@ -237,3 +237,82 @@ func TestOpenCleanDoesNotFollowASymlink(t *testing.T) {
 	}
 	f.Close()
 }
+
+// A symlink at ANY component below the root is refused: the company directory as well as the file (so company A's file cannot be served out of company B's directory).
+func TestOpenCleanAndOutboundDoNotFollowADirectorySymlink(t *testing.T) {
+	root := t.TempDir()
+	fs, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantA, tenantB := uuid.New(), uuid.New()
+	id := uuid.New()
+	for _, area := range []string{"clean", "outbound"} {
+		if err := os.MkdirAll(filepath.Join(root, area, tenantB.String()), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, area, tenantB.String(), id.String()), []byte("B's file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// company A's directory is a link to company B's
+		if err := os.Symlink(filepath.Join(root, area, tenantB.String()), filepath.Join(root, area, tenantA.String())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f, err := fs.OpenClean(tenantA.String(), id.String()); err == nil {
+		f.Close()
+		t.Fatal("OpenClean followed a symlinked company directory")
+	}
+	if f, err := fs.OpenOutbound(tenantA, id); err == nil {
+		f.Close()
+		t.Fatal("OpenOutbound followed a symlinked company directory")
+	}
+	// the genuine paths still open
+	for _, open := range []func() (*os.File, error){
+		func() (*os.File, error) { return fs.OpenClean(tenantB.String(), id.String()) },
+		func() (*os.File, error) { return fs.OpenOutbound(tenantB, id) },
+	} {
+		f, err := open()
+		if err != nil {
+			t.Fatalf("a regular path must open: %v", err)
+		}
+		f.Close()
+	}
+	// names that are not plain names never reach the file system
+	for _, bad := range []string{"", ".", "..", "a/b", "../x"} {
+		if f, err := fs.OpenClean(bad, id.String()); err == nil {
+			f.Close()
+			t.Errorf("OpenClean accepted %q as a company name", bad)
+		}
+	}
+}
+
+// The outbound files the worker delivers and the API shows back are read without following a link at the company directory or at the file.
+func TestOutboundFilesDoNotFollowSymlinks(t *testing.T) {
+	root := t.TempDir()
+	of, err := NewOutboundFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b, id := uuid.New(), uuid.New(), uuid.New()
+	if err := of.Put(b, id, []byte("B's file")); err != nil {
+		t.Fatal(err)
+	}
+	// company A's directory is a link to company B's
+	if err := os.Symlink(filepath.Join(root, "outbound", b.String()), filepath.Join(root, "outbound", a.String())); err != nil {
+		t.Fatal(err)
+	}
+	sum := "irrelevant"
+	if f, err := of.Open(a, id); err == nil {
+		f.Close()
+		t.Fatal("Open followed a symlinked company directory")
+	}
+	if _, err := of.ReadVerified(a, id, 8, sum); err == nil {
+		t.Fatal("ReadVerified followed a symlinked company directory")
+	}
+	f, err := of.Open(b, id)
+	if err != nil {
+		t.Fatalf("the genuine path must open: %v", err)
+	}
+	f.Close()
+}

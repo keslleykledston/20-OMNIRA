@@ -22,6 +22,22 @@ export function renderAt(ui: ReactElement, path = '/', routePath = '*') {
   );
 }
 
+// Like renderAt, but hands back the QueryClient too (to refetch or inspect the cache from a test).
+export function renderAtWithClient(ui: ReactElement, path = '/', routePath = '*') {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path={routePath} element={ui} />
+          <Route path="*" element={<div data-testid="elsewhere">elsewhere</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+  return { ...view, queryClient };
+}
+
 // Like renderAt, but inside a DATA router (as the real app runs), so useBlocker and the browser Back button can be exercised.
 // `entries` is the history stack; the last one is the current page unless `index` says otherwise.
 export function renderInDataRouter(ui: ReactElement, routePath: string, entries: string[], index = entries.length - 1) {
