@@ -20,14 +20,18 @@ describe('SettingsShell', () => {
   });
 
   it('marks the current route as aria-current=page', () => {
+    // "Pessoas" is one section (Equipe e acesso and Agentes are its tabs); a child route keeps the section active and marks its own tab
+    const people = SETTINGS_SECTIONS.find((s) => s.key === 'people')!;
     renderAt(
-      <SettingsShell sections={SETTINGS_SECTIONS} title="Agentes">
+      <SettingsShell sections={SETTINGS_SECTIONS} subsections={people.subsections} title="Agentes">
         <p>Conteúdo</p>
       </SettingsShell>,
-      '/settings/agents'
+      '/settings/people/agents'
     );
+    expect(screen.getByRole('link', { name: 'Pessoas' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Agentes' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Equipe e acesso' })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('link', { name: 'Empresas' })).not.toHaveAttribute('aria-current');
   });
 
   it('renders title, description and content region', () => {

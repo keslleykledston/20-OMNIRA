@@ -48,7 +48,8 @@ case "${1:-status}" in
     mins="${2:-10}"
     n=$(docker logs --since "${mins}m" "$PG_CONTAINER" 2>&1 | grep -c "session_ctx divergence" || true)
     echo "divergences in the last ${mins} min: $n"
-    docker logs --since "${mins}m" "$PG_CONTAINER" 2>&1 | grep "session_ctx divergence" | sed -E 's/^.*(session_ctx divergence: [a-z_]+).*/\1/' | sort | uniq -c | sort -rn | head ;;
+    # no divergence = grep finds nothing = a failing pipeline under pipefail; the answer "0" is a success
+    docker logs --since "${mins}m" "$PG_CONTAINER" 2>&1 | grep "session_ctx divergence" | sed -E 's/^.*(session_ctx divergence: [a-z_]+).*/\1/' | sort | uniq -c | sort -rn | head || true ;;
   status)
     owner -tA -F' ' -c "SELECT 'mode: ' || mode || ' (changed ' || to_char(changed_at,'YYYY-MM-DD HH24:MI') || ')' FROM session_ctx_mode"
     owner -tA -F' ' -c "SELECT 'key ' || state || ': installed ' || to_char(created_at,'YYYY-MM-DD HH24:MI') || ', ' || octet_length(key) || ' bytes' FROM session_ctx_keys ORDER BY state"
