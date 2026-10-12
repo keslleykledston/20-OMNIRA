@@ -82,6 +82,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   unauthorized.mockReset();
   localStorage.clear();
+  sessionStorage.clear(); // the attendances kept open as tabs (ids) live here; one test must not restore another's
   setSession();
   hubsReply = [H1];
   pages = {};
