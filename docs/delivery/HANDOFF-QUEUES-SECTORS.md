@@ -73,3 +73,7 @@ no sistema por este levantamento. Onde não verifiquei algo, está dito.
 - **Atualizado em 2026-10-12 (noite):** `6d083a5` (permissão `conversation.read_internal`) e a migration 000120 estão em `main` **e implantados** (api, worker e web `sha-6d083a5`, construídos de um `git archive` de uma árvore limpa que tinha as duas linhas de trabalho; tags de volta `rollback-pre-final-20261012-1817`). `main` foi enviado ao GitHub (`f01fea8` na hora do envio). O texto original desta seção (antes da implantação) dizia "sem push" e "não implantado": já não vale.
 - Armadilhas: checkout compartilhado muda de branch (construir de `git archive`/worktree limpo de `main`); `scripts/test-integration.sh` aceita só pacotes; `pgrep -f` em espera casa com o próprio comando.
 - Pendências do dono: testar o fluxo "Interno" e a restrição (agente × supervisor), `#sair`, rotacionar segredos dos `.env.pre-*`, cobrança Meta 131042, fase de logo/favicon, e as cinco decisões da seção 5 (setores).
+
+## 7. Andamento (2026-10-12, noite)
+- **S0 decidido por padrão** (fila = setor) e **S2 implantado** (`sha-9449f5c`, migration 122): ver `docs/adr/0043-queues-as-sectors.md`. Em Pessoas e grupos → aba Grupos há a seção "Entrada por canal" (um seletor por número). Nenhuma regra foi criada: tudo segue para a fila padrão até alguém escolher.
+- **Falta:** S1 (criar as filas dos setores e vincular pessoas: operação sua, com os nomes reais), S3 (escopo de leitura por setor, proposto no ADR, liga por tenant) e S4 (atributos). As cinco decisões da seção 5 continuam valendo para S1/S3.
