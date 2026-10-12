@@ -1835,6 +1835,13 @@ paths:
           in: query
           description: Only conversations assigned to the caller
           schema: { type: string, enum: [me] }
+        - name: queue
+          in: query
+          description: |
+            View filter by group/sector (ADR-0043), never an authorization boundary. `mine` = groups the caller is an active
+            member of plus what is assigned to the caller; `none` = conversations without a group; a uuid = that group
+            (another tenant's id finds nothing); anything else is `400`.
+          schema: { type: string }
         - name: waiting
           in: query
           description: Only conversations whose last message is from the customer

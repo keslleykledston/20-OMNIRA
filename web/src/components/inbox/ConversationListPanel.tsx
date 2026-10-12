@@ -32,6 +32,7 @@ const SEGMENTS: { id: InboxSegment; label: string }[] = [
   { id: 'all', label: 'Todas' },
   { id: 'waiting', label: 'Aguardando' },
   { id: 'mine', label: 'Minhas' },
+  { id: 'my_groups', label: 'Meus grupos' },
   { id: 'unclassified', label: 'Não classif.' },
   { id: 'internal', label: 'Internas' },
   { id: 'closed', label: 'Encerradas' },
@@ -43,7 +44,7 @@ const SCOPES: { id: 'active' | 'closed'; label: string }[] = [
   { id: 'closed', label: 'Encerradas' },
 ];
 // segments reached through "Mais…" (the three primary ones are the segmented control)
-const MORE_IDS: InboxSegment[] = ['unclassified', 'internal', 'spam'];
+const MORE_IDS: InboxSegment[] = ['my_groups', 'unclassified', 'internal', 'spam'];
 
 const WAIT_STYLE: Record<WaitTone, string> = {
   muted: 'bg-surface-muted text-text-secondary',

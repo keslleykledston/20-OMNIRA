@@ -83,6 +83,8 @@ export default function InboxWorkspace() {
             cursor: pageParam || undefined,
             q: debouncedSearch || undefined,
             assigned: segment === 'mine' ? 'me' : undefined,
+            // ADR-0043: view filter - the groups I belong to (plus what is assigned to me)
+            queue: segment === 'my_groups' ? 'mine' : undefined,
             waiting: segment === 'waiting' ? true : undefined,
             kind: segment === 'spam' ? 'spam' : undefined,
             // finalized attendances (ADR-0020) are out of the default list; this segment asks for them

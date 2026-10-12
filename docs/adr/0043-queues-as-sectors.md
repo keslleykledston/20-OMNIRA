@@ -26,6 +26,9 @@ Hoje o *assumir* é limitado pela fila, mas a **lista** e as rotas que nomeiam a
 4. Testes A/B de tenant, membro revogado, fila trocada, busca, mídia, chamado, histórico do contato, SSE; RLS intacta.
 Riscos: contadores e busca global vazam existência se esquecidos; conversas sem fila e atribuídas a quem mudou de setor. **Não construído** — mudança de visibilidade merece a sua decisão por tenant.
 
+### 3.1 S3-lite (implementado) — filtro de visão por grupo, **não** é autorização
+`GET /inbox/conversations?queue=mine|none|<uuid>` e o segmento **"Meus grupos"** (menu "Mais…" da lista): `mine` = grupos em que a pessoa é membro **ativo** + o que está atribuído a ela; `none` = sem grupo; uuid = aquele grupo (de outro tenant não acha nada; texto inválido = 400). Serve para foco do agente no setor dele **sem decidir nada pelo dono**: quem podia ler continua podendo ler, nada some por padrão, nada é 404. Não protege contra um agente curioso — isso continua sendo o S3 completo acima, que só se constrói com a decisão do dono por tenant. Prova: `TestListConversationsQueueFilterIsAViewByGroup` (Postgres real: grupo meu, outro grupo, atribuída a mim em outro grupo, sem grupo, grupo que deixei, grupo de outro tenant, id malformado) e o teste de `InboxWorkspace`. O filtro por grupo **nomeado** para agentes não existe porque a lista de grupos exige `agent.read` (agente não tem); só admin/supervisor podem filtrar por uuid pela API.
+
 ## 4. S4 (proposto) — atributos do setor
 Descrição, supervisor responsável, horário, SLA, cor e transferência entre setores na tela do tenant. Depende de S3 e de decisões de produto.
 

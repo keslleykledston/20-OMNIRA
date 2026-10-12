@@ -157,6 +157,28 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid assigned filter", http.StatusBadRequest)
 		return
 	}
+	// ADR-0043 (S3-lite): a VIEW filter by group (sector), not an authorization boundary - a person who may read the tenant's
+	// conversations still can, with or without it. "mine" = the groups the caller is an active member of, plus what is assigned to
+	// the caller; "none" = conversations without a group; a uuid = that group.
+	switch qf := r.URL.Query().Get("queue"); qf {
+	case "":
+	case "mine":
+		if tc.ActorID == uuid.Nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		actor := arg(tc.ActorID)
+		where += " AND (c.assigned_to_user_id=" + actor + " OR c.queue_id IN (SELECT qm.queue_id FROM queue_members qm WHERE qm.tenant_id=c.tenant_id AND qm.user_id=" + actor + " AND qm.active))"
+	case "none":
+		where += " AND c.queue_id IS NULL"
+	default:
+		qid, perr := uuid.Parse(qf)
+		if perr != nil {
+			http.Error(w, "invalid queue filter", http.StatusBadRequest)
+			return
+		}
+		where += " AND c.queue_id=" + arg(qid)
+	}
 	// Spam is kept (nothing is silently dropped) but out of the default view; ask for it explicitly.
 	switch kind := r.URL.Query().Get("kind"); kind {
 	case "":
