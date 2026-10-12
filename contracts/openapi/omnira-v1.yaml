@@ -848,6 +848,13 @@ paths:
             pending attendances), `mine` (not finalized and held by the caller), `closed` (finalized: the history). Absent = no narrowing.
             A screen filter that can only NARROW the caller's authorized view. Any other value is a 400 (never a silent "everything").
           schema: { type: string, enum: [open, waiting, mine, closed] }
+        - name: include
+          in: query
+          required: false
+          description: |
+            Comma-separated extras, opt-in because they cost a count over the caller's rows: `counts` (the numbers of the page's tabs, first page only) and
+            `company_counts` (`open`/`unanswered` on each company, for the probe that feeds the instance tabs). Any other value is a 400.
+          schema: { type: string }
         - name: q
           in: query
           required: false
@@ -4289,7 +4296,7 @@ components:
         limit: { type: integer }
         counts:
           type: object
-          description: How many items each segment holds for the caller (under RLS), narrowed by `companies` but not by `segment` or `q`. First page only (absent when `cursor` is sent).
+          description: How many items each segment holds for the caller (under RLS), narrowed by `companies` but not by `segment` or `q`. Only with `include=counts`, and only on the first page (absent when `cursor` is sent).
           required: [open, waiting, mine, closed]
           properties:
             open: { type: integer }

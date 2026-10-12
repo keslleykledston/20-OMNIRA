@@ -180,6 +180,19 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "search text too long", http.StatusBadRequest)
 		return
 	}
+	// What else the screen wants with the page. Counters cost a count over the caller's rows, so they are opt-in: `counts` (the numbers of the tabs
+	// of the page, first page only) and `company_counts` (the number of each company's tab, for the probe that feeds the instance tabs).
+	include := map[string]bool{}
+	if raw := strings.TrimSpace(r.URL.Query().Get("include")); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part != "counts" && part != "company_counts" {
+				httpError(w, "invalid include", http.StatusBadRequest)
+				return
+			}
+			include[part] = true
+		}
+	}
 	filter := ports.InboxFilter{Tenants: only, Segment: r.URL.Query().Get("segment"), Query: query, Actor: actor}
 	items, next, err := h.repo.ListHubInboxItems(r.Context(), hubID, filter, opts.Limit, opts.Cursor)
 	if errors.Is(err, ErrInvalidCursor) {
@@ -203,9 +216,9 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	pagination.WritePaginationHeaders(w, &pagination.PageResult{Count: len(out), Limit: opts.Limit, HasMore: next != "", NextCursor: next})
 	body := map[string]any{"items": out, "has_more": next != "", "next_cursor": next, "count": len(out), "limit": opts.Limit,
-		"companies": h.companiesOf(r.Context(), hubID, actor)}
-	// The tabs' counters come with the first page only (under the caller's own session, so only what RLS shows them).
-	if opts.Cursor == "" {
+		"companies": h.companiesOf(r.Context(), hubID, actor, include["company_counts"])}
+	// The tabs' counters come with the first page only, and only when asked for (under the caller's own session, so only what RLS shows them).
+	if include["counts"] && opts.Cursor == "" {
 		if c, err := h.repo.CountHubInboxSegments(r.Context(), hubID, only, actor); err == nil {
 			body["counts"] = c
 		}
@@ -245,14 +258,23 @@ type companyDTO struct {
 	FullContext bool `json:"full_context"`
 	// Open is how many attendances of this company are not finalized and Unanswered how many of those have customer messages nobody answered yet
 	// (the badge of the company's tab). Counted from the inbox projection under the caller's own session, so only what RLS shows them.
-	Open       int `json:"open"`
-	Unanswered int `json:"unanswered"`
+	// Only when the request asked for them (include=company_counts): they cost a count over the caller's inbox rows.
+	Open       *int `json:"open,omitempty"`
+	Unanswered *int `json:"unanswered,omitempty"`
 }
 
 // companiesOf lists the companies this person is currently allowed to serve through the hub, to feed the screen's filter.
 // It only describes (names for a dropdown); what is READABLE is still decided by RLS on every row.
-func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID) []companyDTO {
+func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID, withCounts bool) []companyDTO {
 	out := []companyDTO{}
+	// the counters of the company tabs are a count over the caller's inbox rows: only computed when asked for
+	counts := `LEFT JOIN LATERAL (SELECT NULL::int AS open, NULL::int AS unanswered) n ON true`
+	if withCounts {
+		counts = `LEFT JOIN LATERAL (
+			SELECT count(*) FILTER (WHERE COALESCE(i.status, 'open') <> 'closed')::int AS open,
+			       count(*) FILTER (WHERE COALESCE(i.status, 'open') <> 'closed' AND COALESCE(i.unread_count, 0) > 0)::int AS unanswered
+			FROM ` + liveInbox + ` i WHERE i.hub_id = g.hub_id AND i.tenant_id = t.id) n ON true`
+	}
 	rows, err := platformdb.QuerierFromContext(ctx, h.pool).Query(ctx, `
 		SELECT DISTINCT t.id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name) AS name,
 		       ($3::boolean AND COALESCE('conversation.read' = ANY (delegated_permissions(t.id, $2, $1)), false)) AS full_context,
@@ -260,10 +282,7 @@ func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID) [
 		FROM effective_access_grants g
 		JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id AND k.status = 'active' AND k.valid_from <= now() AND (k.valid_until IS NULL OR k.valid_until > now())
 		JOIN tenants t ON t.id = g.tenant_id AND t.status = 'active'
-		LEFT JOIN LATERAL (
-			SELECT count(*) FILTER (WHERE COALESCE(i.status, 'open') <> 'closed')::int AS open,
-			       count(*) FILTER (WHERE COALESCE(i.status, 'open') <> 'closed' AND COALESCE(i.unread_count, 0) > 0)::int AS unanswered
-			FROM `+liveInbox+` i WHERE i.hub_id = g.hub_id AND i.tenant_id = t.id) n ON true
+		`+counts+`
 		WHERE g.hub_id = $1 AND g.user_id = $2 AND g.status = 'active' AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())
 		ORDER BY 2, 1`, hubID, actor, tenancyadapters.DelegatedServingEnabled())
 	if err != nil {

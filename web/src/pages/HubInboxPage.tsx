@@ -81,7 +81,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
     queryKey: ['hub-inbox', hubId, companyIds, view, debouncedSearch],
     enabled: !!hubId,
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => hubAPI.inbox(hubId, pageParam, companyIds, 30, segmentOf(view), debouncedSearch),
+    queryFn: ({ pageParam }) => hubAPI.inbox(hubId, pageParam, companyIds, 30, segmentOf(view), debouncedSearch, 'counts'),
     getNextPageParam: (last) => (last.has_more ? last.next_cursor : undefined),
     refetchInterval: 30_000,
     retry: false,

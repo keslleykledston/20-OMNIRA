@@ -99,8 +99,9 @@ export const hubAPI = {
     }
   },
   // `companies` only NARROWS the caller's authorized view (empty = all of it); the server never widens because of it.
-  // `segment` and `search` narrow the page too (the server refuses an unknown segment and a search over 80 characters).
-  inbox: (hubId: string, cursor?: string, companies: string[] = [], limit = 30, segment?: HubSegment, search = ''): Promise<HubInboxPage> =>
+  // `segment` and `search` narrow the page too (the server refuses an unknown segment and a search over 80 characters). `include` asks for the counters
+  // (they cost a count on the server, so nobody gets them unasked): `counts` = the numbers of the page's tabs (first page), `company_counts` = the number of each company's tab.
+  inbox: (hubId: string, cursor?: string, companies: string[] = [], limit = 30, segment?: HubSegment, search = '', include?: 'counts' | 'company_counts'): Promise<HubInboxPage> =>
     axios
       .get<HubInboxPage>(`${API_BASE}/hubs/${enc(hubId)}/inbox`, {
         headers: authHeaders(),
@@ -110,6 +111,7 @@ export const hubAPI = {
           ...(companies.length ? { companies: companies.join(',') } : {}),
           ...(segment ? { segment } : {}),
           ...(search.trim() ? { q: search.trim().slice(0, 80) } : {}),
+          ...(include ? { include } : {}),
         },
       })
       .then((r) => r.data),

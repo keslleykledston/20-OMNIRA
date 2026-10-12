@@ -52,7 +52,7 @@ export default function ConversationsEntry() {
     queries: list.map((h) => ({
       queryKey: ['hub-companies-probe', h.id],
       enabled: !wantsClassic,
-      queryFn: () => hubAPI.inbox(h.id, undefined, [], 1),
+      queryFn: () => hubAPI.inbox(h.id, undefined, [], 1, undefined, '', 'company_counts'),
       staleTime: 10_000,
       refetchInterval: REFRESH_MS,
       retry: false,
@@ -74,7 +74,8 @@ export default function ConversationsEntry() {
         const known = byId.get(c.id);
         if (known) {
           known.hubId = known.hubId ?? h.id;
-          known.unanswered = c.unanswered;
+          // the same instance can be served by two hubs: the FIRST hub keeps both the way in and the number (summing would count the same conversations twice)
+          if (known.unanswered === undefined) known.unanswered = c.unanswered;
         } else {
           byId.set(c.id, { id: c.id, name: c.name, member: false, hubId: h.id, fullContext: !!c.full_context, unanswered: c.unanswered });
         }

@@ -26,7 +26,7 @@ run() { # the host toolchain with its warm caches
   OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -p 1 -run 'TestHubInbox_Segments|TestHubInbox_Companies' \
+    go test -count=1 -p 1 -run 'TestHubInbox_Segments|TestHubInbox_Companies|TestHubInbox_TheQueue' \
       ./internal/hub/adapters 2>&1
 }
 verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 1 ]; }
@@ -83,10 +83,15 @@ mut "the counter of mine counts every held" $PG "assigned_user_id = \$3)," "(ass
 mut "the counters see nothing without a company filter" $PG "COALESCE(cardinality(\$2::uuid[]), 0) = 0 OR" "cardinality(\$2::uuid[]) = 0 OR"
 mut "a mistyped query string is not refused" $HT "if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {" "if _, err := url.ParseQuery(r.URL.RawQuery); err != nil && false {"
 mut "the assignment says 'me' for everybody" $HT "if *i.AssignedUserID == actor {" "if *i.AssignedUserID != actor {"
-mut "the counters repeat on every page" $HT "if opts.Cursor == \"\" {" "if true {"
+mut "the counters repeat on every page" $HT "if include[\"counts\"] && opts.Cursor == \"\" {" "if include[\"counts\"] {"
+mut "the counters are computed without being asked for" $HT "if include[\"counts\"] && opts.Cursor == \"\" {" "if opts.Cursor == \"\" {"
+mut "the company counters are computed without being asked for" $HT "include[\"company_counts\"])}" "true)}"
+mut "an unknown include is accepted" $HT "if part != \"counts\" && part != \"company_counts\" {" "if false {"
 mut "an over-long search is accepted" $HT "if len([]rune(query)) > 80 {" "if len([]rune(query)) > 800000 {"
 mut "the tab counts the finalized" $HT "count(*) FILTER (WHERE COALESCE(i.status, 'open') <> 'closed')::int AS open," "count(*)::int AS open,"
 mut "the unanswered badge counts every open one" $HT "AND COALESCE(i.unread_count, 0) > 0)::int AS unanswered" "AND COALESCE(i.unread_count, 0) >= 0)::int AS unanswered"
 mut "the holder is read from the lagging projection" $PG "CASE WHEN c.id IS NULL THEN i.assigned_user_id ELSE c.assigned_to_user_id END AS assigned_user_id" "i.assigned_user_id AS assigned_user_id"
 mut "the finalized state is read from the lagging projection" $PG "CASE WHEN c.id IS NULL THEN i.status ELSE c.status END AS status" "i.status AS status"
+mut "opening an item reads the lagging projection" $PG "FROM \`+liveInbox+\` li WHERE hub_id = \$1 AND id = \$2\`, hubID, itemID" "FROM hub_inbox_items WHERE hub_id = \$1 AND id = \$2\`, hubID, itemID"
+mut "the queue is read from the lagging projection" $PG "CASE WHEN c.id IS NULL THEN i.queue_id ELSE c.queue_id END AS queue_id," "i.queue_id AS queue_id,"
 echo "== done: $N mutants"

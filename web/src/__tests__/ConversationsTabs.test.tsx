@@ -27,6 +27,7 @@ vi.mock('../pages/HubInboxPage', () => ({
 let mine: { id: string; legal_name: string; trade_name?: string }[] = [];
 let companies: { id: string; name: string; full_context?: boolean; open?: number; unanswered?: number }[] = [];
 let hubs: { id: string; name: string; role: string }[] = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent' }];
+let companiesByHub: Record<string, typeof companies> = {};
 let probeFails = false;
 
 function serve() {
@@ -36,7 +37,8 @@ function serve() {
     if (u.endsWith('/tenants')) return { data: mine };
     if (u.includes('/hubs/') && u.endsWith('/inbox')) {
       if (probeFails) return Promise.reject({ response: { status: 500 } });
-      return { data: { items: [], companies, has_more: false, count: 0, limit: 1 } };
+      const hubId = u.match(/\/hubs\/([^/]+)\/inbox$/)?.[1] ?? '';
+      return { data: { items: [], companies: companiesByHub[hubId] ?? companies, has_more: false, count: 0, limit: 1 } };
     }
     return Promise.reject({ response: { status: 404 } });
   });
@@ -52,6 +54,7 @@ beforeEach(() => {
   localStorage.setItem('token', 'tok');
   mine = [T1];
   companies = [];
+  companiesByHub = {};
   hubs = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent' }];
   probeFails = false;
   switchTenant.mockReset();
@@ -99,6 +102,19 @@ describe('Conversas tabs', () => {
     expect(screen.getByRole('tab', { name: 'Alfa (2)' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Beta Hub (1)' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Gama Hub' })).toBeInTheDocument();
+  });
+
+  it('an instance served by two hubs keeps the way in and the number of the first (never summed: they are the same conversations)', async () => {
+    mine = [T1];
+    hubs = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent' }, { id: 'hub-2', name: 'Outro', role: 'hub_agent' }];
+    companiesByHub = {
+      'hub-1': [{ id: 'B', name: 'Beta Hub', unanswered: 4 }, { id: 'C', name: 'Gama Hub', unanswered: 0 }],
+      'hub-2': [{ id: 'B', name: 'Beta Hub', unanswered: 9 }],
+    };
+    renderAt(<ConversationsEntry />);
+    expect(await screen.findByRole('tab', { name: 'Beta Hub (4)' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Beta Hub (9)' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Beta Hub (13)' })).toBeNull();
   });
 
   it('an instance reached only through the Hub opens the Hub view pinned to that instance, with the reduced-view notice', async () => {

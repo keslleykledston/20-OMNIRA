@@ -136,23 +136,23 @@ func TestHubInbox_SegmentsSeparateThePendingQueueFromTheHistory(t *testing.T) {
 	want("?q=" + url.QueryEscape("secreta"))
 
 	// counters: first page only, narrowed by the company filter, not by the segment or the search, never counting what RLS hides
-	code, p := api.segment(agent, "?segment=closed&q=zzz")
+	code, p := api.segment(agent, "?segment=closed&q=zzz&include=counts")
 	if code != 200 || p.Counts == nil {
 		t.Fatalf("counts missing on the first page: %d %+v", code, p.Counts)
 	}
 	if c := *p.Counts; c.Open != 3 || c.Waiting != 1 || c.Mine != 1 || c.Closed != 2 {
 		t.Fatalf("counts = %+v, want open 3, waiting 1, mine 1, closed 2 (the segment and the search do not change them)", c)
 	}
-	_, onlyB := api.segment(agent, "?companies="+w.tenant["B"].String())
+	_, onlyB := api.segment(agent, "?include=counts&companies="+w.tenant["B"].String())
 	if c := *onlyB.Counts; c.Open != 0 || c.Waiting != 0 || c.Mine != 0 || c.Closed != 2 {
 		t.Fatalf("counts narrowed to B = %+v", c)
 	}
 	// a second page carries no counts (they are not recomputed per page)
-	_, first := api.segment(agent, "?limit=1")
+	_, first := api.segment(agent, "?limit=1&include=counts")
 	if first.NextCursor == "" {
 		t.Fatal("expected a second page")
 	}
-	_, second := api.segment(agent, "?limit=1&cursor="+url.QueryEscape(first.NextCursor))
+	_, second := api.segment(agent, "?limit=1&include=counts&cursor="+url.QueryEscape(first.NextCursor))
 	if second.Counts != nil {
 		t.Errorf("counts repeated on page 2: %+v", second.Counts)
 	}
@@ -169,7 +169,7 @@ func TestHubInbox_SegmentsSeparateThePendingQueueFromTheHistory(t *testing.T) {
 	// revoking the grant of B takes its pending/closed items out of every segment and out of the counters at once
 	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["B"])
 	want("?segment=closed")
-	_, afterRevoke := api.segment(agent, "")
+	_, afterRevoke := api.segment(agent, "?include=counts")
 	if c := *afterRevoke.Counts; c.Closed != 0 || c.Open != 3 || c.Waiting != 1 || c.Mine != 1 {
 		t.Fatalf("counts after revoking B = %+v", c)
 	}
@@ -208,6 +208,29 @@ func TestHubInbox_CompaniesCarryTheCountersOfTheirTabs(t *testing.T) {
 		Open       int       `json:"open"`
 		Unanswered int       `json:"unanswered"`
 	}
+	// counters are opt-in: without include a company comes with a name and nothing counted, and an unknown include is refused
+	_, rawPlain, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox", w.hub), agent, nil)
+	var plain struct {
+		Counts    json.RawMessage              `json:"counts"`
+		Companies []map[string]json.RawMessage `json:"companies"`
+	}
+	w.must(json.Unmarshal([]byte(rawPlain), &plain))
+	if plain.Counts != nil || len(plain.Companies) != 2 {
+		t.Errorf("segment counters came without being asked for (or the companies are missing): %s", rawPlain)
+	}
+	for _, c := range plain.Companies {
+		if _, has := c["open"]; has {
+			t.Errorf("company counters came without being asked for: %v", c)
+		}
+		if _, has := c["unanswered"]; has {
+			t.Errorf("company counters came without being asked for: %v", c)
+		}
+	}
+	for _, bad := range []string{"?include=nope", "?include=counts,secrets", "?include=counts;x"} {
+		if code, _, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox%s", w.hub, bad), agent, nil); code != 400 {
+			t.Errorf("%s: %d, want 400", bad, code)
+		}
+	}
 	read := func(q string) map[uuid.UUID]co {
 		t.Helper()
 		code, body, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox%s", w.hub, q), agent, nil)
@@ -224,7 +247,7 @@ func TestHubInbox_CompaniesCarryTheCountersOfTheirTabs(t *testing.T) {
 		}
 		return m
 	}
-	m := read("")
+	m := read("?include=company_counts")
 	if len(m) != 2 {
 		t.Fatalf("companies offered: %v", m)
 	}
@@ -238,13 +261,13 @@ func TestHubInbox_CompaniesCarryTheCountersOfTheirTabs(t *testing.T) {
 		t.Fatal("a company without a grant was listed with its counters")
 	}
 	// the counters of the tabs do not depend on the page's filter, segment or search (they describe the companies, not the page)
-	m = read("?segment=closed&q=zzz&companies=" + w.tenant["B"].String())
+	m = read("?include=company_counts&segment=closed&q=zzz&companies=" + w.tenant["B"].String())
 	if m[w.tenant["A"]].Open != 3 || m[w.tenant["B"]].Open != 1 {
 		t.Errorf("counters changed with the page filter: %+v", m)
 	}
 	// a revoked grant takes the company and its counters away at once
 	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["A"])
-	m = read("")
+	m = read("?include=company_counts")
 	if _, still := m[w.tenant["A"]]; still || m[w.tenant["B"]].Open != 1 {
 		t.Errorf("after revoking A: %+v", m)
 	}
@@ -278,7 +301,21 @@ func TestHubInbox_SegmentsFollowTheConversationNotTheLaggingProjection(t *testin
 	if in("?segment=waiting") || !in("?segment=mine") {
 		t.Fatal("after taking it the attendance is still in the pending queue / not in mine (the list followed the lagging projection)")
 	}
-	_, p := api.segment(agent, "?segment=mine")
+	// opening it agrees with the list: the item says it is mine (the live holder), not what the lagging projection says
+	{
+		_, rawOpen, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox/%s", w.hub, w.itemID("A")), agent, nil)
+		var d struct {
+			Item struct {
+				Assignment string `json:"assignment"`
+				Status     string `json:"status"`
+			} `json:"item"`
+		}
+		w.must(json.Unmarshal([]byte(rawOpen), &d))
+		if d.Item.Assignment != "me" {
+			t.Errorf("the opened item says assignment %q, want me (the list says so)", d.Item.Assignment)
+		}
+	}
+	_, p := api.segment(agent, "?segment=mine&include=counts")
 	if it := convsOf(p)[conv]; it.Assignment != "me" {
 		t.Errorf("assignment of the taken attendance = %q, want me", it.Assignment)
 	}
@@ -291,7 +328,7 @@ func TestHubInbox_SegmentsFollowTheConversationNotTheLaggingProjection(t *testin
 		t.Fatal("after finalizing, the attendance must be in the history and out of the queue")
 	}
 	// the tab of the company counts it as no longer open
-	_, raw, _ := api.do("GET", "/api/v1/hubs/"+w.hub.String()+"/inbox?segment=closed", agent, nil)
+	_, raw, _ := api.do("GET", "/api/v1/hubs/"+w.hub.String()+"/inbox?segment=closed&include=company_counts", agent, nil)
 	var b struct {
 		Companies []struct {
 			ID   uuid.UUID `json:"id"`
@@ -308,5 +345,35 @@ func TestHubInbox_SegmentsFollowTheConversationNotTheLaggingProjection(t *testin
 	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["A"])
 	if in("?segment=closed") || in("") {
 		t.Fatal("a revoked grant still sees the conversation through the live join")
+	}
+}
+
+// Opening an item authorizes by its QUEUE, and the list shows the queue RLS really applies (the conversation's), so both must read it live: a conversation moved
+// by the company into a queue the contract covers, while the projection still says the old queue, is listed AND opens; one moved out of the contract's queues
+// disappears from the list and does not open either.
+func TestHubInbox_TheQueueIsReadLiveByTheListAndByOpeningAnItem(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	u := w.hubAgent("moved")
+	w.grant(u, "A")
+	w.exec(`UPDATE hub_tenant_service_contracts SET service_scope = $2::jsonb WHERE id = $1`, w.contract["A"], fmt.Sprintf(`{"queue_ids":["%s"]}`, w.queue1["A"]))
+
+	// A2 lives in q2 (outside the contract). The company moves it to q1 (inside); the projection still says q2.
+	w.exec(`UPDATE conversations SET queue_id = $2 WHERE id = $1`, w.conv["A2"], w.queue1["A"])
+	_, p := api.segment(u, "")
+	if _, ok := convsOf(p)[w.conv["A2"]]; !ok {
+		t.Fatal("a conversation moved INTO the contract's queues is not listed (the list followed the lagging projection)")
+	}
+	if code, _ := api.open(u, w.hub, w.itemID("A2")); code != 200 {
+		t.Fatalf("it is listed but does not open (%d): opening used the lagging projection's queue", code)
+	}
+	// A is in q1 (inside). The company moves it to q2 (outside); the projection still says q1: it vanishes from the list and cannot be opened
+	w.exec(`UPDATE conversations SET queue_id = $2 WHERE id = $1`, w.conv["A"], w.queue2["A"])
+	_, p = api.segment(u, "")
+	if _, ok := convsOf(p)[w.conv["A"]]; ok {
+		t.Fatal("a conversation moved OUT of the contract's queues is still listed")
+	}
+	if code, _ := api.open(u, w.hub, w.itemID("A")); code != 404 {
+		t.Fatalf("a conversation moved out of the contract's queues still opens: %d", code)
 	}
 }

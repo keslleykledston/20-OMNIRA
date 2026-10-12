@@ -155,6 +155,13 @@ describe('Hub layout contract — the queue is apart from the history', () => {
     expect(await screen.findByText('Nada encontrado para esta busca.')).toBeInTheDocument();
   });
 
+  it('asks for the counters of the tabs (they are opt-in on the server) and for nothing else it does not show', async () => {
+    serve();
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    expect(inboxParams.every((p) => p.include === 'counts')).toBe(true);
+  });
+
   it('shows the counters of the tabs (the pending queue first) and a plain empty queue', async () => {
     counts = { open: 3, waiting: 2, mine: 1, closed: 1 };
     serve();

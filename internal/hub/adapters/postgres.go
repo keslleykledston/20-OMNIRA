@@ -330,9 +330,11 @@ func (r *PostgresHubRepository) GetHubInboxItem(ctx context.Context, hubID, tena
 
 // liveInbox is the Hub inbox as the screen's tabs need it: the projection row with WHO HOLDS the conversation and whether it is FINALIZED read from the conversation itself.
 // The projector reconciles every minute, so after "Assumir" or "Finalizar" the projected row would still say "pending" and the person would not find
-// the attendance in "Minhas" (or the history) until the next run. The join adds nothing to what the caller may read: the RLS policy of hub_inbox_items
-// already requires the parent conversation to be readable under the caller's own session. Every other column stays the projection's.
-const liveInbox = `(SELECT i.id, i.hub_id, i.tenant_id, i.conversation_id, i.queue_id,
+// the attendance in "Minhas" (or the history) until the next run. The queue is read live too, so that the list and the opening of an item (which authorizes
+// by the queue) agree with the queue RLS really applies. The join adds nothing to what the caller may read: the RLS policy of hub_inbox_items already
+// requires the parent conversation to be readable under the caller's own session. Every other column stays the projection's.
+const liveInbox = `(SELECT i.id, i.hub_id, i.tenant_id, i.conversation_id,
+		CASE WHEN c.id IS NULL THEN i.queue_id ELSE c.queue_id END AS queue_id,
 		CASE WHEN c.id IS NULL THEN i.assigned_user_id ELSE c.assigned_to_user_id END AS assigned_user_id,
 		i.customer_name, i.channel,
 		CASE WHEN c.id IS NULL THEN i.status ELSE c.status END AS status,
@@ -483,7 +485,7 @@ func (r *PostgresHubRepository) CountHubInboxSegments(ctx context.Context, hubID
 // is read from this persisted row (and only visible if RLS lets the caller see the row).
 func (r *PostgresHubRepository) GetHubInboxItemByID(ctx context.Context, hubID, itemID uuid.UUID) (*domain.HubInboxItem, error) {
 	q := platformdb.QuerierFromContext(ctx, r.pool)
-	item, err := scanInboxItem(q.QueryRow(ctx, `SELECT `+inboxColumns+` FROM hub_inbox_items WHERE hub_id = $1 AND id = $2`, hubID, itemID))
+	item, err := scanInboxItem(q.QueryRow(ctx, `SELECT `+inboxColumns+` FROM `+liveInbox+` li WHERE hub_id = $1 AND id = $2`, hubID, itemID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
