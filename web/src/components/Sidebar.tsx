@@ -7,6 +7,7 @@ import { useTenantDisplay } from '../lib/tenantContext'
 import { isDevSurface } from './UnavailableSurface'
 import { isActing } from '../lib/acting'
 import { useMyHubs } from '../hooks/useMyHubs'
+import { useHubWaiting } from '../hooks/useHubWaiting'
 
 // Only routes that exist in App.tsx. Spec items without a route (Automação, o
 // restante de Configurações) stay hidden rather than simulated —
@@ -66,6 +67,8 @@ export default function Sidebar() {
   const wide = (cls: string) => (collapsed ? '' : cls)
   const tenant = useTenantDisplay()
   const hubs = useMyHubs()
+  // Conversations waiting for an answer in the instances served through the Hub: shown on "Conversas" (display only; not while attending one instance)
+  const waiting = useHubWaiting(hubs.data ?? [], !isActing())
   const base = navItems.filter((item) => !item.mockBacked || isDevSurface())
   // ADR-0039: the Access panel (people and permissions) is offered only to hub admins, and only when the server mounts it.
   const accessItem: (typeof navItems)[number] = { label: 'Acessos', path: '/acessos', icon: 'key' }
@@ -161,10 +164,26 @@ export default function Sidebar() {
                 'focus-visible:ring-offset-0'
               )}
               aria-current={active ? 'page' : undefined}
-              title={item.label}
+              aria-label={item.path === '/inbox' && waiting > 0 ? `${item.label}, ${waiting} aguardando resposta` : undefined}
+              title={item.path === '/inbox' && waiting > 0 ? `${item.label} — ${waiting} aguardando resposta` : item.label}
             >
-              <Icon name={item.icon} />
+              <span className="relative inline-flex">
+                <Icon name={item.icon} />
+                {item.path === '/inbox' && waiting > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className={clsx('absolute -right-2 -top-2 min-w-[16px] rounded-full bg-accent-primary px-1 text-center text-[10px] font-semibold leading-4 text-white', wide('xl:hidden'))}
+                  >
+                    {waiting > 99 ? '99+' : waiting}
+                  </span>
+                )}
+              </span>
               <span className={clsx('hidden', wide('xl:inline'))}>{item.label}</span>
+              {item.path === '/inbox' && waiting > 0 && (
+                <span aria-hidden="true" className={clsx('ml-auto hidden rounded-full bg-accent-primary px-1.5 text-[11px] font-semibold leading-5 text-white', wide('xl:inline'))}>
+                  {waiting > 99 ? '99+' : waiting}
+                </span>
+              )}
             </Link>
           )
         })}

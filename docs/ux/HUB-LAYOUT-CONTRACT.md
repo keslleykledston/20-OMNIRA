@@ -40,7 +40,7 @@ Invariantes (cada um tem teste; ver §5):
 3. **Os detalhes do atendimento são seções recolhíveis** (`CollapsibleSection`, a mesma da caixa da empresa), com a escolha lembrada por pessoa. Na caixa completa da instância (delegada) todas as seções começam abertas: nada que o agente já alcançava fica atrás de um clique.
 4. **A empresa é sempre dita, por extenso**: em cada linha, no cabeçalho da conversa, na faixa "Contexto ativo", em cada aba de atendimento e no painel de detalhes (`TenantBadge`: código + nome completo; nunca só cor).
 5. **Abas de instância** trazem o contador do que espera resposta (soma em "Todas"); sem número quando nada espera.
-6. **Atendimentos abertos como abas**: abrir uma conversa a adiciona; clicar numa aba a traz de volta; **fechar a aba só a esquece** (não finaliza, não transfere, não escreve nada); uma conversa que deixou de poder ser aberta (acesso encerrado) sai das abas; limite de 8; pertencem a um Hub só.
+6. **Atendimentos abertos como abas**: abrir uma conversa a adiciona; clicar numa aba a traz de volta; **fechar a aba só a esquece** (não finaliza, não transfere, não escreve nada); uma conversa que deixou de poder ser aberta (acesso encerrado) sai das abas; limite de 8; pertencem a um Hub só. **Sobrevivem à recarga da página como ids apenas** (`sessionStorage` da aba do navegador; nenhum nome de cliente ou empresa é gravado): ao voltar, cada id é perguntado de novo ao servidor (sem usar cópia em memória) e só volta o que a pessoa pode abrir agora; qualquer saída (logout) esquece tudo.
 7. **O menu da esquerda recolhe para ícones** e lembra a escolha; abaixo de `xl` ele já é só ícones.
 8. **O shell não é trocado**: `Layout`, `Header`, `Sidebar`, `MobileNav` continuam sendo os do OMNIRA. Não existe um "app dentro do app" do Hub.
 
@@ -66,12 +66,12 @@ Nunca: usar `tenant_id` de payload como autorização; ler dados de uma empresa 
 |---|---|---|
 | Abas "Todos os tenants / Empresa A / B" com contador | **ADAPT — feito** | `ConversationsEntry` + `Tabs` (`count`); número = `companies[].unanswered` |
 | Faixa "Contexto ativo: Empresa · Operação / N conversas" | **ADAPT — feito** (na aba "Todas") | `HubInboxPage`. "Operação" (subdivisão da empresa) não existe no modelo: só a instância |
-| "Atendimentos abertos" (abas com ✕) | **ADAPT — feito** | `HubOpenTabs`; fica só na memória da tela (não persiste entre recargas) |
+| "Atendimentos abertos" (abas com ✕) | **ADAPT — feito** | `HubOpenTabs`; sobrevivem à recarga só como ids (`lib/hubTabs.ts`), nomes relidos do servidor |
 | Painel "Contexto do cliente" (dados, histórico de interações, ações rápidas) | **ADAPT — feito** com o que o item carrega | `HubContextPane`. Telefone e e-mail **não** estão na projeção do Hub: ficam na caixa completa |
 | Menu à esquerda recolhível | **ADAPT — feito** no Sidebar do OMNIRA | `Sidebar` (`omnira.sidebar.collapsed`) |
 | Filtros "Novas / Lidas / Respondidas" | **NÃO adotado**: a caixa da empresa já usa Todas/Aguardando/Minhas/Encerradas e o Hub segue o mesmo vocabulário ("Pendentes" = sem responsável) | — |
 | Seção "Inbox" separada de "Conversas" no menu | **NÃO adotado** como itens do menu (um único "Conversas", ADR-0039); a separação é fila × histórico dentro da caixa | — |
-| Contador no item "Inbox" do menu | **PENDENTE** (exige consulta periódica fora da tela de conversas) | — |
+| Contador no item "Inbox" do menu | **ADAPT — feito**: número no item "Conversas" = soma de `companies[].unanswered` (servidor, `include=company_counts`, a cada 60 s; mesma entrada de cache das abas de instância; a mesma instância servida por dois Hubs conta uma vez; não aparece enquanto se atende uma instância) | `useHubWaiting` + `Sidebar` |
 | Mídia, status de entrega, tempo real, estado de conexão na aba "Todas" | **PENDENTE** (dependem de leitura de mídia por item do Hub e de SSE do Hub) | caixa completa da instância já tem |
 | Encerrar conversa / copiar telefone (ações rápidas) | Encerrar existe na caixa completa (chave `conversation.finalize`); copiar telefone não, pelo motivo do telefone | — |
 | `HubWorkspace.tsx` como componente | **REJEITADO** (ADR-0036): mock, estado e tema próprios | — |
@@ -79,7 +79,7 @@ Nunca: usar `tenant_id` de payload como autorização; ler dados de uma empresa 
 ## 5. Como o contrato é guardado
 
 - `web/src/__tests__/HubLayoutContract.test.tsx` fixa a estrutura (regiões, abas, ordem, recolher, gaveta, faixa, abas de atendimento, menu recolhível, seções recolhíveis da caixa delegada).
-- `web/src/__tests__/ConversationsTabs.test.tsx`: contador nas abas de instância.
+- `web/src/__tests__/ConversationsTabs.test.tsx`: contador nas abas de instância. `web/src/__tests__/SidebarWaitingBadge.test.tsx`: contador no item do menu.
 - `internal/hub/adapters/inbox_segments_integration_test.go` (Postgres real, papel `omnira_app`, RLS): segmentos, busca, contadores; o que a pessoa não pode ler não é listado nem contado.
 - `web/e2e-real/hub.real.spec.ts` ("layout aprovado…"): navegador real contra a API e o banco reais.
 
