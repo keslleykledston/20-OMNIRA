@@ -4,7 +4,7 @@ Estado do projeto: `LAB`. Esta página liga cada critério de `.agent/multitenan
 
 Todo nome de teste citado foi conferido por busca (`func <nome>` existe); a revisão do Codex de 2026-10-12 encontrou citações genéricas e uma afirmação sem teste (MT-AT-040), corrigidas aqui com os testes `TestAValidTokenNamingAnotherCompanyGainsNothing` e `TestHubInbox_TheNumberOfStatementsDoesNotGrowWithTheNumberOfCompanies`.
 
-Resumo: **27 VERIFIED, 10 PARTIAL, 3 NOT BUILT** de 40.
+Resumo: **28 VERIFIED, 9 PARTIAL, 3 NOT BUILT** de 40.
 
 | ID | Sev. | Critério | Situação | Evidência |
 |---|---|---|---|---|
@@ -32,7 +32,7 @@ Resumo: **27 VERIFIED, 10 PARTIAL, 3 NOT BUILT** de 40.
 | MT-AT-022 | P0 | AI conversation summarization does not aggregate cross-tenant | **VERIFIED** (POSTGRES+AUDIT) | summary_integration_test.go; TestAISummary_Disabled_ZeroProviderCalls; the summary reads ONE conversation under the resolved tenant (Codex audit) |
 | MT-AT-023 | P0 | WebSocket/SSE subscription filtered by effective tenant | **VERIFIED** (POSTGRES+NATS) | TestSSEIsolatesTenantsAndConversations; TestDelegatedRealtimeStreams; realtime bridge verifies the (company, conversation) pair |
 | MT-AT-024 | P0 | Revoked contract immediately revokes WebSocket access | **PARTIAL** (POSTGRES) | TestSSEClosesWhenAuthorizationIsRevoked; TestDelegatedStreamEndsWithinTheRecheckEvenWhenTheLookupsStall. Bounded, not immediate: <= ~15 s (HUB-ISOLATION-AUDIT.md #2, accepted) |
-| MT-AT-025 | P0 | Cache keys scoped by tenant (no global key collision) | **PARTIAL** (AUDIT) | Valkey holds only presence; keys are presence:sessions:<tenant>:<agent> and presence:online:<tenant>, tenant from the trusted context (HUB-ISOLATION-AUDIT.md). The global expiry ZSET holds ids only; no cross-tenant Valkey test, ACL is infrastructure |
+| MT-AT-025 | P0 | Cache keys scoped by tenant (no global key collision) | **VERIFIED** (real Valkey) | Valkey holds only presence; keys are presence:sessions:<tenant>:<agent> and presence:online:<tenant>, tenant from the trusted context; the global expiry ZSET members start with the tenant id. TestValkeyStore_SameAgentAndSessionInTwoTenants_NeverCollide (scripts/test-presence-valkey.sh, disposable Valkey) uses the SAME agent and session id in two companies: own online transition, own snapshot, only the expired company goes offline, a company that never touched sees nothing, every key carries a tenant id. Mutant (global online key) is killed. Server ACLs stay infrastructure (owner) |
 | MT-AT-026 | P0 | Storage paths isolated by Tenant (attachments, etc.) | **VERIFIED** (UNIT+AUDIT) | paths <root>/{quarantine|clean|outbound}/<tenant uuid>/<uuid>; TestOpenCleanDoesNotFollowASymlink; Codex audit |
 | MT-AT-027 | P1 | Weighted capacity blocks overloaded agent | **PARTIAL** (POSTGRES) | per-person capacity is enforced and not overshot by concurrent workers (TestDistribute_CapacityIsNotOvershotByConcurrentWorkers, ...AcrossPoolsThatShareAPerson). Weighted scoring (skills, SLA, continuity) is NOT BUILT: distribution is round-robin to the least loaded |
 | MT-AT-028 | P0 | Router never selects unauthorized agent | **VERIFIED** (POSTGRES) | TestDistribute_ChoosesTheLeastLoadedAmongPeopleWhoMayReply; TestDistribute_ARevocationRacingTheAssignmentWins |
@@ -53,5 +53,5 @@ Resumo: **27 VERIFIED, 10 PARTIAL, 3 NOT BUILT** de 40.
 
 - **NOT BUILT (3)**: base de conhecimento por tenant para a IA (021), painel de supervisão do Hub (030), pontuação de roteamento (037). Os três são produto novo, não correção.
 - **PARTIAL por capacidade que não existe**: logo da empresa (009, Tenant Brand Settings), gateway de integração por capacidade (018), pontuação ponderada e afinidade de cliente (027, 029), alvo de integração na confirmação (032).
-- **PARTIAL por limite medido ou aceito**: revogação do tempo real em até ~15 s (024), chaves do Valkey sem teste de colisão e ACL de infraestrutura (025), latência da lista sob carga e dos contadores (036), avaliação de política por linha em listas (038), recibo da ação externa sem entidade própria (012).
+- **PARTIAL por limite medido ou aceito**: revogação do tempo real em até ~15 s (024), latência da lista sob carga e dos contadores (036), avaliação de política por linha em listas (038), recibo da ação externa sem entidade própria (012).
 - Um achado do Codex, não de um teste, sustenta 014, 022, 025 e 026: `HUB-ISOLATION-AUDIT.md`.

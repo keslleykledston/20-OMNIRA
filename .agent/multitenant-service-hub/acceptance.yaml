@@ -329,9 +329,9 @@ acceptance_tests:
     title: "Cache keys scoped by tenant (no global key collision)"
     category: "cache"
     severity: "P0"
-    status: "partial"
-    level: "AUDIT"
-    evidence: "Valkey holds only presence; keys are presence:sessions:<tenant>:<agent> and presence:online:<tenant>, tenant from the trusted context (HUB-ISOLATION-AUDIT.md). The global expiry ZSET holds ids only; no cross-tenant Valkey test, ACL is infrastructure"
+    status: "verified"
+    level: "VALKEY"
+    evidence: "TestValkeyStore_SameAgentAndSessionInTwoTenants_NeverCollide on a disposable real Valkey (scripts/test-presence-valkey.sh): same agent and session id in two companies never collide; keys and expiry members carry the tenant id; mutant with a global online key is killed. Server ACLs stay infrastructure (owner)"
     test: |
       Given Valkey cache
       When Tenant A caches value X

@@ -15,7 +15,7 @@ Estado do projeto: `LAB`. Este documento reúne as provas para o dono decidir se
 
 ## 2. Matriz de aceite (40 critérios)
 
-27 VERIFIED · 10 PARTIAL · 3 NOT BUILT (base de conhecimento por tenant, painel de supervisão do Hub, pontuação de roteamento). Os PARTIAL são capacidade inexistente ou limite medido/aceito, listados um a um na matriz.
+28 VERIFIED · 9 PARTIAL · 3 NOT BUILT (base de conhecimento por tenant, painel de supervisão do Hub, pontuação de roteamento). Os PARTIAL são capacidade inexistente ou limite medido/aceito, listados um a um na matriz.
 
 ## 3. O que NÃO está provado (precisa de aparelho, provedor ou ação do dono)
 
