@@ -77,6 +77,13 @@ test('layout aprovado: a fila de pendentes fica separada do histórico, as conve
   await expect(page.getByText('Contexto ativo: ISP Roraima')).toBeVisible();
   await page.getByRole('button', { name: 'Fechar aba de Maria Souza' }).click();
   await expect(open.getByRole('tab')).toHaveCount(1);
+  // a recarga da página não perde a aba: o navegador guarda só o id; o nome volta do servidor
+  await page.reload();
+  await expect(open.getByRole('tab')).toHaveCount(1);
+  await expect(page.getByText('Contexto ativo: ISP Roraima')).toBeVisible();
+  const kept = await page.evaluate(() => Object.entries(sessionStorage).filter(([k]) => k.startsWith('omnira.hub.tabs.')).map(([, v]) => v).join('|'));
+  expect(kept).not.toBe('');
+  expect(kept).not.toMatch(/Jose|Maria|ISP|NorteNet/); // nenhum nome de cliente ou de empresa fica gravado no navegador
   // detalhes do atendimento: coluna ao lado (ou gaveta abaixo de 1440px), seções que recolhem e lembram a escolha
   const details = page.getByRole('complementary', { name: 'Detalhes do atendimento' });
   if (!(await details.isVisible())) await page.getByRole('button', { name: 'Detalhes do atendimento' }).click();
