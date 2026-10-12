@@ -15,6 +15,7 @@
 # the three outputs to see what the signed context costs. Without it the sessions only set the legacy settings, as before.
 #
 # Usage: scripts/bench-hub-policies.sh        (CONV=30000 MSGS=10 FACTOR=5 ABS_MS=250 to change; KEEP=1 leaves the seeded database running to run EXPLAIN by hand)
+# HUB_LIST_MS=600 HUB_COUNT_MS=1500 limit the Hub's own list and counters (migration 119: they took 5.6 s and 8.1 s at 30 000 items before it).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONV=${CONV:-30000}; MSGS=${MSGS:-10}; FACTOR=${FACTOR:-3}; ABS_MS=${ABS_MS:-250}
@@ -151,6 +152,28 @@ if v > float(lim) or (base >= 20 and v > float(factor)*base):
     print("   SLOW: %s as %s: %.2f ms vs member %.2f ms (limits: %sx when the member takes >= 20 ms, %s ms)" % (qn,m,v,base,factor,lim)); sys.exit(1)
 PY
   done
+done
+# The Hub's OWN reads (migration 119): the person outside the delegated context lists and counts hub_inbox_items, whose policy and the policy of the conversations
+# behind them used to ask has_active_hub_access once per row (5.6 s the list, 8.1 s the counters at 30 000 items). Same shape as the Hub inbox endpoint (liveInbox).
+HUB=00000000-0000-0000-0000-0000000000b0
+Q_HUBLIST="SELECT i.id FROM (SELECT i.id, i.hub_id, i.tenant_id, i.last_activity_at, CASE WHEN c.id IS NULL THEN i.status ELSE c.status END AS status,
+  CASE WHEN c.id IS NULL THEN i.assigned_user_id ELSE c.assigned_to_user_id END AS assigned_user_id
+  FROM hub_inbox_items i LEFT JOIN conversations c ON c.tenant_id=i.tenant_id AND c.id=i.conversation_id) i
+  WHERE i.hub_id='$HUB' AND i.status<>'closed' AND i.assigned_user_id IS NULL ORDER BY i.last_activity_at DESC, i.id DESC LIMIT 51"
+Q_HUBCOUNT="SELECT count(*) FILTER (WHERE i.status<>'closed'), count(*) FILTER (WHERE i.status='closed') FROM (SELECT CASE WHEN c.id IS NULL THEN i.status ELSE c.status END AS status
+  FROM hub_inbox_items i LEFT JOIN conversations c ON c.tenant_id=i.tenant_id AND c.id=i.conversation_id WHERE i.hub_id='$HUB') i"
+set_scope none
+for qn in HUBLIST HUBCOUNT; do
+  q_var="Q_$qn"; q="${!q_var}"
+  read -r hm hb < <(bench hubtab "$DELEGATE" 0 "$q")
+  printf '%-22s %-10s %12s %12s\n' "$qn" hubtab "$hm" "$hb"
+  case "$qn" in HUBLIST) lim=${HUB_LIST_MS:-600} ;; *) lim=${HUB_COUNT_MS:-1500} ;; esac
+  python3 - "$qn" "$hm" "$lim" <<'PY' || FAIL=1
+import sys
+qn,v,lim=sys.argv[1],float(sys.argv[2]),float(sys.argv[3])
+if v > lim:
+    print("   SLOW: %s as the Hub's own tab: %.2f ms (limit %s ms)" % (qn,v,lim)); sys.exit(1)
+PY
 done
 set_scope none
 [ "$FAIL" = 0 ] && echo "PASS: delegated reads within the limits (${FACTOR}x the member's when it takes >= 20 ms; ${ABS_MS} ms lists, ${POINT_MS:-25} ms point reads)" || { echo "FAIL: a delegated read is too slow (see SLOW lines)"; exit 1; }

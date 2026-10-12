@@ -32,6 +32,9 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 	w.exec(`INSERT INTO effective_access_grants (id, hub_id, user_id, tenant_id, service_contract_id, valid_from) VALUES ($1, $2, $3, $4, $5, now() - interval '1 day')`,
 		g2, hub2, agent, w.tenant["A"], contract2)
 
+	// an inbox row of the SECOND hub for company B, where the person holds no grant through that hub: it must never be visible, whatever the first hub allows
+	w.exec(`INSERT INTO hub_inbox_items (hub_id, tenant_id, conversation_id, queue_id) VALUES ($1, $2, $3, $4)`, hub2, w.tenant["B"], w.conv["B"], w.queue1["B"])
+
 	type rowSeen struct{ conv, item bool }
 	keys := []string{"A", "A2", "A0", "B", "C"}
 	// what the policies show, and what the original function says, per conversation key
@@ -45,7 +48,7 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 				var n int
 				w.must(q.QueryRow(ctx, `SELECT count(*) FROM conversations WHERE id = $1`, w.conv[k]).Scan(&n))
 				s.conv = n > 0
-				w.must(q.QueryRow(ctx, `SELECT count(*) FROM hub_inbox_items WHERE conversation_id = $1`, w.conv[k]).Scan(&n))
+				w.must(q.QueryRow(ctx, `SELECT count(*) FROM hub_inbox_items WHERE conversation_id = $1 AND hub_id = $2`, w.conv[k], w.hub).Scan(&n))
 				s.item = n > 0
 				got[k] = s
 
@@ -61,6 +64,13 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 				t.Errorf("conversation %s: policies show conversation=%v item=%v; the original function says conversation=%v item=%v", k, got[k].conv, got[k].item, want[k].conv, want[k].item)
 			}
 		}
+		w.inSession(agent, func(ctx context.Context, q platformdb.Querier) {
+			var n int
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM hub_inbox_items WHERE hub_id = $1`, hub2).Scan(&n))
+			if n != 0 {
+				t.Errorf("an inbox row of a hub the person holds no grant through is visible (%d)", n)
+			}
+		})
 		var shown []string
 		for _, k := range keys {
 			if got[k].conv {
@@ -78,6 +88,8 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 	reset := func() {
 		w.exec(`UPDATE hub_tenant_service_contracts SET service_scope = '{}'::jsonb, status = 'active', valid_from = now() - interval '1 day', valid_until = NULL`)
 		w.exec(`UPDATE effective_access_grants SET status = 'active', valid_from = now() - interval '1 day', valid_until = NULL`)
+		// the second hub starts OFF: its unrestricted scope would hide every scope case of the first one; the cases about two hubs switch it on
+		w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, g2)
 		w.exec(`UPDATE service_hubs SET status = 'active'`)
 		w.exec(`UPDATE tenants SET status = 'active'`)
 		w.exec(`UPDATE users SET status = 'active' WHERE id = $1`, agent)
@@ -91,6 +103,10 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 		{"one queue", scopeA(`{"queue_ids": ["` + q1 + `"]}`)},
 		{"two queues", scopeA(`{"queue_ids": ["` + q1 + `","` + q2 + `"]}`)},
 		{"a queue of another company never widens", scopeA(`{"queue_ids": ["` + qB + `"]}`)},
+		{"a queue of another company, with no grant there, shows nothing of it", func() {
+			scopeA(`{"queue_ids": ["` + qB + `"]}`)()
+			w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, gB)
+		}},
 		{"empty list", scopeA(`{"queue_ids": []}`)},
 		{"JSON null list", scopeA(`{"queue_ids": null}`)},
 		{"not an array", scopeA(`{"queue_ids": "` + q1 + `"}`)},
@@ -116,17 +132,18 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 			w.exec(`UPDATE tenants SET status = 'suspended' WHERE id IN ($1, $2)`, w.tenant["A"], w.tenant["B"])
 		}},
 		{"account inactive", func() { w.exec(`UPDATE users SET status = 'inactive' WHERE id = $1`, agent) }},
-		{"second hub revoked, first scoped to one queue", func() {
+		{"second hub unrestricted widens the first scoped to one queue", func() {
 			scopeA(`{"queue_ids": ["` + q1 + `"]}`)()
-			w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, g2)
+			w.exec(`UPDATE effective_access_grants SET status = 'active' WHERE id = $1`, g2)
 		}},
-		{"second hub unrestricted widens the first scoped to one queue", scopeA(`{"queue_ids": ["` + q1 + `"]}`)},
 		{"second hub scoped to the other queue, first to one", func() {
 			scopeA(`{"queue_ids": ["` + q1 + `"]}`)()
+			w.exec(`UPDATE effective_access_grants SET status = 'active' WHERE id = $1`, g2)
 			w.exec(`UPDATE hub_tenant_service_contracts SET service_scope = $2::jsonb WHERE id = $1`, contract2, `{"queue_ids": ["`+q2+`"]}`)
 		}},
 		{"second hub ended, first scoped to nothing", func() {
 			scopeA(`{"queue_ids": []}`)()
+			w.exec(`UPDATE effective_access_grants SET status = 'active' WHERE id = $1`, g2)
 			w.exec(`UPDATE hub_tenant_service_contracts SET valid_until = now() - interval '1 minute' WHERE id = $1`, contract2)
 		}},
 		{"company B grant revoked", func() { w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, gB) }},
