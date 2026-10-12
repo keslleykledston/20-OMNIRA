@@ -53,6 +53,11 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
   }
 }
 
+// Para endpoints que podem retornar 401 sem redirecionar (como status do convite)
+async function callNoRedirect<T>(fn: () => Promise<{ data: T }>): Promise<T> {
+  return (await fn()).data;
+}
+
 export const invitationsAPI = {
   list: () => call<{ items: Invitation[] }>(() => axios.get(teamBase(), { headers: authHeaders() })).then((d) => d.items),
   create: (email: string, roleKey: string) =>
@@ -68,7 +73,7 @@ export const invitationsAPI = {
 // sem exigir tenant).
 export const invitationAcceptAPI = {
   status: (token: string) =>
-    call<InvitationStatusResponse>(() => axios.get(`${API_BASE}/invitations/${token}/status`, { headers: authHeaders() })),
+    callNoRedirect<InvitationStatusResponse>(() => axios.get(`${API_BASE}/invitations/${token}/status`, { headers: authHeaders() })),
   accept: (token: string) =>
     call<{ tenant_id: string }>(() => axios.post(`${API_BASE}/invitations/${token}/accept`, {}, { headers: authHeaders() })),
 };
