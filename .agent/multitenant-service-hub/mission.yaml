@@ -195,7 +195,7 @@ phases:
   - phase: 12
     title: "Observability & Operations"
     status: "completed_lab"
-    evidence: "internal/platform/opsmetrics + projector/distributor/delegation/session-context signals on /metrics; scripts/hub-health-check.sh (+ its test); docs/ops/HUB-ALERTS.md. NOT PROVEN: an alert reaching the owner's phone (cron line proposed, not installed until the code is deployed)"
+    evidence: "internal/platform/opsmetrics + projector/distributor/delegation/session-context/change-signal signals on /metrics; scripts/hub-health-check.sh (+ its test) in cron */5 on the host since 2026-10-12; docs/ops/HUB-ALERTS.md. NOT PROVEN: an alert reaching the owner's phone"
     deliverables:
       - "Metrics (Hub Inbox lag, routing latency, integration latency)"
       - "Logs (structured, audit trail, no secrets)"
@@ -205,8 +205,8 @@ phases:
 
   - phase: 13
     title: "Security / Adversarial Gate"
-    status: "in_progress"
-    evidence: "independent Codex reviews were run at every phase and on 2026-10-12 (isolation audit, migration 119); each HIGH/CRITICAL was fixed before moving on. The single consolidated gate before any approval is still to be run and signed off by the owner"
+    status: "completed_candidate"
+    evidence: "three independent Codex layers + follow-up (CRITICAL 0, every HIGH fixed/mitigated/accepted with a written reason: HUB-PRE-GATE-REPORT.md); credential-leak sweep in the real-browser E2E; consolidated package docs/architecture/HUB-GATE-PACKAGE.md is UNSIGNED - the owner's decision (section 5) is the only thing left"
     deliverables:
       - "Codex independent review (all critical paths)"
       - "Penetration test scenarios"
@@ -219,7 +219,7 @@ phases:
   - phase: 14
     title: "E2E / Performance / Migration Proof"
     status: "partial"
-    evidence: "migration up/down/up identical; REAL backup restored into a fresh cluster with isolation checks (scripts/backup-restore-hub-check.sh, RTO ~6 s); EXPLAIN/bench at 10k and 30k items; HTTP load proof (16 clients, 20k items). NOT DONE: the live pilot with the owner (docs/ops/HUB-LIVE-TEST-SCRIPT.md), real Keycloak, real ERP/WhatsApp"
+    evidence: "migration up/down/up identical through 121 (re-run 2026-10-12); REAL backup restored into a fresh cluster (RTO ~6 s); EXPLAIN/bench at 10k and 30k items; HTTP load proof (16 clients, 20k items); nginx streaming of the change signal proved against the deployed web image. NOT DONE: the live pilot with the owner (docs/ops/HUB-LIVE-TEST-SCRIPT.md), real Keycloak, real ERP/WhatsApp"
     deliverables:
       - "Migration on dev/staging environment"
       - "Rollback validation"
@@ -230,8 +230,8 @@ phases:
 
   - phase: 15
     title: "Cleanup & Documentation"
-    status: "in_progress"
-    evidence: "this file, HUB-ACCEPTANCE-MATRIX.md, HUB-ISOLATION-AUDIT.md, HUB-ALERTS.md, HUB-LAYOUT-CONTRACT.md, ADR-0040/0042 updated; FINAL-REPORT.md waits for the owner's acceptance"
+    status: "completed_pending_acceptance"
+    evidence: "HUB-DATA-MODEL.md, HUB-MIGRATION-GUIDE.md, docs/ops/HUB-OPERATOR-GUIDE.md, docs/ux/HUB-AGENT-GUIDE.md, HUB-ALERTS.md, HUB-ACCEPTANCE-MATRIX.md, HUB-ISOLATION-AUDIT.md, HUB-GATE-PACKAGE.md, CHANGELOG; FINAL-REPORT.md exists as a DRAFT until the owner signs the gate"
     deliverables:
       - "Architecture docs updated"
       - "Data model documentation"

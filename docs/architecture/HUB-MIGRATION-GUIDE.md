@@ -16,12 +16,12 @@ Estado: `LAB`. Ledger de produção: **121**. Receitas validadas nesta árvore.
 
 ## 3. Voltar
 
-- **Imagens:** `docker tag 20-omnira-<svc>:rollback-pre-… 20-omnira-<svc>:latest` e `up -d --no-deps --no-build --force-recreate <svc>`. As migrations 093–121 são compatíveis com a imagem anterior **da própria 119/121** para frente apenas se as políticas novas forem mantidas; para voltar uma migration, aplique o `.down.sql` correspondente **depois** de voltar as imagens, nunca antes.
+- **Imagens:** `docker tag 20-omnira-<svc>:rollback-pre-… 20-omnira-<svc>:latest` e `up -d --no-deps --no-build --force-recreate <svc>`. Voltar só a imagem é seguro quando a migration nova é aditiva (a imagem antiga ignora o que não conhece); para desfazer a migration, volte primeiro as imagens e só então aplique o `.down.sql` correspondente, nunca o contrário.
 - **Banco:** restaurar o backup escolhido num cluster novo é o caminho provado (`scripts/backup-restore-hub-check.sh`: RTO ~6 s no volume atual, isolamento conferido depois). Restaurar sobre o banco vivo só com o serviço parado e ordem do dono.
 
 ## 4. Provas que existem
 
-`scripts/test-hub-migrations.sh` (up/down/up de 093–…), `scripts/test-integration.sh` (gate de 37 pacotes, sempre de `git archive`, em `enforce`), `scripts/bench-hub-policies.sh` (custo a 10k/30k), `scripts/test-hub-load.sh` (16 clientes, 20k itens), `scripts/backup-restore-hub-check.sh`.
+`scripts/test-hub-migrations.sh` (up/down/up de 093 até a mais nova; PASS em 2026-10-12 com 121), `scripts/test-integration.sh` (gate de 37 pacotes, sempre de `git archive`, em `enforce`), `scripts/bench-hub-policies.sh` (custo a 10k/30k), `scripts/test-hub-load.sh` (16 clientes, 20k itens), `scripts/backup-restore-hub-check.sh`.
 
 ## 5. Armadilhas conhecidas
 

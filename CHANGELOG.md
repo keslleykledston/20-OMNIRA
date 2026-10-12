@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added (Multi-Tenant Service Hub — estado `LAB`, migrations 093–121)
+- Hub como plano de controle: contratos, concessões, painel `/acessos`, convites por e-mail, pools e distribuição, auditoria; atender uma empresa pelo Hub (`X-Omnira-Acting-As`) com chaves delegáveis; aba "Todas" no layout aprovado (fila × histórico, abas, painel recolhível) com sinal de mudança em tempo real (`GET /api/v1/hubs/{id}/events`, SSE sem conteúdo).
+- Isolamento: RLS FORCE, contexto de sessão assinado em `enforce` (ADR-0042, migration 118), escopo das escritas de auditoria/outbox (121), checagem de mesma origem nas escritas por cookie, limpeza de cache/rascunhos ao sair.
+- Escala/operação: `hub_reach()` (migration 119), métricas `omnira_hub_*`, `scripts/hub-health-check.sh`, guias em `docs/ops/HUB-OPERATOR-GUIDE.md` e `docs/architecture/HUB-{DATA-MODEL,MIGRATION-GUIDE,GATE-PACKAGE}.md`. Gate formal **não assinado**.
+
 ### Fixed (Flow Builder — chamado sem assunto)
 - `find_open_tickets` passa a nomear o chamado pelo assunto, ou por `nº <número do CRM/ERP>` quando o assunto local está vazio (chamado aberto no CRM pelo Inbox), ou por `sem assunto registrado`. Antes o cliente lia `chamado aberto: ""` e o resumo do atendente terminava em `existe: .` (smoke com telefone real, 2026-10-07).
 - **Implantado em 2026-10-08** (só o `worker`, que executa os fluxos; sem migration). Rollback: `20-omnira-worker:rollback-pre-ticketlabel-20261007-2054`.
