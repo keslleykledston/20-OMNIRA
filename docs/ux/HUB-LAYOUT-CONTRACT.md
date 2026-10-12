@@ -54,7 +54,7 @@ A divisão de tenant (quem enxerga o quê, por contrato/concessão/fila) muda **
 | criar um novo **escopo** (fila, equipe, contrato) | entra no servidor (RLS e filtro do `segment`/`companies`); a tela continua pedindo as mesmas abas. O que a pessoa não pode ver simplesmente não vem; a tela não decide |
 | criar uma nova **fonte de dados do cliente** (ERP, CRM, IA) | vira seção recolhível em **Detalhes** da caixa completa da instância (já é assim: Contato, Chamado, Resumo com IA, Anotações, Histórico). Na aba "Todas" só aparece o que o **item do Hub** carrega; o resto abre pelo botão "Abrir na caixa completa" |
 | precisar de mais **uma região** (alertas, supervisão) | é uma **rota nova** (como `/supervisor`), não uma quarta coluna na caixa |
-| tocar no **contador** das abas | o número vem de `companies[].unanswered` (servidor, sob a sessão da pessoa); nunca é somado a partir de listas no navegador |
+| tocar no **contador** das abas | o número vem de `companies[].unanswered` (servidor, sob a sessão da pessoa, só com `include=company_counts`); nunca é somado a partir de listas no navegador. Quem segura a conversa, se está finalizada e a fila vêm **vivos** da conversa (a projeção atrasa até 1 min) |
 | mexer em **cores/tokens** | só a camada `--tenant-accent`; a paleta OMNIRA fica (a roxa do protótipo é rejeitada) |
 | mexer no **shell** (`Layout`, `Sidebar`…) | não: é decisão do dono (ADR-0036 item 5) |
 
