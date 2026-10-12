@@ -87,6 +87,7 @@ const narrow = () => {
 beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   clearActing();
   setSession();
   items = [item('a', { assignment: 'none' }), item('b', { assignment: 'me', unread_count: 2 }), item('c', { assignment: 'other' }), item('d', { status: 'closed' })];
@@ -357,6 +358,62 @@ describe('Hub layout contract — which company is being served, and the attenda
     items = [item('a', { assignment: 'none' }), item('b', { assignment: 'me' }), item('c', { assignment: 'other' })];
     await user.click(screen.getByRole('button', { name: 'Fechar aba de Cliente c' }));
     expect(await screen.findByRole('heading', { name: 'Cliente a' })).toBeInTheDocument();
+  });
+});
+
+describe('Hub layout contract — the attendances opened as tabs survive a reload, as ids only', () => {
+  const rowOf = async (n: string) => (await screen.findByText('Cliente ' + n)).closest('button')!;
+  const tabNames = () => within(screen.getByRole('tablist', { name: 'Atendimentos abertos' })).getAllByRole('tab').map((t) => t.textContent);
+
+  it('brings the open attendances and the selected one back after a reload, with names the SERVER says now; the browser keeps ids only', async () => {
+    serve();
+    const user = userEvent.setup();
+    const first = renderAt(<HubInboxPage />);
+    await user.click(await rowOf('a'));
+    await user.click(await rowOf('b'));
+    await screen.findByRole('tablist', { name: 'Atendimentos abertos' });
+    await waitFor(() => expect(sessionStorage.getItem('omnira.hub.tabs.hub-1')).not.toBeNull());
+    const kept = sessionStorage.getItem('omnira.hub.tabs.hub-1')!;
+    expect(JSON.parse(kept)).toEqual({ ids: ['a', 'b'], selected: 'b' });
+    expect(kept).not.toMatch(/Cliente|Instância/); // no name of a customer or a company is written to the browser
+    first.unmount();
+    // the reload: a customer was renamed meanwhile; the tab shows what the server says now
+    items = items.map((i) => (i.id === 'a' ? { ...i, customer_name: 'Cliente a (renomeado)' } : i));
+    renderAt(<HubInboxPage />);
+    await waitFor(() => expect(tabNames()).toEqual(['CACliente a (renomeado)Instância a', 'CBCliente bInstância b']));
+    expect(await screen.findByRole('heading', { name: 'Cliente b' })).toBeInTheDocument();
+  });
+
+  it('does not bring back an attendance the person can no longer open', async () => {
+    serve();
+    const user = userEvent.setup();
+    const first = renderAt(<HubInboxPage />);
+    await user.click(await rowOf('a'));
+    await user.click(await rowOf('b'));
+    await waitFor(() => expect(JSON.parse(sessionStorage.getItem('omnira.hub.tabs.hub-1') ?? '{}').ids).toEqual(['a', 'b']));
+    first.unmount();
+    items = items.filter((i) => i.id !== 'a'); // the access to a ended: its detail is a 404
+    renderAt(<HubInboxPage />);
+    await waitFor(() => expect(tabNames()).toEqual(['CBCliente bInstância b']));
+    await waitFor(() => expect(JSON.parse(sessionStorage.getItem('omnira.hub.tabs.hub-1') ?? '{}').ids).toEqual(['b']));
+  });
+
+  it('does not overwrite what was kept with the empty first render, and a sign-out forgets it', async () => {
+    serve();
+    sessionStorage.setItem('omnira.hub.tabs.hub-1', JSON.stringify({ ids: ['a'], selected: 'a' }));
+    renderAt(<HubInboxPage />);
+    await waitFor(() => expect(tabNames()).toEqual(['CACliente aInstância a']));
+    const { clearSession } = await import('../lib/session');
+    clearSession();
+    expect(sessionStorage.getItem('omnira.hub.tabs.hub-1')).toBeNull();
+  });
+
+  it('ignores a damaged or oversized entry instead of failing', async () => {
+    serve();
+    sessionStorage.setItem('omnira.hub.tabs.hub-1', '{not json');
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    expect(screen.queryByRole('tablist', { name: 'Atendimentos abertos' })).toBeNull();
   });
 });
 

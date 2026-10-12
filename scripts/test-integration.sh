@@ -169,6 +169,13 @@ docker run -d --name "${CONTAINER}" \
 PORT=$(docker port "${CONTAINER}" 5432/tcp | head -1 | cut -d: -f2)
 echo "== ${CONTAINER} -> 127.0.0.1:${PORT}"
 
+# The official image starts a TEMPORARY server to run initdb and then restarts: pg_isready answers during the temporary one, and the connection dies when
+# it stops ("server closed the connection unexpectedly" on the first CREATE DATABASE). The real server is the one that logs "ready to accept connections"
+# the SECOND time; wait for that, then for pg_isready.
+for i in $(seq 1 120); do
+  [ "$(docker logs "${CONTAINER}" 2>&1 | grep -c 'database system is ready to accept connections')" -ge 2 ] && break
+  sleep 0.5
+done
 for i in $(seq 1 30); do
   docker exec "${CONTAINER}" pg_isready -U "${PG_USER}" >/dev/null 2>&1 && break
   sleep 0.5

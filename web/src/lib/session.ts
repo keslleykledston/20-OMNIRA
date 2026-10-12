@@ -1,3 +1,5 @@
+import { forgetAllTabs } from './hubTabs'
+
 // Session values for the inbox pages. The JWT lives under "token" (lib/store.ts);
 // the tenant comes from the backend login response.
 export const TOKEN_KEY = 'token';
@@ -33,6 +35,8 @@ export function hasSession(): boolean {
 export function clearSession(): void {
 	// 'actingHub'/'actingName': the delegated context (lib/acting.ts) never survives a sign-out
 	[TOKEN_KEY, TENANT_KEY, USER_KEY, SESSION_KEY, 'jwtToken', 'actingHub', 'actingName'].forEach((k) => localStorage.removeItem(k));
+	// the attendances open as tabs in the Hub inbox (ids only, lib/hubTabs.ts) do not outlive the sign-in either
+	forgetAllTabs();
 }
 
 // A 401 from the API means the token is missing/expired (the backend keys are per process):

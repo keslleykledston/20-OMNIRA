@@ -6,6 +6,7 @@ import { hubAPI, type HubCompanyOption, type HubInboxItem, type HubItemDetail, t
 import { enterDelegatedInstance, switchTenant } from '../lib/tenants';
 import { useDebounced } from '../hooks/useDebounced';
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
+import { loadTabs, saveTabs, MAX_TABS } from '../lib/hubTabs';
 import { useMyHubs } from '../hooks/useMyHubs';
 import { useMyTenants } from '../hooks/useMyTenants';
 import { useMediaQuery } from '../hooks/useMediaQuery';
@@ -64,10 +65,49 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
         const tabs = cur.hub === hubId ? cur.tabs : [];
         if (tabs.some((t) => t.id === id)) return { hub: hubId, tabs };
         // a bounded set: past 8 the oldest tab that is not the one being opened is forgotten
-        return { hub: hubId, tabs: [...tabs, { id, name: from.customer_name || 'Sem nome', tenantName: from.tenant_name || 'Instância não identificada', tenantId: from.tenant_id }].slice(-8) };
+        return { hub: hubId, tabs: [...tabs, { id, name: from.customer_name || 'Sem nome', tenantName: from.tenant_name || 'Instância não identificada', tenantId: from.tenant_id }].slice(-MAX_TABS) };
       });
     }
   };
+  // Restore the attendances that were open before a reload (ids only were kept, lib/hubTabs.ts): each is asked of the server again, so what comes back is what the
+  // person may read NOW, with the names the server says; an attendance that cannot be opened any more is simply not brought back. `restored` also keeps the
+  // saving below from overwriting what was kept with the empty state of the first render.
+  const [restored, setRestored] = useState('');
+  useEffect(() => {
+    if (!hubId || restored === hubId) return;
+    const saved = loadTabs(hubId);
+    if (saved.ids.length === 0) {
+      setRestored(hubId);
+      return;
+    }
+    let live = true;
+    void Promise.allSettled(
+      saved.ids.map((id) => queryClient.fetchQuery({ queryKey: ['hub-item', hubId, id], queryFn: () => hubAPI.item(hubId, id), staleTime: 10_000 })),
+    ).then((results) => {
+      if (!live) return;
+      const back: OpenAttendance[] = [];
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') back.push({ id: saved.ids[i]!, name: r.value.item.customer_name || 'Sem nome', tenantName: r.value.tenant.name || 'Instância não identificada', tenantId: r.value.tenant.id });
+      });
+      setOpened((cur) => {
+        const already = cur.hub === hubId ? cur.tabs : [];
+        const merged = [...back.filter((b) => !already.some((a) => a.id === b.id)), ...already].slice(-MAX_TABS);
+        return { hub: hubId, tabs: merged };
+      });
+      setSelection((cur) => (cur.hub === hubId && cur.id ? cur : { hub: hubId, id: back.some((b) => b.id === saved.selected) ? saved.selected : '' }));
+      setRestored(hubId);
+    });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hubId]);
+  const tabKey = allOpenTabs.map((t) => t.id).join(',');
+  useEffect(() => {
+    if (!hubId || restored !== hubId) return;
+    const ids = tabKey ? tabKey.split(',') : [];
+    saveTabs(hubId, { ids, selected: ids.includes(selected) ? selected : '' });
+  }, [hubId, restored, tabKey, selected]);
   // like the selection, the filter belongs to ONE hub
   const companyIds = onlyCompany ? [onlyCompany] : filter.hub === hubId ? filter.ids : [];
   const openTabs = companyIds.length > 0 ? allOpenTabs.filter((t) => companyIds.includes(t.tenantId)) : allOpenTabs;
