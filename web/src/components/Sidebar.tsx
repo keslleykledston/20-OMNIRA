@@ -181,6 +181,9 @@ export default function Sidebar() {
             <p className="text-xs text-text-tertiary truncate">
               {tenant.roleLabel}
             </p>
+            <p className="text-[10px] text-text-quaternary truncate font-mono">
+              {tenant.tenantId}
+            </p>
           </div>
         </div>
       </div>
