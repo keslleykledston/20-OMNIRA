@@ -10,7 +10,7 @@ Três revisões adversariais independentes, cada uma assumindo um atacante difer
 |---|---|---|
 | Banco (migrations 093..119, RLS, funções `SECURITY DEFINER`, contexto de sessão assinado) | executa **SQL arbitrário** como `omnira_app` | `01a1319d-7df1-71c1-ae3c-8d940dd2282e` |
 | Go (autorização, delegação, OIDC, convites, painel de acessos) | pessoa autenticada comum ou administradora tentando passar do que lhe cabe | `01a1319d-7e2e-7450-8b40-223f6b6ed413` |
-| Navegador (SPA, nginx, cookies, cache) | outra pessoa no mesmo navegador; site de fora | `01a1319d-…` (3ª tarefa, ver o histórico) |
+| Navegador (SPA, nginx, cookies, cache) | outra pessoa no mesmo navegador; site de fora | `01a1319d-7ec6-7d42-9bd8-d7ecb1412cdf` |
 
 Resultado bruto: **CRITICAL 0** nas três; **HIGH 4 + 1 + 2**; MEDIUM 4 + 3 + 4; LOW 2 + 2 + 2. Nenhuma camada foi declarada "sem achados".
 
@@ -53,6 +53,8 @@ Resultado bruto: **CRITICAL 0** nas três; **HIGH 4 + 1 + 2**; MEDIUM 4 + 3 + 4;
 | L-02 `ConversationPage` legado renderiza URL de mídia | **SEM CAMINHO VIVO** (não é roteado); não reativar sem tratar |
 
 ## 3. Revisões dos próprios lotes do dia (resumo)
+
+**Revisão de seguimento das correções do pré-gate** (`01a131be-081c-7370-ac73-308800456486`): **4 HIGH** (INSERT de outbox por concessão só de leitura; modo `off` como padrão da migration; validade do contrato ignorada nas escritas de gestão; caminhos de saída que não chamavam `clearSession`), 6 MEDIUM e 1 LOW. Corrigidos nesta mesma rodada: outbox exige concessão que **pode responder**; linha de auditoria sem empresa só em nome da própria pessoa; `valid_from`/`valid_until` do contrato nas escritas de gestão; **`enforce` obrigatório por padrão com login real** (`OMNIRA_SESSION_CTX_REQUIRE_ENFORCE` vazio + `OMNIRA_AUTH_MODE=oidc` = ligado); todo caminho de saída termina a sessão inteira; `X-Forwarded-Host` deixou de ser confiável e a comparação por `Host` só vale sem origem configurada; uma aplicação de autorização por e-mail que falhou é refeita no próximo login do **mesmo** endereço; respostas de fila esquecidas quando a lista da empresa muda. **Aceitos:** fluxo de sinal aberto sem nenhuma concessão (limitado por pessoa/processo/vida), um sinal vazio possível depois da revogação (sem conteúdo).
 
 Lote de 2026-10-12 (migration 119, sinais, abas, selo): 1ª passada sem CRITICAL/HIGH; 2ª com **2 HIGH** (consulta amplificável por `NOTIFY` forjado; afirmação MT-AT-040 sem teste), todos corrigidos. Sinal de mudança do Hub: **2 HIGH** (escopo de fila era o da pessoa e não o do Hub; veredito em cache sobrevivia à mudança de escopo), 5 MEDIUM e 3 LOW, todos corrigidos ou aceitos com motivo (credencial Bearer não é revalidada, igual aos demais fluxos).
 
