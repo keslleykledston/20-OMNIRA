@@ -125,7 +125,7 @@ func NewPresenceWakeup(repo ports.LivenessRepository, nc *nats.Conn) *PresenceWa
 // requirement (Retrigger's SKIP LOCKED already makes duplicates harmless).
 func (w *PresenceWakeup) Start(ctx context.Context) error {
 	sub, err := w.nc.QueueSubscribe("presence.changed.*", "routing-liveness-wakeup", func(msg *nats.Msg) {
-		w.handle(ctx, msg.Data)
+		w.handleOnSubject(ctx, msg.Subject, msg.Data)
 	})
 	if err != nil {
 		return err
@@ -138,6 +138,17 @@ func (w *PresenceWakeup) Stop() {
 	if w.sub != nil {
 		_ = w.sub.Unsubscribe()
 	}
+}
+
+// handleOnSubject refuses an event whose payload names a company other than the one of the subject it arrived on: the subject is where the publisher
+// (presence.NatsTransitionPublisher) scopes the event, so a mismatch is a malformed or forged message, not a reason to retrigger another company's routing.
+func (w *PresenceWakeup) handleOnSubject(ctx context.Context, subject string, data []byte) {
+	var event presenceTransitionEvent
+	if err := json.Unmarshal(data, &event); err != nil || subject != "presence.changed."+event.TenantID.String() {
+		log.Printf("routing liveness wakeup: dropping a presence event whose company does not match its subject")
+		return
+	}
+	w.handle(ctx, data)
 }
 
 func (w *PresenceWakeup) handle(ctx context.Context, data []byte) {

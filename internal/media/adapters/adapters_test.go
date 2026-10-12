@@ -203,3 +203,37 @@ func TestOpenFileStoreNeverCreatesAnythingAndNeedsAnExistingDirectory(t *testing
 		t.Fatal("relative path must be refused")
 	}
 }
+
+// A symlink planted as the final component of a cleared file is never followed.
+func TestOpenCleanDoesNotFollowASymlink(t *testing.T) {
+	root := t.TempDir()
+	fs, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, id := uuid.NewString(), uuid.NewString()
+	dir := filepath.Join(root, "clean", tenant)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(root, "other-file")
+	if err := os.WriteFile(secret, []byte("not this company's media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, id)); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := fs.OpenClean(tenant, id); err == nil {
+		f.Close()
+		t.Fatal("OpenClean followed a symlink")
+	}
+	real := uuid.NewString()
+	if err := os.WriteFile(filepath.Join(dir, real), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := fs.OpenClean(tenant, real)
+	if err != nil {
+		t.Fatalf("a regular file must open: %v", err)
+	}
+	f.Close()
+}

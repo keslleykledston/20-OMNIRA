@@ -38,7 +38,28 @@ func TestBridgeForwardsNotificationsAndRecovers(t *testing.T) {
 	}
 	defer nc.Close()
 
-	tenant, conv := uuid.New(), uuid.New()
+	// a real conversation of a real tenant: the bridge verifies the pair against the database before publishing
+	tenant, conv, contact := uuid.New(), uuid.New(), uuid.New()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO tenants (id, legal_name, status) VALUES ($1, $2, 'active')`, []any{tenant, "Bridge " + tenant.String()[:8]}},
+		{`INSERT INTO contacts (id, tenant_id, display_name, phone_e164) VALUES ($1, $2, 'Cliente', $3)`, []any{contact, tenant, "+5511" + fmt.Sprintf("%09d", time.Now().UnixNano()%1_000_000_000)}},
+		{`INSERT INTO conversations (id, tenant_id, contact_id) VALUES ($1, $2, $3)`, []any{conv, tenant, contact}},
+	} {
+		if _, err := seed.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	otherTenant := uuid.New()
+	if _, err := seed.Exec(ctx, `INSERT INTO tenants (id, legal_name, status) VALUES ($1, $2, 'active')`, otherTenant, "Bridge other "+otherTenant.String()[:8]); err != nil {
+		t.Fatal(err)
+	}
+	// the forged pair (another tenant's id, this tenant's conversation) must reach NOBODY, not even the subject it names
+	forgedSeen := make(chan struct{}, 1)
+	forgedSub, _ := nc.Subscribe(realtime.Subject(otherTenant, conv), func(*nats.Msg) { forgedSeen <- struct{}{} })
+	defer forgedSub.Unsubscribe()
 	events := make(chan map[string]any, 8)
 	sub, err := nc.Subscribe(realtime.Subject(tenant, conv), func(m *nats.Msg) {
 		var e map[string]any
@@ -85,6 +106,16 @@ func TestBridgeForwardsNotificationsAndRecovers(t *testing.T) {
 		}
 	}
 listening:
+	// A forged notification (the tenant of the subject is not the conversation's tenant) is dropped.
+	forged := fmt.Sprintf(`{"tenant_id":%q,"conversation_id":%q,"type":"message_received","data":{"message_id":"forged"}}`, otherTenant, conv)
+	if _, err := seed.Exec(ctx, `SELECT pg_notify('omnira_inbox_events', $1)`, forged); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-forgedSeen:
+		t.Fatal("a forged (tenant, conversation) pair was published")
+	case <-time.After(500 * time.Millisecond):
+	}
 	// Malformed notifications are dropped, not fatal.
 	if _, err := seed.Exec(ctx, `SELECT pg_notify('omnira_inbox_events', 'not json')`); err != nil {
 		t.Fatal(err)

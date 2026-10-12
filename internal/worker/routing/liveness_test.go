@@ -154,3 +154,19 @@ func TestPresenceWakeup_RepeatedOnlineEvent_IsSafeAndIdempotentByConstruction(t 
 		t.Fatalf("expected two calls (one per event), got %d — each is safe because Retrigger itself is idempotent", got)
 	}
 }
+
+// The subject is where the publisher scopes the event; a payload that names another company than its subject is dropped, never turned into a retrigger.
+func TestPresenceWakeup_AnEventForAnotherCompanyThanItsSubjectIsDropped(t *testing.T) {
+	tenantA, tenantB, agentID, queue := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repo := &fakeLivenessRepo{queuesByAgent: map[uuid.UUID][]uuid.UUID{agentID: {queue}}}
+	w := NewPresenceWakeup(repo, nil)
+	body, _ := json.Marshal(presenceTransitionEvent{TenantID: tenantB, AgentProfileID: agentID, Status: "online"})
+	w.handleOnSubject(context.Background(), "presence.changed."+tenantA.String(), body)
+	if n := len(repo.calls()); n != 0 {
+		t.Fatalf("an event published on company A's subject for company B retriggered %d queue(s)", n)
+	}
+	w.handleOnSubject(context.Background(), "presence.changed."+tenantB.String(), body)
+	if n := len(repo.calls()); n != 1 {
+		t.Fatalf("the matching subject retriggered %d queue(s), want 1", n)
+	}
+}

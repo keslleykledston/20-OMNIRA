@@ -87,7 +87,8 @@ func (s *FileStore) Remove(w ports.Work) error {
 
 // OpenClean returns the cleared file for serving. It never looks in quarantine.
 func (s *FileStore) OpenClean(tenantID, id string) (*os.File, error) {
-	return os.Open(filepath.Join(s.root, "clean", tenantID, id))
+	// O_NOFOLLOW: the final component is never followed, so a symlink planted in clean/<company>/ cannot turn a served file into another file.
+	return os.OpenFile(filepath.Join(s.root, "clean", tenantID, id), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 }
 
 // OpenOutbound opens a file an operator sent (ADR-0024); the API only ever reads this area to show the operators their own sent files.

@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -24,8 +25,8 @@ func TestForwardAddsAnEventIDAndAPayloadVersionAndKeepsTheLegacyFields(t *testin
 	pub := &capturePublisher{}
 	b := NewBridge(nil, pub)
 	payload := `{"tenant_id":"` + tenant.String() + `","conversation_id":"` + conv.String() + `","type":"message_received","data":{"message_id":"m1","direction":"inbound"}}`
-	b.forward(payload)
-	b.forward(payload)
+	b.forward(context.Background(), payload)
+	b.forward(context.Background(), payload)
 	if len(pub.bodies) != 2 || pub.subjects[0] != Subject(tenant, conv) {
 		t.Fatalf("published %d on %v", len(pub.bodies), pub.subjects)
 	}
@@ -53,9 +54,49 @@ func TestForwardDropsMalformedNotifications(t *testing.T) {
 	pub := &capturePublisher{}
 	b := NewBridge(nil, pub)
 	for _, bad := range []string{`not json`, `{}`, `{"tenant_id":"` + uuid.NewString() + `","type":"x"}`} {
-		b.forward(bad)
+		b.forward(context.Background(), bad)
 	}
 	if len(pub.bodies) != 0 {
 		t.Fatalf("malformed notifications must not be published: %d", len(pub.bodies))
+	}
+}
+
+// The pair (tenant, conversation) of a notification is verified, not trusted: a conversation that is not the tenant's never reaches that tenant's subject.
+func TestForwardDropsAConversationThatIsNotTheTenants(t *testing.T) {
+	tenantA, tenantB, convOfB := uuid.New(), uuid.New(), uuid.New()
+	pub := &capturePublisher{}
+	b := NewBridge(nil, pub)
+	asked := 0
+	b.verify = func(_ context.Context, tenant, conv uuid.UUID) (bool, error) {
+		asked++
+		return tenant == tenantB && conv == convOfB, nil
+	}
+	forged := `{"tenant_id":"` + tenantA.String() + `","conversation_id":"` + convOfB.String() + `","type":"message_status","data":{}}`
+	genuine := `{"tenant_id":"` + tenantB.String() + `","conversation_id":"` + convOfB.String() + `","type":"message_status","data":{}}`
+	b.forward(context.Background(), forged)
+	if len(pub.subjects) != 0 {
+		t.Fatalf("a forged pair was published on %v", pub.subjects)
+	}
+	b.forward(context.Background(), genuine)
+	b.forward(context.Background(), genuine)
+	if len(pub.subjects) != 2 || pub.subjects[0] != Subject(tenantB, convOfB) {
+		t.Fatalf("the genuine pair was not published: %v", pub.subjects)
+	}
+	if asked != 2 { // the forged one and the first genuine one; the second genuine one is remembered
+		t.Errorf("the database was asked %d times, want 2 (a verified pair is remembered)", asked)
+	}
+	b.forward(context.Background(), forged)
+	if len(pub.subjects) != 2 {
+		t.Error("a negative answer must not be remembered as a positive one")
+	}
+}
+
+func TestForwardFailsClosedWhenTheVerificationFails(t *testing.T) {
+	pub := &capturePublisher{}
+	b := NewBridge(nil, pub)
+	b.verify = func(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return false, context.DeadlineExceeded }
+	b.forward(context.Background(), `{"tenant_id":"`+uuid.NewString()+`","conversation_id":"`+uuid.NewString()+`","type":"x","data":{}}`)
+	if len(pub.subjects) != 0 {
+		t.Fatal("an unverifiable notification was published")
 	}
 }
