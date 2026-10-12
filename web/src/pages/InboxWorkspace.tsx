@@ -17,6 +17,7 @@ import { Drawer } from '../components/primitives';
 import type { ConversationItem } from '../types/api';
 import { useChannelLines } from '../lib/channelLines';
 import { isActing } from '../lib/acting';
+import { useAccess } from '../lib/useAccess';
 import DelegatedContextPane from '../components/inbox/DelegatedContextPane';
 
 // PRODUCT.6-O2D2: the frozen deep-link contract is /inbox?conversation_id=
@@ -42,6 +43,7 @@ export default function InboxWorkspace() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), 300);
   const { thresholds: waitThresholds } = useInboxSettings();
+  const { can } = useAccess();
   const [showContext, setShowContext] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Three panes only when the space left AFTER the app sidebar can hold them (the sidebar takes ~224px): below 1440px the
@@ -212,6 +214,7 @@ export default function InboxWorkspace() {
             onLoadMore={() => void fetchNextPage()}
             waitThresholds={waitThresholds}
             channels={channelLines.data ?? []}
+            canReadInternal={can('conversation.read_internal')}
           />
         </div>
 

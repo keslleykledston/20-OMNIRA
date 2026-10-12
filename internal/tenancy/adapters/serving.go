@@ -31,9 +31,10 @@ func EnableDelegatedServing(on bool) { delegatedServing.Store(on) }
 func DelegatedServingEnabled() bool { return delegatedServing.Load() }
 
 var (
-	errServeDenied  = errors.New("delegated serving: not found")
-	errServeHandled = errors.New("delegated serving: handled")
-	errServeForbid  = errors.New("delegated serving: permission not held")
+	errServeDenied   = errors.New("delegated serving: not found")
+	errServeHandled  = errors.New("delegated serving: handled")
+	errServeInternal = errors.New("delegated serving: internal conversation")
+	errServeForbid   = errors.New("delegated serving: permission not held")
 )
 
 type delegableKey struct{}
@@ -87,7 +88,7 @@ func resolveServeContext(ctx context.Context, pool *pgxpool.Pool, hubID, tenantI
 // delegationMetric counts how requests acting for a Hub ended (closed set: never an id). Refusals and forbidden keys are the signals worth an alert when they jump;
 // the people and instances involved are in the log lines next to them.
 var delegationMetric = opsmetrics.NewCounter("omnira_hub_delegation_requests_total", "Requests with X-Omnira-Acting-As by outcome", "outcome",
-	"served", "rate_limited", "disabled", "not_delegable", "refused", "forbidden_key", "error")
+	"served", "rate_limited", "disabled", "not_delegable", "refused", "forbidden_key", "internal_conversation", "error")
 
 // serveDelegated — the delegated branch of AuthorizationMiddleware.
 func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, pool *pgxpool.Pool, principal *authn.Principal, tenantID, hubID uuid.UUID) {
@@ -128,6 +129,12 @@ func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, p
 		if !held {
 			return errServeForbid
 		}
+		// a Hub agent never reads the conversations of an internal contact (the key is not delegable); same answer as a missing one
+		if refused, rerr := RefusesInternalConversation(ctx, platformdb.QuerierFromContext(ctx, pool), r, tc); rerr != nil {
+			return rerr
+		} else if refused {
+			return errServeInternal
+		}
 		next.ServeHTTP(tw, r.WithContext(domain.WithTenantContext(ctx, tc)))
 		return nil
 	})
@@ -136,6 +143,9 @@ func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, p
 		delegationMetric.Inc("served")
 	case errors.Is(serr, errServeHandled):
 		delegationMetric.Inc("rate_limited")
+	case errors.Is(serr, errServeInternal):
+		delegationMetric.Inc("internal_conversation")
+		WriteInternalRefusal(tw, r)
 	case errors.Is(serr, errServeForbid):
 		delegationMetric.Inc("forbidden_key")
 		http.Error(tw, "forbidden", http.StatusForbidden)
@@ -246,7 +256,10 @@ func ServingConversationVisible(ctx context.Context, pool *pgxpool.Pool, userID,
 		if err != nil || !held {
 			return err
 		}
-		return platformdb.QuerierFromContext(c, pool).QueryRow(c, `SELECT EXISTS(SELECT 1 FROM conversations WHERE tenant_id = $1 AND id = $2)`, tenantID, conversationID).Scan(&visible)
+		// never a conversation of an internal contact: conversation.read_internal is not delegable (ADR-0018 addendum)
+		return platformdb.QuerierFromContext(c, pool).QueryRow(c, `SELECT EXISTS(SELECT 1 FROM conversations cv WHERE cv.tenant_id = $1 AND cv.id = $2
+		  AND (NOT EXISTS (SELECT 1 FROM contacts co WHERE co.tenant_id = cv.tenant_id AND co.id = cv.contact_id AND co.kind = 'internal')
+		       OR actor_has_permission($1, $3, 'conversation.read_internal')))`, tenantID, conversationID, userID).Scan(&visible)
 	})
 	if errors.Is(err, errServeDenied) {
 		return false, nil

@@ -97,6 +97,15 @@ func AuthorizationMiddleware(pool *pgxpool.Pool, authzSvc *application.Authoriza
 					return errHandled
 				}
 
+				// ADR-0018 (Interno): a conversation of a contact declared internal is invisible, with the same answer as a missing one,
+				// to whoever lacks conversation.read_internal.
+				if refused, rerr := RefusesInternalConversation(ctx, platformdb.QuerierFromContext(ctx, pool), r, tenantContext); rerr != nil {
+					return rerr
+				} else if refused {
+					WriteInternalRefusal(tw, r)
+					return errHandled
+				}
+
 				// Injetar TenantContext no context e servir o handler
 				// downstream dentro da mesma sessão/transação de banco.
 				ctx = domain.WithTenantContext(ctx, tenantContext)

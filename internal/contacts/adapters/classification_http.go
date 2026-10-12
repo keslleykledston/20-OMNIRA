@@ -481,7 +481,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 	}
 	h.countChange(r.Context(), change, domain.SourceManual)
 	if change.Changed {
-		if kind == domain.KindSpam {
+		if kind == domain.KindSpam || kind == domain.KindInternal {
 			_, _ = dequeueSpam(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc, contactID)
 		}
 		action := auditdomain.ActionContactReclassified

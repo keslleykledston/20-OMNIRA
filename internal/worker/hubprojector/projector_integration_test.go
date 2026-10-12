@@ -239,11 +239,16 @@ func TestProjector_Eligibility(t *testing.T) {
 	internal := uuid.New()
 	f.exec(`INSERT INTO conversations (id, tenant_id, contact_id, internal_user_id, conversation_kind, channel_connection_id) VALUES ($1, $2, NULL, $3, 'internal', $4)`, internal, a.id, staff, a.conn)
 
+	// a conversation with a contact an operator declared internal (partner, supplier, team on a personal number) stays external_other for
+	// the inbox but must never reach the Hub either: conversation.read_internal is not delegable
+	declared := f.conversation(a, ptr(a.queue1))
+	f.exec(`UPDATE contacts SET kind = 'internal', internal_role = 'supplier' WHERE id = (SELECT contact_id FROM conversations WHERE id = $1)`, declared)
+
 	f.reconcile()
 	for name, want := range map[string]struct {
 		conv uuid.UUID
 		in   bool
-	}{"open": {open, true}, "recently closed": {recentClosed, true}, "closed long ago": {oldClosed, false}, "internal staff chat": {internal, false}} {
+	}{"open": {open, true}, "recently closed": {recentClosed, true}, "closed long ago": {oldClosed, false}, "internal staff chat": {internal, false}, "contact declared internal": {declared, false}} {
 		if _, got := f.item(f.hub, a.id, want.conv); got != want.in {
 			t.Errorf("%s: projected=%v, want %v", name, got, want.in)
 		}

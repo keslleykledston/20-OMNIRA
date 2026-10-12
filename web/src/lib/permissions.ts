@@ -18,6 +18,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     items: [
       { key: 'conversation.claim', label: 'Assumir e responder conversas' },
       { key: 'conversation.manage', label: 'Gerenciar e transferir conversas' },
+      { key: 'conversation.read_internal', label: 'Ver conversas com contatos internos (equipe, parceiros, fornecedores)' },
     ],
   },
   { title: 'Canais', items: [{ key: 'channel.manage', label: 'Gerenciar canais' }] },

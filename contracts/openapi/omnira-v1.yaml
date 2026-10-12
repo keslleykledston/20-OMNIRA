@@ -1747,7 +1747,11 @@ paths:
       operationId: listConversations
       tags: [Inbox]
       summary: List conversations by last activity (cursor pagination, most recent first)
-      description: Ordered by the last message (creation when there is none); page through with the cursor until has_more is false.
+      description: >-
+        Ordered by the last message (creation when there is none); page through with the cursor until has_more is false.
+        Conversations of contacts declared internal (contact_kind internal) are returned only to whoever holds the permission
+        conversation.read_internal (administrators and supervisors); for everyone else they are absent from every filter, and every route
+        that names such a conversation (or one of its messages, or the contact's conversations/tickets/topics) answers 404, as for a missing one.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/Limit' }

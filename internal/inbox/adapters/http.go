@@ -15,6 +15,7 @@ import (
 	mediaports "github.com/omnira/omnira/internal/media/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -165,6 +166,13 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	default:
 		http.Error(w, "invalid kind filter", http.StatusBadRequest)
 		return
+	}
+	// ADR-0018 (Interno): without conversation.read_internal the conversations of contacts declared internal are not in any list.
+	if canInternal, perr := tenancyadapters.CanReadInternalConversations(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc); perr != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	} else if !canInternal {
+		where += " AND (co.kind IS NULL OR co.kind <> 'internal')"
 	}
 	// Conversations with staff (internal) are kept but, like spam, out of the default view: they are not attendance.
 	// Ask for them (or any other kind) explicitly with conversation_kind.

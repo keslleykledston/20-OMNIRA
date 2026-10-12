@@ -36,7 +36,7 @@ type Option = { key: string; label: string; detail?: string; ref: AccountRef }
 // What "Interno" changes, said every time it is chosen: a customer marked internal by mistake would silently lose the bot,
 // the automatic ticket and the SLA, so the person deciding must know.
 const INTERNAL_NOTICE =
-  'Conversas internas não recebem bot, chamado automático, SLA nem pesquisa de satisfação, mas continuam na fila e podem ser atribuídas.'
+  'Conversas internas não recebem bot, chamado automático, SLA nem pesquisa de satisfação, não entram na fila automática e só administradores e supervisores as veem.'
 
 const FIELD =
   'w-full rounded-control border border-border-subtle bg-surface px-2 py-1.5 text-xs text-text-primary ' +

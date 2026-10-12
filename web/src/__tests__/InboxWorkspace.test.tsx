@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import userEvent from '@testing-library/user-event';
@@ -282,9 +282,19 @@ describe('InboxWorkspace — list paging, search and filters', () => {
     await waitFor(() => expect(listCalls().filter((p) => p.kind === undefined).length).toBeGreaterThan(1));
   });
 
+  it('the Internas view is offered only to whoever holds conversation.read_internal (agents never get conversations of internal contacts)', async () => {
+    mockGets({ ...mockDefaultList(), '/me/access': { role_key: 'tenant_agent', permissions: ['conversation.read', 'conversation.claim'] } });
+    renderAt(<InboxWorkspace />, '/inbox');
+    await screen.findByRole('tab', { name: 'Todas' });
+    const more = screen.getByLabelText('Mais filtros');
+    await waitFor(() => expect(vi.mocked(axios.get).mock.calls.some(([url]) => (url as string).endsWith('/me/access'))).toBe(true));
+    expect(within(more).queryByRole('option', { name: 'Internas' })).not.toBeInTheDocument();
+    expect(within(more).getByRole('option', { name: 'Spam' })).toBeInTheDocument();
+  });
+
   it('the Não classif. and Internas tabs ask the API for that conversation_kind, and the other tabs send none (ADR-0018)', async () => {
     const user = userEvent.setup();
-    mockGets(mockDefaultList());
+    mockGets({ ...mockDefaultList(), '/me/access': { role_key: 'tenant_supervisor', permissions: ['conversation.read', 'conversation.read_internal'] } });
     renderAt(<InboxWorkspace />, '/inbox');
     await screen.findByRole('tab', { name: 'Todas' });
     await user.selectOptions(screen.getByLabelText('Mais filtros'), 'unclassified');

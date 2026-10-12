@@ -96,6 +96,7 @@ src AS (
                 '-infinity'::timestamptz)) w ON true
   WHERE c.tenant_id = $2
     AND c.conversation_kind <> 'internal'
+    AND (ct.kind IS NULL OR ct.kind <> 'internal') -- a contact declared internal (partner, supplier, team) is not served to a Hub: conversation.read_internal is not delegable
     AND ($4::uuid IS NULL OR c.id = $4::uuid)
     AND (c.status = 'open' OR COALESCE(lm.created_at, c.created_at) > now() - make_interval(days => $3))
     AND EXISTS (SELECT 1 FROM live)

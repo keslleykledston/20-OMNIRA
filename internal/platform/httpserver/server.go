@@ -1082,7 +1082,10 @@ func (a sessionStreamAuthorizer) ConversationVisible(ctx context.Context, userID
 	var visible bool
 	err := platformdb.WithTenantSession(ctx, a.pool, userID, false, func(scoped context.Context) error {
 		return platformdb.QuerierFromContext(scoped, a.pool).QueryRow(scoped,
-			`SELECT EXISTS(SELECT 1 FROM conversations WHERE tenant_id=$1 AND id=$2)`, tenantID, conversationID).Scan(&visible)
+			// a conversation of a contact declared internal is visible only with conversation.read_internal (ADR-0018 addendum)
+			`SELECT EXISTS(SELECT 1 FROM conversations cv WHERE cv.tenant_id=$1 AND cv.id=$2
+			   AND (NOT EXISTS (SELECT 1 FROM contacts co WHERE co.tenant_id=cv.tenant_id AND co.id=cv.contact_id AND co.kind='internal')
+			        OR actor_has_permission($1, $3, 'conversation.read_internal')))`, tenantID, conversationID, userID).Scan(&visible)
 	})
 	return visible, err
 }

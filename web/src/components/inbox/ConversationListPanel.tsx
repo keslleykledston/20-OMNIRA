@@ -24,6 +24,8 @@ interface ConversationListPanelProps {
   waitThresholds?: WaitThresholds;
   /** The instance's channel lines. There is no channel filter any more (every channel of the instance is merged in this list); the lines only say where each row came from. */
   channels?: ChannelLine[];
+  /** conversation.read_internal: without it the API never returns conversations of internal contacts, so the Internas view is not offered. */
+  canReadInternal?: boolean;
 }
 
 const SEGMENTS: { id: InboxSegment; label: string }[] = [
@@ -73,6 +75,7 @@ export default function ConversationListPanel({
   onLoadMore,
   waitThresholds = DEFAULT_WAIT_THRESHOLDS,
   channels = [],
+  canReadInternal = true,
 }: ConversationListPanelProps) {
   const multiChannel = channels.length > 1;
   const lineById = new Map(channels.map((c) => [c.id, c] as const));
@@ -169,7 +172,7 @@ export default function ConversationListPanel({
                 )}
               >
                 <option value="">Mais…</option>
-                {SEGMENTS.slice(3).filter((x) => x.id !== 'closed').map((x) => (
+                {SEGMENTS.slice(3).filter((x) => x.id !== 'closed' && (x.id !== 'internal' || canReadInternal)).map((x) => (
                   <option key={x.id} value={x.id}>
                     {x.label}
                   </option>
