@@ -417,6 +417,27 @@ describe('Hub layout contract — the attendances opened as tabs survive a reloa
   });
 });
 
+describe('Hub layout contract — the aggregated tab follows the change signal of the Hub', () => {
+  it('re-reads the list as soon as the Hub says something changed, without waiting for the next poll', async () => {
+    serve();
+    let push!: (t: string) => void;
+    const body = new ReadableStream<Uint8Array>({ start: (c) => (push = (t) => c.enqueue(new TextEncoder().encode(t))) });
+    const fetchMock = vi.fn().mockResolvedValue({ status: 200, ok: true, body } as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderAt(<HubInboxPage />);
+      await screen.findByText('Cliente a');
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/hubs\/hub-1\/events$/);
+      const before = inboxParams.length;
+      push('event: changed\ndata: {}\n\n');
+      await waitFor(() => expect(inboxParams.length).toBeGreaterThan(before));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('Hub layout contract — the left menu folds to icons', () => {
   it('has a toggle that folds and unfolds it, and remembers the choice', async () => {
     serve();

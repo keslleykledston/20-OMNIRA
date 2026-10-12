@@ -114,7 +114,7 @@ for i in $(seq 1 60); do curl -sf --max-time 2 "http://127.0.0.1:$WEBPORT/" >/de
 curl -sf --max-time 2 "http://127.0.0.1:$WEBPORT/" >/dev/null || { echo "web did not start"; tail -20 "$WORK/web.log"; exit 1; }
 
 echo "== browser"
-export E2E_BASE_URL="http://127.0.0.1:$WEBPORT" E2E_HUB="$HUB" E2E_TA="$TA" E2E_TB="$TB" E2E_TC="$TC"
+export E2E_NATS_PORT="$NATSPORT" E2E_BASE_URL="http://127.0.0.1:$WEBPORT" E2E_HUB="$HUB" E2E_TA="$TA" E2E_TB="$TB" E2E_TC="$TC"
 export E2E_RUN="$$" E2E_WORK="$WORK" E2E_PG_ID="$PGID" E2E_NONCE="$NONCE"   # the helpers derive and PROVE the rest (container id, run marker, published port, binary)
 set +e
 (cd web && npx playwright test -c playwright.real.config.ts "$@")

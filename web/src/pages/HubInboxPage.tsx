@@ -10,6 +10,7 @@ import { loadTabs, saveTabs, MAX_TABS } from '../lib/hubTabs';
 import { useMyHubs } from '../hooks/useMyHubs';
 import { useMyTenants } from '../hooks/useMyTenants';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useHubEvents } from '../hooks/useHubEvents';
 import { Drawer, EmptyState, ErrorState, LoadingState } from '../components/primitives';
 import HubInboxList from '../components/hub/HubInboxList';
 import HubItemView from '../components/hub/HubItemView';
@@ -156,6 +157,13 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
     for (const page of inbox.data?.pages ?? []) for (const it of page.items) if (!seen.has(it.id)) { seen.add(it.id); out.push(it); }
     return out;
   }, [inbox.data]);
+
+  // "Something changed in an instance you serve" (no content): re-read the lists and the open attendance now instead of waiting for the next poll.
+  useHubEvents(hubId, () => {
+    void queryClient.invalidateQueries({ queryKey: ['hub-inbox', hubId] });
+    void queryClient.invalidateQueries({ queryKey: ['hub-item', hubId] });
+    void queryClient.invalidateQueries({ queryKey: ['hub-companies-probe'] });
+  });
 
   const detail = useQuery({
     queryKey: ['hub-item', hubId, selected],

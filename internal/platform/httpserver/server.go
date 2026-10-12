@@ -455,6 +455,11 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
 	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI).WithAccessAPI(accessAPI)
+	if s.natsConn != nil {
+		// the change signal of the aggregated tab (no content; see hub/adapters/events.go). Authentication only: a stream never sits behind the request transaction.
+		h = h.WithEvents(s.natsConn, hubadapters.EventsOptions{SessionRecheck: s.streamCredentialRecheck()})
+		s.mux.Handle("GET /api/v1/hubs/{hub_id}/events", authnMiddleware(http.HandlerFunc(h.StreamEvents)))
+	}
 	s.mux.Handle("GET /api/v1/hubs", authnMiddleware(userSession(http.HandlerFunc(h.ListMyHubs))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", authnMiddleware(userSession(http.HandlerFunc(h.ListInbox))))
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))

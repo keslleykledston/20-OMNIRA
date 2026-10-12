@@ -51,6 +51,8 @@ type HTTPHandler struct {
 	adminEnabled bool
 	// accessEnabled mirrors OMNIRA_HUB_ACCESS_API_ENABLED for the same reason (the Access panel).
 	accessEnabled bool
+	// events is the change signal of the aggregated tab (events.go); nil until WithEvents.
+	events *eventsConfig
 }
 
 // WithAdminAPI marks the company-management API as mounted (see ListMyHubs).

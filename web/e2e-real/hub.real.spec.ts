@@ -1,9 +1,31 @@
 import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
+import net from 'node:net';
 import { api, env, hubctl, signIn, sql } from './support';
 
 // ADR-0038 phase 5: the Hub in a real browser, real API, real RLS. Serial: each scenario builds on the data the previous one left.
 test.describe.configure({ mode: 'serial' });
+
+// Publishes one realtime event on the throwaway NATS exactly the way the worker's bridge does (subject inbox.events.<company>.<conversation>): the plain NATS text protocol.
+function publishChange(tenant: string, conversation: string): Promise<void> {
+  const port = Number(process.env.E2E_NATS_PORT);
+  if (!Number.isInteger(port) || port < 1024) throw new Error('E2E_NATS_PORT is not set by scripts/e2e-hub-browser.sh');
+  const payload = JSON.stringify({ type: 'conversation_updated', id: conversation, timestamp: new Date().toISOString(), data: {} });
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(port, '127.0.0.1');
+    sock.once('error', reject);
+    sock.on('data', (d) => {
+      if (d.toString().includes('PONG')) {
+        sock.end();
+        resolve();
+      }
+    });
+    sock.once('connect', () => {
+      sock.write(`CONNECT {"verbose":false,"pedantic":false}\r\nPUB inbox.events.${tenant}.${conversation} ${Buffer.byteLength(payload)}\r\n${payload}\r\nPING\r\n`);
+    });
+  });
+}
+
 
 test('Conversas junta as instâncias liberadas pelo Hub, com o logo de origem, e filtra por instância', async ({ page }) => {
   await signIn(page, 'agent1@e2e.test');
@@ -105,6 +127,29 @@ test('layout aprovado: a fila de pendentes fica separada do histórico, as conve
     await expect(page.getByRole('button', { name: 'Expandir o menu' })).toBeVisible();
     await page.getByRole('button', { name: 'Expandir o menu' }).click();
   }
+});
+
+test('tempo real: a lista segue o aviso de mudança do Hub, sem esperar o ciclo de 30 s', async ({ page }) => {
+  await signIn(page, 'agent2@e2e.test'); // serves only company A: one conversation
+  await page.goto('/inbox');
+  const list = page.getByRole('list', { name: 'Conversas do Hub' });
+  await expect(list.getByText('Jose Carlos')).toBeVisible();
+  await expect(list.getByText('Com outro', { exact: true })).toBeVisible(); // agent1 took it in an earlier scenario
+  const conv = sql(`SELECT id FROM conversations WHERE tenant_id = '${env.ta}'`);
+  const holder = sql(`SELECT assigned_to_user_id FROM conversations WHERE id = '${conv}'`);
+  // somebody gives the conversation back to the queue behind the screen's back: only the Hub's signal makes the screen notice it in a few seconds
+  sql(`UPDATE conversations SET assigned_to_user_id = NULL WHERE id = '${conv}'`);
+  await publishChange(env.ta, conv);
+  await expect(list.getByText('Na fila', { exact: true })).toBeVisible({ timeout: 10_000 });
+  // and back (the next scenarios expect agent1 to hold it)
+  sql(`UPDATE conversations SET assigned_to_user_id = '${holder}' WHERE id = '${conv}'`);
+  await publishChange(env.ta, conv);
+  await expect(list.getByText('Com outro', { exact: true })).toBeVisible({ timeout: 10_000 });
+  // a signal for a company the person does not serve changes nothing on their screen (and nothing they could read)
+  const before = await list.getByRole('button').count();
+  await publishChange(env.tc, randomUUID());
+  await page.waitForTimeout(1500);
+  expect(await list.getByRole('button').count()).toBe(before);
 });
 
 test('quem só lê vê a conversa mas não pode assumir nem responder', async ({ page }) => {
