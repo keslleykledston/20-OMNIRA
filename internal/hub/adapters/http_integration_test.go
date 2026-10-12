@@ -625,3 +625,21 @@ func TestHubInbox_AFutureGrantIsNotOfferedToTheFilter(t *testing.T) {
 		}
 	}
 }
+
+// doQuiet is do() for code that runs outside the test goroutine (load tests): it never calls t.Fatal and reports transport failures as status 0.
+func (a *hubAPI) doQuiet(method, path string, user uuid.UUID) (int, string, http.Header) {
+	req, err := http.NewRequest(method, a.srv.URL+path, nil)
+	if err != nil {
+		return 0, err.Error(), nil
+	}
+	if user != uuid.Nil {
+		req.Header.Set("X-Test-User", user.String())
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err.Error(), nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body), resp.Header
+}
