@@ -39,7 +39,8 @@ if [ -z "$api" ] && [ -z "$worker" ]; then
 fi
 
 val() { # val <metrics text> <metric line prefix> -> number or empty
-  printf '%s\n' "$1" | awk -v p="$2" 'index($0, p) == 1 { print $NF; exit }'
+  # Prometheus text may use scientific notation (1.79e+09): normalise to a whole number before the shell does integer arithmetic
+  printf '%s\n' "$1" | awk -v p="$2" 'index($0, p) == 1 { printf "%.0f\n", $NF; exit }'
 }
 fail=""; warn=""
 

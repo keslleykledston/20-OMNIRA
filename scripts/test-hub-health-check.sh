@@ -8,8 +8,8 @@ pass=0; fail=0
 check() { if [ "$2" = "$3" ]; then echo "PASS: $1"; pass=$((pass+1)); else echo "FAIL: $1 (got '$2', want '$3')"; fail=$((fail+1)); fi; }
 NOW=1790000000
 export STATE_FILE="$WORK/state.log" CHECK_NOW_EPOCH=$NOW
-worker() { # worker <last success age s> [interval s]
-  printf 'omnira_hub_projector_last_success_timestamp_seconds %s\nomnira_hub_projector_interval_seconds %s\n' "$((NOW - $1))" "${2:-60}" > "$WORK/worker.txt"
+worker() { # worker <last success age s> [interval s]; written the way Go's %g prints a Unix time: scientific notation (this broke the first run against production)
+  printf 'omnira_hub_projector_last_success_timestamp_seconds %s\nomnira_hub_projector_interval_seconds %s\n' "$(awk -v n="$((NOW - $1))" 'BEGIN{printf "%.9e", n}')" "${2:-60}" > "$WORK/worker.txt"
 }
 api() { printf 'omnira_session_ctx_enforce %s\nomnira_session_ctx_rejections_total %s\n' "${1:-1}" "${2:-0}" > "$WORK/api.txt"; }
 run() { set +e; out=$(METRICS_API_FILE="$WORK/api.txt" METRICS_WORKER_FILE="$WORK/worker.txt" "$@" scripts/hub-health-check.sh 2>&1); code=$?; set -e; }
