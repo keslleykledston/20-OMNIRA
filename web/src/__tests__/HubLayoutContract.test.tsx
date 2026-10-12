@@ -1,0 +1,312 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import axios from 'axios';
+import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import HubInboxPage from '../pages/HubInboxPage';
+import Sidebar from '../components/Sidebar';
+import DelegatedContextPane from '../components/inbox/DelegatedContextPane';
+import { renderAt, setSession } from './testUtils';
+import { clearActing, getActingHub, setActing } from '../lib/acting';
+import type { HubInboxItem, HubItemDetail } from '../lib/hub';
+
+// THE APPROVED LAYOUT OF THE HUB INBOX (docs/ux/HUB-LAYOUT-CONTRACT.md). These tests pin its structure, not its pixels: the queue of pending
+// attendances apart from the history, the conversation, and the collapsible details of the attendance beside it; the company always named;
+// the left menu foldable. A later phase (a new tenant-division rule, a new key, a new data source) may change what fills these regions, but if a
+// change makes one of these tests fail it has changed the approved layout and needs the owner's decision, not a quiet edit of the test.
+vi.mock('axios');
+
+const item = (id: string, over: Partial<HubInboxItem> = {}): HubInboxItem => ({
+  id,
+  tenant_id: 'tenant-' + id,
+  tenant_name: 'Instância ' + id,
+  conversation_id: 'conv-' + id,
+  customer_name: 'Cliente ' + id,
+  channel: 'whatsapp',
+  status: 'open',
+  priority: 'normal',
+  unread_count: 0,
+  assignment: 'none',
+  last_activity_at: new Date().toISOString(),
+  ...over,
+});
+
+const detail = (it: HubInboxItem, assignment: 'none' | 'me' | 'other' = 'none'): HubItemDetail => ({
+  item: it,
+  tenant: { id: it.tenant_id, name: it.tenant_name },
+  access: { source: 'hub', can_reply: true },
+  conversation: { id: it.conversation_id, status: it.status, created_at: '2026-10-01T10:00:00Z', assignment },
+  messages: [
+    { id: 'm1', direction: 'inbound', message_type: 'text', body: 'Sem internet desde ontem', status: 'received', created_at: '2026-10-01T10:00:00Z' },
+    { id: 'm2', direction: 'outbound', message_type: 'text', body: 'Já vamos verificar', status: 'sent', created_at: '2026-10-01T10:05:00Z' },
+  ],
+});
+
+const H1 = { id: 'hub-1', name: 'K3G Service Desk', role: 'hub_agent' };
+let items: HubInboxItem[] = [];
+let fullContext = true;
+let counts: { open: number; waiting: number; mine: number; closed: number } | undefined;
+const inboxParams: Record<string, string>[] = [];
+
+function serve() {
+  vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+    const u = String(url);
+    if (u.endsWith('/hubs')) return { data: { items: [H1] } };
+    let m = u.match(/\/hubs\/([^/]+)\/inbox\/([^/]+)$/);
+    if (m) {
+      const it = items.find((i) => i.id === m![2]);
+      return it ? { data: detail(it, it.assignment ?? 'none') } : Promise.reject({ response: { status: 404 } });
+    }
+    m = u.match(/\/hubs\/([^/]+)\/inbox$/);
+    if (m) {
+      inboxParams.push({ ...(config?.params ?? {}) });
+      const seg = config?.params?.segment as string | undefined;
+      const q = String(config?.params?.q ?? '').toLowerCase();
+      const shown = items.filter(
+        (i) =>
+          (!seg || (seg === 'closed' ? i.status === 'closed' : i.status !== 'closed')) &&
+          (seg !== 'waiting' || i.assignment === 'none') &&
+          (seg !== 'mine' || i.assignment === 'me') &&
+          i.customer_name.toLowerCase().includes(q),
+      );
+      const companies = items.map((i) => ({ id: i.tenant_id, name: i.tenant_name, full_context: fullContext }));
+      return { data: { items: shown, has_more: false, count: shown.length, limit: 30, companies, ...(counts && !config?.params?.cursor ? { counts } : {}) } };
+    }
+    if (u.endsWith('/tenants')) return { data: [] };
+    return Promise.reject({ response: { status: 404 } });
+  });
+}
+
+const lastSegment = () => inboxParams[inboxParams.length - 1]?.segment;
+const narrow = () => {
+  // a tablet: not a phone (the list and the conversation sit side by side) but under 1440px (the details open in a drawer)
+  (window as any).matchMedia = (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} });
+};
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  localStorage.clear();
+  clearActing();
+  setSession();
+  items = [item('a', { assignment: 'none' }), item('b', { assignment: 'me', unread_count: 2 }), item('c', { assignment: 'other' }), item('d', { status: 'closed' })];
+  fullContext = true;
+  counts = undefined;
+  inboxParams.length = 0;
+  delete (window as any).matchMedia;
+});
+afterEach(() => {
+  clearActing();
+  delete (window as any).matchMedia;
+});
+
+describe('Hub layout contract — the queue is apart from the history', () => {
+  it('has the scope tabs (in progress / finalized), the filter tabs, the search and the company filter in the queue column', async () => {
+    serve();
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    const queue = screen.getByRole('region', { name: 'Caixa do Hub' });
+    const scope = within(queue).getByRole('tablist', { name: 'Escopo das conversas' });
+    expect(within(scope).getAllByRole('tab').map((t) => t.textContent)).toEqual(['Em andamento', 'Encerradas']);
+    const filters = within(queue).getByRole('tablist', { name: 'Filtro de conversas' });
+    expect(within(filters).getAllByRole('tab').map((t) => t.textContent?.replace(/\s*\(\d+\)/, ''))).toEqual(['Todas', 'Pendentes', 'Minhas']);
+    expect(within(queue).getByRole('searchbox', { name: 'Buscar cliente' })).toBeInTheDocument();
+  });
+
+  it('asks the server for the in-progress queue by default, the pending ones, mine and, apart, the history', async () => {
+    serve();
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    expect(lastSegment()).toBe('open');
+    expect(screen.queryByText('Cliente d')).toBeNull(); // the finalized one is not in the queue
+
+    await user.click(screen.getByRole('tab', { name: /Pendentes/ }));
+    await waitFor(() => expect(lastSegment()).toBe('waiting'));
+    expect(await screen.findByText('Cliente a')).toBeInTheDocument();
+    expect(screen.queryByText('Cliente b')).toBeNull();
+
+    await user.click(screen.getByRole('tab', { name: /Minhas/ }));
+    await waitFor(() => expect(lastSegment()).toBe('mine'));
+    expect(await screen.findByText('Cliente b')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Encerradas' }));
+    await waitFor(() => expect(lastSegment()).toBe('closed'));
+    expect(await screen.findByText('Cliente d')).toBeInTheDocument();
+    expect(screen.queryByRole('tablist', { name: 'Filtro de conversas' })).toBeNull(); // the history has no queue filter
+
+    await user.click(screen.getByRole('tab', { name: 'Em andamento' }));
+    await waitFor(() => expect(lastSegment()).toBe('open'));
+    expect(await screen.findByText('Cliente a')).toBeInTheDocument();
+  });
+
+  it('the search is sent after a pause, trimmed, as q (never as a tenant)', async () => {
+    serve();
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    await user.type(screen.getByRole('searchbox', { name: 'Buscar cliente' }), '  cliente b ');
+    await waitFor(() => expect(inboxParams.some((p) => p.q === 'cliente b')).toBe(true));
+    expect(inboxParams.every((p) => !('tenant_id' in p))).toBe(true);
+    expect(await screen.findByText('Cliente b')).toBeInTheDocument();
+    expect(screen.queryByText('Cliente a')).toBeNull();
+    await user.clear(screen.getByRole('searchbox', { name: 'Buscar cliente' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Buscar cliente' }), 'ninguem');
+    expect(await screen.findByText('Nada encontrado para esta busca.')).toBeInTheDocument();
+  });
+
+  it('shows the counters of the tabs (the pending queue first) and a plain empty queue', async () => {
+    counts = { open: 3, waiting: 2, mine: 1, closed: 1 };
+    serve();
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    expect(await screen.findByRole('tab', { name: 'Pendentes (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Minhas (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Todas (3)' })).toBeInTheDocument();
+  });
+
+  it('each row names the company in full and who holds it, relative to the caller', async () => {
+    serve();
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    const list = screen.getByRole('list', { name: 'Conversas do Hub' });
+    const row = (n: string) => within(list).getByText('Cliente ' + n).closest('button')!;
+    expect(row('a')).toHaveTextContent('Instância a');
+    expect(row('a')).toHaveTextContent('Na fila');
+    expect(row('b')).toHaveTextContent('Com você');
+    expect(row('c')).toHaveTextContent('Com outro');
+    expect(row('b')).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+describe('Hub layout contract — queue | conversation | collapsible details', () => {
+  const openA = async () => {
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await user.click((await screen.findByText('Cliente a')).closest('button')!);
+    await screen.findByText('Sem internet desde ontem');
+    return user;
+  };
+
+  it('with room, the details of the attendance sit beside the conversation, in sections that fold', async () => {
+    serve();
+    await openA();
+    const aside = await screen.findByRole('complementary', { name: 'Detalhes do atendimento' });
+    expect(within(aside).getAllByText(/^(Atendimento|Cliente|Linha do tempo|Ações)$/).map((e) => e.textContent)).toEqual(['Atendimento', 'Cliente', 'Linha do tempo', 'Ações']);
+    expect(aside.querySelectorAll('details')).toHaveLength(4);
+    expect(aside).toHaveTextContent('Instância a'); // the company, in full
+    expect(aside).toHaveTextContent('Sem responsável');
+    // the three regions are siblings of one grid, in this order
+    const regions = [screen.getByRole('region', { name: 'Caixa do Hub' }), screen.getByRole('region', { name: 'Conversa selecionada' }), aside.parentElement!];
+    const grid = regions[0].parentElement!;
+    expect(regions.every((r) => r.parentElement === grid)).toBe(true);
+    expect(Array.from(grid.children)).toEqual(regions);
+  });
+
+  it('a section folds, and the choice is remembered for the viewer', async () => {
+    serve();
+    await openA();
+    const aside = await screen.findByRole('complementary', { name: 'Detalhes do atendimento' });
+    const section = within(aside).getByText('Linha do tempo').closest('details')!;
+    expect(section.open).toBe(true);
+    fireEvent.click(within(section).getByText('Linha do tempo'));
+    section.open = false;
+    fireEvent(section, new Event('toggle'));
+    expect(localStorage.getItem('omnira.inbox.section.hub-timeline')).toBe('0');
+  });
+
+  it('the details button hides and shows the column; the conversation keeps working', async () => {
+    serve();
+    const user = await openA();
+    expect(await screen.findByRole('complementary', { name: 'Detalhes do atendimento' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Detalhes do atendimento' }));
+    expect(screen.queryByRole('complementary', { name: 'Detalhes do atendimento' })).toBeNull();
+    expect(screen.getByText('Sem internet desde ontem')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Detalhes do atendimento' }));
+    expect(await screen.findByRole('complementary', { name: 'Detalhes do atendimento' })).toBeInTheDocument();
+  });
+
+  it('under 1440px the details are not squeezed in: they open in a drawer from the same button', async () => {
+    narrow();
+    serve();
+    const user = await openA();
+    expect(screen.queryByRole('complementary', { name: 'Detalhes do atendimento' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Detalhes do atendimento' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('complementary', { name: 'Detalhes do atendimento' })).toBeInTheDocument();
+  });
+
+  it('the full workspace of the company is one click away only when the server said so, and the click only navigates', async () => {
+    const assign = vi.fn();
+    const original = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, assign } });
+    try {
+      serve();
+      const user = await openA();
+      const aside = await screen.findByRole('complementary', { name: 'Detalhes do atendimento' });
+      await user.click(within(aside).getByRole('button', { name: /Abrir na caixa completa de Instância a/ }));
+      expect(assign).toHaveBeenCalledWith('/inbox?instancia=tenant-a&conversation_id=conv-a');
+      expect(getActingHub()).toBe('hub-1'); // entered as an agent of THIS hub; nothing else was decided by the screen
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
+  });
+
+  it('without the full context the pane says so instead of offering a button that would be refused', async () => {
+    fullContext = false;
+    serve();
+    await openA();
+    const aside = await screen.findByRole('complementary', { name: 'Detalhes do atendimento' });
+    expect(within(aside).queryByRole('button', { name: /Abrir na caixa completa/ })).toBeNull();
+    expect(aside).toHaveTextContent('não está liberada para você');
+  });
+});
+
+describe('Hub layout contract — the left menu folds to icons', () => {
+  it('has a toggle that folds and unfolds it, and remembers the choice', async () => {
+    serve();
+    const first = renderAt(<Sidebar />);
+    const toggle = await screen.findByRole('button', { name: 'Recolher o menu' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const label = () => screen.getAllByText('Conversas').find((e) => e.tagName === 'SPAN')!;
+    expect(label().className).toContain('xl:inline');
+    await userEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Expandir o menu' })).toHaveAttribute('aria-expanded', 'false');
+    expect(label().className).not.toContain('xl:inline');
+    expect(localStorage.getItem('omnira.sidebar.collapsed')).toBe('1');
+    first.unmount();
+    renderAt(<Sidebar />);
+    expect(await screen.findByRole('button', { name: 'Expandir o menu' })).toBeInTheDocument(); // remembered
+    await userEvent.click(screen.getByRole('button', { name: 'Expandir o menu' }));
+    expect(localStorage.getItem('omnira.sidebar.collapsed')).toBe('0');
+  });
+});
+
+describe('Hub layout contract — the company workspace entered through the Hub keeps the same collapsible sections', () => {
+  it('the delegated details pane is made of the same foldable sections as the member pane', async () => {
+    const get = vi.mocked(axios.get);
+    get.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/me/access')) return { data: { role_key: 'hub_delegate', permissions: ['conversation.read', 'contact.read', 'attendance.history'] } };
+      if (u.endsWith('/inbox/conversations/c1')) return { data: { id: 'c1', contact_name: 'Berjon Brito', status: 'open', contact_id: 'k1', assigned_to_user_id: 'u-9' } };
+      if (u.endsWith('/contacts/k1')) return { data: { id: 'k1', display_name: 'Berjon Brito', kind: 'customer' } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+    setActing('hub-1', 'Beta Hub');
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <DelegatedContextPane conversationId="c1" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const aside = await screen.findByRole('complementary', { name: 'Detalhes do atendimento' });
+    await waitFor(() => expect(aside.querySelectorAll('details').length).toBeGreaterThanOrEqual(3));
+    const titles = Array.from(aside.querySelectorAll('details > summary')).map((s) => s.textContent?.trim());
+    expect(titles).toEqual(expect.arrayContaining(['Contato', 'Atendimento', 'Histórico do contato']));
+    // nothing a delegated agent could already reach is hidden behind a click: every section starts open
+    expect(Array.from(aside.querySelectorAll('details')).every((d) => d.open)).toBe(true);
+    act(() => clearActing());
+  });
+});

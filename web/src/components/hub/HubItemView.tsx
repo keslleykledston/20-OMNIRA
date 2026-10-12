@@ -7,6 +7,7 @@ import { TenantBadge } from '../primitives/TenantBadge';
 import MessageComposer from '../inbox/MessageComposer';
 import TransferDialog from './TransferDialog';
 import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
+import { Icon } from '../primitives';
 
 const TYPE_LABEL: Record<string, string> = { image: 'Imagem', video: 'Vídeo', audio: 'Áudio', document: 'Documento', sticker: 'Figurinha' };
 
@@ -43,7 +44,7 @@ function composerMode(d: HubItemDetail): 'readonly' | 'closed' | 'claim' | 'othe
   return d.conversation.assignment === 'other' ? 'other' : 'claim';
 }
 
-export default function HubItemView({ hubId, detail, onBack }: { hubId: string; detail: HubItemDetail; onBack?: () => void }) {
+export default function HubItemView({ hubId, detail, onBack, onToggleContext }: { hubId: string; detail: HubItemDetail; onBack?: () => void; onToggleContext?: () => void }) {
   const end = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -105,7 +106,7 @@ export default function HubItemView({ hubId, detail, onBack }: { hubId: string; 
               ←
             </button>
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h2 className="truncate font-semibold text-text-primary">{detail.item.customer_name || 'Sem nome'}</h2>
             <p className="flex items-center gap-2 text-[11px] text-text-secondary">
               <TenantBadge name={detail.tenant.name || detail.item.tenant_name || 'Instância não identificada'} />
@@ -114,6 +115,11 @@ export default function HubItemView({ hubId, detail, onBack }: { hubId: string; 
               {detail.conversation.status === 'closed' && <span>· Finalizado</span>}
             </p>
           </div>
+          {onToggleContext && (
+            <button type="button" onClick={onToggleContext} className="flex-shrink-0 rounded-control p-1.5 text-text-secondary hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary" aria-label="Detalhes do atendimento" title="Detalhes do atendimento">
+              <Icon name="info" size={18} />
+            </button>
+          )}
         </div>
       </header>
       <ol aria-label="Mensagens" className="flex-1 space-y-2 overflow-y-auto px-4 py-3">

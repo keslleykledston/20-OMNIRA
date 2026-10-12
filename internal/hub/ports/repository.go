@@ -36,7 +36,8 @@ type HubRepository interface {
 	// HubInboxItem operations
 	GetHubInboxItem(ctx context.Context, hubID, tenantID, conversationID uuid.UUID) (*domain.HubInboxItem, error)
 	GetHubInboxItemByID(ctx context.Context, hubID, itemID uuid.UUID) (*domain.HubInboxItem, error)
-	ListHubInboxItems(ctx context.Context, hubID uuid.UUID, onlyTenants []uuid.UUID, limit int, cursor string) ([]*domain.HubInboxItem, string, error)
+	ListHubInboxItems(ctx context.Context, hubID uuid.UUID, filter InboxFilter, limit int, cursor string) ([]*domain.HubInboxItem, string, error)
+	CountHubInboxSegments(ctx context.Context, hubID uuid.UUID, onlyTenants []uuid.UUID, actor uuid.UUID) (InboxCounts, error)
 	UpsertHubInboxItem(ctx context.Context, item *domain.HubInboxItem) error
 	DeleteHubInboxItem(ctx context.Context, hubID, tenantID, conversationID uuid.UUID) error
 
@@ -54,4 +55,30 @@ type HubRepository interface {
 	GetAgentSkill(ctx context.Context, userID, skillID uuid.UUID) (*domain.AgentSkill, error)
 	ListAgentSkills(ctx context.Context, userID uuid.UUID) ([]*domain.AgentSkill, error)
 	CreateAgentSkill(ctx context.Context, agentSkill *domain.AgentSkill) error
+}
+
+// Inbox segments of the screen (the same idea as the tenant inbox's Todas / Aguardando / Minhas / Encerradas). They only NARROW
+// what RLS already shows the caller; none of them can widen it.
+const (
+	SegmentAll     = ""        // no narrowing (the API before segments existed)
+	SegmentOpen    = "open"    // not finalized
+	SegmentWaiting = "waiting" // not finalized and nobody holds it: the queue of pending attendances
+	SegmentMine    = "mine"    // not finalized and held by the caller
+	SegmentClosed  = "closed"  // finalized: the history
+)
+
+// InboxFilter narrows a Hub inbox page. Tenants is the screen's company filter; Actor is the caller (needed by SegmentMine).
+type InboxFilter struct {
+	Tenants []uuid.UUID
+	Segment string
+	Query   string
+	Actor   uuid.UUID
+}
+
+// InboxCounts is how many items each segment holds for the caller (under RLS), ignoring the segment and the search of the page.
+type InboxCounts struct {
+	Open    int `json:"open"`
+	Waiting int `json:"waiting"`
+	Mine    int `json:"mine"`
+	Closed  int `json:"closed"`
 }

@@ -30,6 +30,19 @@ export interface HubInboxItem {
   sla_due_at?: string
   last_activity_at?: string
   unread_count: number
+  // Relative to the caller; the server never names another operator. Mirrors the projection (reconciled periodically): opening the item reads the live value.
+  assignment?: 'none' | 'me' | 'other'
+}
+
+// The tabs of the Hub inbox, like the tenant inbox's: the queue of pending attendances (waiting), the ones I hold (mine), everything not
+// finalized (open) and the history (closed). They only NARROW what the server shows; the server decides what exists for the caller.
+export type HubSegment = 'open' | 'waiting' | 'mine' | 'closed'
+
+export interface HubSegmentCounts {
+  open: number
+  waiting: number
+  mine: number
+  closed: number
 }
 
 // A company the signed-in person may serve through the hub; feeds the inbox filter. Describes, never authorizes.
@@ -47,6 +60,8 @@ export interface HubInboxPage {
   next_cursor?: string
   count: number
   limit: number
+  // First page only; narrowed by the company filter, not by the segment or the search.
+  counts?: HubSegmentCounts
 }
 
 export interface HubMessage {
@@ -81,11 +96,18 @@ export const hubAPI = {
     }
   },
   // `companies` only NARROWS the caller's authorized view (empty = all of it); the server never widens because of it.
-  inbox: (hubId: string, cursor?: string, companies: string[] = [], limit = 30): Promise<HubInboxPage> =>
+  // `segment` and `search` narrow the page too (the server refuses an unknown segment and a search over 80 characters).
+  inbox: (hubId: string, cursor?: string, companies: string[] = [], limit = 30, segment?: HubSegment, search = ''): Promise<HubInboxPage> =>
     axios
       .get<HubInboxPage>(`${API_BASE}/hubs/${enc(hubId)}/inbox`, {
         headers: authHeaders(),
-        params: { limit, ...(cursor ? { cursor } : {}), ...(companies.length ? { companies: companies.join(',') } : {}) },
+        params: {
+          limit,
+          ...(cursor ? { cursor } : {}),
+          ...(companies.length ? { companies: companies.join(',') } : {}),
+          ...(segment ? { segment } : {}),
+          ...(search.trim() ? { q: search.trim().slice(0, 80) } : {}),
+        },
       })
       .then((r) => r.data),
   item: (hubId: string, itemId: string): Promise<HubItemDetail> =>

@@ -840,6 +840,19 @@ paths:
             company the caller holds no live grant for stays invisible whatever is sent. Not a tenant selector
             (`tenant_id` is still refused). Invalid ids are a 400.
           schema: { type: string }
+        - name: segment
+          in: query
+          required: false
+          description: |
+            Narrows the page like the tabs of the tenant inbox: `open` (not finalized), `waiting` (not finalized and held by nobody: the queue of
+            pending attendances), `mine` (not finalized and held by the caller), `closed` (finalized: the history). Absent = no narrowing.
+            A screen filter that can only NARROW the caller's authorized view. Any other value is a 400 (never a silent "everything").
+          schema: { type: string, enum: [open, waiting, mine, closed] }
+        - name: q
+          in: query
+          required: false
+          description: Search by customer name (case-insensitive, at most 80 characters; `%` and `_` are literal). Narrows the page like `segment`.
+          schema: { type: string, maxLength: 80 }
       responses:
         '200':
           description: A page of inbox items
@@ -4259,6 +4272,10 @@ components:
         sla_due_at: { type: string, format: date-time }
         last_activity_at: { type: string, format: date-time }
         unread_count: { type: integer }
+        assignment:
+          type: string
+          enum: [none, me, other]
+          description: Relative to the caller (the server never names another operator). Mirrors the projection, which is reconciled periodically; opening the item reads the live value.
     HubInboxPage:
       type: object
       required: [items, has_more, count, limit]
@@ -4270,6 +4287,15 @@ components:
         next_cursor: { type: string }
         count: { type: integer }
         limit: { type: integer }
+        counts:
+          type: object
+          description: How many items each segment holds for the caller (under RLS), narrowed by `companies` but not by `segment` or `q`. First page only (absent when `cursor` is sent).
+          required: [open, waiting, mine, closed]
+          properties:
+            open: { type: integer }
+            waiting: { type: integer }
+            mine: { type: integer }
+            closed: { type: integer }
         companies:
           type: array
           description: The companies the caller currently serves through this hub (live grants); feeds the screen's company filter. Describes, never authorizes.
@@ -4279,6 +4305,7 @@ components:
             properties:
               id: { type: string, format: uuid }
               name: { type: string }
+              full_context: { type: boolean, description: "The full workspace of this company may be opened for this person (ADR-0040). Display only." }
     HubReplyResult:
       type: object
       required: [id, conversation_id, direction, body, status, created_at, tenant]

@@ -14,6 +14,7 @@ import { Button } from '../primitives'
 import DelegatedTransferDialog from './DelegatedTransferDialog'
 import ConversationSummary from './ConversationSummary'
 import { TicketPanel } from '../TicketPanel'
+import { CollapsibleSection } from './CollapsibleSection'
 import type { ConversationItem } from '../../types/api'
 
 interface ContactCard {
@@ -87,8 +88,10 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
         <h2 className="text-sm font-semibold text-text-primary">Detalhes do atendimento</h2>
         <p className="text-[12px] text-text-secondary">Atendendo {getActingName() || 'a instância'} pelo Hub</p>
       </header>
-      <div className="space-y-4 px-4 py-4">
-        <section aria-label="Contato">
+      {/* Same collapsible sections as the member's pane (CollapsibleSection remembers each choice per viewer). All open by default: nothing a
+          delegated agent could already reach is hidden behind a click. */}
+      <CollapsibleSection id="d-contact" title="Contato" icon="contacts" defaultOpen>
+        <section aria-label="Contato" className="px-4 pb-4">
           <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Contato</h3>
           <p className="text-[15px] font-semibold text-text-primary">{name}</p>
           {whatsapp && <p className="text-[12px] text-text-secondary">{whatsapp} no WhatsApp</p>}
@@ -97,7 +100,9 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
           {kind && <p className="mt-1 text-[12px] text-text-secondary">{KIND[kind] ?? kind}</p>}
           {contact.isError && <p className="mt-1 text-[12px] text-text-tertiary">Os dados completos do contato não estão liberados para o seu acesso.</p>}
         </section>
-        <section aria-label="Atendimento">
+      </CollapsibleSection>
+      <CollapsibleSection id="d-attendance" title="Atendimento" icon="conversations" defaultOpen>
+        <section aria-label="Atendimento" className="px-4 pb-4">
           <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Atendimento</h3>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
             <dt className="text-text-secondary">Estado</dt>
@@ -117,8 +122,10 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
             </div>
           )}
         </section>
-        {contactId && can('contact.classify') && (
-          <section aria-label="Classificar o contato" className="-mx-4 border-t border-border-subtle">
+      </CollapsibleSection>
+      {contactId && can('contact.classify') && (
+        <CollapsibleSection id="d-classify" title="Classificar o contato" icon="contacts" defaultOpen>
+          <section aria-label="Classificar o contato">
             <ContactDetailsEditor contactId={contactId} onChanged={refreshAll} />
             <ContactKindControl
               contactId={contactId}
@@ -129,33 +136,41 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
               onChanged={refreshAll}
             />
           </section>
-        )}
-        {(can('ticket.create') || can('ticket.read')) && (
-          <section aria-label="Chamado no ERP" className="-mx-4 border-t border-border-subtle">
+        </CollapsibleSection>
+      )}
+      {(can('ticket.create') || can('ticket.read')) && (
+        <CollapsibleSection id="d-ticket" title="Chamado" icon="tickets" defaultOpen>
+          <section aria-label="Chamado no ERP">
             <TicketPanel conversationId={conversationId} delegated conversationUnassigned={!c?.assigned_to_user_id} />
           </section>
-        )}
-        {can('ai.assist') && (
-          <section aria-label="Resumo por IA" className="-mx-4 border-t border-border-subtle">
+        </CollapsibleSection>
+      )}
+      {can('ai.assist') && (
+        <CollapsibleSection id="d-summary" title="Resumo com IA" icon="sparkles" defaultOpen>
+          <section aria-label="Resumo por IA">
             <ConversationSummary conversationId={conversationId} />
           </section>
-        )}
-        {contactId && can('contact.note') && (
-          <section aria-label="Anotações" className="-mx-4 border-t border-border-subtle">
+        </CollapsibleSection>
+      )}
+      {contactId && can('contact.note') && (
+        <CollapsibleSection id="d-notes" title="Anotações internas" icon="tickets" defaultOpen>
+          <section aria-label="Anotações">
             <ContactNotes contactId={contactId} />
           </section>
-        )}
-        {can('attendance.history') ? (
-          <div className="-mx-4 border-t border-border-subtle">
+        </CollapsibleSection>
+      )}
+      {can('attendance.history') ? (
+        <CollapsibleSection id="d-history" title="Histórico do contato" icon="conversations" defaultOpen>
+          <div>
             {can('conversation.read') && <HistorySearch conversationId={conversationId} />}
             <AttendanceMemoryPanel conversationId={conversationId} delegated canResolve={can('followup.resolve')} />
           </div>
-        ) : (
-          <p role="note" className="rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
-            O histórico dos atendimentos anteriores não está liberado para você nesta empresa.
-          </p>
-        )}
-      </div>
+        </CollapsibleSection>
+      ) : (
+        <p role="note" className="m-4 rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
+          O histórico dos atendimentos anteriores não está liberado para você nesta empresa.
+        </p>
+      )}
       <DelegatedTransferDialog
         conversationId={conversationId}
         open={transferOpen}

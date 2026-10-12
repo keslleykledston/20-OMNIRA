@@ -12,6 +12,12 @@ function when(iso?: string): string {
 }
 
 const PRIORITY: Record<string, string> = { high: 'Alta', urgent: 'Urgente' };
+// Who holds it, relative to the caller (the server never names anyone else). Finalized items say "Finalizado" instead.
+const HOLDER: Record<string, { label: string; cls: string }> = {
+  none: { label: 'Na fila', cls: 'bg-accent-primary-soft text-accent-primary' },
+  me: { label: 'Com você', cls: 'bg-status-muted text-text-secondary' },
+  other: { label: 'Com outro', cls: 'bg-status-muted text-text-secondary' },
+};
 
 interface Props {
   items: HubInboxItem[];
@@ -50,7 +56,11 @@ export default function HubInboxList({ items, selectedId, onSelect, hasMore, loa
                 <span className="flex items-center gap-2 text-[11px] text-text-secondary">
                   <ChannelOrigin source={it.channel} />
                   <span>{channelLabel(it.channel)}</span>
-                  {it.status === 'closed' && <span className="rounded-pill bg-status-muted px-2 py-0.5">Finalizado</span>}
+                  {it.status === 'closed' ? (
+                    <span className="rounded-pill bg-status-muted px-2 py-0.5">Finalizado</span>
+                  ) : (
+                    it.assignment && HOLDER[it.assignment] && <span className={clsx('rounded-pill px-2 py-0.5', HOLDER[it.assignment].cls)}>{HOLDER[it.assignment].label}</span>
+                  )}
                   {PRIORITY[it.priority] && <span className="rounded-pill bg-status-warning-soft px-2 py-0.5 text-status-warning-strong">{PRIORITY[it.priority]}</span>}
                   {it.unread_count > 0 && (
                     <span className="ml-auto rounded-pill bg-accent-primary px-2 py-0.5 font-semibold text-white" aria-label={`${it.unread_count} sem resposta`}>

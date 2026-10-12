@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 import { Avatar, Icon } from './primitives'
@@ -39,8 +40,30 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Configurações', path: '/settings/general', icon: 'settings' },
 ]
 
+// The menu can be folded to icons on wide screens too (below xl it is always icons): the choice is a per-viewer convenience, remembered locally.
+const COLLAPSED_KEY = 'omnira.sidebar.collapsed'
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export default function Sidebar() {
   const location = useLocation()
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  const toggleCollapsed = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    try {
+      localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0')
+    } catch {
+      /* the choice just is not remembered */
+    }
+  }
+  // widths and labels: from xl up they follow `collapsed`; below xl the menu is always icons
+  const wide = (cls: string) => (collapsed ? '' : cls)
   const tenant = useTenantDisplay()
   const hubs = useMyHubs()
   const base = navItems.filter((item) => !item.mockBacked || isDevSurface())
@@ -64,7 +87,8 @@ export default function Sidebar() {
     <aside
       className={clsx(
         // Compact (icon-only) on tablet, full width from xl up — 01-FOUNDATION/APP-SHELL.md
-        'w-sidebar-compact xl:w-sidebar',
+        'w-sidebar-compact',
+        wide('xl:w-sidebar'),
         'bg-surface',
         'border-r',
         'border-border-subtle',
@@ -77,12 +101,26 @@ export default function Sidebar() {
       )}
     >
       {/* Logo/Branding */}
-      <div className="px-4 xl:px-6 py-6 border-b border-border-subtle">
-        <div className="flex items-center gap-2 justify-center xl:justify-start">
+      <div className={clsx('px-4 py-6 border-b border-border-subtle', wide('xl:px-6'))}>
+        <div className={clsx('flex items-center gap-2 justify-center', wide('xl:justify-start'), collapsed && 'xl:flex-col xl:gap-3')}>
           <div className="w-8 h-8 bg-accent-primary rounded-card flex items-center justify-center text-white font-bold text-sm">
             O
           </div>
-          <span className="hidden xl:inline font-bold text-text-primary text-lg">OMNIRA</span>
+          <span className={clsx('hidden font-bold text-text-primary text-lg', wide('xl:inline'))}>OMNIRA</span>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? 'Expandir o menu' : 'Recolher o menu'}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Expandir o menu' : 'Recolher o menu'}
+            className={clsx(
+              'hidden xl:flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-control text-text-tertiary hover:bg-surface-muted hover:text-text-primary',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
+              collapsed ? '' : 'ml-auto',
+            )}
+          >
+            <Icon name="chevron-down" size={16} className={collapsed ? '-rotate-90' : 'rotate-90'} />
+          </button>
         </div>
       </div>
 
@@ -99,7 +137,8 @@ export default function Sidebar() {
                 'flex',
                 'items-center',
                 'gap-3',
-                'justify-center xl:justify-start',
+                'justify-center',
+                wide('xl:justify-start'),
                 'px-3',
                 'py-2.5',
                 'rounded-control',
@@ -125,7 +164,7 @@ export default function Sidebar() {
               title={item.label}
             >
               <Icon name={item.icon} />
-              <span className="hidden xl:inline">{item.label}</span>
+              <span className={clsx('hidden', wide('xl:inline'))}>{item.label}</span>
             </Link>
           )
         })}
@@ -133,9 +172,9 @@ export default function Sidebar() {
 
       {/* Tenant Card */}
       <div className="p-4 border-t border-border-subtle bg-surface-muted" title={`${tenant.tenantName} — ${tenant.roleLabel}`}>
-        <div className="flex items-center gap-3 justify-center xl:justify-start">
+        <div className={clsx('flex items-center gap-3 justify-center', wide('xl:justify-start'))}>
           <Avatar alt={tenant.tenantName} size="md" />
-          <div className="hidden xl:block flex-1 min-w-0">
+          <div className={clsx('hidden flex-1 min-w-0', wide('xl:block'))}>
             <p className="text-sm font-semibold text-text-primary truncate">
               {tenant.tenantName}
             </p>

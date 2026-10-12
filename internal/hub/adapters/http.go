@@ -8,6 +8,7 @@ import (
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/application"
 	"github.com/omnira/omnira/internal/hub/domain"
+	"github.com/omnira/omnira/internal/hub/ports"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	"github.com/omnira/omnira/internal/hub/replying"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
@@ -77,11 +79,21 @@ type inboxItemDTO struct {
 	SLADueAt       *time.Time `json:"sla_due_at,omitempty"`
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 	UnreadCount    int        `json:"unread_count"`
+	// Assignment is relative to the caller (none | me | other): the server never names another operator.
+	Assignment string `json:"assignment"`
 }
 
-func toDTO(i *domain.HubInboxItem) inboxItemDTO {
+func toDTO(i *domain.HubInboxItem, actor uuid.UUID) inboxItemDTO {
+	assignment := "none"
+	if i.AssignedUserID != nil {
+		assignment = "other"
+		if *i.AssignedUserID == actor {
+			assignment = "me"
+		}
+	}
 	return inboxItemDTO{ID: i.ID, TenantID: i.TenantID, ConversationID: i.ConversationID, QueueID: i.QueueID, CustomerName: i.CustomerName,
-		Channel: i.Channel, Status: i.Status, Priority: i.Priority, SLADueAt: i.SLADueAt, LastActivityAt: i.LastActivityAt, UnreadCount: i.UnreadCount}
+		Channel: i.Channel, Status: i.Status, Priority: i.Priority, SLADueAt: i.SLADueAt, LastActivityAt: i.LastActivityAt, UnreadCount: i.UnreadCount,
+		Assignment: assignment}
 }
 
 // httpError is http.Error that also marks the response non-cacheable. (net/http's own Error strips Cache-Control
@@ -156,9 +168,26 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, next, err := h.repo.ListHubInboxItems(r.Context(), hubID, only, opts.Limit, opts.Cursor)
+	// A query string Go cannot parse (a stray semicolon, a bad escape) would make net/url drop the offending parameter SILENTLY, turning a
+	// mistyped segment into "everything": refuse it instead.
+	if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {
+		httpError(w, "invalid query", http.StatusBadRequest)
+		return
+	}
+	// `segment` and `q` only narrow the page (the queue of pending attendances, mine, the history; a search by customer name).
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(query)) > 80 {
+		httpError(w, "search text too long", http.StatusBadRequest)
+		return
+	}
+	filter := ports.InboxFilter{Tenants: only, Segment: r.URL.Query().Get("segment"), Query: query, Actor: actor}
+	items, next, err := h.repo.ListHubInboxItems(r.Context(), hubID, filter, opts.Limit, opts.Cursor)
 	if errors.Is(err, ErrInvalidCursor) {
 		httpError(w, "invalid cursor", http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, ErrInvalidSegment) {
+		httpError(w, "invalid segment", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
@@ -168,13 +197,20 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 	names := h.tenantNames(r.Context(), items)
 	out := make([]inboxItemDTO, 0, len(items))
 	for _, it := range items {
-		dto := toDTO(it)
+		dto := toDTO(it, actor)
 		dto.TenantName = names[it.TenantID]
 		out = append(out, dto)
 	}
 	pagination.WritePaginationHeaders(w, &pagination.PageResult{Count: len(out), Limit: opts.Limit, HasMore: next != "", NextCursor: next})
-	writeJSON(w, map[string]any{"items": out, "has_more": next != "", "next_cursor": next, "count": len(out), "limit": opts.Limit,
-		"companies": h.companiesOf(r.Context(), hubID, actor)})
+	body := map[string]any{"items": out, "has_more": next != "", "next_cursor": next, "count": len(out), "limit": opts.Limit,
+		"companies": h.companiesOf(r.Context(), hubID, actor)}
+	// The tabs' counters come with the first page only (under the caller's own session, so only what RLS shows them).
+	if opts.Cursor == "" {
+		if c, err := h.repo.CountHubInboxSegments(r.Context(), hubID, only, actor); err == nil {
+			body["counts"] = c
+		}
+	}
+	writeJSON(w, body)
 }
 
 // parseCompanyFilter reads `companies=<uuid>,<uuid>`: a screen filter that only NARROWS the caller's authorized view. It is
@@ -312,7 +348,7 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 		}
 		msgs = append(msgs, m)
 	}
-	dto := toDTO(item)
+	dto := toDTO(item, actor)
 	dto.TenantName = tenantName
 	// Who holds the conversation, WITHOUT naming anyone else: the composer only needs to know whether it is the caller.
 	assignment := "none"

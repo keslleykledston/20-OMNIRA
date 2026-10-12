@@ -1,15 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { hubAPI, type HubCompanyOption, type HubInboxItem } from '../lib/hub';
+import clsx from 'clsx';
+import { hubAPI, type HubCompanyOption, type HubInboxItem, type HubItemDetail, type HubSegmentCounts } from '../lib/hub';
+import { enterDelegatedInstance, switchTenant } from '../lib/tenants';
+import { useDebounced } from '../hooks/useDebounced';
 import { handleUnauthorized, isUnauthorized } from '../lib/session';
 import { useMyHubs } from '../hooks/useMyHubs';
 import { useMyTenants } from '../hooks/useMyTenants';
 import { useMediaQuery } from '../hooks/useMediaQuery';
-import { EmptyState, ErrorState, LoadingState } from '../components/primitives';
+import { Drawer, EmptyState, ErrorState, LoadingState } from '../components/primitives';
 import HubInboxList from '../components/hub/HubInboxList';
 import HubItemView from '../components/hub/HubItemView';
 import CompanyFilter from '../components/hub/CompanyFilter';
+import HubInboxToolbar, { segmentOf, type HubView } from '../components/hub/HubInboxToolbar';
+import HubContextPane from '../components/hub/HubContextPane';
 
 // "Conversas" for a person the Hub authorized for two or more companies (ADR-0039): ONE inbox across every company they are
 // authorized to serve, with a company filter where a single-company person has the channel selector. What appears here is
@@ -18,6 +23,14 @@ import CompanyFilter from '../components/hub/CompanyFilter';
 // `embedded` is the page living inside the Conversas tabs: the tabs are how one reaches an instance's full inbox, so the link to it
 // is not shown. `onlyCompany` pins the list to ONE instance (the tab of an instance the person reaches only through the Hub): the
 // title row and the company filter go away, the tab already says which instance it is. `notice` is a line shown above the list.
+function emptyText(view: HubView, search: string, filtered: boolean): string {
+  if (search) return 'Nada encontrado para esta busca.';
+  if (view === 'closed') return 'Aqui ficam os atendimentos finalizados.';
+  if (view === 'waiting') return filtered ? 'Não há conversas na fila das instâncias selecionadas.' : 'Nenhuma conversa pendente: quando um cliente escrever e ninguém tiver assumido, ela aparece aqui.';
+  if (view === 'mine') return 'Você não está com nenhuma conversa agora. Assuma uma da fila de pendentes.';
+  return filtered ? 'Não há conversas nas instâncias selecionadas.' : 'Você não tem acesso delegado a nenhuma instância neste Hub, ou ainda não há conversas.';
+}
+
 export default function HubInboxPage({ hubId: preferredHub = '', embedded = false, onlyCompany = '', notice }: { hubId?: string; embedded?: boolean; onlyCompany?: string; notice?: React.ReactNode }) {
   const hubs = useMyHubs();
   const myTenants = useMyTenants();
@@ -27,6 +40,14 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   // The selection remembers which hub it belongs to, so an item id can never be used against another hub (not even for one render).
   const [selection, setSelection] = useState({ hub: '', id: '' });
   const isMobile = useMediaQuery('(max-width: 767px)');
+  // Three panes (queue | conversation | details) only when the room left AFTER the app sidebar can hold them, the same rule as the company
+  // workspace (InboxWorkspace): below 1440px the details open in a drawer instead of squeezing the conversation.
+  const wide = useMediaQuery('(min-width: 1440px)', true);
+  const [showContext, setShowContext] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [view, setView] = useState<HubView>('all');
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounced(search.trim(), 300);
   const hub = list.find((h) => h.id === pickedHub) ?? list[0];
   const hubId = hub?.id ?? '';
   const selected = selection.hub === hubId ? selection.id : '';
@@ -35,10 +56,10 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   const companyIds = onlyCompany ? [onlyCompany] : filter.hub === hubId ? filter.ids : [];
 
   const inbox = useInfiniteQuery({
-    queryKey: ['hub-inbox', hubId, companyIds],
+    queryKey: ['hub-inbox', hubId, companyIds, view, debouncedSearch],
     enabled: !!hubId,
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => hubAPI.inbox(hubId, pageParam, companyIds),
+    queryFn: ({ pageParam }) => hubAPI.inbox(hubId, pageParam, companyIds, 30, segmentOf(view), debouncedSearch),
     getNextPageParam: (last) => (last.has_more ? last.next_cursor : undefined),
     refetchInterval: 30_000,
     retry: false,
@@ -49,6 +70,11 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   const fresh = inbox.data?.pages[0]?.companies;
   if (fresh) lastCompanies.current = { hub: hubId, list: fresh };
   const companies: HubCompanyOption[] = lastCompanies.current.hub === hubId ? lastCompanies.current.list : [];
+  // The tabs' counters come with the first page; keep the last known ones while a narrower request is in flight so they do not blink.
+  const lastCounts = useRef<{ hub: string; counts?: HubSegmentCounts }>({ hub: '' });
+  const freshCounts = inbox.data?.pages[0]?.counts;
+  if (freshCounts) lastCounts.current = { hub: hubId, counts: freshCounts };
+  const counts = lastCounts.current.hub === hubId ? lastCounts.current.counts : undefined;
   const items = useMemo(() => {
     const seen = new Set<string>();
     const out: HubInboxItem[] = [];
@@ -67,6 +93,17 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   useEffect(() => {
     if ([hubs.error, inbox.error, detail.error].some(isUnauthorized)) handleUnauthorized();
   }, [hubs.error, inbox.error, detail.error]);
+
+  // The full workspace of a company opens only when the server said so (companies[].full_context); the click only navigates, and every request of
+  // that workspace is decided again by the server.
+  const fullContextOf = (d: HubItemDetail) => !!companies.find((c) => c.id === d.tenant.id)?.full_context;
+  const openFull = (d: HubItemDetail) => {
+    const target = `/inbox?instancia=${encodeURIComponent(d.tenant.id)}&conversation_id=${encodeURIComponent(d.conversation.id)}`;
+    const go = () => window.location.assign(target);
+    // an instance of the person's own is entered as themselves; any other only as an agent of this Hub
+    if (myTenants.data?.some((t) => t.id === d.tenant.id)) switchTenant(d.tenant.id, go);
+    else enterDelegatedInstance(d.tenant.id, hubId, d.tenant.name, go);
+  };
 
   if (hubs.isLoading) return <div className="p-6"><LoadingState message="Carregando o Hub…" /></div>;
   if (hubs.isError) {
@@ -112,17 +149,25 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
           </div>
         </div>
       )}
-      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[360px_minmax(0,1fr)]">
+      <div
+        className={clsx(
+          'grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] md:grid-cols-[360px_minmax(0,1fr)]',
+          wide && showContext && detail.data && selected && 'min-[1440px]:grid-cols-[360px_minmax(0,1fr)_320px]',
+        )}
+      >
         {showList && (
-          <section aria-label="Caixa do Hub" className="min-h-0 border-r border-border-subtle">
-            {inbox.isLoading && <LoadingState message="Carregando conversas…" />}
-            {inbox.isError && <div className="p-4"><ErrorState message="Não foi possível carregar as conversas." action={{ label: 'Tentar novamente', onClick: () => void inbox.refetch() }} /></div>}
-            {!inbox.isLoading && !inbox.isError && items.length === 0 && (
-              <EmptyState title="Nenhuma conversa" description={companyIds.length > 0 ? 'Não há conversas nas instâncias selecionadas.' : 'Você não tem acesso delegado a nenhuma instância neste Hub, ou ainda não há conversas.'} />
-            )}
-            {items.length > 0 && (
-              <HubInboxList items={items} selectedId={selected} onSelect={setSelected} hasMore={!!inbox.hasNextPage} loadingMore={inbox.isFetchingNextPage} onLoadMore={() => void inbox.fetchNextPage()} />
-            )}
+          <section aria-label="Caixa do Hub" className="flex min-h-0 flex-col border-r border-border-subtle">
+            <HubInboxToolbar view={view} onViewChange={setView} search={search} onSearchChange={setSearch} counts={counts} />
+            <div className="min-h-0 flex-1">
+              {inbox.isLoading && <LoadingState message="Carregando conversas…" />}
+              {inbox.isError && <div className="p-4"><ErrorState message="Não foi possível carregar as conversas." action={{ label: 'Tentar novamente', onClick: () => void inbox.refetch() }} /></div>}
+              {!inbox.isLoading && !inbox.isError && items.length === 0 && (
+                <EmptyState title="Nenhuma conversa" description={emptyText(view, debouncedSearch, companyIds.length > 0)} />
+              )}
+              {items.length > 0 && (
+                <HubInboxList items={items} selectedId={selected} onSelect={setSelected} hasMore={!!inbox.hasNextPage} loadingMore={inbox.isFetchingNextPage} onLoadMore={() => void inbox.fetchNextPage()} />
+              )}
+            </div>
           </section>
         )}
         {showDetail && (
@@ -138,10 +183,28 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
                 />
               </div>
             )}
-            {selected && detail.data && <HubItemView hubId={hubId} detail={detail.data} onBack={isMobile ? () => setSelected('') : undefined} />}
+            {selected && detail.data && (
+              <HubItemView
+                hubId={hubId}
+                detail={detail.data}
+                onBack={isMobile ? () => setSelected('') : undefined}
+                onToggleContext={() => (wide ? setShowContext(!showContext) : setDrawerOpen(true))}
+              />
+            )}
           </section>
         )}
+        {/* The details of the attendance: a third column when there is room, otherwise a drawer opened from the conversation header */}
+        {wide && showContext && selected && detail.data && (
+          <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-border-subtle">
+            <HubContextPane detail={detail.data} fullContext={fullContextOf(detail.data)} onOpenFull={() => openFull(detail.data!)} />
+          </div>
+        )}
       </div>
+      {!wide && (
+        <Drawer open={drawerOpen && !!selected && !!detail.data} title="Detalhes do atendimento" onClose={() => setDrawerOpen(false)}>
+          {detail.data && <HubContextPane detail={detail.data} fullContext={fullContextOf(detail.data)} onOpenFull={() => openFull(detail.data!)} />}
+        </Drawer>
+      )}
     </div>
   );
 }

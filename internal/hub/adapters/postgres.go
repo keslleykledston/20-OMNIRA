@@ -373,7 +373,7 @@ func decodeInboxCursor(cursor string) (time.Time, uuid.UUID, error) {
 // ListHubInboxItems pages the hub's inbox by most recent activity with keyset pagination on (last_activity_at, id).
 // It runs inside the caller's database session, so RLS (not this query) decides which tenants' rows exist
 // for the caller; the hub_id filter only narrows within that.
-func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uuid.UUID, onlyTenants []uuid.UUID, limit int, cursor string) ([]*domain.HubInboxItem, string, error) {
+func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uuid.UUID, f ports.InboxFilter, limit int, cursor string) ([]*domain.HubInboxItem, string, error) {
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -381,11 +381,30 @@ func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uui
 
 	query := `SELECT ` + inboxColumns + ` FROM hub_inbox_items WHERE hub_id = $1`
 	args := []interface{}{hubID}
-	// onlyTenants NARROWS what RLS already shows (a screen filter: "these companies only"). It can never widen it: rows the
+	// Tenants NARROWS what RLS already shows (a screen filter: "these companies only"). It can never widen it: rows the
 	// caller may not read are filtered out before this predicate is ever evaluated.
-	if len(onlyTenants) > 0 {
-		args = append(args, onlyTenants)
+	if len(f.Tenants) > 0 {
+		args = append(args, f.Tenants)
 		query += fmt.Sprintf(` AND tenant_id = ANY($%d::uuid[])`, len(args))
+	}
+	switch f.Segment {
+	case ports.SegmentAll:
+	case ports.SegmentOpen:
+		query += ` AND COALESCE(status, 'open') <> 'closed'`
+	case ports.SegmentWaiting:
+		query += ` AND COALESCE(status, 'open') <> 'closed' AND assigned_user_id IS NULL`
+	case ports.SegmentMine:
+		args = append(args, f.Actor)
+		query += fmt.Sprintf(` AND COALESCE(status, 'open') <> 'closed' AND assigned_user_id = $%d`, len(args))
+	case ports.SegmentClosed:
+		query += ` AND status = 'closed'`
+	default:
+		return nil, "", ErrInvalidSegment
+	}
+	// The search is on the customer name only (the projection holds no phone number). The user's text is data: LIKE wildcards are escaped.
+	if term := strings.TrimSpace(f.Query); term != "" {
+		args = append(args, "%"+escapeLike(term)+"%")
+		query += fmt.Sprintf(` AND customer_name ILIKE $%d`, len(args))
 	}
 	if cursor != "" {
 		ts, id, err := decodeInboxCursor(cursor)
@@ -423,6 +442,30 @@ func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uui
 		next = encodeInboxCursor(*last.LastActivityAt, last.ID)
 	}
 	return items, next, nil
+}
+
+// ErrInvalidSegment is a segment the API does not know (a 400, never a silent fallback to "everything").
+var ErrInvalidSegment = errors.New("invalid inbox segment")
+
+// escapeLike makes a user's text literal inside a LIKE pattern (backslash is the default LIKE escape character).
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// CountHubInboxSegments counts, under the caller's own session (so only rows RLS shows them), the items of each segment. The screen's
+// company filter narrows it like it narrows the list; the segment and the search of the page do not.
+func (r *PostgresHubRepository) CountHubInboxSegments(ctx context.Context, hubID uuid.UUID, onlyTenants []uuid.UUID, actor uuid.UUID) (ports.InboxCounts, error) {
+	q := platformdb.QuerierFromContext(ctx, r.pool)
+	var c ports.InboxCounts
+	err := q.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE COALESCE(status, 'open') <> 'closed'),
+		       count(*) FILTER (WHERE COALESCE(status, 'open') <> 'closed' AND assigned_user_id IS NULL),
+		       count(*) FILTER (WHERE COALESCE(status, 'open') <> 'closed' AND assigned_user_id = $3),
+		       count(*) FILTER (WHERE status = 'closed')
+		FROM hub_inbox_items
+		WHERE hub_id = $1 AND (COALESCE(cardinality($2::uuid[]), 0) = 0 OR tenant_id = ANY($2::uuid[]))`,
+		hubID, onlyTenants, actor).Scan(&c.Open, &c.Waiting, &c.Mine, &c.Closed)
+	return c, err
 }
 
 // GetHubInboxItemByID loads one item by its own id within a hub. The caller never supplies the tenant: it
