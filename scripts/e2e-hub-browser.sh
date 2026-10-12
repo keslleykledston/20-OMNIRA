@@ -101,9 +101,10 @@ UPDATE messages SET media_ref = 'e2e', mime_type = 'image/png', size_bytes = 70 
 SQL
 ctl reconcile >/dev/null
 
+CRED_KEY="$(head -c32 /dev/urandom | base64)"
 echo "== the real omnira-api (dev login, every Hub flag ON) and the built web app proxying to it"
 OMNIRA_DATABASE_URL="$APPDB" OMNIRA_ENV=test OMNIRA_AUTH_MODE=mock OMNIRA_DEV_AUTH_ENABLED=true OMNIRA_NATS_URL="nats://127.0.0.1:$NATSPORT" \
-  OMNIRA_CREDENTIALS_KEY="$(head -c32 /dev/urandom | base64)" OMNIRA_HTTP_ADDR=127.0.0.1:$APIPORT \
+  OMNIRA_CREDENTIALS_KEY="$CRED_KEY" OMNIRA_HTTP_ADDR=127.0.0.1:$APIPORT \
   OMNIRA_HUB_API_ENABLED=true OMNIRA_HUB_ADMIN_API_ENABLED=true OMNIRA_HUB_ACCESS_API_ENABLED=true OMNIRA_HUB_SERVE_ENABLED=true OMNIRA_MEDIA_DIR="$MEDIA" \
   "$WORK/bin/api" >"$WORK/api.log" 2>&1 &
 echo $! >"$WORK/api.pid"
@@ -121,4 +122,21 @@ set +e
 STATUS=$?
 set -e
 if [ "$STATUS" -ne 0 ]; then echo "--- api log (tail)"; tail -25 "$WORK/api.log"; exit "$STATUS"; fi
+
+# Credential-leak sweep (pre-gate deliverable): after every real flow, no secret of this run may sit in the api log, and no audit/outbox row may carry a secret-looking key or a signed-context token
+echo "== leak sweep: api log, audit_events and outbox_events"
+LEAKS=0
+for canary in "$OMNIRA_SESSION_CTX_KEY" "$CRED_KEY"; do
+  if grep -qF -- "$canary" "$WORK/api.log"; then echo "LEAK: a run secret is in the api log"; LEAKS=$((LEAKS + 1)); fi
+done
+if grep -qE 'b1\|[0-9a-f-]{36}\|[01]\|[0-9a-f]{32}\|[0-9a-f]{64}' "$WORK/api.log"; then echo "LEAK: a signed session-context token is in the api log"; LEAKS=$((LEAKS + 1)); fi
+if grep -qiE 'bearer [a-z0-9._-]{20,}|set-cookie|omnira_session=[a-z0-9]' "$WORK/api.log"; then echo "LEAK: a bearer token or cookie is in the api log"; LEAKS=$((LEAKS + 1)); fi
+PAYLOAD_RE='"(password|passwd|secret|token|access_token|refresh_token|authorization|cookie|ciphertext|api_key|apikey)"|b1\|[0-9a-f-]{36}\|'
+for q in "SELECT count(*) FROM audit_events WHERE metadata::text ~* '$PAYLOAD_RE'" "SELECT count(*) FROM outbox_events WHERE payload::text ~* '$PAYLOAD_RE'"; do
+  n=$(psql_o -c "$q"); if [ "$n" != "0" ]; then echo "LEAK: $n row(s) for: $q"; LEAKS=$((LEAKS + 1)); fi
+done
+rows=$(psql_o -c "SELECT (SELECT count(*) FROM audit_events) + (SELECT count(*) FROM outbox_events)")
+[ "${rows:-0}" -gt 0 ] || { echo "leak sweep inspected no audit/outbox rows: the check proves nothing"; exit 1; }
+[ "$LEAKS" -eq 0 ] || exit 1
+echo "leak sweep: clean ($rows audit/outbox rows inspected)"
 echo "PASS: Hub E2E in a real browser against the real binaries"
