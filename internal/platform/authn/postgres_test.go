@@ -53,3 +53,54 @@ func TestPostgresIdentityResolverCrossesRLSOnlyForProvisionedIdentity(t *testing
 		t.Fatal("unprovisioned identity was accepted")
 	}
 }
+
+// A person who belongs to no company but to a live Service Hub can finish signing in (their place is "Conversas"); anyone else still cannot, and a suspended Hub
+// gives nobody a place.
+func TestSessionProfileOfAPersonWhoOnlyBelongsToAHub(t *testing.T) {
+	ownerURL, appURL := testhelpers.RequireIntegrationDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	owner, err := pgxpool.New(ctx, ownerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := owner.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hubUser, nobody, hub := uuid.New(), uuid.New(), uuid.New()
+	exec(`INSERT INTO users(id,external_subject,email,display_name,status) VALUES($1,$2,'hubonly@invalid','Hub Only','active'),($3,$4,'nobody@invalid','Nobody','active')`,
+		hubUser, "hubonly-"+hubUser.String(), nobody, "nobody-"+nobody.String())
+	exec(`INSERT INTO service_hubs(id,name,status) VALUES($1,'Hub do teste','active')`, hub)
+	exec(`INSERT INTO hub_memberships(hub_id,user_id,role_id) SELECT $1,$2,id FROM roles WHERE key='hub_agent' AND tenant_id IS NULL`, hub, hubUser)
+	t.Cleanup(func() {
+		_, _ = owner.Exec(context.Background(), `DELETE FROM service_hubs WHERE id=$1`, hub)
+		_, _ = owner.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1,$2)`, hubUser, nobody)
+	})
+	resolver := NewPostgresIdentityResolver(app)
+
+	p, err := resolver.SessionProfile(ctx, hubUser)
+	if err != nil || !p.HubOnly || p.Tenant.ID != "" || p.User.ID != hubUser.String() || p.User.Email != "hubonly@invalid" {
+		t.Fatalf("hub-only profile = %#v err=%v", p, err)
+	}
+	if _, err := resolver.SessionProfile(ctx, nobody); err == nil {
+		t.Fatal("a person with neither a company nor a Hub got a profile")
+	}
+	exec(`UPDATE service_hubs SET status='suspended' WHERE id=$1`, hub)
+	if _, err := resolver.SessionProfile(ctx, hubUser); err == nil {
+		t.Fatal("a member of a suspended Hub got a profile")
+	}
+	exec(`UPDATE service_hubs SET status='active' WHERE id=$1`, hub)
+	exec(`UPDATE users SET status='inactive' WHERE id=$1`, hubUser)
+	if _, err := resolver.SessionProfile(ctx, hubUser); err == nil {
+		t.Fatal("an inactive account got a profile")
+	}
+}

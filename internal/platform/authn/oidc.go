@@ -64,12 +64,15 @@ type OIDCIdentityResolver interface {
 type SessionProfile struct {
 	User   SessionUser   `json:"user"`
 	Tenant SessionTenant `json:"tenant"`
+	// HubOnly is true for a person who belongs to no company of their own but to a live Service Hub: Tenant is then empty and their place is "Conversas"
+	// (the instances the Hub delegated to them). It decides nothing server-side; every request is still authorized by the Hub relationship.
+	HubOnly bool `json:"hub_only,omitempty"`
 }
 
 type SessionUser struct {
-	ID                string `json:"id"`
-	Email             string `json:"email,omitempty"`
-	Name              string `json:"name,omitempty"`
+	ID                string     `json:"id"`
+	Email             string     `json:"email,omitempty"`
+	Name              string     `json:"name,omitempty"`
 	PasswordExpiresAt *time.Time `json:"password_expires_at,omitempty"`
 }
 
@@ -79,15 +82,15 @@ type SessionTenant struct {
 }
 
 type oidcClaims struct {
-	Nonce       string `json:"nonce,omitempty"`
-	Email       string `json:"email,omitempty"`
+	Nonce string `json:"nonce,omitempty"`
+	Email string `json:"email,omitempty"`
 	// email_verified: bool no padrão OIDC, mas alguns IdPs enviam a string "true".
-	EmailVerified any `json:"email_verified,omitempty"`
-	Name        string `json:"name,omitempty"`
+	EmailVerified any    `json:"email_verified,omitempty"`
+	Name          string `json:"name,omitempty"`
 	// Azp: authorized party (the OIDC client the token was issued to); the native flow requires it to be the mobile client.
-	Azp         string `json:"azp,omitempty"`
-	GivenName   string `json:"given_name,omitempty"`
-	FamilyName  string `json:"family_name,omitempty"`
+	Azp        string `json:"azp,omitempty"`
+	GivenName  string `json:"given_name,omitempty"`
+	FamilyName string `json:"family_name,omitempty"`
 	jwt.RegisteredClaims
 }
 

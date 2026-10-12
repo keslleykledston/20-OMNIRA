@@ -82,4 +82,22 @@ describe('Login — default landing destination', () => {
 
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/no-access', { replace: true }));
   });
+
+  // A person who belongs to no company of their own but to a Service Hub (the product's central case) must be able to finish signing in: their place is "Conversas".
+  it('OIDC completion of a person who only belongs to a Hub lands on /inbox with a session, not on /no-access', async () => {
+    mode({ mode: 'oidc' });
+    vi.mocked(authAPI.session).mockResolvedValue({
+      data: { user: { id: 'u2', email: 'hugo@x', roles: [] }, tenant: { id: '', name: '' }, hub_only: true },
+    } as any);
+    window.history.replaceState({}, '', '/login?oidc=complete');
+    render(
+      <MemoryRouter initialEntries={['/login?oidc=complete']}>
+        <Login />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/inbox', { replace: true }));
+    expect(localStorage.getItem('sessionActive')).toBe('true'); // the app's own gate (Layout) lets them in
+    expect(localStorage.getItem('tenantId')).toBeNull(); // and no company is invented for them
+  });
 });

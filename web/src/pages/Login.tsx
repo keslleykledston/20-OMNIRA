@@ -57,7 +57,8 @@ export default function Login() {
               navigate('/settings/password', { replace: true })
               return
             }
-            navigate(tenantId ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
+            // A person who belongs to no company of their own but to a Service Hub signs in too: their place is "Conversas" (the instances the Hub delegated to them).
+            navigate(tenantId || session.data.hub_only ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
             return
           } catch (err: any) {
             if (!active) return
