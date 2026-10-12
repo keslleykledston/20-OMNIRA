@@ -22,3 +22,11 @@ Cada upload em andamento pode segurar até ~40 MiB (arquivo + cópia sem metadad
 - Disco: `du -sh <host path>/outbound`; pendentes expiram em 24 h, enviados em 60 dias.
 - Desligar: `OMNIRA_OUTBOUND_MEDIA_ENABLED=false` e recriar a `api`. Mensagens de mídia já enfileiradas continuam sendo entregues pelo worker.
 - Reverter a migration: `down` remove só a tabela de registros; apague `outbound/` à mão se quiser liberar disco.
+
+## O que já foi provado sem o celular (2026-10-12) e o que continua do dono
+
+**Provado contra um clamd REAL** (`scripts/test-clamd-real.sh`, contêiner `clamav/clamav:1.4` descartável; nunca o `omnira-clamav` de produção): o EICAR é encontrado (`Eicar-Test-Signature`), bytes comuns de 1 byte a 1 MiB (abaixo, na borda e acima do bloco de 64 KiB) voltam limpos, um JPEG sem ameaça não é julgado, e **com o clamd parado** a verificação é um **erro** (nunca "limpo") — é isso que faz o envio responder `503` sem guardar nada. Observação medida: o EICAR é reconhecido pelo hash do **arquivo inteiro**; um documento que apenas contém o texto não é marcado (o texto de teste prova o encanamento, não modela malware).
+
+**Já coberto por testes de unidade/integração** (`internal/messages/adapters/attachment_test.go`, `internal/media/domain/outbound_test.go`): tipos e tamanhos recusados antes de guardar qualquer coisa, GPS/EXIF removido da foto, antivírus indisponível fecha, cota e limite de pendentes, quem pode enviar, retenção.
+
+**Continua do dono** (precisa de um número real): ver a foto, o PDF, a nota de voz (OGG) e o MP4 chegarem **no celular** pela linha WAHA, e repetir JPG e PDF em linha Meta. Isso não se simula: depende do provedor e do aparelho.
