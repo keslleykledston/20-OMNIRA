@@ -70,7 +70,6 @@ no sistema por este levantamento. Onde não verifiquei algo, está dito.
 5. Qual é a fila padrão do tenant `4bae…` (hoje sem membros) e do piloto?
 
 ## 6. Estado do que foi feito nesta sessão (para quem assume)
-- Commitado em `main`, **sem push**: `6d083a5` (permissão `conversation.read_internal`) e antes `8ce866d`/`94250f4` (chave Gemini).
-- Migration 000120 **já aplicada em produção** (arrastada pelo `migrate` de outra sessão). O código novo (api, worker, web) **ainda não foi implantado**. O `web` em produção foi construído da árvore de outra sessão: reconstruir a partir de `main` pode remover alterações dela.
-- Armadilhas: checkout compartilhado muda de branch (construir de worktree limpo de `main`); `scripts/test-integration.sh` aceita só pacotes; `pgrep -f` em espera casa com o próprio comando.
-- Pendências do dono: testar o fluxo "Interno" e a restrição (agente × supervisor), `#sair`, ordem de push, rotacionar segredos dos `.env.pre-*`, cobrança Meta 131042, fase de logo/favicon.
+- **Atualizado em 2026-10-12 (noite):** `6d083a5` (permissão `conversation.read_internal`) e a migration 000120 estão em `main` **e implantados** (api, worker e web `sha-6d083a5`, construídos de um `git archive` de uma árvore limpa que tinha as duas linhas de trabalho; tags de volta `rollback-pre-final-20261012-1817`). `main` foi enviado ao GitHub (`f01fea8` na hora do envio). O texto original desta seção (antes da implantação) dizia "sem push" e "não implantado": já não vale.
+- Armadilhas: checkout compartilhado muda de branch (construir de `git archive`/worktree limpo de `main`); `scripts/test-integration.sh` aceita só pacotes; `pgrep -f` em espera casa com o próprio comando.
+- Pendências do dono: testar o fluxo "Interno" e a restrição (agente × supervisor), `#sair`, rotacionar segredos dos `.env.pre-*`, cobrança Meta 131042, fase de logo/favicon, e as cinco decisões da seção 5 (setores).
