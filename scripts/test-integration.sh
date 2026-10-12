@@ -158,6 +158,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# shellcheck source=lib/clone-retry.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/clone-retry.sh"
+
 echo "== starting disposable Postgres cluster (${CONTAINER}, 127.0.0.1 only, test-local credentials)"
 docker run -d --name "${CONTAINER}" \
   --label "${LABEL_KEY}=true" \
@@ -282,20 +285,9 @@ for pkg in "${PACKAGES[@]}"; do
   pkghash=$(printf '%s' "${pkg}" | md5sum | cut -c1-8)
   dbname="omnira_test_${RUNSHORT}_${pkghash}"
 
-  # The disposable cluster sometimes drops the connection ("server closed the connection unexpectedly") right after a heavy run; that is the
-  # infrastructure, not the code under test, so the clone is retried a few times (waiting for pg_isready) before the run is declared failed.
+  # (the retry rules live in scripts/lib/clone-retry.sh, with their own proof in scripts/test-gate-clone-retry.sh)
   cloned=0
-  for attempt in 1 2 3 4 5; do
-    if clone_err=$(psql_owner -d postgres -c "CREATE DATABASE ${dbname} TEMPLATE ${TEMPLATE_DB}" 2>&1 >/dev/null); then cloned=1; break; fi
-    # only a dropped/refused connection is the infrastructure; anything else (permission, bad template, name clash) is a real failure and is reported as it is
-    if ! printf '%s' "${clone_err}" | grep -qiE "server closed the connection|connection refused|could not connect|terminating connection|the database system is (starting|shutting)|connection to server .* failed"; then
-      echo "FATAL: cloning the template for ${pkg} failed: ${clone_err}" >&2
-      break
-    fi
-    echo "   (clone of ${dbname} failed with a dropped connection, attempt ${attempt}/5: ${clone_err}; waiting for the cluster)" >&2
-    psql_owner -d postgres -c "DROP DATABASE IF EXISTS ${dbname}" >/dev/null 2>&1 || true
-    for i in $(seq 1 30); do docker exec "${CONTAINER}" pg_isready -U "${PG_USER}" >/dev/null 2>&1 && break; sleep 1; done
-  done
+  clone_template_with_retry "${dbname}" "${TEMPLATE_DB}" "${pkg}" && cloned=1
   if [ "$cloned" != "1" ]; then
     FAILED+=("${pkg} (could not clone the template)")
     continue
