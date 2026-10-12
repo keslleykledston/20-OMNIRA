@@ -754,6 +754,73 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '422': { description: "Thresholds out of range or not increasing", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/queues/lines:
+    get:
+      operationId: listLineQueues
+      tags: [Agents]
+      summary: Which channel lines send new conversations to a queue of their own
+      description: |
+        Requires `agent.read`. Only lines that name a queue are listed; a line absent from the list uses the tenant's
+        default queue (ADR-0043, sector entry rule).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: Line to queue pairs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  count: { type: integer, minimum: 0 }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [connection_id, queue_id]
+                      properties:
+                        connection_id: { type: string, format: uuid }
+                        queue_id: { type: string, format: uuid }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/channels/lines/{connection_id}/queue:
+    put:
+      operationId: setLineQueue
+      tags: [Agents]
+      summary: Point a channel line at a queue (sector), or clear it
+      description: |
+        Requires `agent.manage`. `queue_id: null` clears the rule and the line goes back to the default queue. Affects only
+        conversations created afterwards: a conversation already routed never moves. A line or queue of another tenant and
+        an unknown id are indistinguishable (`404`). Audited as `channel.line_queue_changed`. A queue a line points at cannot
+        be deleted (`409`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: connection_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                queue_id: { type: [string, 'null'], format: uuid }
+      responses:
+        '200':
+          description: The rule now in force
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connection_id, queue_id]
+                properties:
+                  connection_id: { type: string, format: uuid }
+                  queue_id: { type: [string, 'null'], format: uuid }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/queues/{queue_id}:
     patch:
       operationId: updateQueue
@@ -787,8 +854,8 @@ paths:
       tags: [Agents]
       summary: Delete a queue
       description: |
-        Requires `agent.manage`. Removes the queue and its member assignments. Refused with `409` for the default queue
-        and for any queue that still holds conversations.
+        Requires `agent.manage`. Removes the queue and its member assignments. Refused with `409` for the default queue,
+        for any queue that still holds conversations and for any queue a channel line points at.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { $ref: '#/components/parameters/QueueId' }

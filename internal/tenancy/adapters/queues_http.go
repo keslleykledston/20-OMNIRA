@@ -366,10 +366,139 @@ func (h *QueuesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the queue still has conversations and cannot be deleted", http.StatusConflict)
 		return
 	}
+	var lines int
+	if err := q.QueryRow(r.Context(), `SELECT count(*) FROM channel_connections WHERE tenant_id = $1 AND default_queue_id = $2`, tc.TenantID, id).Scan(&lines); err != nil {
+		http.Error(w, "failed to read queue", http.StatusInternalServerError)
+		return
+	}
+	if lines > 0 {
+		http.Error(w, "a channel line still sends new conversations to this queue; move the line first", http.StatusConflict)
+		return
+	}
 	if _, err := q.Exec(r.Context(), `DELETE FROM queues WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id); err != nil {
 		http.Error(w, "failed to delete queue", http.StatusInternalServerError)
 		return
 	}
 	h.record(r, id, auditdomain.ActionQueueDeleted, map[string]any{"members_removed": members})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---- Sector entry rule (ADR-0043, S2): which queue a channel line sends NEW conversations to ----
+
+type lineQueueItem struct {
+	ConnectionID uuid.UUID `json:"connection_id"`
+	QueueID      uuid.UUID `json:"queue_id"`
+}
+
+// ListLineQueues answers which lines name a queue of their own (a line absent from the list uses the tenant's default queue).
+func (h *QueuesHandler) ListLineQueues(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.authorize(w, r, "agent.read")
+	if !ok {
+		return
+	}
+	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(),
+		`SELECT id, default_queue_id FROM channel_connections WHERE tenant_id = $1 AND default_queue_id IS NOT NULL ORDER BY created_at, id`, tc.TenantID)
+	if err != nil {
+		http.Error(w, "failed to list line queues", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	items := []lineQueueItem{}
+	for rows.Next() {
+		var it lineQueueItem
+		if err := rows.Scan(&it.ConnectionID, &it.QueueID); err != nil {
+			http.Error(w, "failed to read line queues", http.StatusInternalServerError)
+			return
+		}
+		items = append(items, it)
+	}
+	if rows.Err() != nil {
+		http.Error(w, "failed to read line queues", http.StatusInternalServerError)
+		return
+	}
+	writeQueueJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+type setLineQueueRequest struct {
+	// QueueID null (or absent) clears the rule: the line goes back to the tenant's default queue.
+	QueueID *uuid.UUID `json:"queue_id"`
+}
+
+// SetLineQueue points a channel line at a queue, or clears it. Only affects conversations created after the change: a
+// conversation already routed never moves. The line and the queue must both belong to the caller's tenant (RLS and the
+// composite foreign key); anything else is a plain 404, so existence in another tenant is not revealed.
+func (h *QueuesHandler) SetLineQueue(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.authorize(w, r, "agent.manage")
+	if !ok {
+		return
+	}
+	connID, err := uuid.Parse(r.PathValue("connection_id"))
+	if err != nil {
+		http.Error(w, "invalid connection_id", http.StatusBadRequest)
+		return
+	}
+	var req setLineQueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	if req.QueueID != nil {
+		var exists bool
+		if err := q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM queues WHERE tenant_id = $1 AND id = $2)`, tc.TenantID, *req.QueueID).Scan(&exists); err != nil {
+			http.Error(w, "failed to read queue", http.StatusInternalServerError)
+			return
+		}
+		if !exists {
+			http.Error(w, "queue not found", http.StatusNotFound)
+			return
+		}
+	}
+	var previous *uuid.UUID
+	if err := q.QueryRow(r.Context(), `SELECT default_queue_id FROM channel_connections WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, tc.TenantID, connID).Scan(&previous); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "channel line not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to read channel line", http.StatusInternalServerError)
+		return
+	}
+	if _, err := q.Exec(r.Context(), `UPDATE channel_connections SET default_queue_id = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, connID, req.QueueID); err != nil {
+		http.Error(w, "failed to set the line queue", http.StatusInternalServerError)
+		return
+	}
+	meta := map[string]any{}
+	if previous != nil {
+		meta["previous_queue_id"] = previous.String()
+	}
+	if req.QueueID != nil {
+		meta["queue_id"] = req.QueueID.String()
+	}
+	h.recordOn(r, auditdomain.ResourceChannelConnection, connID, auditdomain.ActionChannelLineQueueChanged, meta)
+	writeQueueJSON(w, http.StatusOK, lineQueueItemOrEmpty(connID, req.QueueID))
+}
+
+func lineQueueItemOrEmpty(conn uuid.UUID, queue *uuid.UUID) map[string]any {
+	if queue == nil {
+		return map[string]any{"connection_id": conn, "queue_id": nil}
+	}
+	return map[string]any{"connection_id": conn, "queue_id": *queue}
+}
+
+func (h *QueuesHandler) recordOn(r *http.Request, res auditdomain.ResourceType, id uuid.UUID, action auditdomain.AuditAction, meta map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	tc, err := tenancydomain.FromContext(r.Context())
+	if err != nil {
+		return
+	}
+	ev, err := auditdomain.NewAuditEvent(tc.TenantID, tc.ActorID, action, res, id, auditdomain.OutcomeSuccess, uuid.Nil)
+	if err != nil {
+		return
+	}
+	for k, v := range meta {
+		ev.SetMetadata(k, v)
+	}
+	_ = h.audit.Store(r.Context(), ev)
 }

@@ -378,3 +378,79 @@ func TestQueuesOfAnotherTenantAreUntouchable(t *testing.T) {
 		t.Fatalf("tenant B lost its default queue: %d", n)
 	}
 }
+
+// ADR-0043 (S2): the entry rule of a channel line. Permission, tenant isolation, audit, clearing, and the delete guard.
+func TestLineQueueRuleIsPermissionedTenantScopedAuditedAndGuardsDelete(t *testing.T) {
+	seed, app, h := queuesEnv(t)
+	a, b := seedTeamTenant(t, seed), seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	agent := seedTeamMember(t, seed, a.tenantID, "tenant_agent", "active")
+	def := seedQueue(t, seed, a.tenantID, "Triagem", "manual", true)
+	fin := seedQueue(t, seed, a.tenantID, "Financeiro", "manual", false)
+	foreign := seedQueue(t, seed, b.tenantID, "Do B", "manual", true)
+	line := func(tenant uuid.UUID) uuid.UUID {
+		id := uuid.New()
+		if _, err := seed.Exec(context.Background(), `INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status,capabilities)
+			VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active','["text"]'::jsonb)`, id, tenant, "n"+id.String()); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	lineA, lineB := line(a.tenantID), line(b.tenantID)
+	set := func(actor, tenant, conn uuid.UUID, body string) *httptest.ResponseRecorder {
+		return callQueues(t, app, tenant, actor, http.MethodPut, h.SetLineQueue, map[string]string{"connection_id": conn.String()}, body)
+	}
+	listed := func() []lineQueueItem {
+		rec := callQueues(t, app, a.tenantID, admin, http.MethodGet, h.ListLineQueues, nil, "")
+		var out struct {
+			Items []lineQueueItem `json:"items"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("list line queues = %d %s", rec.Code, rec.Body.String())
+		}
+		return out.Items
+	}
+
+	if got := set(agent, a.tenantID, lineA, `{"queue_id":"`+fin.String()+`"}`).Code; got != http.StatusForbidden {
+		t.Fatalf("an agent must not set the rule: %d", got)
+	}
+	if got := set(admin, a.tenantID, lineA, `{"queue_id":"`+fin.String()+`"}`).Code; got != http.StatusOK {
+		t.Fatalf("admin set = %d", got)
+	}
+	if items := listed(); len(items) != 1 || items[0].ConnectionID != lineA || items[0].QueueID != fin {
+		t.Fatalf("list after set = %+v", items)
+	}
+	if auditCount(t, seed, a.tenantID, "channel.line_queue_changed") != 1 {
+		t.Fatal("the change must be audited once")
+	}
+	// another tenant's line or queue is indistinguishable from an unknown one
+	if got := set(admin, a.tenantID, lineB, `{"queue_id":"`+fin.String()+`"}`).Code; got != http.StatusNotFound {
+		t.Fatalf("another tenant's line = %d, want 404", got)
+	}
+	if got := set(admin, a.tenantID, lineA, `{"queue_id":"`+foreign.String()+`"}`).Code; got != http.StatusNotFound {
+		t.Fatalf("another tenant's queue = %d, want 404", got)
+	}
+	if got := set(admin, a.tenantID, uuid.New(), `{"queue_id":"`+fin.String()+`"}`).Code; got != http.StatusNotFound {
+		t.Fatalf("unknown line = %d, want 404", got)
+	}
+	if got := set(admin, a.tenantID, lineA, `{"queue_id":"nope"}`).Code; got != http.StatusBadRequest {
+		t.Fatalf("malformed queue id = %d, want 400", got)
+	}
+	if items := listed(); len(items) != 1 || items[0].QueueID != fin {
+		t.Fatalf("a refused change must leave the rule alone: %+v", items)
+	}
+	// a queue a line points at cannot be deleted; after clearing it can
+	if got := callQueues(t, app, a.tenantID, admin, http.MethodDelete, h.Delete, map[string]string{"queue_id": fin.String()}, "").Code; got != http.StatusConflict {
+		t.Fatalf("delete of a queue a line points at = %d, want 409", got)
+	}
+	if got := set(admin, a.tenantID, lineA, `{"queue_id":null}`).Code; got != http.StatusOK {
+		t.Fatalf("clear = %d", got)
+	}
+	if items := listed(); len(items) != 0 {
+		t.Fatalf("cleared rule still listed: %+v", items)
+	}
+	if got := callQueues(t, app, a.tenantID, admin, http.MethodDelete, h.Delete, map[string]string{"queue_id": fin.String()}, "").Code; got != http.StatusNoContent {
+		t.Fatalf("delete after clearing = %d, want 204", got)
+	}
+	_ = def
+}

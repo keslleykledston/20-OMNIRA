@@ -46,6 +46,22 @@ export const queuesAPI = {
   remove: (id: string) => call<void>(() => axios.delete(`${base()}/${id}`, { headers: authHeaders() })),
 }
 
+// ADR-0043 (S2): which queue ("grupo") a channel line sends NEW conversations to. A line absent from the list uses the default.
+export interface LineQueue {
+  connection_id: string
+  queue_id: string
+}
+
+export const lineQueuesAPI = {
+  list: () =>
+    call<{ items: LineQueue[] }>(() => axios.get(`${base()}/lines`, { headers: authHeaders() })).then((r) => r.items),
+  // queueId null clears the rule: the line goes back to the default group
+  set: (connectionId: string, queueId: string | null) =>
+    call<LineQueue>(() =>
+      axios.put(`${API_BASE}/tenants/${getTenantId()}/channels/lines/${connectionId}/queue`, { queue_id: queueId }, { headers: authHeaders() }),
+    ),
+}
+
 // The API answers with short plain-text reasons; the screen shows a sentence the
 // operator can act on instead of the raw text.
 export function queueErrorMessage(err: any, fallback = 'Não foi possível concluir a alteração.'): string {
@@ -63,6 +79,7 @@ export function queueErrorMessage(err: any, fallback = 'Não foi possível concl
       return 'O grupo padrão não pode ser excluído. Defina outro como padrão antes.'
     }
     if (text.includes('still has conversations')) return 'Este grupo ainda tem conversas e não pode ser excluído.'
+    if (text.includes('channel line still sends')) return 'Um canal ainda envia conversas novas para este grupo. Mude o canal antes de excluir.'
   }
   return fallback
 }

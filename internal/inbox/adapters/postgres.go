@@ -110,7 +110,7 @@ func (s *PostgresInboundStore) FindOpenInternal(ctx context.Context, userID, con
 		ORDER BY updated_at DESC, id DESC LIMIT 1`, tenantID, userID, connectionID))
 }
 
-// RouteNew selects only the tenant's explicit default queue. Round-robin
+// RouteNew selects the queue of the line the conversation came through (ADR-0043, when the line names one), else the tenant's explicit default queue. Round-robin
 // queues enqueue a durable reference in the same transaction as inbound
 // persistence; manual queues remain visible for operator claim.
 func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid.UUID) error {
@@ -120,7 +120,12 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 	}
 	_, err = platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
 		WITH selected AS (
-		  SELECT id,mode FROM queues WHERE tenant_id=$1 AND is_default ORDER BY id LIMIT 1
+		  -- ADR-0043 (S2): the line the conversation came through may name its own queue (sector); otherwise the tenant's default
+		  SELECT q.id,q.mode FROM queues q WHERE q.tenant_id=$1 AND q.id = COALESCE(
+		    (SELECT cc.default_queue_id FROM conversations c0
+		       JOIN channel_connections cc ON cc.tenant_id=c0.tenant_id AND cc.id=c0.channel_connection_id
+		      WHERE c0.tenant_id=$1 AND c0.id=$2),
+		    (SELECT d.id FROM queues d WHERE d.tenant_id=$1 AND d.is_default ORDER BY d.id LIMIT 1))
 		), routed AS (
 		  -- routing_retry_at starts comfortably past the JetStream in-flight
 		  -- window (routing.SweepRetryBackoff, internal/worker/routing/liveness.go)

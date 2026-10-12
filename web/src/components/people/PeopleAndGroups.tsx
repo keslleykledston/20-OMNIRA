@@ -19,6 +19,7 @@ import {
   Tabs,
 } from '../primitives'
 import type { QueueMode } from '../../lib/queues'
+import { LineEntryRules } from './LineEntryRules'
 import {
   hasNoDefaultGroup,
   pluralize,
@@ -517,6 +518,7 @@ function GroupsView(props: PeopleAndGroupsProps) {
           ))}
         </ul>
       )}
+      <LineEntryRules groups={groups.items} canManage={canManage} />
       {creating && (
         <NewGroupModal
           busy={busyKey === 'new-group'}

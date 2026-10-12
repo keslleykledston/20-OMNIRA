@@ -24,3 +24,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0023 - Contrato de eventos em tempo real e arquitetura de notificações
 - 0024 - Anexos de saída (o operador envia arquivo ao cliente) — aceita, implementada, desligada até o teste ao vivo
 - 0036 - Estratégia de evolução do frontend: o OMNIRA é a aplicação, protótipos gerados são só referência de UX — aceita
+- 0043 - Setores: a fila é o setor; entrada por canal (S0–S2 implementadas, S3/S4 propostas)

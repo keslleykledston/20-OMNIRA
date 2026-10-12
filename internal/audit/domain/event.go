@@ -60,6 +60,7 @@ const (
 	ActionQueueUpdated             AuditAction = "queue.updated"
 	ActionQueueDefaultChanged      AuditAction = "queue.default_changed"
 	ActionQueueDeleted             AuditAction = "queue.deleted"
+	ActionChannelLineQueueChanged  AuditAction = "channel.line_queue_changed"
 	ActionParticipantInvited       AuditAction = "participant.invited"
 	ActionParticipantAccepted      AuditAction = "participant.accepted"
 	ActionParticipantRejected      AuditAction = "participant.rejected"
