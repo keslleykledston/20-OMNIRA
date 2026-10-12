@@ -3,6 +3,8 @@
 Quem executa: o dono, no navegador, com o login real do Keycloak. Nada aqui é provado pelos testes automatizados: o E2E usa
 sessões fabricadas. Marque cada passo como OK / FALHOU e anote a tela. Não use dados de cliente real.
 
+**Atualização de 2026-10-12.** O login em si (código OIDC com PKCE, e-mail verificado, identidade → usuário, cookie de sessão, a primeira tela de cada tipo de pessoa) e o convite por e-mail passaram a ser exercitados por `scripts/e2e-hub-keycloak.sh`, num Keycloak descartável com o MESMO realm de produção (5 cenários, navegador real). Esse teste achou um defeito que o E2E com sessão fabricada não via: **quem só pertence ao Hub (sem empresa própria) terminava em "Sem Acesso" depois de entrar** (corrigido: `/auth/session` devolve `hub_only` e o login leva a Conversas). O que continua só com você: o Keycloak/realm **de produção** (domínio, TLS, o cliente `omnira-web` de verdade), o WhatsApp real e tudo que depende de um aparelho.
+
 Pré-requisitos: uma conta de administrador do Hub e uma segunda conta (agente) com e-mail que você controle; a empresa de teste
 (instância) já existente; um celular de teste para o WhatsApp (número que não seja de cliente).
 
@@ -13,7 +15,7 @@ Pré-requisitos: uma conta de administrador do Hub e uma segunda conta (agente) 
 
 ## B. Autorizar uma pessoa por e-mail
 4. Em Agentes, autorizar o e-mail do agente de teste para uma instância (permissão de resposta).
-5. Entrar com a conta do agente: ela vê só a(s) instância(s) autorizada(s).
+5. Entrar com a conta do agente (**uma conta que não pertence a nenhuma empresa, só ao Hub**): o login termina em Conversas — não em "Sem Acesso" — e ela vê só a(s) instância(s) autorizada(s). (Passo a conferir em produção depois da implantação de 2026-10-12.)
 6. Tentar autorizar o mesmo e-mail em OUTRA instância como operador: deve recusar com a mensagem "já atua em outra instância".
 
 ## C. Convite de equipe (corrigido em 2026-10-09 — este é o passo mais importante)
