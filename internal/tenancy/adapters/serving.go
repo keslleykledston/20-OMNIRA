@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
 	"github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -83,14 +84,21 @@ func resolveServeContext(ctx context.Context, pool *pgxpool.Pool, hubID, tenantI
 	return domain.NewHubServeTenantContext(tenantID, actor, hubID, contract, grant, permissions, "")
 }
 
+// delegationMetric counts how requests acting for a Hub ended (closed set: never an id). Refusals and forbidden keys are the signals worth an alert when they jump;
+// the people and instances involved are in the log lines next to them.
+var delegationMetric = opsmetrics.NewCounter("omnira_hub_delegation_requests_total", "Requests with X-Omnira-Acting-As by outcome", "outcome",
+	"served", "rate_limited", "disabled", "not_delegable", "refused", "forbidden_key", "error")
+
 // serveDelegated — the delegated branch of AuthorizationMiddleware.
 func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, pool *pgxpool.Pool, principal *authn.Principal, tenantID, hubID uuid.UUID) {
 	if !delegatedServing.Load() {
+		delegationMetric.Inc("disabled")
 		http.Error(w, "delegated context is not enabled", http.StatusForbidden)
 		return
 	}
 	permissions, delegable := r.Context().Value(delegableKey{}).([]string)
 	if !delegable || len(permissions) == 0 {
+		delegationMetric.Inc("not_delegable")
 		log.Printf("tenancy: delegated context refused: route %q is not delegable (tenant=%s hub=%s actor=%s)", r.Pattern, tenantID, hubID, principal.UserID)
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -124,14 +132,20 @@ func serveDelegated(w http.ResponseWriter, r *http.Request, next http.Handler, p
 		return nil
 	})
 	switch {
-	case serr == nil, errors.Is(serr, errServeHandled):
+	case serr == nil:
+		delegationMetric.Inc("served")
+	case errors.Is(serr, errServeHandled):
+		delegationMetric.Inc("rate_limited")
 	case errors.Is(serr, errServeForbid):
+		delegationMetric.Inc("forbidden_key")
 		http.Error(tw, "forbidden", http.StatusForbidden)
 	case errors.Is(serr, errServeDenied):
+		delegationMetric.Inc("refused")
 		// the same answer for a stranger, a revoked grant and an instance that does not exist; ids only in the log, never a reason to the client
 		log.Printf("tenancy: delegated context refused (tenant=%s hub=%s actor=%s)", tenantID, hubID, principal.UserID)
 		http.Error(tw, "not found", http.StatusNotFound)
 	default:
+		delegationMetric.Inc("error")
 		if tw.wrote {
 			log.Printf("tenancy: delegated serving: error after the response was written: %v", serr)
 			return

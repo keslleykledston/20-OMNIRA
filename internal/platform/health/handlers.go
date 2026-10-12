@@ -6,13 +6,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
 )
 
 // HealthResponse — resposta de health check.
 type HealthResponse struct {
-	Status     Status                         `json:"status"`
-	Timestamp  time.Time                      `json:"timestamp"`
-	Components map[string]*ComponentHealth    `json:"components"`
+	Status     Status                      `json:"status"`
+	Timestamp  time.Time                   `json:"timestamp"`
+	Components map[string]*ComponentHealth `json:"components"`
 }
 
 // HealthHandler — HTTP handler para /healthz.
@@ -96,6 +98,8 @@ func (h *HealthCheck) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	if h.ExtraMetrics != nil {
 		sb.WriteString(h.ExtraMetrics())
 	}
+	// the operational counters and gauges of the Hub (projector freshness, delegated serving outcomes, refused session contexts)
+	sb.WriteString(opsmetrics.Render())
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)

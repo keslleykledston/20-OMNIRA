@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
 )
 
 // ADR-0042: the identity of a database session is not trusted from settings the application role can write; it is SIGNED here and VERIFIED by the database
@@ -63,6 +64,9 @@ func parseSessionKey(raw string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// rejectionsMetric feeds /metrics: a signed context the database refused means the process and the database disagree on the key (alert on any increase).
+var rejectionsMetric = opsmetrics.NewCounter("omnira_session_ctx_rejections_total", "Signed session contexts the database refused (key mismatch between the process and the database)", "")
 
 // Rejections is how many contexts the database refused since the process started.
 func Rejections() int64 { return rejected.Load() }
@@ -120,6 +124,7 @@ func Set(ctx context.Context, q Querier, userID uuid.UUID, isSystemAdmin bool) e
 
 func noteRejected() {
 	rejected.Add(1)
+	rejectionsMetric.Inc("")
 	now := time.Now().Unix()
 	if last := lastWarnAt.Load(); now-last >= 30 && lastWarnAt.CompareAndSwap(last, now) {
 		log.Printf("session context: the database REFUSED a signed context (a key different from the one the migrator installed); in mode enforce these sessions have no access")

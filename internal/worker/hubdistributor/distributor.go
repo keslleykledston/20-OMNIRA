@@ -11,6 +11,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/omnira/omnira/internal/hub/distribution"
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
+)
+
+// Signals of the work-pool distribution: a stopped distributor leaves new conversations unassigned without any error to see.
+var (
+	distRunsMetric     = opsmetrics.NewCounter("omnira_hub_distributor_runs_total", "Passes of the work-pool distributor by outcome", "outcome", "ok", "error")
+	distAssigned       = opsmetrics.NewCounter("omnira_hub_distributor_assigned_total", "Conversations the work-pool distributor assigned", "")
+	distLastSuccess    = opsmetrics.NewGauge("omnira_hub_distributor_last_success_timestamp_seconds", "Unix time of the last distributor pass that did not fail")
+	distIntervalMetric = opsmetrics.NewGauge("omnira_hub_distributor_interval_seconds", "Configured interval between distributor passes")
 )
 
 type Distributor struct {
@@ -48,6 +57,7 @@ func (d *Distributor) RunOnce(ctx context.Context) (tried, assigned int, err err
 
 // Run polls until ctx is done.
 func (d *Distributor) Run(ctx context.Context, every time.Duration) {
+	distIntervalMetric.Set(every.Seconds())
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -56,6 +66,13 @@ func (d *Distributor) Run(ctx context.Context, every time.Duration) {
 			return
 		case <-t.C:
 			tried, assigned, err := d.RunOnce(ctx)
+			if err != nil {
+				distRunsMetric.Inc("error")
+			} else {
+				distRunsMetric.Inc("ok")
+				distLastSuccess.SetNow()
+				distAssigned.Add("", uint64(assigned))
+			}
 			switch {
 			case err != nil:
 				log.Printf("hub distributor: %v", err)

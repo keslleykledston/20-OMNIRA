@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
 	"github.com/omnira/omnira/internal/platform/sessionctx"
 )
+
+// sessionCtxEnforce is 1 when the database trusts only signed session contexts (ADR-0042 mode enforce) as seen at the start of this process, 0 for any other mode.
+var sessionCtxEnforce = opsmetrics.NewGauge("omnira_session_ctx_enforce", "1 when the database mode is enforce (only signed session contexts are trusted), 0 otherwise; set when the process starts")
 
 // CheckSessionContext tells the operator how the database treats session identities (ADR-0042) and, when requireEnforce is set (OMNIRA_SESSION_CTX_REQUIRE_ENFORCE=true), refuses to let the
 // process run unless the database trusts ONLY signed contexts and this process has the key to sign them. Without the flag it logs the mode and warns when it is not enforce: a staged
@@ -24,6 +28,11 @@ func CheckSessionContext(ctx context.Context, q Querier, requireEnforce bool) (s
 		}
 		log.Printf("session context: database without migration 000118; identities are the legacy settings")
 		return "legacy", nil
+	}
+	if mode == "enforce" {
+		sessionCtxEnforce.Set(1)
+	} else {
+		sessionCtxEnforce.Set(0)
 	}
 	if requireEnforce {
 		if mode != "enforce" {

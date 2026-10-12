@@ -17,6 +17,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
+)
+
+// Signals of the projection (docs/architecture/OBSERVABILITY.md): how fresh it is, not what it holds. The alert that matters is "no successful pass for
+// 3 intervals" (omnira_hub_projector_last_success_timestamp_seconds), because a stalled projector leaves the Hub tab behind the conversations without any error.
+var (
+	runsMetric     = opsmetrics.NewCounter("omnira_hub_projector_runs_total", "Complete reconcile passes of the Hub inbox projector by outcome (error = at least one hub/company pair failed)", "outcome", "ok", "error")
+	changesMetric  = opsmetrics.NewCounter("omnira_hub_projector_changes_total", "Rows the Hub inbox projector wrote or removed", "kind", "upserted", "removed")
+	lastSuccess    = opsmetrics.NewGauge("omnira_hub_projector_last_success_timestamp_seconds", "Unix time of the last reconcile pass that finished without any failing pair")
+	lastDuration   = opsmetrics.NewGauge("omnira_hub_projector_last_duration_seconds", "Duration of the last reconcile pass")
+	intervalMetric = opsmetrics.NewGauge("omnira_hub_projector_interval_seconds", "Configured interval between reconcile passes")
 )
 
 // DefaultLookbackDays bounds how long a CLOSED conversation stays in the Hub inbox. Open conversations are always projected.
@@ -209,8 +220,20 @@ func (p *Projector) Run(ctx context.Context, interval time.Duration) {
 	}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
+	intervalMetric.Set(interval.Seconds())
 	for {
-		if res, err := p.ReconcileAll(ctx); err != nil {
+		started := time.Now()
+		res, err := p.ReconcileAll(ctx)
+		lastDuration.Set(time.Since(started).Seconds())
+		changesMetric.Add("upserted", uint64(res.Upserted))
+		changesMetric.Add("removed", uint64(res.Removed))
+		if err != nil {
+			runsMetric.Inc("error")
+		} else {
+			runsMetric.Inc("ok")
+			lastSuccess.SetNow()
+		}
+		if err != nil {
 			log.Printf("hub projector: %v", err)
 		} else if res.Upserted+res.Removed > 0 {
 			log.Printf("hub projector: %d upserted, %d removed", res.Upserted, res.Removed)

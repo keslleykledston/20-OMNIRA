@@ -8,12 +8,14 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/platform/opsmetrics"
 	"github.com/omnira/omnira/internal/testhelpers"
 	"github.com/omnira/omnira/internal/worker/hubprojector"
 )
@@ -418,5 +420,42 @@ func TestProjector_RowsAreOnlyVisibleThroughALiveGrant(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The projector publishes how FRESH the projection is (docs/architecture/OBSERVABILITY.md): a stalled projector leaves the Hub tab behind the conversations
+// without any error, so "no successful pass for 3 intervals" must be observable from /metrics.
+func TestRunPublishesFreshnessMetrics(t *testing.T) {
+	f := newFx(t)
+	ctx, cancel := context.WithCancel(f.ctx)
+	done := make(chan struct{})
+	go func() { f.proj.Run(ctx, time.Second); close(done) }()
+	deadline := time.Now().Add(30 * time.Second)
+	var out string
+	for time.Now().Before(deadline) {
+		out = opsmetrics.Render()
+		if strings.Contains(out, "omnira_hub_projector_last_success_timestamp_seconds ") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	for _, want := range []string{
+		`omnira_hub_projector_last_success_timestamp_seconds `,
+		`omnira_hub_projector_last_duration_seconds `,
+		`omnira_hub_projector_interval_seconds 1`,
+		`omnira_hub_projector_runs_total{outcome="ok"} `,
+		`omnira_hub_projector_changes_total{kind="upserted"} `,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("/metrics lacks %q:\n%s", want, out)
+		}
+	}
+	// the labels are closed sets: nothing from a request (company, hub, person) can become a series
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "omnira_hub_") && strings.Contains(line, "tenant") {
+			t.Errorf("a metric line carries a company: %s", line)
+		}
 	}
 }

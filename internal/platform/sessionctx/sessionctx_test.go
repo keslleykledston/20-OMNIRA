@@ -145,3 +145,13 @@ func TestABadKeyInTheEnvironmentFailsEverySessionLoudly(t *testing.T) {
 		t.Error("a misconfigured key must fail the session, not silently downgrade it to unsigned")
 	}
 }
+
+// A context the database refused (the process and the database disagree on the key) is the one failure that locks everybody out in mode enforce without an HTTP error to
+// see: it must reach /metrics so an alert can fire on any increase.
+func TestARefusedContextIsExportedToMetrics(t *testing.T) {
+	before := rejectionsMetric.Value("")
+	noteRejected()
+	if got := rejectionsMetric.Value(""); got != before+1 {
+		t.Fatalf("omnira_session_ctx_rejections_total: %d -> %d, want +1", before, got)
+	}
+}
