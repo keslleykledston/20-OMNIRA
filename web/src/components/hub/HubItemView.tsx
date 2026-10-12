@@ -71,6 +71,8 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
     try {
       await hubWriteAPI.claim(hubId, detail.item.id, detail.tenant.id);
       await refresh();
+      // it leaves the pending queue and is now in "Minhas": the tabs and the counters must say so without waiting for the next poll
+      void queryClient.invalidateQueries({ queryKey: ['hub-inbox', hubId] });
     } catch (err) {
       fail(err);
     } finally {

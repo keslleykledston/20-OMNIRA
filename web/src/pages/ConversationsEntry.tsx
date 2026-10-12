@@ -34,6 +34,8 @@ interface Instance {
   member: boolean;
   hubId?: string;
   fullContext?: boolean;
+  /** Conversations of this instance waiting for an answer (the badge of its tab); display only, from the Hub's own list. */
+  unanswered?: number;
 }
 
 type Nav = { kind: 'switch'; id: string } | { kind: 'enter'; id: string; hub: string; name: string } | { kind: 'leave' } | null;
@@ -72,8 +74,9 @@ export default function ConversationsEntry() {
         const known = byId.get(c.id);
         if (known) {
           known.hubId = known.hubId ?? h.id;
+          known.unanswered = c.unanswered;
         } else {
-          byId.set(c.id, { id: c.id, name: c.name, member: false, hubId: h.id, fullContext: !!c.full_context });
+          byId.set(c.id, { id: c.id, name: c.name, member: false, hubId: h.id, fullContext: !!c.full_context, unanswered: c.unanswered });
         }
       }
     });
@@ -154,9 +157,11 @@ export default function ConversationsEntry() {
     return winner >= 0 ? <HubInboxPage hubId={list[winner].id} /> : <InboxWorkspace />;
   }
 
+  // What waits for an answer, per tab (the tab of an instance, and "Todas" for the instances of the Hub that gathers them).
+  const allUnanswered = (probes[list.findIndex((h) => h.id === hubWithMany)]?.data?.companies ?? []).reduce((sum, c) => sum + (c.unanswered ?? 0), 0);
   const items = [
-    ...(hasAllTab ? [{ id: ALL, label: 'Todas' }] : []),
-    ...instances.map((i) => ({ id: i.id, label: i.name })),
+    ...(hasAllTab ? [{ id: ALL, label: 'Todas', count: allUnanswered }] : []),
+    ...instances.map((i) => ({ id: i.id, label: i.name, count: i.unanswered })),
   ];
   const select = (id: string) => {
     const target = instances.find((i) => i.id === id);

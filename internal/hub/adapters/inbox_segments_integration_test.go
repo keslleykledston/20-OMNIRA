@@ -39,6 +39,13 @@ func (a *hubAPI) segment(user uuid.UUID, query string) (int, segPage) {
 	return code, p
 }
 
+// setItem writes what the projector would (name, holder, state) AND what the conversation itself says: the list reads who holds it and whether it is
+// finalized from the conversation (the projection lags by up to a minute), so a fixture must agree with both.
+func (w *world) setItem(conv uuid.UUID, name string, assigned any, status string) {
+	w.exec(`UPDATE hub_inbox_items SET customer_name = $2, assigned_user_id = $3, status = $4 WHERE conversation_id = $1`, conv, name, assigned, status)
+	w.exec(`UPDATE conversations SET assigned_to_user_id = $2, status = $3 WHERE id = $1`, conv, assigned, status)
+}
+
 func convsOf(p segPage) map[uuid.UUID]segItem {
 	m := map[uuid.UUID]segItem{}
 	for _, it := range p.Items {
@@ -66,11 +73,11 @@ func TestHubInbox_SegmentsSeparateThePendingQueueFromTheHistory(t *testing.T) {
 	w.exec(`INSERT INTO conversations (id, tenant_id, contact_id) VALUES ($1, $2, $3)`, closedMine, w.tenant["B"], bContact)
 	w.exec(`INSERT INTO hub_inbox_items (hub_id, tenant_id, conversation_id) VALUES ($1, $2, $3)`, w.hub, w.tenant["B"], closedMine)
 
-	w.exec(`UPDATE hub_inbox_items SET customer_name = 'Ana Pendente', assigned_user_id = NULL, status = 'open' WHERE conversation_id = $1`, waiting)
-	w.exec(`UPDATE hub_inbox_items SET customer_name = 'Bruno Meu', assigned_user_id = $2, status = 'open' WHERE conversation_id = $1`, mine, agent)
-	w.exec(`UPDATE hub_inbox_items SET customer_name = 'Carla do Colega', assigned_user_id = $2, status = 'open' WHERE conversation_id = $1`, theirs, colleague)
-	w.exec(`UPDATE hub_inbox_items SET customer_name = 'Davi Encerrado', assigned_user_id = NULL, status = 'closed' WHERE conversation_id = $1`, closed)
-	w.exec(`UPDATE hub_inbox_items SET customer_name = '100% Sob_Medida', assigned_user_id = $2, status = 'closed' WHERE conversation_id = $1`, closedMine, agent)
+	w.setItem(waiting, "Ana Pendente", nil, "open")
+	w.setItem(mine, "Bruno Meu", agent, "open")
+	w.setItem(theirs, "Carla do Colega", colleague, "open")
+	w.setItem(closed, "Davi Encerrado", nil, "closed")
+	w.setItem(closedMine, "100% Sob_Medida", agent, "closed")
 
 	want := func(q string, ids ...uuid.UUID) {
 		t.Helper()
@@ -173,5 +180,133 @@ func TestHubInbox_SegmentsSeparateThePendingQueueFromTheHistory(t *testing.T) {
 		if code, _ := api.segment(stranger, q); code != 404 {
 			t.Errorf("stranger %q: %d, want 404", q, code)
 		}
+	}
+}
+
+// The tab of each company carries two numbers (ADR-0040 UX parity, the tenant tabs of the approved design): how many attendances are open and how
+// many of those have customer messages nobody answered. Counted under the caller's own session: a company they hold no grant on is not even
+// listed, and what they cannot read is not counted.
+func TestHubInbox_CompaniesCarryTheCountersOfTheirTabs(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	agent := w.hubAgent("tabs")
+	w.grant(agent, "A")
+	w.grant(agent, "B")
+
+	// A: three open (two unanswered) + one closed unanswered; B: one open, answered; C (no grant): unanswered, must never show
+	w.exec(`UPDATE hub_inbox_items SET status = 'open', unread_count = 2 WHERE conversation_id = $1`, w.conv["A"])
+	w.exec(`UPDATE hub_inbox_items SET status = 'open', unread_count = 1 WHERE conversation_id = $1`, w.conv["A2"])
+	w.exec(`UPDATE hub_inbox_items SET status = 'open', unread_count = 0 WHERE conversation_id = $1`, w.conv["A0"])
+	w.exec(`UPDATE hub_inbox_items SET status = 'open', unread_count = 0 WHERE conversation_id = $1`, w.conv["B"])
+	w.exec(`UPDATE hub_inbox_items SET status = 'open', unread_count = 9 WHERE conversation_id = $1`, w.conv["C"])
+	closedA := uuid.New()
+	w.exec(`INSERT INTO conversations (id, tenant_id, contact_id, status) SELECT $1, tenant_id, contact_id, 'closed' FROM conversations WHERE id = $2`, closedA, w.conv["A"])
+	w.exec(`INSERT INTO hub_inbox_items (hub_id, tenant_id, conversation_id, status, unread_count) VALUES ($1, $2, $3, 'closed', 5)`, w.hub, w.tenant["A"], closedA)
+
+	type co struct {
+		ID         uuid.UUID `json:"id"`
+		Open       int       `json:"open"`
+		Unanswered int       `json:"unanswered"`
+	}
+	read := func(q string) map[uuid.UUID]co {
+		t.Helper()
+		code, body, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox%s", w.hub, q), agent, nil)
+		if code != 200 {
+			t.Fatalf("%s: %d", q, code)
+		}
+		var b struct {
+			Companies []co `json:"companies"`
+		}
+		w.must(json.Unmarshal([]byte(body), &b))
+		m := map[uuid.UUID]co{}
+		for _, c := range b.Companies {
+			m[c.ID] = c
+		}
+		return m
+	}
+	m := read("")
+	if len(m) != 2 {
+		t.Fatalf("companies offered: %v", m)
+	}
+	if a := m[w.tenant["A"]]; a.Open != 3 || a.Unanswered != 2 {
+		t.Errorf("A = %+v, want open 3, unanswered 2 (the closed one does not count)", a)
+	}
+	if b := m[w.tenant["B"]]; b.Open != 1 || b.Unanswered != 0 {
+		t.Errorf("B = %+v, want open 1, unanswered 0", b)
+	}
+	if _, leaked := m[w.tenant["C"]]; leaked {
+		t.Fatal("a company without a grant was listed with its counters")
+	}
+	// the counters of the tabs do not depend on the page's filter, segment or search (they describe the companies, not the page)
+	m = read("?segment=closed&q=zzz&companies=" + w.tenant["B"].String())
+	if m[w.tenant["A"]].Open != 3 || m[w.tenant["B"]].Open != 1 {
+		t.Errorf("counters changed with the page filter: %+v", m)
+	}
+	// a revoked grant takes the company and its counters away at once
+	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["A"])
+	m = read("")
+	if _, still := m[w.tenant["A"]]; still || m[w.tenant["B"]].Open != 1 {
+		t.Errorf("after revoking A: %+v", m)
+	}
+}
+
+// The list answers from what the CONVERSATION says about who holds it and whether it is finalized, not from the projection, which the projector
+// reconciles once a minute: after "Assumir" the attendance has to be in "Minhas" at once (and out of the pending queue), and after "Finalizar" in the history.
+func TestHubInbox_SegmentsFollowTheConversationNotTheLaggingProjection(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	agent := w.hubAgent("live")
+	w.grant(agent, "A")
+	conv := w.conv["A"]
+	// the projection still says: open and held by nobody
+	w.exec(`UPDATE hub_inbox_items SET status = 'open', assigned_user_id = NULL, customer_name = 'Eva Ao Vivo' WHERE conversation_id = $1`, conv)
+
+	in := func(q string) bool {
+		t.Helper()
+		code, p := api.segment(agent, q)
+		if code != 200 {
+			t.Fatalf("%s: %d", q, code)
+		}
+		_, ok := convsOf(p)[conv]
+		return ok
+	}
+	if !in("?segment=waiting") || in("?segment=mine") {
+		t.Fatal("setup: the pending conversation must be in the queue and not in mine")
+	}
+	// the agent takes it: the CONVERSATION changes, the projection has not run yet
+	w.exec(`UPDATE conversations SET assigned_to_user_id = $2 WHERE id = $1`, conv, agent)
+	if in("?segment=waiting") || !in("?segment=mine") {
+		t.Fatal("after taking it the attendance is still in the pending queue / not in mine (the list followed the lagging projection)")
+	}
+	_, p := api.segment(agent, "?segment=mine")
+	if it := convsOf(p)[conv]; it.Assignment != "me" {
+		t.Errorf("assignment of the taken attendance = %q, want me", it.Assignment)
+	}
+	if c := *p.Counts; c.Mine != 1 || c.Waiting != 2 { // A2 and A0 still wait; the one taken left the queue
+		t.Errorf("counters did not follow the conversation: %+v", c)
+	}
+	// finalized: the conversation closes, the projection has not run yet
+	w.exec(`UPDATE conversations SET status = 'closed' WHERE id = $1`, conv)
+	if in("?segment=open") || in("?segment=mine") || !in("?segment=closed") {
+		t.Fatal("after finalizing, the attendance must be in the history and out of the queue")
+	}
+	// the tab of the company counts it as no longer open
+	_, raw, _ := api.do("GET", "/api/v1/hubs/"+w.hub.String()+"/inbox?segment=closed", agent, nil)
+	var b struct {
+		Companies []struct {
+			ID   uuid.UUID `json:"id"`
+			Open int       `json:"open"`
+		} `json:"companies"`
+	}
+	w.must(json.Unmarshal([]byte(raw), &b))
+	for _, c := range b.Companies {
+		if c.ID == w.tenant["A"] && c.Open != 2 { // A holds three conversations; one is finalized now
+			t.Errorf("tab of A counts %d open, want 2", c.Open)
+		}
+	}
+	// reading the conversation grants nothing the policy did not: a grant without the queue of the conversation does not see it, live or not
+	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["A"])
+	if in("?segment=closed") || in("") {
+		t.Fatal("a revoked grant still sees the conversation through the live join")
 	}
 }

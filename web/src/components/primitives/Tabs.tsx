@@ -5,6 +5,8 @@ export interface TabItem<T extends string = string> {
   id: T
   label: string
   disabled?: boolean
+  /** A small number beside the label (what waits in that tab); omitted or 0 shows nothing. */
+  count?: number
 }
 
 interface TabsProps<T extends string> {
@@ -63,6 +65,7 @@ export function Tabs<T extends string>({
             role="tab"
             type="button"
             aria-selected={active}
+            aria-label={item.count ? `${item.label} (${item.count})` : undefined}
             disabled={item.disabled}
             tabIndex={active ? 0 : -1}
             onClick={() => onChange(item.id)}
@@ -76,6 +79,11 @@ export function Tabs<T extends string>({
             )}
           >
             {item.label}
+            {item.count ? (
+              <span aria-hidden="true" className="ml-2 rounded-pill bg-surface-secondary px-1.5 py-0.5 text-[10px] font-semibold text-text-secondary">
+                {item.count > 99 ? '99+' : item.count}
+              </span>
+            ) : null}
             {active && (
               <span
                 aria-hidden="true"

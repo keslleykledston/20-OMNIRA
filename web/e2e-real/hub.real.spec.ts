@@ -17,7 +17,7 @@ test('Conversas junta as instâncias liberadas pelo Hub, com o logo de origem, e
   await expect(page.getByRole('link', { name: 'Hub', exact: true })).toHaveCount(0); // não existe item "Hub" no menu
 
   await page.getByRole('button', { name: 'Filtrar por instância' }).click();
-  await page.getByLabel('NorteNet').check();
+  await page.getByRole('checkbox', { name: 'NorteNet' }).check();
   await expect(list.getByText('Jose Carlos')).toHaveCount(0);
   await expect(list.getByText('Maria Souza')).toBeVisible();
 
@@ -44,6 +44,60 @@ test('assumir e responder pelo Hub grava a mensagem na instância certa', async 
   await expect(page.getByText('Olá José, já estamos verificando')).toBeVisible();
   expect(sql(`SELECT count(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE m.direction = 'outbound' AND c.tenant_id = '${env.ta}' AND m.body = 'Olá José, já estamos verificando'`)).toBe('1');
   expect(sql(`SELECT count(*) FROM messages WHERE direction = 'outbound' AND tenant_id <> '${env.ta}'`)).toBe('0');
+});
+
+test('layout aprovado: a fila de pendentes fica separada do histórico, as conversas abertas viram abas e os detalhes se recolhem', async ({ page }) => {
+  await signIn(page, 'agent1@e2e.test');
+  await page.goto('/inbox');
+  const queue = page.getByRole('region', { name: 'Caixa do Hub' });
+  const list = page.getByRole('list', { name: 'Conversas do Hub' });
+  // fila e histórico são abas separadas (o servidor filtra; a tela só pede)
+  await expect(queue.getByRole('tab', { name: 'Em andamento' })).toHaveAttribute('aria-selected', 'true');
+  await expect(queue.getByRole('tab', { name: /Pendentes/ })).toBeVisible();
+  await queue.getByRole('tab', { name: /Minhas/ }).click();
+  await expect(list.getByText('Jose Carlos')).toBeVisible(); // assumida no passo anterior
+  await expect(list.getByText('Maria Souza')).toHaveCount(0);
+  await queue.getByRole('tab', { name: 'Encerradas' }).click();
+  await expect(queue.getByRole('tablist', { name: 'Filtro de conversas' })).toHaveCount(0); // o histórico não tem filtro de fila
+  await expect(list.getByText('Jose Carlos')).toHaveCount(0);
+  await queue.getByRole('tab', { name: 'Em andamento' }).click();
+  // busca por nome, no servidor
+  await queue.getByRole('searchbox', { name: 'Buscar cliente' }).fill('maria');
+  await expect(list.getByText('Maria Souza')).toBeVisible();
+  await expect(list.getByText('Jose Carlos')).toHaveCount(0);
+  await queue.getByRole('searchbox', { name: 'Buscar cliente' }).fill('');
+  // a faixa diz para quem se atende; as conversas abertas viram abas
+  await expect(page.getByText('Caixa: Todas as instâncias')).toBeVisible();
+  await list.getByText('Jose Carlos').click();
+  await list.getByText('Maria Souza').click();
+  await expect(page.getByText('Contexto ativo: NorteNet')).toBeVisible();
+  const open = page.getByRole('tablist', { name: 'Atendimentos abertos' });
+  await expect(open.getByRole('tab')).toHaveCount(2);
+  await open.getByRole('tab').first().click();
+  await expect(page.getByText('Contexto ativo: ISP Roraima')).toBeVisible();
+  await page.getByRole('button', { name: 'Fechar aba de Maria Souza' }).click();
+  await expect(open.getByRole('tab')).toHaveCount(1);
+  // detalhes do atendimento: coluna ao lado (ou gaveta abaixo de 1440px), seções que recolhem e lembram a escolha
+  const details = page.getByRole('complementary', { name: 'Detalhes do atendimento' });
+  if (!(await details.isVisible())) await page.getByRole('button', { name: 'Detalhes do atendimento' }).click();
+  await expect(details.getByText('ISP Roraima').first()).toBeVisible();
+  const timeline = details.locator('details', { has: page.getByText('Linha do tempo', { exact: true }) });
+  await expect(timeline).toHaveAttribute('open', '');
+  await timeline.locator('summary').click();
+  await expect(timeline).not.toHaveAttribute('open', '');
+  // o evento `toggle` do <details> chega depois do clique
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('omnira.inbox.section.hub-timeline'))).toBe('0');
+  // (a gaveta de detalhes, quando aberta, cobre a tela: fecha antes de mexer no menu)
+  if (await page.getByRole('dialog').isVisible()) await page.keyboard.press('Escape');
+  // o menu da esquerda recolhe para ícones e lembra
+  const fold = page.getByRole('button', { name: 'Recolher o menu' });
+  if (await fold.isVisible()) {
+    await fold.click();
+    await expect(page.getByRole('button', { name: 'Expandir o menu' })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Expandir o menu' })).toBeVisible();
+    await page.getByRole('button', { name: 'Expandir o menu' }).click();
+  }
 });
 
 test('quem só lê vê a conversa mas não pode assumir nem responder', async ({ page }) => {

@@ -15,6 +15,8 @@ import HubItemView from '../components/hub/HubItemView';
 import CompanyFilter from '../components/hub/CompanyFilter';
 import HubInboxToolbar, { segmentOf, type HubView } from '../components/hub/HubInboxToolbar';
 import HubContextPane from '../components/hub/HubContextPane';
+import HubOpenTabs, { type OpenAttendance } from '../components/hub/HubOpenTabs';
+import { Icon } from '../components/primitives';
 
 // "Conversas" for a person the Hub authorized for two or more companies (ADR-0039): ONE inbox across every company they are
 // authorized to serve, with a company filter where a single-company person has the channel selector. What appears here is
@@ -51,9 +53,29 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   const hub = list.find((h) => h.id === pickedHub) ?? list[0];
   const hubId = hub?.id ?? '';
   const selected = selection.hub === hubId ? selection.id : '';
-  const setSelected = (id: string) => setSelection({ hub: hubId, id });
+  // The attendances opened as tabs (names the server showed in the list; they authorize nothing). Like the selection they belong to ONE hub.
+  const [opened, setOpened] = useState<{ hub: string; tabs: OpenAttendance[] }>({ hub: '', tabs: [] });
+  const allOpenTabs = opened.hub === hubId ? opened.tabs : [];
+  const setSelected = (id: string, from?: HubInboxItem) => {
+    setSelection({ hub: hubId, id });
+    if (id && from) {
+      setOpened((cur) => {
+        const tabs = cur.hub === hubId ? cur.tabs : [];
+        if (tabs.some((t) => t.id === id)) return { hub: hubId, tabs };
+        // a bounded set: past 8 the oldest tab that is not the one being opened is forgotten
+        return { hub: hubId, tabs: [...tabs, { id, name: from.customer_name || 'Sem nome', tenantName: from.tenant_name || 'Instância não identificada', tenantId: from.tenant_id }].slice(-8) };
+      });
+    }
+  };
   // like the selection, the filter belongs to ONE hub
   const companyIds = onlyCompany ? [onlyCompany] : filter.hub === hubId ? filter.ids : [];
+  const openTabs = companyIds.length > 0 ? allOpenTabs.filter((t) => companyIds.includes(t.tenantId)) : allOpenTabs;
+  const closeTab = (id: string) => {
+    const idx = openTabs.findIndex((t) => t.id === id);
+    const rest = openTabs.filter((t) => t.id !== id);
+    setOpened({ hub: hubId, tabs: allOpenTabs.filter((t) => t.id !== id) });
+    if (id === selected) setSelection({ hub: hubId, id: rest[Math.min(idx, rest.length - 1)]?.id ?? '' });
+  };
 
   const inbox = useInfiniteQuery({
     queryKey: ['hub-inbox', hubId, companyIds, view, debouncedSearch],
@@ -93,6 +115,12 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   useEffect(() => {
     if ([hubs.error, inbox.error, detail.error].some(isUnauthorized)) handleUnauthorized();
   }, [hubs.error, inbox.error, detail.error]);
+  // an attendance that can no longer be opened (access ended, gone) does not stay as a tab
+  useEffect(() => {
+    if (detail.isError && !isUnauthorized(detail.error) && selected) {
+      setOpened((cur) => (cur.hub === hubId ? { hub: hubId, tabs: cur.tabs.filter((t) => t.id !== selected) } : cur));
+    }
+  }, [detail.isError, detail.error, selected, hubId]);
 
   // The full workspace of a company opens only when the server said so (companies[].full_context); the click only navigates, and every request of
   // that workspace is decided again by the server.
@@ -121,6 +149,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
     );
   }
 
+  const scopeLabel = companyIds.length === 0 ? 'Todas as instâncias' : companyIds.length === 1 ? (companies.find((c) => c.id === companyIds[0])?.name ?? '1 instância') : `${companyIds.length} instâncias`;
   const showList = !isMobile || !selected;
   const showDetail = !isMobile || !!selected;
   return (
@@ -149,6 +178,14 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
           </div>
         </div>
       )}
+      {/* Which company the person is acting for, said above the panes like the company tabs of the approved design */}
+      <div className="flex min-h-9 shrink-0 items-center gap-2 border-b border-border-subtle bg-surface-muted px-4 py-2 text-[11px]">
+        <Icon name="supervisor" size={14} className="shrink-0 text-accent-primary" />
+        <span className="min-w-0 truncate font-medium text-text-primary">
+          {detail.data && selected ? `Contexto ativo: ${detail.data.tenant.name || detail.data.item.tenant_name || 'Instância não identificada'}` : `Caixa: ${scopeLabel}`}
+        </span>
+        <span className="ml-auto hidden shrink-0 text-text-secondary sm:inline">{items.length}{inbox.hasNextPage ? '+' : ''} {items.length === 1 ? 'conversa' : 'conversas'}</span>
+      </div>
       <div
         className={clsx(
           'grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] md:grid-cols-[360px_minmax(0,1fr)]',
@@ -165,13 +202,15 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
                 <EmptyState title="Nenhuma conversa" description={emptyText(view, debouncedSearch, companyIds.length > 0)} />
               )}
               {items.length > 0 && (
-                <HubInboxList items={items} selectedId={selected} onSelect={setSelected} hasMore={!!inbox.hasNextPage} loadingMore={inbox.isFetchingNextPage} onLoadMore={() => void inbox.fetchNextPage()} />
+                <HubInboxList items={items} selectedId={selected} onSelect={(id) => setSelected(id, items.find((i) => i.id === id))} hasMore={!!inbox.hasNextPage} loadingMore={inbox.isFetchingNextPage} onLoadMore={() => void inbox.fetchNextPage()} />
               )}
             </div>
           </section>
         )}
         {showDetail && (
-          <section aria-label="Conversa selecionada" className="min-h-0">
+          <section aria-label="Conversa selecionada" className="flex min-h-0 min-w-0 flex-col">
+            <HubOpenTabs tabs={openTabs} selectedId={selected} onSelect={(id) => setSelected(id)} onClose={closeTab} />
+            <div className="min-h-0 flex-1">
             {!selected && <EmptyState title="Selecione uma conversa" description="O nome da instância aparece em cada conversa." />}
             {selected && detail.isLoading && <LoadingState message="Abrindo a conversa…" />}
             {selected && detail.isError && !isUnauthorized(detail.error) && (
@@ -191,6 +230,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
                 onToggleContext={() => (wide ? setShowContext(!showContext) : setDrawerOpen(true))}
               />
             )}
+            </div>
           </section>
         )}
         {/* The details of the attendance: a third column when there is room, otherwise a drawer opened from the conversation header */}

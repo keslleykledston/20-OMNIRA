@@ -4306,6 +4306,8 @@ components:
               id: { type: string, format: uuid }
               name: { type: string }
               full_context: { type: boolean, description: "The full workspace of this company may be opened for this person (ADR-0040). Display only." }
+              open: { type: integer, description: "Attendances of this company that are not finalized, as the caller's session sees them (the number of the company's tab)." }
+              unanswered: { type: integer, description: "Of those, how many have customer messages nobody answered yet (the badge of the company's tab)." }
     HubReplyResult:
       type: object
       required: [id, conversation_id, direction, body, status, created_at, tenant]

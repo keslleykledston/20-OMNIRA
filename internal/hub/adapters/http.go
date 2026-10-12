@@ -243,6 +243,10 @@ type companyDTO struct {
 	// FullContext tells the screen it may open the full workspace of this company for this person (ADR-0040): serving is enabled and the
 	// person holds conversation.read there through this hub, right now. Display only: every request is decided again, by the server and the data layer.
 	FullContext bool `json:"full_context"`
+	// Open is how many attendances of this company are not finalized and Unanswered how many of those have customer messages nobody answered yet
+	// (the badge of the company's tab). Counted from the inbox projection under the caller's own session, so only what RLS shows them.
+	Open       int `json:"open"`
+	Unanswered int `json:"unanswered"`
 }
 
 // companiesOf lists the companies this person is currently allowed to serve through the hub, to feed the screen's filter.
@@ -251,10 +255,15 @@ func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID) [
 	out := []companyDTO{}
 	rows, err := platformdb.QuerierFromContext(ctx, h.pool).Query(ctx, `
 		SELECT DISTINCT t.id, COALESCE(NULLIF(t.trade_name, ''), t.legal_name) AS name,
-		       ($3::boolean AND COALESCE('conversation.read' = ANY (delegated_permissions(t.id, $2, $1)), false)) AS full_context
+		       ($3::boolean AND COALESCE('conversation.read' = ANY (delegated_permissions(t.id, $2, $1)), false)) AS full_context,
+		       n.open, n.unanswered
 		FROM effective_access_grants g
 		JOIN hub_tenant_service_contracts k ON k.id = g.service_contract_id AND k.status = 'active' AND k.valid_from <= now() AND (k.valid_until IS NULL OR k.valid_until > now())
 		JOIN tenants t ON t.id = g.tenant_id AND t.status = 'active'
+		LEFT JOIN LATERAL (
+			SELECT count(*) FILTER (WHERE COALESCE(i.status, 'open') <> 'closed')::int AS open,
+			       count(*) FILTER (WHERE COALESCE(i.status, 'open') <> 'closed' AND COALESCE(i.unread_count, 0) > 0)::int AS unanswered
+			FROM `+liveInbox+` i WHERE i.hub_id = g.hub_id AND i.tenant_id = t.id) n ON true
 		WHERE g.hub_id = $1 AND g.user_id = $2 AND g.status = 'active' AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())
 		ORDER BY 2, 1`, hubID, actor, tenancyadapters.DelegatedServingEnabled())
 	if err != nil {
@@ -263,7 +272,7 @@ func (h *HTTPHandler) companiesOf(ctx context.Context, hubID, actor uuid.UUID) [
 	defer rows.Close()
 	for rows.Next() {
 		var c companyDTO
-		if err := rows.Scan(&c.ID, &c.Name, &c.FullContext); err == nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.FullContext, &c.Open, &c.Unanswered); err == nil {
 			out = append(out, c)
 		}
 	}

@@ -51,6 +51,9 @@ export interface HubCompanyOption {
   name: string
   // The full workspace of this company may be opened for this person (ADR-0040). Display only: the server decides every request again.
   full_context?: boolean
+  // The numbers of the company's tab: attendances not finalized, and how many of them wait for an answer. Display only.
+  open?: number
+  unanswered?: number
 }
 
 export interface HubInboxPage {

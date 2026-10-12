@@ -401,3 +401,16 @@ contrato restrito a uma fila não acha texto das conversas fora do escopo; o cam
 `SettingsShell`); `DelegatedHistory.test.tsx` cobre a busca com e sem as chaves. A lista exata das rotas delegáveis (`delegable_routes_test.go`) ganhou a rota.
 
 **Não provado:** uso por pessoa real do Hub; implantação.
+
+## 24. Paridade de UX do Hub com o layout aprovado (2026-10-12) — LOCAL, sem migration
+
+**Origem:** o dono apontou que a tela do Hub não tinha a fila de pendentes separada do histórico nem o painel lateral de detalhes recolhível, e depois publicou no protótipo Lovable as abas por empresa (commit `158d710`). A análise (as fases 04–09 entregaram o contexto completo da instância, mas a aba "Todas" ficou como lista única + texto) e o contrato resultante estão em `docs/ux/HUB-LAYOUT-CONTRACT.md`.
+
+**O que mudou (aditivo, sem tocar no shell nem na RLS):**
+1. **API** `GET /hubs/{id}/inbox`: `segment` (`open|waiting|mine|closed`, outro valor = 400), `q` (nome do cliente, ≤ 80, `%`/`_` literais), `assignment` relativo a quem chama em cada item, `counts` na primeira página (segmento e busca não os alteram), e `companies[].open/unanswered` (o número da aba da empresa). Tudo só ESTREITA o que a RLS já mostra; contado sob a sessão da pessoa. Uma query string que o Go não consegue ler (ponto e vírgula) é 400: o `net/url` descartaria o parâmetro em silêncio e "waiting;x" viraria "tudo".
+2. **Tela:** abas de escopo + filtro + busca na fila; três colunas ≥ 1440 px (gaveta abaixo) com `HubContextPane` (seções recolhíveis; abre a caixa completa da empresa só quando o servidor disse `full_context`); faixa "Contexto ativo"; abas de atendimentos abertos (fechar não escreve nada); contador nas abas de instância; menu à esquerda recolhível; `DelegatedContextPane` com as mesmas seções recolhíveis do painel do membro.
+3. **Achados do próprio trabalho:** (a) o `COUNT` com `cardinality(NULL)` dava zero para "sem filtro de empresa" (um array nulo do pgx): corrigido com `COALESCE` e coberto; (b) o `aria-label` com contador no `Tab` mudou o nome acessível da aba e quebrou um seletor do E2E (`getByLabel('NorteNet')` achou o filtro e a aba): o seletor ficou específico.
+
+**Provas:** POSTGRES (`inbox_segments_integration_test.go`: segmentos, busca com curingas literais, SQL hostil, empresa sem concessão não listada nem contada, revogação, contadores por empresa); UNIT (`HubLayoutContract.test.tsx`, `ConversationsTabs.test.tsx`, `HubInboxPage.test.tsx`); E2E em navegador real (cenário "layout aprovado…" em `hub.real.spec.ts`).
+
+**Não feito (dito):** contador no item "Conversas" do menu; mídia, status de entrega e tempo real na aba "Todas" (a caixa completa da instância já os tem); persistência das abas de atendimento entre recargas; telefone/e-mail no painel da aba "Todas" (não estão na projeção do Hub: ficam na caixa completa).

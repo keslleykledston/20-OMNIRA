@@ -25,7 +25,7 @@ vi.mock('../pages/HubInboxPage', () => ({
 }));
 
 let mine: { id: string; legal_name: string; trade_name?: string }[] = [];
-let companies: { id: string; name: string; full_context?: boolean }[] = [];
+let companies: { id: string; name: string; full_context?: boolean; open?: number; unanswered?: number }[] = [];
 let hubs: { id: string; name: string; role: string }[] = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent' }];
 let probeFails = false;
 
@@ -89,6 +89,16 @@ describe('Conversas tabs', () => {
     await waitFor(() => expect(tabs()).toEqual(['Todas', 'Alfa', 'Beta Hub']));
     expect(screen.getByRole('tab', { name: 'Todas' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('hub-inbox')).toHaveTextContent('hub:hub-1 embedded:true only:');
+  });
+
+  it('each tab carries what waits for an answer there ("Todas" the sum), and nothing when nothing waits', async () => {
+    mine = [T1];
+    companies = [{ id: 'T1', name: 'Alfa', unanswered: 2 }, { id: 'B', name: 'Beta Hub', unanswered: 1 }, { id: 'C', name: 'Gama Hub', unanswered: 0 }];
+    renderAt(<ConversationsEntry />);
+    expect(await screen.findByRole('tab', { name: 'Todas (3)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Alfa (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Beta Hub (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Gama Hub' })).toBeInTheDocument();
   });
 
   it('an instance reached only through the Hub opens the Hub view pinned to that instance, with the reduced-view notice', async () => {

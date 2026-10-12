@@ -262,6 +262,79 @@ describe('Hub layout contract — queue | conversation | collapsible details', (
   });
 });
 
+describe('Hub layout contract — which company is being served, and the attendances opened as tabs', () => {
+  const rowOf = async (n: string) => (await screen.findByText('Cliente ' + n)).closest('button')!;
+
+  it('says above the panes which company the person is acting for (the whole box before a conversation is open)', async () => {
+    serve();
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await screen.findByText('Cliente a');
+    expect(screen.getByText('Caixa: Todas as instâncias')).toBeInTheDocument();
+    expect(screen.getByText('3 conversas')).toBeInTheDocument(); // the three open ones
+    await user.click(await rowOf('a'));
+    expect(await screen.findByText('Contexto ativo: Instância a')).toBeInTheDocument();
+    await user.click(await rowOf('b'));
+    expect(await screen.findByText('Contexto ativo: Instância b')).toBeInTheDocument();
+  });
+
+  it('opening conversations keeps them as tabs above the conversation, each with its company; a tab selects, closing only forgets it', async () => {
+    serve();
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    expect(screen.queryByRole('tablist', { name: 'Atendimentos abertos' })).toBeNull();
+    await user.click(await rowOf('a'));
+    await user.click(await rowOf('b'));
+    const strip = await screen.findByRole('tablist', { name: 'Atendimentos abertos' });
+    const tabs = within(strip).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent)).toEqual(['CACliente aInstância a', 'CBCliente bInstância b']);
+    expect(tabs[1]).toHaveAttribute('aria-selected', 'true');
+    // another tab brings its conversation back
+    await user.click(tabs[0]);
+    expect(await screen.findByRole('heading', { name: 'Cliente a' })).toBeInTheDocument();
+    expect(within(strip).getAllByRole('tab')[0]).toHaveAttribute('aria-selected', 'true');
+    // closing the open one selects its neighbour and touches nothing on the server
+    const writes = vi.mocked(axios.post).mock.calls.length;
+    await user.click(within(strip).getByRole('button', { name: 'Fechar aba de Cliente a' }));
+    expect(await screen.findByRole('heading', { name: 'Cliente b' })).toBeInTheDocument();
+    expect(within(screen.getByRole('tablist', { name: 'Atendimentos abertos' })).getAllByRole('tab')).toHaveLength(1);
+    expect(vi.mocked(axios.post).mock.calls.length).toBe(writes);
+    // closing the last one leaves the invitation to pick a conversation
+    await user.click(screen.getByRole('button', { name: 'Fechar aba de Cliente b' }));
+    expect(await screen.findByText('Selecione uma conversa')).toBeInTheDocument();
+    expect(screen.queryByRole('tablist', { name: 'Atendimentos abertos' })).toBeNull();
+  });
+
+  it('taking an attendance asks the list again, so it leaves the pending queue and is in "Minhas" without waiting for the next poll', async () => {
+    serve();
+    vi.mocked(axios.post).mockResolvedValue({ data: { item_id: 'a', conversation_id: 'conv-a', changed: true, tenant: { id: 'tenant-a', name: 'Instância a' } } });
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await user.click(await rowOf('a'));
+    await screen.findByRole('button', { name: 'Assumir' });
+    const before = inboxParams.length;
+    await user.click(screen.getByRole('button', { name: 'Assumir' }));
+    await waitFor(() => expect(inboxParams.length).toBeGreaterThan(before));
+    expect(String(vi.mocked(axios.post).mock.calls[0][0])).toMatch(/\/inbox\/a\/claim$/);
+  });
+
+  it('a conversation that can no longer be opened does not stay as a tab', async () => {
+    serve();
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await user.click(await rowOf('a'));
+    await screen.findByRole('tablist', { name: 'Atendimentos abertos' });
+    items = items.filter((i) => i.id !== 'b'); // access to b ended: its detail is a 404
+    const origGet = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => (String(url).endsWith('/inbox/b') ? Promise.reject({ response: { status: 404 } }) : origGet(url, config)));
+    await user.click(await rowOf('c'));
+    await screen.findByRole('heading', { name: 'Cliente c' });
+    items = [item('a', { assignment: 'none' }), item('b', { assignment: 'me' }), item('c', { assignment: 'other' })];
+    await user.click(screen.getByRole('button', { name: 'Fechar aba de Cliente c' }));
+    expect(await screen.findByRole('heading', { name: 'Cliente a' })).toBeInTheDocument();
+  });
+});
+
 describe('Hub layout contract — the left menu folds to icons', () => {
   it('has a toggle that folds and unfolds it, and remembers the choice', async () => {
     serve();

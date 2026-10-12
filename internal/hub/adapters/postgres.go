@@ -328,6 +328,17 @@ func (r *PostgresHubRepository) GetHubInboxItem(ctx context.Context, hubID, tena
 	return &i, nil
 }
 
+// liveInbox is the Hub inbox as the screen's tabs need it: the projection row with WHO HOLDS the conversation and whether it is FINALIZED read from the conversation itself.
+// The projector reconciles every minute, so after "Assumir" or "Finalizar" the projected row would still say "pending" and the person would not find
+// the attendance in "Minhas" (or the history) until the next run. The join adds nothing to what the caller may read: the RLS policy of hub_inbox_items
+// already requires the parent conversation to be readable under the caller's own session. Every other column stays the projection's.
+const liveInbox = `(SELECT i.id, i.hub_id, i.tenant_id, i.conversation_id, i.queue_id,
+		CASE WHEN c.id IS NULL THEN i.assigned_user_id ELSE c.assigned_to_user_id END AS assigned_user_id,
+		i.customer_name, i.channel,
+		CASE WHEN c.id IS NULL THEN i.status ELSE c.status END AS status,
+		i.priority, i.sla_due_at, i.last_activity_at, i.unread_count, i.metadata_json, i.version, i.created_at, i.updated_at
+	FROM hub_inbox_items i LEFT JOIN conversations c ON c.tenant_id = i.tenant_id AND c.id = i.conversation_id)`
+
 // inboxColumns is NULL-safe: the table declares DEFAULTs but not NOT NULL on the descriptive columns.
 const inboxColumns = `id, hub_id, tenant_id, conversation_id, queue_id, assigned_user_id,
 	COALESCE(customer_name, ''), COALESCE(channel, ''), COALESCE(status, 'open'), COALESCE(priority, 'normal'),
@@ -379,7 +390,7 @@ func (r *PostgresHubRepository) ListHubInboxItems(ctx context.Context, hubID uui
 		limit = 50
 	}
 
-	query := `SELECT ` + inboxColumns + ` FROM hub_inbox_items WHERE hub_id = $1`
+	query := `SELECT ` + inboxColumns + ` FROM ` + liveInbox + ` li WHERE hub_id = $1`
 	args := []interface{}{hubID}
 	// Tenants NARROWS what RLS already shows (a screen filter: "these companies only"). It can never widen it: rows the
 	// caller may not read are filtered out before this predicate is ever evaluated.
@@ -462,7 +473,7 @@ func (r *PostgresHubRepository) CountHubInboxSegments(ctx context.Context, hubID
 		       count(*) FILTER (WHERE COALESCE(status, 'open') <> 'closed' AND assigned_user_id IS NULL),
 		       count(*) FILTER (WHERE COALESCE(status, 'open') <> 'closed' AND assigned_user_id = $3),
 		       count(*) FILTER (WHERE status = 'closed')
-		FROM hub_inbox_items
+		FROM `+liveInbox+` li
 		WHERE hub_id = $1 AND (COALESCE(cardinality($2::uuid[]), 0) = 0 OR tenant_id = ANY($2::uuid[]))`,
 		hubID, onlyTenants, actor).Scan(&c.Open, &c.Waiting, &c.Mine, &c.Closed)
 	return c, err
