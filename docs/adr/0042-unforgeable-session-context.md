@@ -128,4 +128,10 @@ Retirar a variável do ambiente de `api`/`worker` com o banco em `off` ou `measu
 
 ## 10. Estado
 
-[PREENCHER: implantação e modo]
+- **Migration 000118** aplicada em produção (ledger 118) em 2026-10-11, com backup prévio e tags de rollback (`rollback-pre-adr0042-20261011-0237`).
+- **Modo do banco: `enforce`** (passou por `off` → `measure`, 0 divergências, → `enforce`). `api` e `worker` rodam com `OMNIRA_SESSION_CTX_REQUIRE_ENFORCE=true` e se recusam a iniciar fora de `enforce`.
+- **Chave:** em `OMNIRA_SESSION_CTX_KEY` no `.env` (modo 600) e na tabela do dono; fora do log (`scripts/test-session-ctx-key-logging.sh`).
+- **Sondas em produção como `omnira_app`:** administrador forjado vê 0 empresas; contexto de sistema genuíno vê 3; o mesmo token em outra transação é recusado.
+- **Não provado:** `measure` rodou de madrugada, só com tráfego de workers (sem usuário real); login real do Keycloak; carga.
+- **Rollback instantâneo:** `scripts/session-ctx.sh mode off`; com `REQUIRE_ENFORCE=true`, `api`/`worker` só reiniciam depois de remover a flag do `.env`.
+- Estado de produção permanece `LAB`.
