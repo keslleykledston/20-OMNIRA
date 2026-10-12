@@ -145,6 +145,11 @@ test('tempo real: a lista segue o aviso de mudança do Hub, sem esperar o ciclo 
   sql(`UPDATE conversations SET assigned_to_user_id = '${holder}' WHERE id = '${conv}'`);
   await publishChange(env.ta, conv);
   await expect(list.getByText('Com outro', { exact: true })).toBeVisible({ timeout: 10_000 });
+  // the real route behind the real middleware: another Hub does not exist for this person, and without a session there is no stream
+  expect((await api(page, `/hubs/${randomUUID()}/events`)).status).toBe(404);
+  const anonymous = await page.context().browser()!.newContext({ baseURL: process.env.E2E_BASE_URL });
+  expect((await anonymous.request.get(`/api/v1/hubs/${env.hub}/events`)).status()).toBe(401);
+  await anonymous.close();
   // a signal for a company the person does not serve changes nothing on their screen (and nothing they could read)
   const before = await list.getByRole('button').count();
   await publishChange(env.tc, randomUUID());
@@ -190,7 +195,7 @@ test('transferir: quem está com a conversa escolhe só entre quem pode responde
   await expect(carla.getByText('Respondendo como ISP Roraima')).toBeVisible();
   await expect(carla.getByRole('button', { name: 'Transferir conversa' })).toBeVisible();
   // o Bruno não pode mais transferir (a API recusa: não é só a tela)
-  const resp = await page.request.post(`/api/v1/hubs/${env.hub}/inbox/${sql(`SELECT id FROM hub_inbox_items WHERE tenant_id = '${env.ta}' LIMIT 1`)}/transfer`, { data: { expected_tenant_id: env.ta, to_user_id: null } });
+  const resp = await page.request.post(`/api/v1/hubs/${env.hub}/inbox/${sql(`SELECT id FROM hub_inbox_items WHERE tenant_id = '${env.ta}' LIMIT 1`)}/transfer`, { headers: { Origin: process.env.E2E_BASE_URL! }, data: { expected_tenant_id: env.ta, to_user_id: null } });
   expect(resp.status()).toBe(409);
   await other.close();
 });
@@ -247,7 +252,7 @@ test('delegação: o operador libera a gestão, o administrador marca quem geren
   expect(list.body).not.toContain('segredo-do-crm-12345');
   expect(sql(`SELECT count(*) FROM audit_events WHERE metadata::text LIKE '%segredo-do-crm-12345%'`)).toBe('0');
   // o escopo "canais" (WhatsApp) NÃO foi delegado: a mesma pessoa recebe 403 ao tentar criar uma linha
-  const wa = await carla.request.post(`/api/v1/hubs/${env.hub}/instances/${env.ta}/channels/connections`, { data: { provider: 'waha', risk_acknowledged: true } });
+  const wa = await carla.request.post(`/api/v1/hubs/${env.hub}/instances/${env.ta}/channels/connections`, { headers: { Origin: process.env.E2E_BASE_URL! }, data: { provider: 'waha', risk_acknowledged: true } });
   expect([403, 503]).toContain(wa.status());
   expect(sql(`SELECT count(*) FROM channel_connections WHERE tenant_id = '${env.ta}' AND provider = 'waha' AND external_number_id NOT LIKE 'e2e-%'`)).toBe('0');
   // outra instância do mesmo Hub: nada
@@ -266,7 +271,7 @@ test('segurança no navegador real: quem não administra o Hub não vê painel n
   await expect(page.getByRole('link', { name: 'Acessos' })).toHaveCount(0);
   expect((await api(page, `/hubs/${env.hub}/pools`)).status).toBe(404);
   expect((await api(page, `/hubs/${env.hub}/access`)).status).toBe(404);
-  const create = await page.request.post(`/api/v1/hubs/${env.hub}/pools`, { data: { name: 'Invasora', distribution: 'round_robin' } });
+  const create = await page.request.post(`/api/v1/hubs/${env.hub}/pools`, { headers: { Origin: process.env.E2E_BASE_URL! }, data: { name: 'Invasora', distribution: 'round_robin' } });
   expect(create.status()).toBe(404);
   expect(sql(`SELECT count(*) FROM work_pools`)).toBe('0');
   // a instância C não é dele: nem a conversa, nem a gestão
@@ -532,7 +537,7 @@ test('finalizar o atendimento pelo Hub (fase 05b): só quem tem a chave e está 
   expect(sql(`SELECT closed_by_user_id || '|' || source FROM conversation_closures WHERE tenant_id = '${env.tb}'`)).toBe(`${bruno.id}|agent`);
   expect(Number(sql(`SELECT count(*) FROM audit_events WHERE tenant_id = '${env.tb}' AND actor_id = '${bruno.id}' AND action = 'hub.conversation.finalized' AND metadata->>'hub_id' = '${env.hub}'`))).toBe(1);
   // repetir a chamada é idempotente (a mesma ficha de encerramento, sem segunda linha nem segunda auditoria)
-  const res = await page.request.post(`/api/v1/tenants/${env.tb}/inbox/conversations/${sql(`SELECT id FROM conversations WHERE tenant_id = '${env.tb}'`)}/finalize`, { headers: { 'X-Omnira-Acting-As': `hub:${env.hub}` }, data: { reason: 'resolved' } });
+  const res = await page.request.post(`/api/v1/tenants/${env.tb}/inbox/conversations/${sql(`SELECT id FROM conversations WHERE tenant_id = '${env.tb}'`)}/finalize`, { headers: { Origin: process.env.E2E_BASE_URL!, 'X-Omnira-Acting-As': `hub:${env.hub}` }, data: { reason: 'resolved' } });
   expect(res.status()).toBe(200);
   expect(Number(sql(`SELECT count(*) FROM conversation_closures WHERE tenant_id = '${env.tb}'`))).toBe(1);
   // fase 08: o aviso de encerramento ("Avisar o cliente" vem marcado) foi enfileirado PELO SERVIDOR junto com o fechamento: uma mensagem do agente, sob a chave por conversa, e a repetição não a duplicou

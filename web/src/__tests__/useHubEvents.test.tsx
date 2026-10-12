@@ -85,4 +85,31 @@ describe('useHubEvents', () => {
     live.unmount();
     expect(signal.aborted).toBe(true);
   });
+
+  it('keeps backing off when a proxy answers 200 and closes at once (a connection that never carried anything does not reset the delay)', async () => {
+    const closed = () => {
+      const r = sseResponse();
+      r.end();
+      return r.res;
+    };
+    const fetchMock = vi.fn().mockImplementation(async () => closed());
+    vi.stubGlobal('fetch', fetchMock);
+    renderHook(() => useHubEvents('hub-1', vi.fn()));
+    await tick(); // 1st connection, closed at once
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await tick(1100); // after 1 s: the 2nd
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await tick(1500); // the delay doubled to 2 s: still waiting
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await tick(700);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads once more when the access is refused, so the screen shows the truth at once', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 404, ok: false, body: null } as unknown as Response));
+    const onChanged = vi.fn();
+    renderHook(() => useHubEvents('hub-1', onChanged));
+    await tick();
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
 });

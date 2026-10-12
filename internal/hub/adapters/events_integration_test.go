@@ -239,3 +239,53 @@ func TestHubEvents_AdmissionAndLimits(t *testing.T) {
 		t.Errorf("a third stream for the same person: %d, want 429", third.status)
 	}
 }
+
+// Codex (pre-gate): the queue scope must be THIS Hub's, not whatever the person can read in general. A direct member of the company reads every queue through
+// their own membership; the Hub's signal still follows the Hub's contract. And a verdict learned under one scope must not outlive a change of the scope.
+func TestHubEvents_TheScopeIsTheHubsEvenForADirectMemberAndAChangeOfScopeIsNotRemembered(t *testing.T) {
+	w := newWorld(t)
+	api := w.eventsAPI(t, fastEvents)
+	agent := w.hubAgent("agent")
+	w.grant(agent, "A")
+	w.directMember(agent, "A") // reads every queue of A through the membership
+	w.queueScope("A", w.queue1["A"])
+
+	s := api.open(t, agent, "")
+	api.publish(w.tenant["A"], w.conv["A2"]) // queue 2: readable as a member, outside this Hub's contract
+	if got := s.next(700 * time.Millisecond); got != "" {
+		t.Fatalf("a conversation outside THIS Hub's queues was signalled because the person is also a member: %q", got)
+	}
+	api.publish(w.tenant["A"], w.conv["A"]) // queue 1
+	if got := s.next(2 * time.Second); got != "event: changed|data: {}" {
+		t.Fatalf("a conversation inside the Hub's queues was not signalled: %q", got)
+	}
+	// the contract now lists queue 2 only: what was true for conversation A (queue 1) a moment ago must not be reused
+	w.queueScope("A", w.queue2["A"])
+	time.Sleep(900 * time.Millisecond) // a recheck passes
+	api.publish(w.tenant["A"], w.conv["A"])
+	if got := s.next(700 * time.Millisecond); got != "" {
+		t.Fatalf("a verdict learned under the old scope was reused after the scope changed: %q", got)
+	}
+	api.publish(w.tenant["A"], w.conv["A2"])
+	if got := s.next(2 * time.Second); got != "event: changed|data: {}" {
+		t.Fatalf("the new scope was not applied: %q", got)
+	}
+}
+
+// A company that leaves the person's reach stops mattering at once, even for an event that was already on its way.
+func TestHubEvents_AnEventOfACompanyThatLeftIsDroppedAfterTheNextRecheck(t *testing.T) {
+	w := newWorld(t)
+	api := w.eventsAPI(t, fastEvents)
+	agent := w.hubAgent("agent")
+	w.grant(agent, "A")
+	w.grant(agent, "B")
+	s := api.open(t, agent, "")
+	w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE user_id = $1 AND tenant_id = $2`, agent, w.tenant["A"])
+	time.Sleep(900 * time.Millisecond)
+	for i := 0; i < 5; i++ {
+		api.publish(w.tenant["A"], w.conv["A"])
+	}
+	if got := s.next(700 * time.Millisecond); got != "" {
+		t.Fatalf("a company that left was signalled: %q", got)
+	}
+}

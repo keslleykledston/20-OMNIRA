@@ -119,6 +119,11 @@ func main() {
 	srv.RegisterHealthHandlers()
 	// omnira_session sempre carrega um session id opaco (auth_sessions),
 	// nunca um JWT/ID Token — dev e OIDC usam o mesmo SessionStore.
+	// a state-changing request authenticated by the session cookie must come from this application (defense in depth next to SameSite=Lax; see authn/origin.go)
+	if cfg.OriginCheck {
+		authn.EnableOriginCheck(append([]string{cfg.AuthRedirectURL, cfg.WebBaseURL}, cfg.AllowedOrigins...)...)
+		log.Printf("origin check: cookie-authenticated writes must come from this application")
+	}
 	sessionStore := authn.NewPostgresSessionStore(dbPool)
 	if cfg.AuthMode == "oidc" {
 		resolver := authn.NewPostgresIdentityResolver(dbPool)

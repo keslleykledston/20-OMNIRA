@@ -145,12 +145,14 @@ func (s *Service) Invite(ctx context.Context, actor, hub uuid.UUID, email string
 		if err != nil {
 			return err
 		}
-		expires := time.Now().UTC().Add(InvitationTTL)
+		// the lifetime starts on the DATABASE clock, the one that decides whether it has ended (an API node with a skewed clock cannot lengthen or shorten it)
 		var id uuid.UUID
+		var expires time.Time
 		if err := q.QueryRow(c, `INSERT INTO hub_preauthorizations (hub_id, email, grants, created_by, expires_at)
-		                         VALUES ($1, $2, $3, $4, $5) RETURNING id`, hub, e, raw, actor, expires).Scan(&id); err != nil {
+		                         VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5)) RETURNING id, expires_at`, hub, e, raw, actor, InvitationTTL.Seconds()).Scan(&id, &expires); err != nil {
 			return err
 		}
+		expires = expires.UTC()
 		res = InviteResult{Status: "pending", ExpiresAt: &expires}
 		return s.auditHub(c, q, &actor, "hub.preauthorization.created", id, map[string]any{"hub_id": hub, "companies": len(access)})
 	})

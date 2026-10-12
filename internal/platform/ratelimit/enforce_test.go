@@ -111,3 +111,39 @@ func TestAnOverQuotaUserDoesNotDrainTheTenantBucket(t *testing.T) {
 		}
 	}
 }
+
+// A route without a company in the path (the Hub's control plane and inbox) still gets the person's OWN quota after authentication, and one person's burst
+// never throttles another person.
+func TestUserQuotaAppliesWithoutATenantAndIsPerPerson(t *testing.T) {
+	l := NewLimiter()
+	l.SetQuota(QuotaTypeUser, 3, time.Minute)
+	l.SetQuota(QuotaTypeGlobal, 1000, time.Minute)
+	handler := Middleware(l)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !EnforceUser(w, r, uuid.MustParse(r.URL.Query().Get("u"))) {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	hit := func(user uuid.UUID) int {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, httptest.NewRequest("GET", "/x?u="+user.String(), nil))
+		return rr.Code
+	}
+	alice, bob := uuid.New(), uuid.New()
+	for i := 0; i < 3; i++ {
+		if c := hit(alice); c != 200 {
+			t.Fatalf("request %d: %d", i, c)
+		}
+	}
+	if c := hit(alice); c != http.StatusTooManyRequests {
+		t.Fatalf("the person's own quota was not enforced: %d", c)
+	}
+	if c := hit(bob); c != 200 {
+		t.Fatalf("one person's burst throttled another: %d", c)
+	}
+	// without a limiter in the context (tests, tools) everything is allowed
+	rr := httptest.NewRecorder()
+	if !EnforceUser(rr, httptest.NewRequest("GET", "/", nil), alice) {
+		t.Fatal("EnforceUser refused without a limiter")
+	}
+}

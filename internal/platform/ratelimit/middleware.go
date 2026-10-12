@@ -44,6 +44,22 @@ func EnforceTenantUser(w http.ResponseWriter, r *http.Request, tenantID, actorID
 	return true
 }
 
+// EnforceUser applies ONLY the per-user quota to an authenticated request that has no company (the Hub's control plane and inbox: a Hub administrator or agent
+// belongs to no tenant in the path). Without it those requests share the coarse process-wide bucket, so one person's burst could throttle everybody else.
+// Same contract as EnforceTenantUser: it writes the 429 itself, and without a limiter in the context (tests, tools) it allows everything.
+func EnforceUser(w http.ResponseWriter, r *http.Request, actorID uuid.UUID) bool {
+	l, _ := r.Context().Value(enforcerKey{}).(*Limiter)
+	if l == nil {
+		return true
+	}
+	allowed, remaining, reset := l.Allow(r.Context(), QuotaTypeUser, actorID.String())
+	if !allowed {
+		writeRateLimitExceeded(w, remaining, reset)
+		return false
+	}
+	return true
+}
+
 // Middleware — HTTP middleware para rate limiting
 func Middleware(limiter *Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

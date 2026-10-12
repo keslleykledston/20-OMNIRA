@@ -84,6 +84,12 @@ type Config struct {
 	// WebBaseURL: host do frontend como o navegador enxerga (links de e-mail). Diferente
 	// de PublicBaseURL, que é a URL server-to-server usada por webhooks.
 	WebBaseURL         string
+
+	// AllowedOrigins: extra origins ("https://host[:port]") a cookie-authenticated state-changing request may come from, besides the origins of AuthRedirectURL and
+	// WebBaseURL, the host the request was addressed to and loopback. OriginCheck (default on) is the same-origin defense in depth against CSRF.
+	AllowedOrigins []string
+	OriginCheck    bool
+
 	SMTPHost           string
 	SMTPPort           int
 	SMTPUsername       string
@@ -183,6 +189,8 @@ func Load() *Config {
 		FlowsAIEnabled:                getEnv("OMNIRA_FLOWS_AI_ENABLED", "false") == "true",
 		PublicBaseURL:                 os.Getenv("OMNIRA_PUBLIC_BASE_URL"),
 		WebBaseURL:                    os.Getenv("OMNIRA_WEB_BASE_URL"),
+		AllowedOrigins:                splitList(os.Getenv("OMNIRA_ALLOWED_ORIGINS")),
+		OriginCheck:                   getEnv("OMNIRA_ORIGIN_CHECK", "true") != "false",
 		SMTPHost:                      os.Getenv("OMNIRA_SMTP_HOST"),
 		SMTPPort:                      getEnvInt("OMNIRA_SMTP_PORT", 587),
 		SMTPUsername:                  os.Getenv("OMNIRA_SMTP_USERNAME"),

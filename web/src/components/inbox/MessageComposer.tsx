@@ -2,12 +2,18 @@ import React, { useRef, useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { Icon } from '../primitives';
 import { ATTACHMENT_ACCEPT, UploadedAttachment, formatBytes } from '../../lib/attachments';
+import { onSessionEnd } from '../../lib/session';
 
 // Drafts live in memory per conversation: switching to another attendance must never carry the text over (it could go to the
 // wrong person) nor lose what was typed for the previous one.
 const drafts = new Map<string, string>();
 // The file chosen for a conversation survives switching away and back, like the text (it is already uploaded and valid for 24 h).
 const attachmentDrafts = new Map<string, UploadedAttachment>();
+// what was typed for a conversation is the person's work: it does not stay in memory for whoever signs in next in this tab
+onSessionEnd(() => {
+  drafts.clear();
+  attachmentDrafts.clear();
+});
 
 interface MessageComposerProps {
   /** Identifies whose draft this is (tenant + conversation). */

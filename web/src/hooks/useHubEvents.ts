@@ -51,12 +51,21 @@ export function useHubEvents(hubId: string, onChanged: () => void, enabled = tru
             handleUnauthorized();
             return;
           }
-          if (res.status === 403 || res.status === 404) return; // the access is gone (or the signal is not mounted): nothing to retry
+          if (res.status === 403 || res.status === 404) {
+            changed(); // the access is gone (or the signal is not mounted): read once more so the screen shows the truth now, then stop asking
+            return;
+          }
           if (!res.ok || !res.body) throw new Error(`events connection failed (HTTP ${res.status})`);
-          attempt = 0;
           if (dropped) changed();
           dropped = true;
-          await readEvents(res.body, () => changed());
+          const openedAt = Date.now();
+          let frames = 0;
+          await readEvents(res.body, () => {
+            frames += 1;
+            changed();
+          });
+          // a connection that was useful (a frame came, or it lived a while) starts the backoff over; one that a proxy closes at once does not
+          if (frames > 0 || Date.now() - openedAt > 10_000) attempt = 0;
         } catch {
           if (stopped) return;
         }
@@ -76,10 +85,14 @@ export function useHubEvents(hubId: string, onChanged: () => void, enabled = tru
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => {
+    const onAbort = () => {
       clearTimeout(timer);
       resolve();
-    }, { once: true });
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort); // no listener piles up over many reconnects
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }

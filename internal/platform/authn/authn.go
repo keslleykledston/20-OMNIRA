@@ -149,6 +149,10 @@ func Middleware(auth Authenticator) func(http.Handler) http.Handler {
 				}
 				token = parts[1]
 			} else if cookie, err := r.Cookie(SessionCookieName); err == nil {
+				if !sameOriginOK(r) {
+					refuseCrossSite(w)
+					return
+				}
 				token = cookie.Value
 			}
 			if token == "" {
@@ -175,6 +179,10 @@ func SessionMiddleware(store SessionStore) func(http.Handler) http.Handler {
 			cookie, err := r.Cookie(SessionCookieName)
 			if err != nil {
 				http.Error(w, "missing session", http.StatusUnauthorized)
+				return
+			}
+			if !sameOriginOK(r) {
+				refuseCrossSite(w)
 				return
 			}
 
@@ -223,6 +231,10 @@ func WebMiddleware(auth Authenticator, store SessionStore) func(http.Handler) ht
 			cookie, err := r.Cookie(SessionCookieName)
 			if err != nil {
 				http.Error(w, "missing authentication", http.StatusUnauthorized)
+				return
+			}
+			if !sameOriginOK(r) {
+				refuseCrossSite(w)
 				return
 			}
 			if store == nil {

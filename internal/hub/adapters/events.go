@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/opsmetrics"
+	"github.com/omnira/omnira/internal/platform/ratelimit"
 )
 
 // The Hub's change signal: GET /api/v1/hubs/{hub_id}/events (Server-Sent Events).
@@ -42,6 +44,7 @@ type EventsOptions struct {
 	VisibilityTTL   time.Duration // how long "this conversation is visible to the person" is reused (default 10s)
 	MaxPerUser      int           // concurrent streams per person (default 4)
 	MaxTotal        int           // concurrent streams per process (default 500)
+	MaxCompanies    int           // companies followed by one stream (default 100); the rest keep the list's own poll
 	// SessionRecheck re-validates the credential the stream was opened with; an error ends the stream. nil skips it.
 	SessionRecheck func(ctx context.Context, p *authn.Principal) error
 }
@@ -89,6 +92,9 @@ func (h *HTTPHandler) WithEvents(nc *nats.Conn, opts EventsOptions) *HTTPHandler
 	if opts.MaxTotal <= 0 {
 		opts.MaxTotal = 500
 	}
+	if opts.MaxCompanies <= 0 {
+		opts.MaxCompanies = 100
+	}
 	h.events = &eventsConfig{nc: nc, opts: opts, perUser: map[uuid.UUID]int{}}
 	return h
 }
@@ -113,27 +119,28 @@ func (e *eventsConfig) release(user uuid.UUID) {
 	}
 }
 
-// reach is one company the person serves through the Hub, as the database says right now.
+// reach is one company the person serves through THIS Hub, as the database says right now, with the queues THIS Hub's contract allows.
 type reach struct {
 	tenant       uuid.UUID
-	unrestricted bool // the contract names no queue list: every event of the company may be signalled
+	unrestricted bool     // the contract names no queue list: every event of the company may be signalled
+	queues       []string // otherwise, the queues the contract lists (canonical text)
 }
 
-// reachOf asks, in a short transaction under the person's own session, whether they are a live member of the Hub and which companies they serve.
+// reachOf asks, in a short transaction under the person's own session, whether they are a live member of the Hub and which companies they serve through it.
 func (h *HTTPHandler) reachOf(ctx context.Context, actor, hubID uuid.UUID) ([]reach, error) {
 	var out []reach
 	err := platformdb.WithTenantSession(ctx, h.pool, actor, false, func(c context.Context) error {
 		if err := h.authz.AuthorizeHubMember(c, actor, hubID); err != nil {
 			return err
 		}
-		rows, err := platformdb.QuerierFromContext(c, h.pool).Query(c, `SELECT tenant_id, unrestricted FROM hub_reach() WHERE hub_id = $1`, hubID)
+		rows, err := platformdb.QuerierFromContext(c, h.pool).Query(c, `SELECT tenant_id, unrestricted, queue_texts FROM hub_reach() WHERE hub_id = $1 ORDER BY tenant_id`, hubID)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var r reach
-			if err := rows.Scan(&r.tenant, &r.unrestricted); err != nil {
+			if err := rows.Scan(&r.tenant, &r.unrestricted, &r.queues); err != nil {
 				return err
 			}
 			out = append(out, r)
@@ -143,13 +150,37 @@ func (h *HTTPHandler) reachOf(ctx context.Context, actor, hubID uuid.UUID) ([]re
 	return out, err
 }
 
-// visibleTo asks whether the person may read the conversation (the Hub's own path of the conversations policy, queue scope included).
-func (h *HTTPHandler) visibleTo(ctx context.Context, actor, tenant, conversation uuid.UUID) (bool, error) {
-	var ok bool
-	err := platformdb.WithTenantSession(ctx, h.pool, actor, false, func(c context.Context) error {
-		return platformdb.QuerierFromContext(c, h.pool).QueryRow(c, `SELECT EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $1 AND id = $2)`, tenant, conversation).Scan(&ok)
+// queueOf reads the queue of a conversation the person can read at all (their own session, RLS applies). found=false: not readable or not there. A conversation
+// with no queue answers found=true and "" (it is in no queue a contract can list).
+func (h *HTTPHandler) queueOf(ctx context.Context, actor, tenant, conversation uuid.UUID) (queue string, found bool, err error) {
+	err = platformdb.WithTenantSession(ctx, h.pool, actor, false, func(c context.Context) error {
+		var q *string
+		e := platformdb.QuerierFromContext(c, h.pool).QueryRow(c, `SELECT queue_id::text FROM conversations WHERE tenant_id = $1 AND id = $2`, tenant, conversation).Scan(&q)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		found = true
+		if q != nil {
+			queue = *q
+		}
+		return nil
 	})
-	return ok, err
+	return queue, found, err
+}
+
+// company is what the stream knows about one served company.
+type company struct {
+	unrestricted bool
+	queues       map[string]bool
+}
+
+type queueAnswer struct {
+	queue string
+	found bool
+	at    time.Time
 }
 
 // StreamEvents serves the change signal. Mount it behind the authentication middleware ONLY (never behind UserSessionMiddleware: that holds a database
@@ -171,6 +202,9 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor := principal.UserID
+	if !ratelimit.EnforceUser(w, r, actor) {
+		return
+	}
 	if _, ok := w.(http.Flusher); !ok {
 		httpError(w, "streaming not supported", http.StatusInternalServerError)
 		return
@@ -191,32 +225,49 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ev.release(actor)
 
+	var watchdog sync.WaitGroup
+	defer watchdog.Wait() // runs AFTER stop(): the watchdog never touches the response once the handler has returned
 	ctx, stop := context.WithCancel(r.Context())
 	defer stop()
 	rc := http.NewResponseController(w)
+	var closing atomic.Bool // set the moment the watchdog ends the stream: nothing is written after it
 	write := func(b []byte) bool {
+		if closing.Load() {
+			return false
+		}
 		_ = rc.SetWriteDeadline(time.Now().Add(ev.opts.WriteTimeout))
+		if closing.Load() { // the watchdog closed the stream between the check and the arming: its "now" deadline must win
+			_ = rc.SetWriteDeadline(time.Now())
+			return false
+		}
 		if _, err := w.Write(b); err != nil {
 			return false
 		}
 		return rc.Flush() == nil
 	}
 
-	// One subscription per company; callbacks only note that something arrived (a full channel already means "pending").
-	type arrival struct {
-		tenant, conversation uuid.UUID
-	}
+	// One subscription per company (bounded); callbacks only note that something arrived (a full channel already means "pending").
+	type arrival struct{ tenant, conversation uuid.UUID }
 	arrivals := make(chan arrival, 128)
+	var mu sync.Mutex // guards companies, subs and cache
+	companies := map[uuid.UUID]company{}
 	subs := map[uuid.UUID]*nats.Subscription{}
-	unrestricted := map[uuid.UUID]bool{}
-	var mu sync.Mutex // guards subs and unrestricted
+	cache := map[[2]uuid.UUID]queueAnswer{}
 	apply := func(now []reach) bool {
 		mu.Lock()
 		defer mu.Unlock()
+		if len(now) > ev.opts.MaxCompanies {
+			log.Printf("hub events: %d companies for one person, following the first %d (the list keeps its own poll for the rest)", len(now), ev.opts.MaxCompanies)
+			now = now[:ev.opts.MaxCompanies]
+		}
 		want := map[uuid.UUID]bool{}
 		for _, c := range now {
 			want[c.tenant] = true
-			unrestricted[c.tenant] = c.unrestricted
+			q := map[string]bool{}
+			for _, id := range c.queues {
+				q[id] = true
+			}
+			companies[c.tenant] = company{unrestricted: c.unrestricted, queues: q}
 			if subs[c.tenant] != nil {
 				continue
 			}
@@ -240,13 +291,19 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 				log.Printf("hub events: subscribe failed: %v", err)
 				return false
 			}
-			subs[tenant] = sub
+			subs[c.tenant] = sub
 		}
 		for tenant, sub := range subs {
 			if !want[tenant] {
 				_ = sub.Unsubscribe()
 				delete(subs, tenant)
-				delete(unrestricted, tenant)
+				delete(companies, tenant)
+			}
+		}
+		// what was learned about a conversation of a company that left (or of one whose queue list changed) is forgotten with it
+		for key := range cache {
+			if _, ok := companies[key[0]]; !ok {
+				delete(cache, key)
 			}
 		}
 		return true
@@ -263,6 +320,44 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The relationship is asked again APART from the event loop, so a slow write or a backlog of events cannot postpone a revocation.
+	watchdog.Add(1)
+	go func() {
+		defer watchdog.Done()
+		every := ev.opts.Recheck - ev.opts.DatabaseTimeout
+		if every <= 0 {
+			every = ev.opts.Recheck / 2
+		}
+		tick := time.NewTicker(every)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				c, cancel := context.WithTimeout(ctx, ev.opts.DatabaseTimeout)
+				alive := true
+				if ev.opts.SessionRecheck != nil {
+					if err := ev.opts.SessionRecheck(c, principal); err != nil && !errors.Is(err, context.Canceled) {
+						alive = false
+					}
+				}
+				if alive {
+					now, err := h.reachOf(c, actor, hubID)
+					alive = err == nil && apply(now) // fail closed: a membership that cannot be confirmed ends the stream
+				}
+				cancel()
+				if !alive && ctx.Err() == nil {
+					eventsOpened.Inc("ended_access_lost")
+					closing.Store(true)
+					stop()
+					_ = rc.SetWriteDeadline(time.Now()) // a write blocked on a client that is not reading fails now
+					return
+				}
+			}
+		}
+	}()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -272,46 +367,53 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	eventsOpened.Inc("opened")
 
-	type seen struct {
-		ok bool
-		at time.Time
-	}
-	cache := map[[2]uuid.UUID]seen{}
+	// May this arrival be signalled to THIS person through THIS Hub? The company must still be served, and when the contract lists queues the conversation's
+	// queue must be one of them. The queue is read under the person's session, but the VERDICT is taken against this Hub's list, so a direct membership or
+	// another Hub with a wider scope cannot widen it.
 	visible := func(a arrival) bool {
 		mu.Lock()
-		open := unrestricted[a.tenant]
+		c, ok := companies[a.tenant]
+		e, hit := cache[[2]uuid.UUID{a.tenant, a.conversation}]
 		mu.Unlock()
-		if open {
+		if !ok {
+			return false // a company that left, or an event that was already queued when it left
+		}
+		if c.unrestricted {
 			return true
 		}
-		key := [2]uuid.UUID{a.tenant, a.conversation}
-		if s, hit := cache[key]; hit && time.Since(s.at) < ev.opts.VisibilityTTL {
-			return s.ok
+		if !hit || time.Since(e.at) >= ev.opts.VisibilityTTL {
+			qc, cancel := context.WithTimeout(ctx, ev.opts.DatabaseTimeout)
+			queue, found, err := h.queueOf(qc, actor, a.tenant, a.conversation)
+			cancel()
+			if err != nil {
+				return false // fail closed: no signal
+			}
+			e = queueAnswer{queue: queue, found: found, at: time.Now()}
+			mu.Lock()
+			if _, still := companies[a.tenant]; still {
+				if len(cache) > 4096 {
+					cache = map[[2]uuid.UUID]queueAnswer{}
+				}
+				cache[[2]uuid.UUID{a.tenant, a.conversation}] = e
+			}
+			c, ok = companies[a.tenant] // the scope may have changed while the query ran
+			mu.Unlock()
+			if !ok {
+				return false
+			}
 		}
-		c, cancel := context.WithTimeout(ctx, ev.opts.DatabaseTimeout)
-		defer cancel()
-		ok, err := h.visibleTo(c, actor, a.tenant, a.conversation)
-		if err != nil {
-			return false // fail closed: no signal
-		}
-		if len(cache) > 4096 {
-			cache = map[[2]uuid.UUID]seen{}
-		}
-		cache[key] = seen{ok: ok, at: time.Now()}
-		return ok
+		return e.found && c.queues[e.queue]
 	}
 
 	lifetime := time.NewTimer(ev.opts.MaxLifetime)
 	defer lifetime.Stop()
-	recheck := time.NewTicker(ev.opts.Recheck)
-	defer recheck.Stop()
 	keepalive := time.NewTicker(ev.opts.Keepalive)
 	defer keepalive.Stop()
-	var pending atomic.Bool
+	var pending bool
 	var lastSignal time.Time
 	var flush <-chan time.Time // armed when a signal is owed but the minimum interval has not passed
 	signal := func() bool {
-		pending.Store(false)
+		pending = false
 		flush = nil
 		lastSignal = time.Now()
 		eventsSignals.Inc("")
@@ -331,7 +433,7 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 			if !visible(a) {
 				continue
 			}
-			pending.Store(true)
+			pending = true
 			if wait := ev.opts.MinInterval - time.Since(lastSignal); wait > 0 {
 				if flush == nil {
 					flush = time.After(wait)
@@ -342,30 +444,11 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-flush:
-			if pending.Load() && !signal() {
+			if pending && !signal() {
 				return
 			}
 		case <-keepalive.C:
 			if !write([]byte(": keepalive\n\n")) {
-				return
-			}
-		case <-recheck.C:
-			if ev.opts.SessionRecheck != nil {
-				if err := ev.opts.SessionRecheck(ctx, principal); err != nil && !errors.Is(err, context.Canceled) {
-					eventsOpened.Inc("ended_access_lost")
-					return
-				}
-			}
-			c, cancel := context.WithTimeout(ctx, ev.opts.DatabaseTimeout)
-			now, err := h.reachOf(c, actor, hubID)
-			cancel()
-			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					eventsOpened.Inc("ended_access_lost")
-				}
-				return // fail closed: a membership that cannot be confirmed ends the stream
-			}
-			if !apply(now) {
 				return
 			}
 		}

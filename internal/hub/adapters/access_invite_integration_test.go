@@ -587,3 +587,67 @@ func TestAccessInvite_TheApplicationRoleCannotEraseTheTrail(t *testing.T) {
 		t.Fatal("the trail changed")
 	}
 }
+
+// Codex pre-gate: an address authorized for somebody else must not be taken by changing one's own address at the identity provider. What was authorized for an
+// e-mail comes along with a NEW identity, or with the same identity whose same address has just been verified; never with an existing identity whose address CHANGED.
+func TestAccessInvite_AnExistingIdentityThatChangesItsAddressDoesNotTakeAnotherPersonsAuthorization(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	in := newSignIn(w, api.svc)
+
+	// an ordinary person signs in (no authorization exists for them)
+	thief := in.login("sub-editor", w.e("antigo"), true)
+	// the administrator authorizes an address that has no account
+	if code, _ := api.invite(admin, w.e("alvo"), api.tenantAccess("A", "reply")); code != 200 {
+		t.Fatal("invite refused")
+	}
+	// the person changes their own address at the identity provider to the authorized one and signs in again
+	in.login("sub-editor", w.e("alvo"), true)
+	if w.preStatus(w.e("alvo")) != "pending" {
+		t.Fatalf("the authorization meant for another person was consumed by an existing identity that changed its address: %s", w.preStatus(w.e("alvo")))
+	}
+	if w.count(`SELECT count(*) FROM hub_memberships WHERE user_id = $1`, thief) != 0 || w.reads(thief, "A").conversations != 0 {
+		t.Fatal("the person who changed their address reads company A")
+	}
+	// the person it was meant for signs in for the first time and receives it
+	real := in.login("sub-alvo", w.e("alvo"), true)
+	if w.reads(real, "A").conversations == 0 {
+		t.Fatal("the intended person did not receive the authorization")
+	}
+}
+
+// Codex pre-gate: a write that gives tenant-wide access (an instance administrator) or stages delegated management must not land after the contract ended. A
+// suspension in flight is waited for, and the write is then refused.
+func TestAccess_InstanceAdminAndManageWritesWaitForAContractSuspensionInFlightAndAreRefused(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	person := w.hubAgent("pessoa")
+	w.email(person, w.e("pessoa"))
+	w.grant(person, "A")
+
+	err := inFlight(t, w, func(tx pgxTx) {
+		w.execIn(tx, `UPDATE hub_tenant_service_contracts SET status = 'suspended' WHERE id = $1`, w.contract["A"])
+	}, func() error {
+		_, err := api.svc.AddInstanceAdmin(w.ctx, admin, w.hub, w.tenant["A"], w.e("pessoa"))
+		return err
+	})
+	if err == nil {
+		t.Fatal("an instance administrator was made on a contract that ended while the request was waiting")
+	}
+	if w.count(`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2`, w.tenant["A"], person) != 0 {
+		t.Fatal("a tenant-wide membership was written after the contract ended")
+	}
+
+	w.exec(`UPDATE hub_tenant_service_contracts SET status = 'active' WHERE id = $1`, w.contract["A"])
+	err = inFlight(t, w, func(tx pgxTx) {
+		w.execIn(tx, `UPDATE hub_tenant_service_contracts SET status = 'suspended' WHERE id = $1`, w.contract["A"])
+	}, func() error { return api.svc.SetManage(w.ctx, admin, w.hub, person, w.tenant["A"], true) })
+	if err == nil {
+		t.Fatal("delegated management was staged on a contract that ended while the request was waiting")
+	}
+	if w.count(`SELECT count(*) FROM effective_access_grants WHERE user_id = $1 AND tenant_id = $2 AND can_manage`, person, w.tenant["A"]) != 0 {
+		t.Fatal("can_manage was written after the contract ended")
+	}
+}

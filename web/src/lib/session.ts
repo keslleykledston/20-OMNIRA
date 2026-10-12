@@ -1,4 +1,5 @@
 import { forgetAllTabs } from './hubTabs'
+import { queryClient } from './queryClient'
 
 // Session values for the inbox pages. The JWT lives under "token" (lib/store.ts);
 // the tenant comes from the backend login response.
@@ -21,6 +22,8 @@ export function authHeaders(): Record<string, string> {
 }
 
 export function saveSession(token: string, tenantId: string | undefined, user: unknown): void {
+	// a new session never starts from what another person loaded in this tab (the cache keys do not carry the person)
+	queryClient.clear();
 	if (token) localStorage.setItem(TOKEN_KEY, token);
 	else localStorage.removeItem(TOKEN_KEY);
 	if (tenantId) localStorage.setItem(TENANT_KEY, tenantId);
@@ -32,11 +35,31 @@ export function hasSession(): boolean {
 	return !!getAuthToken() || localStorage.getItem(SESSION_KEY) === 'true';
 }
 
+// Modules that keep a person's work in MEMORY (unsent drafts) register here to let it go when the session ends.
+const sessionEndHooks: Array<() => void> = [];
+export function onSessionEnd(fn: () => void): void {
+	sessionEndHooks.push(fn);
+}
+
+// Things this browser keeps per conversation for the person who worked on them (a ticket being created and its idempotency key): they leave with the sign-out.
+const PER_PERSON_PREFIXES = ['omnira.ticket-'];
+
 export function clearSession(): void {
 	// 'actingHub'/'actingName': the delegated context (lib/acting.ts) never survives a sign-out
 	[TOKEN_KEY, TENANT_KEY, USER_KEY, SESSION_KEY, 'jwtToken', 'actingHub', 'actingName'].forEach((k) => localStorage.removeItem(k));
 	// the attendances open as tabs in the Hub inbox (ids only, lib/hubTabs.ts) do not outlive the sign-in either
 	forgetAllTabs();
+	try {
+		for (let i = localStorage.length - 1; i >= 0; i--) {
+			const k = localStorage.key(i);
+			if (k && PER_PERSON_PREFIXES.some((p) => k.startsWith(p))) localStorage.removeItem(k);
+		}
+	} catch {
+		/* storage blocked: nothing was kept */
+	}
+	sessionEndHooks.forEach((fn) => fn());
+	// and what the person loaded (hubs, companies, conversations) is not left in memory for whoever signs in next in this tab
+	queryClient.clear();
 }
 
 // A 401 from the API means the token is missing/expired (the backend keys are per process):

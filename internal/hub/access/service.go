@@ -432,14 +432,27 @@ func (s *Service) RemoveInstanceAdmin(ctx context.Context, actor, hub, tenant, u
 	})
 }
 
+// requireContract proves the instance is live in this hub AND keeps it live until the transaction ends: the contract and the company rows are locked
+// FOR SHARE (each alone: a locked read that joins another table can drop the row after a concurrent update), so a suspension or revocation that is in flight
+// either commits first (and this refuses) or waits for this transaction. Without the lock a write could land just after the contract ended (Codex pre-gate).
 func requireContract(ctx context.Context, q platformdb.Querier, hub, tenant uuid.UUID) error {
-	var ok bool
-	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM hub_tenant_service_contracts k JOIN tenants t ON t.id = k.tenant_id
-	                                          WHERE k.hub_id = $1 AND k.tenant_id = $2 AND k.status = 'active' AND t.status = 'active')`, hub, tenant).Scan(&ok); err != nil {
+	notFound := fmt.Errorf("%w: no active instance %s in this hub", ErrNotFound, tenant)
+	var contract string
+	if err := q.QueryRow(ctx, `SELECT status FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR SHARE`, hub, tenant).Scan(&contract); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		}
 		return err
 	}
-	if !ok {
-		return fmt.Errorf("%w: no active instance %s in this hub", ErrNotFound, tenant)
+	var company string
+	if err := q.QueryRow(ctx, `SELECT status FROM tenants WHERE id = $1 FOR SHARE`, tenant).Scan(&company); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		}
+		return err
+	}
+	if contract != "active" || company != "active" {
+		return notFound
 	}
 	return nil
 }

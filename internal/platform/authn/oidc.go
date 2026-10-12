@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -400,14 +401,17 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, err := h.resolver.ProvisionIdentity(r.Context(), h.issuer, claims.Subject, claims.Email, displayName, claims.emailVerified())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("identity provisioning error: %v", err), http.StatusInternalServerError)
+		// the cause (constraint names, schema, infrastructure) goes to the log, never to the browser
+		log.Printf("oidc callback: identity provisioning failed: %v", err)
+		http.Error(w, "identity provisioning error", http.StatusInternalServerError)
 		return
 	}
 
 	// Create server-side session (opaque session ID, not ID Token)
 	sessionID, err := h.sessionStore.CreateSession(r.Context(), userID, "oidc", h.sessionTTL)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("session creation error: %v", err), http.StatusInternalServerError)
+		log.Printf("oidc callback: session creation failed: %v", err)
+		http.Error(w, "session creation error", http.StatusInternalServerError)
 		return
 	}
 

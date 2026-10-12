@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -122,11 +123,18 @@ func (r *PostgresIdentityResolver) ResolveIdentity(ctx context.Context, issuer, 
 // Email/display_name are attributes and are updated on each login.
 func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer, subject, email, displayName string, emailVerified bool) (uuid.UUID, error) {
 	var userID uuid.UUID
+	// applyAuthorizations: whether this sign-in may bring along what was authorized for the person's e-mail (afterProvision). It is a NEW identity, or the same
+	// identity whose SAME address has just become verified. An existing identity whose address CHANGED at the identity provider does not: otherwise anybody
+	// able to edit their own address there could take the address an administrator authorized for somebody else (Codex pre-gate, 2026-10-12).
+	applyAuthorizations := false
 	err := platformdb.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(scoped context.Context) error {
 		q := platformdb.QuerierFromContext(scoped, r.pool)
+		var wasEmail string
+		var wasVerified bool
 		if err := q.QueryRow(scoped, `
-			SELECT user_id FROM user_identities WHERE issuer=$1 AND subject=$2
-		`, issuer, subject).Scan(&userID); err == nil {
+			SELECT user_id, COALESCE(email, ''), COALESCE(email_verified, false) FROM user_identities WHERE issuer=$1 AND subject=$2
+		`, issuer, subject).Scan(&userID, &wasEmail, &wasVerified); err == nil {
+			applyAuthorizations = !wasVerified && emailVerified && strings.EqualFold(strings.TrimSpace(wasEmail), strings.TrimSpace(email))
 			if _, err := q.Exec(scoped, `
 				UPDATE user_identities
 				SET email=$3, display_name=$4, email_verified=$5, last_login_at=NOW()
@@ -147,6 +155,7 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 			return err
 		}
 		userID = uuid.New()
+		applyAuthorizations = true
 		if _, err := q.Exec(scoped, `
 			INSERT INTO users(id, external_subject, email, display_name, status)
 			VALUES ($1, $2, $3, $4, 'active')
@@ -161,7 +170,7 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 		}
 		return nil
 	})
-	if err == nil && r.afterProvision != nil {
+	if err == nil && applyAuthorizations && r.afterProvision != nil {
 		r.afterProvision(ctx, userID)
 	}
 	return userID, err

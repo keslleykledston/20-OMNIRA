@@ -162,7 +162,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   useHubEvents(hubId, () => {
     void queryClient.invalidateQueries({ queryKey: ['hub-inbox', hubId] });
     void queryClient.invalidateQueries({ queryKey: ['hub-item', hubId] });
-    void queryClient.invalidateQueries({ queryKey: ['hub-companies-probe'] });
+    void queryClient.invalidateQueries({ queryKey: ['hub-companies-probe', hubId] }); // this Hub's only
   });
 
   const detail = useQuery({

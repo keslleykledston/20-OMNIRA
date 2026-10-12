@@ -25,6 +25,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
+	"github.com/omnira/omnira/internal/platform/ratelimit"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -114,6 +115,10 @@ func requestScope(w http.ResponseWriter, r *http.Request) (actor, hub uuid.UUID,
 	principal, err := authn.FromContext(r.Context())
 	if err != nil || principal.UserID == uuid.Nil {
 		httpError(w, "unauthorized", http.StatusUnauthorized)
+		return uuid.Nil, uuid.Nil, false
+	}
+	// the person's own quota (the Hub's routes carry no company in the path, so the middleware before authentication could only count them in a shared bucket)
+	if !ratelimit.EnforceUser(w, r, principal.UserID) {
 		return uuid.Nil, uuid.Nil, false
 	}
 	// A tenant chosen by the client is not an input of this API at all.
