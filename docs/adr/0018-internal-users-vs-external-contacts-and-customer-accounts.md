@@ -56,12 +56,31 @@ Estado verificado em 2026-10-05 (HEAD `3bbb879`, schema `000072`):
 **Decisão (opção C).**
 1. Novo valor **`contacts.kind = 'internal'`** (migration `000090`, aditiva e reversível) e coluna **`contacts.internal_role`** (`team | partner | supplier`), com CHECK `(kind = 'internal') = (internal_role IS NOT NULL)`. O papel existe exatamente enquanto o tipo é `internal`; sair de `internal` o apaga.
 2. **É declaração de um operador, não identidade.** Não concede permissão nem confiança (decisão 7 intacta). O único efeito é **desligar a automação de cliente** (decisão 13: bot, chamado automático, SLA, CSAT).
-3. **A conversa continua `external_other`.** `contact_kind_to_conversation_kind` e a regra de grupo já mapeiam todo tipo que não é `customer` nem `unclassified` para "outros"; a restrição `conversations_internal_kind_chk` (`internal` ⇔ `internal_user_id`) **não é relaxada**. Em consequência a conversa segue na fila, pode ser atribuída e aparece em "Todas".
+3. **A conversa continua `external_other`.** `contact_kind_to_conversation_kind` e a regra de grupo já mapeiam todo tipo que não é `customer` nem `unclassified` para "outros"; a restrição `conversations_internal_kind_chk` (`internal` ⇔ `internal_user_id`) **não é relaxada**. Em consequência a conversa pode ser atribuída e aparece em "Todas" (para quem tem permissão de vê-la — ver o adendo de 2026-10-12 abaixo, que também tira essa conversa da fila automática).
 4. **O filtro "Internas" do Inbox** (`conversation_kind=internal`) passa a devolver a união: conversas com equipe verificada **e** conversas de contatos declarados internos. Cada conversa traz `contact_internal_role`; a lista mostra o selo "Equipe", "Parceiro" ou "Fornecedor" no lugar de "Outros". A visão "Internos" do diretório de pessoas (`view=internal`) traz Users (precisa de `membership.read`) **mais** esses contatos; sem a permissão volta só a parte de contatos (200, nunca a equipe).
 5. **Proteção contra marcar cliente como interno** (ele perderia bot, chamado e SLA em silêncio): só quem tem `contact.classify`; **somente `source = manual`** (regra, importação, CRM, fluxo e sugestão de IA são recusados com 400); o papel é obrigatório (422 sem ele, 400 em tipo que não é `internal`); a tela mostra o que a escolha desliga antes de salvar; auditoria `contact.classified/reclassified` com `internal_role_from/to`.
 6. `PUT /contacts/{id}/kind` (endpoint simples) **recusa** `internal` (400): só a API de classificação, que carrega o papel, o aceita.
 
 **Rejeitado:** (a) reaproveitar `conversation_kind = internal` para contatos — quebraria a invariante "interno = verificado", faria conversas de fornecedor sumirem de "Todas" e as tiraria da fila; (b) tipo novo de conversa — muita superfície para o mesmo efeito; (c) deixar IA/regra classificar como interno — falha silenciosa para cliente.
 
-**Adiado (não implementado):** vincular um contato "Equipe" a um User (converter em conversa interna verificada, o que exige migrar o histórico entre `contact_id` e `internal_user_id`) e a sugestão automática quando o telefone bater com um User; restringir por permissão quem vê conversas internas.
+**Adiado (não implementado):** vincular um contato "Equipe" a um User (converter em conversa interna verificada, o que exige migrar o histórico entre `contact_id` e `internal_user_id`) e a sugestão automática quando o telefone bater com um User; (a restrição de quem vê conversas internas foi feita no adendo de 2026-10-12).
 
+
+## Adendo 2026-10-12 — quem vê as conversas de contatos "Internos"
+
+**Problema.** Com o adendo anterior a conversa de um parceiro/fornecedor/equipe seguia na fila, e qualquer agente a recebia e lia. Comunicação interna não é atendimento.
+
+**Decisão.**
+1. Nova permissão **`conversation.read_internal`** (migration `000120`): ler e operar (responder, atribuir, chamado, notas) a conversa cujo contato tem `kind = 'internal'`. Concedida a **`tenant_admin` e `tenant_supervisor`**; **agentes não a recebem**. Os papéis são os globais fixos, então é a política de todas as empresas. A chave **não é delegável**: um agente do Hub nunca a tem.
+2. **Um único ponto de decisão:** o middleware de autorização das rotas (`AuthorizationMiddleware` e o ramo delegado, `internal/tenancy/adapters/internal_conversations.go`). Em toda rota que nomeia `{conversation_id}`, `{message_id}` (mídia) ou `/contacts/{id}/conversations|tickets|topics`, se o contato é interno e o ator não tem a chave, a resposta é **404**, com o texto que a rota principal dá para recurso inexistente (`conversation not found`, `media not found`, `contact not found`). O contato em si, a classificação e as notas continuam acessíveis: quem não vê as conversas precisa ver quem é a pessoa e, com `contact.classify`, poder reverter.
+3. **Listas:** `GET /inbox/conversations` omite essas conversas (padrão, `kind=internal`, `conversation_kind=internal`, busca `q`) para quem não tem a chave. A tela só oferece "Internas" a quem a tem.
+4. **Fila:** conversa de contato interno **não entra na fila automática** (como spam): `RouteNew` não a enfileira nem gera job de atribuição, e declarar o contato interno **tira da fila** as conversas abertas sem dono. Quem tem a permissão a assume à mão. Isto substitui o "segue na fila" do adendo anterior.
+5. **Hub:** o projetor não projeta essas conversas (somem na próxima reconciliação, até 1 min por padrão); e o ramo delegado do middleware as recusa de qualquer forma. Marcar um contato como interno em contexto de Hub já era recusado (403).
+6. Reverter o contato (para Cliente/Outros) devolve a conversa a quem a via antes; nada é movido nem apagado.
+
+**Limites conhecidos (honestos).**
+- Conversa **já atribuída** a um agente quando o contato é marcado interno: o agente deixa de vê-la; administrador/supervisor vê e reatribui. Não há reatribuição automática.
+- O texto do 404 só é idêntico ao de "inexistente" nas rotas de leitura principais; rotas de escrita (envio, chamado) têm texto próprio para recurso inexistente — o status é o mesmo.
+- O fluxo **SSE** (`/inbox/events`) é por empresa e leva só identificadores e estados (nunca texto de mensagem); a tela refaz a leitura pela API, que recusa. Contadores agregados (painel, `open_conversation_count` do contato, `last_interaction_at`) ainda incluem essas conversas.
+- Conversas com **equipe verificada** (`conversation_kind = 'internal'`, `internal_user_id`) seguem como estavam: fora da lista padrão, mas **não** sujeitas a esta chave. É uma decisão separada.
+- O banco (RLS) não distingue por papel; a regra é da aplicação, no middleware. Uma rota nova que nomeie conversa por outro parâmetro precisa ser coberta ali.
