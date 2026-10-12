@@ -17,8 +17,9 @@ import (
 //
 // An origin is accepted when it is
 //   - one of the configured ones (OMNIRA_ALLOWED_ORIGINS, plus the origins of OMNIRA_AUTH_REDIRECT_URL and OMNIRA_WEB_BASE_URL, which name the public address), or
-//   - the host this request was addressed to (Host, or X-Forwarded-Host when a proxy in front rewrites it), or
+//   - ONLY when none is configured (development, tests): the host this request was addressed to (Host), or
 //   - a loopback address (a developer's own machine; the cookie of a remote site is never sent to it).
+// X-Forwarded-Host is deliberately NOT trusted: a client can send it, and the proxies in front do not overwrite it (Codex pre-gate).
 // It is OFF until the server turns it on (EnableOriginCheck), so unit tests of unrelated handlers keep their plain requests.
 
 type originConfig struct{ allowed map[string]bool }
@@ -61,13 +62,6 @@ func isLoopbackHost(hostport string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func firstForwarded(v string) string {
-	if i := strings.Index(v, ","); i >= 0 {
-		v = v[:i]
-	}
-	return strings.ToLower(strings.TrimSpace(v))
-}
-
 // sameOriginOK reports whether a request authenticated by the session cookie may proceed. Safe methods and a disabled check always pass.
 func sameOriginOK(r *http.Request) bool {
 	c := originGuard.Load()
@@ -98,10 +92,9 @@ func sameOriginOK(r *http.Request) bool {
 	if isLoopbackHost(u.Host) {
 		return true
 	}
-	if strings.EqualFold(u.Host, r.Host) {
-		return true
-	}
-	if fh := firstForwarded(r.Header.Get("X-Forwarded-Host")); fh != "" && strings.EqualFold(u.Host, fh) {
+	// with the public address configured the list above is the whole truth (and it is exact about the scheme); the Host comparison is only for setups that
+	// configured nothing
+	if len(c.allowed) == 0 && strings.EqualFold(u.Host, r.Host) {
 		return true
 	}
 	return false

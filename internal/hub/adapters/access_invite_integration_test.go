@@ -651,3 +651,62 @@ func TestAccess_InstanceAdminAndManageWritesWaitForAContractSuspensionInFlightAn
 		t.Fatal("can_manage was written after the contract ended")
 	}
 }
+
+// Codex pre-gate: a contract marked active but outside its validity window delegates nothing, so the management writes refuse it too.
+func TestAccess_ManagementWritesRefuseAContractOutsideItsValidityWindow(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	person := w.hubAgent("pessoa")
+	w.email(person, w.e("pessoa"))
+	w.grant(person, "A")
+	for name, set := range map[string]string{
+		"ended yesterday":   `UPDATE hub_tenant_service_contracts SET valid_until = now() - interval '1 day' WHERE id = $1`,
+		"starts next month": `UPDATE hub_tenant_service_contracts SET valid_from = now() + interval '30 days' WHERE id = $1`,
+	} {
+		w.exec(`UPDATE hub_tenant_service_contracts SET status = 'active', valid_from = now() - interval '2 days', valid_until = NULL WHERE id = $1`, w.contract["A"])
+		w.exec(set, w.contract["A"])
+		if _, err := api.svc.AddInstanceAdmin(w.ctx, admin, w.hub, w.tenant["A"], w.e("pessoa")); err == nil {
+			t.Errorf("%s: an instance administrator was made on a contract outside its validity window", name)
+		}
+		if err := api.svc.SetManage(w.ctx, admin, w.hub, person, w.tenant["A"], true); err == nil {
+			t.Errorf("%s: delegated management was staged on a contract outside its validity window", name)
+		}
+	}
+	if w.count(`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2`, w.tenant["A"], person) != 0 {
+		t.Fatal("a tenant-wide membership was written")
+	}
+}
+
+// Codex pre-gate: what was authorized for an address is retried at the next sign-in of the SAME address (a failed application must not be lost), and never taken by
+// an address change.
+func TestAccessInvite_AFailedApplicationIsRetriedAtTheNextSignInOfTheSameAddress(t *testing.T) {
+	w := newWorld(t)
+	api := newAccessAPI(t, w)
+	admin := w.hubAdmin("admin")
+	calls := 0
+	resolver := authn.NewPostgresIdentityResolver(w.app).WithAfterProvision(func(ctx context.Context, user uuid.UUID) {
+		calls++
+		if calls == 1 {
+			return // the first application "failed": nothing was applied
+		}
+		if _, err := api.svc.ApplyPreauthorizations(ctx, user); err != nil {
+			w.t.Errorf("applying: %v", err)
+		}
+	})
+	if code, _ := api.invite(admin, w.e("retry"), api.tenantAccess("A", "reply")); code != 200 {
+		t.Fatal("invite refused")
+	}
+	sub := "sub-retry-" + w.hub.String()[:8]
+	user, err := resolver.ProvisionIdentity(w.ctx, "https://idp.test/realm", sub, w.e("retry"), "Retry", true)
+	w.must(err)
+	if w.preStatus(w.e("retry")) != "pending" {
+		t.Fatal("setup: the first application should have been skipped")
+	}
+	if _, err := resolver.ProvisionIdentity(w.ctx, "https://idp.test/realm", sub, w.e("retry"), "Retry", true); err != nil {
+		t.Fatal(err)
+	}
+	if w.preStatus(w.e("retry")) != "applied" || w.reads(user, "A").conversations == 0 {
+		t.Fatalf("the next sign-in of the same address did not retry the application: %s", w.preStatus(w.e("retry")))
+	}
+}

@@ -171,6 +171,15 @@ func (h *HTTPHandler) queueOf(ctx context.Context, actor, tenant, conversation u
 	return queue, found, err
 }
 
+func sameKeys(a, b map[string]bool) bool {
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return len(a) == len(b)
+}
+
 // company is what the stream knows about one served company.
 type company struct {
 	unrestricted bool
@@ -266,6 +275,13 @@ func (h *HTTPHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
 			q := map[string]bool{}
 			for _, id := range c.queues {
 				q[id] = true
+			}
+			if prev, had := companies[c.tenant]; had && (prev.unrestricted != c.unrestricted || len(prev.queues) != len(q) || !sameKeys(prev.queues, q)) {
+				for key := range cache { // what was learned under the old list is forgotten
+					if key[0] == c.tenant {
+						delete(cache, key)
+					}
+				}
 			}
 			companies[c.tenant] = company{unrestricted: c.unrestricted, queues: q}
 			if subs[c.tenant] != nil {

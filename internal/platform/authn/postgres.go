@@ -123,9 +123,9 @@ func (r *PostgresIdentityResolver) ResolveIdentity(ctx context.Context, issuer, 
 // Email/display_name are attributes and are updated on each login.
 func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer, subject, email, displayName string, emailVerified bool) (uuid.UUID, error) {
 	var userID uuid.UUID
-	// applyAuthorizations: whether this sign-in may bring along what was authorized for the person's e-mail (afterProvision). It is a NEW identity, or the same
-	// identity whose SAME address has just become verified. An existing identity whose address CHANGED at the identity provider does not: otherwise anybody
-	// able to edit their own address there could take the address an administrator authorized for somebody else (Codex pre-gate, 2026-10-12).
+	// applyAuthorizations: whether this sign-in may bring along what was authorized for the person's e-mail (afterProvision). It is a NEW identity, or an existing
+	// one signing in with the SAME verified address it already had (so a failed application is retried). An existing identity whose address CHANGED at the identity
+	// provider does not: otherwise anybody able to edit their own address there could take the address an administrator authorized for somebody else (Codex pre-gate).
 	applyAuthorizations := false
 	err := platformdb.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(scoped context.Context) error {
 		q := platformdb.QuerierFromContext(scoped, r.pool)
@@ -134,7 +134,9 @@ func (r *PostgresIdentityResolver) ProvisionIdentity(ctx context.Context, issuer
 		if err := q.QueryRow(scoped, `
 			SELECT user_id, COALESCE(email, ''), COALESCE(email_verified, false) FROM user_identities WHERE issuer=$1 AND subject=$2
 		`, issuer, subject).Scan(&userID, &wasEmail, &wasVerified); err == nil {
-			applyAuthorizations = !wasVerified && emailVerified && strings.EqualFold(strings.TrimSpace(wasEmail), strings.TrimSpace(email))
+			// the SAME address, verified now: this is also the retry of an application that failed at an earlier sign-in (it is idempotent and applies only what is still pending)
+			applyAuthorizations = emailVerified && strings.EqualFold(strings.TrimSpace(wasEmail), strings.TrimSpace(email))
+			_ = wasVerified
 			if _, err := q.Exec(scoped, `
 				UPDATE user_identities
 				SET email=$3, display_name=$4, email_verified=$5, last_login_at=NOW()

@@ -532,7 +532,8 @@ func (s *Service) SetManage(ctx context.Context, hub, tenant, user uuid.UUID, ca
 		}
 		// the contract must be live and stay live until this transaction ends (a suspension in flight waits for it): management cannot be staged on an ended contract
 		var contract string
-		if err := q.QueryRow(c, `SELECT status FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR SHARE`, hub, tenant).Scan(&contract); err != nil {
+		if err := q.QueryRow(c, `SELECT CASE WHEN status = 'active' AND valid_from <= now() AND (valid_until IS NULL OR valid_until > now()) THEN 'active' ELSE status || ' (not valid now)' END
+		                         FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR SHARE`, hub, tenant).Scan(&contract); err != nil {
 			return mapNoRows(err, "no contract between hub %s and tenant %s", hub, tenant)
 		}
 		if contract != "active" {

@@ -70,7 +70,7 @@ func main() {
 		}
 		log.Printf("WARNING: %v -- RLS is NOT enforced for this process", err)
 	}
-	if _, err := platformdb.CheckSessionContext(context.Background(), dbPool, os.Getenv("OMNIRA_SESSION_CTX_REQUIRE_ENFORCE") == "true"); err != nil {
+	if _, err := platformdb.CheckSessionContext(context.Background(), dbPool, cfg.SessionCtxRequireEnforce); err != nil {
 		log.Fatalf("refusing to start: %v", err)
 	}
 

@@ -31,7 +31,9 @@ func TestAuditAndOutboxInsertsAreScopedToThePersonsCompanies(t *testing.T) {
 	other := w.user("somebody-else")
 	w.directMember(other, "B")
 	agent := w.hubAgent("hub-agent")
-	w.grant(agent, "A") // serves A only
+	w.grantReply(agent, "A") // serves A only, and may reply
+	readonly := w.hubAgent("read-only-agent")
+	w.grant(readonly, "A") // may read A, may not reply
 
 	w.inSession(member, func(ctx context.Context, q platformdb.Querier) {
 		if err := w.tryAudit(q, ctx, w.tenant["A"], member); err != nil {
@@ -75,13 +77,26 @@ func TestAuditAndOutboxInsertsAreScopedToThePersonsCompanies(t *testing.T) {
 			t.Errorf("a Hub agent enqueued an event of a company they do not serve: %v", err)
 		}
 	})
-	// no company at all is allowed for the person's own events, and the actor still has to be the person
+	// a READ-ONLY Hub grant may leave its own audit trail but cannot enqueue a job (an outbox row can become a message to a customer)
+	w.inSession(readonly, func(ctx context.Context, q platformdb.Querier) {
+		if err := w.tryAudit(q, ctx, w.tenant["A"], readonly); err != nil {
+			t.Errorf("a read-only Hub agent writing its own audit row: %v", err)
+		}
+	})
+	w.inSession(readonly, func(ctx context.Context, q platformdb.Querier) {
+		if err := w.tryOutbox(q, ctx, w.tenant["A"]); !denied(err) {
+			t.Errorf("a READ-ONLY Hub grant enqueued an outbox job: %v", err)
+		}
+	})
+	// no company at all: only the person's OWN event (the actor is the person); an actor-less global row is not for a person to write
 	w.inSession(member, func(ctx context.Context, q platformdb.Querier) {
 		if err := w.tryAudit(q, ctx, nil, member); err != nil {
 			t.Errorf("a company-less audit row of the person: %v", err)
 		}
-		if err := w.tryAudit(q, ctx, nil, nil); err != nil {
-			t.Errorf("an actor-less audit row: %v", err)
+	})
+	w.inSession(member, func(ctx context.Context, q platformdb.Querier) {
+		if err := w.tryAudit(q, ctx, nil, nil); !denied(err) {
+			t.Errorf("an actor-less, company-less audit row was accepted from a person's session: %v", err)
 		}
 	})
 	w.inSession(member, func(ctx context.Context, q platformdb.Querier) {

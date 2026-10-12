@@ -43,7 +43,6 @@ func TestSameOriginCheckForCookieRequests(t *testing.T) {
 		{"no origin and no referer on a state-changing request", req("PUT", "omnira.example", "", ""), false},
 		{"no origin, the referer is the application", req("PATCH", "10.0.0.5:3000", "", "https://omnira.example/inbox"), true},
 		{"no origin, the referer is another site", req("POST", "omnira.example", "", "https://evil.example/page"), false},
-		{"origin equal to the host the request was addressed to", req("POST", "intranet.local:8443", "https://intranet.local:8443", ""), true},
 		{"a loopback origin (a developer machine)", req("POST", "omnira.example", "http://localhost:3000", ""), true},
 		{"a loopback address", req("POST", "omnira.example", "http://127.0.0.1:20081", ""), true},
 		{"a look-alike of loopback is not loopback", req("POST", "omnira.example", "http://localhost.evil.example", ""), false},
@@ -53,11 +52,20 @@ func TestSameOriginCheckForCookieRequests(t *testing.T) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
-	// a proxy in front rewrites Host: X-Forwarded-Host names the address the browser used
-	r := req("POST", "web:80", "https://public.example", "")
-	r.Header.Set("X-Forwarded-Host", "public.example")
-	if !sameOriginOK(r) {
-		t.Error("X-Forwarded-Host should name the browser's address")
+	// X-Forwarded-Host is client-controlled and not overwritten by the proxies: it must never make a foreign origin pass
+	r := req("POST", "web:80", "https://evil.example", "")
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	if sameOriginOK(r) {
+		t.Error("a client-supplied X-Forwarded-Host made a foreign origin pass")
+	}
+	// with the public address configured the Host comparison is off; with nothing configured it is the fallback
+	EnableOriginCheck()
+	if !sameOriginOK(req("POST", "intranet.local:8443", "https://intranet.local:8443", "")) {
+		t.Error("with no origin configured the Host of the request is the fallback")
+	}
+	EnableOriginCheck("https://omnira.example")
+	if sameOriginOK(req("POST", "intranet.local:8443", "https://intranet.local:8443", "")) {
+		t.Error("with the public address configured, a host that is not on the list passed because the request was addressed to it")
 	}
 }
 

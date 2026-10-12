@@ -90,6 +90,10 @@ type Config struct {
 	AllowedOrigins []string
 	OriginCheck    bool
 
+	// SessionCtxRequireEnforce: refuse to start unless the database trusts ONLY signed session contexts (ADR-0042 mode enforce). Explicit OMNIRA_SESSION_CTX_REQUIRE_ENFORCE
+	// wins; unset means ON whenever real sign-in (OIDC) is configured, because that is when there are real people whose identity a forged setting would let anyone take.
+	SessionCtxRequireEnforce bool
+
 	SMTPHost           string
 	SMTPPort           int
 	SMTPUsername       string
@@ -191,6 +195,7 @@ func Load() *Config {
 		WebBaseURL:                    os.Getenv("OMNIRA_WEB_BASE_URL"),
 		AllowedOrigins:                splitList(os.Getenv("OMNIRA_ALLOWED_ORIGINS")),
 		OriginCheck:                   getEnv("OMNIRA_ORIGIN_CHECK", "true") != "false",
+		SessionCtxRequireEnforce:      sessionCtxRequireEnforce(getEnv("OMNIRA_AUTH_MODE", "mock")),
 		SMTPHost:                      os.Getenv("OMNIRA_SMTP_HOST"),
 		SMTPPort:                      getEnvInt("OMNIRA_SMTP_PORT", 587),
 		SMTPUsername:                  os.Getenv("OMNIRA_SMTP_USERNAME"),
@@ -356,6 +361,17 @@ func DevAuthEnvAllowed(env string) bool {
 // não exista um caminho em que uma delas discorde das outras.
 func (c *Config) DevAuthActive() bool {
 	return c.DevAuthEnabled && DevAuthEnvAllowed(c.Env)
+}
+
+// sessionCtxRequireEnforce: the explicit setting wins ("true"/"false"); unset means on when the sign-in is OIDC.
+func sessionCtxRequireEnforce(authMode string) bool {
+	switch os.Getenv("OMNIRA_SESSION_CTX_REQUIRE_ENFORCE") {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	return authMode == "oidc"
 }
 
 // splitList parses a comma-separated env value into trimmed, non-empty items.

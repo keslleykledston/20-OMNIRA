@@ -26,7 +26,9 @@ export function saveSession(token: string, tenantId: string | undefined, user: u
 	queryClient.clear();
 	if (token) localStorage.setItem(TOKEN_KEY, token);
 	else localStorage.removeItem(TOKEN_KEY);
+	// a person with no company of their own (Hub only) must not inherit the company of whoever was here before
 	if (tenantId) localStorage.setItem(TENANT_KEY, tenantId);
+	else localStorage.removeItem(TENANT_KEY);
 	localStorage.setItem(USER_KEY, JSON.stringify(user));
 	localStorage.setItem(SESSION_KEY, 'true');
 }

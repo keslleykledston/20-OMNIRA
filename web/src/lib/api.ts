@@ -1,7 +1,6 @@
 import axios from 'axios'
 import { endSessionUrlFrom } from './logout'
-import { forgetAllTabs } from './hubTabs'
-import { queryClient } from './queryClient'
+import { clearSession } from './session'
 
 const api = axios.create({
   baseURL: '/api',
@@ -23,8 +22,7 @@ api.interceptors.response.use(
   response => response,
   error => {
     if (error.response?.status === 401 && !window.location.pathname.includes('/login')) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+      clearSession()
       // Usar replace para evitar histórico
       window.location.replace('/login')
     }
@@ -61,11 +59,9 @@ export const authAPI = {
   },
   logout: async () => {
     const res = await api.post('/v1/auth/logout').catch(() => undefined)
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    // the attendances kept open in the Hub inbox (ids only) do not pass to whoever signs in next in this browser tab
-    forgetAllTabs()
-    queryClient.clear()
+    // the whole session ends here: credentials, tenant, acting context, the attendances kept open in the Hub inbox, the query cache, unsent drafts and tickets in
+    // creation (clearSession) - not just the two keys this used to remove, so no path of sign-out leaves what one person did for the next
+    clearSession()
     // When set, the caller must send the browser there so the identity provider's
     // own session ends too (otherwise the next login reuses the previous account).
     return { data: { status: 'ok', endSessionUrl: endSessionUrlFrom(res?.data) } }

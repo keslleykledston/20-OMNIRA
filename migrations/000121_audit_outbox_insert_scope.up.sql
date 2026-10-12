@@ -16,7 +16,7 @@ CREATE POLICY audit_events_insert_scoped ON audit_events FOR INSERT
     is_system_admin()
     OR (current_user_id() IS NOT NULL
         AND (actor_id IS NULL OR actor_id = current_user_id())
-        AND (tenant_id IS NULL
+        AND ((tenant_id IS NULL AND actor_id = current_user_id())  -- a global event is the person's own
              OR has_active_membership(tenant_id, current_user_id())
              OR has_active_hub_access(current_user_id(), tenant_id, NULL, NULL, false)
              OR has_hub_manage_access(tenant_id, current_user_id())))
@@ -28,7 +28,8 @@ CREATE POLICY outbox_events_insert_scoped ON outbox_events FOR INSERT
     is_system_admin()
     OR (current_user_id() IS NOT NULL
         AND (has_active_membership(tenant_id, current_user_id())
-             OR has_active_hub_access(current_user_id(), tenant_id, NULL, NULL, false)
+             -- an outbox row can become a message to a customer: only a Hub grant that may REPLY (not a read-only one), or the Hub manager of the company
+             OR has_active_hub_access(current_user_id(), tenant_id, NULL, NULL, false, true)
              OR has_hub_manage_access(tenant_id, current_user_id())))
   );
 

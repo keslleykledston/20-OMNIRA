@@ -438,7 +438,9 @@ func (s *Service) RemoveInstanceAdmin(ctx context.Context, actor, hub, tenant, u
 func requireContract(ctx context.Context, q platformdb.Querier, hub, tenant uuid.UUID) error {
 	notFound := fmt.Errorf("%w: no active instance %s in this hub", ErrNotFound, tenant)
 	var contract string
-	if err := q.QueryRow(ctx, `SELECT status FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR SHARE`, hub, tenant).Scan(&contract); err != nil {
+	// status AND validity window: a contract that is still marked active after valid_until (or before valid_from) delegates nothing
+	if err := q.QueryRow(ctx, `SELECT CASE WHEN status = 'active' AND valid_from <= now() AND (valid_until IS NULL OR valid_until > now()) THEN 'active' ELSE status || '-not-valid-now' END
+	                           FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 FOR SHARE`, hub, tenant).Scan(&contract); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return notFound
 		}

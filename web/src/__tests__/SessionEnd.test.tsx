@@ -42,5 +42,23 @@ describe('ending a session forgets what the person loaded and typed', () => {
     await authAPI.logout();
     expect(queryClient.getQueryData(['my-tenants'])).toBeUndefined();
   });
+
+  it('the logout of the API layer ends the WHOLE session (credentials, company, acting context, tabs, drafts), not two keys', async () => {
+    localStorage.setItem('token', 't');
+    localStorage.setItem('user', '{}');
+    localStorage.setItem('tenantId', 'tenant-1');
+    localStorage.setItem('sessionActive', 'true');
+    localStorage.setItem('actingHub', 'hub-1');
+    sessionStorage.setItem('omnira.hub.tabs.hub-1', '{"ids":["a"],"selected":"a"}');
+    await authAPI.logout();
+    for (const k of ['token', 'user', 'tenantId', 'sessionActive', 'actingHub']) expect(localStorage.getItem(k), k).toBeNull();
+    expect(sessionStorage.getItem('omnira.hub.tabs.hub-1')).toBeNull();
+  });
+
+  it('a session without a company (Hub only) does not keep the company of the previous person', () => {
+    localStorage.setItem('tenantId', 'tenant-of-alice');
+    saveSession('', undefined, { id: 'hugo' });
+    expect(localStorage.getItem('tenantId')).toBeNull();
+  });
 });
 
