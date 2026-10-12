@@ -791,8 +791,9 @@ paths:
       tags: [Agents]
       summary: Point a channel line at a queue (sector), or clear it
       description: |
-        Requires `agent.manage`. `queue_id: null` clears the rule and the line goes back to the default queue. Affects only
-        conversations created afterwards: a conversation already routed never moves. A line or queue of another tenant and
+        Requires `agent.manage` and `channel.manage` (the line is channel configuration; a supervisor has the first but not the
+        second: `403`). `queue_id: null` clears the rule and the line goes back to the default queue. Affects conversations
+        routed afterwards: a conversation already routed never moves. A line or queue of another tenant and
         an unknown id are indistinguishable (`404`). Audited as `channel.line_queue_changed`. A queue a line points at cannot
         be deleted (`409`).
       parameters:

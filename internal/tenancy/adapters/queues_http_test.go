@@ -414,6 +414,18 @@ func TestLineQueueRuleIsPermissionedTenantScopedAuditedAndGuardsDelete(t *testin
 	if got := set(agent, a.tenantID, lineA, `{"queue_id":"`+fin.String()+`"}`).Code; got != http.StatusForbidden {
 		t.Fatalf("an agent must not set the rule: %d", got)
 	}
+	// a supervisor manages queues (agent.manage) but not channels: the line is channel configuration, and the row policy would
+	// filter the update out - the answer must be a refusal, never a success with an audit event for a change that did not happen
+	supervisor := seedTeamMember(t, seed, a.tenantID, "tenant_supervisor", "active")
+	if got := set(supervisor, a.tenantID, lineA, `{"queue_id":"`+fin.String()+`"}`).Code; got != http.StatusForbidden {
+		t.Fatalf("a supervisor must not set the rule: %d", got)
+	}
+	if auditCount(t, seed, a.tenantID, "channel.line_queue_changed") != 0 {
+		t.Fatal("a refused change must not be audited as done")
+	}
+	if got := callQueues(t, app, a.tenantID, supervisor, http.MethodGet, h.ListLineQueues, nil, "").Code; got != http.StatusOK {
+		t.Fatalf("a supervisor may read the rules: %d", got)
+	}
 	if got := set(admin, a.tenantID, lineA, `{"queue_id":"`+fin.String()+`"}`).Code; got != http.StatusOK {
 		t.Fatalf("admin set = %d", got)
 	}

@@ -376,6 +376,11 @@ func (h *QueuesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := q.Exec(r.Context(), `DELETE FROM queues WHERE tenant_id = $1 AND id = $2`, tc.TenantID, id); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" { // a line (or a conversation) was pointed at the queue between the check and the delete
+			http.Error(w, "the queue is still in use and cannot be deleted", http.StatusConflict)
+			return
+		}
 		http.Error(w, "failed to delete queue", http.StatusInternalServerError)
 		return
 	}
@@ -424,12 +429,17 @@ type setLineQueueRequest struct {
 	QueueID *uuid.UUID `json:"queue_id"`
 }
 
-// SetLineQueue points a channel line at a queue, or clears it. Only affects conversations created after the change: a
+// SetLineQueue points a channel line at a queue, or clears it. Affects conversations routed after the change: a
 // conversation already routed never moves. The line and the queue must both belong to the caller's tenant (RLS and the
 // composite foreign key); anything else is a plain 404, so existence in another tenant is not revealed.
 func (h *QueuesHandler) SetLineQueue(w http.ResponseWriter, r *http.Request) {
 	tc, ok := h.authorize(w, r, "agent.manage")
 	if !ok {
+		return
+	}
+	// the line is channel configuration: the row policy of channel_connections lets only a tenant administrator update it, and
+	// `channel.manage` is the permission that names that power (a supervisor has agent.manage but not this one)
+	if _, ok := h.authorize(w, r, "channel.manage"); !ok {
 		return
 	}
 	connID, err := uuid.Parse(r.PathValue("connection_id"))
@@ -463,8 +473,13 @@ func (h *QueuesHandler) SetLineQueue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read channel line", http.StatusInternalServerError)
 		return
 	}
-	if _, err := q.Exec(r.Context(), `UPDATE channel_connections SET default_queue_id = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, connID, req.QueueID); err != nil {
+	tag, err := q.Exec(r.Context(), `UPDATE channel_connections SET default_queue_id = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`, tc.TenantID, connID, req.QueueID)
+	if err != nil {
 		http.Error(w, "failed to set the line queue", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() != 1 { // the row policy filtered the update out: never answer success (nor audit) for a change that did not happen
+		http.Error(w, "not allowed to change this channel line", http.StatusForbidden)
 		return
 	}
 	meta := map[string]any{}

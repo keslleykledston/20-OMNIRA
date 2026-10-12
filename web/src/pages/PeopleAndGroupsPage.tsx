@@ -88,6 +88,7 @@ export default function PeopleAndGroupsPage() {
         people={people}
         groups={groups}
         canManage={canManage}
+        canManageLines={access.can('channel.manage')}
         busyKey={busyKey}
         actionError={actionError}
         onMakeOperator={(membershipId) => void run(membershipId, () => agentsAPI.create(membershipId))}

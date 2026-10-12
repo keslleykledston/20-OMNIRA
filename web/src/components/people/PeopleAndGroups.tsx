@@ -37,6 +37,8 @@ export interface PeopleAndGroupsProps {
   people: Loadable<PersonRow>
   groups: Loadable<GroupRow>
   canManage: boolean
+  /** channel.manage as well: pointing a line at a group is channel configuration (tenant administrator). */
+  canManageLines?: boolean
   /** id of the item being changed: its controls are disabled while it runs. */
   busyKey?: string | null
   actionError?: string | null
@@ -518,7 +520,7 @@ function GroupsView(props: PeopleAndGroupsProps) {
           ))}
         </ul>
       )}
-      <LineEntryRules groups={groups.items} canManage={canManage} />
+      <LineEntryRules groups={groups.items} canManage={canManage && !!props.canManageLines} />
       {creating && (
         <NewGroupModal
           busy={busyKey === 'new-group'}
