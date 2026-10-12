@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { hubAPI, type HubCompanyOption, type HubInboxItem, type HubItemDetail, type HubSegmentCounts } from '../lib/hub';
 import { enterDelegatedInstance, switchTenant } from '../lib/tenants';
@@ -34,6 +34,7 @@ function emptyText(view: HubView, search: string, filtered: boolean): string {
 }
 
 export default function HubInboxPage({ hubId: preferredHub = '', embedded = false, onlyCompany = '', notice }: { hubId?: string; embedded?: boolean; onlyCompany?: string; notice?: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const hubs = useMyHubs();
   const myTenants = useMyTenants();
   const [filter, setFilter] = useState<{ hub: string; ids: string[] }>({ hub: '', ids: [] });
@@ -96,7 +97,13 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   useEffect(() => {
     if (!fresh) return;
     const ids = new Set(fresh.map((c) => c.id));
-    setOpened((cur) => (cur.hub === hubId && cur.tabs.some((t) => !ids.has(t.tenantId)) ? { hub: hubId, tabs: cur.tabs.filter((t) => ids.has(t.tenantId)) } : cur));
+    const gone = allOpenTabs.filter((t) => !ids.has(t.tenantId));
+    if (gone.length === 0) return;
+    setOpened({ hub: hubId, tabs: allOpenTabs.filter((t) => ids.has(t.tenantId)) });
+    // what was loaded of those attendances is not kept either (the cache would keep rendering messages the person may no longer read), nor is the selection
+    for (const t of gone) queryClient.removeQueries({ queryKey: ['hub-item', hubId, t.id] });
+    if (gone.some((t) => t.id === selected)) setSelection({ hub: hubId, id: '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fresh, hubId]);
   // The tabs' counters come with the first page; keep the last known ones while a narrower request is in flight so they do not blink.
   const lastCounts = useRef<{ hub: string; counts?: HubSegmentCounts }>({ hub: '' });
@@ -195,7 +202,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
       <div
         className={clsx(
           'grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] md:grid-cols-[360px_minmax(0,1fr)]',
-          wide && showContext && detail.data && selected && 'min-[1440px]:grid-cols-[360px_minmax(0,1fr)_320px]',
+          wide && showContext && detail.data && !detail.isError && selected && 'min-[1440px]:grid-cols-[360px_minmax(0,1fr)_320px]',
         )}
       >
         {showList && (
@@ -228,7 +235,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
                 />
               </div>
             )}
-            {selected && detail.data && (
+            {selected && detail.data && !detail.isError && (
               <HubItemView
                 hubId={hubId}
                 detail={detail.data}
@@ -240,14 +247,14 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
           </section>
         )}
         {/* The details of the attendance: a third column when there is room, otherwise a drawer opened from the conversation header */}
-        {wide && showContext && selected && detail.data && (
+        {wide && showContext && selected && detail.data && !detail.isError && (
           <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-border-subtle">
             <HubContextPane detail={detail.data} fullContext={fullContextOf(detail.data)} onOpenFull={() => openFull(detail.data!)} />
           </div>
         )}
       </div>
       {!wide && (
-        <Drawer open={drawerOpen && !!selected && !!detail.data} title="Detalhes do atendimento" onClose={() => setDrawerOpen(false)}>
+        <Drawer open={drawerOpen && !!selected && !!detail.data && !detail.isError} title="Detalhes do atendimento" onClose={() => setDrawerOpen(false)}>
           {detail.data && <HubContextPane detail={detail.data} fullContext={fullContextOf(detail.data)} onOpenFull={() => openFull(detail.data!)} />}
         </Drawer>
       )}

@@ -337,6 +337,10 @@ describe('Hub layout contract — which company is being served, and the attenda
     await user.click(screen.getByRole('tab', { name: /Minhas/ })); // any new read of the list brings the companies the person may serve now
     await waitFor(() => expect(within(screen.getByRole('tablist', { name: 'Atendimentos abertos' })).getAllByRole('tab')).toHaveLength(1));
     expect(screen.queryByText('Cliente b', { selector: 'strong, span' })).toBeNull();
+    // and the attendance that was open on screen goes with it: no cached messages of a company the person may no longer read
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Cliente b' })).toBeNull());
+    expect(screen.queryByText('Sem internet desde ontem')).toBeNull();
+    expect(screen.getByText('Selecione uma conversa')).toBeInTheDocument();
   });
 
   it('a conversation that can no longer be opened does not stay as a tab', async () => {

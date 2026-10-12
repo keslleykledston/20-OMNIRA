@@ -170,9 +170,17 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	// A query string Go cannot parse (a stray semicolon, a bad escape) would make net/url drop the offending parameter SILENTLY, turning a
 	// mistyped segment into "everything": refuse it instead.
-	if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {
+	parsed, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
 		httpError(w, "invalid query", http.StatusBadRequest)
 		return
+	}
+	// Url.Query().Get reads only the FIRST value: `segment=open&segment=nope` would be accepted as "open". The parameters that narrow the page are single-valued.
+	for _, key := range []string{"segment", "q", "include", "companies"} {
+		if len(parsed[key]) > 1 {
+			httpError(w, "repeated parameter: "+key, http.StatusBadRequest)
+			return
+		}
 	}
 	// `segment` and `q` only narrow the page (the queue of pending attendances, mine, the history; a search by customer name).
 	query := strings.TrimSpace(r.URL.Query().Get("q"))

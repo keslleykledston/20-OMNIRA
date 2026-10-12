@@ -94,4 +94,5 @@ mut "the holder is read from the lagging projection" $PG "CASE WHEN c.id IS NULL
 mut "the finalized state is read from the lagging projection" $PG "CASE WHEN c.id IS NULL THEN i.status ELSE c.status END AS status" "i.status AS status"
 mut "opening an item reads the lagging projection" $PG "FROM \`+liveInbox+\` li WHERE hub_id = \$1 AND id = \$2\`, hubID, itemID" "FROM hub_inbox_items WHERE hub_id = \$1 AND id = \$2\`, hubID, itemID"
 mut "the queue is read from the lagging projection" $PG "CASE WHEN c.id IS NULL THEN i.queue_id ELSE c.queue_id END AS queue_id," "i.queue_id AS queue_id,"
+mut "a repeated narrowing parameter is accepted" $HT "if len(parsed[key]) > 1 {" "if len(parsed[key]) > 100 {"
 echo "== done: $N mutants"

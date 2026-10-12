@@ -73,7 +73,7 @@ export default function HubInboxToolbar({ view, onViewChange, search, onSearchCh
                 type="button"
                 role="tab"
                 aria-selected={view === f.id}
-                aria-label={typeof n === 'number' && n > 0 ? `${f.label} (${n})` : f.label}
+                aria-label={typeof n === 'number' && n > 0 ? `${f.label} (${n > 99 ? '99+' : n})` : f.label}
                 onClick={() => onViewChange(f.id)}
                 className={clsx(
                   'flex h-7 items-center justify-center gap-1 rounded-control px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',

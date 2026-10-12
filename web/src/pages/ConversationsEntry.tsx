@@ -191,7 +191,7 @@ export default function ConversationsEntry() {
   if (lost) {
     body = <AccessLostNotice />;
   } else if (active === ALL) {
-    body = nav ? <LoadingState message="Voltando ao seu ambiente…" /> : <HubInboxPage key="all" hubId={hubWithMany} embedded />;
+    body = nav ? <LoadingState message="Voltando ao seu ambiente…" /> : <HubInboxPage key={`all:${hubWithMany}`} hubId={hubWithMany} embedded />;
   } else if (activeInstance?.member) {
     body = !nav ? <InboxWorkspace key={active} /> : navBlocked ? stuck : <LoadingState message="Abrindo a instância…" />;
   } else if (delegated) {
@@ -201,7 +201,7 @@ export default function ConversationsEntry() {
       <LoadingState message="Voltando ao seu ambiente…" />
     ) : (
       <HubInboxPage
-        key={active}
+        key={`${active}:${activeInstance.hubId}`}
         hubId={activeInstance.hubId}
         embedded
         onlyCompany={active}

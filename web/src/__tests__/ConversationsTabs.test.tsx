@@ -104,6 +104,14 @@ describe('Conversas tabs', () => {
     expect(screen.getByRole('tab', { name: 'Gama Hub' })).toBeInTheDocument();
   });
 
+  it('a big number is said the way it is seen: "99+" in the accessible name too', async () => {
+    mine = [T1];
+    companies = [{ id: 'T1', name: 'Alfa', unanswered: 150 }, { id: 'B', name: 'Beta Hub', unanswered: 3 }];
+    renderAt(<ConversationsEntry />);
+    expect(await screen.findByRole('tab', { name: 'Alfa (99+)' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Todas (99+)' })).toBeInTheDocument();
+  });
+
   it('an instance served by two hubs keeps the way in and the number of the first (never summed: they are the same conversations)', async () => {
     mine = [T1];
     hubs = [{ id: 'hub-1', name: 'K3G', role: 'hub_agent' }, { id: 'hub-2', name: 'Outro', role: 'hub_agent' }];

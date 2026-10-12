@@ -65,7 +65,7 @@ export function Tabs<T extends string>({
             role="tab"
             type="button"
             aria-selected={active}
-            aria-label={item.count ? `${item.label} (${item.count})` : undefined}
+            aria-label={item.count ? `${item.label} (${item.count > 99 ? '99+' : item.count})` : undefined}
             disabled={item.disabled}
             tabIndex={active ? 0 : -1}
             onClick={() => onChange(item.id)}

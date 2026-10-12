@@ -112,8 +112,8 @@ func TestHubInbox_SegmentsSeparateThePendingQueueFromTheHistory(t *testing.T) {
 		}
 	}
 
-	// an unknown segment is a 400, never a silent "everything"
-	for _, bad := range []string{"?segment=nope", "?segment=OPEN", "?segment=waiting;drop", "?segment=%27"} {
+	// an unknown segment is a 400, never a silent "everything"; so is a repeated narrowing parameter (only the first value would be read: `segment=open&segment=nope` is not "open")
+	for _, bad := range []string{"?segment=nope", "?segment=OPEN", "?segment=waiting;drop", "?segment=%27", "?segment=open&segment=nope", "?q=a&q=b", "?include=counts&include=secrets", "?companies=" + w.tenant["A"].String() + "&companies=" + w.tenant["B"].String()} {
 		if code, _ := api.segment(agent, bad); code != 400 {
 			t.Errorf("%s: %d, want 400", bad, code)
 		}
@@ -375,5 +375,33 @@ func TestHubInbox_TheQueueIsReadLiveByTheListAndByOpeningAnItem(t *testing.T) {
 	}
 	if code, _ := api.open(u, w.hub, w.itemID("A")); code != 404 {
 		t.Fatalf("a conversation moved out of the contract's queues still opens: %d", code)
+	}
+}
+
+// The counters follow what the contract's queues let the caller read: with a contract limited to one queue the tab of that company counts only
+// that queue's conversations (RLS on the conversation), never the company's whole inbox.
+func TestHubInbox_CountersRespectTheQueueScopeOfTheContract(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	u := w.hubAgent("scoped-counts")
+	w.grant(u, "A")
+	w.exec(`UPDATE hub_tenant_service_contracts SET service_scope = $2::jsonb WHERE id = $1`, w.contract["A"], fmt.Sprintf(`{"queue_ids":["%s"]}`, w.queue1["A"]))
+	for _, k := range []string{"A", "A2", "A0"} {
+		w.exec(`UPDATE hub_inbox_items SET status = 'open', unread_count = 1 WHERE conversation_id = $1`, w.conv[k])
+	}
+	code, body, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox?include=counts,company_counts", w.hub), u, nil)
+	if code != 200 {
+		t.Fatalf("%d", code)
+	}
+	var b struct {
+		Counts    struct{ Open, Waiting int } `json:"counts"`
+		Companies []struct {
+			Open       int `json:"open"`
+			Unanswered int `json:"unanswered"`
+		} `json:"companies"`
+	}
+	w.must(json.Unmarshal([]byte(body), &b))
+	if b.Counts.Open != 1 || len(b.Companies) != 1 || b.Companies[0].Open != 1 || b.Companies[0].Unanswered != 1 {
+		t.Fatalf("a contract limited to one queue must count only that queue (A has 3 open conversations, only q1 is readable): %s", body)
 	}
 }
