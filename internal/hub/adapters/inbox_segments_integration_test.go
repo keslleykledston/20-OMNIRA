@@ -1,12 +1,18 @@
 package adapters_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/hub/adapters"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
 type segItem struct {
@@ -403,5 +409,46 @@ func TestHubInbox_CountersRespectTheQueueScopeOfTheContract(t *testing.T) {
 	w.must(json.Unmarshal([]byte(body), &b))
 	if b.Counts.Open != 1 || len(b.Companies) != 1 || b.Companies[0].Open != 1 || b.Companies[0].Unanswered != 1 {
 		t.Fatalf("a contract limited to one queue must count only that queue (A has 3 open conversations, only q1 is readable): %s", body)
+	}
+}
+
+// The Hub's own list is read without JIT compilation (measured: 146 ms with it, 89 ms without, 10 000 items): the setting belongs to the request's transaction only.
+func TestHubInbox_TheListRunsWithoutJITAndTheSettingDoesNotLeak(t *testing.T) {
+	w := newWorld(t)
+	agent := w.hubAgent("agent")
+	w.grant(agent, "A")
+	h := adapters.NewHTTPHandler(w.app)
+	session := tenancyadapters.UserSessionMiddleware(w.app)
+	var inside string
+	probe := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		h.ListInbox(rw, r)
+		w.must(platformdb.QuerierFromContext(r.Context(), w.app).QueryRow(r.Context(), `SELECT current_setting('jit')`).Scan(&inside))
+	})
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/hubs/{hub_id}/inbox", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		session(probe).ServeHTTP(rw, r.WithContext(contextWithPrincipal(r, agent)))
+	}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/v1/hubs/" + w.hub.String() + "/inbox")
+	w.must(err)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if inside != "off" {
+		t.Errorf("jit during the list's transaction = %q, want off", inside)
+	}
+	// a later transaction of the same pool is untouched
+	var after string
+	w.inSession(agent, func(ctx context.Context, q platformdb.Querier) {
+		w.must(q.QueryRow(ctx, `SELECT current_setting('jit')`).Scan(&after))
+	})
+	if after == "off" {
+		var server string
+		w.must(w.owner.QueryRow(w.ctx, `SELECT current_setting('jit')`).Scan(&server))
+		if server != "off" {
+			t.Error("the setting leaked out of the list's transaction")
+		}
 	}
 }

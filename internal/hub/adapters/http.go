@@ -146,6 +146,13 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// noJIT turns JIT compilation off for the rest of THIS request's transaction. The policies behind the inbox make the plan look costly (nested function calls),
+// so PostgreSQL JIT-compiles ~160 functions for a statement that then runs in tens of milliseconds: measured 146 ms with it and 89 ms without, for the same
+// list at 10 000 items. The delegated context does the same in lock_served_tenant (migration 114); this is the Hub's own tab. Transaction-local, best effort.
+func (h *HTTPHandler) noJIT(ctx context.Context) {
+	_, _ = platformdb.QuerierFromContext(ctx, h.pool).Exec(ctx, `SELECT set_config('jit', 'off', true)`)
+}
+
 // ListInbox returns the hub inbox items the CALLER may see. RLS, running under the caller's session,
 // removes every tenant/queue they hold no live grant for; the handler never receives a tenant list.
 func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +160,7 @@ func (h *HTTPHandler) ListInbox(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.noJIT(r.Context())
 	if err := h.authz.AuthorizeHubMember(r.Context(), actor, hubID); err != nil {
 		writeAccessError(w, err)
 		return

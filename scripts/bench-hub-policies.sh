@@ -99,6 +99,8 @@ bench() {
   for i in 1 2 3 4 5 6; do
     sql+="BEGIN; $(ctx_begin_sql "$user") SELECT set_config('app.current_user_id','$user',true);"
     [ "$enter" = 1 ] && sql+="SELECT lock_served_tenant('$TA','$user','$HUB');"
+    # the Hub's own tab turns JIT off for its request (HTTPHandler.noJIT), like lock_served_tenant does for the delegated context
+    [ "$mode" = hubtab ] && sql+="SET LOCAL jit = off;"
     sql+="EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) $q; ROLLBACK;"$'\n'
   done
   printf '%s' "$sql" | app | python3 -c '
