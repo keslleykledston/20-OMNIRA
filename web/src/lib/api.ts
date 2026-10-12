@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { endSessionUrlFrom } from './logout'
+import { forgetAllTabs } from './hubTabs'
 
 const api = axios.create({
   baseURL: '/api',
@@ -61,6 +62,8 @@ export const authAPI = {
     const res = await api.post('/v1/auth/logout').catch(() => undefined)
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // the attendances kept open in the Hub inbox (ids only) do not pass to whoever signs in next in this browser tab
+    forgetAllTabs()
     // When set, the caller must send the browser there so the identity provider's
     // own session ends too (otherwise the next login reuses the previous account).
     return { data: { status: 'ok', endSessionUrl: endSessionUrlFrom(res?.data) } }

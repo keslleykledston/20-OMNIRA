@@ -38,7 +38,7 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 	type rowSeen struct{ conv, item bool }
 	keys := []string{"A", "A2", "A0", "B", "C"}
 	// what the policies show, and what the original function says, per conversation key
-	compare := func(t *testing.T) {
+	compareFor := func(t *testing.T, agent uuid.UUID) {
 		t.Helper()
 		got := map[string]rowSeen{}
 		want := map[string]rowSeen{}
@@ -71,6 +71,19 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 				t.Errorf("an inbox row of a hub the person holds no grant through is visible (%d)", n)
 			}
 		})
+		// the SET hub_reach() returns is the oracle's answer for every (hub, company) pair, not only what the policies make of it
+		w.inSession(agent, func(ctx context.Context, q platformdb.Querier) {
+			for _, hub := range []uuid.UUID{w.hub, hub2} {
+				for _, k := range []string{"A", "B", "C"} {
+					var inReach, oracle bool
+					w.must(q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM hub_reach() r WHERE r.hub_id = $1 AND r.tenant_id = $2)`, hub, w.tenant[k]).Scan(&inReach))
+					w.must(q.QueryRow(ctx, `SELECT has_active_hub_access(current_user_id(), $1, NULL, $2, false)`, w.tenant[k], hub).Scan(&oracle))
+					if inReach != oracle {
+						t.Errorf("hub_reach() lists (hub %s, company %s) = %v; the original function says %v", hub.String()[:8], k, inReach, oracle)
+					}
+				}
+			}
+		})
 		var shown []string
 		for _, k := range keys {
 			if got[k].conv {
@@ -80,6 +93,7 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 		t.Logf("visible conversations: %s", strings.Join(shown, ","))
 	}
 
+	compare := func(t *testing.T) { t.Helper(); compareFor(t, agent) }
 	scopeA := func(raw string) func() {
 		return func() {
 			w.exec(`UPDATE hub_tenant_service_contracts SET service_scope = $2::jsonb WHERE id = $1`, w.contract["A"], raw)
@@ -146,6 +160,13 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 			w.exec(`UPDATE effective_access_grants SET status = 'active' WHERE id = $1`, g2)
 			w.exec(`UPDATE hub_tenant_service_contracts SET valid_until = now() - interval '1 minute' WHERE id = $1`, contract2)
 		}},
+		{"grant valid from this very instant", func() {
+			w.exec(`UPDATE effective_access_grants SET valid_from = now() WHERE id = $1`, gA)
+		}},
+		{"grant and contract ending in the future", func() {
+			w.exec(`UPDATE effective_access_grants SET valid_until = now() + interval '1 hour' WHERE id = $1`, gA)
+			w.exec(`UPDATE hub_tenant_service_contracts SET valid_until = now() + interval '1 hour' WHERE id = $1`, w.contract["A"])
+		}},
 		{"company B grant revoked", func() { w.exec(`UPDATE effective_access_grants SET status = 'revoked' WHERE id = $1`, gB) }},
 	}
 	for _, c := range cases {
@@ -157,6 +178,56 @@ func TestHubReachPoliciesAnswerLikeTheOriginalFunction(t *testing.T) {
 			compare(t)
 		})
 	}
+
+	// another person: a hub member with NO grant, and a person with a grant for another company only, see none of A's rows
+	t.Run("a hub member without a grant, and a person whose only grant is elsewhere", func(t *testing.T) {
+		reset()
+		nogrant := w.hubAgent("nogrant")
+		compareFor(t, nogrant)
+		onlyB := w.hubAgent("only-b")
+		w.grant(onlyB, "B")
+		compareFor(t, onlyB)
+		var a int
+		w.inSession(onlyB, func(ctx context.Context, q platformdb.Querier) {
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM hub_inbox_items WHERE tenant_id = $1`, w.tenant["A"]).Scan(&a))
+		})
+		if a != 0 {
+			t.Errorf("a person with a grant on company B only sees %d inbox rows of company A", a)
+		}
+	})
+	t.Run("a forged identity without the signed session context sees nothing when the database enforces it", func(t *testing.T) {
+		reset()
+		if !w.enforced() {
+			t.Skip("the database is not in mode enforce; the legacy settings are trusted in off and measure")
+		}
+		tx, err := w.app.Begin(w.ctx)
+		w.must(err)
+		defer tx.Rollback(w.ctx)
+		_, err = tx.Exec(w.ctx, `SELECT set_config('app.current_user_id', $1, true)`, agent.String())
+		w.must(err)
+		var items, convs int
+		w.must(tx.QueryRow(w.ctx, `SELECT count(*) FROM hub_inbox_items`).Scan(&items))
+		w.must(tx.QueryRow(w.ctx, `SELECT count(*) FROM conversations`).Scan(&convs))
+		if items != 0 || convs != 0 {
+			t.Errorf("a forged identity reads %d inbox rows and %d conversations", items, convs)
+		}
+	})
+
+	t.Run("a hub membership removed ends the reach in both forms", func(t *testing.T) {
+		reset()
+		leaver := w.hubAgent("leaver")
+		w.grant(leaver, "A")
+		compareFor(t, leaver)
+		w.exec(`DELETE FROM hub_memberships WHERE hub_id = $1 AND user_id = $2`, w.hub, leaver)
+		compareFor(t, leaver)
+		var n int
+		w.inSession(leaver, func(ctx context.Context, q platformdb.Querier) {
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM hub_inbox_items`).Scan(&n))
+		})
+		if n != 0 {
+			t.Errorf("a person who left the hub still reads %d inbox rows", n)
+		}
+	})
 
 	// the baseline is not vacuous: an unrestricted agent sees conversations of A and B, none of C, and the policies are what hide the rest
 	t.Run("the baseline sees A and B and never C", func(t *testing.T) {

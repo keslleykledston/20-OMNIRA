@@ -27,6 +27,7 @@ func CheckSessionContext(ctx context.Context, q Querier, requireEnforce bool) (s
 			return "", fmt.Errorf("session context: the database does not report a mode (migration 000118 not applied?): %w", err)
 		}
 		log.Printf("session context: database without migration 000118; identities are the legacy settings")
+		sessionCtxEnforce.Set(0) // reported, not omitted: a database that does not enforce must show on the dashboard and fail hub-health-check.sh
 		return "legacy", nil
 	}
 	if mode == "enforce" {

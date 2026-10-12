@@ -70,7 +70,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
     }
   };
   // Restore the attendances that were open before a reload (ids only were kept, lib/hubTabs.ts): each is asked of the server again, so what comes back is what the
-  // person may read NOW, with the names the server says; an attendance that cannot be opened any more is simply not brought back. `restored` also keeps the
+  // person may read NOW (staleTime 0: a cached copy is never trusted here, a revoked access must not come back from memory), with the names the server says; an attendance that cannot be opened any more is simply not brought back. `restored` also keeps the
   // saving below from overwriting what was kept with the empty state of the first render.
   const [restored, setRestored] = useState('');
   useEffect(() => {
@@ -82,7 +82,7 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
     }
     let live = true;
     void Promise.allSettled(
-      saved.ids.map((id) => queryClient.fetchQuery({ queryKey: ['hub-item', hubId, id], queryFn: () => hubAPI.item(hubId, id), staleTime: 10_000 })),
+      saved.ids.map((id) => queryClient.fetchQuery({ queryKey: ['hub-item', hubId, id], queryFn: () => hubAPI.item(hubId, id), staleTime: 0 })),
     ).then((results) => {
       if (!live) return;
       const back: OpenAttendance[] = [];

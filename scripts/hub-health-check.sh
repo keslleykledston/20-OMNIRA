@@ -3,11 +3,11 @@
 # scripts/run-check-with-alert.sh like the other checks. It mutates nothing except its own STATE_FILE log.
 #
 # Output contract (last line): "<utc-timestamp> <OK|WARN|FAIL> reason=<token> ..."   Exit: 0 OK or WARN, 1 FAIL.
-#   FAIL  the Hub inbox projector has not finished a pass without failures for 3 intervals (or never reported while expected): the Hub tab trails the conversations
+#   FAIL  the Hub inbox projector has not finished a pass without failures for 3 intervals (age >= 3 x interval) (or never reported while expected): the Hub tab trails the conversations
 #   FAIL  the work-pool distributor has not run for 3 intervals (only when EXPECT_DISTRIBUTOR=1)
 #   FAIL  a signed session context was refused by the database (key mismatch between a process and the database): in mode enforce those sessions have no access
 #   FAIL  the database is not in mode enforce (ADR-0042) as seen by a running process
-#   WARN  the projector is late (2 intervals) or the metrics could not be read
+#   WARN  the projector is late (age >= 2 x interval) or the metrics could not be read
 #   OK    otherwise
 #
 # Environment: API_CONTAINER (omnira-api), WORKER_CONTAINER (omnira-worker), EXPECT_PROJECTOR (1), EXPECT_DISTRIBUTOR (0), STATE_FILE.
@@ -29,7 +29,7 @@ emit() { # emit <SEVERITY> <detail...>
 }
 
 fetch() { # fetch <file override> <container> <port>
-  if [ -n "$1" ]; then cat "$1"; else docker exec "$2" wget -q -O - "http://127.0.0.1:$3/metrics" 2>/dev/null; fi
+  if [ -n "$1" ]; then cat "$1"; else timeout 15 docker exec "$2" wget -q -T 10 -O - "http://127.0.0.1:$3/metrics" 2>/dev/null; fi
 }
 api=$(fetch "${METRICS_API_FILE:-}" "$API_CONTAINER" 8080) || api=""
 worker=$(fetch "${METRICS_WORKER_FILE:-}" "$WORKER_CONTAINER" 9090) || worker=""
@@ -64,8 +64,8 @@ fresh() { # fresh <name> <metric prefix> <expect>
   fi
   last=${last%.*}; interval=${interval%.*}
   age=$((now - last)); [ "$age" -ge 0 ] || age=0
-  if [ "$age" -gt $((interval * 3)) ]; then fail="$fail $1_stale_age_s=$age interval_s=$interval"
-  elif [ "$age" -gt $((interval * 2)) ]; then warn="$warn $1_late_age_s=$age interval_s=$interval"; fi
+  if [ "$age" -ge $((interval * 3)) ]; then fail="$fail $1_stale_age_s=$age interval_s=$interval"
+  elif [ "$age" -ge $((interval * 2)) ]; then warn="$warn $1_late_age_s=$age interval_s=$interval"; fi
 }
 if [ -n "$worker" ]; then
   fresh projector projector "$EXPECT_PROJECTOR"
