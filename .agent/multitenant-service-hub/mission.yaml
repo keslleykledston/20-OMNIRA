@@ -4,7 +4,9 @@ mission:
   baseline_commit: "6d36f67"
   branch: "feat/multitenant-service-hub"
   status: "in_progress"
+  state: "LAB"
   started: "2026-10-07"
+  last_reconciled: "2026-10-12"
 
 objectives:
   - id: "obj-01"
@@ -58,7 +60,8 @@ phases:
 
   - phase: 1
     title: "PRD + ADRs + Acceptance"
-    status: "in_progress"
+    status: "completed"
+    evidence: "PRD, ADRs 0033..0042, acceptance matrix (docs/architecture/HUB-ACCEPTANCE-MATRIX.md); backlog.md was never written: the ADR phases and HUB-VERIFICATION-STATUS.md are the backlog"
     deliverables:
       - "PRD.md (consolidated product spec)"
       - "ADRS-ESSENTIAL.md (9 core ADRs)"
@@ -68,7 +71,8 @@ phases:
 
   - phase: 2
     title: "Hub Domain Model + RLS Hardening"
-    status: "pending"
+    status: "completed"
+    evidence: "migrations 093..096 plus RLS/FORCE on every Hub table; scripts/test-hub-migrations.sh; TestHubRLS_*"
     deliverables:
       - "Migration: service_hubs, hub_memberships, hub_tenant_service_contracts"
       - "Migration: work_pools, work_pool_members, effective_access_grants"
@@ -79,7 +83,8 @@ phases:
 
   - phase: 3
     title: "EffectiveTenantContext v2 + Tests"
-    status: "pending"
+    status: "completed"
+    evidence: "HubAuthorizationService + EffectiveTenantContext (direct | hub_serve), ADR-0040 phases 02-03; TestDelegatedServingThroughTheRealMiddleware; ADR-0042 signed session context"
     deliverables:
       - "Derive EffectiveTenantContext (direct | hub access)"
       - "Service contract validation"
@@ -90,7 +95,8 @@ phases:
 
   - phase: 4
     title: "Hub RLS + Authorization + Codex Review"
-    status: "pending"
+    status: "completed"
+    evidence: "RLS for every tenant-scoped table the Hub reads; adversarial suites; Codex reviews of every phase (HUB-VERIFICATION-STATUS.md); audit events carry via=hub"
     deliverables:
       - "RLS policies for all tenant-scoped tables"
       - "Authorization enforcement"
@@ -100,7 +106,8 @@ phases:
 
   - phase: 5
     title: "Hub Inbox Projection"
-    status: "pending"
+    status: "completed_with_deviation"
+    evidence: "hub_inbox_items + periodic reconciling projector (60 s) + GET /hubs/{id}/inbox with cursor pagination, segments, counters; benchmarks in scripts/bench-hub-policies.sh. DEVIATION: the projection is reconciled on a timer, not driven by NATS events (ProjectConversation exists as the entry point); the list reads holder/state/queue live from the conversation so the lag is not visible"
     deliverables:
       - "Migration: hub_inbox_items table"
       - "Event stream integration (NATS)"
@@ -112,7 +119,8 @@ phases:
 
   - phase: 6
     title: "Routing, Presence, Capacity"
-    status: "pending"
+    status: "partial"
+    evidence: "presence, per-person capacity and round-robin pools (ADR-0038 phase 4; TestDistribute_*). NOT BUILT: skills library, weighted score, SLA urgency, customer affinity (MT-AT-027/029/037)"
     deliverables:
       - "Agent presence (online/offline tracking)"
       - "Weighted capacity model"
@@ -124,7 +132,8 @@ phases:
 
   - phase: 7
     title: "Tenant Integration Gateway"
-    status: "pending"
+    status: "not_built"
+    evidence: "the Tenant Integration Gateway was withdrawn from the corrective branch (docs/architecture/INTEGRATION_CONVERGENCE.md records what is left to decide); ERP/CRM tickets keep their own attempt/reconcile pattern"
     deliverables:
       - "Migration: integration_instances, integration_capabilities"
       - "Credential reference (secret manager)"
@@ -136,7 +145,8 @@ phases:
 
   - phase: 8
     title: "Migrate Existing Integrations"
-    status: "pending"
+    status: "not_built"
+    evidence: "depends on phase 7"
     deliverables:
       - "Audit existing adapters (WAHA, Meta, K3G, ticketing)"
       - "Migrate to unified Gateway pattern"
@@ -146,7 +156,8 @@ phases:
 
   - phase: 9
     title: "UX/Frontend via Lovable"
-    status: "pending"
+    status: "completed_lab"
+    evidence: "Hub inbox (queue | conversation | details), company strip, composer, claim/transfer/finalize, full-instance context, tabs, counters; docs/ux/HUB-LAYOUT-CONTRACT.md; real-browser E2E 13/13. NOT BUILT: Supervisor Command Center of the Hub, Tenant Brand Settings"
     deliverables:
       - "Hub Inbox UI"
       - "Tenant Context Bar"
@@ -160,7 +171,8 @@ phases:
 
   - phase: 10
     title: "AI / Tools / Knowledge Isolation"
-    status: "pending"
+    status: "partial"
+    evidence: "audited 2026-10-12 (docs/architecture/HUB-ISOLATION-AUDIT.md): AI calls run under the resolved tenant, tools take no tenant argument, delegated AI needs ai.assist. NOT BUILT: per-tenant knowledge base / vector namespace. NOT PROVEN: prompt injection against a live model"
     deliverables:
       - "AI tool authorization (no tenant selection)"
       - "Vector/search namespace per tenant"
@@ -170,7 +182,8 @@ phases:
 
   - phase: 11
     title: "Realtime / Cache / Storage Hardening"
-    status: "pending"
+    status: "completed_with_accepted_findings"
+    evidence: "audited 2026-10-12: SSE/NATS/Valkey/storage; fixed the realtime bridge pair check, the presence wakeup subject check and O_NOFOLLOW; accepted: SSE revocation window <= ~15 s, infrastructure ACLs (owner)"
     deliverables:
       - "WebSocket tenant filtering"
       - "SSE tenant filtering"
@@ -181,7 +194,8 @@ phases:
 
   - phase: 12
     title: "Observability & Operations"
-    status: "pending"
+    status: "completed_lab"
+    evidence: "internal/platform/opsmetrics + projector/distributor/delegation/session-context signals on /metrics; scripts/hub-health-check.sh (+ its test); docs/ops/HUB-ALERTS.md. NOT PROVEN: an alert reaching the owner's phone (cron line proposed, not installed until the code is deployed)"
     deliverables:
       - "Metrics (Hub Inbox lag, routing latency, integration latency)"
       - "Logs (structured, audit trail, no secrets)"
@@ -191,7 +205,8 @@ phases:
 
   - phase: 13
     title: "Security / Adversarial Gate"
-    status: "pending"
+    status: "in_progress"
+    evidence: "independent Codex reviews were run at every phase and on 2026-10-12 (isolation audit, migration 119); each HIGH/CRITICAL was fixed before moving on. The single consolidated gate before any approval is still to be run and signed off by the owner"
     deliverables:
       - "Codex independent review (all critical paths)"
       - "Penetration test scenarios"
@@ -203,7 +218,8 @@ phases:
 
   - phase: 14
     title: "E2E / Performance / Migration Proof"
-    status: "pending"
+    status: "partial"
+    evidence: "migration up/down/up identical; REAL backup restored into a fresh cluster with isolation checks (scripts/backup-restore-hub-check.sh, RTO ~6 s); EXPLAIN/bench at 10k and 30k items; HTTP load proof (16 clients, 20k items). NOT DONE: the live pilot with the owner (docs/ops/HUB-LIVE-TEST-SCRIPT.md), real Keycloak, real ERP/WhatsApp"
     deliverables:
       - "Migration on dev/staging environment"
       - "Rollback validation"
@@ -214,7 +230,8 @@ phases:
 
   - phase: 15
     title: "Cleanup & Documentation"
-    status: "pending"
+    status: "in_progress"
+    evidence: "this file, HUB-ACCEPTANCE-MATRIX.md, HUB-ISOLATION-AUDIT.md, HUB-ALERTS.md, HUB-LAYOUT-CONTRACT.md, ADR-0040/0042 updated; FINAL-REPORT.md waits for the owner's acceptance"
     deliverables:
       - "Architecture docs updated"
       - "Data model documentation"
@@ -276,4 +293,4 @@ metadata:
   branch: "feat/multitenant-service-hub"
   owner: "Engineering"
   created: "2026-10-07"
-  last_updated: "2026-10-07"
+  last_updated: "2026-10-12"

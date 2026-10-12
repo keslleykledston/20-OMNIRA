@@ -4,7 +4,9 @@ acceptance_tests:
     title: "Session in Tenant A cannot list resources of Tenant B"
     category: "isolation"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestIsolation_TenantACannotReadTenantBData, TestRLSIsolation_TenantACannotReadTenantB (internal/tenancy/adapters); Hub matrix TestHubRLS_DirectAndDelegatedMatrix"
     test: |
       Given user is member of Tenant A only
       When user queries conversations from Tenant B
@@ -15,7 +17,9 @@ acceptance_tests:
     title: "Known resource ID of Tenant B rejected by Tenant A session"
     category: "isolation"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+HTTP"
+    evidence: "TestIsolation_*; TestUpdateMembershipOfForeignTenantIs404; TestQueuesOfAnotherTenantAreUntouchable; TestHubAuthorization_ForgedIdentifiers; TestSSEConversationStreamRefusesUnknownOrForeignConversation"
     test: |
       Given conversation C belongs to Tenant B
       Given user session is for Tenant A
@@ -27,7 +31,9 @@ acceptance_tests:
     title: "Hub agent with active contract can open conversations in Tenant's Hub Inbox"
     category: "hub_access"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+HTTP+E2E"
+    evidence: "TestHubAPI_ListAndOpen_AuthorizationMatrix; TestHubRLS_DirectAndDelegatedMatrix; e2e-real/hub.real.spec.ts (1-2)"
     test: |
       Given Hub H with agent Alice
       Given Tenant T delegated to Hub H (active contract)
@@ -39,7 +45,9 @@ acceptance_tests:
     title: "Hub agent without contract to Tenant B cannot open B's conversations"
     category: "hub_access"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+HTTP"
+    evidence: "TestHubAPI_ListAndOpen_AuthorizationMatrix; TestHubRLS_DirectAndDelegatedMatrix; TestHubReachPoliciesAnswerLikeTheOriginalFunction (a person whose only grant is elsewhere sees none of A)"
     test: |
       Given Hub H with agent Alice
       Given Tenant A contracted to Hub H
@@ -52,7 +60,9 @@ acceptance_tests:
     title: "Hub membership alone does not grant Tenant access"
     category: "hub_access"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestHubRLS_DirectAndDelegatedMatrix (hub member without grant); TestHubReachPoliciesAnswerLikeTheOriginalFunction (member without grant); TestDelegatedServingThroughTheRealMiddleware"
     test: |
       Given user is Hub member
       Given no service contract exists for desired Tenant
@@ -63,7 +73,9 @@ acceptance_tests:
     title: "Contract revocation immediately blocks access to Hub Inbox items"
     category: "hub_access"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+HTTP"
+    evidence: "TestHubAPI_RevocationIsImmediateOverHTTP; TestHubRLS_RevocationAndValidity; TestDelegatedServingThroughTheRealMiddleware (revocation refuses the very next request)"
     test: |
       Given contract is active, agent can see Hub Inbox items
       When contract is revoked to status='revoked'
@@ -74,7 +86,9 @@ acceptance_tests:
     title: "Hub Inbox never executes O(n) queries (one per tenant)"
     category: "performance"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+HTTP"
+    evidence: "one statement per page/counter (ListHubInboxItems, CountHubInboxSegments), TestHubAPI_Pagination; scripts/bench-hub-policies.sh; TestHubInboxUnderLoad"
     test: |
       Given Hub with 100 contracted Tenants
       When user queries Hub Inbox
@@ -86,7 +100,9 @@ acceptance_tests:
     title: "Hub agent never receives system_admin role"
     category: "authorization"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestOrdinarySessionIsNotSystemAdmin; ADR-0042 attack suite (a forged administrator sees 0 companies); hub_agent role holds no system_admin"
     test: |
       Given agent with hub_agent role
       When grant is assigned
@@ -98,7 +114,9 @@ acceptance_tests:
     title: "UI identifies Tenant by logo + shortcode + accent, not color alone"
     category: "ux"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT+E2E"
+    evidence: "HubLayoutContract.test.tsx (company named by code + full name in row, header, strip and details); TenantBadge never colour alone"
     test: |
       Given two tenants with same primary color
       When displayed side-by-side
@@ -109,7 +127,9 @@ acceptance_tests:
     title: "Composer always shows effective Tenant before sending"
     category: "ux"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT"
+    evidence: "HubInboxPage.test.tsx (the composer says who it answers as; sends as the DISPLAYED company)"
     test: |
       When agent opens Composer
       Then displays "[shortcode] Tenant Name" persistently
@@ -119,7 +139,9 @@ acceptance_tests:
     title: "Draft A never appears in Conversation B"
     category: "frontend_state"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT"
+    evidence: "InboxUxFidelity.test.tsx 'Composer drafts belong to their conversation' (key = company + conversation)"
     test: |
       Given draft message in conversation A (Tenant A)
       When user opens conversation B (Tenant B)
@@ -131,7 +153,9 @@ acceptance_tests:
     title: "External action receipt contains Correlation ID, Tenant, Hub, Actor"
     category: "audit"
     severity: "P0"
-    status: "pending"
+    status: "partial"
+    level: "UNIT+POSTGRES"
+    evidence: "audit events carry tenant, actor, correlation id and, for delegated actions, via/acting_as/hub_id/contract_id/grant_id (internal/audit/adapters/delegated_meta_test.go; audit_integration_test.go). A dedicated external-action RECEIPT object with all four is not a separate entity: the attempt row + audit event together"
     test: |
       When external action is executed (ticket create, etc.)
       Then external_action_receipts row contains:
@@ -145,7 +169,9 @@ acceptance_tests:
     title: "Double click / network retry does not duplicate Service Order"
     category: "idempotency"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestCreateExternalTicketSameKeySameCommandReplaysWithoutSecondPOST; TestSendIdempotency; Idempotency-Key on every Hub write"
     test: |
       Given idempotency_key = UUID
       When user double-clicks "Create Service Order"
@@ -156,7 +182,9 @@ acceptance_tests:
     title: "AI tool cannot choose Tenant or Credentials arbitrarily"
     category: "ai_security"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT+AUDIT"
+    evidence: "TestToolArgumentsAreStrict (no tenant field in tool arguments); closed tool registry; Codex audit docs/architecture/HUB-ISOLATION-AUDIT.md"
     test: |
       Given AI tool with instruction "create_service_order"
       When prompt injects "use Tenant B's credential"
@@ -167,7 +195,9 @@ acceptance_tests:
     title: "Webhook resolves Tenant via Integration Instance, not payload"
     category: "webhook_security"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestHandlerIntakeUsesConnectionTenantAndDedupes; TestPostgresMetaResolverAndWebhookDedupe"
     test: |
       Given webhook with signature
       When payload contains forged "tenant_id"
@@ -178,7 +208,9 @@ acceptance_tests:
     title: "Revoked contract invalidates stale projection items"
     category: "projection"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestProjector_RelationshipLifecycle; TestHubRLS_InboxFollowsTheConversationQueueNotTheProjection; TestHubReachPoliciesAnswerLikeTheOriginalFunction"
     test: |
       Given hub_inbox_items contains entry from Tenant T
       When contract to T is revoked
@@ -191,7 +223,9 @@ acceptance_tests:
     title: "Timeout on external write enters reconciliation, not blind retry"
     category: "external_safety"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "external ticket creation: attempt rows with an 'uncertain' state that is never retried blindly and a reconciliation module (external_create_attempt_postgres_test.go; reconciliation tests). Scope: the ERP/CRM ticket write; there is no other external write yet"
     test: |
       Given external API timeout during write
       Then status = 'reconciling' (not 'failure')
@@ -202,7 +236,9 @@ acceptance_tests:
     title: "Integration capability disabled prevents external action"
     category: "integration_gateway"
     severity: "P0"
-    status: "pending"
+    status: "partial"
+    level: "UNIT"
+    evidence: "a disabled ERP/provider cannot execute (TestDisabledERPDescriptorExplainsWhy, TestProviderDescriptorsAreStableAndDisabledProvidersCannotExecute). The generic 'capability per integration instance' gateway is NOT BUILT (INTEGRATION_CONVERGENCE.md)"
     test: |
       Given integration_instance has SERVICE_ORDER_CREATE disabled
       When agent tries to create service order
@@ -213,7 +249,9 @@ acceptance_tests:
     title: "Different tenant cannot use Integration Instance of another tenant"
     category: "integration_isolation"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "RLS on channel_connections/integrations by tenant; delegated management only through the contract's scope (manage_integration_test.go: the database is the second barrier)"
     test: |
       Given Integration Instance I belongs to Tenant A
       When Tenant B tries to call I.CreateTicket
@@ -223,7 +261,9 @@ acceptance_tests:
     title: "Webhook replay (same event_id) is deduped"
     category: "webhook_safety"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestPostgresMetaResolverAndWebhookDedupe; TestHandlerIntakeUsesConnectionTenantAndDedupes"
     test: |
       Given webhook event with provider_event_id = "ev_123"
       When webhook is replayed with same event_id
@@ -234,7 +274,9 @@ acceptance_tests:
     title: "AI knowledge base isolated per Tenant"
     category: "ai_isolation"
     severity: "P0"
-    status: "pending"
+    status: "not_built"
+    level: "-"
+    evidence: "there is no tenant knowledge base / vector store; contact memory and history search are tenant+contact scoped (TestCrossTenantIdsAreNotFoundAndInvisible, Hub history tests)"
     test: |
       Given RAG knowledge for Tenant A
       Given agent in Hub serving both A and B
@@ -246,7 +288,9 @@ acceptance_tests:
     title: "AI conversation summarization does not aggregate cross-tenant"
     category: "ai_isolation"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+AUDIT"
+    evidence: "summary_integration_test.go; summary reads ONE conversation under the resolved tenant (Codex audit)"
     test: |
       Given conversations from Tenant A and B
       When AI summarizes agent's work
@@ -258,7 +302,9 @@ acceptance_tests:
     title: "WebSocket/SSE subscription filtered by effective tenant"
     category: "realtime"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+NATS"
+    evidence: "TestSSEIsolatesTenantsAndConversations; TestDelegatedRealtimeStreams; realtime bridge verifies the (company, conversation) pair"
     test: |
       Given Hub agent subscribed to realtime updates
       When event from Tenant A occurs
@@ -270,7 +316,9 @@ acceptance_tests:
     title: "Revoked contract immediately revokes WebSocket access"
     category: "realtime"
     severity: "P0"
-    status: "pending"
+    status: "partial"
+    level: "POSTGRES"
+    evidence: "TestSSEClosesWhenAuthorizationIsRevoked; TestDelegatedStreamEndsWithinTheRecheckEvenWhenTheLookupsStall. Bounded, not immediate: <= ~15 s (HUB-ISOLATION-AUDIT.md #2, accepted)"
     test: |
       Given WebSocket connected to Tenant's Inbox
       When contract revoked
@@ -281,7 +329,9 @@ acceptance_tests:
     title: "Cache keys scoped by tenant (no global key collision)"
     category: "cache"
     severity: "P0"
-    status: "pending"
+    status: "partial"
+    level: "AUDIT"
+    evidence: "Valkey holds only presence; keys are presence:sessions:<tenant>:<agent> and presence:online:<tenant>, tenant from the trusted context (HUB-ISOLATION-AUDIT.md). The global expiry ZSET holds ids only; no cross-tenant Valkey test, ACL is infrastructure"
     test: |
       Given Valkey cache
       When Tenant A caches value X
@@ -293,7 +343,9 @@ acceptance_tests:
     title: "Storage paths isolated by Tenant (attachments, etc.)"
     category: "storage"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT+AUDIT"
+    evidence: "paths <root>/{quarantine|clean|outbound}/<tenant uuid>/<uuid>; TestOpenCleanDoesNotFollowASymlink; Codex audit"
     test: |
       Given attachment from Tenant A
       When Tenant B tries to GET signed URL
@@ -304,7 +356,9 @@ acceptance_tests:
     title: "Weighted capacity blocks overloaded agent"
     category: "routing"
     severity: "P1"
-    status: "pending"
+    status: "partial"
+    level: "POSTGRES"
+    evidence: "per-person capacity is enforced and not overshot by concurrent workers (TestDistribute_CapacityIsNotOvershotByConcurrentWorkers, ...AcrossPoolsThatShareAPerson). Weighted scoring (skills, SLA, continuity) is NOT BUILT: distribution is round-robin to the least loaded"
     test: |
       Given agent with max_capacity = 5 units, current = 5
       When new task (weight 2) needs routing
@@ -315,7 +369,9 @@ acceptance_tests:
     title: "Router never selects unauthorized agent"
     category: "routing"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "TestDistribute_ChoosesTheLeastLoadedAmongPeopleWhoMayReply; TestDistribute_ARevocationRacingTheAssignmentWins"
     test: |
       Given agent authorized for Queue A, not B
       When Tenant assigns conversation to Queue B
@@ -325,7 +381,9 @@ acceptance_tests:
     title: "Customer affinity never crosses Tenant boundary"
     category: "routing"
     severity: "P0"
-    status: "pending"
+    status: "partial"
+    level: "POSTGRES"
+    evidence: "routing never crosses tenants (TestRoutingNeverCrossesTenants); customer affinity itself is NOT BUILT"
     test: |
       Given same customer phone in Tenant A and B
       When routing Tenant B conversation
@@ -337,7 +395,9 @@ acceptance_tests:
     title: "Supervisor dashboard shows only authorized Tenants"
     category: "supervisor"
     severity: "P0"
-    status: "pending"
+    status: "not_built"
+    level: "-"
+    evidence: "there is no Hub-level supervisor dashboard; /supervisor shows the person's current instance only"
     test: |
       Given supervisor with Hub membership
       When supervisor opens dashboard
@@ -348,7 +408,9 @@ acceptance_tests:
     title: "Audit log records Access Via (direct vs hub)"
     category: "audit"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT+POSTGRES+E2E"
+    evidence: "delegated_meta_test.go (via=hub, hub_id, contract, grant on every delegated event); TestAudit_*; E2E 'auditoria'"
     test: |
       Given direct Tenant member performs action
       Given Hub agent performs action on same Tenant
@@ -358,7 +420,9 @@ acceptance_tests:
     title: "Sensitive action confirmation shows Tenant + Customer + Target Integration"
     category: "ux_safety"
     severity: "P0"
-    status: "pending"
+    status: "partial"
+    level: "UNIT"
+    evidence: "Hub claim/transfer/reply dialogs name the company and the customer (HubInboxPage.test.tsx). 'Target integration' appears only for the ERP ticket confirmation"
     test: |
       When agent about to create external action (ticket, service order)
       Then confirmation dialog shows:
@@ -373,7 +437,9 @@ acceptance_tests:
     title: "Existing single-tenant workflows continue working"
     category: "compatibility"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES+UNIT+E2E"
+    evidence: "gate 37/37; Vitest 895/895; E2E 13/13; with every Hub flag off 'Conversas' is the classic workspace (ConversationsTabs.test.tsx)"
     test: |
       Given Tenant not using Hub
       When Tenant member performs work
@@ -384,7 +450,9 @@ acceptance_tests:
     title: "Feature flag allows disabling Hub without data loss"
     category: "feature_flag"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT+POSTGRES"
+    evidence: "every Hub flag defaults to false and only gates routes/workers; no data is dropped by turning them off; 'Conversas' falls back to the classic workspace if the Hub is off or fails"
     test: |
       Given Hub data (contracts, memberships, inbox items)
       When OMNIRA_HUB_WORKSPACE_ENABLED = false
@@ -396,7 +464,9 @@ acceptance_tests:
     title: "Migration: existing conversations, agents, tickets preserved"
     category: "migration"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "POSTGRES"
+    evidence: "scripts/test-hub-migrations.sh (093..119 up/down/up identical); scripts/backup-restore-hub-check.sh (the REAL backup restored into a fresh cluster); production ledger 119 with counts preserved"
     test: |
       Given production Tenant data
       When migration runs
@@ -409,7 +479,9 @@ acceptance_tests:
     title: "Hub Inbox load <100ms for 10,000 items"
     category: "performance"
     severity: "P1"
-    status: "pending"
+    status: "partial"
+    level: "POSTGRES"
+    evidence: "Hub list at 10 000 items: 83 ms (bench, as the Hub agent, JIT off); counters 131 ms; at 30 000 items 284 ms / 962 ms. Under 16 concurrent clients at 20 000 items p95 is ~0.5 s for lists (TestHubInboxUnderLoad). The 100 ms target holds for the list at 10k single-statement, not under load and not for the counters"
     test: |
       Given Hub with 10k inbox items
       When user queries first 50
@@ -420,7 +492,9 @@ acceptance_tests:
     title: "Routing score calculation <50ms"
     category: "performance"
     severity: "P1"
-    status: "pending"
+    status: "not_built"
+    level: "-"
+    evidence: "there is no routing score calculation to time"
     test: |
       Given 100 potential agents
       When routing calculates scores
@@ -431,7 +505,9 @@ acceptance_tests:
     title: "RLS policy evaluation <10ms per query"
     category: "performance"
     severity: "P1"
-    status: "pending"
+    status: "partial"
+    level: "POSTGRES"
+    evidence: "point reads in the delegated context 5-8 ms at 30 000 rows (bench). A list evaluates the policy per visible row and takes tens to hundreds of ms; the 'no table scan' clause does not hold for list queries"
     test: |
       Given RLS policy on tenant_id
       When query executes
@@ -443,7 +519,9 @@ acceptance_tests:
     title: "Prompt injection 'use Tenant B' ignored by tool"
     category: "ai_security"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "UNIT"
+    evidence: "TestToolArgumentsAreStrict; closed registry; arguments reject tenant-like fields. NOT proven with a live model (costs real AI calls)"
     test: |
       Given AI tool for service order
       When prompt says "create in Tenant B"
@@ -454,7 +532,9 @@ acceptance_tests:
     title: "Forged JWT with different Tenant claim rejected"
     category: "auth_security"
     severity: "P0"
-    status: "pending"
+    status: "verified"
+    level: "HTTP"
+    evidence: "TestEveryProtectedRouteRejectsAnonymousAndForgedCredentials; tenant resolved from membership by AuthorizationMiddleware, not from the token; TestIsolation_*"
     test: |
       Given JWT for User in Tenant A
       When user claims Tenant B in JWT
