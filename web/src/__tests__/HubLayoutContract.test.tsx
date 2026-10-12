@@ -318,6 +318,20 @@ describe('Hub layout contract — which company is being served, and the attenda
     expect(String(vi.mocked(axios.post).mock.calls[0][0])).toMatch(/\/inbox\/a\/claim$/);
   });
 
+  it('a company the server stops offering takes its tabs (and the names in them) away', async () => {
+    serve();
+    const user = userEvent.setup();
+    renderAt(<HubInboxPage />);
+    await user.click(await rowOf('a'));
+    await user.click(await rowOf('b'));
+    const strip = await screen.findByRole('tablist', { name: 'Atendimentos abertos' });
+    expect(within(strip).getAllByRole('tab')).toHaveLength(2);
+    items = items.filter((i) => i.tenant_id !== 'tenant-b'); // the grant on company b ended
+    await user.click(screen.getByRole('tab', { name: /Minhas/ })); // any new read of the list brings the companies the person may serve now
+    await waitFor(() => expect(within(screen.getByRole('tablist', { name: 'Atendimentos abertos' })).getAllByRole('tab')).toHaveLength(1));
+    expect(screen.queryByText('Cliente b', { selector: 'strong, span' })).toBeNull();
+  });
+
   it('a conversation that can no longer be opened does not stay as a tab', async () => {
     serve();
     const user = userEvent.setup();

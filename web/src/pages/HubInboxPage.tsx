@@ -92,6 +92,12 @@ export default function HubInboxPage({ hubId: preferredHub = '', embedded = fals
   const fresh = inbox.data?.pages[0]?.companies;
   if (fresh) lastCompanies.current = { hub: hubId, list: fresh };
   const companies: HubCompanyOption[] = lastCompanies.current.hub === hubId ? lastCompanies.current.list : [];
+  // A company the server no longer offers (access revoked, contract ended) takes its attendance tabs with it: the names the tabs hold are not kept past the access.
+  useEffect(() => {
+    if (!fresh) return;
+    const ids = new Set(fresh.map((c) => c.id));
+    setOpened((cur) => (cur.hub === hubId && cur.tabs.some((t) => !ids.has(t.tenantId)) ? { hub: hubId, tabs: cur.tabs.filter((t) => ids.has(t.tenantId)) } : cur));
+  }, [fresh, hubId]);
   // The tabs' counters come with the first page; keep the last known ones while a narrower request is in flight so they do not blink.
   const lastCounts = useRef<{ hub: string; counts?: HubSegmentCounts }>({ hub: '' });
   const freshCounts = inbox.data?.pages[0]?.counts;

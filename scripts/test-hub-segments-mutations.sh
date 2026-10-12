@@ -81,7 +81,7 @@ mut "the search ignores the text" $PG "AND customer_name ILIKE \$%d\`" "AND (cus
 mut "the search treats % and _ as wildcards" $PG "strings.NewReplacer(\`\\\`, \`\\\\\`, \`%\`, \`\\%\`, \`_\`, \`\\_\`)" "strings.NewReplacer(\`\\\`, \`\\\\\`)"
 mut "the counter of mine counts every held" $PG "assigned_user_id = \$3)," "(assigned_user_id = \$3 OR assigned_user_id IS NOT NULL)),"
 mut "the counters see nothing without a company filter" $PG "COALESCE(cardinality(\$2::uuid[]), 0) = 0 OR" "cardinality(\$2::uuid[]) = 0 OR"
-mut "a mistyped query string is not refused" $HT "if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {" "if false {"
+mut "a mistyped query string is not refused" $HT "if _, err := url.ParseQuery(r.URL.RawQuery); err != nil {" "if _, err := url.ParseQuery(r.URL.RawQuery); err != nil && false {"
 mut "the assignment says 'me' for everybody" $HT "if *i.AssignedUserID == actor {" "if *i.AssignedUserID != actor {"
 mut "the counters repeat on every page" $HT "if opts.Cursor == \"\" {" "if true {"
 mut "an over-long search is accepted" $HT "if len([]rune(query)) > 80 {" "if len([]rune(query)) > 800000 {"
