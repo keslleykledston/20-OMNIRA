@@ -16,6 +16,8 @@ Os rótulos são **conjuntos fechados escritos no código** (um desfecho, um tip
 | `omnira_hub_distributor_*` | worker | Mesmo desenho para a distribuição dos pools de trabalho |
 | `omnira_hub_delegation_requests_total{outcome}` | api | Desfecho dos pedidos `X-Omnira-Acting-As`: `served`, `rate_limited`, `disabled`, `not_delegable`, `refused` (não encontrado/sem concessão), `forbidden_key` (concessão viva sem a chave da rota), `error` |
 | `omnira_session_ctx_rejections_total` | api, worker | Contextos de sessão assinados que **o banco recusou** (chave diferente entre o processo e o banco). Em modo `enforce` essas sessões ficam sem acesso e **não há erro HTTP para ver** |
+| `omnira_hub_events_streams_total{outcome}` / `omnira_hub_events_signals_total` | api | Fluxos do sinal de mudança do Hub (abertos, recusados por limite/acesso, encerrados por perda de acesso/duração) e sinais escritos |
+| `omnira_realtime_bridge_dropped_total{reason}` | worker | Notificações que o bridge de tempo real não publicou (par empresa/conversa não verificado, erro de verificação, limite de consultas, malformada); um salto em `unverified_pair` é alguém forjando `NOTIFY` |
 | `omnira_session_ctx_enforce` | api, worker | `1` quando o banco, na partida do processo, estava em `enforce` |
 
 ## 2. Regras (Prometheus/Alertmanager — a pilha-alvo de `OBSERVABILITY.md`)

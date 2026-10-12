@@ -72,13 +72,15 @@ Nunca: usar `tenant_id` de payload como autorização; ler dados de uma empresa 
 | Filtros "Novas / Lidas / Respondidas" | **NÃO adotado**: a caixa da empresa já usa Todas/Aguardando/Minhas/Encerradas e o Hub segue o mesmo vocabulário ("Pendentes" = sem responsável) | — |
 | Seção "Inbox" separada de "Conversas" no menu | **NÃO adotado** como itens do menu (um único "Conversas", ADR-0039); a separação é fila × histórico dentro da caixa | — |
 | Contador no item "Inbox" do menu | **ADAPT — feito**: número no item "Conversas" = soma de `companies[].unanswered` (servidor, `include=company_counts`, a cada 60 s; mesma entrada de cache das abas de instância; a mesma instância servida por dois Hubs conta uma vez; não aparece enquanto se atende uma instância) | `useHubWaiting` + `Sidebar` |
-| Mídia, status de entrega, tempo real, estado de conexão na aba "Todas" | **PENDENTE** (dependem de leitura de mídia por item do Hub e de SSE do Hub) | caixa completa da instância já tem |
+| Tempo real na aba "Todas" | **ADAPT — feito** como **sinal de mudança sem conteúdo** (`GET /hubs/{id}/events`, SSE): a tela relê as listas pela API normal assim que o Hub avisa que algo mudou nas instâncias da pessoa; o ciclo de 30 s fica como rede de segurança | `events.go` + `useHubEvents` |
+| Mídia, status de entrega, estado de conexão na aba "Todas" | **PENDENTE** (dependem de leitura de mídia por item do Hub; o texto da conversa já chega; a caixa completa da instância tem tudo) | caixa completa da instância já tem |
 | Encerrar conversa / copiar telefone (ações rápidas) | Encerrar existe na caixa completa (chave `conversation.finalize`); copiar telefone não, pelo motivo do telefone | — |
 | `HubWorkspace.tsx` como componente | **REJEITADO** (ADR-0036): mock, estado e tema próprios | — |
 
 ## 5. Como o contrato é guardado
 
 - `web/src/__tests__/HubLayoutContract.test.tsx` fixa a estrutura (regiões, abas, ordem, recolher, gaveta, faixa, abas de atendimento, menu recolhível, seções recolhíveis da caixa delegada).
+- `web/src/__tests__/useHubEvents.test.tsx` e o cenário "tempo real" de `web/e2e-real/hub.real.spec.ts`; `internal/hub/adapters/events_integration_test.go` (Postgres + NATS reais): o sinal só chega para as empresas servidas, nunca diz o quê, respeita o escopo de fila, acaba com a revogação e tem limites.
 - `web/src/__tests__/ConversationsTabs.test.tsx`: contador nas abas de instância. `web/src/__tests__/SidebarWaitingBadge.test.tsx`: contador no item do menu.
 - `internal/hub/adapters/inbox_segments_integration_test.go` (Postgres real, papel `omnira_app`, RLS): segmentos, busca, contadores; o que a pessoa não pode ler não é listado nem contado.
 - `web/e2e-real/hub.real.spec.ts` ("layout aprovado…"): navegador real contra a API e o banco reais.
