@@ -510,3 +510,10 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Implantação:** sem migration nova (ledger 121; 120 já aplicada, a chave `conversation.read_internal` existe), tags de volta `rollback-pre-final-20261012-1817` (api, worker, web), `docker compose up -d --no-deps --no-build --force-recreate api worker web`; os três saudáveis, `omnira_session_ctx_enforce 1`, sinais `omnira_hub_events_*` presentes, `GET /api/v1/hubs/{id}/events` sem sessão → 401 pelo nginx do `web`, `hub-health-check` OK.
 - **Não provado ainda:** uma aba "Todas" aberta por pessoa real em produção (`omnira_hub_events_streams_total{outcome="opened"}` ainda 0 logo após a troca; sobe quando alguém abrir), login do Keycloak de produção com conta só-Hub, ERP/WhatsApp ao vivo, IA com provedor real.
 
+
+## 2026-10-12 (depois do fechamento) — fases 13–15 fechadas até onde dá sem o dono — LOCAL (só documentação e testes; nada a implantar)
+
+- **Varredura de vazamento no E2E de navegador real** (`scripts/e2e-hub-browser.sh`): depois dos 14 fluxos, nenhum segredo da execução (chave do contexto de sessão, chave de credenciais), token de contexto assinado, bearer ou cookie no log da api, e nenhuma chave com cara de segredo (`password`, `token`, `ciphertext`…) em `audit_events`/`outbox_events`; falha se não inspecionar nenhuma linha (62 inspecionadas). Padrões testados à mão com amostras positivas. UNIT/E2E VERIFIED.
+- **`scripts/test-web-nginx-sse.sh`**: o nginx da imagem do web entrega o sinal do Hub evento a evento (1º em ~5 ms, 2º 3 s depois, como o stub envia), sem compressão com `Accept-Encoding: gzip` de navegador; PASS contra a imagem implantada `sha-6d083a5`. Não prova a aba aberta por pessoa real em produção.
+- **Migrations**: `scripts/test-hub-migrations.sh` refeito até a 121 — up/down/up idêntico e RLS FORCE em toda tabela com `tenant_id`.
+- **Fase 15**: `HUB-DATA-MODEL.md`, `HUB-MIGRATION-GUIDE.md`, `docs/ops/HUB-OPERATOR-GUIDE.md`, `docs/ux/HUB-AGENT-GUIDE.md`, CHANGELOG. **Fase 13**: pacote consolidado `HUB-GATE-PACKAGE.md` (NÃO ASSINADO) e rascunho de `FINAL-REPORT.md`. O estado do projeto continua `LAB`.
