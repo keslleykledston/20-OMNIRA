@@ -136,6 +136,11 @@ Motor em `internal/routing/engine`: `Decide` (ASSIGN_AGENT, ENQUEUE, WAIT_UNTIL_
 - O fluxo roda **na mesma transação** da decisão (nenhum consumidor novo, nenhum evento a perder), isolado por *savepoint*: erro do fluxo pula a etapa (`flow_error`), nunca derruba o roteamento. A etapa conta como salto no guarda de laços e o fluxo entra em `visited` (não reinicia no mesmo episódio). Sem o Flow Builder ligado no worker: `flows_unavailable`.
 - Nós de fluxo (Fase 6a) e o destino `flow` são direções opostas e não se chamam em círculo: `apply_overflow` dentro de um fluxo ativo encontra `busy` e a cadeia segue.
 
+### 11.9 Filas manuais passam pelo motor (achado da revisão da própria entrega)
+- As filas-padrão (Comercial, Financeiro, Suporte; migration 123) são **manuais**. Antes, só filas `round_robin`/`least_loaded` recebiam o job `job.routing.assign.v1`; a fila manual nunca chegava ao motor e **aviso fora do expediente, relógios de SLA e transbordo não valeriam para elas**.
+- Agora, **com o motor ligado** (`OMNIRA_ROUTING_ENGINE_ENABLED`), a conversa que entra numa fila manual (por `RouteNew` ou pelo nó `assign_queue`) também recebe o job. O motor **nunca atribui dentro de fila manual** (uma pessoa pega); ele aplica o horário (fora do expediente → aviso, gatilho `after_hours` da cadeia, timer de abertura), o SLA e `max_wait`. Fila manual **sem** `routing_retry_at`: a varredura de segurança continua só para filas automáticas (o job é durável e há timers).
+- Com o motor desligado nada muda (o parâmetro é falso). Conversas já abertas no momento de ligar só entram no motor quando algo as tocar; o guia de operação traz a consulta de retroalimentação.
+
 ## 12. Decisões que precisam do dono (padrão adotado até resposta)
 1. **Feriados:** cadastro manual por tenant (padrão) ou importação de calendário nacional.
 2. **Fuso padrão do tenant:** `America/Manaus`, editável por calendário.

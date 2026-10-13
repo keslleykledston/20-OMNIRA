@@ -2,7 +2,9 @@ package adapters_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -99,5 +101,55 @@ func TestRouteNewUsesTheQueueOfTheLineTheConversationCameThrough(t *testing.T) {
 	e.exec(`UPDATE channel_connections SET default_queue_id=$2 WHERE id=$1`, withoutSector, sector)
 	if _, err := e.seed.Exec(e.ctx, `DELETE FROM queues WHERE id=$1`, sector); err == nil {
 		t.Error("a queue that a line points at must not be deletable")
+	}
+}
+
+// ADR-0044: with the central routing engine on, a conversation of a MANUAL queue also gets its routing job (the engine never assigns inside a
+// manual queue: it applies the closed-hours notice, the SLA clocks and the overflow chain). With the engine off nothing changes.
+func TestRouteNewGivesManualQueuesTheirRoutingJobOnlyWhenTheEngineIsOn(t *testing.T) {
+	e := newKindEnv(t)
+	route := func(store *inboxadapters.PostgresInboundStore, tenant, user, conv uuid.UUID) {
+		t.Helper()
+		if err := platformdb.WithTenantSession(e.ctx, e.app, user, false, func(ctx context.Context) error {
+			tc, err := tenancydomain.NewTenantContext(tenant, user, tenancydomain.AccessSourceDirect)
+			if err != nil {
+				return err
+			}
+			return store.RouteNew(tenancydomain.WithTenantContext(ctx, tc), conv)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs := func(conv uuid.UUID) (n int) {
+		_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM outbox_events WHERE event_type='job.routing.assign.v1' AND aggregate_id=$1`, conv.String()).Scan(&n)
+		return
+	}
+	retry := func(conv uuid.UUID) (set bool) {
+		_ = e.seed.QueryRow(e.ctx, `SELECT routing_retry_at IS NOT NULL FROM conversations WHERE id=$1`, conv).Scan(&set)
+		return
+	}
+	for _, tc := range []struct {
+		name        string
+		engine      bool
+		mode        string
+		wantJob     int
+		wantRetrySt bool
+	}{
+		{"engine off, manual: unchanged", false, "manual", 0, false},
+		{"engine on, manual: the engine gets it, the safety sweep does not", true, "manual", 1, false},
+		{"engine off, round robin: unchanged", false, "round_robin", 1, true},
+		{"engine on, round robin: unchanged", true, "round_robin", 1, true},
+	} {
+		tenant := e.tenant()
+		user := e.member(tenant, "tenant_agent")
+		e.exec(`INSERT INTO queues(id,tenant_id,name,mode,is_default) VALUES($1,$2,'Default',$3,true)`, uuid.New(), tenant, tc.mode)
+		conv := e.conversation(tenant, "Cliente", "other", "+55929"+fmt.Sprintf("%08d", time.Now().UnixNano()/1000%100000000))
+		route(inboxadapters.NewPostgresInboundStore(e.app).WithEngineRouting(tc.engine), tenant, user, conv)
+		if got := jobs(conv); got != tc.wantJob {
+			t.Errorf("%s: routing jobs = %d, want %d", tc.name, got, tc.wantJob)
+		}
+		if got := retry(conv); got != tc.wantRetrySt {
+			t.Errorf("%s: safety-sweep retry set = %v, want %v", tc.name, got, tc.wantRetrySt)
+		}
 	}
 }

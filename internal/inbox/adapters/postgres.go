@@ -24,6 +24,15 @@ type PostgresInboundStore struct {
 	pool *pgxpool.Pool
 	// kindDisabled turns the conversation_kind derivation off (OMNIRA_CONVERSATION_KIND_ENABLED=false).
 	kindDisabled bool
+	// engineRouting: the central routing engine (ADR-0044) is on, so a new conversation of a MANUAL queue also gets its routing job. The engine
+	// never assigns inside a manual queue; it applies the sector's closed-hours notice, the SLA clocks and the overflow chain to it.
+	engineRouting bool
+}
+
+// WithEngineRouting says the central routing engine is enabled (OMNIRA_ROUTING_ENGINE_ENABLED); see engineRouting.
+func (s *PostgresInboundStore) WithEngineRouting(enabled bool) *PostgresInboundStore {
+	s.engineRouting = enabled
+	return s
 }
 
 // WithConversationKind switches the derivation of conversation_kind on (the default) or off.
@@ -143,7 +152,7 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		INSERT INTO outbox_events
 		  (id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload)
 		SELECT $3,$1,'job.routing.assign.v1','conversation',id::text,$4,'{}'::jsonb
-		FROM routed WHERE mode IN ('round_robin','least_loaded')`, tenantID, conversationID, uuid.New(), uuid.New())
+		FROM routed WHERE mode IN ('round_robin','least_loaded') OR $5::boolean`, tenantID, conversationID, uuid.New(), uuid.New(), s.engineRouting)
 	return err
 }
 

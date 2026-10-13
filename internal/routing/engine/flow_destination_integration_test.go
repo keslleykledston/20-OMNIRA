@@ -150,3 +150,48 @@ func TestFlowDestinationWithoutAFlowStarterIsRefusedNotCrashed(t *testing.T) {
 	}
 	_ = errors.New
 }
+
+// The standard sectors are MANUAL queues (agents take the work). The schedule must still govern them: out of hours the customer is told once,
+// the after_hours step of the chain can move the conversation, the SLA clocks run, and at the opening the conversation simply waits for a person.
+func TestManualQueuesFollowTheirScheduleNoticeChainAndOpening(t *testing.T) {
+	e := newEnv(t, nil)
+	n := &recNotifier{pool: e.app}
+	e.eng.WithNotifier(n, t.Logf)
+	a := e.tenant(t)
+	fin := e.queue(t, a, "Financeiro", "manual")
+	cal := e.calendar(t, a, "24x7", "24x7", "[]")
+	e.exec(t, `UPDATE queues SET calendar_id=$2, closed_notice='Fora do expediente. Voltamos {{proxima_abertura}}.' WHERE id=$1`, fin, cal)
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at, reason) VALUES ($1,$2,now()-interval '1 hour',now()+interval '2 hours','teste')`, a, cal)
+	c := e.conversation(t, a, &fin)
+	d, err := e.decide(t, a, c, "")
+	if err != nil || d.Kind != engine.WaitUntilOpen || d.Reason != engine.ReasonSectorClosed {
+		t.Fatalf("a manual queue out of hours waits for the opening: %+v %v", d, err)
+	}
+	if len(n.sent) != 1 || !strings.HasPrefix(n.sent[0].text, "Fora do expediente. Voltamos ") {
+		t.Fatalf("the customer is told once: %+v", n.sent)
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND kind='open_wakeup' AND state='pending'`, c) != 1 {
+		t.Fatal("the opening is a durable timer")
+	}
+	// the suspension ends: at the opening the conversation is just queued for a person (nobody is assigned in a manual queue)
+	e.exec(t, `DELETE FROM calendar_suspensions WHERE calendar_id=$1`, cal)
+	d, err = e.decide(t, a, c, engine.TriggerOpenWakeup)
+	if err != nil || d.Kind != engine.Enqueue || d.Reason != engine.ReasonManualQueue || e.owner(t, c) != nil {
+		t.Fatalf("open and manual: queued, never auto-assigned: %+v %v", d, err)
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_state WHERE conversation_id=$1 AND state='queued'`, c) != 1 {
+		t.Fatal("state is queued")
+	}
+
+	// the chain applies too: after_hours moves a conversation of a closed manual queue to another group
+	next := e.queue(t, a, "Plantão geral", "manual")
+	closedQ := e.closedQueue(t, a, "Comercial")
+	e.policy(t, a, closedQ, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.AfterHours}, DestKind: overflow.DestQueue, DestID: next})
+	c2 := e.conversation(t, a, &closedQ)
+	if _, err := e.decide(t, a, c2, ""); err != nil {
+		t.Fatal(err)
+	}
+	if e.queueOf(t, c2) != next {
+		t.Fatal("the after_hours step of the chain moved the conversation of a closed MANUAL queue")
+	}
+}

@@ -325,12 +325,14 @@ type outcome struct {
 
 // evaluate looks at the queue the conversation is in: manual, closed, or open (then it tries the eligible agents in the strategy's order).
 func (e *Engine) evaluate(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, queue uuid.UUID, mode string, now time.Time, relax eligibility.Policy) (outcome, error) {
-	if mode == "manual" || mode == "" {
-		return outcome{kind: oBlocked, plain: Decision{Kind: Enqueue, Reason: ReasonManualQueue, Destination: "queue:" + queue.String()}, state: "queued"}, nil
-	}
 	avail, err := sectorsadapters.QueueAvailability(ctx, q, tenant, queue, now)
 	if err != nil {
 		return outcome{}, err
+	}
+	// a MANUAL queue assigns nobody, but its schedule still matters: out of hours the customer is told, the after_hours step of the chain can move
+	// the conversation, and the opening is a durable timer - exactly like an automatic queue. In hours it simply waits for a person to take it.
+	if (mode == "manual" || mode == "") && (avail.Open || relax.AllowClosed) {
+		return outcome{kind: oBlocked, plain: Decision{Kind: Enqueue, Reason: ReasonManualQueue, Destination: "queue:" + queue.String()}, state: "queued"}, nil
 	}
 	if !avail.Open && !relax.AllowClosed {
 		if avail.NextOpen == nil {

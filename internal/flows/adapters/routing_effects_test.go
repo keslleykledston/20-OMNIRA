@@ -182,3 +182,28 @@ func TestAFlowCannotMoveAConversationTheChainIsWorking(t *testing.T) {
 	})
 	_ = q
 }
+
+// ADR-0044: a conversation a flow puts in a MANUAL queue gets its routing job only when the engine is on (it applies the notice, SLA and chain).
+func TestAssignQueueEmitsTheRoutingJobForManualQueuesOnlyWithTheEngine(t *testing.T) {
+	f := newFx(t)
+	env := f.env
+	manual := f.queue(env.TenantA, "Manual", "manual", false)
+	jobs := func(conv uuid.UUID) int {
+		return f.count(`SELECT count(*) FROM outbox_events WHERE event_type='job.routing.assign.v1' AND aggregate_id=$1`, conv.String())
+	}
+	for _, engine := range []bool{false, true} {
+		conv, _ := env.SeedConversation(t, env.TenantA, "bot")
+		f.sys(env.TenantA, func(ctx context.Context) {
+			if err := f.effects.WithEngineRouting(engine).AssignQueue(ctx, conv, &manual); err != nil {
+				t.Fatal(err)
+			}
+		})
+		want := 0
+		if engine {
+			want = 1
+		}
+		if got := jobs(conv); got != want {
+			t.Errorf("engine=%v: routing jobs = %d, want %d", engine, got, want)
+		}
+	}
+}

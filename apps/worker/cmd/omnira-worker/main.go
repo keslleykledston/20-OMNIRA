@@ -481,7 +481,7 @@ func main() {
 		if intelligenceFlags.AutoTicketPolicyEnabled {
 			// only the unambiguous policy actions, and a problem here never fails the job
 			pipeline = intelligenceapp.TicketPolicyPipeline{Next: pipeline, Tickets: intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool),
-				intelligenceadapters.NewPostgresRoutingRepository(dbPool), inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)}
+				intelligenceadapters.NewPostgresRoutingRepository(dbPool), inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool).WithEngineRouting(cfg.RoutingEngineEnabled)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)}
 		}
 		if intelligenceFlags.PrivateHandoffEnabled {
 			// before routing: a valid token places the message with the strongest evidence
@@ -509,7 +509,7 @@ func main() {
 		// The contact's "end this attendance" command closes through the same use case as an agent's finalize (source "system").
 		attendanceForFlows := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
 			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
-		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows)
+		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows).WithEngineRouting(cfg.RoutingEngineEnabled)
 		flowCounters := flowsapplication.NewCounters()
 		prevMetrics := hc.ExtraMetrics
 		hc.ExtraMetrics = func() string {

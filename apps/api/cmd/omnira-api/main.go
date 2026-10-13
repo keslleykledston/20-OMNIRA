@@ -272,7 +272,7 @@ func main() {
 			log.Fatalf("WAHA provider descriptor error: %v", err)
 		}
 		resolver := channeladapters.NewWahaWebhookConnectionResolver(dbPool, connectionRepo)
-		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool).WithConversationKind(identityFlags.ConversationKindEnabled)
+		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool).WithConversationKind(identityFlags.ConversationKindEnabled).WithEngineRouting(cfg.RoutingEngineEnabled)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
 			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
 			// ADR-0018: only VERIFIED internal identities make a sender "staff" (nothing matches until one is verified).
@@ -316,7 +316,7 @@ func main() {
 		summarySvc := intelligenceapp.NewSummaryService(topicRepo, summaryRepo, intelligenceadapters.NewPostgresContextRepository(dbPool), routingRepo,
 			intelligenceadapters.NewTopicSummarizerFromConfig(cfg), intelligenceFlags).WithLedger(aiusageadapters.NewPostgresLedger(dbPool))
 		ticketPolicySvc := intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool), routingRepo,
-			inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)
+			inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool).WithEngineRouting(cfg.RoutingEngineEnabled)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)
 		contactMemory := intelligenceadapters.NewContactMemory(dbPool, attendanceService)
 		// ADR-0020: the AI closing suggestion (a draft only; runs on the copilot flag and the model router)
 		attendanceService.WithSuggester(intelligenceadapters.NewClosingSuggestAdapter(
@@ -362,7 +362,7 @@ func main() {
 	if cfg.MetaEnabled {
 		connectionRepo := channeladapters.NewPostgresChannelConnectionRepository(dbPool)
 		eventStore := channeladapters.NewPostgresWebhookEventStore(dbPool)
-		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool).WithConversationKind(identityFlags.ConversationKindEnabled)
+		inboundStore := inboxadapters.NewPostgresInboundStore(dbPool).WithConversationKind(identityFlags.ConversationKindEnabled).WithEngineRouting(cfg.RoutingEngineEnabled)
 		inboundService := inboxapplication.NewInboundService(inboundStore, inboundStore, inboundStore, inboxadapters.TicketStore{PostgresInboundStore: inboundStore}, inboundStore).
 			WithParticipants(inboxadapters.NewPostgresParticipantRecorder(dbPool)).
 			WithIdentity(identityadapters.NewSenderResolver(dbPool, identityFlags.InternalChannelIdentityEnabled), inboundStore)

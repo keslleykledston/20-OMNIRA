@@ -27,6 +27,15 @@ type PostgresEffects struct {
 	pool   *pgxpool.Pool
 	sender SystemSender
 	closer AttendanceCloser
+	// engineRouting: the central routing engine is on, so a conversation a flow puts in a MANUAL queue also gets its routing job (the engine
+	// never assigns inside a manual queue; it applies the closed-hours notice, the SLA clocks and the overflow chain).
+	engineRouting bool
+}
+
+// WithEngineRouting says the central routing engine is enabled (OMNIRA_ROUTING_ENGINE_ENABLED).
+func (e *PostgresEffects) WithEngineRouting(enabled bool) *PostgresEffects {
+	e.engineRouting = enabled
+	return e
 }
 
 var _ ports.Effects = (*PostgresEffects)(nil)
@@ -246,7 +255,7 @@ const assignQueueSQL = `
 	  RETURNING c.id, q.mode
 	), job AS (
 	  INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
-	  SELECT $4, $1, 'job.routing.assign.v1', 'conversation', id::text, $5, '{}'::jsonb FROM routed WHERE mode IN ('round_robin','least_loaded')
+	  SELECT $4, $1, 'job.routing.assign.v1', 'conversation', id::text, $5, '{}'::jsonb FROM routed WHERE mode IN ('round_robin','least_loaded') OR $6::boolean
 	  RETURNING id
 	)
 	SELECT count(*) FROM routed`
@@ -257,7 +266,7 @@ func (e *PostgresEffects) AssignQueue(ctx context.Context, conversationID uuid.U
 		return err
 	}
 	var n int
-	if err := e.q(ctx).QueryRow(ctx, assignQueueSQL, tenantID, conversationID, queueID, uuid.New(), uuid.New()).Scan(&n); err != nil {
+	if err := e.q(ctx).QueryRow(ctx, assignQueueSQL, tenantID, conversationID, queueID, uuid.New(), uuid.New(), e.engineRouting).Scan(&n); err != nil {
 		return err
 	}
 	if n == 0 && queueID != nil {

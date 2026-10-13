@@ -58,7 +58,7 @@ const MODE_LABEL: Record<QueueMode, string> = { manual: 'Manual', round_robin: '
 const MODE_HELP: Record<QueueMode, string> = {
   manual: 'As conversas ficam no grupo para os operadores assumirem.',
   round_robin: 'O sistema distribui as conversas entre os operadores disponíveis.',
-  least_loaded: 'O sistema entrega a conversa a quem tem menos conversas abertas agora. Depende do motor de roteamento; enquanto ele não estiver ligado, funciona como rodízio.',
+  least_loaded: 'O sistema entrega a conversa a quem tem menos conversas abertas agora. Só pode ser usada quando o motor de roteamento estiver ligado neste ambiente.',
 }
 const NAME_MAX = 60
 const CAPACITY_MIN = 1

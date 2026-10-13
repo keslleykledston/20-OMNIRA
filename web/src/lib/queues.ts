@@ -80,6 +80,7 @@ export function queueErrorMessage(err: any, fallback = 'Não foi possível concl
     }
     if (text.includes('still has conversations')) return 'Este grupo ainda tem conversas e não pode ser excluído.'
     if (text.includes('channel line still sends')) return 'Um canal ainda envia conversas novas para este grupo. Mude o canal antes de excluir.'
+    if (text.includes('routing engine')) return 'A estratégia Menor carga exige o motor de roteamento, que não está ligado neste ambiente.'
   }
   return fallback
 }
