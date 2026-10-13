@@ -88,3 +88,59 @@ func TestRoutingAdministrationIsUnreachableActingForAHub(t *testing.T) {
 		t.Fatalf("the refused create wrote %d rows", n)
 	}
 }
+
+// ADR-0044: the routing view of a conversation is mounted like the conversation read itself (Delegable "conversation.read"). A Hub operator
+// serving the company sees it only for the conversations they may read, never another instance's, and the answer carries names and states only.
+func TestConversationRoutingViewFollowsTheDelegatedConversationRead(t *testing.T) {
+	w := newWorld(t)
+	tenancyadapters.EnableDelegatedServing(true)
+	t.Cleanup(func() { tenancyadapters.EnableDelegatedServing(false) })
+
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(w.app), tenancyadapters.NewPostgresTenantRepository(w.app))
+	tenantSession := tenancyadapters.AuthorizationMiddleware(w.app, authz)
+	h := sectorsadapters.NewHandler(w.app, nil)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/routing", tenancyadapters.Delegable("conversation.read", tenantSession(http.HandlerFunc(h.GetConversationRouting))))
+	chain := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if u := r.Header.Get("X-Test-User"); u != "" {
+			id, _ := uuid.Parse(u)
+			r = r.WithContext(authn.WithPrincipal(r.Context(), &authn.Principal{UserID: id}))
+		}
+		mux.ServeHTTP(rw, r)
+	})
+	get := func(user uuid.UUID, tenantKey, convKey, acting string) (int, string) {
+		req := httptest.NewRequest("GET", "/api/v1/tenants/"+w.tenant[tenantKey].String()+"/inbox/conversations/"+w.conv[convKey].String()+"/routing", nil)
+		req.Header.Set("X-Test-User", user.String())
+		if acting != "" {
+			req.Header.Set(tenancydomain.ActingAsHeader, acting)
+		}
+		rec := httptest.NewRecorder()
+		chain.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+
+	op := w.hubAgent("viewer")
+	g := w.grant(op, "A")
+	w.ceiling("A", "conversation.read")
+	w.grantKeys(g, "conversation.read")
+	hub := "hub:" + w.hub.String()
+	// a routing state with a destination name the operator must not be able to use to reach anything else
+	w.exec(`INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id, origin_queue_id) VALUES ($1,$2,'queued',$3,$3)`, w.tenant["A"], w.conv["A"], w.queue1["A"])
+
+	code, body := get(op, "A", "A", hub)
+	if code != http.StatusOK || !strings.Contains(body, `"conversation_id"`) {
+		t.Fatalf("a delegated operator reads the routing of a conversation they may read: %d %s", code, body)
+	}
+	// another instance, even through the right hub header, and another company's conversation id through A's URL: not found
+	if code, _ := get(op, "B", "B", hub); code != http.StatusNotFound {
+		t.Errorf("another instance: %d, want 404", code)
+	}
+	if code, _ := get(op, "A", "B", hub); code != http.StatusNotFound {
+		t.Errorf("another company's conversation through this instance: %d, want 404", code)
+	}
+	// without the grant (a stranger) nothing is reachable
+	stranger := w.user("stranger")
+	if code, _ := get(stranger, "A", "A", hub); code != http.StatusNotFound {
+		t.Errorf("a stranger acting for the hub: %d, want 404", code)
+	}
+}

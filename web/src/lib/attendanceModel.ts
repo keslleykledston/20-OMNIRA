@@ -187,3 +187,77 @@ export function zonedToIso(local: string, timeZone: string): string {
   guess = wall - offsetAt(guess)
   return new Date(guess).toISOString()
 }
+
+// ---- conversa: roteamento e SLA ----------------------------------------------------------------------------------------------
+
+export const ENGINE_STATE_LABELS: Record<string, string> = {
+  queued: 'Na fila, aguardando um atendente',
+  waiting_open: 'Aguardando o setor abrir',
+  manual_required: 'Precisa da ação de uma pessoa',
+  assigned: 'Com um atendente',
+  done: 'Encerrada',
+}
+
+export const DECISION_LABELS: Record<string, string> = {
+  ASSIGN_AGENT: 'Atribuída a um atendente',
+  ENQUEUE: 'Mantida na fila',
+  OVERFLOW: 'Movida pelo transbordo',
+  WAIT_UNTIL_OPEN: 'Aguardando a abertura',
+  EXECUTE_FLOW: 'Fluxo acionado',
+  ESCALATE: 'Escalada',
+  REQUIRE_MANUAL_ACTION: 'Ação manual necessária',
+  NO_ACTION: 'Nada a fazer',
+}
+
+export const REASON_LABELS: Record<string, string> = {
+  already_assigned: 'já tinha dono',
+  no_queue: 'sem grupo',
+  conversation_closed: 'conversa encerrada',
+  manual_queue: 'grupo de atribuição manual',
+  sector_closed: 'setor fechado',
+  never_opens: 'o setor não abre dentro do horizonte',
+  no_eligible_agent: 'nenhum atendente elegível',
+  capacity_exhausted: 'capacidade esgotada',
+  assigned: 'atendente escolhido',
+  presence_unavailable: 'presença indisponível',
+  candidates_truncated: 'lista de atendentes truncada',
+  chain_exhausted: 'etapas do transbordo esgotadas',
+  overflow_oncall: 'plantão',
+  overflow_agent: 'atendente específico',
+}
+
+export const METRIC_LABELS: Record<string, string> = {
+  first_response: 'Primeira resposta',
+  queue_wait: 'Espera na fila',
+  assignment: 'Atribuição',
+  resolution: 'Resolução',
+}
+
+export function reasonLabel(reason: string): string {
+  if (REASON_LABELS[reason]) return REASON_LABELS[reason]
+  const m = /^(sla_risk|sla_breach):(.+)$/.exec(reason)
+  if (m) return `${m[1] === 'sla_risk' ? 'SLA em risco' : 'SLA violado'} (${METRIC_LABELS[m[2]] ?? m[2]})`
+  return reason.replace(/_/g, ' ')
+}
+
+// "12 min", "2 h 5 min", "1 d 3 h": durações curtas para o painel (arredonda para baixo).
+export function humanDuration(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds))
+  if (s < 60) return 'menos de 1 min'
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (d > 0) return h > 0 ? `${d} d ${h} h` : `${d} d`
+  if (h > 0) return m > 0 ? `${h} h ${m} min` : `${h} h`
+  return `${m} min`
+}
+
+// Situação do relógio de SLA agora: tempo que falta até o prazo, ou quanto já passou.
+export function slaStatus(c: { state: string; deadline_at: string; risk_at: string }, now: Date): { tone: 'success' | 'warning' | 'danger' | 'default'; text: string } {
+  if (c.state === 'met') return { tone: 'success', text: 'cumprida' }
+  if (c.state === 'breached') return { tone: 'danger', text: 'violada' }
+  const left = (new Date(c.deadline_at).getTime() - now.getTime()) / 1000
+  if (left <= 0) return { tone: 'danger', text: `vencida há ${humanDuration(-left)}` }
+  const risk = new Date(c.risk_at).getTime() <= now.getTime()
+  return { tone: risk ? 'warning' : 'default', text: `faltam ${humanDuration(left)}${risk ? ' · em risco' : ''}` }
+}

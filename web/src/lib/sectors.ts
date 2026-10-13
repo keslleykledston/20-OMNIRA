@@ -195,3 +195,21 @@ export function attendanceErrorMessage(err: any, fallback = 'Não foi possível 
   if (status === 400 && text) return `Confira os dados: ${text}`
   return fallback
 }
+
+// Onde a conversa está e por quê (GET .../inbox/conversations/{id}/routing). Só nomes e estados: nunca conteúdo de mensagem.
+export interface ConversationRouting {
+  conversation_id: string
+  status: string
+  queue?: { id: string; name: string }
+  sector?: { id: string; name: string }
+  assigned?: { user_id: string; name: string; at?: string }
+  engine?: { state: string; last_decision: string; episode: number; step: number; hops: number; entered_queue_at: string; waiting_seconds?: number; next_attempt_at?: string }
+  schedule?: Availability
+  sla: { metric: string; state: string; started_at: string; risk_at: string; deadline_at: string; counting: string; met_at?: string; breached_at?: string }[]
+  history: { at: string; trigger: string; decision: string; reason: string; destination?: string; destination_label?: string; attempts: number }[]
+}
+
+export const routingAPI = {
+  conversation: (conversationId: string) =>
+    call<ConversationRouting>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/routing`, h())),
+}

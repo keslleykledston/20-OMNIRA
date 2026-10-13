@@ -16,6 +16,7 @@ import { ContactNotes } from '../contacts/ContactNotes';
 import { WhatsAppName } from '../contacts/WhatsAppName';
 import { ChannelSwitcher } from './ChannelSwitcher';
 import AttendanceMemoryPanel from './AttendanceMemoryPanel';
+import RoutingPanel from './RoutingPanel';
 import HistorySearch from './HistorySearch';
 import FinalizeDialog from './FinalizeDialog';
 import { finalizedNotice } from '../../lib/attendance';
@@ -390,6 +391,13 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
       <CollapsibleSection id="topics" title="Assuntos" icon="conversations">
         <TopicsPanel conversationId={conversationId} />
       </CollapsibleSection>
+
+      {/* ADR-0044: setor, grupo, espera, SLA e histórico de roteamento */}
+      {!internal && (
+        <CollapsibleSection id="routing" title="Roteamento e SLA" icon="clock">
+          <RoutingPanel conversationId={conversationId} />
+        </CollapsibleSection>
+      )}
 
       {/* Chamado + atividade CRM */}
       <CollapsibleSection id="ticket" title="Chamado" icon="tickets" defaultOpen>

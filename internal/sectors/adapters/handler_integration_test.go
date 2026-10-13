@@ -1009,3 +1009,82 @@ func TestClosedNoticeAPIValidationPermissionsIsolationAndAudit(t *testing.T) {
 		t.Fatal("removed")
 	}
 }
+
+func TestConversationRoutingViewShowsWhereWhyAndSLAWithoutLeakingAcrossCompanies(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin, agent := e.member(t, a, "tenant_admin"), e.member(t, a, "tenant_agent")
+	adminB := e.member(t, b, "tenant_admin")
+	sec := decode[sectorItem](t, e.call(t, a, admin, "POST", "/", e.h.CreateSector, nil, map[string]string{"name": "Financeiro"})).ID
+	q, next := e.queue(t, a, "Cobrança", false), e.queue(t, a, "Suporte N2", false)
+	if code := e.call(t, a, admin, "PUT", "/", e.h.SetQueueSector, map[string]string{"queue_id": q.String()}, map[string]any{"sector_id": sec}).Code; code != http.StatusOK {
+		t.Fatalf("link: %d", code)
+	}
+	contact, conv := uuid.New(), uuid.New()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := e.seed.Exec(context.Background(), sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO contacts (id, tenant_id, display_name, phone_e164, status) VALUES ($1,$2,'C',$3,'active')`, contact, a, "+559299"+fmt.Sprintf("%07d", time.Now().UnixNano()/1000%10000000))
+	exec(`INSERT INTO conversations (id, tenant_id, contact_id, queue_id, status) VALUES ($1,$2,$3,$4,'open')`, conv, a, contact, q)
+	exec(`INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id, origin_queue_id, hops, episode, step_index, visited) VALUES ($1,$2,'waiting_open',$3,$4,1,1,1,ARRAY[]::text[])`, a, conv, q, next)
+	exec(`INSERT INTO routing_engine_decisions (tenant_id, conversation_id, episode, step_index, trigger, decision, destination, reason) VALUES ($1,$2,1,1,'route','OVERFLOW',$3,'chain')`, a, conv, "queue:"+next.String())
+	exec(`INSERT INTO routing_engine_decisions (tenant_id, conversation_id, episode, step_index, trigger, decision, destination, reason) VALUES ($1,$2,1,0,'route','ENQUEUE',$3,'foreign')`, a, conv, "queue:"+uuid.NewString())
+	exec(`INSERT INTO conversation_sla (tenant_id, conversation_id, metric, started_at, anchor_at, budget_seconds, risk_percent, counting, calendar_queue_id, deadline_at, risk_at, state)
+		VALUES ($1,$2,'assignment', now()-interval '5 minutes', now()-interval '5 minutes', 600, 80, 'wall', $3, now()+interval '5 minutes', now()+interval '3 minutes','running')`, a, conv, q)
+
+	get := func(tenant, actor, id uuid.UUID) *httptest.ResponseRecorder {
+		return e.call(t, tenant, actor, "GET", "/", e.h.GetConversationRouting, map[string]string{"conversation_id": id.String()}, nil)
+	}
+	rec := get(a, agent, conv) // an attendant can read where a conversation is (conversation.read)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read: %d %s", rec.Code, rec.Body.String())
+	}
+	got := decode[struct {
+		Queue    routingRef `json:"queue"`
+		Sector   routingRef `json:"sector"`
+		Engine   map[string]any
+		Schedule Availability
+		SLA      []routingSLAItem      `json:"sla"`
+		History  []routingDecisionItem `json:"history"`
+	}](t, rec)
+	var raw map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &raw)
+	if got.Queue.Name != "Cobrança" || got.Sector.Name != "Financeiro" || got.Sector.ID != sec {
+		t.Fatalf("where it is: %+v %+v", got.Queue, got.Sector)
+	}
+	eng, _ := raw["engine"].(map[string]any)
+	if eng["state"] != "waiting_open" || eng["hops"] != float64(1) || eng["waiting_seconds"] == nil {
+		t.Fatalf("why it waits: %v", eng)
+	}
+	if len(got.SLA) != 1 || got.SLA[0].Metric != "assignment" || got.SLA[0].State != "running" {
+		t.Fatalf("sla: %+v", got.SLA)
+	}
+	if len(got.History) != 2 {
+		t.Fatalf("history: %+v", got.History)
+	}
+	labels := map[string]string{}
+	for _, h := range got.History {
+		labels[h.Decision] = h.DestinationLabel
+	}
+	if labels["OVERFLOW"] != "Suporte N2" || labels["ENQUEUE"] != "" {
+		t.Fatalf("a destination is named only when it is a thing of THIS company: %v", labels)
+	}
+	// another company's conversation is simply not found, for its own admin and for A's
+	if get(a, admin, uuid.New()).Code != http.StatusNotFound {
+		t.Fatal("unknown id")
+	}
+	if get(b, adminB, conv).Code != http.StatusNotFound {
+		t.Fatal("B cannot read A's conversation")
+	}
+	// a conversation of a contact declared internal is hidden from whoever lacks conversation.read_internal, as in the Inbox
+	exec(`UPDATE contacts SET kind='internal', internal_role='team' WHERE id=$1`, contact)
+	if got := get(a, agent, conv).Code; got != http.StatusNotFound {
+		t.Fatalf("an attendant without conversation.read_internal must not see an internal conversation: %d", got)
+	}
+	if got := get(a, admin, conv).Code; got != http.StatusOK {
+		t.Fatalf("the administrator holds conversation.read_internal: %d", got)
+	}
+}
