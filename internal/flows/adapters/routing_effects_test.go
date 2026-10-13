@@ -122,3 +122,63 @@ func TestApplyOverflowNeedsTheEngine(t *testing.T) {
 		}
 	})
 }
+
+// Codex 6a: a queue of an INACTIVE sector is unavailable for the flow nodes, however they reach it.
+func TestQueueOfAnInactiveSectorIsUnavailableToFlows(t *testing.T) {
+	f := newFx(t)
+	env := f.env
+	rx := f.effects.WithRouting(nil, noPresence{})
+	sec := f.sector(env.TenantA, "Vai fechar", true)
+	q := f.sectorQueue(env.TenantA, sec, "Fila do setor")
+	loose := f.queue(env.TenantA, "Sem setor", "manual", false)
+	f.sys(env.TenantA, func(ctx context.Context) {
+		if got, _ := rx.Schedule(ctx, "queue", q); got != "open" {
+			t.Fatalf("active sector: %q", got)
+		}
+		if got, _ := rx.Schedule(ctx, "queue", loose); got != "open" {
+			t.Fatalf("a queue without a sector keeps working as before: %q", got)
+		}
+	})
+	f.exec(`UPDATE sectors SET active=false WHERE id=$1`, sec)
+	f.sys(env.TenantA, func(ctx context.Context) {
+		if got, _ := rx.Schedule(ctx, "queue", q); got != "unavailable" {
+			t.Fatalf("schedule of a queue in an inactive sector: %q", got)
+		}
+		if got, _ := rx.Availability(ctx, "queue", q); got != "missing" {
+			t.Fatalf("availability of a queue in an inactive sector: %q", got)
+		}
+		if got, _ := rx.Schedule(ctx, "queue", loose); got != "open" {
+			t.Fatalf("unrelated queue unaffected: %q", got)
+		}
+	})
+}
+
+// Codex 6a: while the overflow chain is working a conversation, a flow cannot move it (that would start a fresh episode and empty the loop guard).
+func TestAFlowCannotMoveAConversationTheChainIsWorking(t *testing.T) {
+	f := newFx(t)
+	env := f.env
+	rx := f.effects.WithRouting(nil, noPresence{})
+	conv, _ := env.SeedConversation(t, env.TenantA, "bot")
+	sec := f.sector(env.TenantA, "Destino", true)
+	q := f.sectorQueue(env.TenantA, sec, "Fila destino")
+	origin := f.queue(env.TenantA, "Origem", "manual", false)
+	f.exec(`UPDATE conversations SET queue_id=$2 WHERE id=$1`, conv, origin)
+	f.exec(`INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id, origin_queue_id, hops, visited) VALUES ($1,$2,'queued',$3,$3,2,ARRAY['queue:a','queue:b'])`, env.TenantA, conv, origin)
+	f.sys(env.TenantA, func(ctx context.Context) {
+		if got, err := rx.AssignSector(ctx, conv, sec); err != nil || got != "unavailable" {
+			t.Fatalf("a conversation the chain moved (hops=2) must not be moved by a flow: %q %v", got, err)
+		}
+	})
+	var queue uuid.UUID
+	if err := env.Seed.QueryRow(context.Background(), `SELECT queue_id FROM conversations WHERE id=$1`, conv).Scan(&queue); err != nil || queue != origin {
+		t.Fatalf("the refused move changed nothing: %v %v", queue, err)
+	}
+	// once it is finished (assigned) or the chain has not moved it, the flow may route
+	f.exec(`UPDATE routing_engine_state SET hops=0 WHERE conversation_id=$1`, conv)
+	f.sys(env.TenantA, func(ctx context.Context) {
+		if got, err := rx.AssignSector(ctx, conv, sec); err != nil || got != "assigned" {
+			t.Fatalf("hops=0: %q %v", got, err)
+		}
+	})
+	_ = q
+}

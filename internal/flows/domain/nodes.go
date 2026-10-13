@@ -127,6 +127,12 @@ func checkVarName(n Node, a *NodeAnalysis, field, name string) {
 	a.Defines = append(a.Defines, name)
 }
 
+func checkVarRef(n Node, a *NodeAnalysis, name string) {
+	if !variableName.MatchString(name) {
+		a.Issues = append(a.Issues, errIssue(n, "invalid_variable", fmt.Sprintf("%q: from_variable %q must match [a-z][a-z0-9_]* (max 41)", n.ID, name)))
+	}
+}
+
 func checkTimeout(n Node, a *NodeAnalysis, seconds, attempts int) {
 	if seconds < 0 || seconds > 30*24*3600 {
 		a.Issues = append(a.Issues, errIssue(n, "invalid_timeout", fmt.Sprintf("%q: timeout_seconds must be between 0 and 30 days", n.ID)))
@@ -411,8 +417,12 @@ func init() {
 			if c, ok := cfg[SelectSectorConfig](n, &a); ok {
 				checkText(n, &a, "text", c.Text, false)
 				checkTimeout(n, &a, c.TimeoutSeconds, c.MaxAttempts)
+				name := c.Variable
+				if name == "" {
+					name = "sector"
+				}
+				checkVarName(n, &a, "variable", name) // the variable the executor really writes (default "sector")
 			}
-			a.Defines = append(a.Defines, "sector")
 			return a
 		}})
 
@@ -426,6 +436,7 @@ func init() {
 				case c.Sector != nil && !c.Sector.IsZero():
 					checkResource(n, &a, "sector", *c.Sector, true)
 				case c.FromVariable != "":
+					checkVarRef(n, &a, c.FromVariable)
 					a.Reads = append(a.Reads, c.FromVariable+".id")
 				default:
 					a.Issues = append(a.Issues, errIssue(n, "missing_resource", fmt.Sprintf("%q: a sector (or the variable that holds the chosen one) is required", n.ID)))

@@ -156,10 +156,13 @@ func (c *ControlPlane) check(ctx context.Context, slug string, def *domain.Defin
 				for k, v := range f {
 					found[k] = v
 				}
-			} // a checker that cannot tell about sectors leaves them unverified; the node still takes its "unavailable" port at run time
+			}
 		}
 		for _, r := range refs {
 			if r.Kind == "sector" && !hasSectorChecker(c.resources) {
+				// fail closed: a wiring that cannot verify sectors must not publish a flow that names one
+				issues = append(issues, domain.Issue{Severity: domain.SeverityError, Code: "resource_unverifiable", NodeID: r.NodeID,
+					Message: fmt.Sprintf("%q references a sector that cannot be verified in this environment", r.NodeID)})
 				continue
 			}
 			if !found[r.ID] {

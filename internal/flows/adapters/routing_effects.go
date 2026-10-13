@@ -42,7 +42,9 @@ func (r *RoutingEffects) tenant(ctx context.Context) (uuid.UUID, platformdb.Quer
 func (r *RoutingEffects) placeQueues(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, kind string, id uuid.UUID) ([]uuid.UUID, bool, error) {
 	if kind == "queue" {
 		var one uuid.UUID
-		err := q.QueryRow(ctx, `SELECT id FROM queues WHERE tenant_id=$1 AND id=$2`, tenant, id).Scan(&one)
+		// a queue of an INACTIVE sector is unavailable too (a deactivated sector takes the flow to its "unavailable" port, however it is reached)
+		err := q.QueryRow(ctx, `SELECT qq.id FROM queues qq LEFT JOIN sectors sc ON sc.tenant_id=qq.tenant_id AND sc.id=qq.sector_id
+			WHERE qq.tenant_id=$1 AND qq.id=$2 AND (qq.sector_id IS NULL OR sc.active)`, tenant, id).Scan(&one)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil, false, nil
@@ -157,6 +159,16 @@ func (r *RoutingEffects) AssignSector(ctx context.Context, conversationID, secto
 	_, ok, err := r.placeQueues(ctx, q, tenant, "sector", sectorID)
 	if err != nil || !ok {
 		return "unavailable", err
+	}
+	// the overflow chain is authoritative while it runs: a flow may not move a conversation the chain has already moved (that would start a
+	// fresh episode and empty its loop guard). The author's "unavailable" port handles it.
+	var hops int
+	var state string
+	switch err := q.QueryRow(ctx, `SELECT hops, state FROM routing_engine_state WHERE tenant_id=$1 AND conversation_id=$2`, tenant, conversationID).Scan(&hops, &state); {
+	case err == nil && hops > 0 && state != "assigned" && state != "done":
+		return "unavailable", nil
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return "", err
 	}
 	var now time.Time
 	if err := q.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
