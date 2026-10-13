@@ -216,7 +216,7 @@ func TestHTTPLiveValidationAndNodeCatalog(t *testing.T) {
 	}
 	code, cat := hn.call(env.UserA, env.TenantA, "GET", "/flow-node-types", nil)
 	items, _ := cat["items"].([]any)
-	if code != 200 || len(items) != 20 {
+	if code != 200 || len(items) != 25 { // 20 original nodes + 5 routing nodes (ADR-0044)
 		t.Fatalf("catalog: %d %d", code, len(items))
 	}
 }
