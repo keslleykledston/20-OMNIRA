@@ -65,7 +65,8 @@ func SpecFor(t NodeType) (NodeSpec, bool) { s, ok := specs[t]; return s, ok }
 func Specs() []NodeSpec {
 	order := []NodeType{NodeTrigger, NodeSendMessage, NodeAsk, NodeChoice, NodeCondition, NodeSwitch, NodeSetVariable,
 		NodeBusinessHours, NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets,
-		NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd}
+		NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd,
+		NodeCheckSchedule, NodeCheckAvailability, NodeSelectSector, NodeAssignSector, NodeApplyOverflow}
 	out := make([]NodeSpec, 0, len(order))
 	for _, t := range order {
 		if s, ok := specs[t]; ok {
@@ -124,6 +125,12 @@ func checkVarName(n Node, a *NodeAnalysis, field, name string) {
 		return
 	}
 	a.Defines = append(a.Defines, name)
+}
+
+func checkVarRef(n Node, a *NodeAnalysis, name string) {
+	if !variableName.MatchString(name) {
+		a.Issues = append(a.Issues, errIssue(n, "invalid_variable", fmt.Sprintf("%q: from_variable %q must match [a-z][a-z0-9_]* (max 41)", n.ID, name)))
+	}
 }
 
 func checkTimeout(n Node, a *NodeAnalysis, seconds, attempts int) {
@@ -371,6 +378,77 @@ func init() {
 				}
 				checkText(n, &a, "summary", c.Summary, false)
 			}
+			return a
+		}})
+
+	exactlyOnePlace := func(n Node, a *NodeAnalysis, c ScheduleCheckConfig) {
+		switch {
+		case c.Queue != nil && !c.Queue.IsZero() && c.Sector != nil && !c.Sector.IsZero():
+			a.Issues = append(a.Issues, errIssue(n, "ambiguous_place", fmt.Sprintf("%q: name a queue OR a sector, not both", n.ID)))
+		case c.Queue != nil && !c.Queue.IsZero():
+			checkResource(n, a, "queue", *c.Queue, true)
+		case c.Sector != nil && !c.Sector.IsZero():
+			checkResource(n, a, "sector", *c.Sector, true)
+		default:
+			a.Issues = append(a.Issues, errIssue(n, "missing_resource", fmt.Sprintf("%q: a queue or a sector is required", n.ID)))
+		}
+	}
+	register(NodeSpec{Type: NodeCheckSchedule, Label: "Check schedule", Category: "logic", SideEffect: EffectNone,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: append(req("open", "closed"), Port{"unavailable", false})}
+			if c, ok := cfg[ScheduleCheckConfig](n, &a); ok {
+				exactlyOnePlace(n, &a, c)
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeCheckAvailability, Label: "Check availability", Category: "logic", SideEffect: EffectNone,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: append(req("available", "unavailable"), Port{"closed", false}, Port{"missing", false})}
+			if c, ok := cfg[ScheduleCheckConfig](n, &a); ok {
+				exactlyOnePlace(n, &a, c)
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeSelectSector, Label: "Choose sector", Category: "conversation", SideEffect: EffectExternal, Waits: true,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: append(req("selected", "timeout"), append([]Port{{"none", false}}, sendOutcomePorts...)...)}
+			if c, ok := cfg[SelectSectorConfig](n, &a); ok {
+				checkText(n, &a, "text", c.Text, false)
+				checkTimeout(n, &a, c.TimeoutSeconds, c.MaxAttempts)
+				name := c.Variable
+				if name == "" {
+					name = "sector"
+				}
+				checkVarName(n, &a, "variable", name) // the variable the executor really writes (default "sector")
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeAssignSector, Label: "Send to sector", Category: "action", SideEffect: EffectLocal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: []Port{{"next", true}, {"unavailable", false}, {"error", false}}}
+			if c, ok := cfg[AssignSectorConfig](n, &a); ok {
+				switch {
+				case c.Sector != nil && !c.Sector.IsZero() && c.FromVariable != "":
+					a.Issues = append(a.Issues, errIssue(n, "ambiguous_place", fmt.Sprintf("%q: a fixed sector OR a variable, not both", n.ID)))
+				case c.Sector != nil && !c.Sector.IsZero():
+					checkResource(n, &a, "sector", *c.Sector, true)
+				case c.FromVariable != "":
+					checkVarRef(n, &a, c.FromVariable)
+					a.Reads = append(a.Reads, c.FromVariable+".id")
+				default:
+					a.Issues = append(a.Issues, errIssue(n, "missing_resource", fmt.Sprintf("%q: a sector (or the variable that holds the chosen one) is required", n.ID)))
+				}
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeApplyOverflow, Label: "Apply overflow policy", Category: "action", SideEffect: EffectLocal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: append(req("assigned", "queued"), Port{"waiting_open", false}, Port{"manual", false}, Port{"error", false})}
+			cfg[ApplyOverflowConfig](n, &a)
 			return a
 		}})
 

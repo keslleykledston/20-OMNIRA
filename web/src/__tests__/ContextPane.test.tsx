@@ -100,6 +100,7 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
   // ADR-0017 added the topic surface to this pane: it may also READ the conversation's topics and ambiguities and the
   // caller's permissions (all GET, all tenant-scoped, none to a provider). Still never a POST on open.
   // ADR-0020 adds one more READ of our own backend: the contact's attendance history and open follow-ups.
+  // ADR-0044 adds one more READ of our own backend: where the conversation is routed and its SLA clocks (…/routing). Still never a provider.
   it('introduces no new backend/provider request', async () => {
     mockConversation({ crm_contact_id: 'k3g-contact-999' });
     renderAt(<ContextPane conversationId={CONV} />);
@@ -110,7 +111,7 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
       expect(
         url.endsWith(`/inbox/conversations/${CONV}`) || url.endsWith('/crm/companies') || url.endsWith('/ticket') ||
           url.endsWith(`/inbox/conversations/${CONV}/topics`) || url.endsWith(`/inbox/conversations/${CONV}/ambiguities`) || url.endsWith('/me/access') ||
-          url.endsWith(`/inbox/conversations/${CONV}/attendance-context`) || url.endsWith('/channels/lines'),
+          url.endsWith(`/inbox/conversations/${CONV}/attendance-context`) || url.endsWith('/channels/lines') || url.endsWith(`/inbox/conversations/${CONV}/routing`),
       ).toBe(true);
     }
     expect(axios.post).not.toHaveBeenCalled();

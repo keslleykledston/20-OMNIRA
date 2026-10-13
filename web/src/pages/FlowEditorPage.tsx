@@ -13,6 +13,7 @@ import FlowSettingsModal from '../components/flows/FlowSettingsModal'
 import { flowErrorBody, flowErrorMessage, flowErrorStatus, flowsAPI, type FlowDefinition, type Issue, type Scenario, type SimulationResult } from '../lib/flows'
 import { addNode, autoLayout, connect, disconnect, hasBlocking, moveNode, removeNode, stableJSON, updateConfig } from '../lib/flowModel'
 import { queuesAPI } from '../lib/queues'
+import { sectorsAPI } from '../lib/sectors'
 import { useChannelLines } from '../lib/channelLines'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
@@ -37,6 +38,7 @@ export default function FlowEditorPage() {
   const flowQ = useQuery({ queryKey: ['flow', tenantId, flowId], queryFn: () => flowsAPI.get(flowId), enabled: canView && !!flowId, retry: false })
   const typesQ = useQuery({ queryKey: ['flow-node-types', tenantId], queryFn: flowsAPI.nodeTypes, enabled: canView, staleTime: 300_000, retry: false })
   const queuesQ = useQuery({ queryKey: ['queues', tenantId], queryFn: queuesAPI.list, enabled: canView && canEdit, retry: false })
+  const sectorsQ = useQuery({ queryKey: ['sectors', tenantId], queryFn: sectorsAPI.list, enabled: canView && canEdit, retry: false })
   const subflowsQ = useQuery({ queryKey: ['flows-subflows', tenantId], queryFn: () => flowsAPI.list({ type: 'SUBFLOW', status: 'published' }), enabled: canView && canEdit, retry: false })
   const versionsQ = useQuery({ queryKey: ['flow-versions', tenantId, flowId], queryFn: () => flowsAPI.versions(flowId), enabled: canView && !!flowId, retry: false })
   const lines = useChannelLines()
@@ -314,6 +316,7 @@ export default function FlowEditorPage() {
               <NodeInspector
                 node={selected}
                 queues={(queuesQ.data ?? []).map((q) => ({ id: q.id, name: q.name }))}
+                sectors={(sectorsQ.data ?? []).map((x) => ({ id: x.id, name: x.name, active: x.active }))}
                 subflows={(subflowsQ.data ?? []).filter((f) => f.id !== flowId)}
                 variables={variables}
                 readOnly={readOnly}

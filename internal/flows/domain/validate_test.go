@@ -169,7 +169,8 @@ func TestParseDefinitionLimits(t *testing.T) {
 
 func TestEveryNodeTypeHasASpec(t *testing.T) {
 	all := []NodeType{NodeTrigger, NodeSendMessage, NodeAsk, NodeChoice, NodeCondition, NodeSwitch, NodeSetVariable, NodeBusinessHours,
-		NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets, NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd}
+		NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets, NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd,
+		NodeCheckSchedule, NodeCheckAvailability, NodeSelectSector, NodeAssignSector, NodeApplyOverflow}
 	for _, nt := range all {
 		if _, ok := SpecFor(nt); !ok {
 			t.Errorf("node type %s has no spec", nt)
@@ -274,4 +275,31 @@ func TestRedact(t *testing.T) {
 		t.Fatal("undecodable input must not be stored raw")
 	}
 	_ = uuid.Nil
+}
+
+func TestSelectSectorVariableIsTheOneTheExecutorWrites(t *testing.T) {
+	flow := func(selVar, fromVar string) string {
+		return `{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},
+		 {"id":"pick","type":"select_sector","config":{` + selVar + `}},
+		 {"id":"go","type":"assign_sector","config":{"from_variable":"` + fromVar + `"}},
+		 {"id":"done","type":"end"},{"id":"out","type":"end"},{"id":"none","type":"end"}],
+		 "edges":[{"id":"1","source":"start","sourcePort":"next","target":"pick"},{"id":"2","source":"pick","sourcePort":"selected","target":"go"},
+		 {"id":"3","source":"pick","sourcePort":"timeout","target":"out"},{"id":"4","source":"go","sourcePort":"next","target":"done"}]}`
+	}
+	// default variable "sector"
+	if e := codes(Validate(mustDef(t, flow(`"text":"x"`, "sector")), ValidateOptions{}), SeverityError); e["unknown_variable"] != 0 || e["invalid_variable"] != 0 {
+		t.Fatalf("default variable must validate: %v", e)
+	}
+	// a custom variable is what the executor writes, so reading it back must validate...
+	if e := codes(Validate(mustDef(t, flow(`"variable":"department"`, "department")), ValidateOptions{}), SeverityError); e["unknown_variable"] != 0 {
+		t.Fatalf("custom variable written and read must validate: %v", e)
+	}
+	// ...and reading a variable nothing writes must still be caught
+	if e := codes(Validate(mustDef(t, flow(`"variable":"department"`, "sector")), ValidateOptions{}), SeverityError); e["unknown_variable"] == 0 {
+		t.Fatalf("reading a variable nobody defines must be an error: %v", e)
+	}
+	// names must be well formed
+	if e := codes(Validate(mustDef(t, flow(`"variable":"Bad Name"`, "x")), ValidateOptions{}), SeverityError); e["invalid_variable"] == 0 {
+		t.Fatalf("a malformed variable name must be rejected: %v", e)
+	}
 }

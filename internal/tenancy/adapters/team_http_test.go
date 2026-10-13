@@ -348,7 +348,7 @@ func TestListRolesReturnsFixedPermissionMatrixReadOnly(t *testing.T) {
 	want := map[string][]string{
 		"tenant_admin": {
 			"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "channel.manage", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal",
-			"dashboard.read", "flow.archive", "flow.create", "flow.edit", "flow.publish", "flow.test", "flow.view", "flow_run.view", "flow_template.install", "flow_template.view", "group.manage", "group.read", "identity.manage", "membership.manage", "membership.read", "tenant.manage", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "topic.manage", "topic.read",
+			"dashboard.read", "flow.archive", "flow.create", "flow.edit", "flow.publish", "flow.test", "flow.view", "flow_run.view", "flow_template.install", "flow_template.view", "group.manage", "group.read", "identity.manage", "membership.manage", "membership.read", "routing.override", "tenant.manage", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "topic.manage", "topic.read",
 		},
 		"tenant_supervisor": {"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "dashboard.read", "flow.test", "flow.view", "flow_run.view", "flow_template.view", "group.manage", "group.read", "membership.read", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "topic.manage", "topic.read"},
 		// PRODUCT.6-F: ticket.create does not imply ticket.read.

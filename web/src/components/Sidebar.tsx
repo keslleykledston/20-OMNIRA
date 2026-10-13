@@ -38,6 +38,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
   { label: 'Pessoas', path: '/settings/people', icon: 'contacts', alsoActiveOn: '/settings/people/team,/settings/people/agents,/settings/roles' },
+  { label: 'Atendimento', path: '/settings/attendance', icon: 'clock', alsoActiveOn: '/settings/attendance/sectors,/settings/attendance/calendars,/settings/attendance/shifts,/settings/attendance/overflow' },
   { label: 'Configurações', path: '/settings/general', icon: 'settings' },
 ]
 

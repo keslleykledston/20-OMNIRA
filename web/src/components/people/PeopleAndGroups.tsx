@@ -54,10 +54,11 @@ export interface PeopleAndGroupsProps {
   onDeleteGroup: (id: string) => void
 }
 
-const MODE_LABEL: Record<QueueMode, string> = { manual: 'Manual', round_robin: 'Rodízio' }
+const MODE_LABEL: Record<QueueMode, string> = { manual: 'Manual', round_robin: 'Rodízio', least_loaded: 'Menor carga' }
 const MODE_HELP: Record<QueueMode, string> = {
   manual: 'As conversas ficam no grupo para os operadores assumirem.',
   round_robin: 'O sistema distribui as conversas entre os operadores disponíveis.',
+  least_loaded: 'O sistema entrega a conversa a quem tem menos conversas abertas agora. Só pode ser usada quando o motor de roteamento estiver ligado neste ambiente.',
 }
 const NAME_MAX = 60
 const CAPACITY_MIN = 1
@@ -400,7 +401,7 @@ function NewGroupModal({ busy, onCancel, onCreate }: { busy: boolean; onCancel: 
         <fieldset>
           <legend className="mb-2 text-sm font-medium text-text-primary">Modo</legend>
           <div className="flex flex-wrap gap-4">
-            {(['manual', 'round_robin'] as const).map((m) => (
+            {(['manual', 'round_robin', 'least_loaded'] as const).map((m) => (
               <label key={m} className="inline-flex items-center gap-2 text-sm text-text-primary">
                 <input type="radio" name={radioName} checked={mode === m} onChange={() => setMode(m)} className="h-4 w-4 accent-[var(--color-accent-primary,#2563eb)]" />
                 {MODE_LABEL[m]}
@@ -473,6 +474,7 @@ function GroupCard({ group, canManage, busy, props }: { group: GroupRow; canMana
             >
               <option value="manual">Manual</option>
               <option value="round_robin">Rodízio</option>
+              <option value="least_loaded">Menor carga</option>
             </select>
             <div>
               <Button size="sm" variant="tertiary" className="text-status-danger" disabled={group.isDefault || busy} onClick={() => setConfirmDelete(true)}>

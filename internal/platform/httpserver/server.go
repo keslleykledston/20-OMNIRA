@@ -42,6 +42,7 @@ import (
 	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
+	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -421,6 +422,51 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/queues/{queue_id}", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Delete))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/queues/lines", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.ListLineQueues))))
 	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/channels/lines/{connection_id}/queue", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.SetLineQueue))))
+	// ADR-0044: sectors, operational calendars and the availability of a queue (agent.read / agent.manage inside the handler)
+	sectorsHandler := sectorsadapters.NewHandler(dbPool, auditRepo)
+	if s.valkeyClient != nil { // "who can take it now" reads the same presence the routing worker reads; without it a company that requires presence would see everyone as unavailable
+		sectorsHandler = sectorsHandler.WithPresence(presenceadapters.NewStore(s.valkeyClient))
+	}
+	for _, rt := range []struct {
+		pattern string
+		fn      http.HandlerFunc
+	}{
+		{"GET /api/v1/tenants/{tenant_id}/sectors", sectorsHandler.ListSectors},
+		{"POST /api/v1/tenants/{tenant_id}/sectors", sectorsHandler.CreateSector},
+		{"PATCH /api/v1/tenants/{tenant_id}/sectors/{sector_id}", sectorsHandler.UpdateSector},
+		{"GET /api/v1/tenants/{tenant_id}/calendars", sectorsHandler.ListCalendars},
+		{"POST /api/v1/tenants/{tenant_id}/calendars", sectorsHandler.CreateCalendar},
+		{"GET /api/v1/tenants/{tenant_id}/calendars/{calendar_id}", sectorsHandler.GetCalendar},
+		{"PUT /api/v1/tenants/{tenant_id}/calendars/{calendar_id}", sectorsHandler.UpdateCalendar},
+		{"DELETE /api/v1/tenants/{tenant_id}/calendars/{calendar_id}", sectorsHandler.DeleteCalendar},
+		{"POST /api/v1/tenants/{tenant_id}/calendars/{calendar_id}/suspensions", sectorsHandler.AddSuspension},
+		{"DELETE /api/v1/tenants/{tenant_id}/calendars/{calendar_id}/suspensions/{suspension_id}", sectorsHandler.RemoveSuspension},
+		{"PUT /api/v1/tenants/{tenant_id}/settings/default-calendar", sectorsHandler.SetDefaultCalendar},
+		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/sector", sectorsHandler.SetQueueSector},
+		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/calendar", sectorsHandler.SetQueueCalendar},
+		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/availability", sectorsHandler.QueueAvailability},
+		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/closed-notice", sectorsHandler.GetClosedNotice},
+		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/closed-notice", sectorsHandler.PutClosedNotice},
+		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/eligibility", sectorsHandler.QueueEligibility},
+		{"GET /api/v1/tenants/{tenant_id}/hub-contracts", sectorsHandler.ListHubContracts},
+		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/overflow-policy", sectorsHandler.GetOverflowPolicy},
+		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/overflow-policy", sectorsHandler.PutOverflowPolicy},
+		{"DELETE /api/v1/tenants/{tenant_id}/queues/{queue_id}/overflow-policy", sectorsHandler.DeleteOverflowPolicy},
+		{"GET /api/v1/tenants/{tenant_id}/sla-policies", sectorsHandler.ListSLAPolicies},
+		{"PUT /api/v1/tenants/{tenant_id}/sla-policies", sectorsHandler.PutSLAPolicy},
+		{"DELETE /api/v1/tenants/{tenant_id}/sla-policies", sectorsHandler.DeleteSLAPolicy},
+		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/sla", sectorsHandler.QueueSLA},
+		{"GET /api/v1/tenants/{tenant_id}/shifts", sectorsHandler.ListShifts},
+		{"PUT /api/v1/tenants/{tenant_id}/shifts", sectorsHandler.SetShift},
+		{"GET /api/v1/tenants/{tenant_id}/on-call/rosters", sectorsHandler.ListRosters},
+		{"POST /api/v1/tenants/{tenant_id}/on-call/rosters", sectorsHandler.CreateRoster},
+		{"PATCH /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}", sectorsHandler.UpdateRoster},
+		{"GET /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}/periods", sectorsHandler.ListPeriods},
+		{"POST /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}/periods", sectorsHandler.AddPeriod},
+		{"DELETE /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}/periods/{period_id}", sectorsHandler.RemovePeriod},
+	} {
+		s.mux.Handle(rt.pattern, authnMiddleware(tenantSession(rt.fn)))
+	}
 	// IAM4 operational agents; legacy /users/agents keeps its co-attendance semantics.
 	agentProfiles := tenancyadapters.NewAgentProfilesHandler(dbPool, auditRepo)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/agents", authnMiddleware(tenantSession(http.HandlerFunc(agentProfiles.List))))
@@ -551,6 +597,8 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	realtimeHandler := inboxadapters.NewRealtimeHandler(s.natsConn, streamAuth, inboxadapters.RealtimeOptions{SessionRecheck: s.streamCredentialRecheck()})
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListConversations)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.GetConversation)))))
+	// ADR-0044: where the conversation is routed and why (read-only; whoever can read the conversation, also a Hub operator serving it)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/routing", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(sectorsadapters.NewHandler(dbPool, nil).GetConversationRouting)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", tenancyadapters.Delegable("conversation.read", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", tenancyadapters.Delegable("conversation.read", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents)))))

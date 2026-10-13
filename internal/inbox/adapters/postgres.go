@@ -24,6 +24,15 @@ type PostgresInboundStore struct {
 	pool *pgxpool.Pool
 	// kindDisabled turns the conversation_kind derivation off (OMNIRA_CONVERSATION_KIND_ENABLED=false).
 	kindDisabled bool
+	// engineRouting: the central routing engine (ADR-0044) is on, so a new conversation of a MANUAL queue also gets its routing job. The engine
+	// never assigns inside a manual queue; it applies the sector's closed-hours notice, the SLA clocks and the overflow chain to it.
+	engineRouting bool
+}
+
+// WithEngineRouting says the central routing engine is enabled (OMNIRA_ROUTING_ENGINE_ENABLED); see engineRouting.
+func (s *PostgresInboundStore) WithEngineRouting(enabled bool) *PostgresInboundStore {
+	s.engineRouting = enabled
+	return s
 }
 
 // WithConversationKind switches the derivation of conversation_kind on (the default) or off.
@@ -131,9 +140,9 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		  -- window (routing.SweepRetryBackoff, internal/worker/routing/liveness.go)
 		  -- so the IAM4.2-B0 safety sweep never fires on a conversation still
 		  -- being retried by its original job. NULL for non-round_robin
-		  -- (manual) queues: the sweep already excludes them by mode.
+		  -- (manual) queues: the sweep already excludes them by mode - unless the central engine is on, which sets it for them too and has the sweep re-trigger a manual conversation the engine has never seen.
 		  UPDATE conversations c SET queue_id=selected.id,updated_at=now(),
-		    routing_retry_at = CASE WHEN selected.mode='round_robin' THEN now() + interval '90 seconds' ELSE NULL END
+		    routing_retry_at = CASE WHEN selected.mode IN ('round_robin','least_loaded') OR $5::boolean THEN now() + interval '90 seconds' ELSE NULL END
 		  FROM selected WHERE c.tenant_id=$1 AND c.id=$2 AND c.queue_id IS NULL
 		    -- ADR-0014: a spam contact's (or a team member's) conversation is stored but never routed to a queue.
 		    AND c.internal_user_id IS NULL -- ADR-0018: a conversation with staff is never queued for customer service
@@ -143,7 +152,7 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		INSERT INTO outbox_events
 		  (id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload)
 		SELECT $3,$1,'job.routing.assign.v1','conversation',id::text,$4,'{}'::jsonb
-		FROM routed WHERE mode='round_robin'`, tenantID, conversationID, uuid.New(), uuid.New())
+		FROM routed WHERE mode IN ('round_robin','least_loaded') OR $5::boolean`, tenantID, conversationID, uuid.New(), uuid.New(), s.engineRouting)
 	return err
 }
 

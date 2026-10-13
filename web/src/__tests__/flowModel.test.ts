@@ -238,3 +238,25 @@ describe('issues', () => {
     expect(groups[3].label).toBe('Inteligência artificial')
   })
 })
+
+describe('nós de roteamento (ADR-0044)', () => {
+  const node = (type: string): FlowNode => ({ id: 'n', type, position: { x: 0, y: 0 } })
+  const names = (type: string, required?: boolean) => portsOf(node(type)).filter((p) => required === undefined || p.required === required).map((p) => p.name)
+
+  it('espelham as portas do catálogo do backend', () => {
+    expect(names('check_schedule', true)).toEqual(['open', 'closed'])
+    expect(names('check_schedule', false)).toEqual(['unavailable'])
+    expect(names('check_availability', true)).toEqual(['available', 'unavailable'])
+    expect(names('check_availability', false)).toEqual(['closed', 'missing'])
+    expect(names('select_sector', true)).toEqual(['selected', 'timeout'])
+    expect(names('assign_sector', true)).toEqual(['next'])
+    expect(names('assign_sector', false)).toEqual(['unavailable', 'error'])
+    expect(names('apply_overflow', true)).toEqual(['assigned', 'queued'])
+    expect(names('apply_overflow', false)).toEqual(['waiting_open', 'manual', 'error'])
+  })
+
+  it('o nó de pergunta de setor nasce com configuração editável', () => {
+    const { def, id } = addNode(EMPTY_DEFINITION, 'select_sector')
+    expect(def.nodes.find((n) => n.id === id)?.config).toEqual({ text: '' })
+  })
+})

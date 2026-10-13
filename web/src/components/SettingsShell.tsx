@@ -24,6 +24,18 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
       { key: 'agents', label: 'Agentes', href: '/settings/people/agents' },
     ]
   },
+  {
+    // ADR-0044: setores, horários, escalas, plantões, transbordo e SLA. Cada subseção é uma página própria, como em Pessoas.
+    key: 'attendance',
+    label: 'Atendimento',
+    href: '/settings/attendance',
+    subsections: [
+      { key: 'sectors', label: 'Setores', href: '/settings/attendance/sectors' },
+      { key: 'calendars', label: 'Horários', href: '/settings/attendance/calendars' },
+      { key: 'shifts', label: 'Escalas e plantões', href: '/settings/attendance/shifts' },
+      { key: 'overflow', label: 'Transbordo e SLA', href: '/settings/attendance/overflow' },
+    ],
+  },
   { key: 'accounts', label: 'Empresas', href: '/accounts' },
 ]
 

@@ -35,10 +35,16 @@ func NewQueuesHandler(p *pgxpool.Pool, a auditports.AuditEventRepository) *Queue
 	return &QueuesHandler{pool: p, audit: a}
 }
 
+// LeastLoadedEnabled says whether the least_loaded strategy can be configured. It is only honoured by the central routing engine, so the
+// API process sets it from OMNIRA_ROUTING_ENGINE_ENABLED (the same value the worker reads); with the engine off a queue could be
+// configured with a mode that is silently ignored, so the API refuses instead.
+var LeastLoadedEnabled = false
+
 const (
-	queueModeManual     = "manual"
-	queueModeRoundRobin = "round_robin"
-	queueNameMaxRunes   = 60
+	queueModeManual      = "manual"
+	queueModeRoundRobin  = "round_robin"
+	queueModeLeastLoaded = "least_loaded"
+	queueNameMaxRunes    = 60
 )
 
 // queueItem never carries tenant_id: the session already establishes it.
@@ -188,8 +194,12 @@ func (h *QueuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = queueModeManual
 	}
-	if mode != queueModeManual && mode != queueModeRoundRobin {
-		http.Error(w, "mode must be manual or round_robin", http.StatusBadRequest)
+	if mode != queueModeManual && mode != queueModeRoundRobin && mode != queueModeLeastLoaded {
+		http.Error(w, "mode must be manual, round_robin or least_loaded", http.StatusBadRequest)
+		return
+	}
+	if mode == queueModeLeastLoaded && !LeastLoadedEnabled {
+		http.Error(w, "least_loaded needs the central routing engine, which is not enabled", http.StatusConflict)
 		return
 	}
 
@@ -263,8 +273,12 @@ func (h *QueuesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		name = n
 	}
-	if req.Mode != nil && *req.Mode != queueModeManual && *req.Mode != queueModeRoundRobin {
-		http.Error(w, "mode must be manual or round_robin", http.StatusBadRequest)
+	if req.Mode != nil && *req.Mode != queueModeManual && *req.Mode != queueModeRoundRobin && *req.Mode != queueModeLeastLoaded {
+		http.Error(w, "mode must be manual, round_robin or least_loaded", http.StatusBadRequest)
+		return
+	}
+	if req.Mode != nil && *req.Mode == queueModeLeastLoaded && !LeastLoadedEnabled {
+		http.Error(w, "least_loaded needs the central routing engine, which is not enabled", http.StatusConflict)
 		return
 	}
 

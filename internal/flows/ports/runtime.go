@@ -70,6 +70,12 @@ type RunRepository interface {
 	SetAutomationMode(ctx context.Context, conversationID uuid.UUID, mode domain.AutomationMode) error
 }
 
+// FlowLookup is an optional RunRepository capability: one PUBLISHED flow of the session tenant by id, only of the types a routing destination
+// may start (INBOUND, AFTER_HOURS). domain.ErrNotFound when it is absent, unpublished, archived, of another type or of another tenant.
+type FlowLookup interface {
+	FlowByID(ctx context.Context, id uuid.UUID) (*domain.Flow, error)
+}
+
 // VersionReader loads published versions (the FlowRepository satisfies it).
 type VersionReader interface {
 	GetVersion(ctx context.Context, id uuid.UUID) (*domain.FlowVersion, error)
@@ -90,6 +96,30 @@ type Effects interface {
 	// Handoff moves the conversation to humans (queue + automation_mode=waiting_human).
 	Handoff(ctx context.Context, conversationID uuid.UUID, queueID *uuid.UUID) error
 	SendText(ctx context.Context, conversationID uuid.UUID, text, idempotencyKey string) (SendStatus, error)
+}
+
+// SectorOption is one active sector of the company, as a menu offers it.
+type SectorOption struct {
+	ID   uuid.UUID
+	Name string
+}
+
+// RoutingEffects is an optional Effects capability (ADR-0044): the routing nodes ask the SHARED services about schedules, availability and
+// sectors and ask the routing engine to route. A flow never re-implements those rules; an Effects without this capability makes the
+// routing nodes take their error port.
+//
+// Place states: "open" | "closed" | "unavailable" (the queue or sector is gone or inactive) for schedules; "available" | "unavailable" |
+// "closed" | "missing" for availability (open, and somebody eligible right now). Overflow outcomes: "assigned" | "queued" |
+// "waiting_open" | "manual".
+type RoutingEffects interface {
+	Schedule(ctx context.Context, kind string, id uuid.UUID) (string, error)     // kind: "queue" | "sector"
+	Availability(ctx context.Context, kind string, id uuid.UUID) (string, error) // kind: "queue" | "sector"
+	ActiveSectors(ctx context.Context) ([]SectorOption, error)
+	// AssignSector routes the conversation to the best queue of the sector ("assigned") or reports "unavailable" (inactive, gone, no usable queue).
+	AssignSector(ctx context.Context, conversationID, sectorID uuid.UUID) (string, error)
+	// ApplyOverflow also returns who now owns the conversation when the outcome is "assigned" (nil otherwise), so the running flow's picture of the
+	// conversation is not left stale for the nodes that follow.
+	ApplyOverflow(ctx context.Context, conversationID uuid.UUID) (string, *uuid.UUID, error)
 }
 
 // CustomerCloser is an optional Effects capability: close the attendance because the CONTACT asked for it (the system is

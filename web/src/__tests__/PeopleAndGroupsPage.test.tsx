@@ -457,3 +457,42 @@ describe('PeopleAndGroupsPage: permissões e estados', () => {
     expect(await screen.findByRole('heading', { name: 'Suporte' })).toBeInTheDocument()
   })
 })
+
+describe('PeopleAndGroupsPage: estratégia Menor carga (ADR-0044)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    setSession()
+  })
+
+  it('oferece Menor carga, explica que exige o motor e envia o modo least_loaded', async () => {
+    const calls = serve(baseWorld())
+    open('/settings/people?aba=grupos')
+    const user = userEvent.setup()
+    const select = await screen.findByLabelText('Modo de Financeiro')
+    expect(within(select).getByRole('option', { name: 'Menor carga' })).toBeInTheDocument()
+    await user.selectOptions(select, 'least_loaded')
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/queues/q2'))?.body).toEqual({ mode: 'least_loaded' }))
+    await user.click(await screen.findByRole('button', { name: /Novo grupo/ }))
+    await user.click(screen.getByLabelText('Menor carga'))
+    expect(within(screen.getByRole('dialog')).getByText(/Só pode ser usada quando o motor de roteamento estiver ligado neste ambiente/)).toBeInTheDocument()
+  })
+})
+
+describe('PeopleAndGroupsPage: Menor carga sem o motor', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    setSession()
+  })
+
+  it('o servidor recusa (409) quando o motor está desligado e a tela diz o motivo, sem culpar o nome', async () => {
+    const world = baseWorld()
+    serve(world)
+    world.failNext = { status: 409, data: 'least_loaded needs the central routing engine, which is not enabled' }
+    open('/settings/people?aba=grupos')
+    const user = userEvent.setup()
+    await user.selectOptions(await screen.findByLabelText('Modo de Financeiro'), 'least_loaded')
+    expect(await screen.findByText(/exige o motor de roteamento, que não está ligado neste ambiente/)).toBeInTheDocument()
+  })
+})

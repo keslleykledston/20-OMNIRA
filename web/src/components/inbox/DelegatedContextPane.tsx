@@ -9,6 +9,7 @@ import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor'
 import { ContactKindControl } from '../contacts/ContactKindControl'
 import { ContactNotes } from '../contacts/ContactNotes'
 import AttendanceMemoryPanel from './AttendanceMemoryPanel'
+import RoutingPanel from './RoutingPanel'
 import HistorySearch from './HistorySearch'
 import { Button } from '../primitives'
 import DelegatedTransferDialog from './DelegatedTransferDialog'
@@ -150,6 +151,11 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
           <section aria-label="Resumo por IA">
             <ConversationSummary conversationId={conversationId} />
           </section>
+        </CollapsibleSection>
+      )}
+      {can('conversation.read') && (
+        <CollapsibleSection id="d-routing" title="Roteamento e SLA" icon="clock" defaultOpen>
+          <RoutingPanel conversationId={conversationId} />
         </CollapsibleSection>
       )}
       {contactId && can('contact.note') && (

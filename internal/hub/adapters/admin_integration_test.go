@@ -218,6 +218,10 @@ func TestHubAdmin_CreateCompany(t *testing.T) {
 			w.count(`SELECT count(*) FROM queues WHERE tenant_id = $1`, co.ID) != 4 {
 			t.Error("a new company starts with the default queue plus the three standard sectors (ADR-0043), none of them the default")
 		}
+		if w.count(`SELECT count(*) FROM tenants t JOIN queues q ON q.tenant_id=t.id AND q.id=t.default_overflow_queue_id AND q.name='Suporte'
+			JOIN sectors s ON s.tenant_id=t.id AND s.id=q.sector_id AND s.calendar_id IS NOT NULL JOIN calendars c ON c.id=s.calendar_id AND c.kind='24x7' WHERE t.id = $1`, co.ID) != 1 {
+			t.Error("a new company starts with Suporte as the default overflow queue, in a sector open 24x7 (ADR-0044)")
+		}
 		if w.count(`SELECT count(*) FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 AND status = 'active'`, w.hub, co.ID) != 1 {
 			t.Error("no contract with the creating hub")
 		}

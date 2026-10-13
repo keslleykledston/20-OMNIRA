@@ -251,7 +251,7 @@ func (humanHandoffExec) Execute(in StepInput) (StepResult, error) {
 
 // DataExecutors are the nodes that read or change OMNIRA data through Effects.
 func DataExecutors() []Executor {
-	return []Executor{resolveContactExec{}, resolveCustomerExec{}, customerChoiceExec{}, findOpenTicketsExec{}, createTicketExec{}, assignQueueExec{}, humanHandoffExec{}}
+	return append([]Executor{resolveContactExec{}, resolveCustomerExec{}, customerChoiceExec{}, findOpenTicketsExec{}, createTicketExec{}, assignQueueExec{}, humanHandoffExec{}}, RoutingExecutors()...)
 }
 
 // AllExecutors is the full catalog without an AI gateway (AI nodes take their error port); a test enforces parity with domain.Specs().

@@ -301,6 +301,16 @@ func (e *Engine) loadDefinition(ctx context.Context, versionID uuid.UUID) (*doma
 }
 
 func (e *Engine) start(ctx context.Context, facts *ports.ConversationFacts, flow *domain.Flow, ev InboundEvent) error {
+	msg, err := e.runs.LoadInboundMessage(ctx, facts.ID, ev.MessageID)
+	if err != nil {
+		return err
+	}
+	return e.startRun(ctx, facts, flow, ev.MessageID.String(), msg)
+}
+
+// startRun creates the run and drives it from the trigger. msg is the inbound message that started it, or nil when the routing engine starts the
+// flow (StartRouted): the node executors treat a missing message as "nothing said yet".
+func (e *Engine) startRun(ctx context.Context, facts *ports.ConversationFacts, flow *domain.Flow, eventID string, msg *ports.InboundMessage) error {
 	version, def, err := e.loadDefinition(ctx, *flow.ActiveVersionID)
 	if err != nil {
 		return err
@@ -310,7 +320,6 @@ func (e *Engine) start(ctx context.Context, facts *ports.ConversationFacts, flow
 		return fmt.Errorf("flows: published version %s has no trigger", version.ID)
 	}
 	now := e.now()
-	eventID := ev.MessageID.String()
 	run := &domain.FlowRun{
 		ID: uuid.New(), TenantID: facts.TenantID, FlowID: flow.ID, FlowVersionID: version.ID, ConversationID: facts.ID,
 		ContactID: facts.ContactID, ActiveCustomerAccountID: facts.ActiveCustomerAccountID, Status: domain.RunRunning,
@@ -325,10 +334,6 @@ func (e *Engine) start(ctx context.Context, facts *ports.ConversationFacts, flow
 			return err
 		}
 		facts.AutomationMode = domain.AutomationBot
-	}
-	msg, err := e.runs.LoadInboundMessage(ctx, facts.ID, ev.MessageID)
-	if err != nil {
-		return err
 	}
 	return e.drive(ctx, facts, run, def, version, msg, false, false)
 }

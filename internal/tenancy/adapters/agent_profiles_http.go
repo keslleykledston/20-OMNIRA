@@ -143,6 +143,18 @@ func (h *AgentProfilesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to activate agent", 500)
 		return
 	}
+	// ADR-0044 default: a brand-new attendant joins the company's default overflow queue (Suporte), available. Somebody who already has
+	// queue memberships (re-enabled, or tuned by hand) keeps exactly what they have.
+	if _, err := platformdb.QuerierFromContext(r.Context(), h.pool).Exec(r.Context(), `
+		INSERT INTO queue_members(tenant_id,queue_id,user_id,active,available,capacity)
+		SELECT m.tenant_id, t.default_overflow_queue_id, m.user_id, true, true, 5
+		FROM agent_profiles ap JOIN memberships m ON m.tenant_id=ap.tenant_id AND m.id=ap.membership_id JOIN tenants t ON t.id=ap.tenant_id
+		WHERE ap.tenant_id=$1 AND ap.id=$2 AND t.default_overflow_queue_id IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM queue_members qm WHERE qm.tenant_id=m.tenant_id AND qm.user_id=m.user_id)
+		ON CONFLICT (tenant_id,queue_id,user_id) DO NOTHING`, *tid, id); err != nil {
+		http.Error(w, "failed to activate agent", 500)
+		return
+	}
 	h.auditEvent(r, id, auditdomain.ActionAgentEnabled)
 	w.WriteHeader(201)
 	json.NewEncoder(w).Encode(map[string]any{"id": id, "status": "active"})

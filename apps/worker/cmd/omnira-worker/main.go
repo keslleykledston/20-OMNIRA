@@ -47,6 +47,7 @@ import (
 	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapp "github.com/omnira/omnira/internal/routing/application"
+	routingengine "github.com/omnira/omnira/internal/routing/engine"
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	flowsworker "github.com/omnira/omnira/internal/worker/flows"
@@ -165,9 +166,20 @@ func main() {
 	pub.SetSessionRunner(func(ctx context.Context, fn func(context.Context) error) error {
 		return platformdb.WithTenantSession(ctx, dbPool, uuid.Nil, true, fn)
 	})
+	var assignRepo routingports.AssignmentRepository = routingadapters.NewPostgresAssignmentRepository(dbPool, presenceChecker)
+	var routingEngine *routingengine.Engine
+	if cfg.RoutingEngineEnabled { // ADR-0044 phase 4: the central engine replaces the automatic assignment; manual claims stay as they were
+		routingEngineRepo := routingengine.NewRepository(dbPool, presenceChecker)
+		assignRepo = routingEngineRepo
+		routingEngine = routingEngineRepo.Engine()
+		// customer notices (queues.closed_notice): best effort, idempotent by key, sent through the same system sender the Flow Builder uses
+		noticeSender := messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))
+		routingEngine.WithNotifier(routingNotifier{sender: noticeSender}, log.Printf)
+		log.Printf("routing engine ENABLED (OMNIRA_ROUTING_ENGINE_ENABLED=true)")
+	}
 	routingHandler, err := routingworker.NewHandler(
 		routingworker.NewPostgresConversationRunner(dbPool),
-		routingapp.NewService(routingadapters.NewPostgresAssignmentRepository(dbPool, presenceChecker)),
+		routingapp.NewService(assignRepo),
 	)
 	if err != nil {
 		log.Fatalf("failed to configure routing worker: %v", err)
@@ -200,6 +212,10 @@ func main() {
 	}
 	defer routingConsumer.Stop()
 
+	if routingEngine != nil { // durable timers (a sector that was closed): the due time is a row, a restart loses nothing
+		go routingEngine.RunTimers(workerCtx, 15*time.Second)
+	}
+
 	// Realtime: Postgres NOTIFY (row triggers) -> NATS -> SSE. Best effort, ephemeral.
 	go realtime.NewBridge(dbPool, nc).Run(workerCtx)
 
@@ -221,7 +237,7 @@ func main() {
 		go hubdistributor.New(dbPool).Run(workerCtx, every)
 		log.Printf("Hub work-pool distributor started (every %s)\n", every)
 	}
-	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool)
+	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool).WithEngineRouting(cfg.RoutingEngineEnabled).WithEngineSince(cfg.RoutingEngineSince)
 	go routingworker.NewSweep(livenessRepo).Run(workerCtx)
 	presenceWakeup := routingworker.NewPresenceWakeup(livenessRepo, nc)
 	if err := presenceWakeup.Start(workerCtx); err != nil {
@@ -465,7 +481,7 @@ func main() {
 		if intelligenceFlags.AutoTicketPolicyEnabled {
 			// only the unambiguous policy actions, and a problem here never fails the job
 			pipeline = intelligenceapp.TicketPolicyPipeline{Next: pipeline, Tickets: intelligenceapp.NewTopicTicketService(topicRepo, intelligenceadapters.NewPostgresTicketPolicyRepository(dbPool),
-				intelligenceadapters.NewPostgresRoutingRepository(dbPool), inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)}
+				intelligenceadapters.NewPostgresRoutingRepository(dbPool), inboxadapters.TicketStore{PostgresInboundStore: inboxadapters.NewPostgresInboundStore(dbPool).WithEngineRouting(cfg.RoutingEngineEnabled)}, intelligenceapp.NewTopicService(topicRepo), intelligenceFlags)}
 		}
 		if intelligenceFlags.PrivateHandoffEnabled {
 			// before routing: a valid token places the message with the strongest evidence
@@ -493,7 +509,7 @@ func main() {
 		// The contact's "end this attendance" command closes through the same use case as an agent's finalize (source "system").
 		attendanceForFlows := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
 			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
-		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows)
+		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows).WithEngineRouting(cfg.RoutingEngineEnabled)
 		flowCounters := flowsapplication.NewCounters()
 		prevMetrics := hc.ExtraMetrics
 		hc.ExtraMetrics = func() string {
@@ -514,7 +530,10 @@ func main() {
 				log.Printf("Flow AI nodes enabled (provider=%s)\n", cfg.AIProvider)
 			}
 		}
-		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects, flowsapplication.AllExecutorsWith(flowAI)).WithMetrics(flowCounters)
+		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects.WithRouting(routingEngine, presenceChecker), flowsapplication.AllExecutorsWith(flowAI)).WithMetrics(flowCounters)
+		if routingEngine != nil { // the overflow chain may start a published flow on a conversation (destination "flow")
+			routingEngine.WithFlowStarter(flowEngine)
+		}
 		flowHandler, err := flowsworker.NewHandler(flowsworker.NewPostgresConversationRunner(dbPool), flowEngine)
 		if err != nil {
 			log.Fatalf("flows handler error: %v", err)
@@ -564,4 +583,17 @@ func main() {
 	default:
 		log.Println("Worker shutdown complete")
 	}
+}
+
+// routingNotifier adapts the system sender to the routing engine's Notifier: the message goes out like any system text (outbox, window rules
+// and idempotency key included); a closed 24h window or a missing channel is not an error of routing.
+type routingNotifier struct {
+	sender interface {
+		Send(ctx context.Context, conversationID uuid.UUID, text, idempotencyKey string) (messagesapplication.SystemSendStatus, error)
+	}
+}
+
+func (n routingNotifier) Send(ctx context.Context, conversationID uuid.UUID, text, key string) error {
+	_, err := n.sender.Send(ctx, conversationID, text, key)
+	return err
 }

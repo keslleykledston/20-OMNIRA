@@ -46,8 +46,28 @@ type Scenario struct {
 	Now               *time.Time   `json:"now,omitempty"` // the clock (business hours); default: now
 	// AI scripts what the AI nodes answer. A simulation NEVER calls a model (cost, privacy, determinism); without this block
 	// the AI nodes take their error port, exactly as in a tenant that has no AI configured.
-	AI     *SimAI     `json:"ai,omitempty"`
-	Events []SimEvent `json:"events,omitempty"`
+	AI *SimAI `json:"ai,omitempty"`
+	// Routing scripts what the ADR-0044 routing nodes see. A simulation NEVER reads the tenant's real schedules or agents: without this
+	// block every place is open and available, every sector assignable, and the overflow outcome "queued".
+	Routing *SimRouting `json:"routing,omitempty"`
+	Events  []SimEvent  `json:"events,omitempty"`
+}
+
+// SimRouting scripts the routing nodes. Places are keyed by queue or sector id.
+type SimRouting struct {
+	Sectors  []SimSector         `json:"sectors,omitempty"`
+	Places   map[string]SimPlace `json:"places,omitempty"`
+	Overflow string              `json:"overflow,omitempty"` // assigned | queued | waiting_open | manual
+}
+
+type SimSector struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type SimPlace struct {
+	Schedule     string `json:"schedule,omitempty"`     // open | closed | unavailable
+	Availability string `json:"availability,omitempty"` // available | unavailable | closed | missing
 }
 
 // SimAI is the scripted answer of the AI nodes in a simulation.

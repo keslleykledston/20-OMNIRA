@@ -309,11 +309,10 @@ func (s *Service) Create(ctx context.Context, operator, hub uuid.UUID, in Create
 		if _, err := q.Exec(c, `INSERT INTO queues (tenant_id, name, mode, is_default) VALUES ($1, 'Default', 'manual', true)`, tenant); err != nil {
 			return err
 		}
-		// ADR-0043: every company starts with the standard sectors (a queue is a sector); each company adds its own afterwards
-		for _, sector := range StandardSectors {
-			if _, err := q.Exec(c, `INSERT INTO queues (tenant_id, name, mode, is_default) VALUES ($1, $2, 'manual', false)`, tenant, sector); err != nil {
-				return err
-			}
+		// ADR-0043/0044: every company starts with the standard sectors (Comercial, Financeiro, Suporte), Suporte open 24x7 and the default
+		// overflow queue; one SQL definition shared with migration 000126
+		if _, err := q.Exec(c, `SELECT seed_tenant_sector_defaults($1)`, tenant); err != nil {
+			return err
 		}
 		if _, err := q.Exec(c, `INSERT INTO hub_tenant_service_contracts (hub_id, tenant_id) VALUES ($1, $2)`, hub, tenant); err != nil {
 			return err

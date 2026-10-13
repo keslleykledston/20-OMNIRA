@@ -19,6 +19,10 @@ import AgentsPage from './pages/AgentsPage'
 import PeopleAndGroupsPage from './pages/PeopleAndGroupsPage'
 import SettingsPage from './pages/SettingsPage'
 import GroupsPage from './pages/GroupsPage'
+import AttendanceSectorsPage from './pages/AttendanceSectorsPage'
+import AttendanceCalendarsPage from './pages/AttendanceCalendarsPage'
+import AttendanceShiftsPage from './pages/AttendanceShiftsPage'
+import AttendanceOverflowPage from './pages/AttendanceOverflowPage'
 import FlowsPage from './pages/FlowsPage'
 import FlowEditorPage from './pages/FlowEditorPage'
 import { RolesPermissionsPage } from './pages/RolesPermissionsPage'
@@ -64,6 +68,11 @@ function AppRoutes() {
         <Route path="/settings/people/team" element={<TeamPage />} />
         <Route path="/settings/people/agents" element={<AgentsPage />} />
         <Route path="/settings/people" element={<Navigate to="/settings/people/team" replace />} />
+        <Route path="/settings/attendance" element={<Navigate to="/settings/attendance/sectors" replace />} />
+        <Route path="/settings/attendance/sectors" element={<AttendanceSectorsPage />} />
+        <Route path="/settings/attendance/calendars" element={<AttendanceCalendarsPage />} />
+        <Route path="/settings/attendance/shifts" element={<AttendanceShiftsPage />} />
+        <Route path="/settings/attendance/overflow" element={<AttendanceOverflowPage />} />
         <Route path="/settings/roles" element={<RolesPermissionsPage />} />
         <Route path="/settings/general" element={<SettingsPage />} />
         {/* Legacy duplicate retired (DESIGN.5-A) — /channels is the sole Channels UI. */}

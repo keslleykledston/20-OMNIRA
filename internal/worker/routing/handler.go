@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/routing/application"
 )
 
 var ErrPermanent = errors.New("routing worker: permanent job error")
@@ -46,8 +47,22 @@ func (h *Handler) Handle(ctx context.Context, raw []byte) error {
 	if err != nil || conversationID == uuid.Nil {
 		return fmt.Errorf("%w: invalid conversation reference", ErrPermanent)
 	}
-	return h.runner.RunForConversation(ctx, conversationID, func(scoped context.Context) error {
+	// "Nobody could be assigned" is a business outcome, not a failure. The runner rolls back the whole session when fn returns an error, and
+	// with the central routing engine (ADR-0044) that session also holds what the engine just RECORDED about the conversation - the routing
+	// state, the decision, the opening/step/SLA timers, the SLA clocks and the closed-hours notice. Rolling that back would silently undo
+	// every decision that did not end in an assignment. So the session commits, and the sentinel is returned afterwards for the consumer to
+	// acknowledge (it never retries this outcome). With the legacy router nothing was written in that case, so committing changes nothing.
+	var noAgent error
+	err = h.runner.RunForConversation(ctx, conversationID, func(scoped context.Context) error {
 		_, err := h.assigner.AssignRoundRobin(scoped, conversationID)
+		if errors.Is(err, application.ErrNoEligibleAgent) {
+			noAgent = err
+			return nil
+		}
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	return noAgent
 }

@@ -129,15 +129,42 @@ func (c *ControlPlane) CheckDefinition(ctx context.Context, def *domain.Definiti
 func (c *ControlPlane) check(ctx context.Context, slug string, def *domain.Definition, allowPlaceholders bool) ([]domain.Issue, map[string]uuid.UUID, error) {
 	issues := domain.Validate(def, domain.ValidateOptions{AllowPlaceholders: allowPlaceholders})
 	if refs := domain.ExtractRefs(def); len(refs) > 0 && c.resources != nil {
-		ids := make([]uuid.UUID, 0, len(refs))
+		var queueIDs, sectorIDs []uuid.UUID
 		for _, r := range refs {
-			ids = append(ids, r.ID)
+			if r.Kind == "sector" {
+				sectorIDs = append(sectorIDs, r.ID)
+			} else {
+				queueIDs = append(queueIDs, r.ID)
+			}
 		}
-		found, err := c.resources.ExistingQueues(ctx, ids)
-		if err != nil {
-			return nil, nil, err
+		found := map[uuid.UUID]bool{}
+		if len(queueIDs) > 0 {
+			f, err := c.resources.ExistingQueues(ctx, queueIDs)
+			if err != nil {
+				return nil, nil, err
+			}
+			for k, v := range f {
+				found[k] = v
+			}
+		}
+		if len(sectorIDs) > 0 {
+			if sc, ok := c.resources.(ports.SectorChecker); ok {
+				f, err := sc.ExistingSectors(ctx, sectorIDs)
+				if err != nil {
+					return nil, nil, err
+				}
+				for k, v := range f {
+					found[k] = v
+				}
+			}
 		}
 		for _, r := range refs {
+			if r.Kind == "sector" && !hasSectorChecker(c.resources) {
+				// fail closed: a wiring that cannot verify sectors must not publish a flow that names one
+				issues = append(issues, domain.Issue{Severity: domain.SeverityError, Code: "resource_unverifiable", NodeID: r.NodeID,
+					Message: fmt.Sprintf("%q references a sector that cannot be verified in this environment", r.NodeID)})
+				continue
+			}
 			if !found[r.ID] {
 				issues = append(issues, domain.Issue{Severity: domain.SeverityError, Code: "resource_not_found", NodeID: r.NodeID,
 					Message: fmt.Sprintf("%q references a %s that does not exist in this tenant", r.NodeID, r.Kind)})
@@ -438,4 +465,9 @@ func (c *ControlPlane) SimulateFlow(ctx context.Context, flowID uuid.UUID, overr
 	}
 	res.Issues = issues // warnings
 	return res, nil
+}
+
+func hasSectorChecker(r ports.ResourceChecker) bool {
+	_, ok := r.(ports.SectorChecker)
+	return ok
 }
