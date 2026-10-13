@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/routing/eligibility"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
 type fakePresence struct {
@@ -409,5 +410,125 @@ func TestCapacityIsEvaluatedInRealTimeAndOtherInstantsAreCalendarOnly(t *testing
 	}
 	if _, err := e.seed.Exec(context.Background(), `INSERT INTO on_call_periods (tenant_id, roster_id, user_id, starts_at, ends_at) VALUES ($1,$2,$3,now(),now()+interval '1 hour')`, a, roster, stranger); err == nil {
 		t.Error("the database must refuse an on-call period for a user without membership in the tenant")
+	}
+}
+
+// Owner's default: every attendant is available 24x7 and a member of Suporte, which is the default overflow queue; cases are tuned later.
+func TestSeedDefaultsMakeEveryAttendantAvailableAndMemberOfSupport(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	const tz = "America/Manaus"
+	// the company already has its own Suporte (round robin) with one member who tuned their capacity
+	support := e.queue(t, a, "Suporte", false)
+	if _, err := e.seed.Exec(context.Background(), `UPDATE queues SET mode='round_robin' WHERE id=$1`, support); err != nil {
+		t.Fatal(err)
+	}
+	tuned, _ := e.attendant(t, a, &support, 2, true)
+	fresh, _ := e.attendant(t, a, nil, 0, true)
+	fresh2, _ := e.attendant(t, a, nil, 0, true)
+	// not attendants: a member without an agent profile, and a disabled profile
+	noProfile := e.member(t, a, "tenant_agent")
+	disabled, dprof := e.attendant(t, a, nil, 0, true)
+	if _, err := e.seed.Exec(context.Background(), `UPDATE agent_profiles SET status='disabled' WHERE id=$1`, dprof); err != nil {
+		t.Fatal(err)
+	}
+	otherTenantAgent, _ := e.attendant(t, b, nil, 0, true)
+
+	seed := func() {
+		if _, err := e.seed.Exec(context.Background(), `SELECT seed_tenant_sector_defaults($1)`, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed()
+	members := func(tenant uuid.UUID) map[uuid.UUID]int {
+		rows, err := e.seed.Query(context.Background(), `SELECT qm.user_id, qm.capacity FROM queue_members qm JOIN queues q ON q.id=qm.queue_id AND q.tenant_id=qm.tenant_id WHERE qm.tenant_id=$1 AND q.name='Suporte' AND qm.active AND qm.available`, tenant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		out := map[uuid.UUID]int{}
+		for rows.Next() {
+			var u uuid.UUID
+			var c int
+			if err := rows.Scan(&u, &c); err != nil {
+				t.Fatal(err)
+			}
+			out[u] = c
+		}
+		return out
+	}
+	got := members(a)
+	if len(got) != 3 || got[tuned] != 2 || got[fresh] != 5 || got[fresh2] != 5 {
+		t.Fatalf("members of Suporte: %v (the tuned capacity must survive, newcomers get 5)", got)
+	}
+	for name, u := range map[string]uuid.UUID{"member without profile": noProfile, "disabled profile": disabled, "other company's attendant": otherTenantAgent} {
+		if _, in := got[u]; in {
+			t.Errorf("%s must not be added", name)
+		}
+	}
+	if len(members(b)) != 0 {
+		t.Error("seeding one company must not touch another")
+	}
+	var mode, calName string
+	var overflowIsSupport, sectorLinked bool
+	if err := e.seed.QueryRow(context.Background(), `SELECT q.mode, c.name, t.default_overflow_queue_id = q.id, q.sector_id = s.id
+		FROM queues q JOIN tenants t ON t.id=q.tenant_id JOIN sectors s ON s.tenant_id=q.tenant_id AND s.name='Suporte' JOIN calendars c ON c.id=s.calendar_id
+		WHERE q.id=$1`, support).Scan(&mode, &calName, &overflowIsSupport, &sectorLinked); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "round_robin" || calName != "24x7 (padrão)" || !overflowIsSupport || !sectorLinked {
+		t.Fatalf("the company's own Suporte keeps its mode; sector, 24x7 calendar and overflow pointer are set: %s %s %v %v", mode, calName, overflowIsSupport, sectorLinked)
+	}
+	// idempotent: a second run changes nothing, even after the company removed somebody's membership it does NOT matter for existing rows
+	var before, after int
+	_ = e.seed.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM queue_members WHERE tenant_id=$1)+(SELECT count(*) FROM queues WHERE tenant_id=$1)+(SELECT count(*) FROM sectors WHERE tenant_id=$1)+(SELECT count(*) FROM calendars WHERE tenant_id=$1)`, a).Scan(&before)
+	seed()
+	_ = e.seed.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM queue_members WHERE tenant_id=$1)+(SELECT count(*) FROM queues WHERE tenant_id=$1)+(SELECT count(*) FROM sectors WHERE tenant_id=$1)+(SELECT count(*) FROM calendars WHERE tenant_id=$1)`, a).Scan(&after)
+	if before != after {
+		t.Fatalf("seeding twice changed the data: %d -> %d", before, after)
+	}
+	// "available 24x7": at 03:00 the Suporte sector is open and nobody is restricted by a shift; with presence not required they are eligible
+	s := e.snapshot(t, a, admin, support, at(t, tz, "2026-10-14 03:00"), e.h)
+	if !s.Open || s.EligibleCnt != 3 {
+		t.Fatalf("Suporte at 03:00 by calendar: open=%v eligible=%d (%+v)", s.Open, s.EligibleCnt, s)
+	}
+	// a company that chose another overflow queue keeps its choice
+	other := e.queue(t, a, "Plantão geral", false)
+	if _, err := e.seed.Exec(context.Background(), `UPDATE tenants SET default_overflow_queue_id=$2 WHERE id=$1`, a, other); err != nil {
+		t.Fatal(err)
+	}
+	seed()
+	var kept bool
+	if err := e.seed.QueryRow(context.Background(), `SELECT default_overflow_queue_id=$2 FROM tenants WHERE id=$1`, a, other).Scan(&kept); err != nil || !kept {
+		t.Fatalf("the company's own overflow queue must be kept: %v %v", kept, err)
+	}
+	// a new attendant enabled through the real handler joins the default overflow queue; somebody who already has memberships is left alone
+	if _, err := e.seed.Exec(context.Background(), `UPDATE tenants SET default_overflow_queue_id=$2 WHERE id=$1`, a, support); err != nil {
+		t.Fatal(err)
+	}
+	ap := tenancyadapters.NewAgentProfilesHandler(e.app, e.h.audit)
+	enable := func(user uuid.UUID) int {
+		var membership uuid.UUID
+		if err := e.seed.QueryRow(context.Background(), `SELECT id FROM memberships WHERE tenant_id=$1 AND user_id=$2`, a, user).Scan(&membership); err != nil {
+			t.Fatal(err)
+		}
+		return e.call(t, a, admin, "POST", "/", ap.Create, nil, map[string]any{"membership_id": membership}).Code
+	}
+	if got := enable(noProfile); got != 201 {
+		t.Fatalf("enabling a new attendant = %d", got)
+	}
+	if c := members(a)[noProfile]; c != 5 {
+		t.Fatalf("a brand-new attendant must join Suporte (capacity 5): %v", c)
+	}
+	// re-enabling the disabled one who already had memberships: nothing changes for them
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO queue_members (tenant_id, queue_id, user_id, active, available, capacity) VALUES ($1,$2,$3,true,false,7)`, a, other, disabled); err != nil {
+		t.Fatal(err)
+	}
+	if got := enable(disabled); got != 201 {
+		t.Fatalf("re-enabling = %d", got)
+	}
+	if _, in := members(a)[disabled]; in {
+		t.Fatal("somebody who already has queue memberships must not be added to Suporte by re-enabling")
 	}
 }
