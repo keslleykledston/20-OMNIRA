@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -82,5 +83,98 @@ func TestEndToEndFromIngestToTheClosedNoticeOnAManualSector(t *testing.T) {
 	}
 	if e.owner(t, conv) != nil {
 		t.Fatal("nobody is assigned inside a manual queue")
+	}
+}
+
+// Load shape of a busy morning at the opening: many conversations of a closed manual sector and of an automatic queue are decided at the same
+// time by several workers while the timers run. No deadlock, no duplicate notice, no assignment beyond capacity, every closed conversation told once.
+func TestConcurrentWorkersTimersAndNoticesDoNotDeadlockNorDuplicate(t *testing.T) {
+	e := newEnv(t, nil)
+	n := &recNotifier{pool: e.app}
+	repo := engine.NewRepository(e.app, nil)
+	repo.Engine().WithNotifier(n, func(string, ...any) {})
+	handler, err := routingworker.NewHandler(routingworker.NewPostgresConversationRunner(e.app), routingapp.NewService(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := e.tenant(t)
+	closedQ := e.queue(t, a, "Financeiro", "manual")
+	cal := e.calendar(t, a, "fechado", "24x7", "[]")
+	e.exec(t, `UPDATE queues SET calendar_id=$2, closed_notice='Fechado. Voltamos {{proxima_abertura}}.' WHERE id=$1`, closedQ, cal)
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at, reason) VALUES ($1,$2,now()-interval '1 hour',now()+interval '2 hours','teste')`, a, cal)
+	rr := e.queue(t, a, "Suporte", "round_robin")
+	var users []uuid.UUID
+	for i := 0; i < 3; i++ {
+		u, _ := e.attendant(t, a, &rr, 5)
+		users = append(users, u)
+	}
+	const perQueue = 40
+	var jobs [][]byte
+	mk := func(q uuid.UUID) {
+		c := e.conversation(t, a, &q)
+		raw, _ := json.Marshal(map[string]string{"aggregate_id": c.String()})
+		jobs = append(jobs, raw)
+	}
+	for i := 0; i < perQueue; i++ {
+		mk(closedQ)
+		mk(rr)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, len(jobs)*2)
+	sem := make(chan struct{}, 12)
+	for _, raw := range jobs {
+		wg.Add(1)
+		go func(raw []byte) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if err := handler.Handle(e.ctx, raw); err != nil && !strings.Contains(err.Error(), "no eligible agent") {
+				errs <- err
+			}
+		}(raw)
+	}
+	stop := make(chan struct{})
+	var tw sync.WaitGroup
+	tw.Add(1)
+	go func() { // the timers run alongside
+		defer tw.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				if _, err := e.eng.RunTimersOnce(e.ctx); err != nil {
+					errs <- err
+				}
+			}
+		}
+	}()
+	wg.Wait()
+	close(stop)
+	tw.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("worker error under load (a deadlock shows up here as 40P01): %v", err)
+	}
+	if len(n.sent) != perQueue {
+		t.Fatalf("every conversation of the closed sector is told exactly once: %d notices for %d conversations", len(n.sent), perQueue)
+	}
+	keys := map[string]bool{}
+	for _, s := range n.sent {
+		keys[s.key] = true
+	}
+	if len(keys) != perQueue {
+		t.Fatalf("one idempotency key per conversation and episode: %d distinct", len(keys))
+	}
+	for _, u := range users {
+		if got := e.count(t, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND assigned_to_user_id=$2 AND status='open'`, a, u); got > 5 {
+			t.Fatalf("agent %s holds %d conversations, capacity is 5", u, got)
+		}
+	}
+	if got := e.count(t, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND queue_id=$2 AND assigned_to_user_id IS NOT NULL`, a, rr); got != 15 {
+		t.Fatalf("the automatic queue fills its three agents to capacity and no further: %d assigned", got)
+	}
+	if got := e.count(t, `SELECT count(*) FROM routing_engine_state WHERE tenant_id=$1 AND state='waiting_open'`, a); got != perQueue {
+		t.Fatalf("each closed conversation is waiting for the opening: %d", got)
 	}
 }
