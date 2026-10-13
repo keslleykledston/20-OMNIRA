@@ -15,11 +15,19 @@ Branch `feat/sector-scheduling-overflow` (base `c804344` de `main`), worktree `/
 | 5c | SLA (políticas, relógios, risco/violação uma vez, transferência não reinicia) | 130 |
 | fix | `tenant_id` imutável nas tabelas novas | 131 |
 
+## 1b. Feito depois (commits na branch)
+| Fase | Entrega |
+|---|---|
+| 6a | nós do Flow Builder `check_schedule`, `check_availability`, `select_sector`, `assign_sector`, `apply_overflow` (finos; chamam calendário/elegibilidade/motor; simulador com `SimRouting`; publicação valida setor e falha fechada; Codex: 1 HIGH + 3 MEDIUM tratados) |
+| 5d | aviso ao cliente fora do expediente (`queues.closed_notice`, migration 132; uma vez por episódio; savepoint; API GET/PUT) |
+| 7 | segurança: rotas de administração inalcançáveis agindo por Hub (404, mutante morto); chaves não delegáveis; leitura de contratos do Hub sem operadores |
+| 6b | UI: Atendimento › Setores, Horários, Escalas e plantões, Transbordo e SLA; painel "Roteamento e SLA" na conversa (membro e Hub delegado); `GET /inbox/conversations/{id}/routing` |
+
 ## 2. Falta (ordem de execução)
-1. **Fase 6a — Flow Builder**: nós finos que chamam os serviços (consultar horário da fila/setor, consultar disponibilidade, executar transbordo/encaminhar pelo motor, acionar contingência), `select_sector` dinâmico; destino `flow` do transbordo; compatibilidade dos fluxos publicados.
-2. **Fase 7 — segurança**: matriz A/B de todas as rotas novas, contexto delegado do Hub recusado, concorrência/recuperação (parte já feita nos testes do motor).
-3. **Fase 6b — interface**: configuração (setores, calendários, escalas, plantões, cadeia, SLA) e monitoramento; Inbox mostrando setor, fila, agente, espera, SLA.
-4. **Fase 8 — fechamento**: Codex sobre a branch inteira, guia de operação, matriz de aceite do PRD, relatório final.
+1. **Destino `flow` (EXECUTE_FLOW)**: o domínio do transbordo não tem esse destino; o motor só tem o tipo de decisão. Exige uma entrada do Flow Builder que inicie execução SEM mensagem de entrada (hoje só `OnInbound`). Decisão do dono §12.5: só sem execução ativa. Adiado até haver desenho aprovado do ponto de entrada.
+2. Chamar o motor também em `RouteNew`/`assign_queue` (hoje o motor entra pelo job `job.routing.assign.v1`, que já cobre os dois caminhos quando o grupo é round_robin/least_loaded).
+3. UI do grupo: modo `least_loaded` no seletor de estratégia (a tela de grupos ainda lista manual/round_robin).
+4. **Fase 8**: gate completo da branch, Codex sobre a branch inteira, guia de operação, matriz de aceite do PRD, relatório final.
 
 ## 3. Armadilhas (resumo; detalhe na memória)
 Nunca `git checkout <arquivo>` para desfazer mutante com trabalho não commitado (copiar para `/data/cafegpt/tmp/*.o`); rodar **todas** as suítes afetadas antes de commitar (um teste de monitor quebrou por coluna nova); tabelas do motor são `routing_engine_*` (`routing_decisions` já existe); matrizes de permissão (`iam3/security_test.go`, `tenancy/adapters/team_http_test.go`) listam toda permissão de administrador; roster sem setor cobre TODAS as filas; violação de unicidade aborta a transação da requisição (pré-checagem ou `attempt()`).
