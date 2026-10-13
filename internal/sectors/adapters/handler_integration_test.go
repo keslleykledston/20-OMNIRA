@@ -775,6 +775,46 @@ func TestOverflowPolicyNewDestinationKindsAreValidatedAgainstTheCompany(t *testi
 	if got := put(mk("sector", sec, nil)); got != 400 {
 		t.Errorf("an inactive sector = %d, want 400", got)
 	}
+	// flow: a PUBLISHED flow of the company, of a type a routing step may start (INBOUND, AFTER_HOURS)
+	seedFlow := func(tenant uuid.UUID, flowType, status string) uuid.UUID {
+		id, ver := uuid.New(), uuid.New()
+		def := `{"schema_version":1,"nodes":[],"edges":[]}`
+		for _, sql := range []string{
+			`INSERT INTO flows (id, tenant_id, slug, name, flow_type) VALUES ($1,$2,$3,'f',$4)`,
+		} {
+			if _, err := e.seed.Exec(context.Background(), sql, id, tenant, "f-"+id.String()[:8], flowType); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if status == "published" {
+			if _, err := e.seed.Exec(context.Background(), `INSERT INTO flow_versions (id, tenant_id, flow_id, version, definition, definition_hash) VALUES ($1,$2,$3,1,$4::jsonb,'h')`, ver, tenant, id, def); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.seed.Exec(context.Background(), `UPDATE flows SET status='published', active_version_id=$2 WHERE id=$1`, id, ver); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	for _, ft := range []string{"INBOUND", "AFTER_HOURS"} {
+		if got := put(mk("flow", seedFlow(a, ft, "published"), nil)); got != 200 {
+			t.Errorf("a published %s flow of the company = %d, want 200", ft, got)
+		}
+	}
+	for name, id := range map[string]uuid.UUID{
+		"a draft flow":           seedFlow(a, "AFTER_HOURS", "draft"),
+		"a subflow":              seedFlow(a, "SUBFLOW", "published"),
+		"an AI workflow":         seedFlow(a, "AI_WORKFLOW", "published"),
+		"another company's flow": seedFlow(b, "INBOUND", "published"),
+		"an unknown flow":        uuid.New(),
+	} {
+		if got := put(mk("flow", id, nil)); got != 400 {
+			t.Errorf("%s = %d, want 400", name, got)
+		}
+	}
+	if got := put(mk("flow", seedFlow(a, "INBOUND", "published"), &hubQ)); got != 400 {
+		t.Errorf("a flow destination with a queue = %d, want 400", got)
+	}
 	// hub: the company has a contract with the Hub (it sees the contract, never the operators) and the queue is its own
 	hubID, contract := uuid.New(), uuid.New()
 	if _, err := e.seed.Exec(context.Background(), `INSERT INTO service_hubs (id, name) VALUES ($1,'Hub do teste')`, hubID); err != nil {

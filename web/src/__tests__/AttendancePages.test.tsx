@@ -79,6 +79,7 @@ function serve(w: World) {
       { user_id: 'u-ana', name: 'Ana Souza', eligible: true, reasons: [], on_call: false, workload: 1, capacity: 5, shift_source: 'none' },
       { user_id: 'u-bia', name: 'Bia Lima', eligible: false, reasons: ['offline', 'no_capacity'], on_call: false, workload: 5, capacity: 5, shift_source: 'all' }] })
     if (url.endsWith('/hub-contracts')) return ok({ items: w.contracts })
+    if (url.endsWith('/flows')) return ok({ items: [{ id: 'f1', name: 'Atendimento fora do horário', type: 'AFTER_HOURS', status: 'published', slug: 'ah' }, { id: 'f2', name: 'Boas-vindas', type: 'INBOUND', status: 'published', slug: 'bv' }, { id: 'f3', name: 'Sub', type: 'SUBFLOW', status: 'published', slug: 's' }] })
     if (url.endsWith('/sla-policies')) return ok({ items: w.sla })
     if (url.endsWith('/sla')) return ok({ queue_id: 'q', counts: { at_risk: 2, running: 3 }, items: [] })
     void cfg
@@ -348,6 +349,23 @@ describe('Atendimento › Transbordo e SLA', () => {
     expect(within(dest).getByRole('option', { name: 'Hub K3G' })).toBeInTheDocument()
     await user.selectOptions(dest, 'ct1')
     expect(screen.getByText(/A conversa continua dentro da sua empresa/)).toBeInTheDocument()
+  })
+
+  it('destino Fluxo oferece só fluxos que uma etapa pode iniciar e explica quando é pulado', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await screen.findByText(/Este grupo não tem transbordo/)
+    await user.click(screen.getByRole('button', { name: '+ Etapa' }))
+    await user.selectOptions(screen.getByLabelText('Destino da etapa 1'), 'flow')
+    const dest = screen.getByLabelText('Escolha o destino da etapa 1')
+    expect(await within(dest).findByRole('option', { name: 'Atendimento fora do horário (fora do horário)' })).toBeInTheDocument()
+    expect(within(dest).getByRole('option', { name: 'Boas-vindas' })).toBeInTheDocument()
+    expect(within(dest).queryByRole('option', { name: 'Sub' })).toBeNull()
+    expect(screen.getByText(/Só inicia se nenhum fluxo estiver em execução nela/)).toBeInTheDocument()
+    await user.selectOptions(dest, 'f1')
+    await user.click(screen.getByRole('button', { name: 'Salvar política' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT' && c.url.endsWith('/overflow-policy'))?.body.steps[0]).toMatchObject({ destination_kind: 'flow', destination_id: 'f1' }))
   })
 
   it('mostra as metas de SLA e salva uma nova em segundos', async () => {

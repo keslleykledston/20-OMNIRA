@@ -79,6 +79,8 @@ func SavePolicy(ctx context.Context, q platformdb.Querier, tenant, actor, queueI
 				WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND ap.status='active')`, tenant, s.DestID).Scan(&ok)
 		case overflow.DestSector:
 			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sectors WHERE tenant_id=$1 AND id=$2 AND active)`, tenant, s.DestID).Scan(&ok)
+		case overflow.DestFlow: // a published flow of THIS company, of a type a routing step may start
+			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM flows WHERE tenant_id=$1 AND id=$2 AND status='published' AND active_version_id IS NOT NULL AND flow_type IN ('INBOUND','AFTER_HOURS'))`, tenant, s.DestID).Scan(&ok)
 		case overflow.DestHub: // the company has a contract with that Hub (it learns the contract, never the operators) and the queue is its own
 			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tenant_hub_contracts($1) c WHERE c.contract_id=$2)
 				AND EXISTS(SELECT 1 FROM queues WHERE tenant_id=$1 AND id=$3)`, tenant, s.DestID, s.DestQueueID).Scan(&ok)

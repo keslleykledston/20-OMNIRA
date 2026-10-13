@@ -70,6 +70,12 @@ type RunRepository interface {
 	SetAutomationMode(ctx context.Context, conversationID uuid.UUID, mode domain.AutomationMode) error
 }
 
+// FlowLookup is an optional RunRepository capability: one PUBLISHED flow of the session tenant by id, only of the types a routing destination
+// may start (INBOUND, AFTER_HOURS). domain.ErrNotFound when it is absent, unpublished, archived, of another type or of another tenant.
+type FlowLookup interface {
+	FlowByID(ctx context.Context, id uuid.UUID) (*domain.Flow, error)
+}
+
 // VersionReader loads published versions (the FlowRepository satisfies it).
 type VersionReader interface {
 	GetVersion(ctx context.Context, id uuid.UUID) (*domain.FlowVersion, error)

@@ -89,11 +89,24 @@ type Notifier interface {
 	Send(ctx context.Context, conversationID uuid.UUID, text, key string) error
 }
 
+// FlowStarter starts one specific published automation flow on a conversation, in the caller's transaction (the Flow Builder's engine implements
+// it). Outcomes: "started", "busy" (a flow is already running on the conversation: never start over it) or "unavailable".
+type FlowStarter interface {
+	StartRouted(ctx context.Context, conversationID, flowID uuid.UUID, key string) (string, error)
+}
+
 type Engine struct {
 	pool     *pgxpool.Pool
 	presence sectorsadapters.PresenceChecker
 	notifier Notifier
+	flows    FlowStarter
 	logf     func(string, ...any)
+}
+
+// WithFlowStarter enables the "flow" overflow destination. Without it a flow step is refused (flows_unavailable) and the chain moves on.
+func (e *Engine) WithFlowStarter(f FlowStarter) *Engine {
+	e.flows = f
+	return e
 }
 
 // WithNotifier enables the customer notices (queues.closed_notice). Without it the engine sends nothing.
@@ -454,6 +467,9 @@ func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 				visited[enter.Key()] = true
 				res.rejected = append(res.rejected, rejection{Position: enter.Position, Reason: why})
 				continue
+			case entFlow:
+				visited[enter.Key()] = true
+				continue
 			case entQueue:
 				return chainResult{kind: cEntered, mode: a.mode, rejected: res.rejected}, nil
 			case entAssigned:
@@ -494,6 +510,7 @@ const (
 	entRejected entryKind = iota
 	entQueue
 	entAssigned
+	entFlow // a flow was started on the conversation: it stays where it is, and the chain keeps looking at the later steps
 )
 
 type entryResult struct {
@@ -600,6 +617,38 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 			return entRejected, entryResult{}, "", err
 		}
 		return entAssigned, entryResult{decision: Decision{Kind: AssignAgent, Reason: reason, Destination: "agent:" + user.String(), AssignedUser: user}}, "", nil
+	case overflow.DestFlow:
+		if e.flows == nil {
+			return entRejected, entryResult{}, "flows_unavailable", nil
+		}
+		key := fmt.Sprintf("routing-flow:%s:%d:%d", req.ConversationID, st.episode, s.Position)
+		// the flow runs in this transaction; a failure inside it must not abort the routing decision, so it is isolated in a savepoint
+		if _, err := q.Exec(ctx, `SAVEPOINT routing_flow`); err != nil {
+			return entRejected, entryResult{}, "", err
+		}
+		outcome, err := e.flows.StartRouted(ctx, req.ConversationID, s.DestID, key)
+		if err != nil {
+			_, _ = q.Exec(ctx, `ROLLBACK TO SAVEPOINT routing_flow`)
+			_, _ = q.Exec(ctx, `RELEASE SAVEPOINT routing_flow`)
+			if e.logf != nil {
+				e.logf("routing: flow %s could not be started on %s: %v", s.DestID, req.ConversationID, err)
+			}
+			return entRejected, entryResult{}, "flow_error", nil
+		}
+		_, _ = q.Exec(ctx, `RELEASE SAVEPOINT routing_flow`)
+		switch outcome {
+		case "started":
+		case "busy":
+			return entRejected, entryResult{}, "flow_busy", nil
+		default:
+			return entRejected, entryResult{}, "flow_unavailable", nil
+		}
+		advance(st, s, nil, now)
+		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label, "flow": s.DestID.String()},
+			Decision{Kind: ExecuteFlow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
+			return entRejected, entryResult{}, "", err
+		}
+		return entFlow, entryResult{}, "", nil
 	}
 	return entRejected, entryResult{}, "unsupported_destination", nil
 }

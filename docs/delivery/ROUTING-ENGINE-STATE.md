@@ -24,9 +24,9 @@ Branch `feat/sector-scheduling-overflow` (base `c804344` de `main`), worktree `/
 | 6b | UI: Atendimento › Setores, Horários, Escalas e plantões, Transbordo e SLA; painel "Roteamento e SLA" na conversa (membro e Hub delegado); `GET /inbox/conversations/{id}/routing` |
 
 ## 2. Falta (ordem de execução)
-1. **Destino `flow` (EXECUTE_FLOW)**: o domínio do transbordo não tem esse destino; o motor só tem o tipo de decisão. Exige uma entrada do Flow Builder que inicie execução SEM mensagem de entrada (hoje só `OnInbound`). Decisão do dono §12.5: só sem execução ativa. Adiado até haver desenho aprovado do ponto de entrada.
+1. ~~Destino `flow`~~ FEITO (ADR §11.8, migration 133): `Engine.StartRouted` no Flow Builder, mesma transação, só sem execução ativa.
 2. Chamar o motor também em `RouteNew`/`assign_queue` (hoje o motor entra pelo job `job.routing.assign.v1`, que já cobre os dois caminhos quando o grupo é round_robin/least_loaded).
-3. UI do grupo: modo `least_loaded` no seletor de estratégia (a tela de grupos ainda lista manual/round_robin).
+3. ~~UI `least_loaded`~~ FEITO.
 4. **Fase 8**: gate completo da branch, Codex sobre a branch inteira, guia de operação, matriz de aceite do PRD, relatório final.
 
 ## 3. Armadilhas (resumo; detalhe na memória)

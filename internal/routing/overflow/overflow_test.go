@@ -35,6 +35,12 @@ func TestValidateRefusesWhatTheEngineCouldNotRunSafely(t *testing.T) {
 		"nil destination":        func(p *Policy) { p.Steps[0].DestID = uuid.Nil },
 		"back to the origin":     func(p *Policy) { p.Steps[0].DestID = origin },
 		"same destination twice": func(p *Policy) { p.Steps[1].DestKind, p.Steps[1].DestID = DestQueue, n2 },
+		"flow with a queue":      func(p *Policy) { p.Steps[0].DestKind = DestFlow; q := uuid.New(); p.Steps[0].DestQueueID = &q },
+		"same flow twice": func(p *Policy) {
+			f := uuid.New()
+			p.Steps[0].DestKind, p.Steps[0].DestID = DestFlow, f
+			p.Steps[1].DestKind, p.Steps[1].DestID = DestFlow, f
+		},
 	}
 	for name, mut := range bad {
 		p := Policy{MaxSteps: ok.MaxSteps, OnExhausted: ok.OnExhausted, Steps: append([]Step(nil), ok.Steps...)}
@@ -145,5 +151,23 @@ func TestNewDestinationKindsAreValidatedAndKeepTheLoopGuard(t *testing.T) {
 		if p.Validate(origin) == nil {
 			t.Errorf("%s: must be refused", name)
 		}
+	}
+}
+
+func TestAFlowIsAValidDestinationAndCountsAsAVisitedStep(t *testing.T) {
+	origin, flow, n2 := uuid.New(), uuid.New(), uuid.New()
+	p := Policy{MaxSteps: 4, OnExhausted: ExhaustedManual, Steps: []Step{step(1, DestFlow, flow, 0, AfterHours), step(2, DestQueue, n2, 0, AfterHours)}}
+	if err := p.Validate(origin); err != nil {
+		t.Fatalf("a flow destination is valid: %v", err)
+	}
+	visited := map[string]bool{DestKey(DestQueue, origin): true}
+	sel := p.Next(0, AfterHours, visited, 0, elapsed(0))
+	if sel.Step == nil || sel.Step.DestKind != DestFlow {
+		t.Fatalf("the flow is step 1: %+v", sel)
+	}
+	visited[sel.Step.Key()] = true // what the engine records once it started the flow
+	sel = p.Next(1, AfterHours, visited, 1, elapsed(0))
+	if sel.Step == nil || sel.Step.DestKind != DestQueue {
+		t.Fatalf("after the flow the chain goes on to step 2, never back to the flow: %+v", sel)
 	}
 }

@@ -51,7 +51,7 @@ export interface OverflowStep {
   triggers: OverflowTrigger[]
   wait_seconds: number
   wait_business: boolean
-  destination_kind: 'queue' | 'oncall' | 'agent' | 'sector' | 'hub'
+  destination_kind: 'queue' | 'oncall' | 'agent' | 'sector' | 'hub' | 'flow'
   destination_id: string
   destination_queue_id?: string
   allow_closed: boolean

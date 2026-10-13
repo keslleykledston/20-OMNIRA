@@ -613,3 +613,20 @@ func (r *PostgresFlowRepository) ExistingSectors(ctx context.Context, ids []uuid
 	}
 	return out, rows.Err()
 }
+
+var _ ports.FlowLookup = (*PostgresFlowRepository)(nil)
+
+// FlowByID is the lookup the routing engine's "flow" destination uses at run time (the destination is re-checked live: the flow may have been
+// archived since the policy was saved).
+func (r *PostgresFlowRepository) FlowByID(ctx context.Context, id uuid.UUID) (*domain.Flow, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	f, err := scanFlow(r.q(ctx).QueryRow(ctx, `SELECT `+flowColumns+` FROM flows WHERE tenant_id=$1 AND id=$2 AND status='published' AND active_version_id IS NOT NULL
+		AND flow_type IN ('INBOUND','AFTER_HOURS')`, tenantID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	return f, err
+}

@@ -6,6 +6,7 @@ import { agentsAPI } from '../lib/agents'
 import { queuesAPI } from '../lib/queues'
 import { attendanceErrorMessage, calendarsAPI, hubContractsAPI, overflowAPI, sectorsAPI, shiftsAPI, slaAPI, type OverflowPolicy, type OverflowStep, type SLAPolicy, type SLAScope } from '../lib/sectors'
 import { DEST_LABELS, EXHAUSTED_LABELS, TRIGGER_LABELS, describeWait, emptyStep, formatSeconds, moveStep, policyProblems, renumber } from '../lib/attendanceModel'
+import { flowsAPI } from '../lib/flows'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
 
@@ -43,6 +44,7 @@ function PolicyEditor({ queueId, manage }: { queueId: string; manage: boolean })
   const rosters = useQuery({ queryKey: ['att-rosters', tenantId], queryFn: shiftsAPI.rosters, retry: false })
   const agents = useQuery({ queryKey: ['att-agents', tenantId], queryFn: agentsAPI.list, retry: false })
   const contracts = useQuery({ queryKey: ['att-contracts', tenantId], queryFn: hubContractsAPI.list, retry: false, enabled: manage })
+  const flows = useQuery({ queryKey: ['att-flows', tenantId], queryFn: () => flowsAPI.list({ status: 'published' }), retry: false, enabled: manage })
 
   useEffect(() => {
     if (policy.data !== undefined) setDraft(policy.data ? { ...policy.data, steps: renumber(policy.data.steps) } : blankPolicy())
@@ -68,6 +70,7 @@ function PolicyEditor({ queueId, manage }: { queueId: string; manage: boolean })
       case 'oncall': return (rosters.data ?? []).filter((r) => r.active).map((r) => ({ id: r.id, label: `${r.name}${r.on_now ? ` (${r.on_now} de plantão)` : ' (ninguém de plantão agora)'}` }))
       case 'agent': return (agents.data ?? []).filter((a) => a.status === 'active').map((a) => ({ id: a.user_id, label: a.name || a.email }))
       case 'hub': return (contracts.data ?? []).map((c) => ({ id: c.contract_id, label: `${c.hub_name}${c.status === 'active' ? '' : ` (${c.status})`}` }))
+      case 'flow': return (flows.data ?? []).filter((f) => f.type === 'INBOUND' || f.type === 'AFTER_HOURS').map((f) => ({ id: f.id, label: `${f.name}${f.type === 'AFTER_HOURS' ? ' (fora do horário)' : ''}` }))
     }
   }
   const toggleTrigger = (i: number, t: string) => {
@@ -133,6 +136,9 @@ function PolicyEditor({ queueId, manage }: { queueId: string; manage: boolean })
                     {destinations(s.destination_kind).map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
                   </select>
                 </Field>
+                {s.destination_kind === 'flow' && (
+                  <p className="text-xs text-text-tertiary sm:col-span-2">O fluxo é iniciado na própria conversa, que continua no grupo. Só inicia se nenhum fluxo estiver em execução nela; caso contrário a etapa é pulada e a cadeia segue. O fluxo escolhe o que fazer em seguida (por exemplo, “Aplicar transbordo” ou “Transferir para humano”).</p>
+                )}
                 {s.destination_kind === 'hub' && (
                   <Field label="Grupo da empresa que o Hub atende" hint="A conversa continua dentro da sua empresa; o Hub só a atende por este grupo, com as permissões do contrato.">
                     <select className={selectClass} value={s.destination_queue_id ?? ''} disabled={ro} onChange={(e) => patch(i, { destination_queue_id: e.target.value || undefined })}>

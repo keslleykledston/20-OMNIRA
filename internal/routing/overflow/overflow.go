@@ -35,6 +35,7 @@ const (
 	DestAgent  = "agent"  // a named attendant of the company
 	DestSector = "sector" // the first useful queue of a sector
 	DestHub    = "hub"    // a Hub that serves the company: DestID is the CONTRACT, DestQueueID the company queue it serves from
+	DestFlow   = "flow"   // a published automation flow (INBOUND or AFTER_HOURS) of the company, started on the conversation; only when no flow is running on it
 
 	ExhaustedKeepWaiting = "keep_waiting"
 	ExhaustedContingency = "contingency"
@@ -129,7 +130,7 @@ func (p Policy) Validate(origin uuid.UUID) error {
 			return fmt.Errorf("step %d: the max_wait trigger needs a wait greater than zero", s.Position)
 		}
 		switch s.DestKind {
-		case DestQueue, DestOnCall, DestAgent, DestSector:
+		case DestQueue, DestOnCall, DestAgent, DestSector, DestFlow:
 			if s.DestQueueID != nil {
 				return fmt.Errorf("step %d: destination_queue_id is only for a Hub destination", s.Position)
 			}
@@ -145,7 +146,7 @@ func (p Policy) Validate(origin uuid.UUID) error {
 			}
 			seen[DestKey(DestQueue, *s.DestQueueID)] = true
 		default:
-			return fmt.Errorf("step %d: destination kind must be queue, oncall, agent, sector or hub", s.Position)
+			return fmt.Errorf("step %d: destination kind must be queue, oncall, agent, sector, hub or flow", s.Position)
 		}
 		if s.DestID == uuid.Nil {
 			return fmt.Errorf("step %d: destination is required", s.Position)

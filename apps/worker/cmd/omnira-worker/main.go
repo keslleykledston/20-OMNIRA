@@ -531,6 +531,9 @@ func main() {
 			}
 		}
 		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects.WithRouting(routingEngine, presenceChecker), flowsapplication.AllExecutorsWith(flowAI)).WithMetrics(flowCounters)
+		if routingEngine != nil { // the overflow chain may start a published flow on a conversation (destination "flow")
+			routingEngine.WithFlowStarter(flowEngine)
+		}
 		flowHandler, err := flowsworker.NewHandler(flowsworker.NewPostgresConversationRunner(dbPool), flowEngine)
 		if err != nil {
 			log.Fatalf("flows handler error: %v", err)

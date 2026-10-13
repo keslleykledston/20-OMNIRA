@@ -116,6 +116,7 @@ export const DEST_LABELS: Record<OverflowStep['destination_kind'], string> = {
   agent: 'Atendente específico',
   sector: 'Outro setor',
   hub: 'Hub (suporte contratado)',
+  flow: 'Fluxo de automação',
 }
 
 export const EXHAUSTED_LABELS: Record<OverflowPolicy['on_exhausted'], string> = {
