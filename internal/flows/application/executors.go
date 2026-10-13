@@ -78,6 +78,17 @@ func attempts(state map[string]any) int {
 	return 0
 }
 
+// reminders is how many silence reminders this wait already sent (ADR-0045).
+func reminders(state map[string]any) int {
+	if n, ok := state["reminders"].(float64); ok {
+		return int(n)
+	}
+	if n, ok := state["reminders"].(int); ok {
+		return n
+	}
+	return 0
+}
+
 func maxAttempts(configured int) int {
 	if configured > 0 {
 		return configured
@@ -284,7 +295,19 @@ func (choiceExec) Execute(in StepInput) (StepResult, error) {
 		return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": 0}, Output: map[string]any{"asked": true}}, nil
 	}
 	if in.TimedOut {
-		return StepResult{Port: "timeout", Output: map[string]any{"timeout": true}}, nil
+		// ADR-0045: the contact is silent. While reminders remain, nudge (with the menu again) and wait another full timeout; the "timeout" port is
+		// taken only after the last reminder went unanswered.
+		sent := reminders(in.State)
+		if sent < len(c.Reminders) {
+			nudge := strings.TrimSpace(domain.Interpolate(c.Reminders[sent], in.Vars))
+			if port, err := sayChoice(in, nudge+"\n\n"+menu, nudge, c); err != nil {
+				return StepResult{}, err
+			} else if port != "" {
+				return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
+			}
+			return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": attempts(in.State), "reminders": sent + 1}, Output: map[string]any{"reminder": sent + 1}}, nil
+		}
+		return StepResult{Port: "timeout", Output: map[string]any{"timeout": true, "reminders_sent": sent}}, nil
 	}
 	reply := ""
 	if in.Message != nil {
@@ -310,7 +333,7 @@ func (choiceExec) Execute(in StepInput) (StepResult, error) {
 	} else if port != "" {
 		return StepResult{Port: port, Output: map[string]any{"sent": false}}, nil
 	}
-	return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": n}, Output: map[string]any{"invalid": true, "attempts": n}}, nil
+	return StepResult{Wait: true, WaitSecs: wait, State: map[string]any{"attempts": n, "reminders": reminders(in.State)}, Output: map[string]any{"invalid": true, "attempts": n}}, nil
 }
 
 // DefaultExecutors are the nodes that need no data/action side effects; the data and action nodes are in executors_data.go.

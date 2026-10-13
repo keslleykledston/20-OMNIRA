@@ -128,6 +128,12 @@ type CustomerCloser interface {
 	CloseByCustomer(ctx context.Context, conversationID uuid.UUID, command string) error
 }
 
+// ConversationCloser is an optional Effects capability (ADR-0045): the flow itself closes the attendance (the contact stopped answering). The system is the
+// actor; the closure is recorded with source "system" and the given reason (an attendance close reason: no_response, resolved, other). Idempotent.
+type ConversationCloser interface {
+	CloseByFlow(ctx context.Context, conversationID uuid.UUID, reason, note string) error
+}
+
 // ChoiceOption is one tappable option of a menu sent as buttons/list.
 type ChoiceOption struct {
 	ID    string

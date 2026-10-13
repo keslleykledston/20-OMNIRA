@@ -57,6 +57,12 @@ type NodeSpec struct {
 
 var specs = map[NodeType]NodeSpec{}
 
+// MaxReminders / MinReminderWaitSeconds bound the menu reminders (ADR-0045): a few polite nudges, never a chat spammer.
+const (
+	MaxReminders           = 3
+	MinReminderWaitSeconds = 30
+)
+
 func register(s NodeSpec) { specs[s.Type] = s }
 
 func SpecFor(t NodeType) (NodeSpec, bool) { s, ok := specs[t]; return s, ok }
@@ -66,7 +72,7 @@ func Specs() []NodeSpec {
 	order := []NodeType{NodeTrigger, NodeSendMessage, NodeAsk, NodeChoice, NodeCondition, NodeSwitch, NodeSetVariable,
 		NodeBusinessHours, NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets,
 		NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd,
-		NodeCheckSchedule, NodeCheckAvailability, NodeSelectSector, NodeAssignSector, NodeApplyOverflow}
+		NodeCheckSchedule, NodeCheckAvailability, NodeSelectSector, NodeAssignSector, NodeApplyOverflow, NodeCloseConversation}
 	out := make([]NodeSpec, 0, len(order))
 	for _, t := range order {
 		if s, ok := specs[t]; ok {
@@ -222,6 +228,15 @@ func init() {
 			checkText(n, &a, "text", c.Text, true)
 			checkVarName(n, &a, "variable", c.Variable)
 			checkTimeout(n, &a, c.TimeoutSeconds, c.MaxAttempts)
+			if len(c.Reminders) > MaxReminders {
+				a.Issues = append(a.Issues, errIssue(n, "too_many_reminders", fmt.Sprintf("%q: at most %d reminders", n.ID, MaxReminders)))
+			}
+			if len(c.Reminders) > 0 && (c.TimeoutSeconds < MinReminderWaitSeconds || c.TimeoutSeconds > 24*3600) {
+				a.Issues = append(a.Issues, errIssue(n, "reminder_wait", fmt.Sprintf("%q: reminders need timeout_seconds between %d and %d (the wait before each reminder)", n.ID, MinReminderWaitSeconds, 24*3600)))
+			}
+			for i, r := range c.Reminders {
+				checkText(n, &a, fmt.Sprintf("reminders[%d]", i), r, true)
+			}
 			if len(c.Options) < 2 || len(c.Options) > 10 {
 				a.Issues = append(a.Issues, errIssue(n, "invalid_options", fmt.Sprintf("%q: a choice needs 2 to 10 options", n.ID)))
 			}
@@ -521,6 +536,20 @@ func init() {
 				checkVarName(n, &a, "variable", c.Variable)
 				if c.MaxMessages < 0 || c.MaxMessages > 30 {
 					a.Issues = append(a.Issues, errIssue(n, "invalid_max_messages", fmt.Sprintf("%q: max_messages must be between 1 and 30", n.ID)))
+				}
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeCloseConversation, Label: "Close the conversation", Category: "action", SideEffect: EffectExternal, Terminal: true,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{}
+			if c, ok := cfg[CloseConversationConfig](n, &a); ok {
+				checkText(n, &a, "text", c.Text, false)
+				switch c.Reason {
+				case "", "no_response", "resolved", "other":
+				default:
+					a.Issues = append(a.Issues, errIssue(n, "invalid_reason", fmt.Sprintf("%q: reason must be no_response, resolved or other", n.ID)))
 				}
 			}
 			return a

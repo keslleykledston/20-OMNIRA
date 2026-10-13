@@ -249,9 +249,39 @@ func (humanHandoffExec) Execute(in StepInput) (StepResult, error) {
 	return StepResult{Handoff: true, Reserved: map[string]any{"_handoff": handoff}, Output: map[string]any{"summary": summary}}, nil
 }
 
+// closeConversationExec (ADR-0045): says the goodbye (when there is one) and closes the attendance as the system. A goodbye that cannot be delivered
+// (closed 24 h window, no channel) never stops the closing; the closing itself failing fails the run, so the conversation returns to humans.
+type closeConversationExec struct{}
+
+func (closeConversationExec) Type() domain.NodeType { return domain.NodeCloseConversation }
+func (closeConversationExec) Execute(in StepInput) (StepResult, error) {
+	c, err := domain.DecodeConfig[domain.CloseConversationConfig](in.Node.Config)
+	if err != nil {
+		return StepResult{}, err
+	}
+	closer, ok := in.Effects.(ports.ConversationCloser)
+	if !ok {
+		return StepResult{}, fmt.Errorf("closing the conversation from a flow is not available in this environment")
+	}
+	reason := c.Reason
+	if reason == "" {
+		reason = "no_response"
+	}
+	text := strings.TrimSpace(domain.Interpolate(c.Text, in.Vars))
+	sent := false
+	if text != "" {
+		st, serr := in.Effects.SendText(in.Ctx, in.Facts.ID, text, sendKey(in))
+		sent = serr == nil && (st == ports.SendQueued || st == ports.SendReplayed)
+	}
+	if err := closer.CloseByFlow(in.Ctx, in.Facts.ID, reason, "Encerrado pelo fluxo de atendimento ("+reason+")."); err != nil {
+		return StepResult{}, err
+	}
+	return StepResult{End: true, Output: map[string]any{"closed": true, "reason": reason, "goodbye_sent": sent}}, nil
+}
+
 // DataExecutors are the nodes that read or change OMNIRA data through Effects.
 func DataExecutors() []Executor {
-	return append([]Executor{resolveContactExec{}, resolveCustomerExec{}, customerChoiceExec{}, findOpenTicketsExec{}, createTicketExec{}, assignQueueExec{}, humanHandoffExec{}}, RoutingExecutors()...)
+	return append([]Executor{resolveContactExec{}, resolveCustomerExec{}, customerChoiceExec{}, findOpenTicketsExec{}, createTicketExec{}, assignQueueExec{}, humanHandoffExec{}, closeConversationExec{}}, RoutingExecutors()...)
 }
 
 // AllExecutors is the full catalog without an AI gateway (AI nodes take their error port); a test enforces parity with domain.Specs().

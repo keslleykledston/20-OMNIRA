@@ -206,6 +206,15 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
               </>
             )}
           />
+          <Input label="Tempo de espera (segundos)" type="number" min={0} value={str(cfg, 'timeout_seconds')} disabled={ro} helperText="Quanto esperar a escolha. Com lembretes, é a espera antes de CADA lembrete (mínimo 30 s). Vazio usa o padrão do fluxo (24 h)." onChange={(e) => set({ timeout_seconds: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          <ListEditor<{ text: string }>
+            title="Lembretes se o cliente não escolher" items={arr<string>(cfg, 'reminders').map((text) => ({ text }))} max={3} disabled={ro} addLabel="Adicionar lembrete"
+            blank={() => ({ text: '' })}
+            onChange={(items) => set({ reminders: items.length ? items.map((i) => i.text) : undefined })}
+            row={(r, setR, i) => (
+              <TextArea label={`Lembrete ${i + 1}`} value={r.text} disabled={ro} rows={2} helperText={i === 0 ? 'Enviado junto com o menu depois da primeira espera sem resposta. Depois do último lembrete e de mais uma espera, a saída "sem resposta" é seguida.' : undefined} onChange={(e) => setR({ text: e.target.value })} />
+            )}
+          />
         </>
       )
       break
@@ -311,6 +320,18 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
         <>
           {queueSelect('Fila que recebe a conversa', typeof cfg.queue === 'string' ? cfg.queue : '', (v) => set({ queue: v || undefined }), true)}
           <TextArea label="Resumo para o atendente" value={str(cfg, 'summary')} disabled={ro} rows={4} helperText={`O que o atendente deve saber. Aceita {{variavel}}. ${varHint ?? ''}`} onChange={(e) => set({ summary: e.target.value })} />
+        </>
+      )
+      break
+    case 'close_conversation':
+      form = (
+        <>
+          <TextArea label="Mensagem de encerramento" value={str(cfg, 'text')} disabled={ro} rows={3} helperText="Enviada ao cliente antes de encerrar (opcional). Aceita {{variavel}}." onChange={(e) => set({ text: e.target.value || undefined })} />
+          <Select label="Motivo registrado" value={str(cfg, 'reason') || 'no_response'} disabled={ro} hint="Fica no histórico do contato. Encerra o atendimento pelo sistema, sem transbordo." onChange={(v) => set({ reason: v })}>
+            <option value="no_response">Cliente sem resposta (inatividade)</option>
+            <option value="resolved">Resolvido</option>
+            <option value="other">Outro</option>
+          </Select>
         </>
       )
       break

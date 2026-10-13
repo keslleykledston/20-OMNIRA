@@ -36,6 +36,7 @@ export const NODE_LABELS: Record<string, string> = {
   select_sector: 'Perguntar o setor',
   assign_sector: 'Direcionar para setor',
   apply_overflow: 'Aplicar transbordo',
+  close_conversation: 'Encerrar atendimento',
 }
 
 export const CATEGORY_LABELS: Record<string, string> = {
@@ -150,6 +151,7 @@ export function portsOf(node: FlowNode): PortDef[] {
     case 'ai_summarize':
       return [req('next'), req('error')]
     case 'human_handoff':
+    case 'close_conversation':
     case 'end':
       return []
     default:
@@ -238,6 +240,8 @@ export function defaultConfig(type: string): Record<string, unknown> | undefined
       return { outcome: 'resolved' }
     case 'human_handoff':
       return { summary: '' }
+    case 'close_conversation':
+      return { text: 'Encerramos o atendimento por inatividade. Se precisar de algo, é só nos escrever por aqui. Obrigado!', reason: 'no_response' }
     case 'ai_classify_intent':
       return { intents: [{ id: 'intencao_1', label: 'Intenção 1' }, { id: 'intencao_2', label: 'Intenção 2' }], min_confidence: 0.7 }
     case 'ai_extract':
