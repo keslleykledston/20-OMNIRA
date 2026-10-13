@@ -18,6 +18,7 @@ import (
 var (
 	ErrNotFound = errors.New("not found")
 	ErrInUse    = errors.New("in use")
+	ErrStale    = errors.New("calendar changed since it was read")
 )
 
 // Calendar is a stored calendar: its definition (spec), its emergency suspensions, and the revision that timers derive from.
@@ -126,9 +127,19 @@ func LoadCalendar(ctx context.Context, q platformdb.Querier, tenant, id uuid.UUI
 
 // SaveDefinition replaces the whole definition of a calendar in the caller's transaction: the calendar row is locked first, so two
 // editors serialize, and the revision is bumped so everything derived from the old definition (timers) can tell it is stale.
-func SaveDefinition(ctx context.Context, q platformdb.Querier, tenant, id uuid.UUID, name string, sp scheduling.Spec) (int, error) {
+func SaveDefinition(ctx context.Context, q platformdb.Querier, tenant, id uuid.UUID, name string, sp scheduling.Spec, expectedRevision *int) (int, error) {
 	if _, err := sp.Schedule(); err != nil {
 		return 0, err
+	}
+	var current int
+	if err := q.QueryRow(ctx, `SELECT revision FROM calendars WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenant, id).Scan(&current); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, err
+	}
+	if expectedRevision != nil && *expectedRevision != current {
+		return 0, ErrStale
 	}
 	weekly, _ := json.Marshal(nonNil(sp.Weekly))
 	var rev int

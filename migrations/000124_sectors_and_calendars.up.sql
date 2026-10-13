@@ -1,3 +1,6 @@
+-- Fail fast instead of queueing behind traffic: the ALTERs below take short locks on queues and tenants (a few rows per tenant).
+SET LOCAL lock_timeout = '5s';
+
 -- ADR-0044 phase 3: sectors (a sector may own several queues) and operational calendars. Additive: a queue with no sector and no
 -- calendar behaves exactly as before. Everything is per tenant, composite foreign keys keep references inside the tenant.
 

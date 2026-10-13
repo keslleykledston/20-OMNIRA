@@ -94,12 +94,15 @@ Configuração: setores, filas por setor, calendários (semana, feriados, exceç
 |---|---|---|---|
 | 1 Auditoria | §1 | **feita** | tabela de reaproveitamento e lacunas |
 | 2 Arquitetura/contratos | este ADR (+ OpenAPI nas fases com API) | **feita (proposta)** | revisão do Codex sem HIGH aberto |
-| 3 Calendários e disponibilidade | domínio `scheduling` **IMPLEMENTADO**; persistência + API + herança + escala/plantão + `Eligibility()` | **em andamento** | testes temporais (DST, meia-noite, feriado, suspensão), isolamento A/B, escala/presença/capacidade independentes |
+| 3 Calendários e disponibilidade | domínio `scheduling` **IMPLEMENTADO**; **persistência + API + herança + suspensão + `GET /queues/{id}/availability` IMPLEMENTADOS** (migration 124, POSTGRES VERIFIED, branch); **faltam** escala individual, plantão/contingência e `Eligibility()` | **em andamento** | testes temporais (DST, meia-noite, feriado, suspensão), isolamento A/B, escala/presença/capacidade independentes |
 | 4 Motor | `Decide`, `routing_state`, `least_loaded`, chamadas de `RouteNew`/fluxo | pendente | concorrência (dupla atribuição), idempotência, compatibilidade com conversas existentes |
 | 5 Transbordo e SLA | cadeias, timers, contingência, SLA | pendente | os 6 gatilhos, laços, destino indisponível, worker caído, agenda alterada com fila cheia |
 | 6 Flow Builder e Inbox | nós + telas | pendente | fluxos antigos intactos; Vitest + E2E |
 | 7 Segurança e testes | isolamento, Hub, concorrência, recuperação | pendente | matriz do pedido (financeiro fora do expediente, suporte 24x7 sem agentes, turno de madrugada, feriados, fila estourada, destino indisponível, loops, worker caído, agenda alterada, concorrência) |
 | 8 Revisão independente | Codex por fase + riscos residuais | contínua | CRITICAL/HIGH tratados |
+
+### 11.1 Evidência da Fase 3 (parcial), branch `feat/sector-scheduling-overflow`
+Postgres real: herança fila > setor > tenant > nenhum, DST por fuso, feriado/exceção/suspensão, revisão e edição concorrente (`expected_revision` → 409), validação 400, limite de corpo 413, isolamento A/B (404 uniforme, FK composta recusa até o dono do banco), permissões (agente 403, supervisor gerencia, calendário padrão só administrador), backfill idempotente; 6 mutantes mortos; migrations 093–124 up/down/up. Codex sobre a fase: CRITICAL/HIGH 0; 7 MEDIUM/1 LOW tratados (corpo limitado, recusa honesta quando a RLS filtra, concorrência otimista, limite de suspensões sem mexer na revisão, 23505→409, nomes ≤80, `lock_timeout` na migration, aviso de perda de dados no `down`). **Pendente da fase:** contrato OpenAPI das rotas novas; a numeração 124 pode precisar de reajuste no merge.
 
 ## 12. Decisões que precisam do dono (padrão adotado até resposta)
 1. **Feriados:** cadastro manual por tenant (padrão) ou importação de calendário nacional.

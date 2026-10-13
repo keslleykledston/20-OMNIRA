@@ -169,6 +169,7 @@ const (
 	maxExceptions      = 366
 	maxHolidays        = 400
 	maxSuspensions     = 200
+	nameMax            = 80 // exception and holiday names (the columns hold 80)
 )
 
 // Validate checks everything the resolver relies on. A schedule that validates never makes the resolver fail.
@@ -208,6 +209,9 @@ func (s Schedule) Validate() error {
 		return errors.New("too many exceptions or holidays")
 	}
 	for i, e := range s.Exceptions {
+		if len(e.Name) > nameMax {
+			return fmt.Errorf("exception %d: name longer than %d characters", i+1, nameMax)
+		}
 		if !e.From.valid() || !e.To.valid() {
 			return fmt.Errorf("exception %d: invalid date", i+1)
 		}
@@ -237,9 +241,15 @@ func (s Schedule) Validate() error {
 		if sp.From.IsZero() || sp.To.IsZero() || !sp.To.After(sp.From) {
 			return fmt.Errorf("suspension %d: the end must be after the start", i+1)
 		}
+		if len(sp.Reason) > 200 {
+			return fmt.Errorf("suspension %d: reason longer than 200 characters", i+1)
+		}
 	}
 	seenHoliday := map[int]bool{}
 	for i, h := range s.Holidays {
+		if len(h.Name) > nameMax {
+			return fmt.Errorf("holiday %d: name longer than %d characters", i+1, nameMax)
+		}
 		if !h.Date.valid() {
 			return fmt.Errorf("holiday %d: invalid date", i+1)
 		}

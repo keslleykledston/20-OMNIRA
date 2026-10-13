@@ -52,6 +52,33 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, permission s
 	return tc, q, true
 }
 
+// maxBody bounds every JSON body (a calendar with all its holidays is far below it). Decoding stops at the limit, so a hostile payload
+// never gets to be materialized.
+const maxBody = 256 << 10
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+		}
+		return false
+	}
+	return true
+}
+
+// conflict maps a unique violation (two requests raced past the pre-check) to the same 409 the pre-check gives.
+func conflict(w http.ResponseWriter, err error, msg string) bool {
+	if pgCode(err) == "23505" {
+		http.Error(w, msg, http.StatusConflict)
+		return true
+	}
+	return false
+}
+
 func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -152,8 +179,7 @@ func (h *Handler) CreateSector(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if json.NewDecoder(r.Body).Decode(&req) != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	name, valid := cleanName(req.Name)
@@ -172,6 +198,9 @@ func (h *Handler) CreateSector(w http.ResponseWriter, r *http.Request) {
 	}
 	id := uuid.New()
 	if _, err := q.Exec(r.Context(), `INSERT INTO sectors (id, tenant_id, name) VALUES ($1,$2,$3)`, id, tc.TenantID, name); err != nil {
+		if conflict(w, err, "a sector with this name already exists") {
+			return
+		}
 		http.Error(w, "failed to create sector", http.StatusInternalServerError)
 		return
 	}
@@ -190,7 +219,10 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body map[string]json.RawMessage
-	if json.NewDecoder(r.Body).Decode(&body) != nil || len(body) == 0 {
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if len(body) == 0 {
 		http.Error(w, "name, active or calendar_id required", http.StatusBadRequest)
 		return
 	}
@@ -249,6 +281,9 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := q.Exec(r.Context(), `UPDATE sectors SET name=$3, active=$4, calendar_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, id, name, active, cal); err != nil {
+		if conflict(w, err, "a sector with this name already exists") {
+			return
+		}
 		http.Error(w, "failed to update sector", http.StatusInternalServerError)
 		return
 	}
@@ -323,24 +358,25 @@ func (h *Handler) GetCalendar(w http.ResponseWriter, r *http.Request) {
 type calendarInput struct {
 	Name       string          `json:"name"`
 	Definition scheduling.Spec `json:"definition"`
+	// ExpectedRevision, when sent, makes the save conditional: if somebody saved in between, the answer is 409 and nothing is lost.
+	ExpectedRevision *int `json:"expected_revision,omitempty"`
 }
 
-func decodeCalendar(w http.ResponseWriter, r *http.Request) (string, scheduling.Spec, bool) {
+func decodeCalendar(w http.ResponseWriter, r *http.Request) (string, scheduling.Spec, *int, bool) {
 	var in calendarInput
-	if json.NewDecoder(r.Body).Decode(&in) != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
-		return "", scheduling.Spec{}, false
+	if !decodeJSON(w, r, &in) {
+		return "", scheduling.Spec{}, nil, false
 	}
 	name, valid := cleanName(in.Name)
 	if !valid {
 		http.Error(w, "name must have 1 to 60 characters", http.StatusBadRequest)
-		return "", scheduling.Spec{}, false
+		return "", scheduling.Spec{}, nil, false
 	}
 	if _, err := in.Definition.Schedule(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest) // the message names the rule that failed; it carries no tenant data
-		return "", scheduling.Spec{}, false
+		return "", scheduling.Spec{}, nil, false
 	}
-	return name, in.Definition, true
+	return name, in.Definition, in.ExpectedRevision, true
 }
 
 func (h *Handler) CreateCalendar(w http.ResponseWriter, r *http.Request) {
@@ -348,7 +384,7 @@ func (h *Handler) CreateCalendar(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	name, spec, ok := decodeCalendar(w, r)
+	name, spec, _, ok := decodeCalendar(w, r)
 	if !ok {
 		return
 	}
@@ -359,6 +395,9 @@ func (h *Handler) CreateCalendar(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := CreateCalendar(r.Context(), q, tc.TenantID, name, spec)
 	if err != nil {
+		if conflict(w, err, "a calendar with this name already exists") {
+			return
+		}
 		http.Error(w, "failed to create calendar", http.StatusInternalServerError)
 		return
 	}
@@ -380,7 +419,7 @@ func (h *Handler) UpdateCalendar(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	name, spec, ok := decodeCalendar(w, r)
+	name, spec, expected, ok := decodeCalendar(w, r)
 	if !ok {
 		return
 	}
@@ -389,13 +428,16 @@ func (h *Handler) UpdateCalendar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a calendar with this name already exists", http.StatusConflict)
 		return
 	}
-	if _, err := q.Exec(r.Context(), `SELECT 1 FROM calendars WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tc.TenantID, id); err != nil {
-		http.Error(w, "failed to update calendar", http.StatusInternalServerError)
-		return
-	}
-	rev, err := SaveDefinition(r.Context(), q, tc.TenantID, id, name, spec)
+	rev, err := SaveDefinition(r.Context(), q, tc.TenantID, id, name, spec, expected)
 	if errors.Is(err, ErrNotFound) {
 		http.Error(w, "calendar not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, ErrStale) {
+		http.Error(w, "the calendar was changed by someone else; reload it and apply your change again", http.StatusConflict)
+		return
+	}
+	if conflict(w, err, "a calendar with this name already exists") {
 		return
 	}
 	if err != nil {
@@ -462,12 +504,16 @@ func (h *Handler) AddSuspension(w http.ResponseWriter, r *http.Request) {
 		To     time.Time `json:"to"`
 		Reason string    `json:"reason"`
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.From.IsZero() || in.To.IsZero() || !in.To.After(in.From) || len(in.Reason) > 200 {
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if in.From.IsZero() || in.To.IsZero() || !in.To.After(in.From) || len(in.Reason) > 200 {
 		http.Error(w, "from and to (RFC 3339, to after from) are required; reason up to 200 characters", http.StatusBadRequest)
 		return
 	}
-	var rev int
-	err := q.QueryRow(r.Context(), `UPDATE calendars SET revision=revision+1, updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING revision`, tc.TenantID, id).Scan(&rev)
+	// lock the calendar first (this serializes the count below), count, and only then bump the revision: a refused request changes nothing
+	var locked bool
+	err := q.QueryRow(r.Context(), `SELECT true FROM calendars WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tc.TenantID, id).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "calendar not found", http.StatusNotFound)
 		return
@@ -477,8 +523,17 @@ func (h *Handler) AddSuspension(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var n int
-	if err := q.QueryRow(r.Context(), `SELECT count(*) FROM calendar_suspensions WHERE tenant_id=$1 AND calendar_id=$2 AND ends_at > now() - interval '30 days'`, tc.TenantID, id).Scan(&n); err != nil || n >= 200 {
+	if err := q.QueryRow(r.Context(), `SELECT count(*) FROM calendar_suspensions WHERE tenant_id=$1 AND calendar_id=$2 AND ends_at > now() - interval '30 days'`, tc.TenantID, id).Scan(&n); err != nil {
+		http.Error(w, "failed to suspend", http.StatusInternalServerError)
+		return
+	}
+	if n >= 200 {
 		http.Error(w, "too many suspensions on this calendar", http.StatusConflict)
+		return
+	}
+	var rev int
+	if err := q.QueryRow(r.Context(), `UPDATE calendars SET revision=revision+1, updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING revision`, tc.TenantID, id).Scan(&rev); err != nil {
+		http.Error(w, "failed to suspend", http.StatusInternalServerError)
 		return
 	}
 	sid := uuid.New()
@@ -525,8 +580,7 @@ func (h *Handler) RemoveSuspension(w http.ResponseWriter, r *http.Request) {
 
 func readID(w http.ResponseWriter, r *http.Request, field string) (*uuid.UUID, bool) {
 	var body map[string]*uuid.UUID
-	if json.NewDecoder(r.Body).Decode(&body) != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+	if !decodeJSON(w, r, &body) {
 		return nil, false
 	}
 	v, has := body[field]
@@ -539,7 +593,8 @@ func readID(w http.ResponseWriter, r *http.Request, field string) (*uuid.UUID, b
 
 // SetDefaultCalendar: PUT /settings/default-calendar {"calendar_id": uuid|null}.
 func (h *Handler) SetDefaultCalendar(w http.ResponseWriter, r *http.Request) {
-	tc, q, ok := h.authorize(w, r, "agent.manage")
+	// the default lives on the tenants row, which only a tenant administrator may update (tenant.manage names that power)
+	tc, q, ok := h.authorize(w, r, "tenant.manage")
 	if !ok {
 		return
 	}
@@ -551,8 +606,13 @@ func (h *Handler) SetDefaultCalendar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "calendar not found", http.StatusNotFound)
 		return
 	}
-	if _, err := q.Exec(r.Context(), `UPDATE tenants SET default_calendar_id=$2, updated_at=now() WHERE id=$1`, tc.TenantID, cal); err != nil {
+	tag, err := q.Exec(r.Context(), `UPDATE tenants SET default_calendar_id=$2, updated_at=now() WHERE id=$1`, tc.TenantID, cal)
+	if err != nil {
 		http.Error(w, "failed to set the default calendar", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() != 1 { // the row policy filtered the update out: never answer success (nor audit) for a change that did not happen
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	h.record(r, auditdomain.ResourceTenant, tc.TenantID, auditdomain.ActionTenantDefaultCalendar, map[string]any{"calendar_id": idText(cal)})

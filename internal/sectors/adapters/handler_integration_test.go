@@ -442,3 +442,74 @@ func TestMigrationBackfillCreatesSectorsForTheStandardGroups(t *testing.T) {
 		t.Fatalf("Suporte must be linked to its sector, Default and custom groups untouched, exactly one sector: sup=%v def=%v custom=%v sectors=%d", supSector, defSector, customSector, sectors)
 	}
 }
+
+// Codex review of phase 3: bounded bodies, honest answers when the row policy filters a write, optimistic concurrency, a refused
+// request that changes nothing, and unique races that answer 409 instead of 500.
+func TestHardeningBoundedBodiesStaleEditsHonestRefusalsAndRaces(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	supervisor := e.member(t, a, "tenant_supervisor")
+	const tz = "America/Manaus"
+	cal := decode[Calendar](t, e.call(t, a, admin, "POST", "/", e.h.CreateCalendar, nil, businessBody("Base", tz)))
+
+	// a body over the limit is refused before it is materialized
+	huge := `{"name":"x","definition":{"kind":"business","timezone":"` + tz + `","weekly":[],"holidays":[` + strings.Repeat(`{"date":"2026-01-01"},`, 20000) + `{"date":"2026-01-02"}]}}`
+	if got := e.call(t, a, admin, "POST", "/", e.h.CreateCalendar, nil, huge).Code; got != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body = %d, want 413", got)
+	}
+	// names longer than the columns are a 400, not a database error
+	long := businessBody("Longo", tz)
+	long["definition"].(map[string]any)["holidays"] = []map[string]any{{"name": strings.Repeat("x", 81), "date": "2026-09-07"}}
+	if got := e.call(t, a, admin, "POST", "/", e.h.CreateCalendar, nil, long).Code; got != 400 {
+		t.Errorf("holiday name of 81 characters = %d, want 400", got)
+	}
+	// the default calendar lives on the tenants row (admin only): a supervisor is refused, nothing is audited as done
+	if got := e.call(t, a, supervisor, "PUT", "/", e.h.SetDefaultCalendar, nil, map[string]any{"calendar_id": cal.ID}).Code; got != 403 {
+		t.Errorf("supervisor default calendar = %d, want 403", got)
+	}
+	if auditCount(t, e, a, "tenant.default_calendar_changed") != 0 {
+		t.Error("a refused change must not be audited as done")
+	}
+	if got := e.call(t, a, admin, "PUT", "/", e.h.SetDefaultCalendar, nil, map[string]any{"calendar_id": cal.ID}).Code; got != 200 {
+		t.Errorf("admin default calendar = %d, want 200", got)
+	}
+	// optimistic concurrency: the second editor who read revision 1 gets 409 and nothing is overwritten
+	first := businessBody("Base", tz)
+	first["expected_revision"] = 1
+	if got := e.call(t, a, admin, "PUT", "/", e.h.UpdateCalendar, map[string]string{"calendar_id": cal.ID.String()}, first).Code; got != 200 {
+		t.Fatalf("first edit = %d", got)
+	}
+	second := businessBody("Outro nome", tz)
+	second["expected_revision"] = 1
+	if got := e.call(t, a, admin, "PUT", "/", e.h.UpdateCalendar, map[string]string{"calendar_id": cal.ID.String()}, second).Code; got != 409 {
+		t.Errorf("stale edit = %d, want 409", got)
+	}
+	if got := decode[Calendar](t, e.call(t, a, admin, "GET", "/", e.h.GetCalendar, map[string]string{"calendar_id": cal.ID.String()}, nil)); got.Name != "Base" || got.Revision != 2 {
+		t.Errorf("the stale edit must change nothing: %+v", got)
+	}
+	// the suspension limit refuses without bumping the revision
+	for i := 0; i < 200; i++ {
+		if _, err := e.seed.Exec(context.Background(), `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at) VALUES ($1,$2,now()+make_interval(hours => $3), now()+make_interval(hours => $3)+interval '30 minutes')`, a, cal.ID, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := e.call(t, a, admin, "POST", "/", e.h.AddSuspension, map[string]string{"calendar_id": cal.ID.String()},
+		map[string]any{"from": time.Now().Add(1000 * time.Hour), "to": time.Now().Add(1001 * time.Hour)}).Code; got != 409 {
+		t.Errorf("201st suspension = %d, want 409", got)
+	}
+	if got := decode[Calendar](t, e.call(t, a, admin, "GET", "/", e.h.GetCalendar, map[string]string{"calendar_id": cal.ID.String()}, nil)).Revision; got != 2 {
+		t.Errorf("a refused suspension moved the revision to %d", got)
+	}
+	// two requests racing for the same new name: one wins, the other gets 409 (never a 500)
+	codes := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			codes <- e.call(t, a, admin, "POST", "/", e.h.CreateSector, nil, map[string]string{"name": "Corrida"}).Code
+		}()
+	}
+	c1, c2 := <-codes, <-codes
+	if !((c1 == 201 && c2 == 409) || (c1 == 409 && c2 == 201)) {
+		t.Errorf("racing creates answered %d and %d, want one 201 and one 409", c1, c2)
+	}
+}
