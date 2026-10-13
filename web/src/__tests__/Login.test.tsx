@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Login from '../pages/Login';
 import { authAPI } from '../lib/api';
 import { renderAt } from './testUtils';
+import { rememberAfterLogin } from '../lib/afterLogin';
 
 // O alvo aqui é a tela: o que ela oferece em cada modo que o servidor anuncia.
 // O transporte do dev login está coberto em session.test.ts.
@@ -15,6 +16,8 @@ vi.mock('../lib/api', () => ({
     startOIDC: vi.fn(),
   },
 }));
+
+vi.mock('../lib/tenants', () => ({ resolveSessionTenant: vi.fn(async (id?: string) => id ?? 'tenant-a-uuid') }));
 
 const page = () => renderAt(<Login />, '/login', '/login');
 
@@ -179,5 +182,36 @@ describe('Login — teclado', () => {
     await userEvent.type(screen.getByLabelText('E-mail'), 'test@omnira.local{Enter}');
 
     await waitFor(() => expect(authAPI.devLogin).toHaveBeenCalled());
+  });
+});
+
+describe('Login — retorno ao console (ADR-0041)', () => {
+  const realLocation = window.location;
+  const replace = vi.fn();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
+    window.history.replaceState({}, '', '/login?oidc=complete');
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...realLocation, search: '?oidc=complete', pathname: '/login', replace } });
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+  });
+
+  it('volta ao endereço do console que mandou a pessoa entrar', async () => {
+    mode({ mode: 'oidc' });
+    vi.mocked(authAPI.session).mockResolvedValue({ data: { user: { id: 'u', email: 'a@b.c', name: 'A' }, tenant: { id: 'tenant-a-uuid' } } } as any);
+    rememberAfterLogin('/admin/acessos?aba=equipes');
+    page();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/admin/acessos?aba=equipes'));
+  });
+
+  it('sem endereço lembrado segue o destino padrão (nada de /admin/)', async () => {
+    mode({ mode: 'oidc' });
+    vi.mocked(authAPI.session).mockResolvedValue({ data: { user: { id: 'u', email: 'a@b.c', name: 'A' }, tenant: { id: 'tenant-a-uuid' } } } as any);
+    page();
+    await screen.findByTestId('elsewhere');
+    expect(replace).not.toHaveBeenCalled();
   });
 });

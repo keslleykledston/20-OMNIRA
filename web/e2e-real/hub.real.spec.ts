@@ -203,7 +203,7 @@ test('transferir: quem está com a conversa escolhe só entre quem pode responde
 test('delegação: o operador libera a gestão, o administrador marca quem gerencia e o agente cria a conexão pelo Hub', async ({ page, browser }) => {
   // 1) o operador (administrador do Hub) delega "integrações" na instância A
   await signIn(page, 'admin@e2e.test');
-  await page.goto('/acessos?aba=instancias');
+  await page.goto('/admin/acessos?aba=instancias');
   const card = page.getByRole('region', { name: 'Instância ISP Roraima' });
   await card.getByLabel(/Integrações de retaguarda/).click();
   await expect(card.getByLabel(/Integrações de retaguarda/)).toBeChecked();
@@ -215,7 +215,7 @@ test('delegação: o operador libera a gestão, o administrador marca quem geren
   await signIn(c0, 'agent2@e2e.test');
   await c0.goto('/inbox');
   expect((await api(c0, `/hubs/${env.hub}/instances/${env.ta}/channels/connections`)).status).toBe(404);
-  await expect(c0.getByRole('link', { name: 'Canais das instâncias' })).toHaveCount(0);
+  await expect(c0.getByRole('link', { name: 'Administração' })).toHaveCount(0);
   await carla0.close();
 
   // 2) o administrador marca a Carla como gerente da instância A
@@ -231,7 +231,7 @@ test('delegação: o operador libera a gestão, o administrador marca quem geren
   const carla = await ctx.newPage();
   await signIn(carla, 'agent2@e2e.test');
   await carla.goto('/inbox');
-  await carla.getByRole('link', { name: 'Canais das instâncias' }).first().click();
+  await carla.getByRole('link', { name: 'Administração' }).first().click();
   await carla.getByRole('link', { name: 'Abrir canais e integrações' }).click();
   await expect(carla.getByRole('heading', { name: /Canais e integrações — ISP Roraima/ })).toBeVisible();
   await carla.getByRole('button', { name: 'Adicionar canal' }).first().click();
@@ -266,9 +266,9 @@ test('delegação: o operador libera a gestão, o administrador marca quem geren
 
 test('segurança no navegador real: quem não administra o Hub não vê painel nem equipes, e uma instância sem acesso não existe', async ({ page }) => {
   await signIn(page, 'agent1@e2e.test');
-  await page.goto('/acessos');
-  await expect(page.getByText('Painel de acessos indisponível')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Acessos' })).toHaveCount(0);
+  await page.goto('/admin/acessos');
+  await expect(page.getByText('Sem acesso ao console')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Administração' })).toHaveCount(0);
   expect((await api(page, `/hubs/${env.hub}/pools`)).status).toBe(404);
   expect((await api(page, `/hubs/${env.hub}/access`)).status).toBe(404);
   const create = await page.request.post(`/api/v1/hubs/${env.hub}/pools`, { headers: { Origin: process.env.E2E_BASE_URL! }, data: { name: 'Invasora', distribution: 'round_robin' } });
@@ -287,7 +287,7 @@ test('segurança no navegador real: quem não administra o Hub não vê painel n
 
 test('equipes: o administrador monta a equipe e a distribuição automática entrega as conversas novas pelo rodízio', async ({ page }) => {
   await signIn(page, 'admin@e2e.test');
-  await page.goto('/acessos?aba=equipes');
+  await page.goto('/admin/acessos?aba=equipes');
   await page.getByRole('textbox', { name: 'Nova equipe' }).fill('Atendimento A');
   await page.getByRole('button', { name: 'Criar equipe' }).click();
   const team = page.getByRole('article', { name: 'Equipe Atendimento A' });
@@ -333,7 +333,7 @@ test('equipes: o administrador monta a equipe e a distribuição automática ent
 
 test('auditoria: o administrador vê quem mudou o quê, e só ele', async ({ page }) => {
   await signIn(page, 'admin@e2e.test');
-  await page.goto('/acessos?aba=auditoria');
+  await page.goto('/admin/acessos?aba=auditoria');
   const table = page.getByRole('table');
   await expect(table.getByText('Gestão delegada ao Hub alterada').first()).toBeVisible();
   await expect(table.getByText('Conexão de canal/integração criada').first()).toBeVisible();

@@ -66,7 +66,7 @@ test('o operador vê as instâncias, cria uma, suspende e liga/desliga capacidad
   const writes = await install(page, { manage: true });
   // o endereço antigo /hub/empresas leva à aba; não existe mais uma tela separada
   await page.goto('/hub/empresas');
-  await expect(page).toHaveURL(/\/acessos\?aba=instancias$/);
+  await expect(page).toHaveURL(/\/admin\/acessos\?aba=instancias$/);
   await expect(page.getByRole('tab', { name: 'Instâncias', selected: true })).toBeVisible();
 
   const a = page.getByRole('region', { name: 'Instância ISP Roraima' });
@@ -96,10 +96,10 @@ test('o operador vê as instâncias, cria uma, suspende e liga/desliga capacidad
   expect(post.body.legal_name).toBe('Fibra Norte Ltda');
 });
 
-test('quem não administra o Hub não vê o item Acessos e a página diz que está indisponível', async ({ page }) => {
+test('quem não administra o Hub não vê o item Administração e o console diz que não há acesso', async ({ page }) => {
   await install(page, { manage: false });
   await page.goto('/inbox');
-  await expect(page.getByRole('link', { name: 'Acessos' })).toHaveCount(0);
-  await page.goto('/acessos');
-  await expect(page.getByText('Painel de acessos indisponível')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Administração' })).toHaveCount(0);
+  await page.goto('/admin/acessos');
+  await expect(page.getByText('Sem acesso ao console')).toBeVisible();
 });

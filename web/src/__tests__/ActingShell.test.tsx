@@ -48,7 +48,7 @@ describe('the shell while attending an instance through the Hub', () => {
     wrap(<Sidebar />)
     expect(await screen.findByRole('link', { name: 'Conversas' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Tickets' })).toBeInTheDocument()
-    expect(await screen.findByRole('link', { name: 'Acessos' })).toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: 'Administração' })).toHaveAttribute('href', '/admin/')
   })
 
   it('offers only the conversations (desktop and mobile), and names the instance, while acting', async () => {

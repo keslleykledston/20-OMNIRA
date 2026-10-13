@@ -9,8 +9,7 @@ import Tickets from './pages/Tickets'
 import TicketReconciliationPage from './pages/TicketReconciliationPage'
 import Reports from './pages/Reports'
 import SupervisorDashboard from './pages/SupervisorDashboard'
-import HubAccessPage from './pages/HubAccessPage'
-import HubManagedPage, { HubManagedChannelsRoute } from './pages/HubManagedPage'
+import ToConsole from './components/ToConsole'
 import ConversationsEntry from './pages/ConversationsEntry'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
@@ -54,11 +53,10 @@ function AppRoutes() {
         <Route path="/inbox" element={<ConversationsEntry />} />
         {/* ADR-0039 (revisão 2026-10-09): "Conversas" é a única caixa; o Hub deixou de ser um destino à parte. Os endereços antigos continuam valendo. */}
         <Route path="/hub" element={<Navigate to="/inbox" replace />} />
-        <Route path="/hub/empresas" element={<Navigate to="/acessos?aba=instancias" replace />} />
-        <Route path="/acessos" element={<HubAccessPage />} />
-        <Route path="/instancias" element={<HubManagedPage />} />
-        <Route path="/instancias/:hubId/:tenantId/canais" element={<HubManagedChannelsRoute />} />
-        <Route path="/instancias/:hubId/:tenantId/canais/whatsapp/new" element={<HubManagedChannelsRoute wizard />} />
+        {/* ADR-0041: administração (acessos, instâncias e seus canais) vive no console, /admin/, uma entrada própria do build. Os endereços antigos redirecionam. */}
+        <Route path="/hub/empresas" element={<ToConsole to="/acessos?aba=instancias" />} />
+        <Route path="/acessos" element={<ToConsole />} />
+        <Route path="/instancias/*" element={<ToConsole />} />
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/flows" element={<FlowsPage />} />
         <Route path="/flows/:flowId" element={<FlowEditorPage />} />
