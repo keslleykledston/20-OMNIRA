@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Build info injected via ldflags
@@ -42,6 +43,9 @@ type Config struct {
 	// RoutingEngineEnabled switches the automatic assignment from the legacy round-robin to the central routing engine (ADR-0044, phase 4):
 	// sector calendar, agent shifts, on-call, least_loaded, durable open-wakeup timers. Default off: the legacy path is byte-for-byte unchanged.
 	RoutingEngineEnabled bool
+	// RoutingEngineSince (OMNIRA_ROUTING_ENGINE_SINCE, RFC 3339) is the creation-date floor of the engine's recovery of MANUAL-queue conversations it never saw.
+	// Unset = that recovery is off: conversations already open when the engine is switched on are not pulled into it.
+	RoutingEngineSince time.Time
 	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
 	HubAdminAPIEnabled bool
 	// HubAccessAPIEnabled mounts the people-and-permissions routes of ADR-0039 (hub admins only). Needs HubAPIEnabled.
@@ -170,6 +174,7 @@ func Load() *Config {
 		HubAPIEnabled:                 getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
 		HubProjectorEnabled:           getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
 		RoutingEngineEnabled:          getEnv("OMNIRA_ROUTING_ENGINE_ENABLED", "false") == "true",
+		RoutingEngineSince:            parseRFC3339(os.Getenv("OMNIRA_ROUTING_ENGINE_SINCE")),
 		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
 		HubAccessAPIEnabled:           getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
 		HubServeEnabled:               getEnv("OMNIRA_HUB_SERVE_ENABLED", "false") == "true",
@@ -236,6 +241,15 @@ func getEnv(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// parseRFC3339 reads a timestamp; empty or malformed gives the zero time (callers treat zero as "not set", the safe side).
+func parseRFC3339(v string) time.Time {
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func getEnvInt(key string, defaultVal int) int {

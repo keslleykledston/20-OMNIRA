@@ -237,7 +237,7 @@ func main() {
 		go hubdistributor.New(dbPool).Run(workerCtx, every)
 		log.Printf("Hub work-pool distributor started (every %s)\n", every)
 	}
-	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool).WithEngineRouting(cfg.RoutingEngineEnabled)
+	livenessRepo := routingadapters.NewPostgresLivenessRepository(dbPool).WithEngineRouting(cfg.RoutingEngineEnabled).WithEngineSince(cfg.RoutingEngineSince)
 	go routingworker.NewSweep(livenessRepo).Run(workerCtx)
 	presenceWakeup := routingworker.NewPresenceWakeup(livenessRepo, nc)
 	if err := presenceWakeup.Start(workerCtx); err != nil {

@@ -24,6 +24,15 @@ type PostgresLivenessRepository struct {
 	// was lost or terminated) is re-triggered too, once; after the first decision it has a routing state and the sweep leaves it alone (the engine's
 	// own durable timers take over), so a manual queue costs no periodic churn.
 	engineRouting bool
+	// engineSince bounds that recovery to conversations created at or after it (OMNIRA_ROUTING_ENGINE_SINCE): windows that were already open when the
+	// engine was switched on keep the way they are served and are NOT pulled into it. Zero = no manual recovery at all (the safe default).
+	engineSince time.Time
+}
+
+// WithEngineSince sets the creation-date floor of the manual-queue recovery; see engineSince.
+func (r *PostgresLivenessRepository) WithEngineSince(since time.Time) *PostgresLivenessRepository {
+	r.engineSince = since
+	return r
 }
 
 // WithEngineRouting says the central routing engine is enabled (OMNIRA_ROUTING_ENGINE_ENABLED).
@@ -50,6 +59,10 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 		limit = 1
 	}
 	var count int
+	var since *time.Time
+	if !r.engineSince.IsZero() {
+		since = &r.engineSince
+	}
 	err := platformdb.WithTenantSession(ctx, r.pool, uuid.Nil, true, func(sctx context.Context) error {
 		return platformdb.QuerierFromContext(sctx, r.pool).QueryRow(sctx, `
 			WITH candidates AS (
@@ -61,7 +74,8 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 			    AND c.status = 'open'
 			    AND c.queue_id IS NOT NULL
 			    AND (q.mode IN ('round_robin','least_loaded')
-			         OR ($5::boolean AND NOT EXISTS (SELECT 1 FROM routing_engine_state s WHERE s.tenant_id = c.tenant_id AND s.conversation_id = c.id)))
+			         OR ($5::boolean AND $6::timestamptz IS NOT NULL AND c.created_at >= $6
+			             AND NOT EXISTS (SELECT 1 FROM routing_engine_state s WHERE s.tenant_id = c.tenant_id AND s.conversation_id = c.id)))
 			    AND (c.routing_retry_at IS NULL OR c.routing_retry_at <= now())
 			    AND ($1::uuid IS NULL OR c.tenant_id = $1)
 			    AND ($2::uuid IS NULL OR c.queue_id = $2)
@@ -81,7 +95,7 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 			  RETURNING 1
 			)
 			SELECT count(*) FROM enqueued`,
-			tenantID, queueID, limit, backoff.Seconds(), r.engineRouting).Scan(&count)
+			tenantID, queueID, limit, backoff.Seconds(), r.engineRouting, since).Scan(&count)
 	})
 	return count, err
 }

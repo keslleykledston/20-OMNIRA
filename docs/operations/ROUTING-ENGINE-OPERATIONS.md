@@ -15,7 +15,7 @@ Com a flag **desligada** nada muda: o rodízio legado continua atribuindo, nenhu
 4. Implantar **api + worker + web juntos** (imagens de `git archive HEAD`, `docker compose up -d --no-deps --no-build --force-recreate`), migrations pelo serviço `migrate` com o diretório da árvore arquivada.
 5. Com a flag ainda **desligada**: conferir `/healthz`, abrir *Atendimento* nas configurações (as telas leem e gravam; nada roteia).
 6. Ligar `OMNIRA_ROUTING_ENGINE_ENABLED=true` no `.env` do compose (o `docker-compose.yml` repassa o mesmo valor à API e ao worker; padrão `false`) e **recriar os dois juntos** (`docker compose up -d --no-deps --no-build --force-recreate api worker`). **Nunca** manter worker legado e worker do motor ao mesmo tempo numa fila: o SQL legado conta capacidade antes de travar a linha e dois workers no mesmo instante podem estourar a capacidade em 1 (achado pré-existente, `docs/delivery/ROUTING-ENGINE-STATE.md` §3b).
-7. Retroalimentar conversas já abertas (opcional, ver §6).
+7. **Janelas que já estavam abertas NÃO entram no motor** (ordem do dono, 2026-10-13): junto com a flag, definir `OMNIRA_ROUTING_ENGINE_SINCE=<instante da ligação, RFC 3339>` no `.env`. A varredura de segurança só recupera conversa de fila **manual** que o motor nunca viu se ela foi **criada a partir desse instante**; sem a variável essa recuperação fica desligada. Só o worker lê a variável. Não rodar a retroalimentação do §6.
 
 ## 3. Padrões entregues (decisão do dono, 2026-10-13)
 Todos os atendentes ficam **disponíveis 24 h** (sem escala = sempre de turno) e entram no **Suporte** (fila padrão de transbordo; capacidade 5 — a confirmar). Depois se ajusta, caso a caso, horário, plantão e setor por atendente. Os setores Comercial, Financeiro e Suporte já existem (migration 123) e viram setores homônimos (124).
@@ -56,7 +56,7 @@ SELECT uuid_generate_v4(), c.tenant_id, 'job.routing.assign.v1', 'conversation',
  WHERE c.status = 'open' AND c.assigned_to_user_id IS NULL AND c.queue_id IS NOT NULL AND c.internal_user_id IS NULL
    AND NOT EXISTS (SELECT 1 FROM routing_engine_state s WHERE s.tenant_id = c.tenant_id AND s.conversation_id = c.id);
 ```
-Idempotente (o motor recusa o que já tem dono e repete a mesma decisão para o mesmo gatilho).
+Não usar quando a decisão for "só conversas novas" (é o caso da implantação de 2026-10-13). Idempotente (o motor recusa o que já tem dono e repete a mesma decisão para o mesmo gatilho).
 
 ## 7. Diagnóstico rápido
 | Sintoma | Causa provável | O que fazer |

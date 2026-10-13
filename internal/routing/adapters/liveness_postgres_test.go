@@ -442,7 +442,7 @@ func TestRetrigger_ASuspensionInFlightIsNotRaced(t *testing.T) {
 func TestRetrigger_ManualQueue_WithTheEngine_IsRecoveredOnlyWhileTheEngineHasNeverSeenIt(t *testing.T) {
 	f := newLivenessFixture(t)
 	off := NewPostgresLivenessRepository(f.app)
-	on := NewPostgresLivenessRepository(f.app).WithEngineRouting(true)
+	on := NewPostgresLivenessRepository(f.app).WithEngineRouting(true).WithEngineSince(time.Now().Add(-time.Hour))
 	unseen := f.conversation(t, &f.manualQ, nil, "open", past())
 	seen := f.conversation(t, &f.manualQ, nil, "open", past())
 	if _, err := f.seed.Exec(context.Background(), `INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id, origin_queue_id) VALUES ($1,$2,'queued',$3,$3)`, f.tenantID, seen, f.manualQ); err != nil {
@@ -458,5 +458,29 @@ func TestRetrigger_ManualQueue_WithTheEngine_IsRecoveredOnlyWhileTheEngineHasNev
 	}
 	if f.pendingJobCount(t, unseen) != 1 || f.pendingJobCount(t, seen) != 0 {
 		t.Fatalf("the unseen one is re-queued, the one with a routing state is not: %d %d", f.pendingJobCount(t, unseen), f.pendingJobCount(t, seen))
+	}
+}
+
+// Owner's order (2026-10-13): windows that were already open when the engine was switched on do NOT enter it; only the new ones do. The recovery
+// of never-seen manual conversations therefore needs a creation-date floor, and without one it is off.
+func TestRetrigger_ManualQueue_WithTheEngine_NeverPullsInConversationsOlderThanTheFloor(t *testing.T) {
+	f := newLivenessFixture(t)
+	old := f.conversation(t, &f.manualQ, nil, "open", past())
+	fresh := f.conversation(t, &f.manualQ, nil, "open", past())
+	if _, err := f.seed.Exec(context.Background(), `UPDATE conversations SET created_at = now() - interval '3 days' WHERE tenant_id=$1 AND id=$2`, f.tenantID, old); err != nil {
+		t.Fatal(err)
+	}
+
+	noFloor := NewPostgresLivenessRepository(f.app).WithEngineRouting(true)
+	if n, err := noFloor.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute); err != nil || n != 0 {
+		t.Fatalf("engine on without a floor: no manual recovery at all, got %d %v", n, err)
+	}
+	floored := NewPostgresLivenessRepository(f.app).WithEngineRouting(true).WithEngineSince(time.Now().Add(-time.Hour))
+	n, err := floored.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
+	if err != nil || n != 1 {
+		t.Fatalf("with a floor only the conversation created after it is recovered: %d %v", n, err)
+	}
+	if f.pendingJobCount(t, old) != 0 || f.pendingJobCount(t, fresh) != 1 {
+		t.Fatalf("the old window must stay out and the fresh one in: old=%d fresh=%d", f.pendingJobCount(t, old), f.pendingJobCount(t, fresh))
 	}
 }
