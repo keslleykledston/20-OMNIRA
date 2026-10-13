@@ -59,9 +59,11 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 	const tn = "/api/v1/tenants/{tenant_id}"
 	want := map[string]string{
 		// phase 03: attend the conversation
-		"GET " + tn + "/me/access":                                                "conversation.read",
-		"GET " + tn + "/inbox/conversations":                                      "conversation.read",
-		"GET " + tn + "/inbox/conversations/{conversation_id}":                    "conversation.read",
+		"GET " + tn + "/me/access":                             "conversation.read",
+		"GET " + tn + "/inbox/conversations":                   "conversation.read",
+		"GET " + tn + "/inbox/conversations/{conversation_id}": "conversation.read",
+		// ADR-0044: where a conversation is routed and why; reviewed (names and states only; same visibility as the conversation read; tested in hub/adapters)
+		"GET " + tn + "/inbox/conversations/{conversation_id}/routing":            "conversation.read",
 		"GET " + tn + "/inbox/conversations/{conversation_id}/messages":           "conversation.read",
 		"GET " + tn + "/messages/{message_id}/media":                              "media.read",
 		"GET /api/v1/hubs/{hub_id}/serve/{tenant_id}/messages/{message_id}/media": "media.read",
