@@ -23,9 +23,13 @@ import (
 // Handler serves sectors, calendars and the availability of a queue. Permissions: agent.read to read, agent.manage to change (the
 // same keys as the queues); a delegated (Hub) context never holds them (not delegable), so it gets 403 here.
 type Handler struct {
-	pool  *pgxpool.Pool
-	audit auditports.AuditEventRepository
+	pool     *pgxpool.Pool
+	audit    auditports.AuditEventRepository
+	presence PresenceChecker // optional: without it a tenant that requires presence reads every agent as presence_unavailable (fail closed)
 }
+
+// WithPresence wires the Valkey presence lookup used by the eligibility snapshot.
+func (h *Handler) WithPresence(p PresenceChecker) *Handler { h.presence = p; return h }
 
 func NewHandler(p *pgxpool.Pool, a auditports.AuditEventRepository) *Handler {
 	return &Handler{pool: p, audit: a}

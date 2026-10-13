@@ -442,6 +442,15 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/sector", sectorsHandler.SetQueueSector},
 		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/calendar", sectorsHandler.SetQueueCalendar},
 		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/availability", sectorsHandler.QueueAvailability},
+		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/eligibility", sectorsHandler.QueueEligibility},
+		{"GET /api/v1/tenants/{tenant_id}/shifts", sectorsHandler.ListShifts},
+		{"PUT /api/v1/tenants/{tenant_id}/shifts", sectorsHandler.SetShift},
+		{"GET /api/v1/tenants/{tenant_id}/on-call/rosters", sectorsHandler.ListRosters},
+		{"POST /api/v1/tenants/{tenant_id}/on-call/rosters", sectorsHandler.CreateRoster},
+		{"PATCH /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}", sectorsHandler.UpdateRoster},
+		{"GET /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}/periods", sectorsHandler.ListPeriods},
+		{"POST /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}/periods", sectorsHandler.AddPeriod},
+		{"DELETE /api/v1/tenants/{tenant_id}/on-call/rosters/{roster_id}/periods/{period_id}", sectorsHandler.RemovePeriod},
 	} {
 		s.mux.Handle(rt.pattern, authnMiddleware(tenantSession(rt.fn)))
 	}

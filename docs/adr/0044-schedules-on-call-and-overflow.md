@@ -94,7 +94,7 @@ Configuração: setores, filas por setor, calendários (semana, feriados, exceç
 |---|---|---|---|
 | 1 Auditoria | §1 | **feita** | tabela de reaproveitamento e lacunas |
 | 2 Arquitetura/contratos | este ADR (+ OpenAPI nas fases com API) | **feita (proposta)** | revisão do Codex sem HIGH aberto |
-| 3 Calendários e disponibilidade | domínio `scheduling` **IMPLEMENTADO**; **persistência + API + herança + suspensão + `GET /queues/{id}/availability` IMPLEMENTADOS** (migration 124, POSTGRES VERIFIED, branch); **faltam** escala individual, plantão/contingência e `Eligibility()` | **em andamento** | testes temporais (DST, meia-noite, feriado, suspensão), isolamento A/B, escala/presença/capacidade independentes |
+| 3 Calendários e disponibilidade | domínio `scheduling` **IMPLEMENTADO**; **persistência + API + herança + suspensão + `GET /queues/{id}/availability` IMPLEMENTADOS** (migration 124, POSTGRES VERIFIED, branch); **escala individual (`agent_shifts`), plantão/contingência (`on_call_rosters`/`periods`, migration 125) e `eligibility.Evaluate` + `GET /queues/{id}/eligibility` IMPLEMENTADOS** (POSTGRES VERIFIED, branch); falta ligar a elegibilidade ao rodízio real (Fase 4) | **quase concluída** | testes temporais (DST, meia-noite, feriado, suspensão), isolamento A/B, escala/presença/capacidade independentes |
 | 4 Motor | `Decide`, `routing_state`, `least_loaded`, chamadas de `RouteNew`/fluxo | pendente | concorrência (dupla atribuição), idempotência, compatibilidade com conversas existentes |
 | 5 Transbordo e SLA | cadeias, timers, contingência, SLA | pendente | os 6 gatilhos, laços, destino indisponível, worker caído, agenda alterada com fila cheia |
 | 6 Flow Builder e Inbox | nós + telas | pendente | fluxos antigos intactos; Vitest + E2E |

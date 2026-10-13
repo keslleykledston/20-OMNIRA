@@ -69,6 +69,12 @@ const (
 	ActionCalendarDeleted          AuditAction = "calendar.deleted"
 	ActionCalendarSuspended        AuditAction = "calendar.suspension_added"
 	ActionCalendarResumed          AuditAction = "calendar.suspension_removed"
+	ActionShiftSet                 AuditAction = "agent.shift_set"
+	ActionShiftCleared             AuditAction = "agent.shift_cleared"
+	ActionRosterCreated            AuditAction = "oncall.roster_created"
+	ActionRosterUpdated            AuditAction = "oncall.roster_updated"
+	ActionOnCallAdded              AuditAction = "oncall.period_added"
+	ActionOnCallRemoved            AuditAction = "oncall.period_removed"
 	ActionTenantDefaultCalendar    AuditAction = "tenant.default_calendar_changed"
 	ActionChannelLineQueueChanged  AuditAction = "channel.line_queue_changed"
 	ActionParticipantInvited       AuditAction = "participant.invited"
@@ -116,6 +122,8 @@ const (
 	ResourceTopic             ResourceType = "topic_thread"
 	ResourceSector            ResourceType = "sector"
 	ResourceCalendar          ResourceType = "calendar"
+	ResourceOnCallRoster      ResourceType = "on_call_roster"
+	ResourceAgentShift        ResourceType = "agent_shift"
 )
 
 // AuditEvent — evento de auditoria.
