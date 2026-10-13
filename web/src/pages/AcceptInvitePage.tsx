@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { BrandMark } from '../components/BrandMark'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Button } from '../components/primitives'
 import { authAPI } from '../lib/api'
@@ -87,6 +88,7 @@ export default function AcceptInvitePage() {
     <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 py-12">
       <main className="w-full max-w-[440px]">
         <div className="rounded-card bg-surface shadow-md border border-border-subtle p-8 text-center">
+          <BrandMark size={56} className="mx-auto mb-2" />
           <h1 className="text-display-md font-semibold text-text-primary mb-6">OMNIRA</h1>
 
           {state.kind === 'loading' && <p className="text-text-secondary">Verificando convite…</p>}

@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { BrandMark } from './BrandMark'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../lib/store'
 import { authAPI } from '../lib/api'
@@ -51,7 +52,8 @@ export default function Header() {
       )}
     >
       {/* Brand only where the sidebar is hidden; on desktop it lives in the sidebar. */}
-      <div className="flex items-center gap-4 lg:invisible">
+      <div className="flex items-center gap-2 lg:invisible">
+        <BrandMark size={28} />
         <span className="text-lg font-bold text-text-primary">OMNIRA</span>
       </div>
 

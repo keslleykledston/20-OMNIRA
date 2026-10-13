@@ -5,6 +5,7 @@ import { authAPI, type AuthMode } from '../lib/api'
 import { saveSession } from '../lib/session'
 import { resolveSessionTenant } from '../lib/tenants'
 import { Button, Icon, Input } from '../components/primitives'
+import { BrandMark } from '../components/BrandMark'
 
 type Status =
   | { kind: 'loading' }
@@ -95,6 +96,7 @@ export default function Login() {
       <main className="w-full max-w-[400px]">
         <div className="rounded-card bg-surface shadow-md border border-border-subtle p-8">
           <div className="text-center mb-8">
+            <BrandMark size={72} className="mx-auto mb-3" />
             <h1 className="text-display-md font-semibold text-text-primary">OMNIRA</h1>
             <p className="text-text-secondary mt-2">Entre na sua conta</p>
           </div>
