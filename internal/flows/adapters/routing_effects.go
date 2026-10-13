@@ -196,21 +196,22 @@ func (r *RoutingEffects) AssignSector(ctx context.Context, conversationID, secto
 	return "assigned", nil
 }
 
-func (r *RoutingEffects) ApplyOverflow(ctx context.Context, conversationID uuid.UUID) (string, error) {
+func (r *RoutingEffects) ApplyOverflow(ctx context.Context, conversationID uuid.UUID) (string, *uuid.UUID, error) {
 	if r.engine == nil {
-		return "", errors.New("the routing engine is not enabled in this environment")
+		return "", nil, errors.New("the routing engine is not enabled in this environment")
 	}
 	d, err := r.engine.Decide(ctx, engine.Request{ConversationID: conversationID, Trigger: engine.TriggerRoute, StrategyReason: "flow"})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	switch d.Kind {
 	case engine.AssignAgent:
-		return "assigned", nil
+		owner := d.AssignedUser
+		return "assigned", &owner, nil
 	case engine.WaitUntilOpen:
-		return "waiting_open", nil
+		return "waiting_open", nil, nil
 	case engine.RequireManualAction, engine.Escalate:
-		return "manual", nil
+		return "manual", nil, nil
 	}
-	return "queued", nil
+	return "queued", nil, nil
 }

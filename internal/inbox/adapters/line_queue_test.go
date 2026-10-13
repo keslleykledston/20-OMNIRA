@@ -136,7 +136,7 @@ func TestRouteNewGivesManualQueuesTheirRoutingJobOnlyWhenTheEngineIsOn(t *testin
 		wantRetrySt bool
 	}{
 		{"engine off, manual: unchanged", false, "manual", 0, false},
-		{"engine on, manual: the engine gets it, the safety sweep does not", true, "manual", 1, false},
+		{"engine on, manual: the engine gets it, and the sweep may recover it while the engine has never seen it", true, "manual", 1, true},
 		{"engine off, round robin: unchanged", false, "round_robin", 1, true},
 		{"engine on, round robin: unchanged", true, "round_robin", 1, true},
 	} {

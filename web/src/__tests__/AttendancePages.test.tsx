@@ -193,6 +193,9 @@ describe('Atendimento › Setores', () => {
     serve(world({ permissions: [] }))
     page()
     expect(await screen.findByText(/Você não tem permissão para ver a configuração de atendimento/)).toBeInTheDocument()
+    // no read is even attempted for the configuration (the only request is the permission list itself)
+    const urls = vi.mocked(axios.get).mock.calls.map((c) => String(c[0]))
+    expect(urls.filter((u) => !u.endsWith('/me/access'))).toEqual([])
   })
 })
 

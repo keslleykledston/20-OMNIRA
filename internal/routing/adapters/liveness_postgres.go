@@ -18,7 +18,19 @@ import (
 // event the original routing already publishes (internal/inbox/adapters.
 // PostgresInboundStore.RouteNew), through the same outbox_events table the
 // existing publisher already polls.
-type PostgresLivenessRepository struct{ pool *pgxpool.Pool }
+type PostgresLivenessRepository struct {
+	pool *pgxpool.Pool
+	// engineRouting (ADR-0044): the central engine also decides MANUAL queues. A manual conversation the engine has never seen (its first routing job
+	// was lost or terminated) is re-triggered too, once; after the first decision it has a routing state and the sweep leaves it alone (the engine's
+	// own durable timers take over), so a manual queue costs no periodic churn.
+	engineRouting bool
+}
+
+// WithEngineRouting says the central routing engine is enabled (OMNIRA_ROUTING_ENGINE_ENABLED).
+func (r *PostgresLivenessRepository) WithEngineRouting(enabled bool) *PostgresLivenessRepository {
+	r.engineRouting = enabled
+	return r
+}
 
 var _ ports.LivenessRepository = (*PostgresLivenessRepository)(nil)
 
@@ -48,7 +60,8 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 			  WHERE c.assigned_to_user_id IS NULL
 			    AND c.status = 'open'
 			    AND c.queue_id IS NOT NULL
-			    AND q.mode IN ('round_robin','least_loaded')
+			    AND (q.mode IN ('round_robin','least_loaded')
+			         OR ($5::boolean AND NOT EXISTS (SELECT 1 FROM routing_engine_state s WHERE s.tenant_id = c.tenant_id AND s.conversation_id = c.id)))
 			    AND (c.routing_retry_at IS NULL OR c.routing_retry_at <= now())
 			    AND ($1::uuid IS NULL OR c.tenant_id = $1)
 			    AND ($2::uuid IS NULL OR c.queue_id = $2)
@@ -68,7 +81,7 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 			  RETURNING 1
 			)
 			SELECT count(*) FROM enqueued`,
-			tenantID, queueID, limit, backoff.Seconds()).Scan(&count)
+			tenantID, queueID, limit, backoff.Seconds(), r.engineRouting).Scan(&count)
 	})
 	return count, err
 }

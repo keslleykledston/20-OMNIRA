@@ -117,7 +117,7 @@ func TestApplyOverflowNeedsTheEngine(t *testing.T) {
 	f := newFx(t)
 	conv, _ := f.env.SeedConversation(t, f.env.TenantA, "bot")
 	f.sys(f.env.TenantA, func(ctx context.Context) {
-		if _, err := f.effects.WithRouting(nil, noPresence{}).ApplyOverflow(ctx, conv); err == nil {
+		if _, _, err := f.effects.WithRouting(nil, noPresence{}).ApplyOverflow(ctx, conv); err == nil {
 			t.Fatal("without the routing engine the node must report an error (its error port), not pretend it routed")
 		}
 	})

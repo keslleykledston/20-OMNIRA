@@ -302,8 +302,9 @@ function SLASection({ manage, queueId }: { manage: boolean; queueId: string }) {
 
 export default function AttendanceOverflowPage() {
   const tenantId = getTenantId()
+  const canRead = useAccess().can('agent.read')
   const [queueId, setQueueId] = useState('')
-  const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false })
+  const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false, enabled: canRead })
   useEffect(() => { if (!queueId && queues.data?.length) setQueueId(queues.data[0].id) }, [queues.data, queueId])
   return (
     <AttendanceFrame title="Transbordo e SLA" description="O que acontece com a conversa quando o grupo está fechado, sem atendente ou lotado, e quanto tempo cada etapa pode levar.">

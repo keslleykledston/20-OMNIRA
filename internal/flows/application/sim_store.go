@@ -227,11 +227,15 @@ func (f *simEffects) AssignSector(_ context.Context, _ uuid.UUID, sector uuid.UU
 	f.add("assign_sector", map[string]any{"sector": sector.String()})
 	return "assigned", nil
 }
-func (f *simEffects) ApplyOverflow(context.Context, uuid.UUID) (string, error) {
+func (f *simEffects) ApplyOverflow(context.Context, uuid.UUID) (string, *uuid.UUID, error) {
 	out := "queued"
 	if f.sc.Routing != nil && f.sc.Routing.Overflow != "" {
 		out = f.sc.Routing.Overflow
 	}
 	f.add("apply_overflow", map[string]any{"outcome": out})
-	return out, nil
+	if out == "assigned" { // a simulation has no real attendant: a stand-in owner keeps the picture of the conversation honest for the nodes that follow
+		owner := uuid.NewSHA1(uuid.NameSpaceOID, []byte("simulated-owner"))
+		return out, &owner, nil
+	}
+	return out, nil, nil
 }

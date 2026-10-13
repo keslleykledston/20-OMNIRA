@@ -5,6 +5,7 @@ import { AttendanceFrame, Field, Notice, selectClass } from '../components/atten
 import { queuesAPI } from '../lib/queues'
 import { attendanceErrorMessage, calendarsAPI, noticeAPI, sectorsAPI, type Availability, type Sector } from '../lib/sectors'
 import { getTenantId } from '../lib/session'
+import { useAccess } from '../lib/useAccess'
 
 function when(iso: string | undefined, tz?: string): string {
   if (!iso) return ''
@@ -24,6 +25,7 @@ function OpenBadge({ a }: { a?: Availability }) {
 export default function AttendanceSectorsPage() {
   const tenantId = getTenantId()
   const qc = useQueryClient()
+  const canRead = useAccess().can('agent.read') // no request is sent before the permission is known (the API refuses anyway)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -33,9 +35,9 @@ export default function AttendanceSectorsPage() {
   const [noticeFor, setNoticeFor] = useState<{ id: string; name: string } | null>(null)
   const [noticeText, setNoticeText] = useState('')
 
-  const sectors = useQuery({ queryKey: ['att-sectors', tenantId], queryFn: sectorsAPI.list, retry: false })
-  const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false })
-  const calendars = useQuery({ queryKey: ['att-calendars', tenantId], queryFn: calendarsAPI.list, retry: false })
+  const sectors = useQuery({ queryKey: ['att-sectors', tenantId], queryFn: sectorsAPI.list, retry: false, enabled: canRead })
+  const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false, enabled: canRead })
+  const calendars = useQuery({ queryKey: ['att-calendars', tenantId], queryFn: calendarsAPI.list, retry: false, enabled: canRead })
   const availability = useQueries({
     queries: (queues.data ?? []).map((q) => ({ queryKey: ['att-availability', tenantId, q.id], queryFn: () => calendarsAPI.availability(q.id), retry: false, staleTime: 30_000 })),
   })

@@ -20,6 +20,7 @@ type fakeStarter struct {
 	mu      sync.Mutex
 	outcome string
 	sqlFail bool
+	onStart func(ctx context.Context, q platformdb.Querier) error
 	calls   []struct {
 		conv, flow uuid.UUID
 		key        string
@@ -33,6 +34,11 @@ func (f *fakeStarter) StartRouted(ctx context.Context, conv, flow uuid.UUID, key
 		conv, flow uuid.UUID
 		key        string
 	}{conv, flow, key})
+	if f.onStart != nil { // the started flow routes the conversation itself, in the same transaction
+		if err := f.onStart(ctx, platformdb.QuerierFromContext(ctx, f.pool)); err != nil {
+			return "", err
+		}
+	}
 	if f.sqlFail { // a REAL database error inside the decision's transaction: only the savepoint keeps the decision alive
 		_, err := platformdb.QuerierFromContext(ctx, f.pool).Exec(ctx, `SELECT 1/0`)
 		return "", err
@@ -193,5 +199,44 @@ func TestManualQueuesFollowTheirScheduleNoticeChainAndOpening(t *testing.T) {
 	}
 	if e.queueOf(t, c2) != next {
 		t.Fatal("the after_hours step of the chain moved the conversation of a closed MANUAL queue")
+	}
+}
+
+// Codex final review: the flow the chain starts runs in the SAME transaction and may assign_queue / hand off / close the conversation. The chain must
+// not go on from, or record, the queue it believed the conversation was in.
+func TestAFlowThatRoutesTheConversationStopsTheChainAndTheNextDecisionStartsANewEpisode(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	fin := e.closedQueue(t, a, "Financeiro")
+	other := e.queue(t, a, "Triagem", "manual")
+	third := e.queue(t, a, "Suporte N2", "manual")
+	starter := &fakeStarter{outcome: "started", pool: e.app}
+	var conv uuid.UUID
+	starter.onStart = func(ctx context.Context, q platformdb.Querier) error {
+		_, err := q.Exec(ctx, `UPDATE conversations SET queue_id=$1 WHERE id=$2`, other, conv) // what an assign_queue node of the flow does
+		return err
+	}
+	e.eng.WithFlowStarter(starter)
+	e.policy(t, a, fin, 4, overflow.ExhaustedManual,
+		overflow.Step{Triggers: []overflow.Trigger{overflow.AfterHours}, DestKind: overflow.DestFlow, DestID: uuid.New()},
+		overflow.Step{Triggers: []overflow.Trigger{overflow.AfterHours}, DestKind: overflow.DestQueue, DestID: third})
+	conv = e.conversation(t, a, &fin)
+	d, err := e.decide(t, a, conv, "")
+	if err != nil || d.Kind != engine.ExecuteFlow {
+		t.Fatalf("the decision of record is the flow start: %+v %v", d, err)
+	}
+	if e.queueOf(t, conv) != other {
+		t.Fatalf("the chain must not move a conversation the flow already routed (step 2 would have sent it to N2): queue=%v", e.queueOf(t, conv))
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND state IN ('pending','leased') AND kind IN ('open_wakeup','step_wait')`, conv) != 0 {
+		t.Fatal("the old episode's timers are cancelled")
+	}
+	// the next decision notices the difference and starts a NEW episode with a clean loop guard
+	if _, err := e.decide(t, a, conv, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, step, hops, episode, visited := e.stateOf(t, conv)
+	if episode != 2 || step != 0 || hops != 0 || len(visited) != 1 {
+		t.Fatalf("a conversation moved by somebody else starts a new episode: episode=%d step=%d hops=%d visited=%v", episode, step, hops, visited)
 	}
 }

@@ -283,6 +283,11 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 				return Decision{}, err
 			}
 			return finish(res.decision, res.state)
+		case cSettled:
+			if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+				return Decision{}, err
+			}
+			return finish(res.decision, res.state)
 		}
 		// the chain did not move it: stay here with the plain decision, and keep the durable timers it needs
 		if out.wake != nil {
@@ -394,6 +399,7 @@ const (
 	cEntered
 	cAssigned
 	cExhausted
+	cSettled // a flow the chain started already moved/assigned/closed the conversation: the chain stops here
 )
 
 type stepWait struct {
@@ -476,6 +482,8 @@ func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 			case entFlow:
 				visited[enter.Key()] = true
 				continue
+			case entFlowSettled:
+				return chainResult{kind: cSettled, decision: a.decision, state: "queued", rejected: res.rejected}, nil
 			case entQueue:
 				return chainResult{kind: cEntered, mode: a.mode, rejected: res.rejected}, nil
 			case entAssigned:
@@ -516,7 +524,8 @@ const (
 	entRejected entryKind = iota
 	entQueue
 	entAssigned
-	entFlow // a flow was started on the conversation: it stays where it is, and the chain keeps looking at the later steps
+	entFlow        // a flow was started on the conversation: it stays where it is, and the chain keeps looking at the later steps
+	entFlowSettled // the flow moved, assigned or closed the conversation in the same transaction: the chain must not go on with a stale picture
 )
 
 type entryResult struct {
@@ -651,9 +660,22 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 			return entRejected, entryResult{}, "flow_unavailable", nil
 		}
 		advance(st, s, nil, now)
-		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label, "flow": s.DestID.String()},
-			Decision{Kind: ExecuteFlow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
+		// the flow ran in THIS transaction and may have routed the conversation itself (assign_queue, a sector, a hand-off to a person): read what is
+		// true now, under the conversation lock this call already holds
+		var nowQueue, nowOwner *uuid.UUID
+		var nowStatus string
+		if err := q.QueryRow(ctx, `SELECT queue_id, assigned_to_user_id, status FROM conversations WHERE tenant_id=$1 AND id=$2`, tenant, req.ConversationID).Scan(&nowQueue, &nowOwner, &nowStatus); err != nil {
 			return entRejected, entryResult{}, "", err
+		}
+		d := Decision{Kind: ExecuteFlow, Reason: label, Destination: s.Key()}
+		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label, "flow": s.DestID.String()}, d, "queued"); err != nil {
+			return entRejected, entryResult{}, "", err
+		}
+		moved := (nowQueue == nil) != (st.queue == nil) || (nowQueue != nil && st.queue != nil && *nowQueue != *st.queue)
+		if moved || nowOwner != nil || nowStatus != "open" {
+			// leave the recorded queue as the engine left it: the next decision sees the difference and starts a new episode, exactly as it does for any
+			// other party that moves a conversation
+			return entFlowSettled, entryResult{decision: d}, "", nil
 		}
 		return entFlow, entryResult{}, "", nil
 	}

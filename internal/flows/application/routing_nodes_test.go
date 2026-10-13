@@ -1,12 +1,16 @@
 package application_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	. "github.com/omnira/omnira/internal/flows/application"
+	"github.com/omnira/omnira/internal/flows/domain"
+	"github.com/omnira/omnira/internal/flows/flowstest"
+	"github.com/omnira/omnira/internal/flows/ports"
 )
 
 // ADR-0044 routing nodes in the simulator: they ask the (scripted) shared services and only map the answer to a port.
@@ -125,5 +129,56 @@ func TestRoutingNodesValidation(t *testing.T) {
 		if res.Status != "blocked" {
 			t.Fatalf("%s must be blocked by validation: %+v", name, res.Issues)
 		}
+	}
+}
+
+// stubRouting is a RecordingEffects that also answers the routing capability, with a fixed outcome and owner.
+type stubRouting struct {
+	*flowstest.RecordingEffects
+	outcome string
+	owner   *uuid.UUID
+}
+
+func (stubRouting) Schedule(context.Context, string, uuid.UUID) (string, error) { return "open", nil }
+func (stubRouting) Availability(context.Context, string, uuid.UUID) (string, error) {
+	return "available", nil
+}
+func (stubRouting) ActiveSectors(context.Context) ([]ports.SectorOption, error) { return nil, nil }
+func (stubRouting) AssignSector(context.Context, uuid.UUID, uuid.UUID) (string, error) {
+	return "assigned", nil
+}
+func (s stubRouting) ApplyOverflow(context.Context, uuid.UUID) (string, *uuid.UUID, error) {
+	return s.outcome, s.owner, nil
+}
+
+// Codex final review: when apply_overflow assigns a person, the rest of the same run must not keep acting on a picture where nobody owns the conversation.
+func TestApplyOverflowRefreshesTheRunsPictureWhenAPersonNowOwnsTheConversation(t *testing.T) {
+	def, err := domain.ParseDefinition([]byte(wf(`{"id":"start","type":"trigger"},{"id":"ov","type":"apply_overflow"},{"id":"done","type":"end"},{"id":"q","type":"end"}`,
+		strings.Join([]string{edge("1", "start", "next", "ov"), edge("2", "ov", "assigned", "done"), edge("3", "ov", "queued", "q")}, ","), "")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ex Executor
+	for _, e := range RoutingExecutors() {
+		if e.Type() == domain.NodeApplyOverflow {
+			ex = e
+		}
+	}
+	owner := uuid.New()
+	run := func(outcome string, o *uuid.UUID) (*ports.ConversationFacts, StepResult) {
+		facts := &ports.ConversationFacts{ID: uuid.New()}
+		res, err := ex.Execute(StepInput{Ctx: context.Background(), Node: *def.NodeByID("ov"), Facts: facts, Def: def, Effects: stubRouting{RecordingEffects: &flowstest.RecordingEffects{}, outcome: outcome, owner: o}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return facts, res
+	}
+	facts, res := run("assigned", &owner)
+	if res.Port != "assigned" || facts.AssignedTo == nil || *facts.AssignedTo != owner {
+		t.Fatalf("a person owns it now and the run's facts say so: port=%s owner=%v", res.Port, facts.AssignedTo)
+	}
+	facts, res = run("queued", nil)
+	if res.Port != "queued" || facts.AssignedTo != nil {
+		t.Fatalf("nobody owns it: port=%s owner=%v", res.Port, facts.AssignedTo)
 	}
 }

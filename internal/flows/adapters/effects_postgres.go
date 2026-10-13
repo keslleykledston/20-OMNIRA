@@ -248,7 +248,7 @@ const assignQueueSQL = `
 	  ORDER BY id LIMIT 1
 	), routed AS (
 	  UPDATE conversations c SET queue_id = q.id, updated_at = now(),
-	    routing_retry_at = CASE WHEN q.mode IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
+	    routing_retry_at = CASE WHEN q.mode IN ('round_robin','least_loaded') OR $6::boolean THEN now() + interval '90 seconds' ELSE NULL END
 	  FROM q
 	  WHERE c.tenant_id = $1 AND c.id = $2 AND ($3::uuid IS NOT NULL OR c.queue_id IS NULL)
 	    AND c.internal_user_id IS NULL

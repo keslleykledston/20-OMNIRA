@@ -158,7 +158,7 @@ export default function AttendanceCalendarsPage() {
   const [editing, setEditing] = useState<{ calendar: Calendar | null } | null>(null)
   const [removing, setRemoving] = useState<CalendarSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const list = useQuery({ queryKey: ['att-calendars', tenantId], queryFn: calendarsAPI.list, retry: false })
+  const list = useQuery({ queryKey: ['att-calendars', tenantId], queryFn: calendarsAPI.list, retry: false, enabled: access.can('agent.read') })
   const canTenant = access.can('tenant.manage')
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['att-calendars', tenantId] })

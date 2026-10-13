@@ -117,7 +117,9 @@ type RoutingEffects interface {
 	ActiveSectors(ctx context.Context) ([]SectorOption, error)
 	// AssignSector routes the conversation to the best queue of the sector ("assigned") or reports "unavailable" (inactive, gone, no usable queue).
 	AssignSector(ctx context.Context, conversationID, sectorID uuid.UUID) (string, error)
-	ApplyOverflow(ctx context.Context, conversationID uuid.UUID) (string, error)
+	// ApplyOverflow also returns who now owns the conversation when the outcome is "assigned" (nil otherwise), so the running flow's picture of the
+	// conversation is not left stale for the nodes that follow.
+	ApplyOverflow(ctx context.Context, conversationID uuid.UUID) (string, *uuid.UUID, error)
 }
 
 // CustomerCloser is an optional Effects capability: close the attendance because the CONTACT asked for it (the system is

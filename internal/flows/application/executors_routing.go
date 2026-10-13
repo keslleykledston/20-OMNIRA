@@ -238,9 +238,12 @@ func (applyOverflowExec) Execute(in StepInput) (StepResult, error) {
 	if err != nil {
 		return routeError(in, err)
 	}
-	outcome, err := r.ApplyOverflow(in.Ctx, in.Facts.ID)
+	outcome, owner, err := r.ApplyOverflow(in.Ctx, in.Facts.ID)
 	if err != nil {
 		return routeError(in, err)
+	}
+	if owner != nil { // a person owns it now: the rest of THIS run must see that (the bot never acts as if nobody did)
+		in.Facts.AssignedTo = owner
 	}
 	port := outcome
 	if (outcome == "waiting_open" || outcome == "manual") && !hasEdge(in, outcome) {

@@ -51,12 +51,12 @@ CREATE TABLE on_call_periods (
 CREATE INDEX idx_on_call_periods_active ON on_call_periods (tenant_id, roster_id, starts_at, ends_at);
 CREATE INDEX idx_on_call_periods_user ON on_call_periods (tenant_id, user_id, ends_at);
 
--- The database itself refuses to schedule somebody who has no membership in the tenant (user_id references the global users table, and
--- RLS only looks at tenant_id): a Hub operator or a person of another company can never get a shift or an on-call period by any writer.
+-- The database itself refuses to schedule somebody who has no ACTIVE membership in the tenant (user_id references the global users table, and
+-- RLS only looks at tenant_id): a Hub operator, a person of another company or a disabled member can never get a shift or an on-call period by any writer.
 CREATE OR REPLACE FUNCTION scheduling_user_is_member() RETURNS trigger AS $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM public.memberships m WHERE m.tenant_id = NEW.tenant_id AND m.user_id = NEW.user_id) THEN
-    RAISE EXCEPTION 'user % has no membership in tenant %', NEW.user_id, NEW.tenant_id USING ERRCODE = '23514';
+  IF NOT EXISTS (SELECT 1 FROM public.memberships m WHERE m.tenant_id = NEW.tenant_id AND m.user_id = NEW.user_id AND m.status = 'active') THEN
+    RAISE EXCEPTION 'user % has no active membership in tenant %', NEW.user_id, NEW.tenant_id USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END;

@@ -436,3 +436,27 @@ func TestRetrigger_ASuspensionInFlightIsNotRaced(t *testing.T) {
 		t.Fatalf("once the suspension was rolled back: n=%d err=%v, want 1", n, err)
 	}
 }
+
+// ADR-0044: with the central engine on, the safety sweep also recovers a MANUAL conversation the engine has never seen (its first routing job was lost
+// or terminated) - once. After the first decision it has a routing state and the sweep leaves it alone: a manual queue costs no periodic churn.
+func TestRetrigger_ManualQueue_WithTheEngine_IsRecoveredOnlyWhileTheEngineHasNeverSeenIt(t *testing.T) {
+	f := newLivenessFixture(t)
+	off := NewPostgresLivenessRepository(f.app)
+	on := NewPostgresLivenessRepository(f.app).WithEngineRouting(true)
+	unseen := f.conversation(t, &f.manualQ, nil, "open", past())
+	seen := f.conversation(t, &f.manualQ, nil, "open", past())
+	if _, err := f.seed.Exec(context.Background(), `INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id, origin_queue_id) VALUES ($1,$2,'queued',$3,$3)`, f.tenantID, seen, f.manualQ); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := off.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute); err != nil || n != 0 {
+		t.Fatalf("engine off: a manual queue is never swept: %d %v", n, err)
+	}
+	n, err := on.Retrigger(context.Background(), &f.tenantID, nil, 10, time.Minute)
+	if err != nil || n != 1 {
+		t.Fatalf("engine on: exactly the manual conversation the engine never saw: %d %v", n, err)
+	}
+	if f.pendingJobCount(t, unseen) != 1 || f.pendingJobCount(t, seen) != 0 {
+		t.Fatalf("the unseen one is re-queued, the one with a routing state is not: %d %d", f.pendingJobCount(t, unseen), f.pendingJobCount(t, seen))
+	}
+}

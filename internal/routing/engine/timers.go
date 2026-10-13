@@ -157,6 +157,10 @@ func (e *Engine) runTimer(ctx context.Context, x claimed) error {
 
 // recordFailure keeps the lease (it expires and the timer is retried) and, after timerMaxAttempts, hands the conversation to a person.
 // Only the holder of the current token may do either.
+// recordFailure takes the CONVERSATION lock first, like every other writer, and only then touches the timer and the state. The stated order is
+// conversation -> state -> timer; here the timer is updated before the state because the state change depends on this worker still holding the
+// claim. That cannot form a cycle: every path that takes both rows holds the conversation lock first (so they never run together for one
+// conversation), and RunTimersOnce, which locks timers without the conversation, never touches the state.
 func (e *Engine) recordFailure(ctx context.Context, x claimed, cause error) {
 	msg := cause.Error()
 	if len(msg) > 180 {

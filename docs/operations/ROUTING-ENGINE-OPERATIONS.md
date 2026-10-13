@@ -69,7 +69,7 @@ Idempotente (o motor recusa o que já tem dono e repete a mesma decisão para o 
 | `Menor carga` recusado (409) | motor desligado nesse ambiente | ligar o motor (API e worker) |
 
 ## 8. Reverter
-Desligar a flag (API e worker) e reiniciar: o rodízio legado volta a atribuir. Dados e telas permanecem (nada é apagado); conversas esperando abertura deixam de ter timer, mas continuam na fila e visíveis. Reverter a implantação: tags `rollback-pre-*`. **Não** rodar `down` de migration em produção sem o dono (as tabelas novas guardam histórico de decisões e SLA).
+Desligar a flag (API e worker) e reiniciar: o rodízio legado volta a atribuir. **Grupos em `Menor carga`** continuam recebendo conversas com a flag desligada, mas distribuídas por **rodízio** (o legado não conhece o modo; tratá-los como rodízio evita deixar conversas paradas). Volte-os para `Rodízio` antes ou logo depois de desligar. Dados e telas permanecem (nada é apagado); conversas esperando abertura deixam de ter timer, mas continuam na fila e visíveis. Reverter a implantação: tags `rollback-pre-*`. **Não** rodar `down` de migration em produção sem o dono: os `down` existem para provar o ciclo up/down/up em banco descartável e são destrutivos em dados reais (apagam histórico de decisões e SLA, o aviso fora do expediente, etapas de fluxo e a permissão `routing.override` com suas concessões).
 
 ## 9. Limites conhecidos
 - Feriados são cadastro manual (sem calendário nacional) — decisão do dono pendente.
