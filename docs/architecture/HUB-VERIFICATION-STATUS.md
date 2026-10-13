@@ -524,3 +524,8 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - Provas: Postgres real (o teste do roteamento falha com o `RouteNew` antigo; HTTP: permissão, outro tenant, auditoria, supervisor recusado, fila com linha não apaga), Vitest 920/920, gate de integração 37/37 (de `git archive`), migrations 093–122 up/down/up idêntico. Codex sobre o commit `f7b0918`: CRITICAL/HIGH 0; MEDIUMs tratados ou aceitos por escrito (ADR-0043 §2).
 - Implantação: backup `omnira_dev_20261012T230804Z`, tags de volta `rollback-pre-sectors-20261012-1921`, 122 aplicada de um `git archive`, três serviços saudáveis, `enforce` 1, `hub-health-check` OK, `PUT` sem sessão → 401.
 - **Não construído:** S3 (agente vê só as filas de que é membro; proposta com chave, ponto único de decisão e liga por tenant) e S4; S1 (criar os setores reais) é operação do dono.
+
+## 2026-10-13 (madrugada) — filtro de visão "Meus grupos" (ADR-0043 S3-lite) — IMPLANTADO (api e web `sha-621679c`, sem migration; worker inalterado)
+
+- `GET /inbox/conversations?queue=mine|none|<uuid>` + segmento "Meus grupos" no menu "Mais…" da lista do tenant. **É uma visão, não autorização**: quem podia ler continua podendo, nada some por padrão. O escopo de leitura de verdade (S3 completo) segue proposto e depende da decisão do dono por tenant.
+- Provas: Postgres real (6 cenários, inclusive grupo de outro tenant e id malformado), Vitest 920/920, gate de integração 37/37 (de `git archive`). Tags de volta `rollback-pre-s3lite-20261012-2004`; api/web saudáveis, `enforce` 1, health check OK, rota sem sessão → 401.
