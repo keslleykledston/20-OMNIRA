@@ -42,6 +42,10 @@ func invalid(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, a...))
 }
 
+// StandardSectors are the queues every company starts with besides its default one (ADR-0043). Migration 000123 gave the same
+// three to the companies that already existed; keep the two lists equal.
+var StandardSectors = []string{"Comercial", "Financeiro", "Suporte"}
+
 type Company struct {
 	ID               uuid.UUID       `json:"id"`
 	LegalName        string          `json:"legal_name"`
@@ -304,6 +308,12 @@ func (s *Service) Create(ctx context.Context, operator, hub uuid.UUID, in Create
 		}
 		if _, err := q.Exec(c, `INSERT INTO queues (tenant_id, name, mode, is_default) VALUES ($1, 'Default', 'manual', true)`, tenant); err != nil {
 			return err
+		}
+		// ADR-0043: every company starts with the standard sectors (a queue is a sector); each company adds its own afterwards
+		for _, sector := range StandardSectors {
+			if _, err := q.Exec(c, `INSERT INTO queues (tenant_id, name, mode, is_default) VALUES ($1, $2, 'manual', false)`, tenant, sector); err != nil {
+				return err
+			}
 		}
 		if _, err := q.Exec(c, `INSERT INTO hub_tenant_service_contracts (hub_id, tenant_id) VALUES ($1, $2)`, hub, tenant); err != nil {
 			return err

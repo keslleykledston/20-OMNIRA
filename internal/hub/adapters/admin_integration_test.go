@@ -214,6 +214,10 @@ func TestHubAdmin_CreateCompany(t *testing.T) {
 		if w.count(`SELECT count(*) FROM queues WHERE tenant_id = $1 AND is_default AND mode = 'manual'`, co.ID) != 1 {
 			t.Error("no default queue")
 		}
+		if w.count(`SELECT count(*) FROM queues WHERE tenant_id = $1 AND NOT is_default AND mode = 'manual' AND name IN ('Comercial','Financeiro','Suporte')`, co.ID) != 3 ||
+			w.count(`SELECT count(*) FROM queues WHERE tenant_id = $1`, co.ID) != 4 {
+			t.Error("a new company starts with the default queue plus the three standard sectors (ADR-0043), none of them the default")
+		}
 		if w.count(`SELECT count(*) FROM hub_tenant_service_contracts WHERE hub_id = $1 AND tenant_id = $2 AND status = 'active'`, w.hub, co.ID) != 1 {
 			t.Error("no contract with the creating hub")
 		}
