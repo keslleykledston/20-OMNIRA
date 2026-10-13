@@ -1,6 +1,6 @@
 # ADR-0045 — Menu sem resposta: lembretes e encerramento por inatividade
 
-Status: **IMPLEMENTADA em LAB** na branch `feat/menu-idle-reminders` (2026-10-13; não mesclada nem implantada até a ordem do dono). Pedido do dono depois do teste do motor de roteamento: se o cliente não escolhe no menu, lembrar; se continuar em silêncio, perguntar se ainda está aí; só então transbordar ao Suporte, ou encerrar por inatividade (configurável).
+Status: **IMPLEMENTADA e IMPLANTADA em LAB** (2026-10-13; merge `9a26f9c`, imagens `sha-9a26f9c` de api, worker e web; gate de integração com o ajuste da contagem do catálogo). Aplicada na empresa K3G_Solutions (antes "Test Company LTDA"): fluxo "Recepção inteligente" v4 com menu de 120 s, 2 lembretes e, sem resposta, transbordo ao Suporte. Ainda não enviada ao GitHub. Pedido do dono depois do teste do motor de roteamento: se o cliente não escolhe no menu, lembrar; se continuar em silêncio, perguntar se ainda está aí; só então transbordar ao Suporte, ou encerrar por inatividade (configurável).
 
 ## 1. Decisão
 
@@ -22,4 +22,4 @@ Status: **IMPLEMENTADA em LAB** na branch `feat/menu-idle-reminders` (2026-10-13
 - Unitários (motor com relógio falso): lembrete aos 2 e 4 min com o menu junto, porta `timeout` aos 6 min fechando com `no_response`; transbordo em vez de fechar; resposta depois do lembrete segue; resposta inválida mantém a contagem; fechar sem a capacidade falha a corrida (a conversa volta aos humanos); limites validados. Dois mutantes mortos (lembretes desligados; contagem perdida em resposta inválida).
 - PostgreSQL real (`TestSilentMenuIsNudgedByDurableTimersThenClosedForInactivity`): timers duráveis lidos do banco como o sweeper do worker, 3 esperas, conversa `closed`, fechamento `system`/`no_response`.
 - Web: 979 testes Vitest, `tsc` limpo; inspetor edita o tempo e os lembretes (máx. 3) e o novo nó.
-- **Não provado:** conversa real de WhatsApp com a nova versão do fluxo (exige publicar a versão e uma mensagem do aparelho de teste).
+- **Não provado:** conversa real de WhatsApp com a nova versão do fluxo (v4 publicada; falta uma mensagem nova do aparelho de teste ficando em silêncio).
