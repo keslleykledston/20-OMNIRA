@@ -1286,6 +1286,19 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/hub-contracts:
+    get:
+      operationId: listHubContracts
+      tags: [Agents]
+      summary: The company's contracts with Hubs (for choosing a Hub destination)
+      description: |
+        Requires `agent.manage`. Lists the contract and the Hub's name, status and validity. It never reveals who the Hub's operators are.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: "OK" }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
   /tenants/{tenant_id}/queues/{queue_id}/overflow-policy:
     get:
       operationId: getOverflowPolicy

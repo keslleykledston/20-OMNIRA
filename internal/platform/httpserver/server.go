@@ -445,6 +445,7 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/closed-notice", sectorsHandler.GetClosedNotice},
 		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/closed-notice", sectorsHandler.PutClosedNotice},
 		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/eligibility", sectorsHandler.QueueEligibility},
+		{"GET /api/v1/tenants/{tenant_id}/hub-contracts", sectorsHandler.ListHubContracts},
 		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/overflow-policy", sectorsHandler.GetOverflowPolicy},
 		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/overflow-policy", sectorsHandler.PutOverflowPolicy},
 		{"DELETE /api/v1/tenants/{tenant_id}/queues/{queue_id}/overflow-policy", sectorsHandler.DeleteOverflowPolicy},

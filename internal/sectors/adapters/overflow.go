@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -251,4 +252,40 @@ func (h *Handler) DeleteOverflowPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	h.record(r, auditdomain.ResourceOverflowPolicy, queueID, auditdomain.ActionOverflowRemoved, nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListHubContracts: GET /hub-contracts. The company's own contracts with Hubs, so an administrator can pick a Hub destination. It shows the
+// contract and the Hub's name, NEVER who the Hub's operators are (tenant_hub_contracts is the only door and returns nothing else).
+func (h *Handler) ListHubContracts(w http.ResponseWriter, r *http.Request) {
+	tc, q, ok := h.authorize(w, r, "agent.manage")
+	if !ok {
+		return
+	}
+	rows, err := q.Query(r.Context(), `SELECT contract_id, hub_name, status, valid_from, valid_until FROM tenant_hub_contracts($1) ORDER BY hub_name, contract_id LIMIT 200`, tc.TenantID)
+	if err != nil {
+		http.Error(w, "failed to list the Hub contracts", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ContractID uuid.UUID  `json:"contract_id"`
+		HubName    string     `json:"hub_name"`
+		Status     string     `json:"status"`
+		ValidFrom  time.Time  `json:"valid_from"`
+		ValidUntil *time.Time `json:"valid_until,omitempty"`
+	}
+	items := []item{}
+	for rows.Next() {
+		var it item
+		if err := rows.Scan(&it.ContractID, &it.HubName, &it.Status, &it.ValidFrom, &it.ValidUntil); err != nil {
+			http.Error(w, "failed to read the Hub contracts", http.StatusInternalServerError)
+			return
+		}
+		items = append(items, it)
+	}
+	if rows.Err() != nil {
+		http.Error(w, "failed to read the Hub contracts", http.StatusInternalServerError)
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }

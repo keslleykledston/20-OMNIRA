@@ -813,6 +813,29 @@ func TestOverflowPolicyNewDestinationKindsAreValidatedAgainstTheCompany(t *testi
 	if err != nil || visible != 0 {
 		t.Fatalf("a plain attendant must not list the company's Hub contracts: %d %v", visible, err)
 	}
+	// the API: the administrator sees the contract and the Hub's name; an attendant is refused; B sees none of A's; no operator data in the answer
+	rec := e.call(t, a, e.member(t, a, "tenant_admin"), "GET", "/", e.h.ListHubContracts, nil, nil)
+	got := decode[struct {
+		Items []map[string]any `json:"items"`
+	}](t, rec)
+	if rec.Code != http.StatusOK || len(got.Items) != 1 || got.Items[0]["contract_id"] != contract.String() || got.Items[0]["hub_name"] != "Hub do teste" {
+		t.Fatalf("the company's contract: %d %s", rec.Code, rec.Body.String())
+	}
+	for k := range got.Items[0] {
+		switch k {
+		case "contract_id", "hub_name", "status", "valid_from", "valid_until":
+		default:
+			t.Fatalf("unexpected field %q in a Hub contract (operators must never leak)", k)
+		}
+	}
+	if e.call(t, a, agent, "GET", "/", e.h.ListHubContracts, nil, nil).Code != http.StatusForbidden {
+		t.Fatal("an attendant must not list Hub contracts")
+	}
+	if recB := e.call(t, b, bAdmin, "GET", "/", e.h.ListHubContracts, nil, nil); recB.Code != http.StatusOK || decode[struct {
+		Count int `json:"count"`
+	}](t, recB).Count != 0 {
+		t.Fatalf("another company sees none of A's contracts: %s", recB.Body.String())
+	}
 }
 
 func TestSLAPolicyAPIValidationPermissionsRevisionIsolationAndMonitor(t *testing.T) {

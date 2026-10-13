@@ -367,7 +367,12 @@ func (h *Handler) ListCalendars(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read calendars", http.StatusInternalServerError)
 		return
 	}
-	write(w, http.StatusOK, map[string]any{"items": items, "count": len(items), "default_timezone": scheduling.DefaultTimezone})
+	var def *uuid.UUID
+	if err := q.QueryRow(r.Context(), `SELECT default_calendar_id FROM tenants WHERE id=$1`, tc.TenantID).Scan(&def); err != nil {
+		http.Error(w, "failed to read calendars", http.StatusInternalServerError)
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"items": items, "count": len(items), "default_timezone": scheduling.DefaultTimezone, "default_calendar_id": def})
 }
 
 func (h *Handler) GetCalendar(w http.ResponseWriter, r *http.Request) {
