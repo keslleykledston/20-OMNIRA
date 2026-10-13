@@ -1,6 +1,6 @@
 # ADR-0041 — Console de administração independente (agentes e empresas)
 
-Status: **IMPLEMENTADA em LAB** na branch `feat/admin-console` (2026-10-13; não implantada até a ordem do dono). A recomendação B foi construída com o endereço `/admin/` no mesmo host; o host próprio (`admin.<domínio>`) continua opcional (§8). Vocabulário de evidência: §7 diz o que foi provado.
+Status: **IMPLEMENTADA e IMPLANTADA em LAB** (2026-10-13; merge `e0b63a3`, imagem web `sha-e0b63a3`, enviada ao GitHub). `/admin/` no mesmo host; o host próprio (`admin.<domínio>`) continua opcional e foi adiado pelo dono ("Agora não"). Servir pelo nginx do contêiner provado: `/admin/` e `/admin/acessos` 200, `/admin` 301, ativos da marca 200, também pelo domínio público. Não provado: login com Keycloak real e clique em tela. Vocabulário de evidência: §7 diz o que foi provado.
 Relaciona: ADR-0036 (Hub dentro do OMNIRA), ADR-0038/0039 (painel de acessos), ADR-0040 (acesso delegado).
 
 ## 1. Decisão do dono
