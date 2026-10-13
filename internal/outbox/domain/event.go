@@ -16,7 +16,10 @@ const (
 	EventMembershipRevoked EventType = "membership.revoked"
 	EventChannelSendText   EventType = "channel.message.send_text"
 	JobRoutingAssign       EventType = "job.routing.assign.v1"
-	JobChannelSendText     EventType = "job.channel.send_text.v1"
+	// ADR-0044: SLA crossings, announced once per clock (ids and the metric only, never message content)
+	EventRoutingSLAAtRisk   EventType = "routing.sla.at_risk.v1"
+	EventRoutingSLABreached EventType = "routing.sla.breached.v1"
+	JobChannelSendText      EventType = "job.channel.send_text.v1"
 )
 
 // AggregateType — tipo de agregado que gerou o evento.

@@ -247,3 +247,17 @@ func TestSectorDestinationPicksTheFirstQueueWithAnEligibleAgent(t *testing.T) {
 	}
 	_ = time.Second
 }
+
+// Codex: even under a contract with no queue restriction, the function only answers for queues of the contract's own company.
+func TestHubReadinessNeverAnswersForAQueueOfAnotherCompany(t *testing.T) {
+	e := newEnv(t, nil)
+	a, b := e.tenant(t), e.tenant(t)
+	own, foreign := e.queue(t, a, "Minha", "manual"), e.queue(t, b, "Alheia", "manual")
+	w := e.hub(t, a, nil) // unrestricted: covers every queue of A
+	if ready, _ := e.readiness(t, a, w, own); !ready {
+		t.Fatal("an own queue under an unrestricted contract is ready")
+	}
+	if ready, _ := e.readiness(t, a, w, foreign); ready {
+		t.Fatal("a queue of another company must never be ready, whatever the contract says")
+	}
+}

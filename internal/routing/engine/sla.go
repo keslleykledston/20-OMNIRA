@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	outboxdomain "github.com/omnira/omnira/internal/outbox/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/routing/overflow"
 	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
@@ -96,28 +97,21 @@ func slaTimes(ctx context.Context, q platformdb.Querier, tenant, calQueue uuid.U
 // triggers the overflow chain should also consider. Events (risk / breach) are written once: the state change is what makes them once.
 func (e *Engine) syncSLA(ctx context.Context, q platformdb.Querier, tenant, conv uuid.UUID, c convRow, st *stateRow, now time.Time) (slaResult, error) {
 	var res slaResult
-	if c.status != "open" { // closing finishes the resolution clock and cancels the rest; nothing keeps running
-		if _, err := q.Exec(ctx, `UPDATE conversation_sla SET state=CASE WHEN metric='resolution' THEN 'met' ELSE 'cancelled' END,
-			met_at=CASE WHEN metric='resolution' THEN $3::timestamptz END, updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND state='running'`, tenant, conv, now); err != nil {
-			return res, err
-		}
-		_, err := q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', claim_token=NULL, updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND kind IN ('sla_risk','sla_breach') AND state IN ('pending','leased')`, tenant, conv)
-		return res, err
+	if c.status != "open" {
+		return res, e.closeSLA(ctx, q, tenant, conv, c, st, now)
 	}
 	if c.queueID == nil {
 		return res, nil
 	}
 	queue := *c.queueID
-	eff, err := effectiveSLA(ctx, q, tenant, queue)
-	if err != nil {
-		return res, err
-	}
-	if len(eff) == 0 {
-		return res, nil
-	}
-	// clocks of an earlier episode or of a queue the conversation left stop (they are history); the cumulative ones continue
+	// clocks of an earlier episode or of a queue the conversation left stop (they are history; the cumulative ones continue). This runs
+	// even when the new place has NO policy, so a clock of the queue it left never keeps running.
 	if _, err := q.Exec(ctx, `UPDATE conversation_sla SET state='cancelled', updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND state='running'
 		AND ((metric IN ('assignment','queue_wait') AND scope_episode<>$3) OR (metric='queue_wait' AND queue_key<>$4))`, tenant, conv, st.episode, queue); err != nil {
+		return res, err
+	}
+	eff, err := effectiveSLA(ctx, q, tenant, queue)
+	if err != nil {
 		return res, err
 	}
 	for _, m := range slaMetrics {
@@ -133,93 +127,66 @@ func (e *Engine) syncSLA(ctx context.Context, q platformdb.Querier, tenant, conv
 		case metricQueueWait:
 			epoch, qkey, started = st.episode, queue, st.stepEntered
 		}
-		var id uuid.UUID
-		var state string
-		var calQueue *uuid.UUID
-		var startedAt time.Time
-		var budget int
-		var riskNotified *time.Time
-		err := q.QueryRow(ctx, `SELECT id, state, calendar_queue_id, started_at, budget_seconds, risk_notified_at FROM conversation_sla
-			WHERE tenant_id=$1 AND conversation_id=$2 AND metric=$3 AND scope_episode=$4 AND queue_key=$5 FOR UPDATE`, tenant, conv, m, epoch, qkey).
-			Scan(&id, &state, &calQueue, &startedAt, &budget, &riskNotified)
-		if errors.Is(err, pgx.ErrNoRows) {
+		cl, err := e.loadClock(ctx, q, tenant, conv, m, epoch, qkey)
+		if err != nil {
+			return res, err
+		}
+		if cl == nil { // a new clock: its budget, risk point and counting are fixed NOW and never follow later policy edits
 			risk, deadline, err := slaTimes(ctx, q, tenant, queue, started, b, 0)
 			if err != nil {
 				return res, err
 			}
-			if _, err := q.Exec(ctx, `INSERT INTO conversation_sla (tenant_id, conversation_id, metric, scope_episode, queue_key, started_at, budget_seconds, risk_percent, counting, calendar_queue_id, deadline_at, risk_at)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING`, tenant, conv, m, epoch, qkey, started, b.seconds, b.risk, b.counting, queue, deadline, risk); err != nil {
+			if _, err := q.Exec(ctx, `INSERT INTO conversation_sla (tenant_id, conversation_id, metric, scope_episode, queue_key, started_at, budget_seconds, risk_percent, counting, calendar_queue_id, anchor_at, consumed_seconds, deadline_at, risk_at)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$6,0,$11,$12) ON CONFLICT DO NOTHING`, tenant, conv, m, epoch, qkey, started, b.seconds, b.risk, b.counting, queue, deadline, risk); err != nil {
 				return res, err
 			}
-			if err = q.QueryRow(ctx, `SELECT id, state, calendar_queue_id, started_at, budget_seconds, risk_notified_at FROM conversation_sla
-				WHERE tenant_id=$1 AND conversation_id=$2 AND metric=$3 AND scope_episode=$4 AND queue_key=$5 FOR UPDATE`, tenant, conv, m, epoch, qkey).
-				Scan(&id, &state, &calQueue, &startedAt, &budget, &riskNotified); err != nil {
+			if cl, err = e.loadClock(ctx, q, tenant, conv, m, epoch, qkey); err != nil || cl == nil {
 				return res, err
 			}
-		} else if err != nil {
-			return res, err
 		}
-		if state != "running" && state != "breached" {
+		if cl.state != "running" && cl.state != "breached" {
 			continue
 		}
-		// satisfied?
-		metAt, err := e.slaMetAt(ctx, q, tenant, conv, m, c, startedAt, now)
+		bud := slaBudget{seconds: cl.budget, risk: cl.risk, counting: cl.counting} // the clock's OWN numbers
+		// satisfied? A completion after the deadline is a LATE completion: it was a breach, and it is recorded as one
+		metAt, err := e.slaMetAt(ctx, q, tenant, conv, m, c, cl.started, now)
 		if err != nil {
 			return res, err
 		}
 		if metAt != nil {
-			if _, err := q.Exec(ctx, `UPDATE conversation_sla SET state=CASE WHEN state='breached' THEN 'breached' ELSE 'met' END, met_at=$2, updated_at=now() WHERE id=$1`, id, *metAt); err != nil {
-				return res, err
-			}
-			if err := cancelSLATimers(ctx, q, tenant, conv, m); err != nil {
+			if err := e.finishClock(ctx, q, tenant, conv, st, cl, m, *metAt); err != nil {
 				return res, err
 			}
 			continue
 		}
 		// the conversation moved: keep the time lived, re-plan the rest on the calendar of where it is now
-		if state == "running" && calQueue != nil && *calQueue != queue && m != metricQueueWait {
-			consumed, err := sectorsadapters.Elapsed(ctx, q, tenant, *calQueue, startedAt, now, b.counting == "business")
+		if cl.state == "running" && cl.calQueue != nil && *cl.calQueue != queue && m != metricQueueWait {
+			lived, err := sectorsadapters.Elapsed(ctx, q, tenant, *cl.calQueue, cl.anchor, now, bud.counting == "business")
 			if err != nil {
 				return res, err
 			}
-			bb := slaBudget{seconds: budget, risk: b.risk, counting: b.counting}
-			risk, deadline, err := slaTimes(ctx, q, tenant, queue, now, bb, consumed)
+			consumed := time.Duration(cl.consumed)*time.Second + lived
+			risk, deadline, err := slaTimes(ctx, q, tenant, queue, now, bud, consumed)
 			if err != nil {
 				return res, err
 			}
-			if _, err := q.Exec(ctx, `UPDATE conversation_sla SET calendar_queue_id=$2, deadline_at=$3, risk_at=$4, updated_at=now() WHERE id=$1`, id, queue, deadline, risk); err != nil {
+			if _, err := q.Exec(ctx, `UPDATE conversation_sla SET calendar_queue_id=$2, anchor_at=$3, consumed_seconds=$4, deadline_at=$5, risk_at=$6, updated_at=now() WHERE id=$1`,
+				cl.id, queue, now, int(consumed/time.Second), deadline, risk); err != nil {
 				return res, err
 			}
-		}
-		var riskAt, deadline time.Time
-		if err := q.QueryRow(ctx, `SELECT risk_at, deadline_at FROM conversation_sla WHERE id=$1`, id).Scan(&riskAt, &deadline); err != nil {
-			return res, err
+			cl.riskAt, cl.deadline = risk, deadline
 		}
 		switch {
-		case state == "running" && !now.Before(deadline):
-			if _, err := q.Exec(ctx, `UPDATE conversation_sla SET state='breached', breached_at=$2, updated_at=now() WHERE id=$1 AND state='running'`, id, now); err != nil {
-				return res, err
-			}
-			if riskNotified == nil { // a clock found already past its deadline still reports the risk it went through
-				if err := e.slaEvent(ctx, q, tenant, conv, st, slaEvent{m, "sla_risk"}); err != nil {
-					return res, err
-				}
-				if _, err := q.Exec(ctx, `UPDATE conversation_sla SET risk_notified_at=$2 WHERE id=$1`, id, now); err != nil {
-					return res, err
-				}
-			}
-			if err := e.slaEvent(ctx, q, tenant, conv, st, slaEvent{m, "sla_breach"}); err != nil {
+		case cl.state == "running" && !now.Before(cl.deadline):
+			if err := e.breachClock(ctx, q, tenant, conv, st, cl, m, now); err != nil {
 				return res, err
 			}
 			res.triggers = appendUnique(res.triggers, overflow.SLABreach)
-			if err := cancelSLATimers(ctx, q, tenant, conv, m); err != nil {
-				return res, err
-			}
-		case state == "breached":
+		case cl.state == "breached":
 			res.triggers = appendUnique(res.triggers, overflow.SLABreach)
-		case state == "running" && !now.Before(riskAt):
-			if riskNotified == nil {
-				if _, err := q.Exec(ctx, `UPDATE conversation_sla SET risk_notified_at=$2, updated_at=now() WHERE id=$1`, id, now); err != nil {
+		case cl.state == "running" && !now.Before(cl.riskAt):
+			if cl.riskNotified == nil {
+				if _, err := q.Exec(ctx, `UPDATE conversation_sla SET risk_notified_at=$2, updated_at=now() WHERE id=$1`, cl.id, now); err != nil {
 					return res, err
 				}
 				if err := e.slaEvent(ctx, q, tenant, conv, st, slaEvent{m, "sla_risk"}); err != nil {
@@ -227,19 +194,133 @@ func (e *Engine) syncSLA(ctx context.Context, q platformdb.Querier, tenant, conv
 				}
 			}
 			res.triggers = appendUnique(res.triggers, overflow.SLARisk)
-			if err := planTimer(ctx, q, tenant, conv, st.episode, "sla_breach", slaStepIndex[m], deadline); err != nil {
+			if err := planTimer(ctx, q, tenant, conv, st.episode, "sla_breach", slaStepIndex[m], cl.deadline); err != nil {
 				return res, err
 			}
 		default: // running, before the risk point: wake up at the risk point and at the deadline
-			if err := planTimer(ctx, q, tenant, conv, st.episode, "sla_risk", slaStepIndex[m], riskAt); err != nil {
+			if err := planTimer(ctx, q, tenant, conv, st.episode, "sla_risk", slaStepIndex[m], cl.riskAt); err != nil {
 				return res, err
 			}
-			if err := planTimer(ctx, q, tenant, conv, st.episode, "sla_breach", slaStepIndex[m], deadline); err != nil {
+			if err := planTimer(ctx, q, tenant, conv, st.episode, "sla_breach", slaStepIndex[m], cl.deadline); err != nil {
 				return res, err
 			}
 		}
 	}
 	return res, nil
+}
+
+type clockRow struct {
+	id           uuid.UUID
+	state        string
+	calQueue     *uuid.UUID
+	started      time.Time
+	anchor       time.Time
+	consumed     int
+	budget       int
+	risk         int
+	counting     string
+	riskAt       time.Time
+	deadline     time.Time
+	riskNotified *time.Time
+}
+
+func (e *Engine) loadClock(ctx context.Context, q platformdb.Querier, tenant, conv uuid.UUID, metric string, epoch int, qkey uuid.UUID) (*clockRow, error) {
+	var c clockRow
+	err := q.QueryRow(ctx, `SELECT id, state, calendar_queue_id, started_at, anchor_at, consumed_seconds, budget_seconds, risk_percent, counting, risk_at, deadline_at, risk_notified_at
+		FROM conversation_sla WHERE tenant_id=$1 AND conversation_id=$2 AND metric=$3 AND scope_episode=$4 AND queue_key=$5 FOR UPDATE`, tenant, conv, metric, epoch, qkey).
+		Scan(&c.id, &c.state, &c.calQueue, &c.started, &c.anchor, &c.consumed, &c.budget, &c.risk, &c.counting, &c.riskAt, &c.deadline, &c.riskNotified)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &c, err
+}
+
+// breachClock flips a running clock to breached (once), reporting the risk it went through if that was never reported.
+func (e *Engine) breachClock(ctx context.Context, q platformdb.Querier, tenant, conv uuid.UUID, st *stateRow, cl *clockRow, metric string, at time.Time) error {
+	tag, err := q.Exec(ctx, `UPDATE conversation_sla SET state='breached', breached_at=$2, updated_at=now() WHERE id=$1 AND state='running'`, cl.id, at)
+	if err != nil || tag.RowsAffected() != 1 {
+		return err
+	}
+	cl.state = "breached"
+	if cl.riskNotified == nil {
+		if _, err := q.Exec(ctx, `UPDATE conversation_sla SET risk_notified_at=$2 WHERE id=$1`, cl.id, at); err != nil {
+			return err
+		}
+		if err := e.slaEvent(ctx, q, tenant, conv, st, slaEvent{metric, "sla_risk"}); err != nil {
+			return err
+		}
+	}
+	if err := e.slaEvent(ctx, q, tenant, conv, st, slaEvent{metric, "sla_breach"}); err != nil {
+		return err
+	}
+	return cancelSLATimers(ctx, q, tenant, conv, metric)
+}
+
+// finishClock records the completion of a clock. Completed before the deadline = met; completed AFTER it = it was breached (reported if
+// it never was) and stays breached, with the real completion time.
+func (e *Engine) finishClock(ctx context.Context, q platformdb.Querier, tenant, conv uuid.UUID, st *stateRow, cl *clockRow, metric string, at time.Time) error {
+	if cl.state == "running" && at.After(cl.deadline) {
+		if err := e.breachClock(ctx, q, tenant, conv, st, cl, metric, cl.deadline); err != nil {
+			return err
+		}
+	}
+	if _, err := q.Exec(ctx, `UPDATE conversation_sla SET state=CASE WHEN state='breached' THEN 'breached' ELSE 'met' END, met_at=$2, updated_at=now() WHERE id=$1`, cl.id, at); err != nil {
+		return err
+	}
+	return cancelSLATimers(ctx, q, tenant, conv, metric)
+}
+
+// closeSLA: a closed conversation finishes the resolution clock AT the closing instant (late = breached) and stops the others (a clock that
+// was already past its deadline is breached first); every timer of the conversation ends.
+func (e *Engine) closeSLA(ctx context.Context, q platformdb.Querier, tenant, conv uuid.UUID, c convRow, st *stateRow, now time.Time) error {
+	closedAt := now
+	if c.closedAt != nil {
+		closedAt = *c.closedAt
+	}
+	rows, err := q.Query(ctx, `SELECT metric, scope_episode, queue_key FROM conversation_sla WHERE tenant_id=$1 AND conversation_id=$2 AND state='running' ORDER BY id FOR UPDATE`, tenant, conv)
+	if err != nil {
+		return err
+	}
+	type key struct {
+		metric string
+		epoch  int
+		qkey   uuid.UUID
+	}
+	var keys []key
+	for rows.Next() {
+		var k key
+		if err := rows.Scan(&k.metric, &k.epoch, &k.qkey); err != nil {
+			rows.Close()
+			return err
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return rows.Err()
+	}
+	for _, k := range keys {
+		cl, err := e.loadClock(ctx, q, tenant, conv, k.metric, k.epoch, k.qkey)
+		if err != nil || cl == nil {
+			return err
+		}
+		switch {
+		case k.metric == metricResolution:
+			if err := e.finishClock(ctx, q, tenant, conv, st, cl, k.metric, closedAt); err != nil {
+				return err
+			}
+		case !closedAt.Before(cl.deadline): // it was already late when the conversation ended
+			if err := e.breachClock(ctx, q, tenant, conv, st, cl, k.metric, cl.deadline); err != nil {
+				return err
+			}
+		default:
+			if _, err := q.Exec(ctx, `UPDATE conversation_sla SET state='cancelled', updated_at=now() WHERE id=$1`, cl.id); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', claim_token=NULL, updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND state IN ('pending','leased')`, tenant, conv)
+	return err
 }
 
 func appendUnique(in []overflow.Trigger, t overflow.Trigger) []overflow.Trigger {
@@ -264,7 +345,7 @@ func (e *Engine) slaMetAt(ctx context.Context, q platformdb.Querier, tenant, con
 		}
 	case metricFirstResponse: // the first message a PERSON sent after the clock started (automatic messages do not count)
 		var at *time.Time
-		if err := q.QueryRow(ctx, `SELECT min(created_at) FROM messages WHERE tenant_id=$1 AND conversation_id=$2 AND direction='outbound' AND sent_by_user_id IS NOT NULL AND created_at >= $3`,
+		if err := q.QueryRow(ctx, `SELECT min(created_at) FROM messages WHERE tenant_id=$1 AND conversation_id=$2 AND direction='outbound' AND sent_by_user_id IS NOT NULL AND status IN ('sent','delivered','read') AND created_at >= $3`,
 			tenant, conv, started).Scan(&at); err != nil {
 			return nil, err
 		}
@@ -284,9 +365,9 @@ func (e *Engine) slaEvent(ctx context.Context, q platformdb.Querier, tenant, con
 		tenant, conv, st.episode, st.step, ev.kind+":"+ev.metric, queueKey(st), reason, ev.metric); err != nil {
 		return err
 	}
-	eventType := "routing.sla.at_risk.v1"
+	eventType := string(outboxdomain.EventRoutingSLAAtRisk)
 	if ev.kind == "sla_breach" {
-		eventType = "routing.sla.breached.v1"
+		eventType = string(outboxdomain.EventRoutingSLABreached)
 	}
 	_, err := q.Exec(ctx, `INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
 		VALUES ($1,$2,$3,'conversation',$4,$5, jsonb_build_object('metric', $6::text))`, uuid.New(), tenant, eventType, conv.String(), uuid.New(), ev.metric)

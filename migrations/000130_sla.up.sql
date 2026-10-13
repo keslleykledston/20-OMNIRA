@@ -41,6 +41,8 @@ CREATE TABLE conversation_sla (
   risk_percent INTEGER NOT NULL,
   counting TEXT NOT NULL CHECK (counting IN ('wall', 'business')),
   calendar_queue_id UUID,                          -- whose calendar counts business time right now (moves with the conversation)
+  anchor_at TIMESTAMPTZ NOT NULL,                  -- the instant the remaining budget is counted from on that calendar (started_at, or the moment of the last move)
+  consumed_seconds INTEGER NOT NULL DEFAULT 0 CHECK (consumed_seconds >= 0), -- time already lived before the anchor (kept across moves)
   deadline_at TIMESTAMPTZ NOT NULL,
   risk_at TIMESTAMPTZ NOT NULL,
   state TEXT NOT NULL DEFAULT 'running' CHECK (state IN ('running', 'met', 'breached', 'cancelled')),

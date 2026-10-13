@@ -1,12 +1,15 @@
 package engine_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/routing/engine"
 	"github.com/omnira/omnira/internal/routing/overflow"
+	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 )
 
 // slaPolicy inserts a policy straight into the database (the API has its own tests). Zero = the metric is not measured.
@@ -48,7 +51,7 @@ func (e *env) clock(t *testing.T, conv uuid.UUID, metric string) (clock, bool) {
 // slaShift pretends `ago` has passed for the clocks and timers of a conversation.
 func (e *env) slaShift(t *testing.T, conv uuid.UUID, ago time.Duration) {
 	t.Helper()
-	e.exec(t, `UPDATE conversation_sla SET started_at=started_at - make_interval(secs => $2), risk_at=risk_at - make_interval(secs => $2), deadline_at=deadline_at - make_interval(secs => $2) WHERE conversation_id=$1`, conv, ago.Seconds())
+	e.exec(t, `UPDATE conversation_sla SET started_at=started_at - make_interval(secs => $2), anchor_at=anchor_at - make_interval(secs => $2), risk_at=risk_at - make_interval(secs => $2), deadline_at=deadline_at - make_interval(secs => $2) WHERE conversation_id=$1`, conv, ago.Seconds())
 	e.exec(t, `UPDATE routing_engine_timers SET due_at=due_at - make_interval(secs => $2) WHERE conversation_id=$1 AND kind IN ('sla_risk','sla_breach')`, conv, ago.Seconds())
 	e.exec(t, `UPDATE conversations SET created_at=created_at - make_interval(secs => $2) WHERE id=$1`, conv, ago.Seconds())
 }
@@ -269,5 +272,179 @@ func TestBusinessCountingKeepsTheLivedTimeAndSkipsTheDestinationsClosedHours(t *
 	// 30 business minutes are left, but N2 is closed for the next ~2h: the deadline is ~2h30 from now, not 30 minutes
 	if d := time.Until(got.deadline); d < 2*time.Hour+20*time.Minute || d > 2*time.Hour+40*time.Minute {
 		t.Fatalf("remaining business time counted on the destination calendar: deadline in %v", d)
+	}
+}
+
+// Codex: concluir DEPOIS do prazo é violação (não "met"); fechar também.
+func TestLateCompletionIsABreachAndKeepsItsRealCompletionTime(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "S", "manual")
+	u, _ := e.attendant(t, a, &q, 3)
+	e.slaPolicy(t, a, "tenant", nil, "wall", 80, 0, 0, 600, 600)
+	events := func(conv uuid.UUID, kind string) int { // the assignment clock's events only (the resolution clock has its own)
+		return e.count(t, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type=$2 AND payload->>'metric'='assignment'`, conv.String(), kind)
+	}
+	// assigned by a person AFTER the 10-minute deadline, with no timer having run in between
+	c := e.conversation(t, a, &q)
+	e.decide(t, a, c, "")
+	e.slaShift(t, c, 11*time.Minute)
+	e.exec(t, `UPDATE conversations SET assigned_to_user_id=$2, assigned_at=now() WHERE id=$1`, c, u)
+	e.decide(t, a, c, "")
+	var state string
+	var metAt *time.Time
+	_ = e.seed.QueryRow(e.ctx, `SELECT state, met_at FROM conversation_sla WHERE conversation_id=$1 AND metric='assignment'`, c).Scan(&state, &metAt)
+	if state != "breached" || metAt == nil || events(c, "routing.sla.breached.v1") != 1 || events(c, "routing.sla.at_risk.v1") != 1 {
+		t.Fatalf("late assignment: state=%s met=%v breached=%d risk=%d", state, metAt, events(c, "routing.sla.breached.v1"), events(c, "routing.sla.at_risk.v1"))
+	}
+	// closed late: the resolution clock is breached with the closing time; closed in time: met
+	e.exec(t, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, c)
+	e.decide(t, a, c, "")
+	_ = e.seed.QueryRow(e.ctx, `SELECT state FROM conversation_sla WHERE conversation_id=$1 AND metric='resolution'`, c).Scan(&state)
+	if state != "breached" {
+		t.Fatalf("resolution closed after the deadline: %s", state)
+	}
+	c2 := e.conversation(t, a, &q)
+	e.decide(t, a, c2, "")
+	e.exec(t, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, c2)
+	e.decide(t, a, c2, "")
+	_ = e.seed.QueryRow(e.ctx, `SELECT state FROM conversation_sla WHERE conversation_id=$1 AND metric='resolution'`, c2).Scan(&state)
+	if state != "met" {
+		t.Fatalf("resolution closed in time: %s", state)
+	}
+	// a clock that was already past its deadline when the conversation ended is breached, not silently cancelled
+	c3 := e.conversation(t, a, &q)
+	e.decide(t, a, c3, "")
+	e.slaShift(t, c3, 11*time.Minute)
+	e.exec(t, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, c3)
+	e.decide(t, a, c3, "")
+	_ = e.seed.QueryRow(e.ctx, `SELECT state FROM conversation_sla WHERE conversation_id=$1 AND metric='assignment'`, c3).Scan(&state)
+	if state != "breached" || events(c3, "routing.sla.breached.v1") < 1 {
+		t.Fatalf("an unassigned clock past its deadline when the conversation closed: %s", state)
+	}
+}
+
+func TestClosingEndsEveryTimerAndAFailedHumanSendDoesNotMeetTheFirstResponse(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "S", "round_robin")
+	u, _ := e.attendant(t, a, &q, 3)
+	e.slaPolicy(t, a, "tenant", nil, "wall", 80, 600, 0, 0, 0)
+	closed := e.calendar(t, a, "fechado", "24x7", "[]")
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at) VALUES ($1,$2,now()-interval '1 hour',now()+interval '3 hours')`, a, closed)
+	e.exec(t, `UPDATE queues SET calendar_id=$2 WHERE id=$1`, q, closed)
+	c := e.conversation(t, a, &q)
+	e.decide(t, a, c, "")
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND state='pending'`, c) < 2 {
+		t.Fatal("an opening timer and the SLA timers exist")
+	}
+	e.exec(t, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, c)
+	e.decide(t, a, c, "")
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND state IN ('pending','leased')`, c) != 0 {
+		t.Fatal("a closed conversation keeps no timer of any kind")
+	}
+	// a human send that FAILED is not a response
+	open := e.queue(t, a, "Aberta", "round_robin")
+	e.attendant(t, a, &open, 3)
+	c2 := e.conversation(t, a, &open)
+	e.decide(t, a, c2, "")
+	e.exec(t, `INSERT INTO messages (tenant_id, conversation_id, direction, body, status, sent_by_user_id) VALUES ($1,$2,'outbound','x','failed',$3)`, a, c2, u)
+	e.exec(t, `INSERT INTO messages (tenant_id, conversation_id, direction, body, status, sent_by_user_id) VALUES ($1,$2,'outbound','x','queued',$3)`, a, c2, u)
+	e.decide(t, a, c2, "")
+	if got, _ := e.clock(t, c2, "first_response"); got.state != "running" {
+		t.Fatalf("failed/queued sends do not count: %s", got.state)
+	}
+	e.exec(t, `INSERT INTO messages (tenant_id, conversation_id, direction, body, status, sent_by_user_id) VALUES ($1,$2,'outbound','ok','delivered',$3)`, a, c2, u)
+	e.decide(t, a, c2, "")
+	if got, _ := e.clock(t, c2, "first_response"); got.state != "met" {
+		t.Fatalf("a delivered send does: %s", got.state)
+	}
+}
+
+// Codex: o relógio carrega os próprios números; editar a política depois não muda um relógio em curso, nem numa transferência.
+func TestEditingThePolicyNeverChangesARunningClockEvenAcrossATransfer(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	n1, n2 := e.queue(t, a, "N1", "round_robin"), e.queue(t, a, "N2", "round_robin")
+	e.attendant(t, a, &n1, 1)
+	e.exec(t, `UPDATE conversations SET assigned_to_user_id=(SELECT user_id FROM queue_members WHERE queue_id=$1) WHERE id=$2`, n1, e.conversation(t, a, &n1))
+	e.attendant(t, a, &n2, 1)
+	e.exec(t, `UPDATE conversations SET assigned_to_user_id=(SELECT user_id FROM queue_members WHERE queue_id=$1) WHERE id=$2`, n2, e.conversation(t, a, &n2))
+	e.slaPolicy(t, a, "tenant", nil, "wall", 80, 3600, 0, 0, 0)
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.CapacityExhausted}, WaitSeconds: 60, DestKind: overflow.DestQueue, DestID: n2})
+	c := e.conversation(t, a, &n1)
+	e.decide(t, a, c, "")
+	e.exec(t, `UPDATE sla_policies SET counting='business', risk_percent=10, first_response_seconds=60`) // an administrator edits the policy meanwhile
+	e.timeTravel(t, c, 2*time.Minute)
+	e.decide(t, a, c, engine.TriggerStepWait)
+	var counting string
+	var risk, budget int
+	var riskAt, deadline time.Time
+	if err := e.seed.QueryRow(e.ctx, `SELECT counting, risk_percent, budget_seconds, risk_at, deadline_at FROM conversation_sla WHERE conversation_id=$1 AND metric='first_response'`, c).Scan(&counting, &risk, &budget, &riskAt, &deadline); err != nil {
+		t.Fatal(err)
+	}
+	if counting != "wall" || risk != 80 || budget != 3600 {
+		t.Fatalf("the clock keeps ITS numbers: %s %d%% %ds", counting, risk, budget)
+	}
+	if left, riskLeft := time.Until(deadline), time.Until(riskAt); left < 55*time.Minute || riskLeft < 45*time.Minute || riskLeft > 50*time.Minute {
+		t.Fatalf("deadline in %v, risk in %v (80%% of 1h)", left, riskLeft)
+	}
+}
+
+// Codex: mudar o calendário replaneja também os relógios em horário útil que seguem na mesma fila.
+func TestACalendarChangeReplansRunningBusinessClocksAndTheirTimers(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "S", "manual")
+	cal := e.calendar(t, a, "util", "24x7", "[]")
+	e.exec(t, `UPDATE queues SET calendar_id=$2 WHERE id=$1`, q, cal)
+	e.slaPolicy(t, a, "tenant", nil, "business", 80, 0, 0, 3600, 0)
+	c := e.conversation(t, a, &q)
+	e.decide(t, a, c, "")
+	before, _ := e.clock(t, c, "assignment")
+	// a suspension of the next 2 hours is added: the business hour cannot be consumed meanwhile
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at) VALUES ($1,$2,now()+interval '1 minute',now()+interval '2 hours')`, a, cal)
+	if err := platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(c2 context.Context) error {
+		_, err := sectorsadapters.ReplanWaiting(c2, platformdb.QuerierFromContext(c2, e.app), a)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := e.clock(t, c, "assignment")
+	if !after.deadline.After(before.deadline.Add(100 * time.Minute)) {
+		t.Fatalf("the deadline moves past the suspension: %v -> %v", before.deadline, after.deadline)
+	}
+	var due time.Time
+	_ = e.seed.QueryRow(e.ctx, `SELECT due_at FROM routing_engine_timers WHERE conversation_id=$1 AND kind='sla_breach' AND state='pending'`, c).Scan(&due)
+	if !due.Equal(after.deadline) {
+		t.Fatalf("the breach timer follows the clock: %v vs %v", due, after.deadline)
+	}
+}
+
+func TestLeavingForAQueueWithoutPolicyStopsTheOldQueueWaitClockAndRowsNeverChangeCompany(t *testing.T) {
+	e := newEnv(t, nil)
+	a, b := e.tenant(t), e.tenant(t)
+	n1, n2 := e.queue(t, a, "N1", "round_robin"), e.queue(t, a, "N2", "round_robin")
+	e.attendant(t, a, &n1, 1)
+	e.exec(t, `UPDATE conversations SET assigned_to_user_id=(SELECT user_id FROM queue_members WHERE queue_id=$1) WHERE id=$2`, n1, e.conversation(t, a, &n1))
+	e.slaPolicy(t, a, "queue", &n1, "wall", 80, 0, 3600, 0, 0) // only N1 has a policy
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.CapacityExhausted}, DestKind: overflow.DestQueue, DestID: n2})
+	c := e.conversation(t, a, &n1)
+	e.decide(t, a, c, "") // N2 has nobody: the conversation moves there and waits; N2 has no SLA policy at all
+	if e.queueOf(t, c) != n2 {
+		t.Fatal("moved")
+	}
+	if got, _ := e.clock(t, c, "queue_wait"); got.state != "cancelled" {
+		t.Fatalf("the clock of the queue it left must not keep running: %s", got.state)
+	}
+	// a row never changes company, whoever writes (the owner role included)
+	e.exec(t, `INSERT INTO sla_policies (tenant_id, scope_kind, assignment_seconds) VALUES ($1,'tenant',60)`, a)
+	// rows with no composite foreign key to hold them back, so only the trigger can refuse
+	if _, err := e.seed.Exec(e.ctx, `UPDATE sla_policies SET tenant_id=$2 WHERE tenant_id=$1 AND scope_kind='tenant'`, a, b); err == nil {
+		t.Fatal("moving a policy to another company must be refused")
+	}
+	cal := e.calendar(t, a, "movel", "24x7", "[]")
+	if _, err := e.seed.Exec(e.ctx, `UPDATE calendars SET tenant_id=$2 WHERE id=$1`, cal, b); err == nil {
+		t.Fatal("moving a calendar to another company must be refused")
 	}
 }

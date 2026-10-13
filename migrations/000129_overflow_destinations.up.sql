@@ -36,6 +36,7 @@ CREATE OR REPLACE FUNCTION hub_destination_ready(p_tenant UUID, p_contract UUID,
     JOIN public.hub_memberships hm ON hm.hub_id = g.hub_id AND hm.user_id = g.user_id
     JOIN public.tenants t ON t.id = g.tenant_id
     WHERE c.id = p_contract AND g.tenant_id = p_tenant AND c.tenant_id = p_tenant
+      AND EXISTS (SELECT 1 FROM public.queues qq WHERE qq.tenant_id = p_tenant AND qq.id = p_queue)
       AND public.user_is_active(g.user_id)
       AND t.status = 'active' AND h.status = 'active'
       AND g.status = 'active' AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())

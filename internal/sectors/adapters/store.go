@@ -292,7 +292,11 @@ func ReplanWaiting(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) 
 		return n, err
 	}
 	m, err := ReplanStepWaits(ctx, q, tenant)
-	return n + m, err
+	if err != nil {
+		return n + m, err
+	}
+	k, err := ReplanSLA(ctx, q, tenant)
+	return n + m + k, err
 }
 
 func replanOpenWakeups(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) (int, error) {
@@ -553,6 +557,119 @@ func KickQueue(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.U
 				return n, err
 			}
 			n++
+		}
+	}
+	return n, nil
+}
+
+// ReplanSLA recomputes the risk point and deadline of the running BUSINESS clocks of the tenant after a calendar change (a holiday added, a
+// suspension, a new schedule): the remaining budget, counted from the clock's anchor on the calendar of the place the conversation is in,
+// gives new instants, and the durable sla timers follow. Wall-clock clocks do not depend on a calendar and are left alone. Same lock order
+// as the engine (conversation, then clock, then timer), paged.
+func ReplanSLA(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) (int, error) {
+	const pageSize, maxPages = 500, 100
+	n := 0
+	cursor := uuid.Nil
+	for page := 0; page < maxPages; page++ {
+		rows, err := q.Query(ctx, `SELECT s.conversation_id FROM conversation_sla s
+			WHERE s.tenant_id=$1 AND s.state='running' AND s.counting='business' AND s.calendar_queue_id IS NOT NULL AND s.conversation_id > $2
+			GROUP BY s.conversation_id ORDER BY s.conversation_id LIMIT $3`, tenant, cursor, pageSize)
+		if err != nil {
+			return n, err
+		}
+		var convs []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return n, err
+			}
+			convs = append(convs, id)
+		}
+		rows.Close()
+		if rows.Err() != nil {
+			return n, rows.Err()
+		}
+		if len(convs) == 0 {
+			return n, nil
+		}
+		cursor = convs[len(convs)-1]
+		for _, conv := range convs {
+			var found int
+			if err := q.QueryRow(ctx, `SELECT 1 FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenant, conv).Scan(&found); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				return n, err
+			}
+			var episode int
+			if err := q.QueryRow(ctx, `SELECT COALESCE((SELECT episode FROM routing_engine_state WHERE tenant_id=$1 AND conversation_id=$2), 1)`, tenant, conv).Scan(&episode); err != nil {
+				return n, err
+			}
+			crows, err := q.Query(ctx, `SELECT id, metric, calendar_queue_id, anchor_at, consumed_seconds, budget_seconds, risk_percent, risk_at, deadline_at, risk_notified_at
+				FROM conversation_sla WHERE tenant_id=$1 AND conversation_id=$2 AND state='running' AND counting='business' AND calendar_queue_id IS NOT NULL ORDER BY id FOR UPDATE`, tenant, conv)
+			if err != nil {
+				return n, err
+			}
+			type clk struct {
+				id                        uuid.UUID
+				metric                    string
+				cal                       uuid.UUID
+				anchor                    time.Time
+				consumed, budget, riskPct int
+				riskAt, deadline          time.Time
+				notified                  *time.Time
+			}
+			var clocks []clk
+			for crows.Next() {
+				var c clk
+				if err := crows.Scan(&c.id, &c.metric, &c.cal, &c.anchor, &c.consumed, &c.budget, &c.riskPct, &c.riskAt, &c.deadline, &c.notified); err != nil {
+					crows.Close()
+					return n, err
+				}
+				clocks = append(clocks, c)
+			}
+			crows.Close()
+			if crows.Err() != nil {
+				return n, crows.Err()
+			}
+			for _, c := range clocks {
+				total := time.Duration(c.budget) * time.Second
+				consumed := time.Duration(c.consumed) * time.Second
+				left := func(d time.Duration) time.Duration {
+					if d -= consumed; d < 0 {
+						return 0
+					}
+					return d
+				}
+				deadline, err := DueAfter(ctx, q, tenant, c.cal, c.anchor, left(total), true)
+				if err != nil {
+					return n, err
+				}
+				risk, err := DueAfter(ctx, q, tenant, c.cal, c.anchor, left(total*time.Duration(c.riskPct)/100), true)
+				if err != nil {
+					return n, err
+				}
+				if deadline.Equal(c.deadline) && risk.Equal(c.riskAt) {
+					continue
+				}
+				if _, err := q.Exec(ctx, `UPDATE conversation_sla SET deadline_at=$2, risk_at=$3, updated_at=now() WHERE id=$1`, c.id, deadline, risk); err != nil {
+					return n, err
+				}
+				step := map[string]int{"first_response": 1, "queue_wait": 2, "assignment": 3, "resolution": 4}[c.metric]
+				for kind, due := range map[string]time.Time{"sla_risk": risk, "sla_breach": deadline} {
+					if kind == "sla_risk" && c.notified != nil {
+						continue // already reported: no second risk timer
+					}
+					if _, err := q.Exec(ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, step_index, due_at) VALUES ($1,$2,$3,$4,$5,$6)
+						ON CONFLICT (tenant_id, conversation_id, episode, kind, step_index)
+						DO UPDATE SET due_at=EXCLUDED.due_at, state='pending', lease_until=NULL, claim_token=NULL, attempts=0, generation=routing_engine_timers.generation+1, updated_at=now()`,
+						tenant, conv, episode, kind, step, due); err != nil {
+						return n, err
+					}
+				}
+				n++
+			}
 		}
 	}
 	return n, nil

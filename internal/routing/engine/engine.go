@@ -98,6 +98,7 @@ type convRow struct {
 	assigned   *uuid.UUID
 	assignedAt *time.Time
 	createdAt  time.Time
+	closedAt   *time.Time
 	status     string
 	mode       string
 }
@@ -134,9 +135,9 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 
 	// 1. the conversation row is the serialization point: two workers for the same conversation queue up here
 	var c convRow
-	err = q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.status, COALESCE(qq.mode, '')
+	err = q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.closed_at, c.status, COALESCE(qq.mode, '')
 		FROM conversations c LEFT JOIN queues qq ON qq.tenant_id=c.tenant_id AND qq.id=c.queue_id
-		WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c`, tenant, req.ConversationID).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.status, &c.mode)
+		WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c`, tenant, req.ConversationID).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.closedAt, &c.status, &c.mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Decision{}, ErrNotFound
 	}
@@ -589,7 +590,7 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 // closed one) and has at least one eligible agent; when none has an agent, the first acceptable queue (the conversation waits there).
 func (e *Engine) chooseSectorQueue(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, s overflow.Step, visited map[string]bool, now time.Time) (uuid.UUID, string, error) {
 	rows, err := q.Query(ctx, `SELECT qq.id, qq.mode FROM queues qq JOIN sectors sc ON sc.tenant_id=qq.tenant_id AND sc.id=qq.sector_id
-		WHERE qq.tenant_id=$1 AND qq.sector_id=$2 AND sc.active ORDER BY qq.name, qq.id LIMIT 50`, tenant, s.DestID)
+		WHERE qq.tenant_id=$1 AND qq.sector_id=$2 AND sc.active ORDER BY qq.name, qq.id LIMIT 500`, tenant, s.DestID)
 	if err != nil {
 		return uuid.Nil, "", err
 	}

@@ -109,6 +109,10 @@ func (e *Engine) runTimer(ctx context.Context, x claimed) error {
 		if err := q.QueryRow(c, `SELECT 1 FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, x.tenant, x.conversation).Scan(&found); err != nil {
 			return err // the timer references a conversation by foreign key: not finding it is an error to surface, not to swallow
 		}
+		// documented order: conversation -> routing state -> timer
+		if _, err := q.Exec(c, `SELECT 1 FROM routing_engine_state WHERE tenant_id=$1 AND conversation_id=$2 FOR UPDATE`, x.tenant, x.conversation); err != nil {
+			return err
+		}
 		var state string
 		var gen int
 		var token *uuid.UUID
