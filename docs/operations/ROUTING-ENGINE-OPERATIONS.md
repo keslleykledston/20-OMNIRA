@@ -45,7 +45,7 @@ SELECT created_at, trigger, decision, reason, destination, attempts
 -- SLA em risco / violado agora
 SELECT metric, state, count(*) FROM conversation_sla WHERE state IN ('running','breached') GROUP BY 1,2;
 ```
-Logs do worker: `routing engine: timer ... attempt N failed` (falha de timer; reentrega automática, desiste após o limite e a conversa vira `manual_required`), `routing: closed notice not sent` (aviso não saiu; a decisão não é afetada), `routing: flow ... could not be started` (etapa de fluxo pulada).
+Logs do worker: `routing: no eligible agent ... outcome=no_eligible_agent` aparece também para fila **manual** e para conversa que espera a abertura — é um resultado de negócio (a decisão foi gravada e a sessão confirmada), não uma falha; `routing engine: timer ... attempt N failed` (falha de timer; reentrega automática, desiste após o limite e a conversa vira `manual_required`), `routing: closed notice not sent` (aviso não saiu; a decisão não é afetada), `routing: flow ... could not be started` (etapa de fluxo pulada).
 
 ## 6. Retroalimentar conversas abertas ao ligar (requer aprovação do dono; escreve no banco)
 Conversas abertas e sem dono só entram no motor quando algo as toca. Para colocá-las já, em janela combinada:
