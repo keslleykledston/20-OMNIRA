@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/routing/eligibility"
 	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 )
 
@@ -29,7 +30,7 @@ func (e *Engine) TryAssignForTest(tenant, queue, conversation uuid.UUID, cand se
 			return err
 		}
 		var err error
-		ok, err = tryAssign(c, q, tenant, queue, conversation, cand, "round_robin", now)
+		ok, err = tryAssign(c, q, tenant, queue, conversation, cand, "round_robin", now, eligibility.Policy{})
 		return err
 	})
 	return ok, err

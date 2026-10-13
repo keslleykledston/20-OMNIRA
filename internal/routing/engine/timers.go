@@ -131,9 +131,9 @@ func (e *Engine) runTimer(ctx context.Context, x claimed) error {
 			return err
 		}
 		switch x.kind {
-		case "open_wakeup", "step_wait":
+		case "open_wakeup", "step_wait", "retry":
 			trigger := TriggerOpenWakeup
-			if x.kind == "step_wait" {
+			if x.kind != "open_wakeup" { // a step wait ran out, or a policy changed and the conversation must be looked at again
 				trigger = TriggerStepWait
 			}
 			if _, err := e.Decide(c, Request{ConversationID: x.conversation, Trigger: trigger, StrategyReason: trigger}); err != nil && !errors.Is(err, ErrNotFound) {

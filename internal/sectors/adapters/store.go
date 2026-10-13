@@ -287,6 +287,15 @@ func QueueAvailability(ctx context.Context, q platformdb.Querier, tenant, queueI
 // Lock order is the engine's: conversation -> routing state -> timer. Each conversation is locked and its state re-read before anything
 // is changed, so a decision that committed meanwhile (an assignment) is never overwritten. Paged by conversation id, with a ceiling.
 func ReplanWaiting(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) (int, error) {
+	n, err := replanOpenWakeups(ctx, q, tenant)
+	if err != nil {
+		return n, err
+	}
+	m, err := ReplanStepWaits(ctx, q, tenant)
+	return n + m, err
+}
+
+func replanOpenWakeups(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) (int, error) {
 	var now time.Time
 	if err := q.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
 		return 0, err
@@ -423,4 +432,128 @@ func DueAfter(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 		return from.Add(scheduling.Horizon), nil
 	}
 	return due, nil
+}
+
+// ReplanStepWaits recomputes the due time of the pending step_wait timers whose wait is counted in BUSINESS time: a calendar change can
+// make them fall earlier or later. Same lock order as the engine (conversation, then timer), paged.
+func ReplanStepWaits(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) (int, error) {
+	const pageSize, maxPages = 500, 100
+	n := 0
+	cursor := uuid.Nil
+	for page := 0; page < maxPages; page++ {
+		rows, err := q.Query(ctx, `SELECT t.conversation_id, t.episode, t.step_index, st.origin_queue_id, st.step_entered_at, s.wait_seconds
+			FROM routing_engine_timers t
+			JOIN routing_engine_state st ON st.tenant_id=t.tenant_id AND st.conversation_id=t.conversation_id AND st.episode=t.episode
+			JOIN overflow_policies p ON p.tenant_id=t.tenant_id AND p.queue_id=st.origin_queue_id AND p.active
+			JOIN overflow_steps s ON s.tenant_id=t.tenant_id AND s.policy_id=p.id AND s.position=t.step_index AND s.wait_business
+			WHERE t.tenant_id=$1 AND t.kind='step_wait' AND t.state='pending' AND t.conversation_id > $2
+			ORDER BY t.conversation_id LIMIT $3`, tenant, cursor, pageSize)
+		if err != nil {
+			return n, err
+		}
+		type item struct {
+			conv        uuid.UUID
+			episode     int
+			step        int
+			origin      uuid.UUID
+			entered     time.Time
+			waitSeconds int
+		}
+		var items []item
+		for rows.Next() {
+			var it item
+			if err := rows.Scan(&it.conv, &it.episode, &it.step, &it.origin, &it.entered, &it.waitSeconds); err != nil {
+				rows.Close()
+				return n, err
+			}
+			items = append(items, it)
+		}
+		rows.Close()
+		if rows.Err() != nil {
+			return n, rows.Err()
+		}
+		if len(items) == 0 {
+			return n, nil
+		}
+		cursor = items[len(items)-1].conv
+		for _, it := range items {
+			var found int
+			if err := q.QueryRow(ctx, `SELECT 1 FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenant, it.conv).Scan(&found); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				return n, err
+			}
+			due, err := DueAfter(ctx, q, tenant, it.origin, it.entered, time.Duration(it.waitSeconds)*time.Second, true)
+			if err != nil {
+				return n, err
+			}
+			tag, err := q.Exec(ctx, `UPDATE routing_engine_timers SET due_at=$5, claim_token=NULL, generation=generation+1, updated_at=now()
+				WHERE tenant_id=$1 AND conversation_id=$2 AND episode=$3 AND kind='step_wait' AND step_index=$4 AND state='pending' AND due_at IS DISTINCT FROM $5`, tenant, it.conv, it.episode, it.step, due)
+			if err != nil {
+				return n, err
+			}
+			n += int(tag.RowsAffected())
+		}
+	}
+	return n, nil
+}
+
+// KickQueue asks the engine to look again, soon, at every open unassigned conversation that belongs to a queue's chain (the queue itself, or
+// conversations that overflowed away from it): used when its overflow policy is saved, replaced, deactivated or removed, so a conversation
+// waiting under the OLD policy (or under none, in a manual queue that has no routing job) is re-evaluated under the NEW one. A 'retry'
+// timer due now runs the same decision as any other trigger.
+func KickQueue(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UUID) (int, error) {
+	const pageSize, maxPages = 500, 100
+	n := 0
+	cursor := uuid.Nil
+	for page := 0; page < maxPages; page++ {
+		rows, err := q.Query(ctx, `SELECT c.id FROM conversations c
+			LEFT JOIN routing_engine_state st ON st.tenant_id=c.tenant_id AND st.conversation_id=c.id
+			WHERE c.tenant_id=$1 AND c.status='open' AND c.assigned_to_user_id IS NULL AND c.id > $2
+			  AND (c.queue_id=$3 OR st.origin_queue_id=$3)
+			ORDER BY c.id LIMIT $4`, tenant, cursor, queueID, pageSize)
+		if err != nil {
+			return n, err
+		}
+		var ids []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return n, err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if rows.Err() != nil {
+			return n, rows.Err()
+		}
+		if len(ids) == 0 {
+			return n, nil
+		}
+		cursor = ids[len(ids)-1]
+		for _, id := range ids {
+			var found int
+			if err := q.QueryRow(ctx, `SELECT 1 FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenant, id).Scan(&found); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				return n, err
+			}
+			var episode int
+			err := q.QueryRow(ctx, `SELECT COALESCE((SELECT episode FROM routing_engine_state WHERE tenant_id=$1 AND conversation_id=$2), 1)`, tenant, id).Scan(&episode)
+			if err != nil {
+				return n, err
+			}
+			// the episode of a conversation the engine has not seen yet is 1: Decide creates its state with that episode
+			if _, err := q.Exec(ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, step_index, due_at) VALUES ($1,$2,$3,'retry',0,now())
+				ON CONFLICT (tenant_id, conversation_id, episode, kind, step_index)
+				DO UPDATE SET due_at=now(), state='pending', lease_until=NULL, claim_token=NULL, attempts=0, generation=routing_engine_timers.generation+1, updated_at=now()`, tenant, id, episode); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
 }

@@ -11,6 +11,7 @@ import (
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/routing/overflow"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
 // ErrInvalidPolicy carries the reason a policy cannot be saved (it names the failing rule, never tenant data).
@@ -168,6 +169,21 @@ func (h *Handler) PutOverflowPolicy(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	// allow_closed / allow_off_shift bypass the sector calendar or the agent's shift: a stronger power than editing a chain
+	for _, st := range in.Steps {
+		if st.AllowClosed || st.AllowOffShift {
+			ok, err := tenancyadapters.ActorHasPermission(r.Context(), q, tc.TenantID, tc.ActorID, "routing.override")
+			if err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			if !ok {
+				http.Error(w, "forbidden: allow_closed and allow_off_shift need the routing.override permission", http.StatusForbidden)
+				return
+			}
+			break
+		}
+	}
 	var rev int
 	err := attempt(r, q, func() (e error) {
 		rev, e = SavePolicy(r.Context(), q, tc.TenantID, tc.ActorID, queueID, in.Policy, in.ExpectedRevision)
@@ -186,6 +202,10 @@ func (h *Handler) PutOverflowPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		http.Error(w, "failed to save the policy", http.StatusInternalServerError)
+		return
+	}
+	if _, err := KickQueue(r.Context(), q, tc.TenantID, queueID); err != nil { // conversations waiting under the old policy are re-evaluated under the new one
+		http.Error(w, "failed to re-evaluate the waiting conversations", http.StatusInternalServerError)
 		return
 	}
 	h.record(r, auditdomain.ResourceOverflowPolicy, queueID, auditdomain.ActionOverflowSaved, map[string]any{"revision": rev, "steps": len(in.Steps), "active": in.Active})
@@ -215,6 +235,10 @@ func (h *Handler) DeleteOverflowPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() != 1 {
 		http.Error(w, "policy not found", http.StatusNotFound)
+		return
+	}
+	if _, err := KickQueue(r.Context(), q, tc.TenantID, queueID); err != nil {
+		http.Error(w, "failed to re-evaluate the waiting conversations", http.StatusInternalServerError)
 		return
 	}
 	h.record(r, auditdomain.ResourceOverflowPolicy, queueID, auditdomain.ActionOverflowRemoved, nil)

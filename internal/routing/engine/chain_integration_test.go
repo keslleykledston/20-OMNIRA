@@ -1,13 +1,16 @@
 package engine_test
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/routing/engine"
 	"github.com/omnira/omnira/internal/routing/overflow"
+	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 )
 
 // policy inserts an overflow policy for an origin queue straight into the database (the API has its own tests).
@@ -173,8 +176,8 @@ func TestAfterHoursOverflowsToTheOpenSectorAndRefusesAClosedDestination(t *testi
 	e.exec(t, `UPDATE overflow_steps SET allow_closed=true`)
 	c3 := e.conversation(t, a, &fin)
 	d, err = e.decide(t, a, c3, "")
-	if err != nil || d.Kind != engine.WaitUntilOpen || e.queueOf(t, c3) != sup {
-		t.Fatalf("allow_closed: %+v %v (queue %v)", d, err, e.queueOf(t, c3))
+	if err != nil || d.Kind != engine.AssignAgent || d.AssignedUser != s || e.queueOf(t, c3) != sup {
+		t.Fatalf("allow_closed (contingency) routes into the closed sector and its agent takes it: %+v %v (queue %v)", d, err, e.queueOf(t, c3))
 	}
 }
 
@@ -200,6 +203,10 @@ func TestDestinationsThatBecameUnavailableAreSkippedAndLoopsAreImpossible(t *tes
 	}
 	if _, step, hops, _, visited := e.stateOf(t, c); step != 2 || hops != 1 || len(visited) != 2 {
 		t.Fatalf("skipping is not a hop: step=%d hops=%d visited=%v", step, hops, visited)
+	}
+	var rejected string
+	if err := e.seed.QueryRow(e.ctx, `SELECT COALESCE(detail->'rejected'->0->>'reason', '') FROM routing_engine_decisions WHERE conversation_id=$1 AND decision='ASSIGN_AGENT'`, c).Scan(&rejected); err != nil || rejected != "destination_unavailable" {
+		t.Fatalf("the refused destination and its reason are in the history: %q %v", rejected, err)
 	}
 	// loop guard: a destination already visited in this episode is never entered again, even if a step names it
 	c2 := e.conversation(t, a, &n1)
@@ -336,5 +343,143 @@ func TestEnteringAStepCancelsTheTimersOfThePlaceItLeft(t *testing.T) {
 	}
 	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND kind='open_wakeup' AND state IN ('pending','leased')`, c) != 0 {
 		t.Fatal("the opening timer of the sector it left must not survive")
+	}
+}
+
+// Etapas são ordenadas: uma etapa posterior pronta por OUTRO gatilho não fura a fila de uma anterior que ainda espera.
+func TestALaterStepReadyByAnotherTriggerDoesNotJumpAnEarlierWaitingStep(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	n1, n2, n3 := e.queue(t, a, "N1", "round_robin"), e.queue(t, a, "N2", "round_robin"), e.queue(t, a, "N3", "round_robin")
+	e.attendant(t, a, &n1, 1)
+	e.attendant(t, a, &n2, 3)
+	e.attendant(t, a, &n3, 3)
+	e.exec(t, `UPDATE conversations SET assigned_to_user_id=(SELECT user_id FROM queue_members WHERE queue_id=$1) WHERE id=$2`, n1, e.conversation(t, a, &n1))
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual,
+		overflow.Step{Triggers: []overflow.Trigger{overflow.NoEligibleAgent, overflow.CapacityExhausted}, WaitSeconds: 600, DestKind: overflow.DestQueue, DestID: n2},
+		overflow.Step{Triggers: []overflow.Trigger{overflow.MaxWait}, WaitSeconds: 60, DestKind: overflow.DestQueue, DestID: n3})
+	c := e.conversation(t, a, &n1)
+	e.decide(t, a, c, "")
+	e.timeTravel(t, c, 2*time.Minute) // step 2 (max_wait 1 min) is ready; step 1 (capacity, 10 min) is not
+	d, _ := e.decide(t, a, c, engine.TriggerStepWait)
+	if e.queueOf(t, c) != n1 || d.Kind == engine.AssignAgent {
+		t.Fatalf("step 2 must wait for step 1: queue=%v %+v", e.queueOf(t, c), d)
+	}
+	e.timeTravel(t, c, 11*time.Minute)
+	if d, _ := e.decide(t, a, c, engine.TriggerStepWait); e.queueOf(t, c) != n2 || d.Kind != engine.AssignAgent {
+		t.Fatalf("now step 1 goes first: queue=%v %+v", e.queueOf(t, c), d)
+	}
+}
+
+// Plantão substitui a escala pessoal; a política de uma etapa relaxa só o que nomeia, dentro da fila de destino.
+func TestOnCallReplacesTheShiftAndStepRelaxationsApplyInsideTheDestination(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	n1, n2 := e.queue(t, a, "N1", "round_robin"), e.queue(t, a, "N2", "round_robin")
+	e.attendant(t, a, &n1, 1)
+	e.exec(t, `UPDATE conversations SET assigned_to_user_id=(SELECT user_id FROM queue_members WHERE queue_id=$1) WHERE id=$2`, n1, e.conversation(t, a, &n1))
+	closedShift := e.calendar(t, a, "turno fechado", "custom", `[{"day":"mon","intervals":[]}]`)
+	// the on-call person's own shift is closed, and it does not matter: the on-call period is their shift
+	oncall, _ := e.attendant(t, a, nil, 0)
+	e.exec(t, `INSERT INTO agent_shifts (tenant_id, user_id, calendar_id) VALUES ($1,$2,$3)`, a, oncall, closedShift)
+	roster := e.roster(t, a, "Plantão", oncall)
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.CapacityExhausted}, DestKind: overflow.DestOnCall, DestID: roster})
+	c := e.conversation(t, a, &n1)
+	if d, err := e.decide(t, a, c, ""); err != nil || d.AssignedUser != oncall {
+		t.Fatalf("on call overrides the closed personal shift: %+v %v", d, err)
+	}
+	// destination queue whose only member is off shift: assigned only when the step says allow_off_shift
+	off, _ := e.attendant(t, a, &n2, 3)
+	e.exec(t, `INSERT INTO agent_shifts (tenant_id, user_id, calendar_id) VALUES ($1,$2,$3)`, a, off, closedShift)
+	e.exec(t, `DELETE FROM overflow_policies`)
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.CapacityExhausted}, DestKind: overflow.DestQueue, DestID: n2})
+	c2 := e.conversation(t, a, &n1)
+	d, err := e.decide(t, a, c2, "")
+	if err != nil || d.Kind != engine.Enqueue || e.queueOf(t, c2) != n2 || e.owner(t, c2) != nil {
+		t.Fatalf("moved to N2 but its only agent is off shift: %+v %v", d, err)
+	}
+	e.exec(t, `DELETE FROM overflow_policies`)
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.CapacityExhausted}, DestKind: overflow.DestQueue, DestID: n2, AllowOffShift: true})
+	c3 := e.conversation(t, a, &n1)
+	if d, err := e.decide(t, a, c3, ""); err != nil || d.AssignedUser != off {
+		t.Fatalf("allow_off_shift lets the contingency step use the off-shift agent: %+v %v", d, err)
+	}
+}
+
+// Salvar, trocar ou apagar a política reavalia as conversas que já esperam (inclusive em fila manual, que não tem job de roteamento).
+func TestChangingThePolicyReevaluatesConversationsAlreadyWaiting(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	n1, n2 := e.queue(t, a, "Manual", "manual"), e.queue(t, a, "N2", "round_robin")
+	u2, _ := e.attendant(t, a, &n2, 5)
+	c := e.conversation(t, a, &n1)
+	e.decide(t, a, c, "") // no policy yet: it just waits, no timer
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1`, c) != 0 {
+		t.Fatal("no policy, no timer")
+	}
+	e.timeTravel(t, c, 20*time.Minute)
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.MaxWait}, WaitSeconds: 600, DestKind: overflow.DestQueue, DestID: n2})
+	kick := func() {
+		if err := platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(c2 context.Context) error {
+			_, err := sectorsadapters.KickQueue(c2, platformdb.QuerierFromContext(c2, e.app), a, n1)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kick() // what saving the policy does, in the same transaction
+	if n, err := e.eng.RunTimersOnce(e.ctx); err != nil || n != 1 {
+		t.Fatalf("the kicked conversation runs: %d %v", n, err)
+	}
+	if o := e.owner(t, c); o == nil || *o != u2 || e.queueOf(t, c) != n2 {
+		t.Fatalf("waiting 20 minutes under a 10-minute rule, it moves as soon as the policy exists: %v", o)
+	}
+	// deleting the policy: pending step timers are kicked, run once, and the conversation is simply left where it is
+	c2 := e.conversation(t, a, &n1)
+	e.decide(t, a, c2, "")
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND kind='step_wait' AND state='pending'`, c2) != 1 {
+		t.Fatal("the policy plans a step timer for the conversation")
+	}
+	e.exec(t, `DELETE FROM overflow_policies`)
+	kick()
+	e.exec(t, `UPDATE routing_engine_timers SET due_at=now() WHERE conversation_id=$1`, c2)
+	e.eng.RunTimersOnce(e.ctx)
+	if e.queueOf(t, c2) != n1 || e.owner(t, c2) != nil {
+		t.Fatal("with no policy the conversation stays where it is")
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND state IN ('pending','leased')`, c2) != 0 {
+		t.Fatal("and no timer is left alive")
+	}
+}
+
+// Mudança de calendário recalcula também as esperas em horário útil (não só a abertura).
+func TestACalendarChangeMovesPendingBusinessStepWaits(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	n1, n2 := e.queue(t, a, "Util", "manual"), e.queue(t, a, "N2", "round_robin")
+	e.attendant(t, a, &n2, 3)
+	cal := e.calendar(t, a, "util", "24x7", "[]")
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at) VALUES ($1,$2,now()-interval '2 hours',now()+interval '1 hour')`, a, cal)
+	e.exec(t, `UPDATE queues SET calendar_id=$2 WHERE id=$1`, n1, cal)
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.MaxWait}, WaitSeconds: 5400, WaitBusiness: true, DestKind: overflow.DestQueue, DestID: n2})
+	c := e.conversation(t, a, &n1)
+	e.decide(t, a, c, "")
+	e.timeTravel(t, c, 3*time.Hour)
+	e.decide(t, a, c, engine.TriggerStepWait)
+	var due time.Time
+	_ = e.seed.QueryRow(e.ctx, `SELECT due_at FROM routing_engine_timers WHERE conversation_id=$1 AND kind='step_wait' AND state='pending'`, c).Scan(&due)
+	if time.Until(due) < 80*time.Minute {
+		t.Fatalf("with the suspension the wait ends in ~1h30: %v", time.Until(due))
+	}
+	e.exec(t, `DELETE FROM calendar_suspensions WHERE calendar_id=$1`, cal) // the suspension is lifted: 3 open hours have passed, the wait is over
+	if err := platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(c2 context.Context) error {
+		_, err := sectorsadapters.ReplanWaiting(c2, platformdb.QuerierFromContext(c2, e.app), a)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.seed.QueryRow(e.ctx, `SELECT due_at FROM routing_engine_timers WHERE conversation_id=$1 AND kind='step_wait' AND state='pending'`, c).Scan(&due)
+	if time.Until(due) > time.Minute {
+		t.Fatalf("the business wait must be re-planned to the past: %v", time.Until(due))
 	}
 }

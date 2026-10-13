@@ -683,3 +683,50 @@ func TestOverflowPolicyAPIValidationPermissionsRevisionAndIsolation(t *testing.T
 		t.Errorf("audit: saved=%d removed=%d", auditCount(t, e, a, "overflow.policy_saved"), auditCount(t, e, a, "overflow.policy_removed"))
 	}
 }
+
+// Codex: allow_closed / allow_off_shift bypass the calendar and the shift - only a holder of routing.override may set them; saving a
+// policy re-evaluates the conversations already waiting under the old one.
+func TestOverflowBypassFlagsNeedRoutingOverrideAndSavingKicksWaitingConversations(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	supervisor := e.member(t, a, "tenant_supervisor")
+	n1, n2 := e.queue(t, a, "N1", false), e.queue(t, a, "N2", false)
+	path := map[string]string{"queue_id": n1.String()}
+	plain := policyBody(qstep(1, n2, 0, "no_eligible_agent"))
+	flagged := policyBody(map[string]any{"position": 1, "triggers": []string{"after_hours"}, "destination_kind": "queue", "destination_id": n2, "allow_closed": true})
+	offShift := policyBody(map[string]any{"position": 1, "triggers": []string{"no_eligible_agent"}, "destination_kind": "queue", "destination_id": n2, "allow_off_shift": true})
+	if got := e.call(t, a, supervisor, "PUT", "/", e.h.PutOverflowPolicy, path, plain).Code; got != 200 {
+		t.Fatalf("a supervisor edits a plain chain: %d", got)
+	}
+	for name, body := range map[string]map[string]any{"allow_closed": flagged, "allow_off_shift": offShift} {
+		if got := e.call(t, a, supervisor, "PUT", "/", e.h.PutOverflowPolicy, path, body).Code; got != 403 {
+			t.Errorf("a supervisor setting %s = %d, want 403", name, got)
+		}
+	}
+	if got := e.call(t, a, admin, "PUT", "/", e.h.PutOverflowPolicy, path, flagged).Code; got != 200 {
+		t.Fatalf("an administrator holds routing.override: %d", got)
+	}
+	var closed bool
+	if err := e.seed.QueryRow(context.Background(), `SELECT s.allow_closed FROM overflow_steps s JOIN overflow_policies p ON p.id=s.policy_id WHERE p.queue_id=$1`, n1).Scan(&closed); err != nil || !closed {
+		t.Fatalf("the administrator's flag was saved: %v %v", closed, err)
+	}
+	// saving kicks the open unassigned conversations of the queue: a 'retry' timer due now
+	conv, contact := uuid.New(), uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO contacts (id, tenant_id, display_name, phone_e164, status) VALUES ($1,$2,'C','+5511900006001','active')`, contact, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversations (id, tenant_id, contact_id, queue_id, status) VALUES ($1,$2,$3,$4,'open')`, conv, a, contact, n1); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.call(t, a, admin, "PUT", "/", e.h.PutOverflowPolicy, path, plain).Code; got != 200 {
+		t.Fatalf("re-save: %d", got)
+	}
+	var n int
+	if err := e.seed.QueryRow(context.Background(), `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND kind='retry' AND state='pending' AND due_at <= now() + interval '5 seconds'`, conv).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("saving a policy re-evaluates the waiting conversation: timers=%d %v", n, err)
+	}
+	if err := e.seed.QueryRow(context.Background(), `SELECT count(*) FROM conversations WHERE id=$1 AND assigned_to_user_id IS NOT NULL`, conv).Scan(&n); err != nil || n != 0 {
+		t.Fatal("the kick only schedules; it assigns nothing itself")
+	}
+}

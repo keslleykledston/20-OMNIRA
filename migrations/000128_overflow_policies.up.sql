@@ -49,3 +49,12 @@ BEGIN
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO omnira_app', t);
   END LOOP;
 END $$;
+
+-- allow_closed / allow_off_shift let a chain step bypass the sector calendar or the agent's shift (contingency). Setting them is a
+-- stronger power than editing a chain, so it has its own key, held by administrators only.
+INSERT INTO permissions (key, description) VALUES
+  ('routing.override', 'Let an overflow step route while a destination is closed or to an agent outside their shift (contingency)')
+ON CONFLICT (key) DO NOTHING;
+INSERT INTO role_permissions (role_id, permission_key)
+SELECT r.id, 'routing.override' FROM roles r WHERE r.tenant_id IS NULL AND r.key = 'tenant_admin'
+ON CONFLICT DO NOTHING;

@@ -73,9 +73,10 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 
 // SnapshotOptions narrows or widens one evaluation. The zero value is the monitoring snapshot.
 type SnapshotOptions struct {
-	Only         *uuid.UUID // evaluate this one person (the engine re-checks the chosen candidate under its lock)
-	SkipPresence bool       // do not read presence (already checked for the whole queue; Valkey is not transactional)
-	Limit        int        // max people evaluated (default snapshotMaxAgents)
+	Only         *uuid.UUID         // evaluate this one person (the engine re-checks the chosen candidate under its lock)
+	SkipPresence bool               // do not read presence (already checked for the whole queue; Valkey is not transactional)
+	Limit        int                // max people evaluated (default snapshotMaxAgents)
+	Policy       eligibility.Policy // explicit, authorized relaxations of one chain step (closed destination, off-shift agent)
 }
 
 func SnapshotWith(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UUID, at time.Time, presence PresenceChecker, opt SnapshotOptions) (QueueSnapshot, error) {
@@ -210,7 +211,7 @@ func SnapshotWith(ctx context.Context, q platformdb.Querier, tenant, queueID uui
 		v := eligibility.Evaluate(eligibility.Facts{
 			Member: r.member, OnCall: r.onCall, Active: r.active, Available: r.available, ShiftOpen: r.shiftOpen, QueueOpen: avail.Open,
 			PresenceReq: presenceReq && realtime && !opt.SkipPresence, PresenceOK: online[r.profileID], PresenceDown: presenceDown, Workload: workload(r, realtime), Capacity: r.capacity,
-		}, eligibility.Policy{})
+		}, opt.Policy)
 		if v.Eligible {
 			snap.EligibleCnt++
 		}

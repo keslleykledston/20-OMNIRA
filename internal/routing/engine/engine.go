@@ -8,6 +8,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -143,8 +144,9 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
+	detail := map[string]any{}
 	finish := func(d Decision, state string) (Decision, error) {
-		return persist(ctx, q, tenant, req.ConversationID, &st, trigger, "", d, state)
+		return persist(ctx, q, tenant, req.ConversationID, &st, trigger, detail, d, state)
 	}
 	switch {
 	case c.status != "open":
@@ -171,11 +173,19 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		}
 	}
 
+	// the relaxations (closed destination, off-shift agent) of the step the conversation is in: explicit, authorized when the policy was saved
+	relaxOf := func() eligibility.Policy {
+		if pol != nil && st.step >= 1 && st.step <= len(pol.Steps) {
+			s := pol.Steps[st.step-1]
+			return eligibility.Policy{AllowClosed: s.AllowClosed, AllowOffShift: s.AllowOffShift}
+		}
+		return eligibility.Policy{}
+	}
 	// 3. evaluate the queue the conversation is in; if it is blocked, the overflow chain may move it to another destination, and the new
 	// place is evaluated in turn (bounded by the policy's hop limit, so this loop always ends)
 	for iter := 0; iter <= overflow.MaxStepsLimit+1; iter++ {
 		queue := *c.queueID
-		out, err := e.evaluate(ctx, q, tenant, req, &st, queue, c.mode, now)
+		out, err := e.evaluate(ctx, q, tenant, req, &st, queue, c.mode, now, relaxOf())
 		if err != nil {
 			return Decision{}, err
 		}
@@ -197,6 +207,12 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 			if res, err = e.chain(ctx, q, tenant, req, &st, pol, out.trigger, now); err != nil {
 				return Decision{}, err
 			}
+		}
+		if out.trigger != "" {
+			detail["blocking"] = string(out.trigger)
+		}
+		if len(res.rejected) > 0 { // destinations that were looked at and refused, with the reason (the audit trail of a chain that skipped)
+			detail["rejected"] = res.rejected
 		}
 		switch res.kind {
 		case cEntered: // moved to another queue: evaluate it
@@ -255,7 +271,7 @@ type outcome struct {
 }
 
 // evaluate looks at the queue the conversation is in: manual, closed, or open (then it tries the eligible agents in the strategy's order).
-func (e *Engine) evaluate(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, queue uuid.UUID, mode string, now time.Time) (outcome, error) {
+func (e *Engine) evaluate(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, queue uuid.UUID, mode string, now time.Time, relax eligibility.Policy) (outcome, error) {
 	if mode == "manual" || mode == "" {
 		return outcome{kind: oBlocked, plain: Decision{Kind: Enqueue, Reason: ReasonManualQueue, Destination: "queue:" + queue.String()}, state: "queued"}, nil
 	}
@@ -263,14 +279,14 @@ func (e *Engine) evaluate(ctx context.Context, q platformdb.Querier, tenant uuid
 	if err != nil {
 		return outcome{}, err
 	}
-	if !avail.Open {
+	if !avail.Open && !relax.AllowClosed {
 		if avail.NextOpen == nil {
 			return outcome{kind: oNever, plain: Decision{Kind: RequireManualAction, Reason: ReasonNeverOpens, Destination: "queue:" + queue.String()}}, nil
 		}
 		return outcome{kind: oBlocked, trigger: overflow.AfterHours, wake: avail.NextOpen, state: "waiting_open",
 			plain: Decision{Kind: WaitUntilOpen, Reason: ReasonSectorClosed, Destination: "queue:" + queue.String(), WakeAt: avail.NextOpen}}, nil
 	}
-	snap, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, now, e.presence, sectorsadapters.SnapshotOptions{Limit: engineCandidateLimit})
+	snap, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, now, e.presence, sectorsadapters.SnapshotOptions{Limit: engineCandidateLimit, Policy: relax})
 	if err != nil {
 		return outcome{}, err
 	}
@@ -283,7 +299,7 @@ func (e *Engine) evaluate(ctx context.Context, q platformdb.Querier, tenant uuid
 		}
 	}
 	for _, cand := range order(snap.Agents, mode) {
-		ok, err := tryAssign(ctx, q, tenant, queue, req.ConversationID, cand, req.StrategyReason, now)
+		ok, err := tryAssign(ctx, q, tenant, queue, req.ConversationID, cand, req.StrategyReason, now, relax)
 		if err != nil {
 			return outcome{}, err
 		}
@@ -326,7 +342,14 @@ type stepWait struct {
 	due      time.Time
 }
 
+// rejection records why a candidate destination was not entered; it goes into the decision's detail (the audit trail).
+type rejection struct {
+	Position int    `json:"position"`
+	Reason   string `json:"reason"`
+}
+
 type chainResult struct {
+	rejected []rejection
 	kind     chainKind
 	mode     string // the mode of the queue it moved to
 	decision Decision
@@ -372,19 +395,28 @@ func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 				exhausted = true
 			}
 		}
+		if enter != nil { // steps are ordered: a later step never jumps ahead of an earlier one that is still waiting (another trigger's wait)
+			for pos := range waits {
+				if pos < enter.Position {
+					enter = nil
+					break
+				}
+			}
+		}
 		if enter != nil {
-			entered, a, err := e.enter(ctx, q, tenant, req, st, *enter, blocking, now)
+			entered, a, why, err := e.enter(ctx, q, tenant, req, st, *enter, blocking, now)
 			if err != nil {
 				return chainResult{}, err
 			}
 			switch entered {
-			case entRejected: // the live check refused this destination: never retry it in this call, look at the next candidate
+			case entRejected: // the live check refused this destination: never retry it in this call, look at the next candidate, and say why
 				visited[enter.Key()] = true
+				res.rejected = append(res.rejected, rejection{Position: enter.Position, Reason: why})
 				continue
 			case entQueue:
-				return chainResult{kind: cEntered, mode: a.mode}, nil
+				return chainResult{kind: cEntered, mode: a.mode, rejected: res.rejected}, nil
 			case entAssigned:
-				return chainResult{kind: cAssigned, decision: a.decision}, nil
+				return chainResult{kind: cAssigned, decision: a.decision, rejected: res.rejected}, nil
 			}
 		}
 		for pos, s := range waits {
@@ -397,12 +429,12 @@ func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 		sort.Slice(res.waits, func(i, j int) bool { return res.waits[i].position < res.waits[j].position })
 		if len(res.waits) == 0 && (exhausted || len(visited) > len(st.visited)) { // every candidate was visited, over the limit, or rejected
 			d, state := exhaustedDecision(pol, "queue:"+st.queue.String())
-			return chainResult{kind: cExhausted, decision: d, state: state}, nil
+			return chainResult{kind: cExhausted, decision: d, state: state, rejected: res.rejected}, nil
 		}
 		return res, nil
 	}
 	d, state := exhaustedDecision(pol, "queue:"+st.queue.String())
-	return chainResult{kind: cExhausted, decision: d, state: state}, nil
+	return chainResult{kind: cExhausted, decision: d, state: state, rejected: res.rejected}, nil
 }
 
 func exhaustedDecision(pol *overflow.Policy, dest string) (Decision, string) {
@@ -429,7 +461,7 @@ type entryResult struct {
 }
 
 // enter performs the transition to one step after checking the destination LIVE (it may have changed since the policy was saved).
-func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, blocking overflow.Trigger, now time.Time) (entryKind, entryResult, error) {
+func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, blocking overflow.Trigger, now time.Time) (entryKind, entryResult, string, error) {
 	label := string(blocking)
 	if label == "" {
 		label = string(overflow.MaxWait)
@@ -441,48 +473,48 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 		err := q.QueryRow(ctx, `SELECT qq.mode, COALESCE(sc.active, true) FROM queues qq LEFT JOIN sectors sc ON sc.tenant_id=qq.tenant_id AND sc.id=qq.sector_id
 			WHERE qq.tenant_id=$1 AND qq.id=$2`, tenant, s.DestID).Scan(&mode, &sectorActive)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !sectorActive) {
-			return entRejected, entryResult{}, nil // the queue is gone, or its sector was deactivated
+			return entRejected, entryResult{}, "destination_unavailable", nil // the queue is gone, or its sector was deactivated
 		}
 		if err != nil {
-			return entRejected, entryResult{}, err
+			return entRejected, entryResult{}, "", err
 		}
 		avail, err := sectorsadapters.QueueAvailability(ctx, q, tenant, s.DestID, now)
 		if err != nil {
-			return entRejected, entryResult{}, err
+			return entRejected, entryResult{}, "", err
 		}
 		if !avail.Open && !s.AllowClosed {
-			return entRejected, entryResult{}, nil
+			return entRejected, entryResult{}, "destination_closed", nil
 		}
 		if _, err := q.Exec(ctx, `UPDATE conversations SET queue_id=$3, updated_at=now(),
 			routing_retry_at = CASE WHEN $4 IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
 			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, s.DestID, mode); err != nil {
-			return entRejected, entryResult{}, err
+			return entRejected, entryResult{}, "", err
 		}
 		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
-			return entRejected, entryResult{}, err
+			return entRejected, entryResult{}, "", err
 		}
 		advance(st, s, &s.DestID, now)
-		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", label,
+		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label},
 			Decision{Kind: Overflow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
-			return entRejected, entryResult{}, err
+			return entRejected, entryResult{}, "", err
 		}
-		return entQueue, entryResult{mode: mode}, nil
+		return entQueue, entryResult{mode: mode}, "", nil
 	case overflow.DestOnCall:
 		user, ok, err := e.pickOnCall(ctx, q, tenant, req, st, s, now)
 		if err != nil {
-			return entRejected, entryResult{}, err
+			return entRejected, entryResult{}, "", err
 		}
 		if !ok {
-			return entRejected, entryResult{}, nil
+			return entRejected, entryResult{}, "no_eligible_oncall", nil
 		}
 		advance(st, s, nil, now)
-		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", label,
+		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label},
 			Decision{Kind: Overflow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
-			return entRejected, entryResult{}, err
+			return entRejected, entryResult{}, "", err
 		}
-		return entAssigned, entryResult{decision: Decision{Kind: AssignAgent, Reason: ReasonOverflowOnCall, Destination: "agent:" + user.String(), AssignedUser: user}}, nil
+		return entAssigned, entryResult{decision: Decision{Kind: AssignAgent, Reason: ReasonOverflowOnCall, Destination: "agent:" + user.String(), AssignedUser: user}}, "", nil
 	}
-	return entRejected, entryResult{}, nil
+	return entRejected, entryResult{}, "unsupported_destination", nil
 }
 
 func (r Request) triggerOrRoute() string {
@@ -503,82 +535,79 @@ func advance(st *stateRow, s overflow.Step, queue *uuid.UUID, now time.Time) {
 	}
 }
 
-// pickOnCall chooses, among the people on call in the roster right now, the least loaded who is an active attendant, under their
-// capacity (counted across the company: an on-call person is not tied to the queue), inside their own shift unless the step allows
-// otherwise, and online when the company requires presence; then assigns with the same guarantees as any assignment.
+// pickOnCall chooses, among the people on call in the roster right now, the least loaded who is an active attendant and under their
+// capacity (counted across the company: an on-call person is not tied to the queue), and online when the company requires presence.
+// An on-call period IS the person's shift (as in the eligibility rule), so the personal shift does not apply to them. The candidate that
+// looks best is re-read UNDER the per-agent lock before anything is written: the period, the membership and profile, the presence and the
+// capacity are all checked again, because the list that chose it may be seconds old.
 func (e *Engine) pickOnCall(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, now time.Time) (uuid.UUID, bool, error) {
 	var presenceReq bool
 	if err := q.QueryRow(ctx, `SELECT routing_require_presence FROM tenants WHERE id=$1`, tenant).Scan(&presenceReq); err != nil {
 		return uuid.Nil, false, err
 	}
-	rows, err := q.Query(ctx, `SELECT p.user_id, ap.id, max(p.capacity),
+	const current = `SELECT ap.id, max(p.capacity),
 		(SELECT count(*) FROM conversations c WHERE c.tenant_id=p.tenant_id AND c.assigned_to_user_id=p.user_id AND c.status='open')
 		FROM on_call_periods p JOIN on_call_rosters r ON r.tenant_id=p.tenant_id AND r.id=p.roster_id AND r.active
 		JOIN memberships m ON m.tenant_id=p.tenant_id AND m.user_id=p.user_id AND m.status='active'
 		JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
+		WHERE p.tenant_id=$1 AND p.roster_id=$2 AND p.user_id=$3 AND p.starts_at <= $4 AND p.ends_at > $4
+		GROUP BY ap.id, p.tenant_id, p.user_id`
+	rows, err := q.Query(ctx, `SELECT DISTINCT p.user_id,
+		(SELECT count(*) FROM conversations c WHERE c.tenant_id=p.tenant_id AND c.assigned_to_user_id=p.user_id AND c.status='open') AS load
+		FROM on_call_periods p JOIN on_call_rosters r ON r.tenant_id=p.tenant_id AND r.id=p.roster_id AND r.active
 		WHERE p.tenant_id=$1 AND p.roster_id=$2 AND p.starts_at <= $3 AND p.ends_at > $3
-		GROUP BY p.user_id, ap.id, p.tenant_id ORDER BY 4, p.user_id LIMIT 200`, tenant, s.DestID, now)
+		ORDER BY load, p.user_id LIMIT 200`, tenant, s.DestID, now)
 	if err != nil {
 		return uuid.Nil, false, err
 	}
-	type cand struct {
-		user, profile  uuid.UUID
-		capacity, load int
-	}
-	var cands []cand
+	var users []uuid.UUID
 	for rows.Next() {
-		var c cand
-		if err := rows.Scan(&c.user, &c.profile, &c.capacity, &c.load); err != nil {
+		var u uuid.UUID
+		var load int
+		if err := rows.Scan(&u, &load); err != nil {
 			rows.Close()
 			return uuid.Nil, false, err
 		}
-		cands = append(cands, c)
+		users = append(users, u)
 	}
 	rows.Close()
 	if rows.Err() != nil {
 		return uuid.Nil, false, rows.Err()
 	}
-	online := map[uuid.UUID]bool{}
-	if presenceReq {
-		if e.presence == nil {
-			return uuid.Nil, false, nil // fail closed: never assume online
-		}
-		ids := make([]uuid.UUID, len(cands))
-		for i, c := range cands {
-			ids[i] = c.profile
-		}
-		got, err := e.presence.OnlineMembers(ctx, tenant, ids)
-		if err != nil {
-			return uuid.Nil, false, nil
-		}
-		online = got
-	}
-	queue := *st.queue
-	for _, c := range cands {
-		if c.load >= c.capacity || (presenceReq && !online[c.profile]) {
-			continue
-		}
-		if open, _, err := sectorsadapters.AgentShift(ctx, q, tenant, c.user, queue, now); err != nil {
-			return uuid.Nil, false, err
-		} else if open != nil && !*open && !s.AllowOffShift {
-			continue
-		}
+	for _, user := range users {
 		var locked bool
-		if err := q.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('routing:agent:' || $1::text || ':' || $2::text, 0))`, tenant, c.user).Scan(&locked); err != nil {
+		if err := q.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('routing:agent:' || $1::text || ':' || $2::text, 0))`, tenant, user).Scan(&locked); err != nil {
 			return uuid.Nil, false, err
 		}
 		if !locked {
 			continue
 		}
-		var load int
-		if err := q.QueryRow(ctx, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND assigned_to_user_id=$2 AND status='open'`, tenant, c.user).Scan(&load); err != nil {
+		// re-read under the lock
+		var profile uuid.UUID
+		var capacity, load int
+		if err := q.QueryRow(ctx, current, tenant, s.DestID, user, now).Scan(&profile, &capacity, &load); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) { // left the roster, or lost the membership/profile, since the list was read
+				continue
+			}
 			return uuid.Nil, false, err
 		}
-		if load >= c.capacity {
+		if load >= capacity {
 			continue
 		}
+		if presenceReq {
+			if e.presence == nil {
+				return uuid.Nil, false, nil // fail closed: never assume online
+			}
+			got, err := e.presence.OnlineMembers(ctx, tenant, []uuid.UUID{profile})
+			if err != nil {
+				return uuid.Nil, false, nil
+			}
+			if !got[profile] {
+				continue
+			}
+		}
 		tag, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
-			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, c.user)
+			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, user)
 		if err != nil {
 			return uuid.Nil, false, err
 		}
@@ -586,10 +615,10 @@ func (e *Engine) pickOnCall(ctx context.Context, q platformdb.Querier, tenant uu
 			return uuid.Nil, false, nil
 		}
 		if _, err := q.Exec(ctx, `INSERT INTO assignment_events(tenant_id,conversation_id,from_user_id,to_user_id,changed_by,reason,actor_source) VALUES ($1,$2,NULL,$3,NULL,'overflow_oncall','system')`,
-			tenant, req.ConversationID, c.user); err != nil {
+			tenant, req.ConversationID, user); err != nil {
 			return uuid.Nil, false, err
 		}
-		return c.user, true, nil
+		return user, true, nil
 	}
 	return uuid.Nil, false, nil
 }
@@ -644,7 +673,7 @@ func onlyCapacity(agents []sectorsadapters.AgentVerdict) bool {
 // can never both take the last slot of an agent), then a try-lock per agent (never wait: a busy agent is skipped). Under those locks
 // the candidate is evaluated AGAIN by the same eligibility rule (membership, availability, profile, shift, on-call, capacity), because
 // the snapshot that chose it may be seconds old; only then is the owner set, and only if still empty.
-func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, conversation uuid.UUID, cand sectorsadapters.AgentVerdict, reason string, now time.Time) (bool, error) {
+func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, conversation uuid.UUID, cand sectorsadapters.AgentVerdict, reason string, now time.Time, relax eligibility.Policy) (bool, error) {
 	if reason == "" {
 		reason = "round_robin"
 	}
@@ -661,7 +690,7 @@ func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, convers
 		return false, nil
 	}
 	only := cand.UserID
-	fresh, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, now, nil, sectorsadapters.SnapshotOptions{Only: &only, SkipPresence: true, Limit: 1})
+	fresh, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, now, nil, sectorsadapters.SnapshotOptions{Only: &only, SkipPresence: true, Limit: 1, Policy: relax})
 	if err != nil {
 		return false, err
 	}
@@ -718,10 +747,14 @@ func loadState(ctx context.Context, q platformdb.Querier, tenant, conversation u
 }
 
 // persist writes the decision (one row per episode, step and trigger: a repeat updates it and counts the attempt) and the state.
-func persist(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, st *stateRow, trigger, detail string, d Decision, state string) (Decision, error) {
+func persist(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, st *stateRow, trigger string, detail map[string]any, d Decision, state string) (Decision, error) {
+	raw, err := json.Marshal(detail)
+	if err != nil || detail == nil {
+		raw = []byte(`{}`)
+	}
 	var attempts int
 	if err := q.QueryRow(ctx, `INSERT INTO routing_engine_decisions (tenant_id, conversation_id, episode, step_index, trigger, decision, destination, reason, detail)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8, jsonb_build_object('blocking', $9::text))
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
 		ON CONFLICT (tenant_id, conversation_id, episode, step_index, trigger)
 		DO UPDATE SET
 		  -- the original assignment is the decision of record: a duplicate trigger only counts as another attempt
@@ -729,7 +762,7 @@ func persist(ctx context.Context, q platformdb.Querier, tenant, conversation uui
 		  destination=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.destination ELSE EXCLUDED.destination END,
 		  reason=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.reason ELSE EXCLUDED.reason END,
 		  attempts=routing_engine_decisions.attempts+1, updated_at=now()
-		RETURNING attempts`, tenant, conversation, st.episode, st.step, trigger, string(d.Kind), d.Destination, d.Reason, detail).Scan(&attempts); err != nil {
+		RETURNING attempts`, tenant, conversation, st.episode, st.step, trigger, string(d.Kind), d.Destination, d.Reason, string(raw)).Scan(&attempts); err != nil {
 		return Decision{}, fmt.Errorf("engine: decision: %w", err)
 	}
 	if _, err := q.Exec(ctx, `UPDATE routing_engine_state SET state=$3, last_decision=$4, queue_id=$5, step_index=$6, hops=$7, visited=$8, step_entered_at=$9, updated_at=now()
