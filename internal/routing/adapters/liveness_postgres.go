@@ -48,7 +48,7 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 			  WHERE c.assigned_to_user_id IS NULL
 			    AND c.status = 'open'
 			    AND c.queue_id IS NOT NULL
-			    AND q.mode = 'round_robin'
+			    AND q.mode IN ('round_robin','least_loaded')
 			    AND (c.routing_retry_at IS NULL OR c.routing_retry_at <= now())
 			    AND ($1::uuid IS NULL OR c.tenant_id = $1)
 			    AND ($2::uuid IS NULL OR c.queue_id = $2)
@@ -86,7 +86,7 @@ func (r *PostgresLivenessRepository) ActiveQueuesForAgent(ctx context.Context, t
 			FROM queue_members qm
 			JOIN memberships m ON m.tenant_id = qm.tenant_id AND m.user_id = qm.user_id AND m.status = 'active'
 			JOIN agent_profiles ap ON ap.tenant_id = m.tenant_id AND ap.membership_id = m.id AND ap.status = 'active'
-			JOIN queues q ON q.tenant_id = qm.tenant_id AND q.id = qm.queue_id AND q.mode = 'round_robin'
+			JOIN queues q ON q.tenant_id = qm.tenant_id AND q.id = qm.queue_id AND q.mode IN ('round_robin','least_loaded')
 			WHERE qm.tenant_id = $1 AND ap.id = $2 AND qm.active AND qm.available`,
 			tenantID, agentProfileID)
 		if err != nil {

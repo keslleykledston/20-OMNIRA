@@ -39,6 +39,9 @@ type Config struct {
 	// HubProjectorEnabled makes the worker keep hub_inbox_items in step with the tenants' conversations every
 	// HubProjectorIntervalSeconds. Off by default; needs the Hub migrations (093+).
 	HubProjectorEnabled bool
+	// RoutingEngineEnabled switches the automatic assignment from the legacy round-robin to the central routing engine (ADR-0044, phase 4):
+	// sector calendar, agent shifts, on-call, least_loaded, durable open-wakeup timers. Default off: the legacy path is byte-for-byte unchanged.
+	RoutingEngineEnabled bool
 	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
 	HubAdminAPIEnabled bool
 	// HubAccessAPIEnabled mounts the people-and-permissions routes of ADR-0039 (hub admins only). Needs HubAPIEnabled.
@@ -83,7 +86,7 @@ type Config struct {
 	PublicBaseURL  string
 	// WebBaseURL: host do frontend como o navegador enxerga (links de e-mail). Diferente
 	// de PublicBaseURL, que é a URL server-to-server usada por webhooks.
-	WebBaseURL         string
+	WebBaseURL string
 
 	// AllowedOrigins: extra origins ("https://host[:port]") a cookie-authenticated state-changing request may come from, besides the origins of AuthRedirectURL and
 	// WebBaseURL, the host the request was addressed to and loopback. OriginCheck (default on) is the same-origin defense in depth against CSRF.
@@ -166,6 +169,7 @@ func Load() *Config {
 		OutboundMediaEnabled:          getEnv("OMNIRA_OUTBOUND_MEDIA_ENABLED", "false") == "true",
 		HubAPIEnabled:                 getEnv("OMNIRA_HUB_API_ENABLED", "false") == "true",
 		HubProjectorEnabled:           getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
+		RoutingEngineEnabled:          getEnv("OMNIRA_ROUTING_ENGINE_ENABLED", "false") == "true",
 		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
 		HubAccessAPIEnabled:           getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
 		HubServeEnabled:               getEnv("OMNIRA_HUB_SERVE_ENABLED", "false") == "true",

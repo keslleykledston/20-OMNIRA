@@ -513,3 +513,58 @@ func TestHardeningBoundedBodiesStaleEditsHonestRefusalsAndRaces(t *testing.T) {
 		t.Errorf("racing creates answered %d and %d, want one 201 and one 409", c1, c2)
 	}
 }
+
+// A change that moves an opening re-plans the waiting conversations in the SAME request: lifting a suspension wakes them now, and a
+// longer one pushes the timer out.
+func TestCalendarChangesReplanTheTimersOfWaitingConversations(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	const tz = "America/Manaus"
+	q := e.queue(t, a, "Financeiro N1", false)
+	cal := decode[Calendar](t, e.call(t, a, admin, "POST", "/", e.h.CreateCalendar, nil, map[string]any{"name": "24x7", "definition": map[string]any{"kind": "24x7", "timezone": tz}})).ID
+	e.call(t, a, admin, "PUT", "/", e.h.SetQueueCalendar, map[string]string{"queue_id": q.String()}, map[string]any{"calendar_id": cal})
+	sus := decode[Suspension](t, e.call(t, a, admin, "POST", "/", e.h.AddSuspension, map[string]string{"calendar_id": cal.String()},
+		map[string]any{"from": time.Now().Add(-time.Hour), "to": time.Now().Add(3 * time.Hour), "reason": "queda"}))
+	contact, conv := uuid.New(), uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO contacts (id, tenant_id, display_name, phone_e164, status) VALUES ($1,$2,'C','+5511900007001','active')`, contact, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversations (id, tenant_id, contact_id, queue_id, status) VALUES ($1,$2,$3,$4,'open')`, conv, a, contact, q); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id) VALUES ($1,$2,'waiting_open',$3)`, a, conv, q); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, due_at) VALUES ($1,$2,1,'open_wakeup',now()+interval '3 hours')`, a, conv); err != nil {
+		t.Fatal(err)
+	}
+	timer := func() (due time.Time, gen int, state string) {
+		_ = e.seed.QueryRow(context.Background(), `SELECT due_at, generation, state FROM routing_engine_timers WHERE conversation_id=$1`, conv).Scan(&due, &gen, &state)
+		return
+	}
+	// lifting the suspension: the sector is open now, so the timer is due now
+	if got := e.call(t, a, admin, "DELETE", "/", e.h.RemoveSuspension, map[string]string{"calendar_id": cal.String(), "suspension_id": sus.ID.String()}, nil).Code; got != 204 {
+		t.Fatalf("remove suspension = %d", got)
+	}
+	due, gen, state := timer()
+	if time.Until(due) > 5*time.Second || gen != 2 || state != "pending" {
+		t.Fatalf("lifted: due in %v gen=%d state=%s", time.Until(due), gen, state)
+	}
+	// a new, longer suspension pushes the timer to its end
+	e.call(t, a, admin, "POST", "/", e.h.AddSuspension, map[string]string{"calendar_id": cal.String()},
+		map[string]any{"from": time.Now().Add(-time.Hour), "to": time.Now().Add(8 * time.Hour)})
+	due, gen, _ = timer()
+	if time.Until(due) < 7*time.Hour || gen != 3 {
+		t.Fatalf("extended: due in %v gen=%d", time.Until(due), gen)
+	}
+	// a calendar that never opens hands the conversation to a person and cancels the timer
+	never := decode[Calendar](t, e.call(t, a, admin, "POST", "/", e.h.CreateCalendar, nil, map[string]any{"name": "Nunca", "definition": map[string]any{"kind": "custom", "timezone": tz, "weekly": []map[string]any{{"day": "mon", "intervals": []map[string]string{}}}}})).ID
+	e.call(t, a, admin, "PUT", "/", e.h.SetQueueCalendar, map[string]string{"queue_id": q.String()}, map[string]any{"calendar_id": never})
+	_, _, state = timer()
+	var st string
+	_ = e.seed.QueryRow(context.Background(), `SELECT state FROM routing_engine_state WHERE conversation_id=$1`, conv).Scan(&st)
+	if state != "cancelled" || st != "manual_required" {
+		t.Fatalf("never opens: timer=%s state=%s", state, st)
+	}
+}

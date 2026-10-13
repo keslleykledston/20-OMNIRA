@@ -103,6 +103,15 @@ func write(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// replan keeps the timers of waiting conversations true to the calendar that was just changed, in the same transaction.
+func (h *Handler) replan(w http.ResponseWriter, r *http.Request, q platformdb.Querier, tenant uuid.UUID) bool {
+	if _, err := ReplanWaiting(r.Context(), q, tenant); err != nil {
+		http.Error(w, "failed to re-plan the waiting conversations", http.StatusInternalServerError)
+		return false
+	}
+	return true
+}
+
 func (h *Handler) record(r *http.Request, res auditdomain.ResourceType, id uuid.UUID, action auditdomain.AuditAction, meta map[string]any) {
 	if h.audit == nil {
 		return
@@ -311,6 +320,9 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to update sector", http.StatusInternalServerError)
 		return
 	}
+	if !h.replan(w, r, q, tc.TenantID) {
+		return
+	}
 	h.record(r, auditdomain.ResourceSector, id, auditdomain.ActionSectorUpdated, map[string]any{"name": name, "active": active})
 	write(w, http.StatusOK, map[string]any{"id": id, "name": name, "active": active, "calendar_id": cal})
 }
@@ -476,6 +488,9 @@ func (h *Handler) UpdateCalendar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to update calendar", http.StatusInternalServerError)
 		return
 	}
+	if !h.replan(w, r, q, tc.TenantID) {
+		return
+	}
 	h.record(r, auditdomain.ResourceCalendar, id, auditdomain.ActionCalendarUpdated, map[string]any{"name": name, "revision": rev})
 	c, err := LoadCalendar(r.Context(), q, tc.TenantID, id)
 	if err != nil {
@@ -574,6 +589,9 @@ func (h *Handler) AddSuspension(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to suspend", http.StatusInternalServerError)
 		return
 	}
+	if !h.replan(w, r, q, tc.TenantID) {
+		return
+	}
 	h.record(r, auditdomain.ResourceCalendar, id, auditdomain.ActionCalendarSuspended, map[string]any{"suspension_id": sid.String(), "revision": rev})
 	write(w, http.StatusCreated, Suspension{ID: sid, From: in.From, To: in.To, Reason: strings.TrimSpace(in.Reason)})
 }
@@ -602,6 +620,9 @@ func (h *Handler) RemoveSuspension(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := q.Exec(r.Context(), `UPDATE calendars SET revision=revision+1, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, id); err != nil {
 		http.Error(w, "failed to resume", http.StatusInternalServerError)
+		return
+	}
+	if !h.replan(w, r, q, tc.TenantID) {
 		return
 	}
 	h.record(r, auditdomain.ResourceCalendar, id, auditdomain.ActionCalendarResumed, map[string]any{"suspension_id": sid.String()})
@@ -647,6 +668,9 @@ func (h *Handler) SetDefaultCalendar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if !h.replan(w, r, q, tc.TenantID) {
+		return
+	}
 	h.record(r, auditdomain.ResourceTenant, tc.TenantID, auditdomain.ActionTenantDefaultCalendar, map[string]any{"calendar_id": idText(cal)})
 	write(w, http.StatusOK, map[string]any{"calendar_id": cal})
 }
@@ -690,6 +714,9 @@ func (h *Handler) setQueueLink(w http.ResponseWriter, r *http.Request, field, ta
 	}
 	if _, err := q.Exec(r.Context(), `UPDATE queues SET `+col+`=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, queueID, target); err != nil {
 		http.Error(w, "failed to update queue", http.StatusInternalServerError)
+		return
+	}
+	if !h.replan(w, r, q, tc.TenantID) {
 		return
 	}
 	h.record(r, auditdomain.ResourceQueue, queueID, action, map[string]any{"previous": idText(prev), "current": idText(target)})

@@ -133,7 +133,7 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		  -- being retried by its original job. NULL for non-round_robin
 		  -- (manual) queues: the sweep already excludes them by mode.
 		  UPDATE conversations c SET queue_id=selected.id,updated_at=now(),
-		    routing_retry_at = CASE WHEN selected.mode='round_robin' THEN now() + interval '90 seconds' ELSE NULL END
+		    routing_retry_at = CASE WHEN selected.mode IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
 		  FROM selected WHERE c.tenant_id=$1 AND c.id=$2 AND c.queue_id IS NULL
 		    -- ADR-0014: a spam contact's (or a team member's) conversation is stored but never routed to a queue.
 		    AND c.internal_user_id IS NULL -- ADR-0018: a conversation with staff is never queued for customer service
@@ -143,7 +143,7 @@ func (s *PostgresInboundStore) RouteNew(ctx context.Context, conversationID uuid
 		INSERT INTO outbox_events
 		  (id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload)
 		SELECT $3,$1,'job.routing.assign.v1','conversation',id::text,$4,'{}'::jsonb
-		FROM routed WHERE mode='round_robin'`, tenantID, conversationID, uuid.New(), uuid.New())
+		FROM routed WHERE mode IN ('round_robin','least_loaded')`, tenantID, conversationID, uuid.New(), uuid.New())
 	return err
 }
 

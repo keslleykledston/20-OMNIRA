@@ -47,6 +47,7 @@ import (
 	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapp "github.com/omnira/omnira/internal/routing/application"
+	routingengine "github.com/omnira/omnira/internal/routing/engine"
 	routingports "github.com/omnira/omnira/internal/routing/ports"
 	"github.com/omnira/omnira/internal/worker/delivery"
 	flowsworker "github.com/omnira/omnira/internal/worker/flows"
@@ -165,9 +166,17 @@ func main() {
 	pub.SetSessionRunner(func(ctx context.Context, fn func(context.Context) error) error {
 		return platformdb.WithTenantSession(ctx, dbPool, uuid.Nil, true, fn)
 	})
+	var assignRepo routingports.AssignmentRepository = routingadapters.NewPostgresAssignmentRepository(dbPool, presenceChecker)
+	var routingEngine *routingengine.Engine
+	if cfg.RoutingEngineEnabled { // ADR-0044 phase 4: the central engine replaces the automatic assignment; manual claims stay as they were
+		routingEngineRepo := routingengine.NewRepository(dbPool, presenceChecker)
+		assignRepo = routingEngineRepo
+		routingEngine = routingEngineRepo.Engine()
+		log.Printf("routing engine ENABLED (OMNIRA_ROUTING_ENGINE_ENABLED=true)")
+	}
 	routingHandler, err := routingworker.NewHandler(
 		routingworker.NewPostgresConversationRunner(dbPool),
-		routingapp.NewService(routingadapters.NewPostgresAssignmentRepository(dbPool, presenceChecker)),
+		routingapp.NewService(assignRepo),
 	)
 	if err != nil {
 		log.Fatalf("failed to configure routing worker: %v", err)
@@ -199,6 +208,10 @@ func main() {
 		log.Fatalf("failed to start routing consumer: %v", err)
 	}
 	defer routingConsumer.Stop()
+
+	if routingEngine != nil { // durable timers (a sector that was closed): the due time is a row, a restart loses nothing
+		go routingEngine.RunTimers(workerCtx, 15*time.Second)
+	}
 
 	// Realtime: Postgres NOTIFY (row triggers) -> NATS -> SSE. Best effort, ephemeral.
 	go realtime.NewBridge(dbPool, nc).Run(workerCtx)

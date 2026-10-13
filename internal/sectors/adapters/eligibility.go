@@ -27,6 +27,8 @@ type AgentVerdict struct {
 	Workload       int                  `json:"workload"`
 	Capacity       int                  `json:"capacity"`
 	ShiftSource    string               `json:"shift_source"` // queue | sector | all | none
+	// LastAssignedAt orders the round-robin; it is an input of the engine, not part of the monitoring answer.
+	LastAssignedAt *time.Time `json:"-"`
 }
 
 type QueueSnapshot struct {
@@ -58,6 +60,7 @@ type agentRow struct {
 	active, available bool
 	capacity          int
 	workload          int
+	lastAssigned      *time.Time
 	shiftOpen         *bool
 	shiftSource       string
 }
@@ -84,7 +87,8 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 	// members of the queue
 	mrows, err := q.Query(ctx, `SELECT qm.user_id, COALESCE(ap.id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(u.display_name, ''),
 		(m.status='active' AND ap.status='active'), qm.active AND qm.available, qm.capacity,
-		(SELECT count(*) FROM conversations c WHERE c.tenant_id=qm.tenant_id AND c.queue_id=qm.queue_id AND c.assigned_to_user_id=qm.user_id AND c.status='open')
+		(SELECT count(*) FROM conversations c WHERE c.tenant_id=qm.tenant_id AND c.queue_id=qm.queue_id AND c.assigned_to_user_id=qm.user_id AND c.status='open'),
+		qm.last_assigned_at
 		FROM queue_members qm
 		LEFT JOIN users u ON u.id=qm.user_id
 		LEFT JOIN memberships m ON m.tenant_id=qm.tenant_id AND m.user_id=qm.user_id
@@ -96,7 +100,7 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 	for mrows.Next() {
 		var r agentRow
 		var active *bool
-		if err := mrows.Scan(&r.userID, &r.profileID, &r.name, &active, &r.available, &r.capacity, &r.workload); err != nil {
+		if err := mrows.Scan(&r.userID, &r.profileID, &r.name, &active, &r.available, &r.capacity, &r.workload, &r.lastAssigned); err != nil {
 			mrows.Close()
 			return QueueSnapshot{}, err
 		}
@@ -204,7 +208,7 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 			src = "none"
 		}
 		snap.Agents = append(snap.Agents, AgentVerdict{UserID: r.userID, AgentProfileID: r.profileID, Name: r.name, Eligible: v.Eligible, Reasons: reasons,
-			OnCall: v.OnCall, Workload: r.workload, Capacity: r.capacity, ShiftSource: src})
+			OnCall: v.OnCall, Workload: r.workload, Capacity: r.capacity, ShiftSource: src, LastAssignedAt: r.lastAssigned})
 	}
 	return snap, nil
 }

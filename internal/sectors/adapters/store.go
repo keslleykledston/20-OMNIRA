@@ -278,3 +278,68 @@ func QueueAvailability(ctx context.Context, q platformdb.Querier, tenant, queueI
 	}
 	return a, nil
 }
+
+// ReplanWaiting recomputes the open-wakeup timer of every conversation of the tenant that is waiting for its sector to open. It is
+// called in the SAME transaction as any change that can move an opening (a calendar save, a suspension, a link between queue, sector
+// and calendar, the tenant default), so nothing waits for an hour that no longer exists. A conversation whose queue is open now is
+// woken immediately; one that never opens within the horizon is handed to a person.
+func ReplanWaiting(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) (int, error) {
+	rows, err := q.Query(ctx, `SELECT conversation_id, episode, queue_id FROM routing_engine_state WHERE tenant_id=$1 AND state='waiting_open' AND queue_id IS NOT NULL LIMIT 5000`, tenant)
+	if err != nil {
+		return 0, err
+	}
+	type w struct {
+		conv    uuid.UUID
+		episode int
+		queue   uuid.UUID
+	}
+	var waiting []w
+	for rows.Next() {
+		var x w
+		if err := rows.Scan(&x.conv, &x.episode, &x.queue); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		waiting = append(waiting, x)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return 0, rows.Err()
+	}
+	var now time.Time
+	if err := q.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		return 0, err
+	}
+	byQueue := map[uuid.UUID]Availability{}
+	n := 0
+	for _, x := range waiting {
+		a, ok := byQueue[x.queue]
+		if !ok {
+			if a, err = QueueAvailability(ctx, q, tenant, x.queue, now); err != nil {
+				return n, err
+			}
+			byQueue[x.queue] = a
+		}
+		due := now
+		if !a.Open {
+			if a.NextOpen == nil { // never opens within the horizon: a person decides
+				if _, err := q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND episode=$3 AND kind='open_wakeup' AND state IN ('pending','leased')`, tenant, x.conv, x.episode); err != nil {
+					return n, err
+				}
+				if _, err := q.Exec(ctx, `UPDATE routing_engine_state SET state='manual_required', last_decision='REQUIRE_MANUAL_ACTION', updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2`, tenant, x.conv); err != nil {
+					return n, err
+				}
+				n++
+				continue
+			}
+			due = *a.NextOpen
+		}
+		if _, err := q.Exec(ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, step_index, due_at) VALUES ($1,$2,$3,'open_wakeup',0,$4)
+			ON CONFLICT (tenant_id, conversation_id, episode, kind, step_index)
+			DO UPDATE SET due_at=EXCLUDED.due_at, state='pending', lease_until=NULL, attempts=0, generation=routing_engine_timers.generation+1, updated_at=now()`, tenant, x.conv, x.episode, due); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}

@@ -239,14 +239,14 @@ const assignQueueSQL = `
 	  ORDER BY id LIMIT 1
 	), routed AS (
 	  UPDATE conversations c SET queue_id = q.id, updated_at = now(),
-	    routing_retry_at = CASE WHEN q.mode = 'round_robin' THEN now() + interval '90 seconds' ELSE NULL END
+	    routing_retry_at = CASE WHEN q.mode IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
 	  FROM q
 	  WHERE c.tenant_id = $1 AND c.id = $2 AND ($3::uuid IS NOT NULL OR c.queue_id IS NULL)
 	    AND c.internal_user_id IS NULL
 	  RETURNING c.id, q.mode
 	), job AS (
 	  INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
-	  SELECT $4, $1, 'job.routing.assign.v1', 'conversation', id::text, $5, '{}'::jsonb FROM routed WHERE mode = 'round_robin'
+	  SELECT $4, $1, 'job.routing.assign.v1', 'conversation', id::text, $5, '{}'::jsonb FROM routed WHERE mode IN ('round_robin','least_loaded')
 	  RETURNING id
 	)
 	SELECT count(*) FROM routed`
