@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,8 +11,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/flows/adapters"
 	. "github.com/omnira/omnira/internal/flows/application"
+	"github.com/omnira/omnira/internal/flows/domain"
 	"github.com/omnira/omnira/internal/flows/flowstest"
 	"github.com/omnira/omnira/internal/flows/ports"
+	routingengine "github.com/omnira/omnira/internal/routing/engine"
 )
 
 // onlyQueues is a ResourceChecker that cannot tell about sectors (an unusual wiring): publishing must fail closed.
@@ -175,5 +178,95 @@ func TestStartRoutedRefusesWhatTheAutomationMayNotTake(t *testing.T) {
 	// an empty key is refused (no idempotency, no start)
 	if out, _ := x.startRouted(fresh(), flow, ""); out != RoutedUnavailable {
 		t.Errorf("empty key: %q", out)
+	}
+}
+
+// ---- the routing nodes through the REAL adapters and the REAL routing engine (no fakes between the flow and the database) ----
+
+type realRoutingEffects struct {
+	*adapters.RoutingEffects
+	sent []string
+}
+
+func (r *realRoutingEffects) SendText(_ context.Context, _ uuid.UUID, text, _ string) (ports.SendStatus, error) {
+	r.sent = append(r.sent, text)
+	return ports.SendQueued, nil
+}
+
+func TestFlowChoosesASectorAndTheRealEngineAndAdaptersRouteIt(t *testing.T) {
+	env := flowstest.New(t)
+	repo := adapters.NewPostgresFlowRepository(env.App)
+	cp := NewControlPlane(repo, repo, nil)
+	eng := routingengine.New(env.App, nil)
+	fx := &realRoutingEffects{RoutingEffects: adapters.NewPostgresEffects(env.App, nil).WithEngineRouting(true).WithRouting(eng, nil)}
+	flowEngine := NewEngine(repo, repo, fx, AllExecutors())
+
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := env.Seed.Exec(context.Background(), sql, args...); err != nil {
+			t.Fatalf("%v\n%s", err, sql)
+		}
+	}
+	fin, com := uuid.New(), uuid.New()
+	finQ, comQ := uuid.New(), uuid.New()
+	exec(`INSERT INTO sectors (id, tenant_id, name) VALUES ($1,$2,'Financeiro'), ($3,$2,'Comercial')`, fin, env.TenantA, com)
+	exec(`INSERT INTO queues (id, tenant_id, name, mode, sector_id) VALUES ($1,$2,'Cobrança','manual',$3), ($4,$2,'Vendas','manual',$5)`, finQ, env.TenantA, fin, comQ, com)
+
+	def := `{"schema_version":1,"nodes":[
+	  {"id":"start","type":"trigger"},
+	  {"id":"pick","type":"select_sector","config":{"text":"Com qual setor quer falar?"}},
+	  {"id":"go","type":"assign_sector","config":{"from_variable":"sector"}},
+	  {"id":"done","type":"end"},{"id":"out","type":"end"},{"id":"nosec","type":"end"}],
+	 "edges":[
+	  {"id":"1","source":"start","sourcePort":"next","target":"pick"},
+	  {"id":"2","source":"pick","sourcePort":"selected","target":"go"},
+	  {"id":"3","source":"pick","sourcePort":"timeout","target":"out"},
+	  {"id":"4","source":"pick","sourcePort":"none","target":"nosec"},
+	  {"id":"5","source":"go","sourcePort":"next","target":"done"}]}`
+	env.AsUser(t, env.TenantA, env.UserA, func(ctx context.Context) {
+		f, err := cp.Create(ctx, CreateInput{Slug: "escolha-setor", Name: "escolha-setor"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := cp.SaveDraft(ctx, f.ID, f.DraftRevision, f.Name, "", json.RawMessage(def))
+		if err != nil || domain.HasErrors(res.Issues) {
+			t.Fatalf("draft: %v %+v", err, res.Issues)
+		}
+		if _, err := cp.Publish(ctx, f.ID, res.Flow.DraftRevision, ""); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	})
+
+	conv, _ := env.SeedConversation(t, env.TenantA, "bot")
+	deliver := func(text string, newConv bool) {
+		t.Helper()
+		msg := env.SeedInbound(t, env.TenantA, conv, text)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := platformdbSystem(ctx, env, env.TenantA, func(sc context.Context) error {
+			_, err := flowEngine.OnInbound(sc, InboundEvent{ConversationID: conv, MessageID: msg, NewConversation: newConv})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliver("oi", true)
+	if len(fx.sent) != 1 || !strings.Contains(fx.sent[0], "1) Comercial") || !strings.Contains(fx.sent[0], "2) Financeiro") {
+		t.Fatalf("the menu is read from the company's own active sectors: %q", fx.sent)
+	}
+	deliver("2", false) // Financeiro
+	var queue *uuid.UUID
+	if err := env.Seed.QueryRow(context.Background(), `SELECT queue_id FROM conversations WHERE id=$1`, conv).Scan(&queue); err != nil || queue == nil || *queue != finQ {
+		t.Fatalf("the chosen sector's group received the conversation: %v %v", queue, err)
+	}
+	var jobs int
+	_ = env.Seed.QueryRow(context.Background(), `SELECT count(*) FROM outbox_events WHERE event_type='job.routing.assign.v1' AND aggregate_id=$1`, conv.String()).Scan(&jobs)
+	if jobs != 1 {
+		t.Fatalf("with the engine on, even a manual group gets its routing job: %d", jobs)
+	}
+	var status string
+	_ = env.Seed.QueryRow(context.Background(), `SELECT status FROM flow_runs WHERE conversation_id=$1`, conv).Scan(&status)
+	if status != "completed" {
+		t.Fatalf("run: %s", status)
 	}
 }
