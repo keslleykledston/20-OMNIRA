@@ -8,5 +8,5 @@ Mudança visível ao usuário **quando for mesclada e a flag `OMNIRA_ROUTING_ENG
 - **Motor de roteamento** (atribuir, enfileirar, aguardar abertura, exigir ação manual), estratégia **menos carregado**, timers duráveis.
 - **Transbordo em cadeia** (fora do expediente, sem agente, capacidade, espera máxima, SLA em risco/violado) para fila, plantão, agente, setor ou Hub (a conversa nunca sai da empresa).
 - **SLA** por empresa, setor ou fila (primeira resposta, espera na fila, atribuição, resolução), corrido ou em horário útil; uma transferência nunca reinicia o relógio.
-- Novas permissões: `routing.override` (só administrador). Eventos: `routing.sla.at_risk.v1`, `routing.sla.breached.v1`.
+- Novas permissões: `routing.override` (só administrador). Eventos: `job.routing.sla_at_risk.v1`, `job.routing.sla_breached.v1`.
 - Migrations 124–131 (aditivas; ver o guia de rollback em cada `.down.sql`).

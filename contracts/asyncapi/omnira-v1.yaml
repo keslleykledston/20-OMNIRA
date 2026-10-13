@@ -39,15 +39,15 @@ channels:
     subscribe:
       operationId: consumeInboxEvent
       message: { $ref: '#/components/messages/InboxEvent' }
-  events.routing.sla.at_risk.v1.conversation:
+  job.routing.sla_at_risk.v1:
     description: |
-      A conversation's SLA clock reached its risk point (ADR-0044). Published once per clock through the outbox. The envelope's
+      A conversation's SLA clock reached its risk point (ADR-0044). Published once per clock through the outbox, on the OMNIRA_JOBS stream (the only stream the outbox publishes to; nothing consumes it yet, JetStream keeps it 7 days). The envelope's
       `aggregate_id` is the conversation id; the payload carries only the metric. The conversation is NOT reassigned by this: whoever
       supervises acts on it.
     subscribe:
       operationId: consumeRoutingSlaAtRisk
       message: { $ref: '#/components/messages/SlaCrossing' }
-  events.routing.sla.breached.v1.conversation:
+  job.routing.sla_breached.v1:
     description: A conversation's SLA clock passed its deadline (ADR-0044). Once per clock; same envelope as the at-risk event.
     subscribe:
       operationId: consumeRoutingSlaBreached
@@ -63,7 +63,7 @@ components:
         properties:
           id: { type: string, format: uuid }
           tenant_id: { type: string, format: uuid, description: Informational only — never an authorization source }
-          event_type: { type: string, enum: [routing.sla.at_risk.v1, routing.sla.breached.v1] }
+          event_type: { type: string, enum: [job.routing.sla_at_risk.v1, job.routing.sla_breached.v1] }
           aggregate_type: { type: string, enum: [conversation] }
           aggregate_id: { type: string, description: conversation id }
           payload:

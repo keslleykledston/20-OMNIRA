@@ -143,20 +143,20 @@ func TestRiskAndBreachFireOnceWithAnEventAndAnAuditTrail(t *testing.T) {
 	if n, err := e.eng.RunTimersOnce(e.ctx); err != nil || n < 1 {
 		t.Fatalf("the risk timer runs: %d %v", n, err)
 	}
-	if events("routing.sla.at_risk.v1") != 1 || events("routing.sla.breached.v1") != 0 {
-		t.Fatalf("one risk event, no breach yet: %d %d", events("routing.sla.at_risk.v1"), events("routing.sla.breached.v1"))
+	if events("job.routing.sla_at_risk.v1") != 1 || events("job.routing.sla_breached.v1") != 0 {
+		t.Fatalf("one risk event, no breach yet: %d %d", events("job.routing.sla_at_risk.v1"), events("job.routing.sla_breached.v1"))
 	}
 	e.decide(t, a, c, "") // asking again changes nothing
 	e.decide(t, a, c, "")
-	if events("routing.sla.at_risk.v1") != 1 {
+	if events("job.routing.sla_at_risk.v1") != 1 {
 		t.Fatal("the risk is reported once")
 	}
 	e.slaShift(t, c, 2*time.Minute) // now past the deadline
 	e.eng.RunTimersOnce(e.ctx)
 	e.decide(t, a, c, "")
 	got, _ := e.clock(t, c, "assignment")
-	if got.state != "breached" || events("routing.sla.breached.v1") != 1 || events("routing.sla.at_risk.v1") != 1 {
-		t.Fatalf("breach: state=%s breached=%d risk=%d", got.state, events("routing.sla.breached.v1"), events("routing.sla.at_risk.v1"))
+	if got.state != "breached" || events("job.routing.sla_breached.v1") != 1 || events("job.routing.sla_at_risk.v1") != 1 {
+		t.Fatalf("breach: state=%s breached=%d risk=%d", got.state, events("job.routing.sla_breached.v1"), events("job.routing.sla_at_risk.v1"))
 	}
 	if e.count(t, `SELECT count(*) FROM routing_engine_decisions WHERE conversation_id=$1 AND decision='ESCALATE' AND reason IN ('sla_risk','sla_breach')`, c) != 2 {
 		t.Fatal("both crossings are in the decision history, once each")
@@ -165,7 +165,7 @@ func TestRiskAndBreachFireOnceWithAnEventAndAnAuditTrail(t *testing.T) {
 		t.Fatal("a breached clock plans nothing more")
 	}
 	var payload string
-	_ = e.seed.QueryRow(e.ctx, `SELECT payload::text FROM outbox_events WHERE aggregate_id=$1 AND event_type='routing.sla.breached.v1'`, c.String()).Scan(&payload)
+	_ = e.seed.QueryRow(e.ctx, `SELECT payload::text FROM outbox_events WHERE aggregate_id=$1 AND event_type='job.routing.sla_breached.v1'`, c.String()).Scan(&payload)
 	if payload != `{"metric": "assignment"}` {
 		t.Fatalf("the event carries the metric and nothing else: %s", payload)
 	}
@@ -205,7 +205,7 @@ func TestABreachMovesAnUnassignedConversationThroughTheChainButNeverReassignsAnO
 	if o := e.owner(t, c2); o == nil || *o != owner {
 		t.Fatal("an SLA never reassigns an owned conversation")
 	}
-	if e.count(t, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='routing.sla.breached.v1'`, c2.String()) != 1 {
+	if e.count(t, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1 AND event_type='job.routing.sla_breached.v1'`, c2.String()) != 1 {
 		t.Fatal("but the breach is announced")
 	}
 }
@@ -294,8 +294,8 @@ func TestLateCompletionIsABreachAndKeepsItsRealCompletionTime(t *testing.T) {
 	var state string
 	var metAt *time.Time
 	_ = e.seed.QueryRow(e.ctx, `SELECT state, met_at FROM conversation_sla WHERE conversation_id=$1 AND metric='assignment'`, c).Scan(&state, &metAt)
-	if state != "breached" || metAt == nil || events(c, "routing.sla.breached.v1") != 1 || events(c, "routing.sla.at_risk.v1") != 1 {
-		t.Fatalf("late assignment: state=%s met=%v breached=%d risk=%d", state, metAt, events(c, "routing.sla.breached.v1"), events(c, "routing.sla.at_risk.v1"))
+	if state != "breached" || metAt == nil || events(c, "job.routing.sla_breached.v1") != 1 || events(c, "job.routing.sla_at_risk.v1") != 1 {
+		t.Fatalf("late assignment: state=%s met=%v breached=%d risk=%d", state, metAt, events(c, "job.routing.sla_breached.v1"), events(c, "job.routing.sla_at_risk.v1"))
 	}
 	// closed late: the resolution clock is breached with the closing time; closed in time: met
 	e.exec(t, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, c)
@@ -319,7 +319,7 @@ func TestLateCompletionIsABreachAndKeepsItsRealCompletionTime(t *testing.T) {
 	e.exec(t, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, c3)
 	e.decide(t, a, c3, "")
 	_ = e.seed.QueryRow(e.ctx, `SELECT state FROM conversation_sla WHERE conversation_id=$1 AND metric='assignment'`, c3).Scan(&state)
-	if state != "breached" || events(c3, "routing.sla.breached.v1") < 1 {
+	if state != "breached" || events(c3, "job.routing.sla_breached.v1") < 1 {
 		t.Fatalf("an unassigned clock past its deadline when the conversation closed: %s", state)
 	}
 }

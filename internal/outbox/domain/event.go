@@ -16,9 +16,10 @@ const (
 	EventMembershipRevoked EventType = "membership.revoked"
 	EventChannelSendText   EventType = "channel.message.send_text"
 	JobRoutingAssign       EventType = "job.routing.assign.v1"
-	// ADR-0044: SLA crossings, announced once per clock (ids and the metric only, never message content)
-	EventRoutingSLAAtRisk   EventType = "routing.sla.at_risk.v1"
-	EventRoutingSLABreached EventType = "routing.sla.breached.v1"
+	// ADR-0044: SLA crossings, announced once per clock (ids and the metric only, never message content). They are job.* types because OMNIRA_JOBS
+	// (subject job.>) is the only JetStream stream the outbox publishes to: any other type has no stream, so its publish would fail and retry forever.
+	EventRoutingSLAAtRisk   EventType = "job.routing.sla_at_risk.v1"
+	EventRoutingSLABreached EventType = "job.routing.sla_breached.v1"
 	JobChannelSendText      EventType = "job.channel.send_text.v1"
 )
 
