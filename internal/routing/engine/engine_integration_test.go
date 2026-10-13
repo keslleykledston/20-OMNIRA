@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -780,5 +781,76 @@ func TestLegacyAndEngineWorkersShareTheLastSlotOfAnAgent(t *testing.T) {
 	wg.Wait()
 	if n := e.count(t, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND assigned_to_user_id=$2 AND status='open'`, a, u); n != 5 {
 		t.Fatalf("capacity is 5: the agent holds %d (legacy and engine must share the slot)", n)
+	}
+}
+
+type recNotifier struct {
+	pool *pgxpool.Pool
+	mu   sync.Mutex
+	sent []struct {
+		conv      uuid.UUID
+		text, key string
+	}
+	fail bool
+}
+
+func (r *recNotifier) Send(ctx context.Context, conv uuid.UUID, text, key string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fail { // a REAL database error inside the request's transaction (what an unreachable store would cause): it would abort the whole decision without the savepoint
+		_, err := platformdb.QuerierFromContext(ctx, r.pool).Exec(ctx, `SELECT 1/0`)
+		return err
+	}
+	r.sent = append(r.sent, struct {
+		conv      uuid.UUID
+		text, key string
+	}{conv, text, key})
+	return nil
+}
+
+func TestClosedNoticeIsOptInOncePerEpisodeAndNeverBreaksTheDecision(t *testing.T) {
+	e := newEnv(t, nil)
+	n := &recNotifier{pool: e.app}
+	e.eng.WithNotifier(n, t.Logf)
+	a := e.tenant(t)
+	q := e.queue(t, a, "Financeiro", "round_robin")
+	e.attendant(t, a, &q, 3)
+	cal := e.calendar(t, a, "24x7", "24x7", "[]")
+	e.exec(t, `UPDATE queues SET calendar_id=$2 WHERE id=$1`, q, cal)
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at, reason) VALUES ($1,$2,now()-interval '1 hour',now()+interval '3 hours','teste')`, a, cal)
+	c := e.conversation(t, a, &q)
+
+	// opt-in: no text, no message
+	if d, err := e.decide(t, a, c, ""); err != nil || d.Kind != engine.WaitUntilOpen || len(n.sent) != 0 {
+		t.Fatalf("without a notice the engine says nothing: %+v %v sent=%d", d, err, len(n.sent))
+	}
+	e.exec(t, `UPDATE queues SET closed_notice=$2 WHERE id=$1`, q, "Estamos fechados. Voltamos {{proxima_abertura}}.")
+	d, err := e.decide(t, a, c, "")
+	if err != nil || d.Kind != engine.WaitUntilOpen || len(n.sent) != 1 {
+		t.Fatalf("closed with a notice: %+v %v sent=%d", d, err, len(n.sent))
+	}
+	got := n.sent[0]
+	if got.conv != c || got.key == "" || strings.Contains(got.text, "{{") || !strings.HasPrefix(got.text, "Estamos fechados. Voltamos ") || !strings.Contains(got.text, " às ") {
+		t.Fatalf("the placeholder must become the opening in local time: %+v", got)
+	}
+	// asking again in the same episode repeats the SAME key (the sender makes it idempotent)
+	if _, err := e.decide(t, a, c, ""); err != nil || len(n.sent) != 2 || n.sent[1].key != got.key {
+		t.Fatalf("same episode, same key: %+v %v", n.sent, err)
+	}
+	// a failing provider changes nothing about the decision and does not abort the transaction
+	n.fail = true
+	if d, err := e.decide(t, a, c, ""); err != nil || d.Kind != engine.WaitUntilOpen {
+		t.Fatalf("a failed notice must not fail routing: %+v %v", d, err)
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_state WHERE conversation_id=$1 AND state='waiting_open'`, c) != 1 {
+		t.Fatal("the state was still recorded")
+	}
+	// an OPEN group says nothing even with a notice
+	e.exec(t, `DELETE FROM calendar_suspensions WHERE calendar_id=$1`, cal)
+	n.fail = false
+	before := len(n.sent)
+	c2 := e.conversation(t, a, &q)
+	if d, err := e.decide(t, a, c2, ""); err != nil || d.Kind == engine.WaitUntilOpen || len(n.sent) != before {
+		t.Fatalf("open group, no notice: %+v %v", d, err)
 	}
 }

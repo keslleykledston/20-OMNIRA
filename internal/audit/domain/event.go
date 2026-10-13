@@ -73,6 +73,7 @@ const (
 	ActionSLASaved                 AuditAction = "sla.policy_saved"
 	ActionSLARemoved               AuditAction = "sla.policy_removed"
 	ActionOverflowSaved            AuditAction = "overflow.policy_saved"
+	ActionClosedNoticeSaved        AuditAction = "queue.closed_notice_saved"
 	ActionOverflowRemoved          AuditAction = "overflow.policy_removed"
 	ActionShiftCleared             AuditAction = "agent.shift_cleared"
 	ActionRosterCreated            AuditAction = "oncall.roster_created"

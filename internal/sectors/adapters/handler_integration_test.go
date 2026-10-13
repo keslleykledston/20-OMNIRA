@@ -934,3 +934,55 @@ func TestSLAPolicyAPIValidationPermissionsRevisionIsolationAndMonitor(t *testing
 		t.Fatalf("another company's queue monitor = %d, want 404", got)
 	}
 }
+
+func TestClosedNoticeAPIValidationPermissionsIsolationAndAudit(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin, agent, adminB := e.member(t, a, "tenant_admin"), e.member(t, a, "tenant_agent"), e.member(t, b, "tenant_admin")
+	q, qb := e.queue(t, a, "Financeiro", false), e.queue(t, b, "Outra", false)
+	path := map[string]string{"queue_id": q.String()}
+	put := func(actor uuid.UUID, p map[string]string, body any) int {
+		return e.call(t, a, actor, "PUT", "/x", e.h.PutClosedNotice, p, body).Code
+	}
+	if code := put(admin, path, map[string]any{"text": "  Fechado. Voltamos {{proxima_abertura}}.  "}); code != http.StatusOK {
+		t.Fatalf("save: %d", code)
+	}
+	rec := e.call(t, a, admin, "GET", "/x", e.h.GetClosedNotice, path, nil)
+	if got := decode[map[string]any](t, rec)["text"]; rec.Code != http.StatusOK || got != "Fechado. Voltamos {{proxima_abertura}}." {
+		t.Fatalf("trimmed text is stored: %d %v", rec.Code, got)
+	}
+	if auditCount(t, e, a, "queue.closed_notice_saved") != 1 {
+		t.Fatal("saving is audited")
+	}
+	if put(agent, path, map[string]any{"text": "x"}) != http.StatusForbidden {
+		t.Fatal("an attendant cannot change the notice")
+	}
+	if put(admin, path, map[string]any{"text": strings.Repeat("a", 501)}) != http.StatusBadRequest {
+		t.Fatal("limited to 500 characters")
+	}
+	if put(admin, path, map[string]any{"text": "linha\x07"}) != http.StatusBadRequest {
+		t.Fatal("control characters are refused")
+	}
+	if put(admin, path, `{"text":`) != http.StatusBadRequest {
+		t.Fatal("malformed body")
+	}
+	// another company's queue is simply not found, and nothing of it changes
+	if put(admin, map[string]string{"queue_id": qb.String()}, map[string]any{"text": "invasao"}) != http.StatusNotFound {
+		t.Fatal("foreign queue")
+	}
+	if e.call(t, a, admin, "GET", "/x", e.h.GetClosedNotice, map[string]string{"queue_id": qb.String()}, nil).Code != http.StatusNotFound {
+		t.Fatal("foreign queue read")
+	}
+	var other string
+	if err := e.seed.QueryRow(context.Background(), `SELECT closed_notice FROM queues WHERE id=$1`, qb).Scan(&other); err != nil || other != "" {
+		t.Fatalf("tenant B untouched: %q %v", other, err)
+	}
+	_ = adminB
+	if put(admin, path, map[string]any{"text": ""}) != http.StatusOK {
+		t.Fatal("empty removes the notice")
+	}
+	rec = e.call(t, a, admin, "GET", "/x", e.h.GetClosedNotice, path, nil)
+	if decode[map[string]any](t, rec)["text"] != "" {
+		t.Fatal("removed")
+	}
+}

@@ -172,6 +172,9 @@ func main() {
 		routingEngineRepo := routingengine.NewRepository(dbPool, presenceChecker)
 		assignRepo = routingEngineRepo
 		routingEngine = routingEngineRepo.Engine()
+		// customer notices (queues.closed_notice): best effort, idempotent by key, sent through the same system sender the Flow Builder uses
+		noticeSender := messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))
+		routingEngine.WithNotifier(routingNotifier{sender: noticeSender}, log.Printf)
 		log.Printf("routing engine ENABLED (OMNIRA_ROUTING_ENGINE_ENABLED=true)")
 	}
 	routingHandler, err := routingworker.NewHandler(
@@ -577,4 +580,17 @@ func main() {
 	default:
 		log.Println("Worker shutdown complete")
 	}
+}
+
+// routingNotifier adapts the system sender to the routing engine's Notifier: the message goes out like any system text (outbox, window rules
+// and idempotency key included); a closed 24h window or a missing channel is not an error of routing.
+type routingNotifier struct {
+	sender interface {
+		Send(ctx context.Context, conversationID uuid.UUID, text, idempotencyKey string) (messagesapplication.SystemSendStatus, error)
+	}
+}
+
+func (n routingNotifier) Send(ctx context.Context, conversationID uuid.UUID, text, key string) error {
+	_, err := n.sender.Send(ctx, conversationID, text, key)
+	return err
 }

@@ -768,3 +768,70 @@ func (h *Handler) QueueAvailability(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, http.StatusOK, a)
 }
+
+// ---------------------------------------------------------------- closed notice
+
+const maxNoticeRunes = 500
+
+// GetClosedNotice returns the message the customer gets when this group is closed ("" = none).
+func (h *Handler) GetClosedNotice(w http.ResponseWriter, r *http.Request) {
+	tc, q, ok := h.authorize(w, r, "agent.read")
+	if !ok {
+		return
+	}
+	queueID, ok := pathUUID(w, r, "queue_id")
+	if !ok {
+		return
+	}
+	var text string
+	if err := q.QueryRow(r.Context(), `SELECT closed_notice FROM queues WHERE tenant_id=$1 AND id=$2`, tc.TenantID, queueID).Scan(&text); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "queue not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to read queue", http.StatusInternalServerError)
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"queue_id": queueID, "text": text})
+}
+
+// PutClosedNotice sets (or, with empty text, removes) the closed notice. It is plain text sent to the customer by the routing engine, once per
+// episode; {{proxima_abertura}} is replaced by the next opening in the calendar's timezone.
+func (h *Handler) PutClosedNotice(w http.ResponseWriter, r *http.Request) {
+	tc, q, ok := h.authorize(w, r, "agent.manage")
+	if !ok {
+		return
+	}
+	queueID, ok := pathUUID(w, r, "queue_id")
+	if !ok {
+		return
+	}
+	var in struct {
+		Text string `json:"text"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	text := strings.TrimSpace(in.Text)
+	if len([]rune(text)) > maxNoticeRunes {
+		http.Error(w, "the notice is limited to 500 characters", http.StatusBadRequest)
+		return
+	}
+	for _, c := range text {
+		if c < 0x20 && c != '\n' {
+			http.Error(w, "the notice must be plain text", http.StatusBadRequest)
+			return
+		}
+	}
+	tag, err := q.Exec(r.Context(), `UPDATE queues SET closed_notice=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, queueID, text)
+	if err != nil {
+		http.Error(w, "failed to update queue", http.StatusInternalServerError)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "queue not found", http.StatusNotFound)
+		return
+	}
+	h.record(r, auditdomain.ResourceQueue, queueID, auditdomain.ActionClosedNoticeSaved, map[string]any{"has_text": text != ""})
+	write(w, http.StatusOK, map[string]any{"queue_id": queueID, "text": text})
+}

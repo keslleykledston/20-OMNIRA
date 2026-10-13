@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,9 +83,23 @@ type Decision struct {
 	Attempts     int
 }
 
+// Notifier sends a short system message to the customer of a conversation. key makes it idempotent (a replay says nothing twice). The
+// engine treats it as best effort: a failure is logged and never changes, delays or aborts a routing decision.
+type Notifier interface {
+	Send(ctx context.Context, conversationID uuid.UUID, text, key string) error
+}
+
 type Engine struct {
 	pool     *pgxpool.Pool
 	presence sectorsadapters.PresenceChecker
+	notifier Notifier
+	logf     func(string, ...any)
+}
+
+// WithNotifier enables the customer notices (queues.closed_notice). Without it the engine sends nothing.
+func (e *Engine) WithNotifier(n Notifier, logf func(string, ...any)) *Engine {
+	e.notifier, e.logf = n, logf
+	return e
 }
 
 func New(pool *pgxpool.Pool, presence sectorsadapters.PresenceChecker) *Engine {
@@ -266,6 +281,9 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		d, err := finish(out.plain, out.state)
 		if err != nil {
 			return Decision{}, err
+		}
+		if out.state == "waiting_open" {
+			e.noticeClosed(ctx, q, tenant, req.ConversationID, queue, st.episode, now)
 		}
 		if out.presenceDown { // the legacy contract: a presence backend that cannot answer is retried, never folded into "nobody available"
 			return d, ports.ErrPresenceUnavailable
@@ -990,4 +1008,52 @@ func (e *Engine) SectorQueue(ctx context.Context, sector uuid.UUID, now time.Tim
 	}
 	q := platformdb.QuerierFromContext(ctx, e.pool)
 	return e.chooseSectorQueue(ctx, q, tc.TenantID, overflow.Step{DestID: sector}, map[string]bool{}, now)
+}
+
+// noticeClosed tells the customer, once per episode, that the group is closed and when it opens - only when the group has a notice text.
+// It runs after the decision is recorded, inside a savepoint, so no failure of the message can change or abort the routing.
+func (e *Engine) noticeClosed(ctx context.Context, q platformdb.Querier, tenant, conversation, queue uuid.UUID, episode int, now time.Time) {
+	if e.notifier == nil {
+		return
+	}
+	var text string
+	if err := q.QueryRow(ctx, `SELECT closed_notice FROM queues WHERE tenant_id=$1 AND id=$2`, tenant, queue).Scan(&text); err != nil || text == "" {
+		return
+	}
+	text = renderNotice(ctx, q, tenant, queue, text, now)
+	if _, err := q.Exec(ctx, `SAVEPOINT closed_notice`); err != nil {
+		return
+	}
+	if err := e.notifier.Send(ctx, conversation, text, fmt.Sprintf("routing-closed:%s:%d", conversation, episode)); err != nil {
+		_, _ = q.Exec(ctx, `ROLLBACK TO SAVEPOINT closed_notice`)
+		if e.logf != nil {
+			e.logf("routing: closed notice not sent for %s: %v", conversation, err)
+		}
+	}
+	_, _ = q.Exec(ctx, `RELEASE SAVEPOINT closed_notice`)
+}
+
+// renderNotice fills {{proxima_abertura}} with the next opening in the calendar's own timezone ("segunda-feira, 14/10 às 09:00"); when it
+// is unknown the placeholder (and the space before it) is removed, never left raw in the customer's chat.
+func renderNotice(ctx context.Context, q platformdb.Querier, tenant, queue uuid.UUID, text string, now time.Time) string {
+	const ph = "{{proxima_abertura}}"
+	if !strings.Contains(text, ph) {
+		return text
+	}
+	when := ""
+	if a, err := sectorsadapters.QueueAvailability(ctx, q, tenant, queue, now); err == nil && a.NextOpen != nil {
+		loc := time.UTC
+		if a.Timezone != "" {
+			if l, err := time.LoadLocation(a.Timezone); err == nil {
+				loc = l
+			}
+		}
+		t := a.NextOpen.In(loc)
+		days := [...]string{"domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"}
+		when = fmt.Sprintf("%s, %s às %s", days[t.Weekday()], t.Format("02/01"), t.Format("15:04"))
+	}
+	if when == "" {
+		return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, " "+ph, ""), ph, ""))
+	}
+	return strings.ReplaceAll(text, ph, when)
 }
