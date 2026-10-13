@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { API_BASE } from './config'
+import { ACTING_HEADER } from './acting'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session'
 
 // Espelha contracts/openapi/attendance-v1.yaml (ADR-0020). A autoridade é sempre o backend: a UI só evita oferecer ações que ele
@@ -108,8 +109,16 @@ export interface FinalizeBody {
   farewell?: string
 }
 
-const base = () => `${API_BASE}/tenants/${getTenantId()}`
-const h = () => ({ headers: authHeaders() })
+const base = (target?: DelegatedTarget) => `${API_BASE}/tenants/${target?.tenantId ?? getTenantId()}`
+// Attending an instance from the Hub's unified inbox the session's own tenant is another one, so the request names the instance in its URL and the Hub in the
+// acting header itself (the global interceptor only adds it for the session's tenant). The header grants nothing: the server proves hub -> contract -> grant.
+const h = (target?: DelegatedTarget) => ({ headers: { ...authHeaders(), ...(target ? { [ACTING_HEADER]: `hub:${target.hubId}` } : {}) } })
+
+/** The instance a conversation of the Hub's unified inbox belongs to, and the Hub it is served through. */
+export interface DelegatedTarget {
+  tenantId: string
+  hubId: string
+}
 
 async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
   try {
@@ -121,10 +130,10 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 }
 
 export const attendanceAPI = {
-  finalize: (conversationId: string, body: FinalizeBody) =>
-    call<{ changed: boolean; closure?: Closure; farewell?: FarewellState }>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize`, body, h())),
-  suggestClosing: (conversationId: string) =>
-    call<ClosingSuggestion>(() => axios.post(`${base()}/inbox/conversations/${conversationId}/finalize/suggest`, {}, h())),
+  finalize: (conversationId: string, body: FinalizeBody, target?: DelegatedTarget) =>
+    call<{ changed: boolean; closure?: Closure; farewell?: FarewellState }>(() => axios.post(`${base(target)}/inbox/conversations/${conversationId}/finalize`, body, h(target))),
+  suggestClosing: (conversationId: string, target?: DelegatedTarget) =>
+    call<ClosingSuggestion>(() => axios.post(`${base(target)}/inbox/conversations/${conversationId}/finalize/suggest`, {}, h(target))),
   contextOf: (conversationId: string, limit = 5) =>
     call<AttendanceHistory>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/attendance-context`, { ...h(), params: { limit } })),
   searchHistory: (conversationId: string, q: string, limit = 5) =>

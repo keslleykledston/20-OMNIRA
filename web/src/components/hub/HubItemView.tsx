@@ -6,6 +6,7 @@ import { handleUnauthorized, isUnauthorized } from '../../lib/session';
 import { TenantBadge } from '../primitives/TenantBadge';
 import MessageComposer from '../inbox/MessageComposer';
 import TransferDialog from './TransferDialog';
+import FinalizeDialog from '../inbox/FinalizeDialog';
 import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 import { Icon } from '../primitives';
 
@@ -50,6 +51,7 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transferring, setTransferring] = useState(false);
+  const [finalizing, setFinalizing] = useState(false);
   // A retry of the SAME text keeps its key (no double send); a different text is a new attempt.
   const pending = useRef<{ text: string; key: string } | null>(null);
   const tenantName = detail.tenant.name || detail.item.tenant_name || 'Instância não identificada';
@@ -151,7 +153,8 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
           </div>
         )}
         {mode === 'reply' && (
-          <div className="mb-1 flex justify-end">
+          <div className="mb-1 flex justify-end gap-4">
+            <button type="button" onClick={() => setFinalizing(true)} className="text-xs font-medium text-accent-primary underline-offset-2 hover:underline">Finalizar atendimento</button>
             <button type="button" onClick={() => setTransferring(true)} className="text-xs font-medium text-accent-primary underline-offset-2 hover:underline">Transferir conversa</button>
           </div>
         )}
@@ -165,6 +168,16 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
           />
         )}
       </footer>
+      {finalizing && (
+        <FinalizeDialog
+          open
+          conversationId={detail.conversation.id}
+          contactName={detail.item.customer_name || undefined}
+          hub={{ hubId, tenantId: detail.tenant.id, canReply: !!detail.access.can_reply, hasOwner: detail.conversation.assignment === 'me' }}
+          onClose={() => setFinalizing(false)}
+          onFinalized={() => { void refresh(); }}
+        />
+      )}
       <TransferDialog hubId={hubId} detail={detail} open={transferring} onClose={() => setTransferring(false)}
         onDone={() => { setTransferring(false); void refresh(); void queryClient.invalidateQueries({ queryKey: ['hub-inbox', hubId] }); }} />
     </div>

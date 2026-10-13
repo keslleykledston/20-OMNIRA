@@ -4,6 +4,7 @@ import { Button, Input, Modal, TextArea } from '../primitives'
 import {
   attendanceAPI,
   attendanceErrorMessage,
+  type DelegatedTarget,
   CLOSE_REASON_LABEL,
   FOLLOW_UP_KIND_LABEL,
   type CloseReason,
@@ -24,6 +25,9 @@ interface Props {
   onClose: () => void
   // farewell: what became of the closing notice when one was asked for (undefined when none was)
   onFinalized?: (farewell?: FarewellState) => void
+  // Set when the conversation is opened in the Hub's unified inbox: the instance and the Hub it is served through, and what the server already said about it
+  // (the grant may reply; the person holds it). The dialog then acts on THAT instance, not on the session's own tenant.
+  hub?: DelegatedTarget & { canReply: boolean; hasOwner: boolean }
 }
 
 interface DraftItem {
@@ -40,8 +44,9 @@ const selectClass = 'w-full rounded-control border border-border-subtle bg-surfa
 
 // Finalizar atendimento (ADR-0020): encerra o episódio, não o chat. O que ficou pendente ou foi prometido é listado aqui e
 // aparece na próxima conversa do mesmo contato.
-export default function FinalizeDialog({ open, conversationId, contactName, onClose, onFinalized }: Props) {
-  const tenantId = getTenantId()
+export default function FinalizeDialog({ open, conversationId, contactName, onClose, onFinalized, hub }: Props) {
+  const tenantId = hub?.tenantId ?? getTenantId()
+  const target: DelegatedTarget | undefined = hub ? { tenantId: hub.tenantId, hubId: hub.hubId } : undefined
   const qc = useQueryClient()
   const [reason, setReason] = useState<CloseReason>('resolved')
   const [summary, setSummary] = useState('')
@@ -55,13 +60,13 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   // Attending through a Hub (ADR-0040 phase 05b): the channel lookup is not part of the delegated context, so the closing notice is offered whenever the person may
   // reply (a closed 24 h window comes back as an error and the person can finalize without notifying). The AI draft (phase 07) is offered only with the key ai.assist:
   // the text of the conversation goes to the platform's AI provider.
-  const delegated = isActing()
+  const delegated = isActing() || !!hub
   const { can } = useAccess()
   const channel = useConversationChannel(open && !delegated ? conversationId : null)
   const cached = qc.getQueryData<ConversationItem>(['inbox-context', tenantId, conversationId]) ?? qc.getQueryData<ConversationItem>(['inbox-conversation-detail', tenantId, conversationId])
-  const hasOwner = !!cached?.assigned_to_user_id
+  const hasOwner = hub ? hub.hasOwner : !!cached?.assigned_to_user_id
   const windowClosed = !delegated && !!channel.data && channel.data.window_required && !channel.data.window_open
-  const canNotify = hasOwner && !windowClosed && (delegated ? can('conversation.reply') : channel.data?.can_send_text !== false)
+  const canNotify = hasOwner && !windowClosed && (delegated ? (hub ? hub.canReply : can('conversation.reply')) : channel.data?.can_send_text !== false)
   const [notify, setNotify] = useState(true)
   const [farewell, setFarewell] = useState(DEFAULT_FAREWELL)
   // The closing notice travels WITH the finalize request: the server queues it in the same transaction that closes the conversation, so it never goes out for an
@@ -78,13 +83,17 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       const asked = wantsNotice()
       const res = await attendanceAPI.finalize(conversationId, {
         reason, note: note.trim(), summary: summary.trim(), summary_truth, follow_ups, ...(asked ? { farewell: farewell.trim() } : {}),
-      })
+      }, target)
       return { asked, changed: res.changed, farewell: res.farewell }
     },
     onSuccess: (out) => {
       void qc.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] })
       for (const key of ['inbox-context', 'inbox-conversation-detail', 'inbox-messages', 'attendance-context']) {
         void qc.invalidateQueries({ queryKey: [key, tenantId, conversationId] })
+      }
+      if (hub) {
+        void qc.invalidateQueries({ queryKey: ['hub-item', hub.hubId] })
+        void qc.invalidateQueries({ queryKey: ['hub-inbox', hub.hubId] })
       }
       setItems([])
       setSummary('')
@@ -100,7 +109,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   })
 
   const suggest = useMutation({
-    mutationFn: () => attendanceAPI.suggestClosing(conversationId),
+    mutationFn: () => attendanceAPI.suggestClosing(conversationId, target),
     onSuccess: (s) => {
       setError(null)
       setSummary(s.summary)
@@ -139,7 +148,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
           </select>
         </label>
         <div className="flex items-center justify-between gap-2">
-          {!delegated || can('ai.assist') ? (
+          {!hub && (!delegated || can('ai.assist')) ? (
             <Button variant="secondary" size="sm" isLoading={suggest.isPending} disabled={suggest.isPending || finalize.isPending} onClick={() => suggest.mutate()}>Sugerir com IA</Button>
           ) : (
             <span />

@@ -329,6 +329,26 @@ describe('HubInboxPage — claiming and replying (write path)', () => {
     expect((asked[1] as { params: object }).params).toEqual({ expected_tenant_id: a.tenant_id });
   });
 
+  it('"Finalizar atendimento" is offered only to who holds the conversation, and finalizes on the DISPLAYED company through the Hub (acting header)', async () => {
+    vi.mocked(axios.post).mockResolvedValue({ data: { changed: true } });
+    const user = await open('me');
+    await user.click(screen.getByRole('button', { name: 'Finalizar atendimento' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' });
+    expect(within(dialog).queryByRole('button', { name: 'Sugerir com IA' })).toBeNull();
+    await user.click(within(dialog).getByRole('checkbox', { name: /Avisar o cliente/ })); // this test is about the finalize call
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(String(posts()[0][0])).toMatch(new RegExp(`/tenants/${a.tenant_id}/inbox/conversations/${a.conversation_id}/finalize$`));
+    expect((posts()[0][2] as { headers: Record<string, string> }).headers['X-Omnira-Acting-As']).toBe('hub:hub-1');
+    expect(posts()[0][1]).toMatchObject({ reason: 'resolved' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Finalizar atendimento' })).toBeNull());
+  });
+
+  it.each([['none'], ['other']] as const)('no "Finalizar atendimento" when the conversation is %s', async (assignment) => {
+    await open(assignment);
+    expect(screen.queryByRole('button', { name: 'Finalizar atendimento' })).toBeNull();
+  });
+
   it.each([['none'], ['other']] as const)('no "Transferir conversa" when the conversation is %s', async (assignment) => {
     await open(assignment);
     expect(screen.queryByRole('button', { name: 'Transferir conversa' })).toBeNull();
