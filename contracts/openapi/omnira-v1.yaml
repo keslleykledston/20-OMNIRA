@@ -5044,6 +5044,7 @@ components:
             hub_id: { type: string, format: uuid }
             grant_id: { type: string, format: uuid }
             can_reply: { type: boolean, description: Whether this grant lets the caller claim and answer here (otherwise read-only). }
+            can_finalize: { type: boolean, description: "Whether the grant (inside the contract's ceiling) holds the key conversation.finalize, so the screen may offer 'Finalizar atendimento'. Display only: the finalize route asks again." }
         conversation:
           type: object
           required: [id, status, created_at, assignment]

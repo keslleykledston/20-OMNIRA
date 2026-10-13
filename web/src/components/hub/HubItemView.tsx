@@ -154,7 +154,9 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
         )}
         {mode === 'reply' && (
           <div className="mb-1 flex justify-end gap-4">
-            <button type="button" onClick={() => setFinalizing(true)} className="text-xs font-medium text-accent-primary underline-offset-2 hover:underline">Finalizar atendimento</button>
+            {detail.access.can_finalize && (
+              <button type="button" onClick={() => setFinalizing(true)} className="text-xs font-medium text-accent-primary underline-offset-2 hover:underline">Finalizar atendimento</button>
+            )}
             <button type="button" onClick={() => setTransferring(true)} className="text-xs font-medium text-accent-primary underline-offset-2 hover:underline">Transferir conversa</button>
           </div>
         )}

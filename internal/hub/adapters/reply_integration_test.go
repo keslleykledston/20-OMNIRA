@@ -527,3 +527,41 @@ func TestHub_SuspendedCompanyDisappearsFromTheInboxAndComesBack(t *testing.T) {
 		t.Errorf("re-activated: %d items, want %d", got, both)
 	}
 }
+
+// The item says whether the caller may be offered "finalize": the key must be in the grant AND inside the contract's ceiling (display only; the route asks again).
+func TestHubItem_AccessSaysWhetherFinalizeMayBeOffered(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	w.connect("A")
+	alice := w.hubAgent("alice")
+	grant := w.grantReply(alice, "A")
+	canFinalize := func() bool {
+		t.Helper()
+		code, body, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox/%s", w.hub, w.itemID("A")), alice, nil)
+		if code != 200 {
+			t.Fatalf("open %d %s", code, body)
+		}
+		var got struct {
+			Access struct {
+				CanFinalize bool `json:"can_finalize"`
+			} `json:"access"`
+		}
+		w.must(json.Unmarshal([]byte(body), &got))
+		return got.Access.CanFinalize
+	}
+	if canFinalize() {
+		t.Fatal("no keys at all: finalize must not be offered")
+	}
+	w.grantKeys(grant, "conversation.read", "conversation.reply", "conversation.finalize")
+	if canFinalize() {
+		t.Fatal("the contract's ceiling does not delegate the key: finalize must not be offered")
+	}
+	w.ceiling("A", "conversation.read", "conversation.reply", "conversation.finalize")
+	if !canFinalize() {
+		t.Fatal("key in the grant and inside the ceiling: finalize is offered")
+	}
+	w.grantKeys(grant, "conversation.read", "conversation.reply")
+	if canFinalize() {
+		t.Fatal("key withdrawn from the grant: finalize is no longer offered")
+	}
+}

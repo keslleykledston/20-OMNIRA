@@ -409,10 +409,16 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 			assignment = "me"
 		}
 	}
+	// Whether the screen may OFFER "finalize": the delegated key is held by the grant AND inside the contract's ceiling (delegated_permissions answers for the
+	// caller only). Display only - the finalize route asks the database again; a failed lookup just hides the button.
+	canFinalize := false
+	if err := q.QueryRow(ctx, `SELECT 'conversation.finalize' = ANY(delegated_permissions($1, $2, $3))`, tc.TenantID, actor, hubID).Scan(&canFinalize); err != nil {
+		canFinalize = false
+	}
 	writeJSON(w, map[string]any{
 		"item":         dto,
 		"tenant":       map[string]any{"id": tc.TenantID, "name": tenantName},
-		"access":       map[string]any{"source": tc.Source, "hub_id": tc.HubID, "grant_id": tc.EffectiveGrantID, "can_reply": tc.CanReply},
+		"access":       map[string]any{"source": tc.Source, "hub_id": tc.HubID, "grant_id": tc.EffectiveGrantID, "can_reply": tc.CanReply, "can_finalize": canFinalize},
 		"conversation": map[string]any{"id": item.ConversationID, "status": convStatus, "title": convTitle, "created_at": convCreated, "assignment": assignment},
 		"messages":     msgs,
 	})

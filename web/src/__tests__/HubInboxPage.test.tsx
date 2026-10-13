@@ -298,13 +298,13 @@ describe('Navigation — there is no separate "Hub" entry (ADR-0039 revisão: Co
 
 describe('HubInboxPage — claiming and replying (write path)', () => {
   const a = item('a', { tenant_name: 'ISP Roraima' });
-  const open = async (assignment: 'none' | 'me' | 'other', over: { canReply?: boolean; status?: string } = {}) => {
+  const open = async (assignment: 'none' | 'me' | 'other', over: { canReply?: boolean; canFinalize?: boolean; status?: string } = {}) => {
     pages = { 'hub-1': [{ items: [a], has_more: false }] };
     const base = detail(a);
     details = {
       'hub-1/a': {
         ...base,
-        access: { source: 'hub', can_reply: over.canReply ?? true },
+        access: { source: 'hub', can_reply: over.canReply ?? true, can_finalize: over.canFinalize ?? true },
         conversation: { ...base.conversation, status: over.status ?? 'open', assignment },
       },
     };
@@ -342,6 +342,12 @@ describe('HubInboxPage — claiming and replying (write path)', () => {
     expect((posts()[0][2] as { headers: Record<string, string> }).headers['X-Omnira-Acting-As']).toBe('hub:hub-1');
     expect(posts()[0][1]).toMatchObject({ reason: 'resolved' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Finalizar atendimento' })).toBeNull());
+  });
+
+  it('no "Finalizar atendimento" when the grant does not hold the key (the server said so), though the person holds the conversation', async () => {
+    await open('me', { canFinalize: false });
+    expect(screen.getByRole('button', { name: 'Transferir conversa' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Finalizar atendimento' })).toBeNull();
   });
 
   it.each([['none'], ['other']] as const)('no "Finalizar atendimento" when the conversation is %s', async (assignment) => {
