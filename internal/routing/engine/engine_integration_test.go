@@ -517,11 +517,21 @@ func TestNeverOpeningSectorGoesToAPersonAndTimersGiveUpAfterRepeatedFailures(t *
 	if err := e.seed.QueryRow(e.ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, due_at, state, attempts) VALUES ($1,$2,1,'open_wakeup',now(),'leased',3) RETURNING id`, a, c2).Scan(&timerID); err != nil {
 		t.Fatal(err)
 	}
-	e.eng.RecordFailureForTest(a, c2, timerID, 1, 1, 3, errors.New("boom"))
+	token := uuid.New()
+	e.exec(t, `UPDATE routing_engine_timers SET claim_token=$2 WHERE id=$1`, timerID, token)
+	e.eng.RecordFailureForTest(a, c2, timerID, 1, 1, 3, uuid.New(), errors.New("stale worker")) // a worker with an old token changes nothing
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE id=$1 AND last_error=''`, timerID) != 1 {
+		t.Fatal("a stale token must not write")
+	}
+	e.eng.RecordFailureForTest(a, c2, timerID, 1, 1, 3, token, errors.New("boom"))
 	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE id=$1 AND state='leased' AND last_error='boom'`, timerID) != 1 || e.count(t, `SELECT count(*) FROM routing_engine_state WHERE conversation_id=$1 AND state='waiting_open'`, c2) != 1 {
 		t.Fatal("below the limit the timer keeps its lease (it is retried) and the conversation keeps waiting")
 	}
-	e.eng.RecordFailureForTest(a, c2, timerID, 1, 1, 8, errors.New("boom again"))
+	e.eng.RecordFailureForTest(a, c2, timerID, 1, 1, 8, uuid.New(), errors.New("stale at the limit"))
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE id=$1 AND state='failed'`, timerID) != 0 {
+		t.Fatal("a stale worker must not fail the timer nor hand the conversation to a person")
+	}
+	e.eng.RecordFailureForTest(a, c2, timerID, 1, 1, 8, token, errors.New("boom again"))
 	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE id=$1 AND state='failed'`, timerID) != 1 || e.count(t, `SELECT count(*) FROM routing_engine_state WHERE conversation_id=$1 AND state='manual_required'`, c2) != 1 {
 		t.Fatal("at the limit the timer fails and the conversation is handed to a person")
 	}
@@ -554,5 +564,221 @@ func TestAskingAgainMovesTheSameTimerAndBumpsItsGenerationOnlyWhenTheOpeningMove
 	g3, d3, n3 := state()
 	if n3 != 1 || g3 != g1+1 || !d3.After(d1.Add(3*time.Hour)) {
 		t.Fatalf("the opening moved: the same timer is re-planned with a new generation: gen %d->%d due %v -> %v timers=%d", g1, g3, d1, d3, n3)
+	}
+}
+
+// Codex: the chosen candidate is evaluated AGAIN under the locks; a stale snapshot cannot assign to somebody who is no longer eligible.
+func TestAStaleCandidateIsRefusedUnderTheLock(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "RR", "round_robin")
+	u, _ := e.attendant(t, a, &q, 3)
+	c := e.conversation(t, a, &q)
+	stale := sectorsadapters.AgentVerdict{UserID: u, Eligible: true, Capacity: 3}
+	for name, change := range map[string]string{
+		"marked unavailable":     `UPDATE queue_members SET available=false WHERE user_id=$1`,
+		"removed from the queue": `UPDATE queue_members SET active=false WHERE user_id=$1`,
+		"membership revoked":     `UPDATE memberships SET status='revoked' WHERE user_id=$1`,
+		"agent profile disabled": `UPDATE agent_profiles SET status='disabled' WHERE membership_id IN (SELECT id FROM memberships WHERE user_id=$1)`,
+	} {
+		e.exec(t, `UPDATE queue_members SET active=true, available=true WHERE user_id=$1`, u)
+		e.exec(t, `UPDATE memberships SET status='active' WHERE user_id=$1`, u)
+		e.exec(t, `UPDATE agent_profiles SET status='active' WHERE membership_id IN (SELECT id FROM memberships WHERE user_id=$1)`, u)
+		e.exec(t, change, u)
+		ok, err := e.eng.TryAssignForTest(a, q, c, stale)
+		if err != nil || ok || e.owner(t, c) != nil {
+			t.Fatalf("%s: the snapshot said eligible but the database says no: ok=%v err=%v", name, ok, err)
+		}
+	}
+	// an agent whose shift closed between the snapshot and the write
+	e.exec(t, `UPDATE queue_members SET active=true, available=true WHERE user_id=$1`, u)
+	e.exec(t, `UPDATE memberships SET status='active' WHERE user_id=$1`, u)
+	e.exec(t, `UPDATE agent_profiles SET status='active' WHERE membership_id IN (SELECT id FROM memberships WHERE user_id=$1)`, u)
+	closedShift := e.calendar(t, a, "turno fechado", "custom", `[{"day":"mon","intervals":[]}]`)
+	e.exec(t, `INSERT INTO agent_shifts (tenant_id, user_id, calendar_id) VALUES ($1,$2,$3)`, a, u, closedShift)
+	if ok, err := e.eng.TryAssignForTest(a, q, c, stale); err != nil || ok {
+		t.Fatalf("shift closed: %v %v", ok, err)
+	}
+	e.exec(t, `DELETE FROM agent_shifts WHERE user_id=$1`, u)
+	if ok, err := e.eng.TryAssignForTest(a, q, c, stale); err != nil || !ok {
+		t.Fatalf("a candidate that is still eligible is assigned: %v %v", ok, err)
+	}
+}
+
+// Codex: a duplicate trigger after an assignment keeps the original decision of record and only counts the attempt.
+func TestTheOriginalAssignmentStaysTheDecisionOfRecord(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "RR", "round_robin")
+	u, _ := e.attendant(t, a, &q, 3)
+	c := e.conversation(t, a, &q)
+	if d, _ := e.decide(t, a, c, ""); d.AssignedUser != u {
+		t.Fatalf("%+v", d)
+	}
+	for i := 0; i < 3; i++ {
+		e.decide(t, a, c, "")
+	}
+	var reason, dest string
+	var attempts int
+	if err := e.seed.QueryRow(e.ctx, `SELECT reason, destination, attempts FROM routing_engine_decisions WHERE conversation_id=$1`, c).Scan(&reason, &dest, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if reason != engine.ReasonAssigned || dest != "agent:"+u.String() || attempts != 4 {
+		t.Fatalf("decision of record: %s %s attempts=%d", reason, dest, attempts)
+	}
+}
+
+// Codex: a stale worker (old fencing token) can neither finish, release nor fail a timer that someone else holds.
+func TestAStaleFencingTokenCannotTouchANewerClaim(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "S", "round_robin")
+	u, _ := e.attendant(t, a, &q, 3)
+	c := e.conversation(t, a, &q)
+	e.exec(t, `INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id) VALUES ($1,$2,'waiting_open',$3)`, a, c, q)
+	fresh, stale := uuid.New(), uuid.New()
+	var id uuid.UUID
+	if err := e.seed.QueryRow(e.ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, due_at, state, lease_until, attempts, claim_token)
+		VALUES ($1,$2,1,'open_wakeup',now(),'leased',now()+interval '1 minute',2,$3) RETURNING id`, a, c, fresh).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.eng.RunTimerForTest(a, c, id, 1, 1, 1, stale); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE id=$1 AND state='leased' AND claim_token=$2`, id, fresh) != 1 || e.owner(t, c) != nil {
+		t.Fatal("a stale worker must neither complete nor act")
+	}
+	if err := e.eng.RunTimerForTest(a, c, id, 1, 1, 2, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if o := e.owner(t, c); o == nil || *o != u {
+		t.Fatalf("the current holder completes the timer: %v", o)
+	}
+}
+
+// Codex: one tenant with a huge backlog cannot take a whole batch.
+func TestTimerClaimsAreFairAcrossTenants(t *testing.T) {
+	e := newEnv(t, nil)
+	big, small := e.tenant(t), e.tenant(t)
+	for _, tn := range []struct {
+		id uuid.UUID
+		n  int
+	}{{big, 30}, {small, 1}} {
+		q := e.queue(t, tn.id, "S", "round_robin")
+		for i := 0; i < tn.n; i++ {
+			c := e.conversation(t, tn.id, &q)
+			e.exec(t, `INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id) VALUES ($1,$2,'waiting_open',$3)`, tn.id, c, q)
+			e.exec(t, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, due_at) VALUES ($1,$2,1,'open_wakeup',now()-interval '1 minute')`, tn.id, c)
+		}
+	}
+	// the two tenants' timers are the only ones due in this fresh database run; claim one batch
+	if _, err := e.eng.RunTimersOnce(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE tenant_id=$1 AND attempts > 0`, big); n > 10 {
+		t.Fatalf("one tenant took %d of a batch, the limit per tenant is 10", n)
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE tenant_id=$1 AND attempts > 0`, small) != 1 {
+		t.Fatal("the small tenant is served in the same tick")
+	}
+}
+
+// Codex: conversation -> state -> timer everywhere. Decisions, the timer worker and re-planning hammer the same waiting conversations:
+// no deadlock, nothing assigned twice, and what was assigned is never overwritten by a late re-plan.
+func TestRoutingTimersAndReplanningDoNotDeadlockAndNeverOverwriteAnAssignment(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "S", "round_robin")
+	for i := 0; i < 3; i++ {
+		e.attendant(t, a, &q, 20)
+	}
+	cal := e.calendar(t, a, "c", "24x7", "[]")
+	e.exec(t, `UPDATE queues SET calendar_id=$2 WHERE id=$1`, q, cal)
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at) VALUES ($1,$2,now()-interval '1 hour',now()+interval '2 hours')`, a, cal)
+	var convs []uuid.UUID
+	for i := 0; i < 12; i++ {
+		c := e.conversation(t, a, &q)
+		if d, err := e.decide(t, a, c, ""); err != nil || d.Kind != engine.WaitUntilOpen {
+			t.Fatalf("%+v %v", d, err)
+		}
+		convs = append(convs, c)
+	}
+	e.exec(t, `DELETE FROM calendar_suspensions WHERE calendar_id=$1`, cal) // it opens now
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+	run := func(f func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 6; i++ {
+				if err := f(); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	for _, c := range convs {
+		c := c
+		run(func() error { _, err := e.decide(t, a, c, ""); return err })
+	}
+	for i := 0; i < 2; i++ {
+		run(func() error {
+			return platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(c context.Context) error {
+				_, err := sectorsadapters.ReplanWaiting(c, platformdb.QuerierFromContext(c, e.app), a)
+				return err
+			})
+		})
+		run(func() error { _, err := e.eng.RunTimersOnce(e.ctx); return err })
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent routing failed (deadlock?): %v", err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND assigned_to_user_id IS NOT NULL`, a); n != 12 {
+		t.Fatalf("all 12 are assigned once the sector opens: %d", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM assignment_events WHERE tenant_id=$1`, a); n != 12 {
+		t.Fatalf("one history row each: %d", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM routing_engine_state WHERE tenant_id=$1 AND state<>'assigned'`, a); n != 0 {
+		t.Fatalf("a late re-plan must not overwrite an assignment: %d states differ", n)
+	}
+}
+
+// Codex: during a rollout one worker may still run the legacy round-robin while another runs the engine, on the same queue. They share the
+// member-row lock, so the last slot of an agent is taken once, never twice.
+func TestLegacyAndEngineWorkersShareTheLastSlotOfAnAgent(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	q := e.queue(t, a, "RR", "round_robin")
+	u, _ := e.attendant(t, a, &q, 5)
+	legacy := routingadapters.NewPostgresAssignmentRepository(e.app, nil)
+	var convs []uuid.UUID
+	for i := 0; i < 40; i++ {
+		convs = append(convs, e.conversation(t, a, &q))
+	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10)
+	for i, c := range convs {
+		wg.Add(1)
+		go func(i int, c uuid.UUID) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if i%2 == 0 {
+				_ = platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(ctx context.Context) error {
+					_, _, err := legacy.AssignRoundRobin(ctx, c, "round_robin")
+					return err
+				})
+			} else {
+				_, _ = e.decide(t, a, c, "")
+			}
+		}(i, c)
+	}
+	wg.Wait()
+	if n := e.count(t, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND assigned_to_user_id=$2 AND status='open'`, a, u); n != 5 {
+		t.Fatalf("capacity is 5: the agent holds %d (legacy and engine must share the slot)", n)
 	}
 }

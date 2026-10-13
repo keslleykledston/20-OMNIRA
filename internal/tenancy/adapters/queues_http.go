@@ -35,6 +35,11 @@ func NewQueuesHandler(p *pgxpool.Pool, a auditports.AuditEventRepository) *Queue
 	return &QueuesHandler{pool: p, audit: a}
 }
 
+// LeastLoadedEnabled says whether the least_loaded strategy can be configured. It is only honoured by the central routing engine, so the
+// API process sets it from OMNIRA_ROUTING_ENGINE_ENABLED (the same value the worker reads); with the engine off a queue could be
+// configured with a mode that is silently ignored, so the API refuses instead.
+var LeastLoadedEnabled = false
+
 const (
 	queueModeManual      = "manual"
 	queueModeRoundRobin  = "round_robin"
@@ -193,6 +198,10 @@ func (h *QueuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mode must be manual, round_robin or least_loaded", http.StatusBadRequest)
 		return
 	}
+	if mode == queueModeLeastLoaded && !LeastLoadedEnabled {
+		http.Error(w, "least_loaded needs the central routing engine, which is not enabled", http.StatusConflict)
+		return
+	}
 
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 	if taken, err := nameTaken(r, q, tc.TenantID, name, uuid.Nil); err != nil {
@@ -266,6 +275,10 @@ func (h *QueuesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Mode != nil && *req.Mode != queueModeManual && *req.Mode != queueModeRoundRobin && *req.Mode != queueModeLeastLoaded {
 		http.Error(w, "mode must be manual, round_robin or least_loaded", http.StatusBadRequest)
+		return
+	}
+	if req.Mode != nil && *req.Mode == queueModeLeastLoaded && !LeastLoadedEnabled {
+		http.Error(w, "least_loaded needs the central routing engine, which is not enabled", http.StatusConflict)
 		return
 	}
 

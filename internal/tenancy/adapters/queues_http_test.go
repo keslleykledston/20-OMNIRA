@@ -466,3 +466,34 @@ func TestLineQueueRuleIsPermissionedTenantScopedAuditedAndGuardsDelete(t *testin
 	}
 	_ = def
 }
+
+// ADR-0044: least_loaded is only honoured by the central engine, so the API refuses it while the engine is off (no silently ignored mode).
+func TestLeastLoadedModeNeedsTheRoutingEngine(t *testing.T) {
+	seed, app, h := queuesEnv(t)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	q := seedQueue(t, seed, a.tenantID, "Fila", "manual", true)
+	defer func(v bool) { LeastLoadedEnabled = v }(LeastLoadedEnabled)
+
+	LeastLoadedEnabled = false
+	if got := callQueues(t, app, a.tenantID, admin, http.MethodPost, h.Create, nil, `{"name":"LL","mode":"least_loaded"}`).Code; got != http.StatusConflict {
+		t.Fatalf("create least_loaded with the engine off = %d, want 409", got)
+	}
+	if got := callQueues(t, app, a.tenantID, admin, http.MethodPatch, h.Update, map[string]string{"queue_id": q.String()}, `{"mode":"least_loaded"}`).Code; got != http.StatusConflict {
+		t.Fatalf("update to least_loaded with the engine off = %d, want 409", got)
+	}
+	if got := callQueues(t, app, a.tenantID, admin, http.MethodPost, h.Create, nil, `{"name":"RR","mode":"round_robin"}`).Code; got != http.StatusCreated {
+		t.Fatalf("round_robin is unaffected: %d", got)
+	}
+	LeastLoadedEnabled = true
+	rec := callQueues(t, app, a.tenantID, admin, http.MethodPost, h.Create, nil, `{"name":"LL","mode":"least_loaded"}`)
+	if rec.Code != http.StatusCreated || decodeQueue(t, rec).Mode != "least_loaded" {
+		t.Fatalf("create least_loaded with the engine on = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := callQueues(t, app, a.tenantID, admin, http.MethodPatch, h.Update, map[string]string{"queue_id": q.String()}, `{"mode":"least_loaded"}`).Code; got != http.StatusOK {
+		t.Fatalf("update to least_loaded with the engine on = %d", got)
+	}
+	if got := callQueues(t, app, a.tenantID, admin, http.MethodPost, h.Create, nil, `{"name":"X","mode":"nope"}`).Code; got != http.StatusBadRequest {
+		t.Fatalf("unknown mode = %d, want 400", got)
+	}
+}

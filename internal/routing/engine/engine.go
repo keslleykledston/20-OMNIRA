@@ -24,6 +24,10 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
+// engineCandidateLimit bounds the people evaluated per decision. A queue with more members than this is reported (ReasonCandidatesTruncated)
+// instead of silently starving whoever comes after the limit; a paged candidate walk is the follow-up for queues of that size.
+const engineCandidateLimit = 2000
+
 type Kind string
 
 const (
@@ -49,6 +53,7 @@ const (
 	ReasonCapacityExhausted = "capacity_exhausted"
 	ReasonAssigned          = "assigned"
 	ReasonPresenceDown      = "presence_unavailable"
+	ReasonTruncated         = "candidates_truncated"
 )
 
 // Triggers (the part of the idempotency key that says WHY the engine was asked).
@@ -156,7 +161,7 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		return save(Decision{Kind: WaitUntilOpen, Reason: ReasonSectorClosed, Destination: "queue:" + queue.String(), WakeAt: avail.NextOpen}, "waiting_open")
 	}
 	// 4. open: who may receive it, by the single eligibility rule, in the order of the queue's strategy
-	snap, err := sectorsadapters.Snapshot(ctx, q, tenant, queue, now, e.presence)
+	snap, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, now, e.presence, sectorsadapters.SnapshotOptions{Limit: engineCandidateLimit})
 	if err != nil {
 		return Decision{}, err
 	}
@@ -170,7 +175,7 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		}
 	}
 	for _, cand := range candidates {
-		ok, err := tryAssign(ctx, q, tenant, queue, req.ConversationID, cand, req.StrategyReason)
+		ok, err := tryAssign(ctx, q, tenant, queue, req.ConversationID, cand, req.StrategyReason, now)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -191,6 +196,8 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 	}
 	reason := ReasonNoEligibleAgent
 	switch {
+	case snap.Truncated:
+		reason = ReasonTruncated
 	case anyPresenceDown:
 		reason = ReasonPresenceDown
 	case onlyCapacity(snap.Agents):
@@ -251,11 +258,19 @@ func onlyCapacity(agents []sectorsadapters.AgentVerdict) bool {
 	return any
 }
 
-// tryAssign is the atomic step for ONE candidate: a try-lock per agent (never wait: a busy agent is skipped, like SKIP LOCKED, so two
-// workers cannot deadlock on each other's candidates), capacity re-counted under that lock, then the owner is set only if still empty.
-func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, conversation uuid.UUID, cand sectorsadapters.AgentVerdict, reason string) (bool, error) {
+// tryAssign is the atomic step for ONE candidate. Lock order everywhere is conversation -> routing state -> timer, and here the
+// conversation row is already ours; then the member row (the SAME lock the legacy round-robin takes, so a legacy worker and the engine
+// can never both take the last slot of an agent), then a try-lock per agent (never wait: a busy agent is skipped). Under those locks
+// the candidate is evaluated AGAIN by the same eligibility rule (membership, availability, profile, shift, on-call, capacity), because
+// the snapshot that chose it may be seconds old; only then is the owner set, and only if still empty.
+func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, conversation uuid.UUID, cand sectorsadapters.AgentVerdict, reason string, now time.Time) (bool, error) {
 	if reason == "" {
 		reason = "round_robin"
+	}
+	var member int
+	err := q.QueryRow(ctx, `SELECT 1 FROM queue_members WHERE tenant_id=$1 AND queue_id=$2 AND user_id=$3 FOR UPDATE`, tenant, queue, cand.UserID).Scan(&member)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) { // no row = an on-call person who is not a member of the queue
+		return false, err
 	}
 	var locked bool
 	if err := q.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('routing:agent:' || $1::text || ':' || $2::text, 0))`, tenant, cand.UserID).Scan(&locked); err != nil {
@@ -264,11 +279,12 @@ func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, convers
 	if !locked {
 		return false, nil
 	}
-	var workload int
-	if err := q.QueryRow(ctx, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND queue_id=$2 AND assigned_to_user_id=$3 AND status='open'`, tenant, queue, cand.UserID).Scan(&workload); err != nil {
+	only := cand.UserID
+	fresh, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, now, nil, sectorsadapters.SnapshotOptions{Only: &only, SkipPresence: true, Limit: 1})
+	if err != nil {
 		return false, err
 	}
-	if workload >= cand.Capacity {
+	if len(fresh.Agents) != 1 || !fresh.Agents[0].Eligible {
 		return false, nil
 	}
 	tag, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
@@ -310,7 +326,12 @@ func persist(ctx context.Context, q platformdb.Querier, tenant, conversation uui
 	if err := q.QueryRow(ctx, `INSERT INTO routing_engine_decisions (tenant_id, conversation_id, episode, step_index, trigger, decision, destination, reason)
 		VALUES ($1,$2,$3,0,$4,$5,$6,$7)
 		ON CONFLICT (tenant_id, conversation_id, episode, step_index, trigger)
-		DO UPDATE SET decision=EXCLUDED.decision, destination=EXCLUDED.destination, reason=EXCLUDED.reason, attempts=routing_engine_decisions.attempts+1, updated_at=now()
+		DO UPDATE SET
+		  -- the original assignment is the decision of record: a duplicate trigger only counts as another attempt
+		  decision=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason='assigned' THEN routing_engine_decisions.decision ELSE EXCLUDED.decision END,
+		  destination=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason='assigned' THEN routing_engine_decisions.destination ELSE EXCLUDED.destination END,
+		  reason=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason='assigned' THEN routing_engine_decisions.reason ELSE EXCLUDED.reason END,
+		  attempts=routing_engine_decisions.attempts+1, updated_at=now()
 		RETURNING attempts`, tenant, conversation, episode, trigger, string(d.Kind), d.Destination, d.Reason).Scan(&attempts); err != nil {
 		return Decision{}, fmt.Errorf("engine: decision: %w", err)
 	}
@@ -327,7 +348,7 @@ func planWakeup(ctx context.Context, q platformdb.Querier, tenant, conversation 
 	// claimed the old plan cannot complete the new one.
 	_, err := q.Exec(ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, step_index, due_at) VALUES ($1,$2,$3,'open_wakeup',0,$4)
 		ON CONFLICT (tenant_id, conversation_id, episode, kind, step_index)
-		DO UPDATE SET due_at=EXCLUDED.due_at, state='pending', lease_until=NULL,
+		DO UPDATE SET due_at=EXCLUDED.due_at, state='pending', lease_until=NULL, claim_token=NULL,
 		  generation=CASE WHEN routing_engine_timers.due_at IS DISTINCT FROM EXCLUDED.due_at THEN routing_engine_timers.generation+1 ELSE routing_engine_timers.generation END,
 		  updated_at=now()`, tenant, conversation, episode, due)
 	return err

@@ -68,6 +68,21 @@ type agentRow struct {
 // Snapshot evaluates every candidate of a queue at an instant. It is READ-ONLY (it assigns nothing): the routing engine and the
 // monitoring screen both ask this same question, so the answer a supervisor sees is the rule the engine applies.
 func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UUID, at time.Time, presence PresenceChecker) (QueueSnapshot, error) {
+	return SnapshotWith(ctx, q, tenant, queueID, at, presence, SnapshotOptions{})
+}
+
+// SnapshotOptions narrows or widens one evaluation. The zero value is the monitoring snapshot.
+type SnapshotOptions struct {
+	Only         *uuid.UUID // evaluate this one person (the engine re-checks the chosen candidate under its lock)
+	SkipPresence bool       // do not read presence (already checked for the whole queue; Valkey is not transactional)
+	Limit        int        // max people evaluated (default snapshotMaxAgents)
+}
+
+func SnapshotWith(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UUID, at time.Time, presence PresenceChecker, opt SnapshotOptions) (QueueSnapshot, error) {
+	limit := opt.Limit
+	if limit <= 0 {
+		limit = snapshotMaxAgents
+	}
 	avail, err := QueueAvailability(ctx, q, tenant, queueID, at)
 	if err != nil {
 		return QueueSnapshot{}, err
@@ -93,7 +108,7 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 		LEFT JOIN users u ON u.id=qm.user_id
 		LEFT JOIN memberships m ON m.tenant_id=qm.tenant_id AND m.user_id=qm.user_id
 		LEFT JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id
-		WHERE qm.tenant_id=$1 AND qm.queue_id=$2 ORDER BY qm.user_id LIMIT $3`, tenant, queueID, snapshotMaxAgents+1)
+		WHERE qm.tenant_id=$1 AND qm.queue_id=$2 AND ($4::uuid IS NULL OR qm.user_id=$4) ORDER BY qm.user_id LIMIT $3`, tenant, queueID, limit+1, opt.Only)
 	if err != nil {
 		return QueueSnapshot{}, err
 	}
@@ -120,8 +135,8 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 		LEFT JOIN users u ON u.id=p.user_id
 		LEFT JOIN memberships m ON m.tenant_id=p.tenant_id AND m.user_id=p.user_id
 		LEFT JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id
-		WHERE p.tenant_id=$1 AND p.starts_at <= $3 AND p.ends_at > $3 AND (r.sector_id IS NULL OR r.sector_id IS NOT DISTINCT FROM $4)
-		GROUP BY p.user_id, p.tenant_id, ap.id, u.display_name, m.status, ap.status LIMIT $5`, tenant, queueID, at, sectorID, snapshotMaxAgents+1)
+		WHERE p.tenant_id=$1 AND p.starts_at <= $3 AND p.ends_at > $3 AND (r.sector_id IS NULL OR r.sector_id IS NOT DISTINCT FROM $4) AND ($6::uuid IS NULL OR p.user_id=$6)
+		GROUP BY p.user_id, p.tenant_id, ap.id, u.display_name, m.status, ap.status LIMIT $5`, tenant, queueID, at, sectorID, limit+1, opt.Only)
 	if err != nil {
 		return QueueSnapshot{}, err
 	}
@@ -148,14 +163,14 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 	if orows.Err() != nil {
 		return QueueSnapshot{}, orows.Err()
 	}
-	truncated := len(rows) > snapshotMaxAgents
+	truncated := len(rows) > limit
 	ids := make([]uuid.UUID, 0, len(rows))
 	for id := range rows {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
-	if len(ids) > snapshotMaxAgents {
-		ids = ids[:snapshotMaxAgents]
+	if len(ids) > limit {
+		ids = ids[:limit]
 	}
 	if err := loadShifts(ctx, q, tenant, queueID, sectorID, at, ids, rows); err != nil {
 		return QueueSnapshot{}, err
@@ -163,7 +178,7 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 	// presence, one batch per chunk (never one call per agent)
 	online := map[uuid.UUID]bool{}
 	presenceDown := false
-	if presenceReq && realtime {
+	if presenceReq && realtime && !opt.SkipPresence {
 		if presence == nil {
 			presenceDown = true
 		} else {
@@ -189,12 +204,12 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 			}
 		}
 	}
-	snap := QueueSnapshot{QueueID: queueID, At: at, Open: avail.Open, PresenceReq: presenceReq && realtime, Truncated: truncated, CalendarOnly: !realtime, Agents: []AgentVerdict{}}
+	snap := QueueSnapshot{QueueID: queueID, At: at, Open: avail.Open, PresenceReq: presenceReq && realtime && !opt.SkipPresence, Truncated: truncated, CalendarOnly: !realtime, Agents: []AgentVerdict{}}
 	for _, id := range ids {
 		r := rows[id]
 		v := eligibility.Evaluate(eligibility.Facts{
 			Member: r.member, OnCall: r.onCall, Active: r.active, Available: r.available, ShiftOpen: r.shiftOpen, QueueOpen: avail.Open,
-			PresenceReq: presenceReq && realtime, PresenceOK: online[r.profileID], PresenceDown: presenceDown, Workload: workload(r, realtime), Capacity: r.capacity,
+			PresenceReq: presenceReq && realtime && !opt.SkipPresence, PresenceOK: online[r.profileID], PresenceDown: presenceDown, Workload: workload(r, realtime), Capacity: r.capacity,
 		}, eligibility.Policy{})
 		if v.Eligible {
 			snap.EligibleCnt++
