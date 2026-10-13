@@ -529,3 +529,8 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 
 - `GET /inbox/conversations?queue=mine|none|<uuid>` + segmento "Meus grupos" no menu "Mais…" da lista do tenant. **É uma visão, não autorização**: quem podia ler continua podendo, nada some por padrão. O escopo de leitura de verdade (S3 completo) segue proposto e depende da decisão do dono por tenant.
 - Provas: Postgres real (6 cenários, inclusive grupo de outro tenant e id malformado), Vitest 920/920, gate de integração 37/37 (de `git archive`). Tags de volta `rollback-pre-s3lite-20261012-2004`; api/web saudáveis, `enforce` 1, health check OK, rota sem sessão → 401.
+
+## 2026-10-13 — setores padrão Comercial, Financeiro e Suporte (migration 123) — IMPLANTADO (api `sha-a46a6a8`, ledger 123)
+
+- Por ordem do dono: toda empresa existente recebeu os três grupos (manuais, nunca o padrão) e as empresas criadas pelo Hub passam a nascer com eles (`StandardSectors`). Em produção: Test Company LTDA (5 grupos), Keslley_Pessoal (4) e Test Company (3). **Test Company continua sem grupo padrão** (já era assim: as conversas novas dela não são roteadas até alguém escolher um padrão).
+- Provas: Postgres real (migration idempotente, respeita grupo existente, down só remove o intocado), criação de empresa falha sem o laço (mutante), gate 37/37 de `git archive`, migrations 093–123 up/down/up. Backup `omnira_dev_20261012T2…Z` (último), tags de volta `rollback-pre-sectors123-20261012-2036`.
