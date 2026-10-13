@@ -31,6 +31,11 @@ export const NODE_LABELS: Record<string, string> = {
   ai_extract: 'IA: extrair dados',
   ai_summarize: 'IA: resumir conversa',
   end: 'Encerrar',
+  check_schedule: 'Consultar horário',
+  check_availability: 'Consultar disponibilidade',
+  select_sector: 'Perguntar o setor',
+  assign_sector: 'Direcionar para setor',
+  apply_overflow: 'Aplicar transbordo',
 }
 
 export const CATEGORY_LABELS: Record<string, string> = {
@@ -61,6 +66,13 @@ export const PORT_LABELS: Record<string, string> = {
   selected: 'escolheu',
   found: 'encontrou',
   low_confidence: 'baixa confiança',
+  unavailable: 'indisponível',
+  available: 'disponível',
+  missing: 'não existe mais',
+  assigned: 'atribuída a um atendente',
+  queued: 'aguardando na fila',
+  waiting_open: 'aguardando abrir',
+  manual: 'ação manual',
 }
 
 export function nodeLabel(type: string): string {
@@ -109,6 +121,16 @@ export function portsOf(node: FlowNode): PortDef[] {
     }
     case 'business_hours':
       return [req('open'), req('closed')]
+    case 'check_schedule':
+      return [req('open'), req('closed'), opt('unavailable')]
+    case 'check_availability':
+      return [req('available'), req('unavailable'), opt('closed'), opt('missing')]
+    case 'select_sector':
+      return [req('selected'), req('timeout'), opt('none'), opt('window_closed'), opt('error')]
+    case 'assign_sector':
+      return [req('next'), opt('unavailable'), opt('error')]
+    case 'apply_overflow':
+      return [req('assigned'), req('queued'), opt('waiting_open'), opt('manual'), opt('error')]
     case 'resolve_contact':
       return [req('known'), req('unknown')]
     case 'resolve_customer_context':
@@ -208,6 +230,8 @@ export function defaultConfig(type: string): Record<string, unknown> | undefined
       return { timezone: 'America/Sao_Paulo', windows: [{ days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:00', end: '18:00' }] }
     case 'create_ticket':
       return { subject: '', priority: 'medium' }
+    case 'select_sector':
+      return { text: '' }
     case 'subflow':
       return { flow: '' }
     case 'end':

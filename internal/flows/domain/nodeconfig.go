@@ -114,6 +114,31 @@ type HumanHandoffConfig struct {
 	Summary string         `json:"summary,omitempty"`
 }
 
+// ScheduleCheckConfig names ONE place to ask about: a queue or a sector (by id; a sector or queue that is renamed keeps working, one that is
+// gone or deactivated takes the "unavailable" port instead of breaking the flow).
+type ScheduleCheckConfig struct {
+	Queue  *ResourceField `json:"queue,omitempty"`
+	Sector *ResourceField `json:"sector,omitempty"`
+}
+
+// SelectSectorConfig asks the contact to choose among the company's ACTIVE sectors, read when the node runs (a new or deactivated sector
+// shows up or disappears without editing the flow). The choice is stored in the variable (default "sector": id and name).
+type SelectSectorConfig struct {
+	Text           string `json:"text,omitempty"`
+	Variable       string `json:"variable,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	MaxAttempts    int    `json:"max_attempts,omitempty"`
+}
+
+// AssignSectorConfig routes the conversation to a sector: a fixed one, or the one the contact chose (FromVariable).
+type AssignSectorConfig struct {
+	Sector       *ResourceField `json:"sector,omitempty"`
+	FromVariable string         `json:"from_variable,omitempty"`
+}
+
+// ApplyOverflowConfig asks the routing engine to evaluate the conversation now, with the overflow policy of its queue.
+type ApplyOverflowConfig struct{}
+
 type SubflowConfig struct {
 	Flow      string `json:"flow"`                 // slug of a SUBFLOW flow of the tenant
 	VersionID string `json:"version_id,omitempty"` // pinned by publish; never written by hand

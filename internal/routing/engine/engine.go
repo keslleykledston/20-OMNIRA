@@ -979,3 +979,15 @@ func cancelTimers(ctx context.Context, q platformdb.Querier, tenant, conversatio
 	_, err := q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', claim_token=NULL, updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND episode=$3 AND kind NOT IN ('sla_risk','sla_breach') AND state IN ('pending','leased')`, tenant, conversation, episode)
 	return err
 }
+
+// SectorQueue is the queue of a sector that a NEW conversation should enter: the same choice the overflow chain makes for a sector
+// destination (open, with somebody eligible; else the first acceptable queue where the conversation waits). The Flow Builder node
+// "send to sector" asks this instead of re-implementing it. An empty reason means a queue was found.
+func (e *Engine) SectorQueue(ctx context.Context, sector uuid.UUID, now time.Time) (uuid.UUID, string, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil {
+		return uuid.Nil, "", errors.New("engine: tenant context required")
+	}
+	q := platformdb.QuerierFromContext(ctx, e.pool)
+	return e.chooseSectorQueue(ctx, q, tc.TenantID, overflow.Step{DestID: sector}, map[string]bool{}, now)
+}

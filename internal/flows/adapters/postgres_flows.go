@@ -587,3 +587,29 @@ func (r *PostgresFlowRepository) RecentInboundTexts(ctx context.Context, convers
 	}
 	return out, rows.Err()
 }
+
+// ExistingSectors returns which of ids are sectors of the session tenant (RLS + explicit filter). It makes PostgresFlowRepository a
+// ports.SectorChecker, so a flow that names a foreign or unknown sector cannot be published.
+func (r *PostgresFlowRepository) ExistingSectors(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[uuid.UUID]bool{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.q(ctx).Query(ctx, `SELECT id FROM sectors WHERE tenant_id=$1 AND id = ANY($2)`, tenantID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}

@@ -185,3 +185,53 @@ func (f *simEffects) SendText(_ context.Context, _ uuid.UUID, text, key string) 
 	f.messages = append(f.messages, SimMessage{Step: stepOfKey(key), Text: text})
 	return ports.SendQueued, nil
 }
+
+var _ ports.RoutingEffects = (*simEffects)(nil)
+
+func (f *simEffects) place(id uuid.UUID) SimPlace {
+	p := SimPlace{Schedule: "open", Availability: "available"}
+	if f.sc.Routing != nil {
+		if sp, ok := f.sc.Routing.Places[id.String()]; ok {
+			if sp.Schedule != "" {
+				p.Schedule = sp.Schedule
+			}
+			if sp.Availability != "" {
+				p.Availability = sp.Availability
+			}
+		}
+	}
+	return p
+}
+
+func (f *simEffects) Schedule(_ context.Context, _ string, id uuid.UUID) (string, error) {
+	return f.place(id).Schedule, nil
+}
+func (f *simEffects) Availability(_ context.Context, _ string, id uuid.UUID) (string, error) {
+	return f.place(id).Availability, nil
+}
+func (f *simEffects) ActiveSectors(context.Context) ([]ports.SectorOption, error) {
+	var out []ports.SectorOption
+	if f.sc.Routing != nil {
+		for _, s := range f.sc.Routing.Sectors {
+			if id, err := uuid.Parse(s.ID); err == nil {
+				out = append(out, ports.SectorOption{ID: id, Name: s.Name})
+			}
+		}
+	}
+	return out, nil
+}
+func (f *simEffects) AssignSector(_ context.Context, _ uuid.UUID, sector uuid.UUID) (string, error) {
+	if p := f.place(sector); p.Schedule == "unavailable" || p.Availability == "missing" {
+		return "unavailable", nil
+	}
+	f.add("assign_sector", map[string]any{"sector": sector.String()})
+	return "assigned", nil
+}
+func (f *simEffects) ApplyOverflow(context.Context, uuid.UUID) (string, error) {
+	out := "queued"
+	if f.sc.Routing != nil && f.sc.Routing.Overflow != "" {
+		out = f.sc.Routing.Overflow
+	}
+	f.add("apply_overflow", map[string]any{"outcome": out})
+	return out, nil
+}

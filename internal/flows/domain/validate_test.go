@@ -169,7 +169,8 @@ func TestParseDefinitionLimits(t *testing.T) {
 
 func TestEveryNodeTypeHasASpec(t *testing.T) {
 	all := []NodeType{NodeTrigger, NodeSendMessage, NodeAsk, NodeChoice, NodeCondition, NodeSwitch, NodeSetVariable, NodeBusinessHours,
-		NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets, NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd}
+		NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets, NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd,
+		NodeCheckSchedule, NodeCheckAvailability, NodeSelectSector, NodeAssignSector, NodeApplyOverflow}
 	for _, nt := range all {
 		if _, ok := SpecFor(nt); !ok {
 			t.Errorf("node type %s has no spec", nt)

@@ -527,7 +527,7 @@ func main() {
 				log.Printf("Flow AI nodes enabled (provider=%s)\n", cfg.AIProvider)
 			}
 		}
-		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects, flowsapplication.AllExecutorsWith(flowAI)).WithMetrics(flowCounters)
+		flowEngine := flowsapplication.NewEngine(flowRepo, flowRepo, flowEffects.WithRouting(routingEngine, presenceChecker), flowsapplication.AllExecutorsWith(flowAI)).WithMetrics(flowCounters)
 		flowHandler, err := flowsworker.NewHandler(flowsworker.NewPostgresConversationRunner(dbPool), flowEngine)
 		if err != nil {
 			log.Fatalf("flows handler error: %v", err)

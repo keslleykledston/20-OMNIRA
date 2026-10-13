@@ -53,6 +53,11 @@ type FlowRepository interface {
 }
 
 // ResourceChecker confirms that referenced resources belong to the SESSION tenant (a foreign or unknown id is simply absent).
+// SectorChecker is an optional ResourceChecker capability: sectors a flow refers to (kind "sector") must belong to the session tenant too.
+type SectorChecker interface {
+	ExistingSectors(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error)
+}
+
 type ResourceChecker interface {
 	ExistingQueues(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error)
 	ExistingConnections(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]bool, error)

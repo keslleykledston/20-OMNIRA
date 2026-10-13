@@ -10,9 +10,16 @@ export interface QueueOption {
   name: string
 }
 
+export interface SectorOption {
+  id: string
+  name: string
+  active: boolean
+}
+
 interface Props {
   node: FlowNode
   queues: QueueOption[]
+  sectors?: SectorOption[]
   subflows: Flow[]
   variables: string[]
   readOnly?: boolean
@@ -86,7 +93,7 @@ function ListEditor<T extends Record<string, unknown>>({ title, items, addLabel,
 
 const WEEKDAYS: [string, string][] = [['mon', 'Seg'], ['tue', 'Ter'], ['wed', 'Qua'], ['thu', 'Qui'], ['fri', 'Sex'], ['sat', 'Sáb'], ['sun', 'Dom']]
 
-export default function NodeInspector({ node, queues, subflows, variables, readOnly, onConfig, onDelete }: Props) {
+export default function NodeInspector({ node, queues, sectors = [], subflows, variables, readOnly, onConfig, onDelete }: Props) {
   const cfg = (node.config ?? {}) as Cfg
   const set = (patch: Cfg) => onConfig({ ...cfg, ...patch })
   const ro = !!readOnly
@@ -99,8 +106,66 @@ export default function NodeInspector({ node, queues, subflows, variables, readO
     </Select>
   )
 
+  // Um lugar é um setor OU um grupo (fila), sempre por id: renomear não quebra o fluxo; um setor desativado ou removido faz o nó seguir a saída "indisponível".
+  const placeSelect = (label: string, hint: string) => {
+    const sectorId = typeof cfg.sector === 'string' ? cfg.sector : ''
+    const queueId = typeof cfg.queue === 'string' ? cfg.queue : ''
+    const value = sectorId ? `sector:${sectorId}` : queueId ? `queue:${queueId}` : ''
+    const known = (sectorId && sectors.some((x) => x.id === sectorId)) || (queueId && queues.some((x) => x.id === queueId))
+    return (
+      <Select label={label} value={value} disabled={ro} hint={hint} onChange={(v) => {
+        const [kind, id] = v.split(':')
+        set({ sector: kind === 'sector' ? id : undefined, queue: kind === 'queue' ? id : undefined })
+      }}>
+        <option value="">Selecione um setor ou grupo</option>
+        {value && !known && <option value={value}>Item que não existe mais</option>}
+        <optgroup label="Setores">
+          {sectors.map((x) => <option key={x.id} value={`sector:${x.id}`}>{x.active ? x.name : `${x.name} (inativo)`}</option>)}
+        </optgroup>
+        <optgroup label="Grupos">
+          {queues.map((x) => <option key={x.id} value={`queue:${x.id}`}>{x.name}</option>)}
+        </optgroup>
+      </Select>
+    )
+  }
+
   let form: ReactNode = null
   switch (node.type) {
+    case 'check_schedule':
+      form = placeSelect('Consultar o horário de', 'Usa o mesmo calendário do setor ou grupo (feriados, exceções e suspensões incluídos). Nada é configurado aqui.')
+      break
+    case 'check_availability':
+      form = placeSelect('Consultar a disponibilidade de', 'Disponível = aberto e com ao menos um atendente elegível agora (escala, presença e capacidade).')
+      break
+    case 'select_sector':
+      form = (
+        <>
+          <TextArea label="Pergunta" value={str(cfg, 'text')} disabled={ro} rows={3} helperText="Vazio usa: Com qual setor você quer falar? As opções são os setores ativos da empresa, lidos na hora da pergunta." onChange={(e) => set({ text: e.target.value || undefined })} />
+          <Input label="Tempo de espera (segundos)" type="number" min={0} value={str(cfg, 'timeout_seconds')} disabled={ro} helperText="Vazio usa o padrão do fluxo" onChange={(e) => set({ timeout_seconds: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          <Input label="Tentativas inválidas permitidas" type="number" min={0} max={10} value={str(cfg, 'max_attempts')} disabled={ro} onChange={(e) => set({ max_attempts: e.target.value === '' ? undefined : Number(e.target.value) })} />
+          <p className="rounded-control bg-status-info-soft p-2 text-xs text-text-secondary">A escolha fica na variável <strong>sector</strong> (id e nome). Use "Direcionar para setor" em seguida.</p>
+        </>
+      )
+      break
+    case 'assign_sector': {
+      const fromVar = str(cfg, 'from_variable')
+      form = (
+        <>
+          <Select label="Setor" value={fromVar ? '__variable' : typeof cfg.sector === 'string' ? cfg.sector : ''} disabled={ro}
+            hint="O servidor escolhe o grupo do setor (aberto e com atendente elegível). Setor inativo ou removido segue a saída “indisponível”."
+            onChange={(v) => set(v === '__variable' ? { sector: undefined, from_variable: 'sector' } : { sector: v || undefined, from_variable: undefined })}>
+            <option value="">Selecione um setor</option>
+            <option value="__variable">O setor que o cliente escolheu</option>
+            {sectors.map((x) => <option key={x.id} value={x.id}>{x.active ? x.name : `${x.name} (inativo)`}</option>)}
+          </Select>
+          {fromVar && <Input label="Variável que guarda o setor" value={fromVar} disabled={ro} onChange={(e) => set({ from_variable: e.target.value })} />}
+        </>
+      )
+      break
+    }
+    case 'apply_overflow':
+      form = <p className="text-sm text-text-secondary">Pede ao motor de roteamento para decidir agora, com a política de transbordo do grupo da conversa (horário, escala, capacidade, plantão e etapas). Não há o que configurar aqui: as regras ficam em Setores e transbordo.</p>
+      break
     case 'send_message':
       form = <TextArea label="Texto da mensagem" value={str(cfg, 'text')} disabled={ro} rows={4} helperText={`Use {{variavel}} para inserir dados. ${varHint ?? ''}`} onChange={(e) => set({ text: e.target.value })} />
       break

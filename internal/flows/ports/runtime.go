@@ -92,6 +92,28 @@ type Effects interface {
 	SendText(ctx context.Context, conversationID uuid.UUID, text, idempotencyKey string) (SendStatus, error)
 }
 
+// SectorOption is one active sector of the company, as a menu offers it.
+type SectorOption struct {
+	ID   uuid.UUID
+	Name string
+}
+
+// RoutingEffects is an optional Effects capability (ADR-0044): the routing nodes ask the SHARED services about schedules, availability and
+// sectors and ask the routing engine to route. A flow never re-implements those rules; an Effects without this capability makes the
+// routing nodes take their error port.
+//
+// Place states: "open" | "closed" | "unavailable" (the queue or sector is gone or inactive) for schedules; "available" | "unavailable" |
+// "closed" | "missing" for availability (open, and somebody eligible right now). Overflow outcomes: "assigned" | "queued" |
+// "waiting_open" | "manual".
+type RoutingEffects interface {
+	Schedule(ctx context.Context, kind string, id uuid.UUID) (string, error)     // kind: "queue" | "sector"
+	Availability(ctx context.Context, kind string, id uuid.UUID) (string, error) // kind: "queue" | "sector"
+	ActiveSectors(ctx context.Context) ([]SectorOption, error)
+	// AssignSector routes the conversation to the best queue of the sector ("assigned") or reports "unavailable" (inactive, gone, no usable queue).
+	AssignSector(ctx context.Context, conversationID, sectorID uuid.UUID) (string, error)
+	ApplyOverflow(ctx context.Context, conversationID uuid.UUID) (string, error)
+}
+
 // CustomerCloser is an optional Effects capability: close the attendance because the CONTACT asked for it (the system is
 // the actor). It must be idempotent, close the local tickets like an agent's finalize and record source "system".
 type CustomerCloser interface {

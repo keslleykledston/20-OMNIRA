@@ -124,4 +124,11 @@ const (
 	NodeAIExtract          NodeType = "ai_extract"
 	NodeAISummarize        NodeType = "ai_summarize"
 	NodeEnd                NodeType = "end"
+	// ADR-0044: routing nodes. They are thin: the schedule, the availability, the sector choice and the overflow chain are decided by the
+	// shared services (internal/scheduling, internal/routing/*), never re-implemented in a flow.
+	NodeCheckSchedule     NodeType = "check_schedule"
+	NodeCheckAvailability NodeType = "check_availability"
+	NodeSelectSector      NodeType = "select_sector"
+	NodeAssignSector      NodeType = "assign_sector"
+	NodeApplyOverflow     NodeType = "apply_overflow"
 )
