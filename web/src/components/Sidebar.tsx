@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { BrandMark } from './BrandMark'
 import { Link, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
 import { Avatar, Icon } from './primitives'
@@ -107,9 +108,7 @@ export default function Sidebar() {
       {/* Logo/Branding */}
       <div className={clsx('px-4 py-6 border-b border-border-subtle', wide('xl:px-6'))}>
         <div className={clsx('flex items-center gap-2 justify-center', wide('xl:justify-start'), collapsed && 'xl:flex-col xl:gap-3')}>
-          <div className="w-8 h-8 bg-accent-primary rounded-card flex items-center justify-center text-white font-bold text-sm">
-            O
-          </div>
+          <BrandMark size={32} label="OMNIRA" />
           <span className={clsx('hidden font-bold text-text-primary text-lg', wide('xl:inline'))}>OMNIRA</span>
           <button
             type="button"
