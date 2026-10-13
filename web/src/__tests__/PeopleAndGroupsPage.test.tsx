@@ -457,3 +457,24 @@ describe('PeopleAndGroupsPage: permissões e estados', () => {
     expect(await screen.findByRole('heading', { name: 'Suporte' })).toBeInTheDocument()
   })
 })
+
+describe('PeopleAndGroupsPage: estratégia Menor carga (ADR-0044)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    setSession()
+  })
+
+  it('oferece Menor carga, explica que depende do motor e envia o modo least_loaded', async () => {
+    const calls = serve(baseWorld())
+    open('/settings/people?aba=grupos')
+    const user = userEvent.setup()
+    const select = await screen.findByLabelText('Modo de Financeiro')
+    expect(within(select).getByRole('option', { name: 'Menor carga' })).toBeInTheDocument()
+    await user.selectOptions(select, 'least_loaded')
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/queues/q2'))?.body).toEqual({ mode: 'least_loaded' }))
+    await user.click(await screen.findByRole('button', { name: /Novo grupo/ }))
+    await user.click(screen.getByLabelText('Menor carga'))
+    expect(within(screen.getByRole('dialog')).getByText(/Depende do motor de roteamento; enquanto ele não estiver ligado, funciona como rodízio/)).toBeInTheDocument()
+  })
+})

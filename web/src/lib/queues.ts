@@ -2,7 +2,7 @@ import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session'
 
-export type QueueMode = 'manual' | 'round_robin'
+export type QueueMode = 'manual' | 'round_robin' | 'least_loaded'
 
 // Mirrors QueueItem in internal/tenancy/adapters/queues_http.go. The UI calls
 // queues "grupos". member_count / available_count are queue ELIGIBILITY, not
