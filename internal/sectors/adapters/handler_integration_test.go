@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -811,5 +812,125 @@ func TestOverflowPolicyNewDestinationKindsAreValidatedAgainstTheCompany(t *testi
 	})
 	if err != nil || visible != 0 {
 		t.Fatalf("a plain attendant must not list the company's Hub contracts: %d %v", visible, err)
+	}
+}
+
+func TestSLAPolicyAPIValidationPermissionsRevisionIsolationAndMonitor(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	supervisor := e.member(t, a, "tenant_supervisor")
+	agent := e.member(t, a, "tenant_agent")
+	adminB := e.member(t, b, "tenant_admin")
+	q := e.queue(t, a, "Fila", false)
+	qB := e.queue(t, b, "Do B", false)
+	sector := decode[sectorItem](t, e.call(t, a, admin, "POST", "/", e.h.CreateSector, nil, map[string]string{"name": "Setor"})).ID
+	put := func(actor uuid.UUID, body map[string]any) *httptest.ResponseRecorder {
+		return e.call(t, a, actor, "PUT", "/", e.h.PutSLAPolicy, nil, body)
+	}
+	good := map[string]any{"scope_kind": "queue", "scope_id": q, "assignment_seconds": 600, "first_response_seconds": 300, "risk_percent": 75, "counting": "business"}
+	if got := put(agent, good).Code; got != 403 {
+		t.Fatalf("agent = %d, want 403", got)
+	}
+	rec := put(supervisor, good)
+	if rec.Code != 200 {
+		t.Fatalf("supervisor = %d %s", rec.Code, rec.Body.String())
+	}
+	if p := decode[SLAPolicy](t, rec); p.Revision != 1 || p.RiskPercent != 75 || p.Counting != "business" || !p.Active {
+		t.Fatalf("saved: %+v", p)
+	}
+	// defaults: risk 80, wall, active
+	if p := decode[SLAPolicy](t, put(admin, map[string]any{"scope_kind": "tenant", "resolution_seconds": 86400})); p.RiskPercent != 80 || p.Counting != "wall" {
+		t.Fatalf("defaults: %+v", p)
+	}
+	// replace (new revision) and a stale write
+	next := map[string]any{"scope_kind": "queue", "scope_id": q, "assignment_seconds": 120, "expected_revision": 1}
+	if p := decode[SLAPolicy](t, put(admin, next)); p.Revision != 2 {
+		t.Fatalf("revision: %+v", p)
+	}
+	if got := put(admin, next).Code; got != 409 {
+		t.Fatalf("stale = %d, want 409", got)
+	}
+	bad := map[string]map[string]any{
+		"no metric":           {"scope_kind": "tenant"},
+		"bad scope":           {"scope_kind": "galaxy", "assignment_seconds": 60},
+		"tenant with scope":   {"scope_kind": "tenant", "scope_id": q, "assignment_seconds": 60},
+		"queue without scope": {"scope_kind": "queue", "assignment_seconds": 60},
+		"zero budget":         {"scope_kind": "tenant", "assignment_seconds": 0, "queue_wait_seconds": 0},
+		"huge budget":         {"scope_kind": "tenant", "assignment_seconds": 99999999},
+		"risk too high":       {"scope_kind": "tenant", "assignment_seconds": 60, "risk_percent": 100},
+		"bad counting":        {"scope_kind": "tenant", "assignment_seconds": 60, "counting": "lunar"},
+	}
+	for name, body := range bad {
+		if got := put(admin, body).Code; got != 400 {
+			t.Errorf("%s = %d, want 400", name, got)
+		}
+	}
+	if got := put(admin, map[string]any{"scope_kind": "queue", "scope_id": qB, "assignment_seconds": 60}).Code; got != 404 {
+		t.Errorf("another company's queue = %d, want 404", got)
+	}
+	if got := put(admin, map[string]any{"scope_kind": "sector", "scope_id": sector, "assignment_seconds": 60}).Code; got != 200 {
+		t.Errorf("a sector scope = %d", got)
+	}
+	// list is scoped to the company
+	e.call(t, b, adminB, "PUT", "/", e.h.PutSLAPolicy, nil, map[string]any{"scope_kind": "tenant", "assignment_seconds": 5})
+	lst := decode[struct {
+		Items []SLAPolicy `json:"items"`
+	}](t, e.call(t, a, admin, "GET", "/", e.h.ListSLAPolicies, nil, nil))
+	if len(lst.Items) != 3 {
+		t.Fatalf("A has 3 policies (tenant, queue, sector), got %d", len(lst.Items))
+	}
+	// delete
+	del := func(query string) int {
+		return e.call(t, a, admin, "DELETE", "/?"+query, e.h.DeleteSLAPolicy, nil, nil).Code
+	}
+	if got := del("scope_kind=queue&scope_id=" + q.String()); got != 204 {
+		t.Fatalf("delete = %d", got)
+	}
+	if got := del("scope_kind=queue&scope_id=" + q.String()); got != 404 {
+		t.Fatalf("delete again = %d, want 404", got)
+	}
+	if got := del("scope_kind=tenant"); got != 204 {
+		t.Fatalf("delete the tenant policy = %d", got)
+	}
+	if auditCount(t, e, a, "sla.policy_saved") < 3 || auditCount(t, e, a, "sla.policy_removed") != 2 {
+		t.Errorf("audit: saved=%d removed=%d", auditCount(t, e, a, "sla.policy_saved"), auditCount(t, e, a, "sla.policy_removed"))
+	}
+	// the monitor: ids and times of the open conversations of the queue, nearest deadline first, never content
+	mk := func(state string, riskIn, deadlineIn time.Duration) uuid.UUID {
+		contact, conv := uuid.New(), uuid.New()
+		phone := "+55119" + conv.String()[:8]
+		_ = phone
+		if _, err := e.seed.Exec(context.Background(), `INSERT INTO contacts (id, tenant_id, display_name, phone_e164, status) VALUES ($1,$2,'C',$3,'active')`, contact, a, fmt.Sprintf("+5511%09d", time.Now().UnixNano()%1000000000)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversations (id, tenant_id, contact_id, queue_id, status) VALUES ($1,$2,$3,$4,'open')`, conv, a, contact, q); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversation_sla (tenant_id, conversation_id, metric, started_at, budget_seconds, risk_percent, counting, calendar_queue_id, deadline_at, risk_at, state)
+			VALUES ($1,$2,'assignment', now()-interval '5 minutes', 600, 80, 'wall', $3, now()+make_interval(secs => $4), now()+make_interval(secs => $5), $6)`, a, conv, q, deadlineIn.Seconds(), riskIn.Seconds(), state); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		return conv
+	}
+	okc := mk("running", 5*time.Minute, 10*time.Minute)
+	risky := mk("running", -time.Minute, 2*time.Minute)
+	broken := mk("breached", -5*time.Minute, -time.Minute)
+	mon := decode[struct {
+		Counts map[string]int `json:"counts"`
+		Items  []slaClockItem `json:"items"`
+	}](t, e.call(t, a, admin, "GET", "/", e.h.QueueSLA, map[string]string{"queue_id": q.String()}, nil))
+	if mon.Counts["running"] != 1 || mon.Counts["at_risk"] != 1 || mon.Counts["breached"] != 1 || len(mon.Items) != 3 {
+		t.Fatalf("monitor: %+v", mon)
+	}
+	if mon.Items[0].ConversationID != broken || mon.Items[1].ConversationID != risky || mon.Items[2].ConversationID != okc {
+		t.Fatalf("nearest deadline first: %+v", mon.Items)
+	}
+	if got := e.call(t, a, agent, "GET", "/", e.h.QueueSLA, map[string]string{"queue_id": q.String()}, nil).Code; got != 403 {
+		t.Fatalf("agent monitor = %d, want 403", got)
+	}
+	if got := e.call(t, b, adminB, "GET", "/", e.h.QueueSLA, map[string]string{"queue_id": q.String()}, nil).Code; got != 404 {
+		t.Fatalf("another company's queue monitor = %d, want 404", got)
 	}
 }

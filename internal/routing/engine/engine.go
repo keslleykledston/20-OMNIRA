@@ -94,22 +94,25 @@ func New(pool *pgxpool.Pool, presence sectorsadapters.PresenceChecker) *Engine {
 var ErrNotFound = errors.New("engine: conversation not found")
 
 type convRow struct {
-	queueID  *uuid.UUID
-	assigned *uuid.UUID
-	status   string
-	mode     string
+	queueID    *uuid.UUID
+	assigned   *uuid.UUID
+	assignedAt *time.Time
+	createdAt  time.Time
+	status     string
+	mode       string
 }
 
 // stateRow is the routing state of one conversation (one row, locked for the whole decision).
 type stateRow struct {
-	episode     int
-	step        int // 0 = still in the origin queue, n = the n-th step of the overflow chain
-	hops        int
-	visited     []string
-	origin      *uuid.UUID
-	queue       *uuid.UUID
-	stepEntered time.Time
-	state       string
+	episode      int
+	step         int // 0 = still in the origin queue, n = the n-th step of the overflow chain
+	hops         int
+	visited      []string
+	origin       *uuid.UUID
+	queue        *uuid.UUID
+	stepEntered  time.Time
+	enteredQueue time.Time
+	state        string
 }
 
 // Decide runs inside the caller's system tenant session (the routing worker's), in the caller's transaction. The tenant comes from that
@@ -131,9 +134,9 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 
 	// 1. the conversation row is the serialization point: two workers for the same conversation queue up here
 	var c convRow
-	err = q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.status, COALESCE(qq.mode, '')
+	err = q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.status, COALESCE(qq.mode, '')
 		FROM conversations c LEFT JOIN queues qq ON qq.tenant_id=c.tenant_id AND qq.id=c.queue_id
-		WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c`, tenant, req.ConversationID).Scan(&c.queueID, &c.assigned, &c.status, &c.mode)
+		WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c`, tenant, req.ConversationID).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.status, &c.mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Decision{}, ErrNotFound
 	}
@@ -146,8 +149,29 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		return Decision{}, err
 	}
 	detail := map[string]any{}
+	var now time.Time
+	if err := q.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		return Decision{}, err
+	}
+	sla, err := e.syncSLA(ctx, q, tenant, req.ConversationID, c, &st, now)
+	if err != nil {
+		return Decision{}, err
+	}
 	finish := func(d Decision, state string) (Decision, error) {
-		return persist(ctx, q, tenant, req.ConversationID, &st, trigger, detail, d, state)
+		out, err := persist(ctx, q, tenant, req.ConversationID, &st, trigger, detail, d, state)
+		if err != nil {
+			return out, err
+		}
+		// the clocks must reflect what this decision did (assigned: queue clocks met; moved: re-planned on the new calendar)
+		if d.Kind == AssignAgent && d.AssignedUser != uuid.Nil {
+			u := d.AssignedUser
+			c.assigned, c.assignedAt = &u, &now
+		}
+		c.queueID = st.queue
+		if _, err := e.syncSLA(ctx, q, tenant, req.ConversationID, c, &st, now); err != nil {
+			return out, err
+		}
+		return out, nil
 	}
 	switch {
 	case c.status != "open":
@@ -159,10 +183,6 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		return finish(Decision{Kind: AssignAgent, Reason: ReasonAlreadyAssigned, Destination: "agent:" + c.assigned.String(), AssignedUser: *c.assigned}, "assigned")
 	case c.queueID == nil:
 		return finish(Decision{Kind: NoAction, Reason: ReasonNoQueue}, "done")
-	}
-	var now time.Time
-	if err := q.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-		return Decision{}, err
 	}
 	var pol *overflow.Policy
 	if st.origin != nil {
@@ -205,7 +225,7 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 		// blocked (or a manual queue): consult the chain
 		var res chainResult
 		if pol != nil && !out.presenceDown { // a presence backend that is down is an infrastructure fault, not a business trigger: the chain does not act on it
-			if res, err = e.chain(ctx, q, tenant, req, &st, pol, out.trigger, now); err != nil {
+			if res, err = e.chain(ctx, q, tenant, req, &st, pol, out.trigger, sla.triggers, now); err != nil {
 				return Decision{}, err
 			}
 		}
@@ -360,7 +380,7 @@ type chainResult struct {
 
 // chain consults the overflow policy for the conversation's situation. Triggers evaluated: the one that blocks it now, and max_wait
 // (the time in the current step). It performs AT MOST ONE transition per call; an immediate next step happens in the caller's loop.
-func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, pol *overflow.Policy, blocking overflow.Trigger, now time.Time) (chainResult, error) {
+func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, pol *overflow.Policy, blocking overflow.Trigger, slaTriggers []overflow.Trigger, now time.Time) (chainResult, error) {
 	origin := *st.origin
 	visited := map[string]bool{}
 	for _, k := range st.visited {
@@ -370,6 +390,7 @@ func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 	if blocking != "" {
 		triggers = append(triggers, blocking)
 	}
+	triggers = append(triggers, slaTriggers...)
 	triggers = append(triggers, overflow.MaxWait)
 	elapsedFn := func(business bool) time.Duration {
 		d, err := sectorsadapters.Elapsed(ctx, q, tenant, origin, st.stepEntered, now, business)
@@ -895,9 +916,9 @@ func loadState(ctx context.Context, q platformdb.Querier, tenant, conversation u
 		return stateRow{}, fmt.Errorf("engine: routing state: %w", err)
 	}
 	var st stateRow
-	if err := q.QueryRow(ctx, `SELECT episode, step_index, hops, visited, origin_queue_id, queue_id, step_entered_at, state FROM routing_engine_state
+	if err := q.QueryRow(ctx, `SELECT episode, step_index, hops, visited, origin_queue_id, queue_id, step_entered_at, entered_queue_at, state FROM routing_engine_state
 		WHERE tenant_id=$1 AND conversation_id=$2 FOR UPDATE`, tenant, conversation).
-		Scan(&st.episode, &st.step, &st.hops, &st.visited, &st.origin, &st.queue, &st.stepEntered, &st.state); err != nil {
+		Scan(&st.episode, &st.step, &st.hops, &st.visited, &st.origin, &st.queue, &st.stepEntered, &st.enteredQueue, &st.state); err != nil {
 		return stateRow{}, err
 	}
 	moved := queue != nil && (st.queue == nil || *st.queue != *queue)
@@ -905,7 +926,7 @@ func loadState(ctx context.Context, q platformdb.Querier, tenant, conversation u
 	if moved || reopened {
 		if err := q.QueryRow(ctx, `UPDATE routing_engine_state SET episode=episode+1, step_index=0, hops=0, visited=$3, origin_queue_id=$4, queue_id=$4,
 			state='queued', entered_queue_at=now(), step_entered_at=now(), generation=generation+1, updated_at=now()
-			WHERE tenant_id=$1 AND conversation_id=$2 RETURNING episode, step_entered_at`, tenant, conversation, originKey, queue).Scan(&st.episode, &st.stepEntered); err != nil {
+			WHERE tenant_id=$1 AND conversation_id=$2 RETURNING episode, step_entered_at, entered_queue_at`, tenant, conversation, originKey, queue).Scan(&st.episode, &st.stepEntered, &st.enteredQueue); err != nil {
 			return stateRow{}, err
 		}
 		st.step, st.hops, st.visited, st.origin, st.queue, st.state = 0, 0, originKey, queue, queue, "queued"
@@ -954,6 +975,6 @@ func planTimer(ctx context.Context, q platformdb.Querier, tenant, conversation u
 
 // cancelTimers ends every open timer of the episode (the conversation was assigned, finished or handed to a person).
 func cancelTimers(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, episode int) error {
-	_, err := q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', claim_token=NULL, updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND episode=$3 AND state IN ('pending','leased')`, tenant, conversation, episode)
+	_, err := q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', claim_token=NULL, updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND episode=$3 AND kind NOT IN ('sla_risk','sla_breach') AND state IN ('pending','leased')`, tenant, conversation, episode)
 	return err
 }

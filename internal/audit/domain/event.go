@@ -70,6 +70,8 @@ const (
 	ActionCalendarSuspended        AuditAction = "calendar.suspension_added"
 	ActionCalendarResumed          AuditAction = "calendar.suspension_removed"
 	ActionShiftSet                 AuditAction = "agent.shift_set"
+	ActionSLASaved                 AuditAction = "sla.policy_saved"
+	ActionSLARemoved               AuditAction = "sla.policy_removed"
 	ActionOverflowSaved            AuditAction = "overflow.policy_saved"
 	ActionOverflowRemoved          AuditAction = "overflow.policy_removed"
 	ActionShiftCleared             AuditAction = "agent.shift_cleared"
@@ -127,6 +129,7 @@ const (
 	ResourceOnCallRoster      ResourceType = "on_call_roster"
 	ResourceAgentShift        ResourceType = "agent_shift"
 	ResourceOverflowPolicy    ResourceType = "overflow_policy"
+	ResourceSLAPolicy         ResourceType = "sla_policy"
 )
 
 // AuditEvent — evento de auditoria.

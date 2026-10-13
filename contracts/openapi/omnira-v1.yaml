@@ -1302,6 +1302,75 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/sla-policies:
+    get:
+      operationId: listSlaPolicies
+      tags: [Agents]
+      summary: SLA policies of the company
+      description: |
+        Requires `agent.read`. One policy per scope (tenant, sector or queue); the most specific applies, metric by metric
+        (first_response, queue_wait, assignment, resolution).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: "The policies" }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: putSlaPolicy
+      tags: [Agents]
+      summary: Create or replace the SLA policy of one scope
+      description: |
+        Requires `agent.manage`. Body `{scope_kind: tenant|sector|queue, scope_id?, first_response_seconds?, queue_wait_seconds?,
+        assignment_seconds?, resolution_seconds?, risk_percent (1..99, default 80), counting: wall|business (default wall), active,
+        expected_revision?}`. At least one metric. Clocks already running keep the budget they started with. A transfer never restarts a
+        clock: the time lived is kept and the rest is re-planned on the calendar of where the conversation is now (queue_wait, the wait in
+        the CURRENT queue, is the one exception). Risk and breach are reported once (event and decision history).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "The saved policy (revision bumped)" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Stale revision", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    delete:
+      operationId: deleteSlaPolicy
+      tags: [Agents]
+      summary: Remove the SLA policy of one scope
+      description: |
+        Requires `agent.manage`. Query `scope_kind` and, for sector and queue, `scope_id`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: scope_kind, in: query, required: true, schema: { type: string, enum: [tenant, sector, queue] } }
+        - { name: scope_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues/{queue_id}/sla:
+    get:
+      operationId: getQueueSla
+      tags: [Agents]
+      summary: SLA clocks of the open conversations of a queue
+      description: |
+        Requires `agent.read`. Counts of running / at_risk / breached and the nearest deadlines (ids and times, never message content).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      responses:
+        '200': { description: "Counts and clocks" }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/queues/{queue_id}:
     patch:
       operationId: updateQueue
