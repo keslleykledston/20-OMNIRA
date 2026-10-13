@@ -51,6 +51,20 @@ CREATE TABLE on_call_periods (
 CREATE INDEX idx_on_call_periods_active ON on_call_periods (tenant_id, roster_id, starts_at, ends_at);
 CREATE INDEX idx_on_call_periods_user ON on_call_periods (tenant_id, user_id, ends_at);
 
+-- The database itself refuses to schedule somebody who has no membership in the tenant (user_id references the global users table, and
+-- RLS only looks at tenant_id): a Hub operator or a person of another company can never get a shift or an on-call period by any writer.
+CREATE OR REPLACE FUNCTION scheduling_user_is_member() RETURNS trigger AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.memberships m WHERE m.tenant_id = NEW.tenant_id AND m.user_id = NEW.user_id) THEN
+    RAISE EXCEPTION 'user % has no membership in tenant %', NEW.user_id, NEW.tenant_id USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+REVOKE EXECUTE ON FUNCTION scheduling_user_is_member() FROM PUBLIC;
+CREATE TRIGGER agent_shifts_member_guard BEFORE INSERT OR UPDATE OF tenant_id, user_id ON agent_shifts FOR EACH ROW EXECUTE FUNCTION scheduling_user_is_member();
+CREATE TRIGGER on_call_periods_member_guard BEFORE INSERT OR UPDATE OF tenant_id, user_id ON on_call_periods FOR EACH ROW EXECUTE FUNCTION scheduling_user_is_member();
+
 DO $$
 DECLARE t TEXT;
 BEGIN

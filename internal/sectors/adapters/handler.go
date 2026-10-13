@@ -74,6 +74,20 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// attempt runs one statement that may violate a unique constraint inside a savepoint: on failure only the savepoint is rolled back, so the
+// request's transaction stays usable and the handler can answer 409 instead of leaving an aborted transaction to be committed.
+func attempt(r *http.Request, q platformdb.Querier, run func() error) error {
+	if _, err := q.Exec(r.Context(), `SAVEPOINT attempt`); err != nil {
+		return err
+	}
+	if err := run(); err != nil {
+		_, _ = q.Exec(r.Context(), `ROLLBACK TO SAVEPOINT attempt`)
+		return err
+	}
+	_, err := q.Exec(r.Context(), `RELEASE SAVEPOINT attempt`)
+	return err
+}
+
 // conflict maps a unique violation (two requests raced past the pre-check) to the same 409 the pre-check gives.
 func conflict(w http.ResponseWriter, err error, msg string) bool {
 	if pgCode(err) == "23505" {
@@ -201,7 +215,10 @@ func (h *Handler) CreateSector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := uuid.New()
-	if _, err := q.Exec(r.Context(), `INSERT INTO sectors (id, tenant_id, name) VALUES ($1,$2,$3)`, id, tc.TenantID, name); err != nil {
+	if err := attempt(r, q, func() error {
+		_, err := q.Exec(r.Context(), `INSERT INTO sectors (id, tenant_id, name) VALUES ($1,$2,$3)`, id, tc.TenantID, name)
+		return err
+	}); err != nil {
 		if conflict(w, err, "a sector with this name already exists") {
 			return
 		}
@@ -284,7 +301,10 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, err := q.Exec(r.Context(), `UPDATE sectors SET name=$3, active=$4, calendar_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, id, name, active, cal); err != nil {
+	if err := attempt(r, q, func() error {
+		_, err := q.Exec(r.Context(), `UPDATE sectors SET name=$3, active=$4, calendar_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, id, name, active, cal)
+		return err
+	}); err != nil {
 		if conflict(w, err, "a sector with this name already exists") {
 			return
 		}
@@ -397,7 +417,11 @@ func (h *Handler) CreateCalendar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a calendar with this name already exists", http.StatusConflict)
 		return
 	}
-	id, err := CreateCalendar(r.Context(), q, tc.TenantID, name, spec)
+	var id uuid.UUID
+	err := attempt(r, q, func() (e error) {
+		id, e = CreateCalendar(r.Context(), q, tc.TenantID, name, spec)
+		return e
+	})
 	if err != nil {
 		if conflict(w, err, "a calendar with this name already exists") {
 			return
@@ -432,7 +456,11 @@ func (h *Handler) UpdateCalendar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a calendar with this name already exists", http.StatusConflict)
 		return
 	}
-	rev, err := SaveDefinition(r.Context(), q, tc.TenantID, id, name, spec, expected)
+	var rev int
+	err := attempt(r, q, func() (e error) {
+		rev, e = SaveDefinition(r.Context(), q, tc.TenantID, id, name, spec, expected)
+		return e
+	})
 	if errors.Is(err, ErrNotFound) {
 		http.Error(w, "calendar not found", http.StatusNotFound)
 		return

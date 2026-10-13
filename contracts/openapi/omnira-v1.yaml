@@ -822,6 +822,431 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/sectors:
+    get:
+      operationId: listSectors
+      tags: [Agents]
+      summary: List the sectors with their queues
+      description: |
+        Requires `agent.read` (ADR-0044). A sector may own several queues; deactivating never deletes.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createSector
+      tags: [Agents]
+      summary: Create a sector
+      description: |
+        Requires `agent.manage`. Name 1 to 60 characters, unique per tenant (`409`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: "Created" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/sectors/{sector_id}:
+    patch:
+      operationId: updateSector
+      tags: [Agents]
+      summary: Rename, deactivate or set the calendar of a sector
+      description: |
+        Requires `agent.manage`. Body fields `name`, `active`, `calendar_id` (null clears: the sector inherits the tenant default). The id is stable: flows keep working after a rename or deactivation.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: sector_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/calendars:
+    get:
+      operationId: listCalendars
+      tags: [Agents]
+      summary: List the operational calendars
+      description: |
+        Requires `agent.read`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createCalendar
+      tags: [Agents]
+      summary: Create a calendar
+      description: |
+        Requires `agent.manage`. Body `{name, definition:{kind: 24x7|business|custom, timezone (IANA), weekly[], exceptions[], holidays[]}}`; times `HH:MM`, dates `YYYY-MM-DD`; an interval whose end is not after its start crosses midnight and belongs to the day it starts on. Invalid definitions are `400` with the failing rule; body over 256 KiB is `413`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: "Created" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/calendars/{calendar_id}:
+    get:
+      operationId: getCalendar
+      tags: [Agents]
+      summary: Read a calendar with its suspensions and revision
+      description: |
+        Requires `agent.read`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: calendar_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: updateCalendar
+      tags: [Agents]
+      summary: Replace a calendar definition
+      description: |
+        Requires `agent.manage`. Optional `expected_revision`: if somebody saved in between the answer is `409` and nothing is lost. Every save bumps `revision`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: calendar_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    delete:
+      operationId: deleteCalendar
+      tags: [Agents]
+      summary: Delete a calendar not in use
+      description: |
+        Requires `agent.manage`. `409` while a sector, queue or the tenant default uses it.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: calendar_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: "Deleted" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/calendars/{calendar_id}/suspensions:
+    post:
+      operationId: addCalendarSuspension
+      tags: [Agents]
+      summary: Emergency suspension
+      description: |
+        Requires `agent.manage`. Closes the calendar between two instants whatever the other rules say; bumps the revision. At most 200 recent suspensions per calendar (`409`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: calendar_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: "Created" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/calendars/{calendar_id}/suspensions/{suspension_id}:
+    delete:
+      operationId: removeCalendarSuspension
+      tags: [Agents]
+      summary: Lift a suspension
+      description: |
+        Requires `agent.manage`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: calendar_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: suspension_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: "Removed" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/settings/default-calendar:
+    put:
+      operationId: setDefaultCalendar
+      tags: [Agents]
+      summary: Set the tenant default calendar
+      description: |
+        Requires `tenant.manage` (the default lives on the tenants row: only a tenant administrator). Body `{calendar_id: uuid|null}`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues/{queue_id}/sector:
+    put:
+      operationId: setQueueSector
+      tags: [Agents]
+      summary: Link a queue to a sector
+      description: |
+        Requires `agent.manage`. Body `{sector_id: uuid|null}`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues/{queue_id}/calendar:
+    put:
+      operationId: setQueueCalendar
+      tags: [Agents]
+      summary: Give a queue its own calendar
+      description: |
+        Requires `agent.manage`. Body `{calendar_id: uuid|null}`. Inheritance: queue, then sector, then tenant default, then none (always open).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues/{queue_id}/availability:
+    get:
+      operationId: getQueueAvailability
+      tags: [Agents]
+      summary: Is the queue open, and when does that change
+      description: |
+        Requires `agent.read`. Answers `{open, calendar_source, next_open, next_close}`; never the rules.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+        - { name: at, in: query, description: 'RFC 3339 instant (default: now, from the database clock)', schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues/{queue_id}/eligibility:
+    get:
+      operationId: getQueueEligibility
+      tags: [Agents]
+      summary: Who could receive an automatic assignment, and why not for the rest
+      description: |
+        Requires `agent.read`. Evaluates sector calendar, the agent's own shift, presence and capacity as four independent rules and lists every failing reason. Read-only. For an instant that is not now the answer is `calendar_only` (presence and workload are real-time facts). `wired_to_router` is false until the routing engine adopts this rule (ADR-0044 phase 4).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+        - { name: at, in: query, description: 'RFC 3339 instant (default: now, from the database clock)', schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/shifts:
+    get:
+      operationId: listAgentShifts
+      tags: [Agents]
+      summary: List agent shifts
+      description: |
+        Requires `agent.read`. Optional `user_id`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: setAgentShift
+      tags: [Agents]
+      summary: Set or clear an agent shift
+      description: |
+        Requires `agent.manage`. Body `{user_id, calendar_id: uuid|null, queue_id?|sector_id?}` (never both). Most specific wins: queue, sector, then general. Only an active attendant of this company can be scheduled (`404` otherwise).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/on-call/rosters:
+    get:
+      operationId: listOnCallRosters
+      tags: [Agents]
+      summary: List on-call and contingency rosters
+      description: |
+        Requires `agent.read`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createOnCallRoster
+      tags: [Agents]
+      summary: Create a roster
+      description: |
+        Requires `agent.manage`. Body `{name, kind: on_call|contingency, sector_id?}`; no sector means the whole company.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: "Created" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/on-call/rosters/{roster_id}:
+    patch:
+      operationId: updateOnCallRoster
+      tags: [Agents]
+      summary: Rename or deactivate a roster
+      description: |
+        Requires `agent.manage`. Deactivating takes everyone off call at once and keeps the history.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: roster_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/on-call/rosters/{roster_id}/periods:
+    get:
+      operationId: listOnCallPeriods
+      tags: [Agents]
+      summary: List on-call periods
+      description: |
+        Requires `agent.read`. `from`/`to` (RFC 3339; default -1 day to +30 days).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: roster_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: addOnCallPeriod
+      tags: [Agents]
+      summary: Put an attendant on call
+      description: |
+        Requires `agent.manage`. Body `{user_id, from, to (at most 31 days), capacity 1..100}`. A person cannot hold two overlapping periods in one roster (`409`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: roster_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: "Created" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/on-call/rosters/{roster_id}/periods/{period_id}:
+    delete:
+      operationId: removeOnCallPeriod
+      tags: [Agents]
+      summary: Remove an on-call period
+      description: |
+        Requires `agent.manage`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: roster_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: period_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: "Removed" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/queues/{queue_id}:
     patch:
       operationId: updateQueue

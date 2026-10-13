@@ -50,7 +50,11 @@ func (e *env) attendant(t *testing.T, tenant uuid.UUID, queue *uuid.UUID, capaci
 
 func (e *env) snapshot(t *testing.T, tenant, actor, queue uuid.UUID, when string, h *Handler) QueueSnapshot {
 	t.Helper()
-	rec := e.call(t, tenant, actor, "GET", "/?at="+when, h.QueueEligibility, map[string]string{"queue_id": queue.String()}, nil)
+	target := "/"
+	if when != "" {
+		target = "/?at=" + when
+	}
+	rec := e.call(t, tenant, actor, "GET", target, h.QueueEligibility, map[string]string{"queue_id": queue.String()}, nil)
 	if rec.Code != 200 {
 		t.Fatalf("eligibility = %d %s", rec.Code, rec.Body.String())
 	}
@@ -91,9 +95,9 @@ func TestSupport24x7WithNobodyOnlineIsOpenButHasNoEligibleAgent(t *testing.T) {
 	}
 	pres := &fakePresence{online: map[uuid.UUID]bool{}}
 	h := NewHandler(e.app, e.h.audit).WithPresence(pres)
-	night := at(t, tz, "2026-10-12 03:00")
+	night := "" // presence and capacity exist only in real time: ask about NOW (the sector is 24x7, so the hour does not matter)
 	s := e.snapshot(t, a, admin, q, night, h)
-	if !s.Open || s.EligibleCnt != 0 || !has(verdictOf(s, u1), eligibility.Offline) || !has(verdictOf(s, u2), eligibility.Offline) {
+	if s.CalendarOnly || s.WiredToRouter || !s.Open || s.EligibleCnt != 0 || !has(verdictOf(s, u1), eligibility.Offline) || !has(verdictOf(s, u2), eligibility.Offline) {
 		t.Fatalf("24x7 open, nobody online: %+v", s)
 	}
 	pres.online[p1] = true // one connects: open sector + online + capacity => eligible
@@ -158,13 +162,16 @@ func TestSectorCalendarAgentShiftPresenceAndCapacityAreIndependent(t *testing.T)
 	set(nt, night, &q) // queue scope
 	// Monday 10:00: sector open, morning agent in shift, night agent off shift
 	s := e.snapshot(t, a, admin, q, at(t, tz, "2026-10-12 10:00"), e.h)
+	if !s.CalendarOnly {
+		t.Fatal("an instant that is not now is answered by calendar, shift and membership only")
+	}
 	for name, c := range map[string]struct {
 		user   uuid.UUID
 		wantOK bool
 		reason eligibility.Reason
 	}{
 		"morning agent in shift": {am, true, ""}, "night agent off shift": {nt, false, eligibility.OffShift}, "no shift = unrestricted": {free, true, ""},
-		"unavailable": {away, false, eligibility.Unavailable}, "full": {full, false, eligibility.NoCapacity},
+		"unavailable": {away, false, eligibility.Unavailable},
 	} {
 		v := verdictOf(s, c.user)
 		if v.Eligible != c.wantOK || (c.reason != "" && !has(v, c.reason)) {
@@ -349,5 +356,58 @@ func TestAgentShiftPrecedenceQueueOverSectorOverAll(t *testing.T) {
 	var n int
 	if err := e.seed.QueryRow(context.Background(), `SELECT count(*) FROM agent_shifts WHERE tenant_id=$1 AND user_id=$2`, a, user).Scan(&n); err != nil || n != 3 {
 		t.Fatalf("one shift per person and scope: %d %v", n, err)
+	}
+}
+
+// Capacidade e presença só existem em tempo real; para outro instante o instantâneo diz que é "só calendário" e não consulta a presença.
+func TestCapacityIsEvaluatedInRealTimeAndOtherInstantsAreCalendarOnly(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	const tz = "America/Manaus"
+	q := e.queue(t, a, "Suporte N1", false)
+	always := decode[Calendar](t, e.call(t, a, admin, "POST", "/", e.h.CreateCalendar, nil, map[string]any{"name": "24x7", "definition": map[string]any{"kind": "24x7", "timezone": tz}})).ID
+	e.call(t, a, admin, "PUT", "/", e.h.SetQueueCalendar, map[string]string{"queue_id": q.String()}, map[string]any{"calendar_id": always})
+	free, _ := e.attendant(t, a, &q, 2, true)
+	full, _ := e.attendant(t, a, &q, 1, true)
+	contact := uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO contacts (id, tenant_id, display_name, phone_e164, status) VALUES ($1,$2,'C','+5511900008002','active')`, contact, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversations (id, tenant_id, contact_id, queue_id, assigned_to_user_id, status) VALUES ($1,$2,$3,$4,$5,'open')`, uuid.New(), a, contact, q, full); err != nil {
+		t.Fatal(err)
+	}
+	s := e.snapshot(t, a, admin, q, "", e.h)
+	if s.CalendarOnly || !verdictOf(s, free).Eligible || verdictOf(s, full).Eligible || !has(verdictOf(s, full), eligibility.NoCapacity) || s.EligibleCnt != 1 {
+		t.Fatalf("real time: %+v", s)
+	}
+	if v := verdictOf(s, full); v.Workload != 1 || v.Capacity != 1 {
+		t.Fatalf("workload/capacity: %+v", v)
+	}
+	// a future instant: capacity and presence are not evaluated, the answer says so
+	if _, err := e.seed.Exec(context.Background(), `UPDATE tenants SET routing_require_presence=true WHERE id=$1`, a); err != nil {
+		t.Fatal(err)
+	}
+	pres := &fakePresence{online: map[uuid.UUID]bool{}}
+	h := NewHandler(e.app, e.h.audit).WithPresence(pres)
+	s = e.snapshot(t, a, admin, q, time.Now().Add(48*time.Hour).UTC().Format(time.RFC3339), h)
+	if !s.CalendarOnly || s.PresenceReq || pres.calls != 0 || !verdictOf(s, full).Eligible {
+		t.Fatalf("a future instant must be calendar-only and never consult presence: %+v calls=%d", s, pres.calls)
+	}
+	// the database refuses to schedule somebody who is not a member of the tenant, whoever writes (owner role included)
+	stranger := uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO users (id, external_subject, email, display_name, status) VALUES ($1,$2,$3,'s','active')`, stranger, stranger.String(), stranger.String()+"@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = e.seed.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, stranger) })
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO agent_shifts (tenant_id, user_id, calendar_id) VALUES ($1,$2,$3)`, a, stranger, always); err == nil {
+		t.Error("the database must refuse a shift for a user without membership in the tenant")
+	}
+	roster := uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO on_call_rosters (id, tenant_id, name, kind) VALUES ($1,$2,'R','on_call')`, roster, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO on_call_periods (tenant_id, roster_id, user_id, starts_at, ends_at) VALUES ($1,$2,$3,now(),now()+interval '1 hour')`, a, roster, stranger); err == nil {
+		t.Error("the database must refuse an on-call period for a user without membership in the tenant")
 	}
 }

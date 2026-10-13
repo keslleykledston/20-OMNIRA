@@ -30,14 +30,23 @@ type AgentVerdict struct {
 }
 
 type QueueSnapshot struct {
-	QueueID     uuid.UUID      `json:"queue_id"`
-	At          time.Time      `json:"at"`
-	Open        bool           `json:"open"`
-	PresenceReq bool           `json:"presence_required"`
-	EligibleCnt int            `json:"eligible_count"`
-	Agents      []AgentVerdict `json:"agents"`
-	Truncated   bool           `json:"truncated,omitempty"`
+	QueueID     uuid.UUID `json:"queue_id"`
+	At          time.Time `json:"at"`
+	Open        bool      `json:"open"`
+	PresenceReq bool      `json:"presence_required"`
+	EligibleCnt int       `json:"eligible_count"`
+	Truncated   bool      `json:"truncated,omitempty"`
+	// CalendarOnly: the instant asked is not "now", so presence and workload (which only exist in real time) are NOT evaluated; the
+	// verdict answers "by calendar, shift and membership alone". Never read an eligible agent here as "would be assigned".
+	CalendarOnly bool `json:"calendar_only"`
+	// WiredToRouter says whether the live router (AssignRoundRobin) applies this same rule today. It is false until ADR-0044 phase 4:
+	// this snapshot is the rule the engine WILL apply, shown so supervisors and tests can see it first.
+	WiredToRouter bool           `json:"wired_to_router"`
+	Agents        []AgentVerdict `json:"agents"`
 }
+
+// nowTolerance: an instant this close to the database clock is "now" (presence and workload are then evaluated).
+const nowTolerance = 90 * time.Second
 
 const snapshotMaxAgents = 500
 const presenceChunk = 50
@@ -60,6 +69,11 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 	if err != nil {
 		return QueueSnapshot{}, err
 	}
+	var dbNow time.Time
+	if err := q.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		return QueueSnapshot{}, err
+	}
+	realtime := at.Sub(dbNow) < nowTolerance && dbNow.Sub(at) < nowTolerance
 	var sectorID *uuid.UUID
 	var presenceReq bool
 	if err := q.QueryRow(ctx, `SELECT q.sector_id, t.routing_require_presence FROM queues q JOIN tenants t ON t.id=q.tenant_id WHERE q.tenant_id=$1 AND q.id=$2`,
@@ -103,7 +117,7 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 		LEFT JOIN memberships m ON m.tenant_id=p.tenant_id AND m.user_id=p.user_id
 		LEFT JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id
 		WHERE p.tenant_id=$1 AND p.starts_at <= $3 AND p.ends_at > $3 AND (r.sector_id IS NULL OR r.sector_id IS NOT DISTINCT FROM $4)
-		GROUP BY p.user_id, p.tenant_id, ap.id, u.display_name, m.status, ap.status`, tenant, queueID, at, sectorID)
+		GROUP BY p.user_id, p.tenant_id, ap.id, u.display_name, m.status, ap.status LIMIT $5`, tenant, queueID, at, sectorID, snapshotMaxAgents+1)
 	if err != nil {
 		return QueueSnapshot{}, err
 	}
@@ -145,7 +159,7 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 	// presence, one batch per chunk (never one call per agent)
 	online := map[uuid.UUID]bool{}
 	presenceDown := false
-	if presenceReq {
+	if presenceReq && realtime {
 		if presence == nil {
 			presenceDown = true
 		} else {
@@ -171,12 +185,12 @@ func Snapshot(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UU
 			}
 		}
 	}
-	snap := QueueSnapshot{QueueID: queueID, At: at, Open: avail.Open, PresenceReq: presenceReq, Truncated: truncated, Agents: []AgentVerdict{}}
+	snap := QueueSnapshot{QueueID: queueID, At: at, Open: avail.Open, PresenceReq: presenceReq && realtime, Truncated: truncated, CalendarOnly: !realtime, Agents: []AgentVerdict{}}
 	for _, id := range ids {
 		r := rows[id]
 		v := eligibility.Evaluate(eligibility.Facts{
 			Member: r.member, OnCall: r.onCall, Active: r.active, Available: r.available, ShiftOpen: r.shiftOpen, QueueOpen: avail.Open,
-			PresenceReq: presenceReq, PresenceOK: online[r.profileID], PresenceDown: presenceDown, Workload: r.workload, Capacity: r.capacity,
+			PresenceReq: presenceReq && realtime, PresenceOK: online[r.profileID], PresenceDown: presenceDown, Workload: workload(r, realtime), Capacity: r.capacity,
 		}, eligibility.Policy{})
 		if v.Eligible {
 			snap.EligibleCnt++
@@ -252,3 +266,11 @@ func loadShifts(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.
 }
 
 func isOpen(s scheduling.Schedule, at time.Time) (bool, error) { return s.IsOpen(at) }
+
+// workload counts only in real time; for another instant capacity is not evaluated (see QueueSnapshot.CalendarOnly).
+func workload(r *agentRow, realtime bool) int {
+	if !realtime {
+		return 0
+	}
+	return r.workload
+}

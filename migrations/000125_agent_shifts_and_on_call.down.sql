@@ -2,3 +2,4 @@
 DROP TABLE IF EXISTS on_call_periods;
 DROP TABLE IF EXISTS on_call_rosters;
 DROP TABLE IF EXISTS agent_shifts;
+DROP FUNCTION IF EXISTS scheduling_user_is_member();

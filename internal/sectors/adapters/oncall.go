@@ -135,7 +135,7 @@ func (h *Handler) ListRosters(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := q.Query(r.Context(), `SELECT r.id, r.name, r.kind, r.sector_id, r.active,
 		(SELECT count(DISTINCT p.user_id) FROM on_call_periods p WHERE p.tenant_id=r.tenant_id AND p.roster_id=r.id AND p.starts_at <= now() AND p.ends_at > now())
-		FROM on_call_rosters r WHERE r.tenant_id=$1 ORDER BY r.active DESC, r.name`, tc.TenantID)
+		FROM on_call_rosters r WHERE r.tenant_id=$1 ORDER BY r.active DESC, r.name LIMIT 500`, tc.TenantID)
 	if err != nil {
 		http.Error(w, "failed to list rosters", http.StatusInternalServerError)
 		return
@@ -181,7 +181,10 @@ func (h *Handler) CreateRoster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := uuid.New()
-	if _, err := q.Exec(r.Context(), `INSERT INTO on_call_rosters (id, tenant_id, name, kind, sector_id) VALUES ($1,$2,$3,$4,$5)`, id, tc.TenantID, name, in.Kind, in.SectorID); err != nil {
+	if err := attempt(r, q, func() error {
+		_, err := q.Exec(r.Context(), `INSERT INTO on_call_rosters (id, tenant_id, name, kind, sector_id) VALUES ($1,$2,$3,$4,$5)`, id, tc.TenantID, name, in.Kind, in.SectorID)
+		return err
+	}); err != nil {
 		if conflict(w, err, "a roster with this name already exists") {
 			return
 		}
@@ -239,7 +242,10 @@ func (h *Handler) UpdateRoster(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a roster with this name already exists", http.StatusConflict)
 		return
 	}
-	if _, err := q.Exec(r.Context(), `UPDATE on_call_rosters SET name=$3, active=$4, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, id, name, active); err != nil {
+	if err := attempt(r, q, func() error {
+		_, err := q.Exec(r.Context(), `UPDATE on_call_rosters SET name=$3, active=$4, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, id, name, active)
+		return err
+	}); err != nil {
 		if conflict(w, err, "a roster with this name already exists") {
 			return
 		}
@@ -395,7 +401,11 @@ func (h *Handler) QueueEligibility(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	at := time.Now()
+	var at time.Time
+	if err := q.QueryRow(r.Context(), `SELECT now()`).Scan(&at); err != nil { // one clock: the database's (ADR-0044), not each process's
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("at")); raw != "" {
 		t, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
