@@ -60,6 +60,20 @@ func (e *PostgresEffects) CloseByCustomer(ctx context.Context, conversationID uu
 	return e.closer.CloseForCustomer(ctx, conversationID, "Encerrado pelo cliente por comando ("+command+").")
 }
 
+var _ ports.ConversationCloser = (*PostgresEffects)(nil)
+
+// CloseByFlow closes the attendance because the flow decided to (ADR-0045). The attendance service does the closing (same effects as an agent's
+// finalize, recorded with source "system" and the reason).
+func (e *PostgresEffects) CloseByFlow(ctx context.Context, conversationID uuid.UUID, reason, note string) error {
+	c, ok := e.closer.(interface {
+		CloseForFlow(ctx context.Context, conversationID uuid.UUID, reason, note string) error
+	})
+	if !ok {
+		return errors.New("flows: no attendance closer configured")
+	}
+	return c.CloseForFlow(ctx, conversationID, reason, note)
+}
+
 func NewPostgresEffects(pool *pgxpool.Pool, sender SystemSender) *PostgresEffects {
 	return &PostgresEffects{pool: pool, sender: sender}
 }

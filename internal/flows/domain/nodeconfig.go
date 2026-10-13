@@ -50,6 +50,9 @@ type ChoiceConfig struct {
 	// Style: "" or "auto" sends buttons/list on channels that support them (WhatsApp oficial) and numbered text elsewhere;
 	// "text" always sends the numbered text.
 	Style string `json:"style,omitempty"`
+	// Reminders (ADR-0045): what to say, one message per silence, before the "timeout" port is taken. Every wait lasts TimeoutSeconds, so two reminders
+	// and a 120 s timeout mean: reminder at 2 min, second reminder at 4 min, "timeout" at 6 min. Each reminder is sent together with the menu.
+	Reminders []string `json:"reminders,omitempty"`
 }
 
 type ConditionConfig struct {
@@ -142,6 +145,13 @@ type ApplyOverflowConfig struct{}
 type SubflowConfig struct {
 	Flow      string `json:"flow"`                 // slug of a SUBFLOW flow of the tenant
 	VersionID string `json:"version_id,omitempty"` // pinned by publish; never written by hand
+}
+
+// CloseConversationConfig (ADR-0045): Text is the goodbye sent before closing (optional); Reason is recorded on the closure: no_response (default),
+// resolved or other.
+type CloseConversationConfig struct {
+	Text   string `json:"text,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type EndConfig struct {

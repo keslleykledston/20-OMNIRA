@@ -376,11 +376,17 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 // alone) but recorded with source "system", no author, reason "other" and the command in the note. Idempotent: an already
 // closed conversation returns its existing closure.
 func (s *Service) FinalizeBySystem(ctx context.Context, conversationID uuid.UUID, note string) (FinalizeResult, error) {
+	return s.FinalizeBySystemWithReason(ctx, conversationID, domain.ReasonOther, note)
+}
+
+// FinalizeBySystemWithReason is FinalizeBySystem with the close reason chosen by the caller (ADR-0045: a flow closing an attendance whose contact
+// stopped answering records no_response).
+func (s *Service) FinalizeBySystemWithReason(ctx context.Context, conversationID uuid.UUID, reason domain.CloseReason, note string) (FinalizeResult, error) {
 	tc, err := tenancydomain.FromContext(ctx)
 	if err != nil || tc.TenantID == uuid.Nil || tc.Source != tenancydomain.AccessSourceSystem {
 		return FinalizeResult{}, domain.ErrForbidden
 	}
-	in, err := domain.FinalizeInput{ConversationID: conversationID, Reason: domain.ReasonOther, Note: note, SummaryTruth: domain.TruthAgentConfirmed}.Normalize()
+	in, err := domain.FinalizeInput{ConversationID: conversationID, Reason: reason, Note: note, SummaryTruth: domain.TruthAgentConfirmed}.Normalize()
 	if err != nil {
 		return FinalizeResult{}, err
 	}
@@ -416,6 +422,16 @@ func (s *Service) FinalizeBySystem(ctx context.Context, conversationID uuid.UUID
 // CloseForCustomer is FinalizeBySystem without the result, for callers that only need the closing (the flow engine).
 func (s *Service) CloseForCustomer(ctx context.Context, conversationID uuid.UUID, note string) error {
 	_, err := s.FinalizeBySystem(ctx, conversationID, note)
+	return err
+}
+
+// CloseForFlow is the flow engine's closing with a reason (ADR-0045); the reason must be a valid attendance close reason.
+func (s *Service) CloseForFlow(ctx context.Context, conversationID uuid.UUID, reason, note string) error {
+	r := domain.CloseReason(reason)
+	if !r.Valid() {
+		return domain.ErrInvalid
+	}
+	_, err := s.FinalizeBySystemWithReason(ctx, conversationID, r, note)
 	return err
 }
 

@@ -227,6 +227,10 @@ func (f *simEffects) AssignSector(_ context.Context, _ uuid.UUID, sector uuid.UU
 	f.add("assign_sector", map[string]any{"sector": sector.String()})
 	return "assigned", nil
 }
+func (f *simEffects) CloseByFlow(_ context.Context, _ uuid.UUID, reason, _ string) error {
+	f.add("close_conversation", map[string]any{"reason": reason})
+	return nil
+}
 func (f *simEffects) ApplyOverflow(context.Context, uuid.UUID) (string, *uuid.UUID, error) {
 	out := "queued"
 	if f.sc.Routing != nil && f.sc.Routing.Overflow != "" {

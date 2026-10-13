@@ -131,4 +131,6 @@ const (
 	NodeSelectSector      NodeType = "select_sector"
 	NodeAssignSector      NodeType = "assign_sector"
 	NodeApplyOverflow     NodeType = "apply_overflow"
+	// ADR-0045: ends the attendance from the flow (the contact stopped answering): an optional goodbye, then the conversation is closed by the system.
+	NodeCloseConversation NodeType = "close_conversation"
 )
