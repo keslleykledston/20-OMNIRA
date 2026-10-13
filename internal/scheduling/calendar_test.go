@@ -340,3 +340,99 @@ func TestResolverIsPureAndRepeatable(t *testing.T) {
 		t.Errorf("November total = %v, want %v", total, 20*9*time.Hour)
 	}
 }
+
+// Fusos que pularam um dia civil inteiro: o turno iniciado dois dias civis antes ainda está aberto.
+func TestShiftSurvivesAZoneThatSkippedACivilDay(t *testing.T) {
+	apia := "Pacific/Apia" // 2011-12-30 did not exist: Dec 29 was followed by Dec 31
+	s := Schedule{Kind: KindCustom, Timezone: apia, Weekly: []DayRule{day(time.Thursday, mustClock(t, "22:00", "06:00"))}}
+	loc, _ := time.LoadLocation(apia)
+	start := time.Date(2011, 12, 29, 22, 0, 0, 0, loc) // Thursday night, still Dec 29
+	ws, err := s.Windows(start.Add(-time.Hour), start.Add(48*time.Hour))
+	if err != nil || len(ws) != 1 {
+		t.Fatalf("windows: %v %v", ws, err)
+	}
+	mid := ws[0].Start.Add(ws[0].Duration() - time.Minute)
+	if ok := open(t, s, mid); !ok {
+		t.Errorf("the shift must be open one minute before its end (%v), found closed", mid)
+	}
+}
+
+func TestInvalidScheduleIsAnErrorEvenWhenTheAnswerWouldBeTrivial(t *testing.T) {
+	bad := Schedule{Kind: KindCustom, Timezone: "Mars/Olympus"}
+	now := time.Now()
+	if _, err := bad.BusinessElapsed(now, now); err == nil {
+		t.Error("BusinessElapsed(a, a) on an invalid schedule must still fail")
+	}
+	if _, _, err := bad.AddBusiness(now, 0); err == nil {
+		t.Error("AddBusiness(t, 0) on an invalid schedule must still fail")
+	}
+}
+
+func TestHorizonBoundaryIsExplicit(t *testing.T) {
+	z := "America/Manaus"
+	loc, _ := time.LoadLocation(z)
+	t0 := at(t, z, "2026-01-05 12:00")
+	edge := t0.Add(Horizon)
+	// a one-off opening (a closed weekly rule plus one exception): it exists only on one date
+	one := func(when time.Time) Schedule {
+		l := when.In(loc)
+		d, m := dateOf(l), l.Hour()*60+l.Minute()
+		return Schedule{Kind: KindCustom, Timezone: z, Weekly: []DayRule{day(time.Monday)},
+			Exceptions: []Exception{{From: d, To: d, Intervals: []Interval{{Start: m, End: m + 30}}}}}
+	}
+	if _, ok, err := one(edge).NextOpen(t0); err != nil || ok {
+		t.Errorf("an opening exactly at t+Horizon is outside the searched span (ok=%v err=%v)", ok, err)
+	}
+	if n, ok, err := one(edge.Add(-time.Minute)).NextOpen(t0); err != nil || !ok || !n.Equal(edge.Add(-time.Minute)) {
+		t.Errorf("an opening just inside the span must be found: %v %v %v", n, ok, err)
+	}
+	// a deadline may land exactly on t+Horizon (24x7: it needs exactly Horizon of open time)
+	if due, ok, err := Always(z).AddBusiness(t0, Horizon); err != nil || !ok || !due.Equal(edge) {
+		t.Errorf("a deadline exactly Horizon away: %v %v %v", due, ok, err)
+	}
+	if _, ok, _ := Always(z).AddBusiness(t0, Horizon+time.Minute); ok {
+		t.Error("a deadline beyond the horizon must report ok=false")
+	}
+}
+
+// Suspensão emergencial: fecha por instantes, vence qualquer regra e pode cortar um turno em andamento.
+func TestEmergencySuspensionClosesWhateverTheRulesSay(t *testing.T) {
+	z := "America/Manaus"
+	s := Business(z)
+	s.Suspensions = []Suspension{{From: at(t, z, "2026-10-12 10:15"), To: at(t, z, "2026-10-12 11:45"), Reason: "queda de energia"}}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		local string
+		want  bool
+	}{{"2026-10-12 10:14", true}, {"2026-10-12 10:15", false}, {"2026-10-12 11:44", false}, {"2026-10-12 11:45", true}, {"2026-10-13 10:30", true}} {
+		if got := open(t, s, at(t, z, c.local)); got != c.want {
+			t.Errorf("%s open=%v, want %v", c.local, got, c.want)
+		}
+	}
+	// business time skips the suspended hour and a deadline moves accordingly
+	el, _ := s.BusinessElapsed(at(t, z, "2026-10-12 09:00"), at(t, z, "2026-10-12 12:00"))
+	if el != 3*time.Hour-90*time.Minute {
+		t.Errorf("elapsed = %v, want 1h30", el)
+	}
+	if due, ok, _ := s.AddBusiness(at(t, z, "2026-10-12 10:00"), time.Hour); !ok || !due.Equal(at(t, z, "2026-10-12 12:30")) {
+		t.Errorf("deadline across a suspension = %v %v", due, ok)
+	}
+	// a suspension that starts before the schedule opens delays the opening; NextOpen is the end of the suspension
+	s.Suspensions = []Suspension{{From: at(t, z, "2026-10-12 08:00"), To: at(t, z, "2026-10-12 09:30")}}
+	if n, ok, _ := s.NextOpen(at(t, z, "2026-10-12 08:30")); !ok || !n.Equal(at(t, z, "2026-10-12 09:30")) {
+		t.Errorf("next open after a suspension = %v %v", n, ok)
+	}
+	// even 24x7 and holidays-open days close
+	a := Always(z)
+	a.Suspensions = []Suspension{{From: at(t, z, "2026-10-12 00:00"), To: at(t, z, "2026-10-12 06:00")}}
+	if open(t, a, at(t, z, "2026-10-12 03:00")) || !open(t, a, at(t, z, "2026-10-12 06:00")) {
+		t.Error("24x7 is also closed by a suspension")
+	}
+	bad := Business(z)
+	bad.Suspensions = []Suspension{{From: at(t, z, "2026-10-12 10:00"), To: at(t, z, "2026-10-12 09:00")}}
+	if bad.Validate() == nil {
+		t.Error("a suspension that ends before it starts must be refused")
+	}
+}

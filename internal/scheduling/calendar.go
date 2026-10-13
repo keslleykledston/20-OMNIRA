@@ -33,7 +33,18 @@ const (
 )
 
 // Horizon bounds every search ("next opening", "add business time"): a schedule that never opens in this span answers "never".
+// The span is [t, t+Horizon): an opening exactly at t+Horizon is outside it, while a deadline computed by AddBusiness may land
+// exactly on t+Horizon (the end of the last window it needed).
 const Horizon = 366 * 24 * time.Hour
+
+// DefaultTimezone is what the ADAPTERS (tenant defaults, the API) fill in when a tenant has not chosen a zone. The domain never
+// guesses: Validate refuses an empty zone, so a missing zone is a decision somebody made, not an accident of this package.
+const DefaultTimezone = "America/Manaus"
+
+// lookbackDays: an interval belongs to the day it starts on and is shorter than 24 h, so it started at most one civil day before
+// the instant asked about. Two covers zones that skipped a whole civil day (Pacific/Apia, 2011-12-30), where "the next day"
+// of a shift started on the 29th is already the 31st.
+const lookbackDays = 2
 
 const minutesPerDay = 24 * 60
 
@@ -122,6 +133,14 @@ type Holiday struct {
 	Intervals []Interval `json:"intervals,omitempty"`
 }
 
+// Suspension closes the sector between two INSTANTS regardless of every other rule (an emergency: outage, evacuation, strike). It is
+// the strongest rule of the calendar and, unlike a holiday, it can start and end at any minute and may cut a running shift.
+type Suspension struct {
+	From   time.Time `json:"from"`
+	To     time.Time `json:"to"`
+	Reason string    `json:"reason,omitempty"`
+}
+
 // Schedule is the agenda of one sector.
 type Schedule struct {
 	Kind       Kind        `json:"kind"`
@@ -129,6 +148,8 @@ type Schedule struct {
 	Weekly     []DayRule   `json:"weekly,omitempty"`
 	Exceptions []Exception `json:"exceptions,omitempty"`
 	Holidays   []Holiday   `json:"holidays,omitempty"`
+	// Suspensions are applied last: what they cover is closed, whatever the weekly rule, holiday or exception says.
+	Suspensions []Suspension `json:"suspensions,omitempty"`
 }
 
 // Business returns the usual preset: Monday to Friday, 09:00-18:00.
@@ -147,6 +168,7 @@ const (
 	maxIntervalsPerDay = 8
 	maxExceptions      = 366
 	maxHolidays        = 400
+	maxSuspensions     = 200
 )
 
 // Validate checks everything the resolver relies on. A schedule that validates never makes the resolver fail.
@@ -206,6 +228,14 @@ func (s Schedule) Validate() error {
 			if e.From.ordinal() <= o.To.ordinal() && o.From.ordinal() <= e.To.ordinal() {
 				return fmt.Errorf("exceptions %d and %d overlap", j+1, i+1)
 			}
+		}
+	}
+	if len(s.Suspensions) > maxSuspensions {
+		return errors.New("too many suspensions")
+	}
+	for i, sp := range s.Suspensions {
+		if sp.From.IsZero() || sp.To.IsZero() || !sp.To.After(sp.From) {
+			return fmt.Errorf("suspension %d: the end must be after the start", i+1)
 		}
 	}
 	seenHoliday := map[int]bool{}
@@ -338,7 +368,7 @@ func (s Schedule) Windows(from, to time.Time) ([]Window, error) {
 		return nil, fmt.Errorf("range longer than %d days", int(Horizon.Hours()/24))
 	}
 	loc, _ := time.LoadLocation(s.Timezone)
-	first := dateOf(from.In(loc)).addDays(-1) // an interval of the day before may still be running
+	first := dateOf(from.In(loc)).addDays(-lookbackDays) // an interval that started on an earlier day may still be running
 	last := dateOf(to.In(loc))
 	var raw []Window
 	for d := first; d.ordinal() <= last.ordinal(); d = d.addDays(1) {
@@ -358,7 +388,32 @@ func (s Schedule) Windows(from, to time.Time) ([]Window, error) {
 			}
 		}
 	}
-	return merge(clip(raw, from, to)), nil
+	return subtract(merge(clip(raw, from, to)), s.Suspensions), nil
+}
+
+// subtract removes the suspended spans from the open windows (windows are sorted and disjoint).
+func subtract(ws []Window, cuts []Suspension) []Window {
+	if len(cuts) == 0 {
+		return ws
+	}
+	out := ws
+	for _, c := range cuts {
+		next := make([]Window, 0, len(out)+1)
+		for _, w := range out {
+			if !c.To.After(w.Start) || !c.From.Before(w.End) { // no overlap
+				next = append(next, w)
+				continue
+			}
+			if c.From.After(w.Start) {
+				next = append(next, Window{w.Start, c.From})
+			}
+			if c.To.Before(w.End) {
+				next = append(next, Window{c.To, w.End})
+			}
+		}
+		out = next
+	}
+	return out
 }
 
 func dateOf(t time.Time) Date { return Date{t.Year(), t.Month(), t.Day()} }
@@ -432,6 +487,9 @@ func (s Schedule) NextClose(t time.Time) (time.Time, bool, error) {
 
 // BusinessElapsed is the open time between a and b: what a business-time SLA counts. Zero when b <= a.
 func (s Schedule) BusinessElapsed(a, b time.Time) (time.Duration, error) {
+	if err := s.Validate(); err != nil { // an invalid schedule is an error even when the answer would be zero
+		return 0, err
+	}
 	if !b.After(a) {
 		return 0, nil
 	}
@@ -449,6 +507,9 @@ func (s Schedule) BusinessElapsed(a, b time.Time) (time.Duration, error) {
 // AddBusiness returns the instant at which d of open time has elapsed since t (the deadline of a business-time SLA). ok=false when
 // the schedule does not provide that much open time within the Horizon. d <= 0 returns t.
 func (s Schedule) AddBusiness(t time.Time, d time.Duration) (time.Time, bool, error) {
+	if err := s.Validate(); err != nil {
+		return time.Time{}, false, err
+	}
 	if d <= 0 {
 		return t, true, nil
 	}
