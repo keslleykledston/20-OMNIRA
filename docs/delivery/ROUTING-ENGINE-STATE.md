@@ -24,6 +24,13 @@ Branch `feat/sector-scheduling-overflow` (base `c804344` de `main`), worktree `/
 ## 3. Armadilhas (resumo; detalhe na memória)
 Nunca `git checkout <arquivo>` para desfazer mutante com trabalho não commitado (copiar para `/data/cafegpt/tmp/*.o`); rodar **todas** as suítes afetadas antes de commitar (um teste de monitor quebrou por coluna nova); tabelas do motor são `routing_engine_*` (`routing_decisions` já existe); matrizes de permissão (`iam3/security_test.go`, `tenancy/adapters/team_http_test.go`) listam toda permissão de administrador; roster sem setor cobre TODAS as filas; violação de unicidade aborta a transação da requisição (pré-checagem ou `attempt()`).
 
+## 3b. Achado pré-existente (não introduzido pelo ADR-0044)
+O SQL do rodízio legado conta as conversas abertas do atendente com o snapshot da instrução e só depois trava a linha de `queue_members`
+(`FOR UPDATE ... SKIP LOCKED`). Dois workers legados — ou um legado e um do motor — rodando NO MESMO INSTANTE sobre a última vaga de um atendente
+podem passar os dois na contagem e estourar a capacidade em 1. O motor recontaja com instrução nova depois da trava (provado em
+`TestConcurrentWorkersNeverExceedCapacityNorAssignTwice`). Regra operacional: ao ligar `OMNIRA_ROUTING_ENGINE_ENABLED`, reiniciar os workers
+juntos; não manter workers legado e motor ao mesmo tempo numa fila. Corrigir o SQL legado fica fora do escopo (código em produção, byte a byte).
+
 ## 4. Pendências que dependem do dono (acumuladas)
 1. **Autorizar o merge e a implantação da branch** (migrations 124–131 renumeráveis se o `main` ganhar migrations; ligar `OMNIRA_ROUTING_ENGINE_ENABLED` só depois, por empresa/horário combinado).
 2. As cinco decisões da seção 12 do ADR-0044 (feriados manual ou calendário nacional; fuso padrão; limite de etapas; conversa já atribuída ao fechar o expediente; fluxo como destino) — seguem os padrões adotados até resposta.
