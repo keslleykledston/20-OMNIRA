@@ -14,7 +14,7 @@ Com a flag **desligada** nada muda: o rodízio legado continua atribuindo, nenhu
 3. Gate completo da branch (`scripts/test-integration.sh`, de `git archive HEAD`) e `web`: `vitest run`, `tsc --noEmit`.
 4. Implantar **api + worker + web juntos** (imagens de `git archive HEAD`, `docker compose up -d --no-deps --no-build --force-recreate`), migrations pelo serviço `migrate` com o diretório da árvore arquivada.
 5. Com a flag ainda **desligada**: conferir `/healthz`, abrir *Atendimento* nas configurações (as telas leem e gravam; nada roteia).
-6. Ligar `OMNIRA_ROUTING_ENGINE_ENABLED=true` na API **e** no worker e **reiniciar os dois juntos**. **Nunca** manter worker legado e worker do motor ao mesmo tempo numa fila: o SQL legado conta capacidade antes de travar a linha e dois workers no mesmo instante podem estourar a capacidade em 1 (achado pré-existente, `docs/delivery/ROUTING-ENGINE-STATE.md` §3b).
+6. Ligar `OMNIRA_ROUTING_ENGINE_ENABLED=true` no `.env` do compose (o `docker-compose.yml` repassa o mesmo valor à API e ao worker; padrão `false`) e **recriar os dois juntos** (`docker compose up -d --no-deps --no-build --force-recreate api worker`). **Nunca** manter worker legado e worker do motor ao mesmo tempo numa fila: o SQL legado conta capacidade antes de travar a linha e dois workers no mesmo instante podem estourar a capacidade em 1 (achado pré-existente, `docs/delivery/ROUTING-ENGINE-STATE.md` §3b).
 7. Retroalimentar conversas já abertas (opcional, ver §6).
 
 ## 3. Padrões entregues (decisão do dono, 2026-10-13)

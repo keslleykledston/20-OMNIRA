@@ -424,6 +424,9 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/channels/lines/{connection_id}/queue", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.SetLineQueue))))
 	// ADR-0044: sectors, operational calendars and the availability of a queue (agent.read / agent.manage inside the handler)
 	sectorsHandler := sectorsadapters.NewHandler(dbPool, auditRepo)
+	if s.valkeyClient != nil { // "who can take it now" reads the same presence the routing worker reads; without it a company that requires presence would see everyone as unavailable
+		sectorsHandler = sectorsHandler.WithPresence(presenceadapters.NewStore(s.valkeyClient))
+	}
 	for _, rt := range []struct {
 		pattern string
 		fn      http.HandlerFunc
