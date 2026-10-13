@@ -1,6 +1,6 @@
 # ADR-0044 — relatório final da entrega (horários, plantões, transbordo e SLA)
 
-Branch `feat/sector-scheduling-overflow`, base `c804344` (`main`). **Estado: LAB. Nada foi mesclado, enviado ao GitHub nem implantado.** A flag `OMNIRA_ROUTING_ENGINE_ENABLED` não existe em produção. Vocabulário de prova: ver `ROUTING-ENGINE-ACCEPTANCE.md` (nenhuma linha é E2E).
+Branch `feat/sector-scheduling-overflow`, base `c804344` (`main`). **Estado: LAB. IMPLANTADA em 2026-10-13 por ordem do dono (mesclada em `main` `1f30046`, enviada ao GitHub, flag LIGADA só para conversas novas; ver §7).** A flag `OMNIRA_ROUTING_ENGINE_ENABLED` não existe em produção. Vocabulário de prova: ver `ROUTING-ENGINE-ACCEPTANCE.md` (nenhuma linha é E2E).
 
 ## 1. O que foi entregue
 | Fase | Entrega |
@@ -43,3 +43,12 @@ Nenhum E2E em navegador, aparelho WhatsApp, ERP ou IA reais para este módulo; s
 5. Nomes reais dos setores por empresa e como “Servidores/Outsourcing TI/Monitoring” recebem trabalho (S1 do ADR-0043); escopo de leitura por setor (ADR-0043).
 6. Teste real: um aparelho de teste para o aviso fora do expediente e um fluxo `check_schedule`/`select_sector` publicado numa empresa de teste.
 7. Pendências antigas que continuam suas: assinatura do gate do Hub (`HUB-GATE-PACKAGE.md`), Keycloak (e-mail editável só admin), ACLs Valkey/NATS, volume de mídia, ADR-0041, Test Company sem fila padrão, logo/favicon.
+
+## 7. Implantação (2026-10-13, ordem do dono: "faça o merge e implante… pode ligar a flag, as janelas antigas não entram só as novas")
+- **Merge:** `main` = `1f30046` (merge `--no-ff` da branch; base `c804344`, sem divergência). Enviado ao GitHub (`c804344..1f30046`). Nenhuma tag.
+- **Antes do merge** achado e corrigido (`8cb9329`): a varredura de recuperação puxaria para o motor as **46 conversas antigas, abertas e sem dono, das filas manuais** quando a flag ligasse, contra a ordem do dono. Agora ela só recupera conversa manual **criada a partir de `OMNIRA_ROUTING_ENGINE_SINCE`**; sem a variável, a recuperação fica desligada. Teste + mutante.
+- **Gate:** 39/39 pacotes de integração sobre o commit mesclado (`1f30046`, de `git archive`), web 971 testes, `tsc`, `vite build`.
+- **Implantação:** backup `omnira_dev_20261013T124937Z` (local, USB e nuvem, checksum conferido), tags `rollback-pre-engine-20261013-0849` (api, worker, web), imagens `sha-1f30046`, migrations 124–133 aplicadas (ledger 133), api + worker + web recriados; primeiro **com a flag desligada** (saudável), depois `OMNIRA_ROUTING_ENGINE_ENABLED=true` + `OMNIRA_ROUTING_ENGINE_SINCE=2026-10-13T12:50:53Z` em API e worker juntos.
+- **Verificado depois de ligar:** containers saudáveis; `routing_engine_state` = 0, timers = 0, nenhum job `job.routing.*` e nenhuma conversa com `routing_retry_at` (as 46 antigas **não** entraram); sem erro nos logs de api/worker.
+- **Ainda não provado em produção:** o caminho de uma conversa NOVA de ponta a ponta (cliente real/aparelho de teste → motor), aviso fora do expediente, SLA e transbordo. Isso exige o aparelho de teste do dono (pendência 6 do §5).
+- **Reverter:** `OMNIRA_ROUTING_ENGINE_ENABLED=false` (e remover o `SINCE`), recriar api+worker; imagens/rollback pelas tags acima.

@@ -1,6 +1,6 @@
 # ADR-0044 — Motor central de roteamento: setores, calendários, escalas, plantões, SLA e transbordo em cadeia
 
-Status: **PROPOSTA — Fase 2 (arquitetura e contratos) entregue; Fase 3 iniciada** (domínio de calendário implementado). Branch `feat/sector-scheduling-overflow`, base `c804344` de `main`. **Sem merge e sem implantação** até autorização do dono. Estado do projeto: `LAB`.
+Status: **ACEITA E IMPLANTADA em LAB (2026-10-13)** — fases 1–8 entregues. Mesclada em `main` (`1f30046`, base `c804344`), enviada ao GitHub e implantada por ordem do dono; flag `OMNIRA_ROUTING_ENGINE_ENABLED` ligada com `OMNIRA_ROUTING_ENGINE_SINCE` (só conversas novas). Decisões do §12 aprovadas pelo dono em 2026-10-13 (padrões adotados). Estado do projeto: `LAB`; sem `PRODUCTION_READY`.
 Origem: pedidos do dono de 2026-10-13 (módulo de horários/plantões/transbordo e *addendum* do motor central). Relaciona: ADR-0043 (fila = setor, §0), ADR-0019 (Flow Builder), ADR-0038/0040 (Hub), ADR-0042 (contexto de sessão), ADR-0018 (decisão num ponto só).
 Vocabulário de evidência: IMPLEMENTED / UNIT / POSTGRES / HTTP / E2E VERIFIED / NOT WIRED / BLOCKED.
 Revisão independente (Codex) do desenho e da Fase A: 0 CRITICAL, 4 HIGH de **desenho** e 4 MEDIUM; os 4 MEDIUM de código estão corrigidos; os 4 HIGH estão resolvidos neste texto (§6, §7, §8) e viram testes obrigatórios das fases 4–5.

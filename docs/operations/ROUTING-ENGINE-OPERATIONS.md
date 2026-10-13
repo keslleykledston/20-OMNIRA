@@ -1,6 +1,6 @@
 # Motor de roteamento (ADR-0044) — guia de operação
 
-Estado: **LAB**. A branch `feat/sector-scheduling-overflow` NÃO está mesclada nem implantada; a flag `OMNIRA_ROUTING_ENGINE_ENABLED` não existe em produção. Este guia é para quando o dono mandar mesclar e implantar.
+Estado: **LAB**. Mesclado em `main` e implantado em 2026-10-13 (api/worker/web `sha-1f30046`, migrations 124–133); `OMNIRA_ROUTING_ENGINE_ENABLED=true` com `OMNIRA_ROUTING_ENGINE_SINCE=2026-10-13T12:50:53Z` no `.env` (só conversas criadas depois entram). Este guia vale para operar, reverter e para outros ambientes.
 
 ## 1. O que muda quando a flag liga
 Com a flag **desligada** nada muda: o rodízio legado continua atribuindo, nenhuma tela nova altera comportamento, nenhum aviso é enviado. Com ela **ligada** (API e worker, mesmo valor):

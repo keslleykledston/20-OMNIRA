@@ -1,6 +1,6 @@
 # Motor de roteamento (ADR-0044) — estado local, para retomar sem perder o fio
 
-Branch `feat/sector-scheduling-overflow` (base `c804344` de `main`), worktree `/data/cafegpt/tmp/wt-sched`. **Não mesclada, não enviada, não implantada.** Memória: `~/.claude/projects/.../memory/sector-scheduling-overflow-branch.md`. Decisão do dono (2026-10-13): seguir as fases sem perguntar até a entrega do PRD; pendências que dependam dele são listadas aqui (seção 4); **merge e implantação continuam dependendo da ordem dele** (instrução explícita anterior).
+Branch `feat/sector-scheduling-overflow` (base `c804344` de `main`), worktree `/data/cafegpt/tmp/wt-sched`. **MESCLADA em `main` (`1f30046`), enviada e IMPLANTADA em 2026-10-13 por ordem do dono (flag ligada, só conversas novas); este arquivo é histórico de retomada. Ver `ROUTING-ENGINE-FINAL-REPORT.md` §7.** Memória: `~/.claude/projects/.../memory/sector-scheduling-overflow-branch.md`. Decisão do dono (2026-10-13): seguir as fases sem perguntar até a entrega do PRD; pendências que dependam dele são listadas aqui (seção 4); **merge e implantação continuam dependendo da ordem dele** (instrução explícita anterior).
 
 ## 1. Feito (commits na branch; gate de integração, migrations 093–131 up/down/up, Codex por fase)
 | Fase | Entrega | Migration |
