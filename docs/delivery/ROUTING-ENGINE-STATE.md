@@ -23,7 +23,9 @@ Branch `feat/sector-scheduling-overflow` (base `c804344` de `main`), worktree `/
 | 7 | segurança: rotas de administração inalcançáveis agindo por Hub (404, mutante morto); chaves não delegáveis; leitura de contratos do Hub sem operadores |
 | 6b | UI: Atendimento › Setores, Horários, Escalas e plantões, Transbordo e SLA; painel "Roteamento e SLA" na conversa (membro e Hub delegado); `GET /inbox/conversations/{id}/routing` |
 
-## 2. Falta (ordem de execução)
+## 2. ESTADO FINAL (2026-10-13): todas as fases codificadas e verificadas; ver `ROUTING-ENGINE-FINAL-REPORT.md`. O que segue em §2 abaixo está FEITO, salvo a Fase 8 que agora está concluída.
+
+## 2b. (histórico) Falta (ordem de execução)
 1. ~~Destino `flow`~~ FEITO (ADR §11.8, migration 133): `Engine.StartRouted` no Flow Builder, mesma transação, só sem execução ativa.
 2. Chamar o motor também em `RouteNew`/`assign_queue` (hoje o motor entra pelo job `job.routing.assign.v1`, que já cobre os dois caminhos quando o grupo é round_robin/least_loaded).
 3. ~~UI `least_loaded`~~ FEITO.

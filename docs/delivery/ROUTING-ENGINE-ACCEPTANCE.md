@@ -44,7 +44,7 @@ Vocabulário (o mesmo do Hub): **IMPLEMENTED** (existe), **UNIT**, **POSTGRES** 
 | 5 Cadeia, destinos, SLA, aviso, fluxo | POSTGRES |
 | 6 Flow Builder + interface | UNIT/UI-TEST; sem E2E |
 | 7 Segurança | HTTP/POSTGRES (isolamento, Hub, imutabilidade de tenant, conteúdo nunca em fila/eventos) |
-| 8 Fechamento | Codex por fase; **Codex final da branch: ver relatório**; guia de operação |
+| 8 Fechamento | Codex por fase + revisão final da branch + reconferências (sem achados abertos); gate 39/39 em `d41bdff`; guia de operação; relatório final |
 
 ## 4. O que NÃO foi provado (não declarar pronto)
 - Sem E2E em navegador das telas novas e sem teste com aparelho/WhatsApp real (aviso fora do expediente, janela de 24 h da Meta).

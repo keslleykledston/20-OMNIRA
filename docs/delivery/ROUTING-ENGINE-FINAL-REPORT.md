@@ -18,7 +18,7 @@ Branch `feat/sector-scheduling-overflow`, base `c804344` (`main`). **Estado: LAB
 | Operação | `docs/operations/ROUTING-ENGINE-OPERATIONS.md`; matriz de aceite; estado local (`ROUTING-ENGINE-STATE.md`) |
 
 ## 2. Verificação (evidência, não afirmação)
-- **Gate de integração da branch: 39/39 pacotes** (Postgres real sob RLS, mode `enforce`), executado de `git archive` do HEAD final — resultado no fim desta seção.
+- **Gate de integração da branch: 39/39 pacotes** (Postgres real sob RLS, mode `enforce`), executado de `git archive` do commit `d41bdff` (último de código): **39/39 pacotes passaram**, 2026-10-13. Os commits seguintes são só documentação.
 - Testes Go sem integração: todos `ok`. Web: `vitest` 958 testes, `tsc --noEmit`, `vite build` ok. Migrations 124–133: `scripts/test-hub-migrations.sh` (up/down/up idêntico), `tools/validate-schema.sh` ok. `tools/validate-specs.sh`: os mesmos 33 erros que já existem em `main` (nenhum novo).
 - Mutantes: cada correção relevante tem um teste que falha quando a correção é desfeita (savepoints, guarda de fluxo, hand-off, SLA ao fechar, filtro de canal, `Startable`, rota que vira delegável…).
 - **Codex (revisor independente, somente leitura)**: revisões por fase (0 CRITICAL; HIGH/MEDIUM tratados) + **revisão final da branch inteira (4 HIGH, 3 MEDIUM, 1 LOW — todos tratados)** + reconferência do delta (2 HIGH, tratados) + confirmação final: **nenhum CRITICAL/HIGH/MEDIUM/LOW** sobre `e5d29b9..f0ee674`. O savepoint de `tryAssign` (commit `d41bdff`) veio depois da última confirmação e é coberto por 60 repetições do teste de concorrência (antes: ~1 falha em 25).
