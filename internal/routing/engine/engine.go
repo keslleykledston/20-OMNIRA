@@ -1,10 +1,9 @@
-// Package engine is the central routing engine (ADR-0044 phase 4): ONE place that decides where a conversation goes. It does not
+// Package engine is the central routing engine (ADR-0044 phases 4-5): ONE place that decides where a conversation goes. It does not
 // re-implement the rules: the calendar comes from internal/scheduling (through sectors/adapters), the eligibility from
-// internal/routing/eligibility, and the assignment keeps the guarantees of the round-robin it replaces (compare-and-set on the owner,
-// capacity re-checked under a per-agent lock, assignment_events).
+// internal/routing/eligibility, the overflow chain from internal/routing/overflow, and the assignment keeps the guarantees of the
+// round-robin it replaces (compare-and-set on the owner, capacity re-checked under the same member-row lock, assignment_events).
 //
-// Phase 4 decides ASSIGN_AGENT, ENQUEUE, WAIT_UNTIL_OPEN and REQUIRE_MANUAL_ACTION. The other kinds (OVERFLOW, EXECUTE_FLOW,
-// ESCALATE) exist in the closed set so the history is already expressive; the chain that produces them is phase 5.
+// Lock order, everywhere: conversation row -> routing state -> timer. A decision is ONE transaction.
 package engine
 
 import (
@@ -19,12 +18,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/routing/eligibility"
+	"github.com/omnira/omnira/internal/routing/overflow"
 	"github.com/omnira/omnira/internal/routing/ports"
 	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// engineCandidateLimit bounds the people evaluated per decision. A queue with more members than this is reported (ReasonCandidatesTruncated)
+// engineCandidateLimit bounds the people evaluated per decision. A queue with more members than this is reported (ReasonTruncated)
 // instead of silently starving whoever comes after the limit; a paged candidate walk is the follow-up for queues of that size.
 const engineCandidateLimit = 2000
 
@@ -54,12 +54,15 @@ const (
 	ReasonAssigned          = "assigned"
 	ReasonPresenceDown      = "presence_unavailable"
 	ReasonTruncated         = "candidates_truncated"
+	ReasonChainExhausted    = "chain_exhausted"
+	ReasonOverflowOnCall    = "overflow_oncall"
 )
 
 // Triggers (the part of the idempotency key that says WHY the engine was asked).
 const (
 	TriggerRoute      = "route"       // a new conversation, a retry of the routing job, the safety sweep
 	TriggerOpenWakeup = "open_wakeup" // the durable timer of a sector that was closed
+	TriggerStepWait   = "step_wait"   // the durable timer of a wait inside an overflow chain
 )
 
 type Request struct {
@@ -71,7 +74,7 @@ type Request struct {
 type Decision struct {
 	Kind         Kind
 	Reason       string
-	Destination  string // canonical key: agent:<uuid> | queue:<uuid>
+	Destination  string // canonical key: agent:<uuid> | queue:<uuid> | oncall:<uuid>
 	AssignedUser uuid.UUID
 	WakeAt       *time.Time
 	Attempts     int
@@ -93,6 +96,18 @@ type convRow struct {
 	assigned *uuid.UUID
 	status   string
 	mode     string
+}
+
+// stateRow is the routing state of one conversation (one row, locked for the whole decision).
+type stateRow struct {
+	episode     int
+	step        int // 0 = still in the origin queue, n = the n-th step of the overflow chain
+	hops        int
+	visited     []string
+	origin      *uuid.UUID
+	queue       *uuid.UUID
+	stepEntered time.Time
+	state       string
 }
 
 // Decide runs inside the caller's system tenant session (the routing worker's), in the caller's transaction. The tenant comes from that
@@ -123,49 +138,142 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
-	// 2. the routing state of the conversation (created on first sight)
-	episode, err := ensureState(ctx, q, tenant, req.ConversationID, c.queueID)
+	// 2. the routing state (created on first sight; a person's action starts a new episode)
+	st, err := loadState(ctx, q, tenant, req.ConversationID, c.queueID, c.status == "open" && c.assigned == nil)
 	if err != nil {
 		return Decision{}, err
 	}
-	save := func(d Decision, state string) (Decision, error) {
-		return persist(ctx, q, tenant, req.ConversationID, episode, trigger, d, state, c.queueID)
+	finish := func(d Decision, state string) (Decision, error) {
+		return persist(ctx, q, tenant, req.ConversationID, &st, trigger, "", d, state)
 	}
 	switch {
 	case c.status != "open":
-		return save(Decision{Kind: NoAction, Reason: ReasonClosed}, "done")
+		return finish(Decision{Kind: NoAction, Reason: ReasonClosed}, "done")
 	case c.assigned != nil: // somebody (a person, an earlier run) already owns it: never reassign
-		return save(Decision{Kind: AssignAgent, Reason: ReasonAlreadyAssigned, Destination: "agent:" + c.assigned.String(), AssignedUser: *c.assigned}, "assigned")
+		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+			return Decision{}, err
+		}
+		return finish(Decision{Kind: AssignAgent, Reason: ReasonAlreadyAssigned, Destination: "agent:" + c.assigned.String(), AssignedUser: *c.assigned}, "assigned")
 	case c.queueID == nil:
-		return save(Decision{Kind: NoAction, Reason: ReasonNoQueue}, "done")
-	case c.mode == "manual" || c.mode == "":
-		return save(Decision{Kind: Enqueue, Reason: ReasonManualQueue, Destination: "queue:" + c.queueID.String()}, "queued")
+		return finish(Decision{Kind: NoAction, Reason: ReasonNoQueue}, "done")
 	}
-	queue := *c.queueID
 	var now time.Time
 	if err := q.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
 		return Decision{}, err
 	}
-	// 3. the sector's calendar
+	var pol *overflow.Policy
+	if st.origin != nil {
+		if pol, err = sectorsadapters.LoadPolicy(ctx, q, tenant, *st.origin); err != nil {
+			return Decision{}, err
+		}
+		if pol != nil && !pol.Active {
+			pol = nil
+		}
+	}
+
+	// 3. evaluate the queue the conversation is in; if it is blocked, the overflow chain may move it to another destination, and the new
+	// place is evaluated in turn (bounded by the policy's hop limit, so this loop always ends)
+	for iter := 0; iter <= overflow.MaxStepsLimit+1; iter++ {
+		queue := *c.queueID
+		out, err := e.evaluate(ctx, q, tenant, req, &st, queue, c.mode, now)
+		if err != nil {
+			return Decision{}, err
+		}
+		if out.kind == oAssigned {
+			if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+				return Decision{}, err
+			}
+			return finish(out.plain, "assigned")
+		}
+		if out.kind == oNever { // the calendar never opens within the horizon: a person decides (the chain cannot help a closed door)
+			if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+				return Decision{}, err
+			}
+			return finish(out.plain, "manual_required")
+		}
+		// blocked (or a manual queue): consult the chain
+		var res chainResult
+		if pol != nil && !out.presenceDown { // a presence backend that is down is an infrastructure fault, not a business trigger: the chain does not act on it
+			if res, err = e.chain(ctx, q, tenant, req, &st, pol, out.trigger, now); err != nil {
+				return Decision{}, err
+			}
+		}
+		switch res.kind {
+		case cEntered: // moved to another queue: evaluate it
+			c.queueID = st.queue
+			c.mode = res.mode
+			continue
+		case cAssigned:
+			if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+				return Decision{}, err
+			}
+			return finish(res.decision, "assigned")
+		case cExhausted:
+			if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+				return Decision{}, err
+			}
+			return finish(res.decision, res.state)
+		}
+		// the chain did not move it: stay here with the plain decision, and keep the durable timers it needs
+		if out.wake != nil {
+			if err := planTimer(ctx, q, tenant, req.ConversationID, st.episode, "open_wakeup", 0, *out.wake); err != nil {
+				return Decision{}, err
+			}
+		}
+		for _, w := range res.waits {
+			if err := planTimer(ctx, q, tenant, req.ConversationID, st.episode, "step_wait", w.position, w.due); err != nil {
+				return Decision{}, err
+			}
+		}
+		d, err := finish(out.plain, out.state)
+		if err != nil {
+			return Decision{}, err
+		}
+		if out.presenceDown { // the legacy contract: a presence backend that cannot answer is retried, never folded into "nobody available"
+			return d, ports.ErrPresenceUnavailable
+		}
+		return d, nil
+	}
+	return Decision{}, errors.New("engine: routing did not settle (hop limit)")
+}
+
+type outKind int
+
+const (
+	oAssigned outKind = iota
+	oBlocked
+	oNever
+)
+
+type outcome struct {
+	kind         outKind
+	trigger      overflow.Trigger // what blocks it ("" for a manual queue: only max_wait can move it)
+	plain        Decision         // what to report if the chain does not move it
+	state        string           // the routing state that goes with `plain`
+	wake         *time.Time       // the open-wakeup timer to keep if it stays
+	presenceDown bool
+}
+
+// evaluate looks at the queue the conversation is in: manual, closed, or open (then it tries the eligible agents in the strategy's order).
+func (e *Engine) evaluate(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, queue uuid.UUID, mode string, now time.Time) (outcome, error) {
+	if mode == "manual" || mode == "" {
+		return outcome{kind: oBlocked, plain: Decision{Kind: Enqueue, Reason: ReasonManualQueue, Destination: "queue:" + queue.String()}, state: "queued"}, nil
+	}
 	avail, err := sectorsadapters.QueueAvailability(ctx, q, tenant, queue, now)
 	if err != nil {
-		return Decision{}, err
+		return outcome{}, err
 	}
 	if !avail.Open {
 		if avail.NextOpen == nil {
-			return save(Decision{Kind: RequireManualAction, Reason: ReasonNeverOpens, Destination: "queue:" + queue.String()}, "manual_required")
+			return outcome{kind: oNever, plain: Decision{Kind: RequireManualAction, Reason: ReasonNeverOpens, Destination: "queue:" + queue.String()}}, nil
 		}
-		if err := planWakeup(ctx, q, tenant, req.ConversationID, episode, *avail.NextOpen); err != nil {
-			return Decision{}, err
-		}
-		return save(Decision{Kind: WaitUntilOpen, Reason: ReasonSectorClosed, Destination: "queue:" + queue.String(), WakeAt: avail.NextOpen}, "waiting_open")
+		return outcome{kind: oBlocked, trigger: overflow.AfterHours, wake: avail.NextOpen, state: "waiting_open",
+			plain: Decision{Kind: WaitUntilOpen, Reason: ReasonSectorClosed, Destination: "queue:" + queue.String(), WakeAt: avail.NextOpen}}, nil
 	}
-	// 4. open: who may receive it, by the single eligibility rule, in the order of the queue's strategy
 	snap, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, now, e.presence, sectorsadapters.SnapshotOptions{Limit: engineCandidateLimit})
 	if err != nil {
-		return Decision{}, err
+		return outcome{}, err
 	}
-	candidates := order(snap.Agents, c.mode)
 	anyPresenceDown := false
 	for _, a := range snap.Agents {
 		for _, r := range a.Reasons {
@@ -174,43 +282,316 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 			}
 		}
 	}
-	for _, cand := range candidates {
+	for _, cand := range order(snap.Agents, mode) {
 		ok, err := tryAssign(ctx, q, tenant, queue, req.ConversationID, cand, req.StrategyReason, now)
 		if err != nil {
-			return Decision{}, err
+			return outcome{}, err
 		}
 		if ok {
-			if err := cancelWakeup(ctx, q, tenant, req.ConversationID, episode); err != nil {
-				return Decision{}, err
-			}
-			return save(Decision{Kind: AssignAgent, Reason: ReasonAssigned, Destination: "agent:" + cand.UserID.String(), AssignedUser: cand.UserID}, "assigned")
+			return outcome{kind: oAssigned, plain: Decision{Kind: AssignAgent, Reason: ReasonAssigned, Destination: "agent:" + cand.UserID.String(), AssignedUser: cand.UserID}}, nil
 		}
 		// lost a race (capacity, lock, or the conversation was taken meanwhile): look at the conversation again before the next candidate
 		var owner *uuid.UUID
 		if err := q.QueryRow(ctx, `SELECT assigned_to_user_id FROM conversations WHERE tenant_id=$1 AND id=$2`, tenant, req.ConversationID).Scan(&owner); err != nil {
-			return Decision{}, err
+			return outcome{}, err
 		}
 		if owner != nil {
-			return save(Decision{Kind: AssignAgent, Reason: ReasonAlreadyAssigned, Destination: "agent:" + owner.String(), AssignedUser: *owner}, "assigned")
+			return outcome{kind: oAssigned, plain: Decision{Kind: AssignAgent, Reason: ReasonAlreadyAssigned, Destination: "agent:" + owner.String(), AssignedUser: *owner}}, nil
 		}
 	}
-	reason := ReasonNoEligibleAgent
+	reason, trig := ReasonNoEligibleAgent, overflow.NoEligibleAgent
 	switch {
 	case snap.Truncated:
 		reason = ReasonTruncated
 	case anyPresenceDown:
 		reason = ReasonPresenceDown
 	case onlyCapacity(snap.Agents):
-		reason = ReasonCapacityExhausted
+		reason, trig = ReasonCapacityExhausted, overflow.CapacityExhausted
 	}
-	d, err := save(Decision{Kind: Enqueue, Reason: reason, Destination: "queue:" + queue.String()}, "queued")
+	return outcome{kind: oBlocked, trigger: trig, state: "queued", presenceDown: anyPresenceDown,
+		plain: Decision{Kind: Enqueue, Reason: reason, Destination: "queue:" + queue.String()}}, nil
+}
+
+type chainKind int
+
+const (
+	cNone chainKind = iota
+	cEntered
+	cAssigned
+	cExhausted
+)
+
+type stepWait struct {
+	position int
+	due      time.Time
+}
+
+type chainResult struct {
+	kind     chainKind
+	mode     string // the mode of the queue it moved to
+	decision Decision
+	state    string
+	waits    []stepWait
+}
+
+// chain consults the overflow policy for the conversation's situation. Triggers evaluated: the one that blocks it now, and max_wait
+// (the time in the current step). It performs AT MOST ONE transition per call; an immediate next step happens in the caller's loop.
+func (e *Engine) chain(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, pol *overflow.Policy, blocking overflow.Trigger, now time.Time) (chainResult, error) {
+	origin := *st.origin
+	visited := map[string]bool{}
+	for _, k := range st.visited {
+		visited[k] = true
+	}
+	triggers := []overflow.Trigger{}
+	if blocking != "" {
+		triggers = append(triggers, blocking)
+	}
+	triggers = append(triggers, overflow.MaxWait)
+	elapsedFn := func(business bool) time.Duration {
+		d, err := sectorsadapters.Elapsed(ctx, q, tenant, origin, st.stepEntered, now, business)
+		if err != nil {
+			return 0 // an unreadable calendar must not make a wait look elapsed
+		}
+		return d
+	}
+	var res chainResult
+	for attempt := 0; attempt <= len(pol.Steps); attempt++ {
+		var enter *overflow.Step
+		waits := map[int]*overflow.Step{}
+		exhausted := false
+		for _, t := range triggers {
+			sel := pol.Next(st.step, t, visited, st.hops, elapsedFn)
+			switch {
+			case sel.Step != nil:
+				if enter == nil || sel.Step.Position < enter.Position {
+					enter = sel.Step
+				}
+			case sel.WaitFor != nil:
+				waits[sel.WaitFor.Position] = sel.WaitFor
+			case sel.Exhausted:
+				exhausted = true
+			}
+		}
+		if enter != nil {
+			entered, a, err := e.enter(ctx, q, tenant, req, st, *enter, blocking, now)
+			if err != nil {
+				return chainResult{}, err
+			}
+			switch entered {
+			case entRejected: // the live check refused this destination: never retry it in this call, look at the next candidate
+				visited[enter.Key()] = true
+				continue
+			case entQueue:
+				return chainResult{kind: cEntered, mode: a.mode}, nil
+			case entAssigned:
+				return chainResult{kind: cAssigned, decision: a.decision}, nil
+			}
+		}
+		for pos, s := range waits {
+			due, err := sectorsadapters.DueAfter(ctx, q, tenant, origin, st.stepEntered, time.Duration(s.WaitSeconds)*time.Second, s.WaitBusiness)
+			if err != nil {
+				return chainResult{}, err
+			}
+			res.waits = append(res.waits, stepWait{position: pos, due: due})
+		}
+		sort.Slice(res.waits, func(i, j int) bool { return res.waits[i].position < res.waits[j].position })
+		if len(res.waits) == 0 && (exhausted || len(visited) > len(st.visited)) { // every candidate was visited, over the limit, or rejected
+			d, state := exhaustedDecision(pol, "queue:"+st.queue.String())
+			return chainResult{kind: cExhausted, decision: d, state: state}, nil
+		}
+		return res, nil
+	}
+	d, state := exhaustedDecision(pol, "queue:"+st.queue.String())
+	return chainResult{kind: cExhausted, decision: d, state: state}, nil
+}
+
+func exhaustedDecision(pol *overflow.Policy, dest string) (Decision, string) {
+	switch pol.OnExhausted {
+	case overflow.ExhaustedContingency:
+		return Decision{Kind: Escalate, Reason: ReasonChainExhausted, Destination: dest}, "manual_required"
+	case overflow.ExhaustedManual:
+		return Decision{Kind: RequireManualAction, Reason: ReasonChainExhausted, Destination: dest}, "manual_required"
+	}
+	return Decision{Kind: Enqueue, Reason: ReasonChainExhausted, Destination: dest}, "queued"
+}
+
+type entryKind int
+
+const (
+	entRejected entryKind = iota
+	entQueue
+	entAssigned
+)
+
+type entryResult struct {
+	mode     string
+	decision Decision
+}
+
+// enter performs the transition to one step after checking the destination LIVE (it may have changed since the policy was saved).
+func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, blocking overflow.Trigger, now time.Time) (entryKind, entryResult, error) {
+	label := string(blocking)
+	if label == "" {
+		label = string(overflow.MaxWait)
+	}
+	switch s.DestKind {
+	case overflow.DestQueue:
+		var mode string
+		var sectorActive bool
+		err := q.QueryRow(ctx, `SELECT qq.mode, COALESCE(sc.active, true) FROM queues qq LEFT JOIN sectors sc ON sc.tenant_id=qq.tenant_id AND sc.id=qq.sector_id
+			WHERE qq.tenant_id=$1 AND qq.id=$2`, tenant, s.DestID).Scan(&mode, &sectorActive)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !sectorActive) {
+			return entRejected, entryResult{}, nil // the queue is gone, or its sector was deactivated
+		}
+		if err != nil {
+			return entRejected, entryResult{}, err
+		}
+		avail, err := sectorsadapters.QueueAvailability(ctx, q, tenant, s.DestID, now)
+		if err != nil {
+			return entRejected, entryResult{}, err
+		}
+		if !avail.Open && !s.AllowClosed {
+			return entRejected, entryResult{}, nil
+		}
+		if _, err := q.Exec(ctx, `UPDATE conversations SET queue_id=$3, updated_at=now(),
+			routing_retry_at = CASE WHEN $4 IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
+			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, s.DestID, mode); err != nil {
+			return entRejected, entryResult{}, err
+		}
+		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+			return entRejected, entryResult{}, err
+		}
+		advance(st, s, &s.DestID, now)
+		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", label,
+			Decision{Kind: Overflow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
+			return entRejected, entryResult{}, err
+		}
+		return entQueue, entryResult{mode: mode}, nil
+	case overflow.DestOnCall:
+		user, ok, err := e.pickOnCall(ctx, q, tenant, req, st, s, now)
+		if err != nil {
+			return entRejected, entryResult{}, err
+		}
+		if !ok {
+			return entRejected, entryResult{}, nil
+		}
+		advance(st, s, nil, now)
+		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", label,
+			Decision{Kind: Overflow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
+			return entRejected, entryResult{}, err
+		}
+		return entAssigned, entryResult{decision: Decision{Kind: AssignAgent, Reason: ReasonOverflowOnCall, Destination: "agent:" + user.String(), AssignedUser: user}}, nil
+	}
+	return entRejected, entryResult{}, nil
+}
+
+func (r Request) triggerOrRoute() string {
+	if r.Trigger == "" {
+		return TriggerRoute
+	}
+	return r.Trigger
+}
+
+// advance moves the in-memory state to the step (the caller persists it).
+func advance(st *stateRow, s overflow.Step, queue *uuid.UUID, now time.Time) {
+	st.step = s.Position
+	st.hops++
+	st.visited = append(st.visited, s.Key())
+	st.stepEntered = now
+	if queue != nil {
+		st.queue = queue
+	}
+}
+
+// pickOnCall chooses, among the people on call in the roster right now, the least loaded who is an active attendant, under their
+// capacity (counted across the company: an on-call person is not tied to the queue), inside their own shift unless the step allows
+// otherwise, and online when the company requires presence; then assigns with the same guarantees as any assignment.
+func (e *Engine) pickOnCall(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, now time.Time) (uuid.UUID, bool, error) {
+	var presenceReq bool
+	if err := q.QueryRow(ctx, `SELECT routing_require_presence FROM tenants WHERE id=$1`, tenant).Scan(&presenceReq); err != nil {
+		return uuid.Nil, false, err
+	}
+	rows, err := q.Query(ctx, `SELECT p.user_id, ap.id, max(p.capacity),
+		(SELECT count(*) FROM conversations c WHERE c.tenant_id=p.tenant_id AND c.assigned_to_user_id=p.user_id AND c.status='open')
+		FROM on_call_periods p JOIN on_call_rosters r ON r.tenant_id=p.tenant_id AND r.id=p.roster_id AND r.active
+		JOIN memberships m ON m.tenant_id=p.tenant_id AND m.user_id=p.user_id AND m.status='active'
+		JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
+		WHERE p.tenant_id=$1 AND p.roster_id=$2 AND p.starts_at <= $3 AND p.ends_at > $3
+		GROUP BY p.user_id, ap.id, p.tenant_id ORDER BY 4, p.user_id LIMIT 200`, tenant, s.DestID, now)
 	if err != nil {
-		return Decision{}, err
+		return uuid.Nil, false, err
 	}
-	if anyPresenceDown { // the legacy contract: a presence backend that cannot answer is retried, never folded into "nobody available"
-		return d, ports.ErrPresenceUnavailable
+	type cand struct {
+		user, profile  uuid.UUID
+		capacity, load int
 	}
-	return d, nil
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		if err := rows.Scan(&c.user, &c.profile, &c.capacity, &c.load); err != nil {
+			rows.Close()
+			return uuid.Nil, false, err
+		}
+		cands = append(cands, c)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return uuid.Nil, false, rows.Err()
+	}
+	online := map[uuid.UUID]bool{}
+	if presenceReq {
+		if e.presence == nil {
+			return uuid.Nil, false, nil // fail closed: never assume online
+		}
+		ids := make([]uuid.UUID, len(cands))
+		for i, c := range cands {
+			ids[i] = c.profile
+		}
+		got, err := e.presence.OnlineMembers(ctx, tenant, ids)
+		if err != nil {
+			return uuid.Nil, false, nil
+		}
+		online = got
+	}
+	queue := *st.queue
+	for _, c := range cands {
+		if c.load >= c.capacity || (presenceReq && !online[c.profile]) {
+			continue
+		}
+		if open, _, err := sectorsadapters.AgentShift(ctx, q, tenant, c.user, queue, now); err != nil {
+			return uuid.Nil, false, err
+		} else if open != nil && !*open && !s.AllowOffShift {
+			continue
+		}
+		var locked bool
+		if err := q.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('routing:agent:' || $1::text || ':' || $2::text, 0))`, tenant, c.user).Scan(&locked); err != nil {
+			return uuid.Nil, false, err
+		}
+		if !locked {
+			continue
+		}
+		var load int
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM conversations WHERE tenant_id=$1 AND assigned_to_user_id=$2 AND status='open'`, tenant, c.user).Scan(&load); err != nil {
+			return uuid.Nil, false, err
+		}
+		if load >= c.capacity {
+			continue
+		}
+		tag, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
+			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, c.user)
+		if err != nil {
+			return uuid.Nil, false, err
+		}
+		if tag.RowsAffected() != 1 {
+			return uuid.Nil, false, nil
+		}
+		if _, err := q.Exec(ctx, `INSERT INTO assignment_events(tenant_id,conversation_id,from_user_id,to_user_id,changed_by,reason,actor_source) VALUES ($1,$2,NULL,$3,NULL,'overflow_oncall','system')`,
+			tenant, req.ConversationID, c.user); err != nil {
+			return uuid.Nil, false, err
+		}
+		return c.user, true, nil
+	}
+	return uuid.Nil, false, nil
 }
 
 // order puts the eligible agents in the order of the queue's strategy. Both strategies end in user id, so the order is total.
@@ -305,56 +686,74 @@ func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, convers
 	return true, nil
 }
 
-func ensureState(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, queue *uuid.UUID) (int, error) {
-	var episode int
-	err := q.QueryRow(ctx, `INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id) VALUES ($1,$2,'queued',$3)
-		ON CONFLICT (tenant_id, conversation_id) DO UPDATE SET queue_id=COALESCE(EXCLUDED.queue_id, routing_engine_state.queue_id)
-		RETURNING episode`, tenant, conversation, queue).Scan(&episode)
-	if err != nil {
-		return 0, fmt.Errorf("engine: routing state: %w", err)
+// loadState reads (creating on first sight) the routing state and locks it. A NEW EPISODE starts, with an empty loop guard, only when a
+// person acted: the conversation went back to the queue after having been assigned or finished (a release/reopen), or somebody moved it
+// to a different queue than the one the engine left it in. Automatic requeue never resets the guard.
+func loadState(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, queue *uuid.UUID, openAndUnassigned bool) (stateRow, error) {
+	originKey := []string{}
+	if queue != nil {
+		originKey = []string{overflow.DestKey(overflow.DestQueue, *queue)}
 	}
-	// lock it for the rest of the decision (the conversation row already serializes, this keeps readers of the state consistent)
-	if _, err := q.Exec(ctx, `SELECT 1 FROM routing_engine_state WHERE tenant_id=$1 AND conversation_id=$2 FOR UPDATE`, tenant, conversation); err != nil {
-		return 0, err
+	if _, err := q.Exec(ctx, `INSERT INTO routing_engine_state (tenant_id, conversation_id, state, queue_id, origin_queue_id, visited) VALUES ($1,$2,'queued',$3,$3,$4)
+		ON CONFLICT (tenant_id, conversation_id) DO NOTHING`, tenant, conversation, queue, originKey); err != nil {
+		return stateRow{}, fmt.Errorf("engine: routing state: %w", err)
 	}
-	return episode, nil
+	var st stateRow
+	if err := q.QueryRow(ctx, `SELECT episode, step_index, hops, visited, origin_queue_id, queue_id, step_entered_at, state FROM routing_engine_state
+		WHERE tenant_id=$1 AND conversation_id=$2 FOR UPDATE`, tenant, conversation).
+		Scan(&st.episode, &st.step, &st.hops, &st.visited, &st.origin, &st.queue, &st.stepEntered, &st.state); err != nil {
+		return stateRow{}, err
+	}
+	moved := queue != nil && (st.queue == nil || *st.queue != *queue)
+	reopened := openAndUnassigned && (st.state == "assigned" || st.state == "done")
+	if moved || reopened {
+		if err := q.QueryRow(ctx, `UPDATE routing_engine_state SET episode=episode+1, step_index=0, hops=0, visited=$3, origin_queue_id=$4, queue_id=$4,
+			state='queued', entered_queue_at=now(), step_entered_at=now(), generation=generation+1, updated_at=now()
+			WHERE tenant_id=$1 AND conversation_id=$2 RETURNING episode, step_entered_at`, tenant, conversation, originKey, queue).Scan(&st.episode, &st.stepEntered); err != nil {
+			return stateRow{}, err
+		}
+		st.step, st.hops, st.visited, st.origin, st.queue, st.state = 0, 0, originKey, queue, queue, "queued"
+	}
+	return st, nil
 }
 
-// persist writes the decision (one row per episode, step and trigger: a repeat updates it and counts the attempt) and the new state.
-func persist(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, episode int, trigger string, d Decision, state string, queue *uuid.UUID) (Decision, error) {
+// persist writes the decision (one row per episode, step and trigger: a repeat updates it and counts the attempt) and the state.
+func persist(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, st *stateRow, trigger, detail string, d Decision, state string) (Decision, error) {
 	var attempts int
-	if err := q.QueryRow(ctx, `INSERT INTO routing_engine_decisions (tenant_id, conversation_id, episode, step_index, trigger, decision, destination, reason)
-		VALUES ($1,$2,$3,0,$4,$5,$6,$7)
+	if err := q.QueryRow(ctx, `INSERT INTO routing_engine_decisions (tenant_id, conversation_id, episode, step_index, trigger, decision, destination, reason, detail)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8, jsonb_build_object('blocking', $9::text))
 		ON CONFLICT (tenant_id, conversation_id, episode, step_index, trigger)
 		DO UPDATE SET
 		  -- the original assignment is the decision of record: a duplicate trigger only counts as another attempt
-		  decision=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason='assigned' THEN routing_engine_decisions.decision ELSE EXCLUDED.decision END,
-		  destination=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason='assigned' THEN routing_engine_decisions.destination ELSE EXCLUDED.destination END,
-		  reason=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason='assigned' THEN routing_engine_decisions.reason ELSE EXCLUDED.reason END,
+		  decision=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.decision ELSE EXCLUDED.decision END,
+		  destination=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.destination ELSE EXCLUDED.destination END,
+		  reason=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.reason ELSE EXCLUDED.reason END,
 		  attempts=routing_engine_decisions.attempts+1, updated_at=now()
-		RETURNING attempts`, tenant, conversation, episode, trigger, string(d.Kind), d.Destination, d.Reason).Scan(&attempts); err != nil {
+		RETURNING attempts`, tenant, conversation, st.episode, st.step, trigger, string(d.Kind), d.Destination, d.Reason, detail).Scan(&attempts); err != nil {
 		return Decision{}, fmt.Errorf("engine: decision: %w", err)
 	}
-	if _, err := q.Exec(ctx, `UPDATE routing_engine_state SET state=$3, last_decision=$4, queue_id=COALESCE($5, queue_id), updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2`,
-		tenant, conversation, state, string(d.Kind), queue); err != nil {
+	if _, err := q.Exec(ctx, `UPDATE routing_engine_state SET state=$3, last_decision=$4, queue_id=$5, step_index=$6, hops=$7, visited=$8, step_entered_at=$9, updated_at=now()
+		WHERE tenant_id=$1 AND conversation_id=$2`, tenant, conversation, state, string(d.Kind), st.queue, st.step, st.hops, st.visited, st.stepEntered); err != nil {
 		return Decision{}, err
 	}
+	st.state = state
 	d.Attempts = attempts
 	return d, nil
 }
 
-func planWakeup(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, episode int, due time.Time) error {
-	// one timer per (conversation, episode, kind): planning again moves it. A moved due time bumps the generation, so a worker that
-	// claimed the old plan cannot complete the new one.
-	_, err := q.Exec(ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, step_index, due_at) VALUES ($1,$2,$3,'open_wakeup',0,$4)
+// planTimer keeps ONE timer per (conversation, episode, kind, step): planning again moves it. A moved due time bumps the generation and
+// drops the claim, so a worker that claimed the old plan cannot complete the new one.
+func planTimer(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, episode int, kind string, step int, due time.Time) error {
+	_, err := q.Exec(ctx, `INSERT INTO routing_engine_timers (tenant_id, conversation_id, episode, kind, step_index, due_at) VALUES ($1,$2,$3,$4,$5,$6)
 		ON CONFLICT (tenant_id, conversation_id, episode, kind, step_index)
 		DO UPDATE SET due_at=EXCLUDED.due_at, state='pending', lease_until=NULL, claim_token=NULL,
 		  generation=CASE WHEN routing_engine_timers.due_at IS DISTINCT FROM EXCLUDED.due_at THEN routing_engine_timers.generation+1 ELSE routing_engine_timers.generation END,
-		  updated_at=now()`, tenant, conversation, episode, due)
+		  updated_at=now()`, tenant, conversation, episode, kind, step, due)
 	return err
 }
 
-func cancelWakeup(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, episode int) error {
-	_, err := q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND episode=$3 AND kind='open_wakeup' AND state IN ('pending','leased')`, tenant, conversation, episode)
+// cancelTimers ends every open timer of the episode (the conversation was assigned, finished or handed to a person).
+func cancelTimers(ctx context.Context, q platformdb.Querier, tenant, conversation uuid.UUID, episode int) error {
+	_, err := q.Exec(ctx, `UPDATE routing_engine_timers SET state='cancelled', claim_token=NULL, updated_at=now() WHERE tenant_id=$1 AND conversation_id=$2 AND episode=$3 AND state IN ('pending','leased')`, tenant, conversation, episode)
 	return err
 }

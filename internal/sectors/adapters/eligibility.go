@@ -293,3 +293,18 @@ func workload(r *agentRow, realtime bool) int {
 	}
 	return r.workload
 }
+
+// AgentShift answers whether the person's own shift calendar is open at the instant for a queue (queue > sector > all scope); open is nil
+// when the person has no shift (no restriction).
+func AgentShift(ctx context.Context, q platformdb.Querier, tenant, user, queueID uuid.UUID, at time.Time) (open *bool, source string, err error) {
+	var sectorID *uuid.UUID
+	if err := q.QueryRow(ctx, `SELECT sector_id FROM queues WHERE tenant_id=$1 AND id=$2`, tenant, queueID).Scan(&sectorID); err != nil {
+		return nil, "", err
+	}
+	rows := map[uuid.UUID]*agentRow{user: {userID: user}}
+	if err := loadShifts(ctx, q, tenant, queueID, sectorID, at, []uuid.UUID{user}, rows); err != nil {
+		return nil, "", err
+	}
+	r := rows[user]
+	return r.shiftOpen, r.shiftSource, nil
+}

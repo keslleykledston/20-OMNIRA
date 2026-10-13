@@ -12,16 +12,19 @@ CREATE TABLE routing_engine_state (
   episode INTEGER NOT NULL DEFAULT 1 CHECK (episode >= 1),   -- a new episode starts only with a HUMAN action; automatic requeue never resets the loop guard
   step_index INTEGER NOT NULL DEFAULT 0 CHECK (step_index >= 0),
   state TEXT NOT NULL CHECK (state IN ('queued', 'waiting_open', 'assigned', 'manual_required', 'flow', 'done')),
-  queue_id UUID,
+  queue_id UUID,                                          -- the queue the conversation is in NOW
+  origin_queue_id UUID,                                   -- the queue where this episode started: its overflow policy governs the chain
   visited TEXT[] NOT NULL DEFAULT '{}' CHECK (cardinality(visited) <= 32), -- canonical destination keys already tried in this episode
   hops INTEGER NOT NULL DEFAULT 0 CHECK (hops >= 0),
   entered_queue_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  step_entered_at TIMESTAMPTZ NOT NULL DEFAULT now(),    -- when the conversation entered the CURRENT step of the overflow chain (waits count from here)
   generation INTEGER NOT NULL DEFAULT 1,
   last_decision TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (tenant_id, conversation_id),
   FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id) ON DELETE CASCADE,
-  FOREIGN KEY (tenant_id, queue_id) REFERENCES queues (tenant_id, id) ON DELETE SET NULL (queue_id)
+  FOREIGN KEY (tenant_id, queue_id) REFERENCES queues (tenant_id, id) ON DELETE SET NULL (queue_id),
+  FOREIGN KEY (tenant_id, origin_queue_id) REFERENCES queues (tenant_id, id) ON DELETE SET NULL (origin_queue_id)
 );
 CREATE INDEX idx_routing_engine_state_waiting ON routing_engine_state (tenant_id, state) WHERE state IN ('waiting_open', 'manual_required');
 

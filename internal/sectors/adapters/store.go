@@ -368,3 +368,59 @@ func ReplanWaiting(ctx context.Context, q platformdb.Querier, tenant uuid.UUID) 
 	}
 	return n, nil
 }
+
+// CalendarOf returns the schedule that applies to a queue (inheritance queue -> sector -> tenant default); ok=false when none applies
+// (the queue is always open).
+func CalendarOf(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UUID) (scheduling.Schedule, bool, error) {
+	eff, err := EffectiveCalendar(ctx, q, tenant, queueID)
+	if err != nil || eff.CalendarID == nil {
+		return scheduling.Schedule{}, false, err
+	}
+	cal, err := LoadCalendar(ctx, q, tenant, *eff.CalendarID)
+	if err != nil {
+		return scheduling.Schedule{}, false, err
+	}
+	s, err := cal.Schedule()
+	return s, err == nil, err
+}
+
+// Elapsed is the time between two instants as a wait is counted: wall-clock, or only the open time of the queue's calendar.
+func Elapsed(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UUID, from, to time.Time, business bool) (time.Duration, error) {
+	if !to.After(from) {
+		return 0, nil
+	}
+	if !business {
+		return to.Sub(from), nil
+	}
+	s, ok, err := CalendarOf(ctx, q, tenant, queueID)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return to.Sub(from), nil
+	}
+	return s.BusinessElapsed(from, to)
+}
+
+// DueAfter is the instant at which a wait of d, counted from `from`, ends (wall-clock or in the queue's business time). A business wait
+// that the calendar cannot satisfy within its horizon ends at the horizon: a timer must always exist.
+func DueAfter(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.UUID, from time.Time, d time.Duration, business bool) (time.Time, error) {
+	if !business {
+		return from.Add(d), nil
+	}
+	s, ok, err := CalendarOf(ctx, q, tenant, queueID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !ok {
+		return from.Add(d), nil
+	}
+	due, found, err := s.AddBusiness(from, d)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !found {
+		return from.Add(scheduling.Horizon), nil
+	}
+	return due, nil
+}

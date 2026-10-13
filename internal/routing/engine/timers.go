@@ -131,11 +131,15 @@ func (e *Engine) runTimer(ctx context.Context, x claimed) error {
 			return err
 		}
 		switch x.kind {
-		case "open_wakeup":
-			if _, err := e.Decide(c, Request{ConversationID: x.conversation, Trigger: TriggerOpenWakeup, StrategyReason: "open_wakeup"}); err != nil && !errors.Is(err, ErrNotFound) {
+		case "open_wakeup", "step_wait":
+			trigger := TriggerOpenWakeup
+			if x.kind == "step_wait" {
+				trigger = TriggerStepWait
+			}
+			if _, err := e.Decide(c, Request{ConversationID: x.conversation, Trigger: trigger, StrategyReason: trigger}); err != nil && !errors.Is(err, ErrNotFound) {
 				return err
 			}
-		default: // kinds of phase 5 are not produced yet; never leave an unknown timer leased forever
+		default: // kinds of later phases (sla_*) are not produced yet; never leave an unknown timer leased forever
 			_, err := q.Exec(c, `UPDATE routing_engine_timers SET state='cancelled', last_error='unsupported kind', claim_token=NULL, updated_at=now() WHERE id=$1 AND claim_token=$2`, x.id, x.token)
 			return err
 		}

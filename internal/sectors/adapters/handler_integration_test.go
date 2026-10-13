@@ -568,3 +568,118 @@ func TestCalendarChangesReplanTheTimersOfWaitingConversations(t *testing.T) {
 		t.Fatalf("never opens: timer=%s state=%s", state, st)
 	}
 }
+
+func policyBody(steps ...map[string]any) map[string]any {
+	return map[string]any{"active": true, "max_steps": 4, "on_exhausted": "contingency", "steps": steps}
+}
+
+func qstep(pos int, dest uuid.UUID, wait int, triggers ...string) map[string]any {
+	return map[string]any{"position": pos, "triggers": triggers, "wait_seconds": wait, "destination_kind": "queue", "destination_id": dest}
+}
+
+func TestOverflowPolicyAPIValidationPermissionsRevisionAndIsolation(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	supervisor := e.member(t, a, "tenant_supervisor")
+	agent := e.member(t, a, "tenant_agent")
+	adminB := e.member(t, b, "tenant_admin")
+	n1, n2 := e.queue(t, a, "N1", false), e.queue(t, a, "N2", false)
+	foreign := e.queue(t, b, "Do B", false)
+	rosterA := decode[rosterItem](t, e.call(t, a, admin, "POST", "/", e.h.CreateRoster, nil, map[string]any{"name": "Plantão", "kind": "on_call"})).ID
+	rosterB := decode[rosterItem](t, e.call(t, b, adminB, "POST", "/", e.h.CreateRoster, nil, map[string]any{"name": "Plantão B", "kind": "on_call"})).ID
+	path := map[string]string{"queue_id": n1.String()}
+	put := func(actor uuid.UUID, body map[string]any) *httptest.ResponseRecorder {
+		return e.call(t, a, actor, "PUT", "/", e.h.PutOverflowPolicy, path, body)
+	}
+	good := policyBody(qstep(1, n2, 300, "no_eligible_agent", "capacity_exhausted"),
+		map[string]any{"position": 2, "triggers": []string{"max_wait"}, "wait_seconds": 900, "destination_kind": "oncall", "destination_id": rosterA})
+
+	// permissions
+	if got := put(agent, good).Code; got != 403 {
+		t.Fatalf("agent put = %d, want 403", got)
+	}
+	if got := e.call(t, a, agent, "GET", "/", e.h.GetOverflowPolicy, path, nil).Code; got != 403 {
+		t.Fatalf("agent get = %d, want 403", got)
+	}
+	rec := put(supervisor, good)
+	if rec.Code != 200 {
+		t.Fatalf("supervisor put = %d %s", rec.Code, rec.Body.String())
+	}
+	got := decode[struct {
+		Policy struct {
+			Revision int `json:"revision"`
+			Steps    []struct {
+				Position int `json:"position"`
+			} `json:"steps"`
+		} `json:"policy"`
+	}](t, rec)
+	if got.Policy.Revision != 1 || len(got.Policy.Steps) != 2 {
+		t.Fatalf("saved: %+v", got)
+	}
+	// revision: a stale editor gets 409 and nothing is lost
+	again := policyBody(qstep(1, n2, 60, "no_eligible_agent"))
+	again["expected_revision"] = 1
+	if got := put(admin, again).Code; got != 200 {
+		t.Fatalf("expected revision 1 = %d", got)
+	}
+	stale := policyBody(qstep(1, n2, 999, "no_eligible_agent"))
+	stale["expected_revision"] = 1
+	if got := put(admin, stale).Code; got != 409 {
+		t.Fatalf("stale revision = %d, want 409", got)
+	}
+	var wait int
+	if err := e.seed.QueryRow(context.Background(), `SELECT s.wait_seconds FROM overflow_steps s JOIN overflow_policies p ON p.id=s.policy_id WHERE p.queue_id=$1`, n1).Scan(&wait); err != nil || wait != 60 {
+		t.Fatalf("the stale write changed nothing: wait=%d %v", wait, err)
+	}
+	// validation: each of these is a 400 and leaves the saved policy alone
+	bad := map[string]map[string]any{
+		"back to the origin":     policyBody(qstep(1, n1, 0, "no_eligible_agent")),
+		"another company queue":  policyBody(qstep(1, foreign, 0, "no_eligible_agent")),
+		"unknown queue":          policyBody(qstep(1, uuid.New(), 0, "no_eligible_agent")),
+		"another company roster": policyBody(map[string]any{"position": 1, "triggers": []string{"max_wait"}, "wait_seconds": 60, "destination_kind": "oncall", "destination_id": rosterB}),
+		"unknown trigger":        policyBody(qstep(1, n2, 0, "whenever")),
+		"max_wait without wait":  policyBody(qstep(1, n2, 0, "max_wait")),
+		"no steps":               policyBody(),
+		"too many steps":         policyBody(qstep(1, n2, 0, "no_eligible_agent"), qstep(2, n2, 0, "no_eligible_agent")),
+		"bad exhausted":          {"active": true, "max_steps": 4, "on_exhausted": "explode", "steps": []map[string]any{qstep(1, n2, 0, "no_eligible_agent")}},
+	}
+	for name, body := range bad {
+		if got := put(admin, body).Code; got != 400 {
+			t.Errorf("%s = %d, want 400", name, got)
+		}
+	}
+	if e.call(t, a, admin, "PUT", "/", e.h.PutOverflowPolicy, map[string]string{"queue_id": uuid.NewString()}, good).Code != 404 {
+		t.Error("a queue that does not exist is 404")
+	}
+	// a deactivated roster is not a valid destination
+	e.call(t, a, admin, "PATCH", "/", e.h.UpdateRoster, map[string]string{"roster_id": rosterA.String()}, map[string]any{"active": false})
+	if got := put(admin, good).Code; got != 400 {
+		t.Errorf("an inactive roster as destination = %d, want 400", got)
+	}
+	// isolation: B cannot see or touch A's policy
+	pathA := map[string]string{"queue_id": n1.String()}
+	for name, c := range map[string]*httptest.ResponseRecorder{
+		"B reads":   e.call(t, b, adminB, "GET", "/", e.h.GetOverflowPolicy, pathA, nil),
+		"B writes":  e.call(t, b, adminB, "PUT", "/", e.h.PutOverflowPolicy, pathA, policyBody(qstep(1, foreign, 0, "no_eligible_agent"))),
+		"B deletes": e.call(t, b, adminB, "DELETE", "/", e.h.DeleteOverflowPolicy, pathA, nil),
+	} {
+		if c.Code != 404 {
+			t.Errorf("%s = %d, want 404", name, c.Code)
+		}
+	}
+	// read, delete, read again
+	read := e.call(t, a, admin, "GET", "/", e.h.GetOverflowPolicy, path, nil)
+	if read.Code != 200 || !strings.Contains(read.Body.String(), `"revision":2`) {
+		t.Fatalf("get = %d %s", read.Code, read.Body.String())
+	}
+	if got := e.call(t, a, admin, "DELETE", "/", e.h.DeleteOverflowPolicy, path, nil).Code; got != 204 {
+		t.Fatalf("delete = %d", got)
+	}
+	if read := e.call(t, a, admin, "GET", "/", e.h.GetOverflowPolicy, path, nil); !strings.Contains(read.Body.String(), `"policy":null`) {
+		t.Fatalf("after delete: %s", read.Body.String())
+	}
+	if auditCount(t, e, a, "overflow.policy_saved") != 2 || auditCount(t, e, a, "overflow.policy_removed") != 1 {
+		t.Errorf("audit: saved=%d removed=%d", auditCount(t, e, a, "overflow.policy_saved"), auditCount(t, e, a, "overflow.policy_removed"))
+	}
+}

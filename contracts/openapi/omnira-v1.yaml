@@ -1247,6 +1247,61 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues/{queue_id}/overflow-policy:
+    get:
+      operationId: getOverflowPolicy
+      tags: [Agents]
+      summary: The overflow chain of a queue
+      description: |
+        Requires `agent.read`. `{"policy": null}` when the queue has none (it behaves as before ADR-0044).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      responses:
+        '200': { description: "The policy or null" }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: putOverflowPolicy
+      tags: [Agents]
+      summary: Replace the overflow chain of a queue
+      description: |
+        Requires `agent.manage`. Body `{active, max_steps 1..8, on_exhausted: keep_waiting|contingency|manual, steps[], expected_revision?}`.
+        A step is `{position (1..n in order), name?, triggers[] (after_hours, no_eligible_agent, capacity_exhausted, max_wait, sla_risk,
+        sla_breach, operational_failure), wait_seconds (0..7 days; max_wait needs more than 0), wait_business, destination_kind
+        (queue|oncall), destination_id, allow_closed, allow_off_shift}`. Refused with `400` (and the failing rule) when a destination
+        repeats, is the origin queue, belongs to another company, or is an inactive roster; `409` when `expected_revision` is stale.
+        Conversations already in a chain keep their state; the engine re-checks every destination live before using it.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: "The saved policy (revision bumped)" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '409': { description: "Stale revision", content: { text/plain: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    delete:
+      operationId: deleteOverflowPolicy
+      tags: [Agents]
+      summary: Remove the overflow chain of a queue
+      description: |
+        Requires `agent.manage`. With no policy the engine stops overflowing the queue's conversations.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      responses:
+        '204': { description: Removed }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/queues/{queue_id}:
     patch:
       operationId: updateQueue
