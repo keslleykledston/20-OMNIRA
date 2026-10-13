@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,13 +100,16 @@ type Engine struct {
 	pool     *pgxpool.Pool
 	presence sectorsadapters.PresenceChecker
 	notifier Notifier
-	flows    FlowStarter
-	logf     func(string, ...any)
+	// flows is set after the engine is already serving (the Flow Builder is wired later in the worker), so it is read atomically.
+	flows atomic.Pointer[flowBox]
+	logf  func(string, ...any)
 }
+
+type flowBox struct{ s FlowStarter }
 
 // WithFlowStarter enables the "flow" overflow destination. Without it a flow step is refused (flows_unavailable) and the chain moves on.
 func (e *Engine) WithFlowStarter(f FlowStarter) *Engine {
-	e.flows = f
+	e.flows.Store(&flowBox{s: f})
 	return e
 }
 
@@ -620,7 +624,8 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 		}
 		return entAssigned, entryResult{decision: Decision{Kind: AssignAgent, Reason: reason, Destination: "agent:" + user.String(), AssignedUser: user}}, "", nil
 	case overflow.DestFlow:
-		if e.flows == nil {
+		starter := e.flows.Load()
+		if starter == nil || starter.s == nil {
 			return entRejected, entryResult{}, "flows_unavailable", nil
 		}
 		key := fmt.Sprintf("routing-flow:%s:%d:%d", req.ConversationID, st.episode, s.Position)
@@ -628,7 +633,7 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 		if _, err := q.Exec(ctx, `SAVEPOINT routing_flow`); err != nil {
 			return entRejected, entryResult{}, "", err
 		}
-		outcome, err := e.flows.StartRouted(ctx, req.ConversationID, s.DestID, key)
+		outcome, err := starter.s.StartRouted(ctx, req.ConversationID, s.DestID, key)
 		if err != nil {
 			_, _ = q.Exec(ctx, `ROLLBACK TO SAVEPOINT routing_flow`)
 			_, _ = q.Exec(ctx, `RELEASE SAVEPOINT routing_flow`)
