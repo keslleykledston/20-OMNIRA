@@ -1270,7 +1270,7 @@ paths:
         Requires `agent.manage`. Body `{active, max_steps 1..8, on_exhausted: keep_waiting|contingency|manual, steps[], expected_revision?}`.
         A step is `{position (1..n in order), name?, triggers[] (after_hours, no_eligible_agent, capacity_exhausted, max_wait, sla_risk,
         sla_breach, operational_failure), wait_seconds (0..7 days; max_wait needs more than 0), wait_business, destination_kind
-        (queue|oncall), destination_id, allow_closed, allow_off_shift}`. Refused with `400` (and the failing rule) when a destination
+        (queue|oncall|agent|sector|hub), destination_id, destination_queue_id (Hub only), allow_closed, allow_off_shift}`. A `hub` destination names the CONTRACT in `destination_id` and the company queue the Hub serves from in `destination_queue_id`: the conversation never leaves the company, it moves to a queue the contract covers, and only while the contract has a live operator who may reply. `allow_closed`/`allow_off_shift` need `routing.override` (`403` otherwise). Refused with `400` (and the failing rule) when a destination
         repeats, is the origin queue, belongs to another company, or is an inactive roster; `409` when `expected_revision` is stale.
         Conversations already in a chain keep their state; the engine re-checks every destination live before using it.
       parameters:

@@ -116,3 +116,34 @@ func TestAnEarlierStepDoesNotLetALaterOneJumpTheQueue(t *testing.T) {
 		t.Fatalf("step 2 must not be entered before step 1: %+v", sel)
 	}
 }
+
+func TestNewDestinationKindsAreValidatedAndKeepTheLoopGuard(t *testing.T) {
+	origin, n2, user, sector, contract := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	hubQ := uuid.New()
+	hubStep := Step{Position: 3, Triggers: []Trigger{NoEligibleAgent}, DestKind: DestHub, DestID: contract, DestQueueID: &hubQ}
+	ok := Policy{MaxSteps: 5, OnExhausted: ExhaustedManual, Steps: []Step{
+		step(1, DestAgent, user, 0, NoEligibleAgent), step(2, DestSector, sector, 0, NoEligibleAgent), hubStep}}
+	if err := ok.Validate(origin); err != nil {
+		t.Fatal(err)
+	}
+	if hubStep.Key() != "hub:"+contract.String() {
+		t.Fatalf("hub key: %s", hubStep.Key())
+	}
+	bad := map[string]func(p *Policy){
+		"hub without a queue":         func(p *Policy) { p.Steps[2].DestQueueID = nil },
+		"hub serving from the origin": func(p *Policy) { o := origin; p.Steps[2].DestQueueID = &o },
+		"queue id on a non-hub":       func(p *Policy) { q := n2; p.Steps[0].DestQueueID = &q },
+		"hub queue reused by a queue step": func(p *Policy) {
+			p.Steps = append(p.Steps[:2:2], step(3, DestQueue, hubQ, 0, NoEligibleAgent), Step{Position: 4, Triggers: []Trigger{NoEligibleAgent}, DestKind: DestHub, DestID: contract, DestQueueID: &hubQ})
+		},
+		"same agent twice": func(p *Policy) { p.Steps[1] = step(2, DestAgent, user, 0, NoEligibleAgent) },
+		"unknown kind":     func(p *Policy) { p.Steps[0].DestKind = "mars" },
+	}
+	for name, mut := range bad {
+		p := Policy{MaxSteps: ok.MaxSteps, OnExhausted: ok.OnExhausted, Steps: append([]Step(nil), ok.Steps...)}
+		mut(&p)
+		if p.Validate(origin) == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}

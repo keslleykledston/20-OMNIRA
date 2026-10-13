@@ -25,8 +25,8 @@ func (e *env) policy(t *testing.T, tenant, origin uuid.UUID, maxSteps int, onExh
 		for j, x := range s.Triggers {
 			trig[j] = string(x)
 		}
-		e.exec(t, `INSERT INTO overflow_steps (tenant_id, policy_id, position, triggers, wait_seconds, wait_business, destination_kind, destination_id, allow_closed, allow_off_shift)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, tenant, id, i+1, trig, s.WaitSeconds, s.WaitBusiness, s.DestKind, s.DestID, s.AllowClosed, s.AllowOffShift)
+		e.exec(t, `INSERT INTO overflow_steps (tenant_id, policy_id, position, triggers, wait_seconds, wait_business, destination_kind, destination_id, destination_queue_id, allow_closed, allow_off_shift)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, tenant, id, i+1, trig, s.WaitSeconds, s.WaitBusiness, s.DestKind, s.DestID, s.DestQueueID, s.AllowClosed, s.AllowOffShift)
 	}
 }
 

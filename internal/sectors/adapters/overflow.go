@@ -30,7 +30,7 @@ func LoadPolicy(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.
 	if err != nil {
 		return nil, err
 	}
-	rows, err := q.Query(ctx, `SELECT position, name, triggers, wait_seconds, wait_business, destination_kind, destination_id, allow_closed, allow_off_shift
+	rows, err := q.Query(ctx, `SELECT position, name, triggers, wait_seconds, wait_business, destination_kind, destination_id, destination_queue_id, allow_closed, allow_off_shift
 		FROM overflow_steps WHERE tenant_id=$1 AND policy_id=$2 ORDER BY position`, tenant, p.ID)
 	if err != nil {
 		return nil, err
@@ -39,7 +39,7 @@ func LoadPolicy(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.
 	for rows.Next() {
 		var s overflow.Step
 		var trig []string
-		if err := rows.Scan(&s.Position, &s.Name, &trig, &s.WaitSeconds, &s.WaitBusiness, &s.DestKind, &s.DestID, &s.AllowClosed, &s.AllowOffShift); err != nil {
+		if err := rows.Scan(&s.Position, &s.Name, &trig, &s.WaitSeconds, &s.WaitBusiness, &s.DestKind, &s.DestID, &s.DestQueueID, &s.AllowClosed, &s.AllowOffShift); err != nil {
 			return nil, err
 		}
 		for _, t := range trig {
@@ -73,12 +73,20 @@ func SavePolicy(ctx context.Context, q platformdb.Querier, tenant, actor, queueI
 			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM queues WHERE tenant_id=$1 AND id=$2)`, tenant, s.DestID).Scan(&ok)
 		case overflow.DestOnCall:
 			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM on_call_rosters WHERE tenant_id=$1 AND id=$2 AND active)`, tenant, s.DestID).Scan(&ok)
+		case overflow.DestAgent: // an active attendant of THIS company (never a Hub operator: they have no membership here)
+			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id
+				WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active' AND ap.status='active')`, tenant, s.DestID).Scan(&ok)
+		case overflow.DestSector:
+			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sectors WHERE tenant_id=$1 AND id=$2 AND active)`, tenant, s.DestID).Scan(&ok)
+		case overflow.DestHub: // the company has a contract with that Hub (it learns the contract, never the operators) and the queue is its own
+			err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM tenant_hub_contracts($1) c WHERE c.contract_id=$2)
+				AND EXISTS(SELECT 1 FROM queues WHERE tenant_id=$1 AND id=$3)`, tenant, s.DestID, s.DestQueueID).Scan(&ok)
 		}
 		if err != nil {
 			return 0, err
 		}
 		if !ok {
-			return 0, ErrInvalidPolicy{fmt.Sprintf("step %d: the destination does not exist in this company (or the roster is inactive)", s.Position)}
+			return 0, ErrInvalidPolicy{fmt.Sprintf("step %d: the destination does not exist in this company (or is inactive, or the company has no such contract)", s.Position)}
 		}
 	}
 	var current *int
@@ -117,8 +125,8 @@ func SavePolicy(ctx context.Context, q platformdb.Querier, tenant, actor, queueI
 		for i, t := range s.Triggers {
 			trig[i] = string(t)
 		}
-		if _, err := q.Exec(ctx, `INSERT INTO overflow_steps (tenant_id, policy_id, position, name, triggers, wait_seconds, wait_business, destination_kind, destination_id, allow_closed, allow_off_shift)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, tenant, policyID, s.Position, s.Name, trig, s.WaitSeconds, s.WaitBusiness, s.DestKind, s.DestID, s.AllowClosed, s.AllowOffShift); err != nil {
+		if _, err := q.Exec(ctx, `INSERT INTO overflow_steps (tenant_id, policy_id, position, name, triggers, wait_seconds, wait_business, destination_kind, destination_id, destination_queue_id, allow_closed, allow_off_shift)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, tenant, policyID, s.Position, s.Name, trig, s.WaitSeconds, s.WaitBusiness, s.DestKind, s.DestID, s.DestQueueID, s.AllowClosed, s.AllowOffShift); err != nil {
 			return 0, err
 		}
 	}

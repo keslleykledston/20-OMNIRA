@@ -57,6 +57,7 @@ const (
 	ReasonTruncated         = "candidates_truncated"
 	ReasonChainExhausted    = "chain_exhausted"
 	ReasonOverflowOnCall    = "overflow_oncall"
+	ReasonOverflowAgent     = "overflow_agent"
 )
 
 // Triggers (the part of the idempotency key that says WHY the engine was asked).
@@ -461,24 +462,58 @@ type entryResult struct {
 }
 
 // enter performs the transition to one step after checking the destination LIVE (it may have changed since the policy was saved).
+// It returns why a destination was refused, so the history can say it.
 func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, blocking overflow.Trigger, now time.Time) (entryKind, entryResult, string, error) {
 	label := string(blocking)
 	if label == "" {
 		label = string(overflow.MaxWait)
 	}
+	visited := map[string]bool{}
+	for _, k := range st.visited {
+		visited[k] = true
+	}
 	switch s.DestKind {
-	case overflow.DestQueue:
+	case overflow.DestQueue, overflow.DestSector, overflow.DestHub:
+		var dest uuid.UUID
+		var extra []string
+		switch s.DestKind {
+		case overflow.DestQueue:
+			dest = s.DestID
+		case overflow.DestHub:
+			dest = *s.DestQueueID
+			if visited[overflow.DestKey(overflow.DestQueue, dest)] {
+				return entRejected, entryResult{}, overflow.SkipVisited, nil
+			}
+			var ready bool
+			if err := q.QueryRow(ctx, `SELECT hub_destination_ready($1, $2, $3)`, tenant, s.DestID, dest).Scan(&ready); err != nil {
+				return entRejected, entryResult{}, "", err
+			}
+			if !ready { // contract not active/valid, queue outside its scope, tenant or Hub inactive, or no live operator who may reply
+				return entRejected, entryResult{}, "hub_not_ready", nil
+			}
+			extra = append(extra, overflow.DestKey(overflow.DestQueue, dest))
+		case overflow.DestSector:
+			chosen, why, err := e.chooseSectorQueue(ctx, q, tenant, s, visited, now)
+			if err != nil {
+				return entRejected, entryResult{}, "", err
+			}
+			if chosen == uuid.Nil {
+				return entRejected, entryResult{}, why, nil
+			}
+			dest = chosen
+			extra = append(extra, overflow.DestKey(overflow.DestQueue, dest))
+		}
 		var mode string
 		var sectorActive bool
 		err := q.QueryRow(ctx, `SELECT qq.mode, COALESCE(sc.active, true) FROM queues qq LEFT JOIN sectors sc ON sc.tenant_id=qq.tenant_id AND sc.id=qq.sector_id
-			WHERE qq.tenant_id=$1 AND qq.id=$2`, tenant, s.DestID).Scan(&mode, &sectorActive)
+			WHERE qq.tenant_id=$1 AND qq.id=$2`, tenant, dest).Scan(&mode, &sectorActive)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !sectorActive) {
 			return entRejected, entryResult{}, "destination_unavailable", nil // the queue is gone, or its sector was deactivated
 		}
 		if err != nil {
 			return entRejected, entryResult{}, "", err
 		}
-		avail, err := sectorsadapters.QueueAvailability(ctx, q, tenant, s.DestID, now)
+		avail, err := sectorsadapters.QueueAvailability(ctx, q, tenant, dest, now)
 		if err != nil {
 			return entRejected, entryResult{}, "", err
 		}
@@ -487,34 +522,166 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 		}
 		if _, err := q.Exec(ctx, `UPDATE conversations SET queue_id=$3, updated_at=now(),
 			routing_retry_at = CASE WHEN $4 IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
-			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, s.DestID, mode); err != nil {
+			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, dest, mode); err != nil {
 			return entRejected, entryResult{}, "", err
 		}
 		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
 			return entRejected, entryResult{}, "", err
 		}
-		advance(st, s, &s.DestID, now)
-		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label},
+		advance(st, s, &dest, now)
+		st.visited = append(st.visited, extra...)
+		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label, "queue": dest.String()},
 			Decision{Kind: Overflow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
 			return entRejected, entryResult{}, "", err
 		}
 		return entQueue, entryResult{mode: mode}, "", nil
-	case overflow.DestOnCall:
-		user, ok, err := e.pickOnCall(ctx, q, tenant, req, st, s, now)
+	case overflow.DestOnCall, overflow.DestAgent:
+		var user uuid.UUID
+		var ok bool
+		var err error
+		if s.DestKind == overflow.DestOnCall {
+			user, ok, err = e.pickOnCall(ctx, q, tenant, req, st, s, now)
+		} else {
+			user, ok, err = e.pickAgent(ctx, q, tenant, req, st, s, now)
+		}
 		if err != nil {
 			return entRejected, entryResult{}, "", err
 		}
 		if !ok {
-			return entRejected, entryResult{}, "no_eligible_oncall", nil
+			return entRejected, entryResult{}, "no_eligible_" + s.DestKind, nil
 		}
 		advance(st, s, nil, now)
+		reason := ReasonOverflowOnCall
+		if s.DestKind == overflow.DestAgent {
+			reason = ReasonOverflowAgent
+		}
 		if _, err := persist(ctx, q, tenant, req.ConversationID, st, req.triggerOrRoute()+":overflow", map[string]any{"blocking": label},
 			Decision{Kind: Overflow, Reason: label, Destination: s.Key()}, "queued"); err != nil {
 			return entRejected, entryResult{}, "", err
 		}
-		return entAssigned, entryResult{decision: Decision{Kind: AssignAgent, Reason: ReasonOverflowOnCall, Destination: "agent:" + user.String(), AssignedUser: user}}, "", nil
+		return entAssigned, entryResult{decision: Decision{Kind: AssignAgent, Reason: reason, Destination: "agent:" + user.String(), AssignedUser: user}}, "", nil
 	}
 	return entRejected, entryResult{}, "unsupported_destination", nil
+}
+
+// chooseSectorQueue picks, among the queues of the sector (by name), the first that has not been visited, is open (or the step allows a
+// closed one) and has at least one eligible agent; when none has an agent, the first acceptable queue (the conversation waits there).
+func (e *Engine) chooseSectorQueue(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, s overflow.Step, visited map[string]bool, now time.Time) (uuid.UUID, string, error) {
+	rows, err := q.Query(ctx, `SELECT qq.id, qq.mode FROM queues qq JOIN sectors sc ON sc.tenant_id=qq.tenant_id AND sc.id=qq.sector_id
+		WHERE qq.tenant_id=$1 AND qq.sector_id=$2 AND sc.active ORDER BY qq.name, qq.id LIMIT 50`, tenant, s.DestID)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	type cand struct {
+		id   uuid.UUID
+		mode string
+	}
+	var cands []cand
+	for rows.Next() {
+		var c cand
+		if err := rows.Scan(&c.id, &c.mode); err != nil {
+			rows.Close()
+			return uuid.Nil, "", err
+		}
+		cands = append(cands, c)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return uuid.Nil, "", rows.Err()
+	}
+	first := uuid.Nil
+	for _, c := range cands {
+		if visited[overflow.DestKey(overflow.DestQueue, c.id)] {
+			continue
+		}
+		avail, err := sectorsadapters.QueueAvailability(ctx, q, tenant, c.id, now)
+		if err != nil {
+			return uuid.Nil, "", err
+		}
+		if !avail.Open && !s.AllowClosed {
+			continue
+		}
+		if first == uuid.Nil {
+			first = c.id
+		}
+		if c.mode == "manual" {
+			continue
+		}
+		snap, err := sectorsadapters.SnapshotWith(ctx, q, tenant, c.id, now, e.presence, sectorsadapters.SnapshotOptions{Limit: engineCandidateLimit,
+			Policy: eligibility.Policy{AllowClosed: s.AllowClosed, AllowOffShift: s.AllowOffShift}})
+		if err != nil {
+			return uuid.Nil, "", err
+		}
+		if snap.EligibleCnt > 0 {
+			return c.id, "", nil
+		}
+	}
+	if first == uuid.Nil {
+		return uuid.Nil, "sector_has_no_open_queue", nil
+	}
+	return first, "", nil
+}
+
+const defaultAgentCapacity = 5
+
+// pickAgent assigns to a named attendant (an escalation target). Capacity: the largest capacity the person has in any queue, or
+// defaultAgentCapacity, counted across the company; shift unless the step allows otherwise; presence when required. The person is
+// re-read under the per-agent lock, like every other assignment.
+func (e *Engine) pickAgent(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, now time.Time) (uuid.UUID, bool, error) {
+	user := s.DestID
+	var locked bool
+	if err := q.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('routing:agent:' || $1::text || ':' || $2::text, 0))`, tenant, user).Scan(&locked); err != nil {
+		return uuid.Nil, false, err
+	}
+	if !locked {
+		return uuid.Nil, false, nil
+	}
+	var profile uuid.UUID
+	var capacity, load int
+	err := q.QueryRow(ctx, `SELECT ap.id, COALESCE((SELECT max(qm.capacity) FROM queue_members qm WHERE qm.tenant_id=m.tenant_id AND qm.user_id=m.user_id AND qm.active), $3::int),
+		(SELECT count(*) FROM conversations c WHERE c.tenant_id=m.tenant_id AND c.assigned_to_user_id=m.user_id AND c.status='open')
+		FROM memberships m JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
+		WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active'`, tenant, user, defaultAgentCapacity).Scan(&profile, &capacity, &load)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if load >= capacity {
+		return uuid.Nil, false, nil
+	}
+	if open, _, err := sectorsadapters.AgentShift(ctx, q, tenant, user, *st.queue, now); err != nil {
+		return uuid.Nil, false, err
+	} else if open != nil && !*open && !s.AllowOffShift {
+		return uuid.Nil, false, nil
+	}
+	var presenceReq bool
+	if err := q.QueryRow(ctx, `SELECT routing_require_presence FROM tenants WHERE id=$1`, tenant).Scan(&presenceReq); err != nil {
+		return uuid.Nil, false, err
+	}
+	if presenceReq {
+		if e.presence == nil {
+			return uuid.Nil, false, nil
+		}
+		got, err := e.presence.OnlineMembers(ctx, tenant, []uuid.UUID{profile})
+		if err != nil || !got[profile] {
+			return uuid.Nil, false, nil
+		}
+	}
+	tag, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
+		WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, user)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return uuid.Nil, false, nil
+	}
+	if _, err := q.Exec(ctx, `INSERT INTO assignment_events(tenant_id,conversation_id,from_user_id,to_user_id,changed_by,reason,actor_source) VALUES ($1,$2,NULL,$3,NULL,'overflow_agent','system')`,
+		tenant, req.ConversationID, user); err != nil {
+		return uuid.Nil, false, err
+	}
+	return user, true, nil
 }
 
 func (r Request) triggerOrRoute() string {
@@ -758,9 +925,9 @@ func persist(ctx context.Context, q platformdb.Querier, tenant, conversation uui
 		ON CONFLICT (tenant_id, conversation_id, episode, step_index, trigger)
 		DO UPDATE SET
 		  -- the original assignment is the decision of record: a duplicate trigger only counts as another attempt
-		  decision=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.decision ELSE EXCLUDED.decision END,
-		  destination=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.destination ELSE EXCLUDED.destination END,
-		  reason=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall') THEN routing_engine_decisions.reason ELSE EXCLUDED.reason END,
+		  decision=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall','overflow_agent') THEN routing_engine_decisions.decision ELSE EXCLUDED.decision END,
+		  destination=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall','overflow_agent') THEN routing_engine_decisions.destination ELSE EXCLUDED.destination END,
+		  reason=CASE WHEN routing_engine_decisions.decision='ASSIGN_AGENT' AND routing_engine_decisions.reason IN ('assigned','overflow_oncall','overflow_agent') THEN routing_engine_decisions.reason ELSE EXCLUDED.reason END,
 		  attempts=routing_engine_decisions.attempts+1, updated_at=now()
 		RETURNING attempts`, tenant, conversation, st.episode, st.step, trigger, string(d.Kind), d.Destination, d.Reason, string(raw)).Scan(&attempts); err != nil {
 		return Decision{}, fmt.Errorf("engine: decision: %w", err)

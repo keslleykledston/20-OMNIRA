@@ -32,6 +32,9 @@ var AllTriggers = []Trigger{AfterHours, NoEligibleAgent, CapacityExhausted, MaxW
 const (
 	DestQueue  = "queue"
 	DestOnCall = "oncall"
+	DestAgent  = "agent"  // a named attendant of the company
+	DestSector = "sector" // the first useful queue of a sector
+	DestHub    = "hub"    // a Hub that serves the company: DestID is the CONTRACT, DestQueueID the company queue it serves from
 
 	ExhaustedKeepWaiting = "keep_waiting"
 	ExhaustedContingency = "contingency"
@@ -42,15 +45,17 @@ const (
 )
 
 type Step struct {
-	Position      int       `json:"position"`
-	Name          string    `json:"name,omitempty"`
-	Triggers      []Trigger `json:"triggers"`
-	WaitSeconds   int       `json:"wait_seconds"`
-	WaitBusiness  bool      `json:"wait_business"`
-	DestKind      string    `json:"destination_kind"`
-	DestID        uuid.UUID `json:"destination_id"`
-	AllowClosed   bool      `json:"allow_closed"`
-	AllowOffShift bool      `json:"allow_off_shift"`
+	Position     int       `json:"position"`
+	Name         string    `json:"name,omitempty"`
+	Triggers     []Trigger `json:"triggers"`
+	WaitSeconds  int       `json:"wait_seconds"`
+	WaitBusiness bool      `json:"wait_business"`
+	DestKind     string    `json:"destination_kind"`
+	DestID       uuid.UUID `json:"destination_id"`
+	// DestQueueID is required for a Hub destination (the company queue the Hub serves from, which its contract must cover) and forbidden otherwise.
+	DestQueueID   *uuid.UUID `json:"destination_queue_id,omitempty"`
+	AllowClosed   bool       `json:"allow_closed"`
+	AllowOffShift bool       `json:"allow_off_shift"`
 }
 
 // Key is the canonical identity of the step's destination, the string the loop guard compares.
@@ -123,8 +128,24 @@ func (p Policy) Validate(origin uuid.UUID) error {
 		if s.Has(MaxWait) && s.WaitSeconds == 0 {
 			return fmt.Errorf("step %d: the max_wait trigger needs a wait greater than zero", s.Position)
 		}
-		if s.DestKind != DestQueue && s.DestKind != DestOnCall {
-			return fmt.Errorf("step %d: destination kind must be queue or oncall", s.Position)
+		switch s.DestKind {
+		case DestQueue, DestOnCall, DestAgent, DestSector:
+			if s.DestQueueID != nil {
+				return fmt.Errorf("step %d: destination_queue_id is only for a Hub destination", s.Position)
+			}
+		case DestHub:
+			if s.DestQueueID == nil || *s.DestQueueID == uuid.Nil {
+				return fmt.Errorf("step %d: a Hub destination needs the company queue it serves from (destination_queue_id)", s.Position)
+			}
+			if *s.DestQueueID == origin {
+				return fmt.Errorf("step %d: the Hub cannot serve from the origin queue (a chain cannot revisit it)", s.Position)
+			}
+			if seen[DestKey(DestQueue, *s.DestQueueID)] {
+				return fmt.Errorf("step %d: that queue is already used by another step", s.Position)
+			}
+			seen[DestKey(DestQueue, *s.DestQueueID)] = true
+		default:
+			return fmt.Errorf("step %d: destination kind must be queue, oncall, agent, sector or hub", s.Position)
 		}
 		if s.DestID == uuid.Nil {
 			return fmt.Errorf("step %d: destination is required", s.Position)

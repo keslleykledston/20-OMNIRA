@@ -730,3 +730,86 @@ func TestOverflowBypassFlagsNeedRoutingOverrideAndSavingKicksWaitingConversation
 		t.Fatal("the kick only schedules; it assigns nothing itself")
 	}
 }
+
+// ADR-0044 5b: agent, sector and Hub destinations are validated against the company when the policy is saved.
+func TestOverflowPolicyNewDestinationKindsAreValidatedAgainstTheCompany(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	agent := e.member(t, a, "tenant_agent")
+	n1, hubQ := e.queue(t, a, "N1", false), e.queue(t, a, "Hub", false)
+	foreignQ := e.queue(t, b, "Do B", false)
+	attendantUser, _ := e.attendant(t, a, nil, 0, true)
+	noProfile := e.member(t, a, "tenant_agent")
+	path := map[string]string{"queue_id": n1.String()}
+	put := func(step map[string]any) int {
+		return e.call(t, a, admin, "PUT", "/", e.h.PutOverflowPolicy, path, policyBody(step)).Code
+	}
+	mk := func(kind string, id uuid.UUID, queue *uuid.UUID) map[string]any {
+		m := map[string]any{"position": 1, "triggers": []string{"no_eligible_agent"}, "destination_kind": kind, "destination_id": id}
+		if queue != nil {
+			m["destination_queue_id"] = *queue
+		}
+		return m
+	}
+	// agent: an active attendant of the company
+	if got := put(mk("agent", attendantUser, nil)); got != 200 {
+		t.Fatalf("an active attendant = %d", got)
+	}
+	for name, id := range map[string]uuid.UUID{"member without an agent profile": noProfile, "unknown person": uuid.New()} {
+		if got := put(mk("agent", id, nil)); got != 400 {
+			t.Errorf("agent destination (%s) = %d, want 400", name, got)
+		}
+	}
+	// sector: active, of the company
+	sec := decode[sectorItem](t, e.call(t, a, admin, "POST", "/", e.h.CreateSector, nil, map[string]string{"name": "Financeiro"})).ID
+	secB := decode[sectorItem](t, e.call(t, b, e.member(t, b, "tenant_admin"), "POST", "/", e.h.CreateSector, nil, map[string]string{"name": "Do B"})).ID
+	if got := put(mk("sector", sec, nil)); got != 200 {
+		t.Fatalf("a sector = %d", got)
+	}
+	if got := put(mk("sector", secB, nil)); got != 400 {
+		t.Errorf("another company's sector = %d, want 400", got)
+	}
+	e.call(t, a, admin, "PATCH", "/", e.h.UpdateSector, map[string]string{"sector_id": sec.String()}, map[string]any{"active": false})
+	if got := put(mk("sector", sec, nil)); got != 400 {
+		t.Errorf("an inactive sector = %d, want 400", got)
+	}
+	// hub: the company has a contract with the Hub (it sees the contract, never the operators) and the queue is its own
+	hubID, contract := uuid.New(), uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO service_hubs (id, name) VALUES ($1,'Hub do teste')`, hubID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = e.seed.Exec(context.Background(), `DELETE FROM service_hubs WHERE id=$1`, hubID) })
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO hub_tenant_service_contracts (id, hub_id, tenant_id) VALUES ($1,$2,$3)`, contract, hubID, a); err != nil {
+		t.Fatal(err)
+	}
+	if got := put(mk("hub", contract, &hubQ)); got != 200 {
+		t.Fatalf("a Hub the company has a contract with = %d", got)
+	}
+	if got := put(mk("hub", uuid.New(), &hubQ)); got != 400 {
+		t.Errorf("a contract the company does not have = %d, want 400", got)
+	}
+	if got := put(mk("hub", contract, &foreignQ)); got != 400 {
+		t.Errorf("a queue of another company = %d, want 400", got)
+	}
+	if got := put(mk("hub", contract, nil)); got != 400 {
+		t.Errorf("a Hub destination without the queue = %d, want 400", got)
+	}
+	if got := put(mk("hub", contract, &n1)); got != 400 {
+		t.Errorf("serving from the origin queue = %d, want 400", got)
+	}
+	// B has no contract with this Hub: B cannot name A's contract
+	bAdmin := e.member(t, b, "tenant_admin")
+	bq := e.queue(t, b, "N1 B", false)
+	if got := e.call(t, b, bAdmin, "PUT", "/", e.h.PutOverflowPolicy, map[string]string{"queue_id": bq.String()}, policyBody(mk("hub", contract, &foreignQ))).Code; got != 400 {
+		t.Errorf("another company's contract = %d, want 400", got)
+	}
+	// the function the company uses to list its contracts needs agent.manage and shows nothing about operators
+	var visible int
+	err := platformdb.WithTenantSession(context.Background(), e.app, agent, false, func(ctx context.Context) error {
+		return platformdb.QuerierFromContext(ctx, e.app).QueryRow(ctx, `SELECT count(*) FROM tenant_hub_contracts($1)`, a).Scan(&visible)
+	})
+	if err != nil || visible != 0 {
+		t.Fatalf("a plain attendant must not list the company's Hub contracts: %d %v", visible, err)
+	}
+}
