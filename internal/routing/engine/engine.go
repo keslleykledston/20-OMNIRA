@@ -993,7 +993,27 @@ func onlyCapacity(agents []sectorsadapters.AgentVerdict) bool {
 // can never both take the last slot of an agent), then a try-lock per agent (never wait: a busy agent is skipped). Under those locks
 // the candidate is evaluated AGAIN by the same eligibility rule (membership, availability, profile, shift, on-call, capacity), because
 // the snapshot that chose it may be seconds old; only then is the owner set, and only if still empty.
+// tryAssign attempts ONE candidate and holds at most one agent's locks at a time: the attempt runs in a savepoint, and when it does not end in an
+// assignment the savepoint is rolled back, which RELEASES the member-row lock it took. Without that, a worker that failed on agent X kept X's row
+// locked while it went on to agent Y, and two workers going through the candidates in different orders deadlocked (40P01, seen ~1 in 25 runs of the
+// concurrency test). A lock held only while the candidate is being decided cannot form a cycle between workers.
 func tryAssign(ctx context.Context, q platformdb.Querier, tenant, queue, conversation uuid.UUID, cand sectorsadapters.AgentVerdict, reason string, now time.Time, relax eligibility.Policy) (bool, error) {
+	if _, err := q.Exec(ctx, `SAVEPOINT try_agent`); err != nil {
+		return false, err
+	}
+	ok, err := tryAssignLocked(ctx, q, tenant, queue, conversation, cand, reason, now, relax)
+	if err != nil || !ok {
+		_, _ = q.Exec(ctx, `ROLLBACK TO SAVEPOINT try_agent`)
+		_, _ = q.Exec(ctx, `RELEASE SAVEPOINT try_agent`)
+		return false, err
+	}
+	if _, err := q.Exec(ctx, `RELEASE SAVEPOINT try_agent`); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func tryAssignLocked(ctx context.Context, q platformdb.Querier, tenant, queue, conversation uuid.UUID, cand sectorsadapters.AgentVerdict, reason string, now time.Time, relax eligibility.Policy) (bool, error) {
 	if reason == "" {
 		reason = "round_robin"
 	}

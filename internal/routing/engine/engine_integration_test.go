@@ -343,6 +343,7 @@ func TestConcurrentWorkersNeverExceedCapacityNorAssignTwice(t *testing.T) {
 				if _, err := e.decide(t, a, c, ""); err != nil {
 					mu.Lock()
 					failures++
+					t.Logf("decision failed: %v", err)
 					mu.Unlock()
 				}
 			}(c)
