@@ -42,6 +42,7 @@ import (
 	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
+	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -421,6 +422,29 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/queues/{queue_id}", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Delete))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/queues/lines", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.ListLineQueues))))
 	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/channels/lines/{connection_id}/queue", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.SetLineQueue))))
+	// ADR-0044: sectors, operational calendars and the availability of a queue (agent.read / agent.manage inside the handler)
+	sectorsHandler := sectorsadapters.NewHandler(dbPool, auditRepo)
+	for _, rt := range []struct {
+		pattern string
+		fn      http.HandlerFunc
+	}{
+		{"GET /api/v1/tenants/{tenant_id}/sectors", sectorsHandler.ListSectors},
+		{"POST /api/v1/tenants/{tenant_id}/sectors", sectorsHandler.CreateSector},
+		{"PATCH /api/v1/tenants/{tenant_id}/sectors/{sector_id}", sectorsHandler.UpdateSector},
+		{"GET /api/v1/tenants/{tenant_id}/calendars", sectorsHandler.ListCalendars},
+		{"POST /api/v1/tenants/{tenant_id}/calendars", sectorsHandler.CreateCalendar},
+		{"GET /api/v1/tenants/{tenant_id}/calendars/{calendar_id}", sectorsHandler.GetCalendar},
+		{"PUT /api/v1/tenants/{tenant_id}/calendars/{calendar_id}", sectorsHandler.UpdateCalendar},
+		{"DELETE /api/v1/tenants/{tenant_id}/calendars/{calendar_id}", sectorsHandler.DeleteCalendar},
+		{"POST /api/v1/tenants/{tenant_id}/calendars/{calendar_id}/suspensions", sectorsHandler.AddSuspension},
+		{"DELETE /api/v1/tenants/{tenant_id}/calendars/{calendar_id}/suspensions/{suspension_id}", sectorsHandler.RemoveSuspension},
+		{"PUT /api/v1/tenants/{tenant_id}/settings/default-calendar", sectorsHandler.SetDefaultCalendar},
+		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/sector", sectorsHandler.SetQueueSector},
+		{"PUT /api/v1/tenants/{tenant_id}/queues/{queue_id}/calendar", sectorsHandler.SetQueueCalendar},
+		{"GET /api/v1/tenants/{tenant_id}/queues/{queue_id}/availability", sectorsHandler.QueueAvailability},
+	} {
+		s.mux.Handle(rt.pattern, authnMiddleware(tenantSession(rt.fn)))
+	}
 	// IAM4 operational agents; legacy /users/agents keeps its co-attendance semantics.
 	agentProfiles := tenancyadapters.NewAgentProfilesHandler(dbPool, auditRepo)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/agents", authnMiddleware(tenantSession(http.HandlerFunc(agentProfiles.List))))

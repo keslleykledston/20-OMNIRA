@@ -60,6 +60,16 @@ const (
 	ActionQueueUpdated             AuditAction = "queue.updated"
 	ActionQueueDefaultChanged      AuditAction = "queue.default_changed"
 	ActionQueueDeleted             AuditAction = "queue.deleted"
+	ActionQueueSectorChanged       AuditAction = "queue.sector_changed"
+	ActionQueueCalendarChanged     AuditAction = "queue.calendar_changed"
+	ActionSectorCreated            AuditAction = "sector.created"
+	ActionSectorUpdated            AuditAction = "sector.updated"
+	ActionCalendarCreated          AuditAction = "calendar.created"
+	ActionCalendarUpdated          AuditAction = "calendar.updated"
+	ActionCalendarDeleted          AuditAction = "calendar.deleted"
+	ActionCalendarSuspended        AuditAction = "calendar.suspension_added"
+	ActionCalendarResumed          AuditAction = "calendar.suspension_removed"
+	ActionTenantDefaultCalendar    AuditAction = "tenant.default_calendar_changed"
 	ActionChannelLineQueueChanged  AuditAction = "channel.line_queue_changed"
 	ActionParticipantInvited       AuditAction = "participant.invited"
 	ActionParticipantAccepted      AuditAction = "participant.accepted"
@@ -104,6 +114,8 @@ const (
 	ResourceUserIdentity      ResourceType = "user_channel_identity"
 	ResourceIdentityConflict  ResourceType = "identity_conflict"
 	ResourceTopic             ResourceType = "topic_thread"
+	ResourceSector            ResourceType = "sector"
+	ResourceCalendar          ResourceType = "calendar"
 )
 
 // AuditEvent — evento de auditoria.
