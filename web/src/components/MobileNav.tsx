@@ -17,9 +17,9 @@ const items: { label: string; path: string; icon: IconName }[] = [
 export default function MobileNav() {
   const location = useLocation()
   const hubs = useMyHubs()
-  // Same rule as the desktop sidebar: no separate Hub entry; admins of a Hub also get the Access panel (ADR-0039)
+  // Same rule as the desktop sidebar: no separate Hub entry; people who administer a Hub (or its instances' channels) get one link to the console (ADR-0041)
   const shown = isActing() ? items.filter((i) => i.path === '/inbox') : [...items]
-  if (!isActing() && (hubs.data ?? []).some((h) => h.can_manage_access)) shown.splice(1, 0, { label: 'Acessos', path: '/acessos', icon: 'key' as IconName })
+  const showConsole = !isActing() && (hubs.data ?? []).some((h) => h.can_manage_access || h.can_manage_instances)
   // startsWith keeps child routes (e.g. /contacts/:id, /channels/whatsapp/new)
   // active under their parent item.
   const isActive = (path: string) => location.pathname.startsWith(path)
@@ -45,6 +45,12 @@ export default function MobileNav() {
           </Link>
         )
       })}
+      {showConsole && (
+        <a href="/admin/" className={clsx(slot, 'text-text-secondary')}>
+          <Icon name="key" size={22} />
+          <span>Administração</span>
+        </a>
+      )}
     </nav>
   )
 }

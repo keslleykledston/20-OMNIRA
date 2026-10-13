@@ -90,13 +90,13 @@ async function install(page: Page, opts: { role: 'hub_admin' | 'hub_agent'; oper
 
 test('o operador delega canais e integrações no cartão da instância, e o link para as telas aparece', async ({ page }, info) => {
   const { writes } = await install(page, { role: 'hub_admin', operator: true });
-  await page.goto('/acessos?aba=instancias');
+  await page.goto('/admin/acessos?aba=instancias');
   const card = page.getByRole('region', { name: 'Instância ISP Roraima' });
   await expect(card.getByLabel(/Canais de atendimento/)).not.toBeChecked();
   await expect(card.getByRole('link', { name: 'Abrir canais e integrações' })).toHaveCount(0); // nada delegado ainda
   await card.getByLabel(/Canais de atendimento/).click(); // controlled by the server's answer, so no .check()
   await expect(card.getByLabel(/Canais de atendimento/)).toBeChecked();
-  await expect(card.getByRole('link', { name: 'Abrir canais e integrações' })).toHaveAttribute('href', `/instancias/${HUB}/A/canais`);
+  await expect(card.getByRole('link', { name: 'Abrir canais e integrações' })).toHaveAttribute('href', `/admin/instancias/${HUB}/A/canais`);
   expect(writes.find((w) => w.method === 'PATCH')!.body).toEqual({ management_scopes: ['channels'] });
   await page.screenshot({ path: info.outputPath('hub-instancias.png'), fullPage: true });
 });
@@ -104,10 +104,10 @@ test('o operador delega canais e integrações no cartão da instância, e o lin
 test('quem gerencia vê "Canais das instâncias" e usa a MESMA tela de Canais, falando com as rotas do Hub', async ({ page }, info) => {
   const { gets } = await install(page, { role: 'hub_agent', manages: true });
   await page.goto('/inbox');
-  await page.getByRole('link', { name: 'Canais das instâncias' }).first().click();
-  await expect(page).toHaveURL(/\/instancias$/);
+  await page.getByRole('link', { name: 'Administração' }).first().click();
+  await expect(page).toHaveURL(/\/admin\/instancias$/);
   await page.getByRole('link', { name: 'Abrir canais e integrações' }).click();
-  await expect(page).toHaveURL(new RegExp(`/instancias/${HUB}/A/canais$`));
+  await expect(page).toHaveURL(new RegExp(`/admin/instancias/${HUB}/A/canais$`));
   await expect(page.getByRole('heading', { name: /Canais e integrações — ISP Roraima/ })).toBeVisible();
   await expect(page.getByText('WhatsApp (não oficial)').first()).toBeVisible();
   await page.screenshot({ path: info.outputPath('hub-canais-instancia.png') });
@@ -117,7 +117,7 @@ test('quem gerencia vê "Canais das instâncias" e usa a MESMA tela de Canais, f
 
 test('a chave "Gerenciar" na matriz só aparece onde o contrato delega e envia exatamente aquele grant', async ({ page }) => {
   const { writes } = await install(page, { role: 'hub_admin', operator: true });
-  await page.goto('/acessos?aba=instancias');
+  await page.goto('/admin/acessos?aba=instancias');
   await page.getByRole('region', { name: 'Instância ISP Roraima' }).getByLabel(/Canais de atendimento/).click();
   await expect(page.getByRole('region', { name: 'Instância ISP Roraima' }).getByLabel(/Canais de atendimento/)).toBeChecked();
   await page.getByRole('tab', { name: 'Agentes e permissões' }).click();
@@ -129,7 +129,7 @@ test('a chave "Gerenciar" na matriz só aparece onde o contrato delega e envia e
 
 test('equipes: criar, escolher integrantes com capacidade e instâncias, e ligar a distribuição automática', async ({ page }, info) => {
   const { writes } = await install(page, { role: 'hub_admin' });
-  await page.goto('/acessos?aba=equipes');
+  await page.goto('/admin/acessos?aba=equipes');
   await page.getByRole('textbox', { name: 'Nova equipe' }).fill('Vendas');
   await page.getByRole('button', { name: 'Criar equipe' }).click();
   await expect(page.getByRole('alert')).toContainText('Equipe criada');

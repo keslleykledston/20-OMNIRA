@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ElementType } from 'react'
 import { BrandMark } from './BrandMark'
 import { Link, useLocation } from 'react-router-dom'
 import clsx from 'clsx'
@@ -21,7 +21,7 @@ import { useHubWaiting } from '../hooks/useHubWaiting'
 // capability; the route itself still exists (see UnavailableSurface).
 // Supervisor became real in PRODUCT.1, Tickets in PRODUCT.2-B, Dashboard in
 // PRODUCT.3-B — none of the three is contained anymore.
-const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string; mockBacked?: boolean }[] = [
+const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string; mockBacked?: boolean; external?: boolean }[] = [
   { label: 'Dashboard', path: '/', icon: 'dashboard' },
   { label: 'Conversas', path: '/inbox', icon: 'conversations' },
   { label: 'Tickets', path: '/tickets', icon: 'tickets' },
@@ -72,16 +72,12 @@ export default function Sidebar() {
   // Conversations waiting for an answer in the instances served through the Hub: shown on "Conversas" (display only; not while attending one instance)
   const waiting = useHubWaiting(hubs.data ?? [], !isActing())
   const base = navItems.filter((item) => !item.mockBacked || isDevSurface())
-  // ADR-0039: the Access panel (people and permissions) is offered only to hub admins, and only when the server mounts it.
-  const accessItem: (typeof navItems)[number] = { label: 'Acessos', path: '/acessos', icon: 'key' }
-  const canAccess = (hubs.data ?? []).some((h) => h.can_manage_access)
-  // ADR-0038 phase 3: channels/integrations of the instances the Hub delegated to this person
-  const manageItem: (typeof navItems)[number] = { label: 'Canais das instâncias', path: '/instancias', icon: 'building' }
-  const canManage = (hubs.data ?? []).some((h) => h.can_manage_instances)
+  // ADR-0041: administration (Hub access, instances and their channels) lives in the console (/admin/, another entry of the build). The agent menu only
+  // points to it, for the people the server says may use it (display only; the console and the API check again).
+  const consoleItem: (typeof navItems)[number] = { label: 'Administração', path: '/admin/', icon: 'key', external: true }
+  const canAdmin = (hubs.data ?? []).some((h) => h.can_manage_access || h.can_manage_instances)
   // There is no separate "Hub" entry: "Conversas" is the one inbox, and it widens to every authorized company by itself (ADR-0039 revisão).
-  const withAccess = canAccess ? [...base.slice(0, 2), accessItem, ...base.slice(2)] : base
-  const channelsAt = withAccess.findIndex((i) => i.path === '/channels')
-  const allItems = canManage ? [...withAccess.slice(0, channelsAt + 1), manageItem, ...withAccess.slice(channelsAt + 1)] : withAccess
+  const allItems = canAdmin ? [...base, consoleItem] : base
   // Attending an instance through the Hub (ADR-0040): only the conversations are available there for now, nothing else of the instance is offered.
   const visibleNavItems = isActing() ? allItems.filter((i) => i.path === '/inbox') : allItems
 
@@ -132,10 +128,12 @@ export default function Sidebar() {
         {visibleNavItems.map(item => {
           const alsoActivePaths = item.alsoActiveOn?.split(',').map(p => p.trim()) || []
           const active = isActive(item.path) || alsoActivePaths.some(p => isActive(p))
+          // `external`: another entry of the build (the console), so a plain link with a full page load, not the router's.
+          const NavTag: ElementType = item.external ? 'a' : Link
           return (
-            <Link
+            <NavTag
               key={item.path}
-              to={item.path}
+              {...(item.external ? { href: item.path } : { to: item.path })}
               className={clsx(
                 'flex',
                 'items-center',
@@ -184,7 +182,7 @@ export default function Sidebar() {
                   {waiting > 99 ? '99+' : waiting}
                 </span>
               )}
-            </Link>
+            </NavTag>
           )
         })}
       </nav>

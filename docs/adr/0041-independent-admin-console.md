@@ -1,6 +1,6 @@
 # ADR-0041 — Console de administração independente (agentes e empresas)
 
-Status: **PROPOSTA** (decisão de produto do dono em 2026-10-09; nada implementado). Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`).
+Status: **IMPLEMENTADA em LAB** na branch `feat/admin-console` (2026-10-13; não implantada até a ordem do dono). A recomendação B foi construída com o endereço `/admin/` no mesmo host; o host próprio (`admin.<domínio>`) continua opcional (§8). Vocabulário de evidência: §7 diz o que foi provado.
 Relaciona: ADR-0036 (Hub dentro do OMNIRA), ADR-0038/0039 (painel de acessos), ADR-0040 (acesso delegado).
 
 ## 1. Decisão do dono
@@ -55,3 +55,21 @@ Configurações **da própria instância** (Pessoas, Papéis, Canais próprios) 
 - **Quem entra no console:** administrador do Hub e operador da plataforma. O gestor delegado de canais (agente com "Gerenciar") entra só na parte de canais? Decidir.
 - **Mobile:** o console é, a princípio, desktop; o agente continua responsivo.
 - **Contratos e teto de capacidades (ADR-0040):** quem os define é o operador da plataforma, com o consentimento da instância; a interface vive no console.
+
+## 7. O que foi construído (2026-10-13)
+
+**Inventário (passo 1).** Telas que **configuram** e foram para o console: `HubAccessPage` (abas Agentes e permissões, Instâncias, Equipes, Auditoria), `HubManagedPage` e `HubManagedChannelsRoute` (canais e integrações das instâncias, incluindo o assistente de WhatsApp). Ficam no agente: Conversas, Tickets, Contatos, Grupos, Automação, Dashboard, Canais **da própria instância**, Configurações da instância (Pessoas, Papéis, Atendimento).
+
+**Entrada própria (passo 2).** `web/admin.html` + `web/src/admin/` (`AdminApp`, `AdminShell`): segunda entrada do mesmo build (Vite multi-página). O servidor continua sendo o mesmo; o login também (mesma origem, mesmo cookie de sessão e mesmo cliente OIDC: **não há ação de Keycloak nem de DNS/certificado**, porque o proxy do host já encaminha tudo ao contêiner web). O contêiner serve `/admin/` com `admin.html` (`web/nginx.conf`); `vite dev/preview` fazem o mesmo por plugin.
+- Guarda de exibição: sem sessão → lembra o endereço do console (`lib/afterLogin.ts`; só aceita endereços `/admin...`) e manda para `/login`, que volta ao console depois do SSO; atendendo instância pelo Hub → volta a `/inbox`; sem Hub administrado nem gestão de canais delegada → "Sem acesso ao console". **A guarda só decide o que mostrar**; cada requisição é decidida de novo pelo servidor e pela RLS (nada de autoridade no front).
+- Endereços iguais aos de antes sob o prefixo `/admin` (`/admin/acessos`, `/admin/instancias/...`): os links internos das telas movidas não mudaram.
+
+**Mover e retirar do agente (passos 3 e 4).** O app do agente não importa mais essas páginas: `/acessos`, `/hub/empresas` e `/instancias/*` viram redirecionamento de página inteira para o console (`components/ToConsole.tsx`); o menu lateral e o mobile trocam os itens "Acessos" e "Canais das instâncias" por **um** link "Administração" (`/admin/`), mostrado a quem o servidor diz que administra (continua exibição, não autorização). Conferido no build: textos exclusivos do painel estão só no chunk `admin-*.js`, ausentes do `main-*.js`.
+
+**Testes (passo 6).** Vitest (`AdminConsole.test.tsx`, `Login.test.tsx`, `ActingShell.test.tsx`), Playwright de navegador real contra o build (`hub-access/hub-manage/hub-companies.mock.spec.ts`: 11/11 em `/admin/...`; o agente não vê o item sem permissão e o não-administrador recebe "Sem acesso ao console"); `e2e-real/hub.real.spec.ts` ajustado ao console e executado com `scripts/e2e-hub-browser.sh` (API, hubctl e Postgres reais, bundle real, RLS ligada): **14/14**, sem vazamento no log/auditoria. Não provado: login com Keycloak real e o servir pelo nginx do contêiner (a regra de `/admin/` só foi exercitada no `vite preview`; conferir com `curl /admin/` após implantar).
+
+## 8. Decisões que ficam com o dono
+1. **Host próprio** (`admin.<domínio>`, passo 5): custa nginx do host + certificado + cliente OIDC com URIs de retorno do console + cookie por host. Hoje não é necessário; vale quando se quiser CSP/MFA/lista de IPs só do console.
+2. **Gestor delegado de canais** entra no console só na parte de canais: implementado assim (a aba "Acessos" só aparece a quem administra um Hub; a de "Canais das instâncias" a quem recebeu gestão).
+3. **Mobile:** o console responde em tela estreita (cabeçalho quebra em linhas), mas o desenho é de desktop.
+4. **Configurações da própria instância** (Pessoas, Papéis, Atendimento) permanecem no agente, como decidido no §3.

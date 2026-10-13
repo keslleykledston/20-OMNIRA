@@ -86,8 +86,8 @@ async function install(page: Page, opts: { admin: boolean; companies: { id: stri
 test('o administrador do Hub vê a matriz, libera um agente em uma segunda instância e o painel conta isso', async ({ page }) => {
   const { writes } = await install(page, { admin: true, companies: [] });
   await page.goto('/inbox');
-  await page.getByRole('link', { name: 'Acessos' }).first().click();
-  await expect(page).toHaveURL(/\/acessos$/);
+  await page.getByRole('link', { name: 'Administração' }).first().click();
+  await expect(page).toHaveURL(/\/admin\/acessos$/);
 
   const sel = page.getByLabel('Acesso de x@k3g.com em NorteNet');
   await expect(sel).toHaveValue('none');
@@ -107,7 +107,7 @@ test('o administrador do Hub vê a matriz, libera um agente em uma segunda inst�
 
 test('o administrador autoriza por e-mail quem ainda não tem conta, vê a autorização aguardando e a cancela', async ({ page }) => {
   const { writes } = await install(page, { admin: true, companies: [] });
-  await page.goto('/acessos');
+  await page.goto('/admin/acessos');
   await page.getByLabel('Adicionar pessoa ao Hub').fill('Futuro@Nova.com');
   await page.getByLabel('Acesso inicial em NorteNet').selectOption('reply');
   await page.getByRole('button', { name: 'Adicionar' }).click();
@@ -127,12 +127,12 @@ test('o administrador autoriza por e-mail quem ainda não tem conta, vê a autor
   await expect(page.getByRole('alert')).toContainText('já tinha conta');
 });
 
-test('quem não administra o Hub não vê o painel nem o link para ele', async ({ page }) => {
+test('quem não administra o Hub não vê o console nem o link para ele', async ({ page }) => {
   await install(page, { admin: false, companies: [] });
   await page.goto('/inbox');
-  await expect(page.getByRole('link', { name: 'Acessos' })).toHaveCount(0);
-  await page.goto('/acessos');
-  await expect(page.getByText('Painel de acessos indisponível')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Administração' })).toHaveCount(0);
+  await page.goto('/admin/acessos');
+  await expect(page.getByText('Sem acesso ao console')).toBeVisible();
 });
 
 test('Conversas unificadas: quem atende duas instâncias vê tudo e filtra por instância no lugar do menu de canais', async ({ page }) => {

@@ -6,6 +6,7 @@ import { saveSession } from '../lib/session'
 import { resolveSessionTenant } from '../lib/tenants'
 import { Button, Icon, Input } from '../components/primitives'
 import { BrandMark } from '../components/BrandMark'
+import { takeAfterLogin } from '../lib/afterLogin'
 
 type Status =
   | { kind: 'loading' }
@@ -56,6 +57,12 @@ export default function Login() {
             // Se password_expires_at existe, força troca de senha antes de entrar
             if (user.password_expires_at) {
               navigate('/settings/password', { replace: true })
+              return
+            }
+            // The console (ADR-0041) sent them here to sign in: take them back to the address they wanted (a console address only).
+            const back = takeAfterLogin()
+            if (back && (tenantId || session.data.hub_only)) {
+              window.location.replace(back)
               return
             }
             // A person who belongs to no company of their own but to a Service Hub signs in too: their place is "Conversas" (the instances the Hub delegated to them).
