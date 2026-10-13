@@ -907,8 +907,8 @@ func TestSLAPolicyAPIValidationPermissionsRevisionIsolationAndMonitor(t *testing
 		if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversations (id, tenant_id, contact_id, queue_id, status) VALUES ($1,$2,$3,$4,'open')`, conv, a, contact, q); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversation_sla (tenant_id, conversation_id, metric, started_at, budget_seconds, risk_percent, counting, calendar_queue_id, deadline_at, risk_at, state)
-			VALUES ($1,$2,'assignment', now()-interval '5 minutes', 600, 80, 'wall', $3, now()+make_interval(secs => $4), now()+make_interval(secs => $5), $6)`, a, conv, q, deadlineIn.Seconds(), riskIn.Seconds(), state); err != nil {
+		if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversation_sla (tenant_id, conversation_id, metric, started_at, anchor_at, budget_seconds, risk_percent, counting, calendar_queue_id, deadline_at, risk_at, state)
+			VALUES ($1,$2,'assignment', now()-interval '5 minutes', now()-interval '5 minutes', 600, 80, 'wall', $3, now()+make_interval(secs => $4), now()+make_interval(secs => $5), $6)`, a, conv, q, deadlineIn.Seconds(), riskIn.Seconds(), state); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * time.Millisecond)
