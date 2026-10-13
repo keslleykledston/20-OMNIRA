@@ -240,3 +240,50 @@ func TestAFlowThatRoutesTheConversationStopsTheChainAndTheNextDecisionStartsANew
 		t.Fatalf("a conversation moved by somebody else starts a new episode: episode=%d step=%d hops=%d visited=%v", episode, step, hops, visited)
 	}
 }
+
+// Codex re-check: a flow that hands the conversation to people (queue, owner and status unchanged; only the automation mode flips), or that closes it,
+// must settle the conversation just like a flow that moves it - no later overflow step, no stale state, no clock left running on a closed conversation.
+func TestAFlowThatHandsOffOrClosesTheConversationSettlesItWithoutStaleState(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, wantState string
+	}{
+		{"hand-off to people on the same queue", `UPDATE conversations SET automation_mode='waiting_human' WHERE id=$1`, "queued"},
+		{"the flow closes the conversation", `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, "done"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, nil)
+			a := e.tenant(t)
+			fin := e.closedQueue(t, a, "Financeiro")
+			third := e.queue(t, a, "Suporte N2", "manual")
+			e.exec(t, `INSERT INTO sla_policies (tenant_id, scope_kind, first_response_seconds, resolution_seconds) VALUES ($1,'tenant',600,3600)`, a)
+			var conv uuid.UUID
+			starter := &fakeStarter{outcome: "started", pool: e.app}
+			starter.onStart = func(ctx context.Context, q platformdb.Querier) error {
+				_, err := q.Exec(ctx, tc.sql, conv)
+				return err
+			}
+			e.eng.WithFlowStarter(starter)
+			e.policy(t, a, fin, 4, overflow.ExhaustedManual,
+				overflow.Step{Triggers: []overflow.Trigger{overflow.AfterHours}, DestKind: overflow.DestFlow, DestID: uuid.New()},
+				overflow.Step{Triggers: []overflow.Trigger{overflow.AfterHours}, DestKind: overflow.DestQueue, DestID: third})
+			conv = e.conversation(t, a, &fin)
+			d, err := e.decide(t, a, conv, "")
+			if err != nil || d.Kind != engine.ExecuteFlow {
+				t.Fatalf("the flow start is the decision of record: %+v %v", d, err)
+			}
+			if e.queueOf(t, conv) != fin {
+				t.Fatalf("the chain must not go on to step 2 after the flow settled the conversation")
+			}
+			state, _, _, _, _ := e.stateOf(t, conv)
+			if state != tc.wantState {
+				t.Fatalf("recorded state = %q, want %q (not a stale 'queued' for a closed conversation)", state, tc.wantState)
+			}
+			if tc.wantState == "done" && e.count(t, `SELECT count(*) FROM conversation_sla WHERE conversation_id=$1 AND state='running'`, conv) != 0 {
+				t.Fatal("no SLA clock may keep running on a conversation the flow closed")
+			}
+			if e.count(t, `SELECT count(*) FROM routing_engine_timers WHERE conversation_id=$1 AND state IN ('pending','leased') AND kind IN ('open_wakeup','step_wait')`, conv) != 0 {
+				t.Fatal("the episode's timers are cancelled")
+			}
+		})
+	}
+}

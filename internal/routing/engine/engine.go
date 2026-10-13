@@ -135,6 +135,16 @@ type convRow struct {
 	mode       string
 }
 
+// loadConv reads the conversation row the decision rests on. Decide reads it once under its lock; the path where a started flow already routed the
+// conversation (entFlowSettled) reads it again, because the flow changed it in this same transaction.
+func loadConv(ctx context.Context, q platformdb.Querier, tenant, id uuid.UUID) (convRow, error) {
+	var c convRow
+	err := q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.closed_at, c.status, COALESCE(qq.mode, '')
+		FROM conversations c LEFT JOIN queues qq ON qq.tenant_id=c.tenant_id AND qq.id=c.queue_id
+		WHERE c.tenant_id=$1 AND c.id=$2`, tenant, id).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.closedAt, &c.status, &c.mode)
+	return c, err
+}
+
 // stateRow is the routing state of one conversation (one row, locked for the whole decision).
 type stateRow struct {
 	episode      int
@@ -284,10 +294,34 @@ func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
 			}
 			return finish(res.decision, res.state)
 		case cSettled:
+			// the flow routed the conversation inside this transaction: the picture read at the top is stale. Re-read it, record the decision with the
+			// state that is TRUE now, and touch the SLA clocks only when something ended (closed, or a person owns it); a move to another queue is
+			// left to the next decision, which opens a new episode with its own clocks.
 			if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
 				return Decision{}, err
 			}
-			return finish(res.decision, res.state)
+			fresh, err := loadConv(ctx, q, tenant, req.ConversationID)
+			if err != nil {
+				return Decision{}, err
+			}
+			c = fresh
+			state := "queued"
+			switch {
+			case c.status != "open":
+				state = "done"
+			case c.assigned != nil:
+				state = "assigned"
+			}
+			out, err := persist(ctx, q, tenant, req.ConversationID, &st, trigger, detail, res.decision, state)
+			if err != nil {
+				return out, err
+			}
+			if c.status != "open" || c.assigned != nil {
+				if _, err := e.syncSLA(ctx, q, tenant, req.ConversationID, c, &st, now); err != nil {
+					return out, err
+				}
+			}
+			return out, nil
 		}
 		// the chain did not move it: stay here with the plain decision, and keep the durable timers it needs
 		if out.wake != nil {
@@ -663,8 +697,8 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 		// the flow ran in THIS transaction and may have routed the conversation itself (assign_queue, a sector, a hand-off to a person): read what is
 		// true now, under the conversation lock this call already holds
 		var nowQueue, nowOwner *uuid.UUID
-		var nowStatus string
-		if err := q.QueryRow(ctx, `SELECT queue_id, assigned_to_user_id, status FROM conversations WHERE tenant_id=$1 AND id=$2`, tenant, req.ConversationID).Scan(&nowQueue, &nowOwner, &nowStatus); err != nil {
+		var nowStatus, nowMode string
+		if err := q.QueryRow(ctx, `SELECT queue_id, assigned_to_user_id, status, automation_mode FROM conversations WHERE tenant_id=$1 AND id=$2`, tenant, req.ConversationID).Scan(&nowQueue, &nowOwner, &nowStatus, &nowMode); err != nil {
 			return entRejected, entryResult{}, "", err
 		}
 		d := Decision{Kind: ExecuteFlow, Reason: label, Destination: s.Key()}
@@ -672,7 +706,8 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 			return entRejected, entryResult{}, "", err
 		}
 		moved := (nowQueue == nil) != (st.queue == nil) || (nowQueue != nil && st.queue != nil && *nowQueue != *st.queue)
-		if moved || nowOwner != nil || nowStatus != "open" {
+		// a hand-off to people leaves queue, owner and status as they were and only flips the automation mode: it settles the conversation as well
+		if moved || nowOwner != nil || nowStatus != "open" || nowMode == "waiting_human" {
 			// leave the recorded queue as the engine left it: the next decision sees the difference and starts a new episode, exactly as it does for any
 			// other party that moves a conversation
 			return entFlowSettled, entryResult{decision: d}, "", nil
