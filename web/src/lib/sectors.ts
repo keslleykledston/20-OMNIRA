@@ -147,6 +147,11 @@ export const noticeAPI = {
   put: (queueId: string, text: string) => call<{ queue_id: string; text: string }>(() => axios.put(`${base()}/queues/${queueId}/closed-notice`, { text }, h())),
 }
 
+export const openNoticeAPI = {
+  get: (queueId: string) => call<{ queue_id: string; text: string }>(() => axios.get(`${base()}/queues/${queueId}/open-notice`, h())),
+  put: (queueId: string, text: string) => call<{ queue_id: string; text: string }>(() => axios.put(`${base()}/queues/${queueId}/open-notice`, { text }, h())),
+}
+
 export const shiftsAPI = {
   list: (userId?: string) => call<{ items: AgentShift[] }>(() => axios.get(`${base()}/shifts`, { ...h(), params: userId ? { user_id: userId } : undefined })).then((r) => r.items),
   set: (body: { user_id: string; calendar_id: string | null; queue_id?: string | null; sector_id?: string | null }) =>

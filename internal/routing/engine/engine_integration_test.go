@@ -850,3 +850,87 @@ func TestClosedNoticeIsOptInOncePerEpisodeAndNeverBreaksTheDecision(t *testing.T
 		t.Fatalf("open group, no notice: %+v %v", d, err)
 	}
 }
+
+// ADR-0044 addendum: a customer who was told "closed, we open at X" is told when the group opens. Opt-in (open_notice), once per episode, only
+// when the durable timer wakes a waiting conversation and releases it; never when the group is still closed, never on a plain route, never
+// for a conversation that already has an owner, and a failing provider changes nothing about the decision.
+func TestOpenNoticeIsOptInOnlyOnWakeupReleaseOncePerEpisodeAndNeverBreaksTheDecision(t *testing.T) {
+	e := newEnv(t, nil)
+	n := &recNotifier{pool: e.app}
+	e.eng.WithNotifier(n, t.Logf)
+	a := e.tenant(t)
+
+	for _, mode := range []string{"manual", "round_robin"} {
+		q := e.queue(t, a, "Financeiro "+mode, mode)
+		e.attendant(t, a, &q, 3)
+		cal := e.calendar(t, a, "24x7 "+mode, "24x7", "[]")
+		e.exec(t, `UPDATE queues SET calendar_id=$2 WHERE id=$1`, q, cal)
+		e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at, reason) VALUES ($1,$2,now()-interval '1 hour',now()+interval '3 hours','teste')`, a, cal)
+		c := e.conversation(t, a, &q)
+		before := len(n.sent)
+
+		// closed: waits (no open notice yet, only the closed one if any)
+		if d, err := e.decide(t, a, c, ""); err != nil || d.Kind != engine.WaitUntilOpen || len(n.sent) != before {
+			t.Fatalf("%s: closed group waits and says nothing: %+v %v", mode, d, err)
+		}
+		// woken while STILL closed: nothing is said (it is not open)
+		e.exec(t, `UPDATE queues SET open_notice='Já estamos atendendo.' WHERE id=$1`, q)
+		if d, err := e.decide(t, a, c, engine.TriggerOpenWakeup); err != nil || d.Kind != engine.WaitUntilOpen || len(n.sent) != before {
+			t.Fatalf("%s: a wake-up while closed says nothing: %+v %v sent=%d", mode, d, err, len(n.sent)-before)
+		}
+		// opens; opt-in OFF (empty text): released, but silent
+		e.exec(t, `DELETE FROM calendar_suspensions WHERE calendar_id=$1`, cal)
+		e.exec(t, `UPDATE queues SET open_notice='' WHERE id=$1`, q)
+		c0 := e.conversation(t, a, &q)
+		e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at, reason) VALUES ($1,$2,now()-interval '1 hour',now()+interval '3 hours','t2')`, a, cal)
+		if _, err := e.decide(t, a, c0, ""); err != nil {
+			t.Fatal(err)
+		}
+		e.exec(t, `DELETE FROM calendar_suspensions WHERE calendar_id=$1`, cal)
+		if d, err := e.decide(t, a, c0, engine.TriggerOpenWakeup); err != nil || d.Kind == engine.WaitUntilOpen || len(n.sent) != before {
+			t.Fatalf("%s: without a text the release is silent: %+v %v sent=%d", mode, d, err, len(n.sent)-before)
+		}
+
+		// with the text: the woken conversation is released AND told, once, with a key of its own episode
+		e.exec(t, `UPDATE queues SET open_notice='Já estamos atendendo. Um atendente responderá em instantes.' WHERE id=$1`, q)
+		d, err := e.decide(t, a, c, engine.TriggerOpenWakeup)
+		if err != nil || d.Kind == engine.WaitUntilOpen || len(n.sent) != before+1 {
+			t.Fatalf("%s: released with a text must say it once: %+v %v sent=%d", mode, d, err, len(n.sent)-before)
+		}
+		got := n.sent[before]
+		if got.conv != c || got.text != "Já estamos atendendo. Um atendente responderá em instantes." || !strings.HasPrefix(got.key, "routing-opened:"+c.String()+":") {
+			t.Fatalf("%s: the notice: %+v", mode, got)
+		}
+		// a replay of the wake-up repeats the SAME key (the sender makes it idempotent): never a second distinct message
+		if mode == "manual" {
+			if _, err := e.decide(t, a, c, engine.TriggerOpenWakeup); err != nil || len(n.sent) != before+2 || n.sent[before+1].key != got.key {
+				t.Fatalf("same episode, same key: %+v %v", n.sent[before:], err)
+			}
+		}
+		// a plain route on an open group does not announce an opening
+		c2 := e.conversation(t, a, &q)
+		cnt := len(n.sent)
+		if _, err := e.decide(t, a, c2, ""); err != nil || len(n.sent) != cnt {
+			t.Fatalf("%s: a plain route never says 'we are open': %v sent=%d", mode, err, len(n.sent)-cnt)
+		}
+	}
+
+	// a failing provider changes nothing about the decision and does not abort the transaction
+	q := e.queue(t, a, "Falha", "manual")
+	e.attendant(t, a, &q, 1)
+	cal := e.calendar(t, a, "24x7 falha", "24x7", "[]")
+	e.exec(t, `UPDATE queues SET calendar_id=$2, open_notice='Abrimos.' WHERE id=$1`, q, cal)
+	e.exec(t, `INSERT INTO calendar_suspensions (tenant_id, calendar_id, starts_at, ends_at, reason) VALUES ($1,$2,now()-interval '1 hour',now()+interval '3 hours','f')`, a, cal)
+	c := e.conversation(t, a, &q)
+	if _, err := e.decide(t, a, c, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.exec(t, `DELETE FROM calendar_suspensions WHERE calendar_id=$1`, cal)
+	n.fail = true
+	if d, err := e.decide(t, a, c, engine.TriggerOpenWakeup); err != nil || d.Kind != engine.Enqueue {
+		t.Fatalf("a failed open notice must not fail routing: %+v %v", d, err)
+	}
+	if e.count(t, `SELECT count(*) FROM routing_engine_state WHERE conversation_id=$1 AND state='queued'`, c) != 1 {
+		t.Fatal("the new state was still recorded")
+	}
+}

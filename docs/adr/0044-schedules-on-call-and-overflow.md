@@ -142,6 +142,12 @@ Motor em `internal/routing/engine`: `Decide` (ASSIGN_AGENT, ENQUEUE, WAIT_UNTIL_
 - **Recuperação:** com o motor ligado, o job de uma conversa manual também tem `routing_retry_at`; a varredura de segurança reenfileira uma conversa manual **só enquanto o motor nunca a viu** (sem linha em `routing_engine_state`). Depois da primeira decisão ela tem estado e o motor cuida dela com timers: nenhuma releitura periódica de fila manual.
 - Com o motor desligado nada muda (o parâmetro é falso). Exceção documentada: grupos que ficaram em `least_loaded` (só existem se o motor já esteve ligado) continuam recebendo job e são distribuídos por rodízio, em vez de ficarem parados. Conversas já abertas no momento de ligar só entram no motor quando algo as tocar; o guia de operação traz a consulta de retroalimentação.
 
+### 11.10 Aviso ao abrir (migration 134) — pedido do dono após o teste real de 2026-10-14
+- **Lacuna vista no WhatsApp real:** o cliente recebia "fechado, respondemos quarta às 09:35" e, quando o setor abria, **nada**: a conversa passava a "aguardando atendente" em silêncio e o cliente não sabia se seria atendido.
+- `queues.open_notice` (≤ 500 caracteres, texto simples). **Opt-in** como o `closed_notice`: vazio = não diz nada. O motor envia **uma vez por episódio** (chave idempotente `routing-opened:<conversa>:<episódio>`) quando o timer durável `open_wakeup` acorda uma conversa que esperava a abertura **e** a decisão a libera (`ENQUEUE` ou atribuição feita pelo motor). Não envia: com o grupo ainda fechado, em rota comum numa fila aberta, nem se a conversa já tinha dono. Melhor esforço dentro de *savepoint*: falha do provedor nunca altera nem aborta a decisão.
+- API `GET/PUT /queues/{id}/open-notice` (`agent.read` / `agent.manage`, auditada como `queue.open_notice_saved`), independente do aviso de fechado. Tela: **Atendimento → Setores → "Avisos de horário"** (um modal com os dois textos; só o campo alterado é enviado).
+- Evidência: Postgres real (`TestOpenNoticeIsOptInOnlyOnWakeupReleaseOncePerEpisodeAndNeverBreaksTheDecision`, filas manual e `round_robin`; mutante "sem envio" morto) e `TestOpenNoticeAPIIsIndependentFromTheClosedNoticeAndFollowsTheSameRules`; Vitest 980. **Não provado** em WhatsApp real (depende de implantar e de um novo teste com setor fechado).
+
 ## 12. Decisões que precisam do dono (padrão adotado até resposta)
 1. **Feriados:** cadastro manual por tenant (padrão) ou importação de calendário nacional.
 2. **Fuso padrão do tenant:** `America/Manaus`, editável por calendário.

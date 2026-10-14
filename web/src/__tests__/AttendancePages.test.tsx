@@ -25,6 +25,7 @@ interface World {
   sla: any[]
   contracts: any[]
   notices: Record<string, string>
+  openNotices: Record<string, string>
   failNext?: { status: number; data: string } | null
 }
 type Call = { method: string; url: string; body?: any; params?: any }
@@ -48,6 +49,7 @@ function world(over: Partial<World> = {}): World {
     sla: [{ scope_kind: 'tenant', risk_percent: 80, counting: 'wall', active: true, first_response_seconds: 300, revision: 1 }],
     contracts: [{ contract_id: 'ct1', hub_name: 'Hub K3G', status: 'active', valid_from: '2026-01-01T00:00:00Z' }],
     notices: {},
+    openNotices: {},
     ...over,
   }
 }
@@ -69,6 +71,7 @@ function serve(w: World) {
     if (url.endsWith('/calendars')) return ok({ items: w.calendars, default_timezone: 'America/Manaus', default_calendar_id: null })
     if (/\/calendars\/[^/]+$/.test(url)) return ok({ id: 'c-bus', name: 'Comercial', revision: 3, updated_at: '', suspensions: [], definition: { kind: 'business', timezone: 'America/Manaus', weekly: [{ day: 'mon', intervals: [{ start: '08:00', end: '18:00' }] }] } })
     if (url.endsWith('/availability')) return ok(url.includes('q-fin') ? open : { ...open, open: false, next_open: '2026-10-14T12:00:00Z', next_close: undefined })
+    if (url.endsWith('/open-notice')) return ok({ queue_id: 'x', text: w.openNotices[url.match(/queues\/([^/]+)\//)![1]] ?? '' })
     if (url.endsWith('/closed-notice')) return ok({ queue_id: 'x', text: w.notices[url.match(/queues\/([^/]+)\//)![1]] ?? '' })
     if (url.endsWith('/agents')) return ok({ items: w.agents })
     if (url.endsWith('/shifts')) return ok({ items: w.shifts })
@@ -98,6 +101,7 @@ function serve(w: World) {
     calls.push({ method: 'PUT', url, body })
     const f = fail(); if (f) return f
     if (url.endsWith('/overflow-policy')) { const id = url.match(/queues\/([^/]+)\//)![1]; w.policies[id] = { ...body, revision: (w.policies[id]?.revision ?? 0) + 1 }; return ok({ policy: w.policies[id] }) }
+    if (url.endsWith('/open-notice')) { w.openNotices[url.match(/queues\/([^/]+)\//)![1]] = body.text; return ok(body) }
     if (url.endsWith('/closed-notice')) { w.notices[url.match(/queues\/([^/]+)\//)![1]] = body.text; return ok(body) }
     return ok(body)
   })
@@ -156,18 +160,35 @@ describe('Atendimento › Setores', () => {
     await waitFor(() => expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ active: false }))
   })
 
-  it('salva o aviso de fora do expediente por grupo e explica o placeholder', async () => {
+  it('salva os avisos de horário por grupo (fechado e ao abrir), só o que mudou, e explica o placeholder', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world({ notices: { 'q-fin': 'Voltamos já.' }, openNotices: { 'q-fin': 'Abrimos.' } }))
+    page()
+    const list = await screen.findByRole('list', { name: 'Grupos de Financeiro' })
+    await user.click(within(list).getByRole('button', { name: 'Avisos de horário' }))
+    const closed = await screen.findByLabelText('Quando o grupo está fechado')
+    const opened = await screen.findByLabelText('Quando o grupo abrir')
+    await waitFor(() => { expect(closed).toHaveValue('Voltamos já.'); expect(opened).toHaveValue('Abrimos.') })
+    expect(screen.getByText(/\{\{proxima_abertura\}\}/)).toBeInTheDocument()
+    fireEvent.change(opened, { target: { value: 'Já estamos atendendo. Um atendente responderá em instantes.' } })
+    await user.click(screen.getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls.find((c) => c.url.endsWith('/queues/q-fin/open-notice'))?.body).toEqual({ text: 'Já estamos atendendo. Um atendente responderá em instantes.' }))
+    // the closed text did not change: it is not sent again
+    expect(calls.some((c) => c.method === 'PUT' && c.url.endsWith('/queues/q-fin/closed-notice'))).toBe(false)
+  })
+
+  it('o aviso de fechado continua salvando pelo mesmo modal', async () => {
     const user = userEvent.setup()
     const calls = serve(world({ notices: { 'q-fin': 'Voltamos já.' } }))
     page()
     const list = await screen.findByRole('list', { name: 'Grupos de Financeiro' })
-    await user.click(within(list).getByRole('button', { name: 'Aviso fora do expediente' }))
-    const box = await screen.findByLabelText('Mensagem ao cliente')
+    await user.click(within(list).getByRole('button', { name: 'Avisos de horário' }))
+    const box = await screen.findByLabelText('Quando o grupo está fechado')
     await waitFor(() => expect(box).toHaveValue('Voltamos já.'))
-    expect(screen.getByText(/\{\{proxima_abertura\}\}/)).toBeInTheDocument()
     fireEvent.change(box, { target: { value: 'Fechado. Voltamos {{proxima_abertura}}.' } })
     await user.click(screen.getByRole('button', { name: 'Salvar' }))
     await waitFor(() => expect(calls.find((c) => c.url.endsWith('/queues/q-fin/closed-notice'))?.body).toEqual({ text: 'Fechado. Voltamos {{proxima_abertura}}.' }))
+    expect(calls.some((c) => c.method === 'PUT' && c.url.endsWith('/queues/q-fin/open-notice'))).toBe(false)
   })
 
   it('quem só lê não vê nenhuma ação, e um erro do servidor vira frase em português', async () => {

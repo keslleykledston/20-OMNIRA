@@ -3,7 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Input, Modal, Skeleton, StatusBadge, TextArea } from '../components/primitives'
 import { AttendanceFrame, Field, Notice, selectClass } from '../components/attendance/AttendanceFrame'
 import { queuesAPI } from '../lib/queues'
-import { attendanceErrorMessage, calendarsAPI, noticeAPI, sectorsAPI, type Availability, type Sector } from '../lib/sectors'
+import { attendanceErrorMessage, calendarsAPI, noticeAPI, openNoticeAPI, sectorsAPI, type Availability, type Sector } from '../lib/sectors'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
 
@@ -34,6 +34,8 @@ export default function AttendanceSectorsPage() {
   const [deactivating, setDeactivating] = useState<Sector | null>(null)
   const [noticeFor, setNoticeFor] = useState<{ id: string; name: string } | null>(null)
   const [noticeText, setNoticeText] = useState('')
+  const [openText, setOpenText] = useState('')
+  const [saved, setSaved] = useState({ closed: '', open: '' }) // what the server had: only a field that changed is sent (a field that failed to load is never overwritten by the empty form)
 
   const sectors = useQuery({ queryKey: ['att-sectors', tenantId], queryFn: sectorsAPI.list, retry: false, enabled: canRead })
   const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false, enabled: canRead })
@@ -64,7 +66,22 @@ export default function AttendanceSectorsPage() {
   const openNotice = async (id: string, name: string) => {
     setNoticeFor({ id, name })
     setNoticeText('')
-    try { setNoticeText((await noticeAPI.get(id)).text) } catch { /* o formulário abre vazio; salvar mostra o erro */ }
+    setOpenText('')
+    setSaved({ closed: '', open: '' })
+    const [closed, open] = await Promise.allSettled([noticeAPI.get(id), openNoticeAPI.get(id)]) // o formulário abre vazio se falhar; salvar mostra o erro
+    const c = closed.status === 'fulfilled' ? closed.value.text : ''
+    const o = open.status === 'fulfilled' ? open.value.text : ''
+    setNoticeText(c)
+    setOpenText(o)
+    setSaved({ closed: c, open: o })
+  }
+  const saveNotices = () => {
+    const id = noticeFor!.id
+    run.mutate(async () => {
+      if (noticeText !== saved.closed) await noticeAPI.put(id, noticeText)
+      if (openText !== saved.open) await openNoticeAPI.put(id, openText)
+    })
+    setNoticeFor(null)
   }
 
   return (
@@ -126,7 +143,7 @@ export default function AttendanceSectorsPage() {
                     </div>
                     {manage && (
                       <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => void openNotice(q.id, q.name)}>Aviso fora do expediente</Button>
+                        <Button size="sm" variant="secondary" onClick={() => void openNotice(q.id, q.name)}>Avisos de horário</Button>
                         <Button size="sm" variant="secondary" disabled={run.isPending} onClick={() => run.mutate(() => sectorsAPI.setQueueSector(q.id, null))}>Tirar do setor</Button>
                       </div>
                     )}
@@ -177,13 +194,15 @@ export default function AttendanceSectorsPage() {
             confirmLabel="Desativar" destructive isPending={run.isPending}
             onCancel={() => setDeactivating(null)} onConfirm={() => { const id = deactivating!.id; run.mutate(() => sectorsAPI.update(id, { active: false })); setDeactivating(null) }} />
 
-          <Modal open={!!noticeFor} title={`Aviso fora do expediente — ${noticeFor?.name ?? ''}`} onClose={() => setNoticeFor(null)}
+          <Modal open={!!noticeFor} title={`Avisos de horário — ${noticeFor?.name ?? ''}`} onClose={() => setNoticeFor(null)}
             footer={<><Button variant="secondary" size="sm" onClick={() => setNoticeFor(null)}>Cancelar</Button>
-              <Button size="sm" disabled={run.isPending} onClick={() => { const id = noticeFor!.id; run.mutate(() => noticeAPI.put(id, noticeText)); setNoticeFor(null) }}>Salvar</Button></>}>
+              <Button size="sm" disabled={run.isPending} onClick={saveNotices}>Salvar</Button></>}>
             <div className="space-y-3">
-              <TextArea label="Mensagem ao cliente" rows={4} maxLength={500} value={noticeText} onChange={(e) => setNoticeText(e.target.value)}
+              <TextArea label="Quando o grupo está fechado" rows={3} maxLength={500} value={noticeText} onChange={(e) => setNoticeText(e.target.value)}
                 helperText="Enviada uma vez por atendimento quando o cliente chega com o grupo fechado. Use {{proxima_abertura}} para informar quando volta. Vazio = não envia nada." />
-              <Notice>Se um fluxo publicado já avisa o cliente sobre o horário, deixe este campo vazio para não repetir a mensagem.</Notice>
+              <TextArea label="Quando o grupo abrir" rows={3} maxLength={500} value={openText} onChange={(e) => setOpenText(e.target.value)}
+                helperText="Enviada uma vez, na hora em que o grupo abre, ao cliente que ficou esperando. Ex.: “Já estamos atendendo. Um atendente responderá em instantes.” Vazio = não envia nada." />
+              <Notice>Se um fluxo publicado já avisa o cliente sobre o horário, deixe o campo vazio para não repetir a mensagem.</Notice>
             </div>
           </Modal>
 
