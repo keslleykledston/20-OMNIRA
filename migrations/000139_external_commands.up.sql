@@ -45,6 +45,11 @@ END $$;
 REVOKE ALL ON FUNCTION external_command_receipts_purge(INTERVAL) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION external_command_receipts_purge(INTERVAL) TO omnira_app;
 
+-- The list of the external API is keyset-paged by created_at (the default) or updated_at (an index for it exists since migration 14). Without an index on created_at the
+-- database sorts every visible conversation of the company for each page and evaluates the row-level-security policies on all of them (measured: ~1.4 s per page at 30 000
+-- conversations); with it the scan stops after one page.
+CREATE INDEX idx_conversations_tenant_created ON conversations (tenant_id, created_at DESC, id DESC);
+
 -- The CRM lease (ADR-0046 §6.1): optional per installation (external_app_installations.lease_seconds; NULL = the application holds until it releases). While the
 -- installation holds a conversation, every command it makes and its heartbeat push the expiry forward; a hold whose lease (plus the grace period) ran out is freed by the
 -- worker with the reason lease_expired and the router looks at the conversation again. A person is never expired.

@@ -50,6 +50,7 @@ CREATE TABLE webhook_deliveries (
   UNIQUE (subscription_id, event_seq),
   FOREIGN KEY (tenant_id, subscription_id) REFERENCES webhook_subscriptions (tenant_id, id) ON DELETE CASCADE
 );
+ALTER TABLE webhook_deliveries SET (autovacuum_analyze_scale_factor = 0.02, autovacuum_vacuum_scale_factor = 0.05);   -- rows change status in bulk
 CREATE INDEX idx_webhook_deliveries_due ON webhook_deliveries (next_attempt_at) WHERE status = 'pending';
 CREATE INDEX idx_webhook_deliveries_subscription ON webhook_deliveries (tenant_id, subscription_id, status, created_at DESC);
 

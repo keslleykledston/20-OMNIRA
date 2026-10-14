@@ -1,6 +1,7 @@
 package adapters_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/external/crmsim"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"net/http/httptest"
 )
 
@@ -40,13 +42,15 @@ func TestBenchmarkHeadlessAtScale(t *testing.T) {
 
 	// 1. volume: n conversations, 3 messages each, with the producers writing facts in the same transactions
 	t0 := time.Now()
-	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) SELECT gen_random_uuid(), $1, 'Cliente '||g, '+5592'||lpad(g::text, 9, '0') FROM generate_series(1,$2) g`, tn, n)
+	e.exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) SELECT gen_random_uuid(), $1, 'Bench '||g, '+5592'||lpad(g::text, 9, '0') FROM generate_series(1,$2) g`, tn, n)
 	e.exec(`INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status,created_at,updated_at)
-	        SELECT gen_random_uuid(), $1, c.id, $3, 'open', now() - (random()*interval '30 days'), now() - (random()*interval '5 days') FROM contacts c WHERE c.tenant_id=$1 AND c.display_name LIKE 'Cliente %' LIMIT $2`, tn, n, conn)
+	        SELECT gen_random_uuid(), $1, c.id, $3, 'open', now() - (random()*interval '30 days'), now() - (random()*interval '5 days') FROM contacts c WHERE c.tenant_id=$1 AND c.display_name LIKE 'Bench %' LIMIT $2`, tn, n, conn)
 	e.exec(`INSERT INTO messages(id,tenant_id,conversation_id,direction,message_type,body,status,created_at)
 	        SELECT gen_random_uuid(), $1, c.id, CASE WHEN k=2 THEN 'outbound' ELSE 'inbound' END, 'text', 'mensagem '||k, CASE WHEN k=2 THEN 'sent' ELSE 'received' END, c.created_at + k*interval '1 minute'
 	          FROM conversations c, generate_series(1,3) k WHERE c.tenant_id=$1`, tn)
 	insert := time.Since(t0)
+	// what autovacuum would have done in production before a client arrives: the planner must know the tables are not tiny
+	e.exec(`ANALYZE contacts, conversations, messages, domain_events`)
 	var events int64
 	_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM domain_events WHERE tenant_id=$1`, tn).Scan(&events)
 	line("conversations", n)
@@ -68,12 +72,41 @@ func TestBenchmarkHeadlessAtScale(t *testing.T) {
 			break
 		}
 	}
+	e.exec(`ANALYZE domain_events`) // numbering updated every row: what autovacuum does before a client arrives
 	line("sequencer_seconds", time.Since(t0).Seconds())
 	line("sequencer_facts_per_second", float64(total)/time.Since(t0).Seconds())
 
+	explain := func(label, sql string, args ...any) {
+		// as the application really runs: the application role, a system session of the company (so RLS is evaluated, not bypassed)
+		_ = platformdb.WithSystemTenantSession(e.ctx, e.app, tn, func(ctx context.Context) error {
+			q := platformdb.QuerierFromContext(ctx, e.app)
+			rows, err := q.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) "+sql, args...)
+			if err != nil {
+				t.Logf("PLAN %s: %v", label, err)
+				return nil
+			}
+			for rows.Next() {
+				var l string
+				_ = rows.Scan(&l)
+				t.Logf("PLAN %s | %s", label, l)
+			}
+			rows.Close()
+			return nil
+		})
+	}
+	vis := `c.tenant_id = $1 AND c.internal_user_id IS NULL AND c.conversation_kind <> 'internal' AND EXISTS (SELECT 1 FROM contacts vc WHERE vc.tenant_id = c.tenant_id AND vc.id = c.contact_id AND vc.kind NOT IN ('internal','spam'))`
+	explain("list", `SELECT c.id, (SELECT max(m.created_at) FROM messages m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id) FROM conversations c LEFT JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.channel_connection_id WHERE `+vis+` AND c.status='open' ORDER BY c.created_at DESC, c.id DESC LIMIT 101`, tn)
+	var anyID uuid.UUID
+	_ = e.seed.QueryRow(e.ctx, `SELECT id FROM conversations WHERE tenant_id=$1 LIMIT 1`, tn).Scan(&anyID)
+	explain("get", `SELECT c.id, (SELECT max(m.created_at) FROM messages m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id) FROM conversations c LEFT JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.channel_connection_id WHERE `+vis+` AND c.id=$2`, tn, anyID)
+	explain("events", `WITH w AS (SELECT e.* FROM domain_events e WHERE e.tenant_id = $1 AND e.seq IS NOT NULL AND e.seq > $2 ORDER BY e.seq LIMIT 200)
+	  SELECT w.seq, w.id, CASE WHEN w.conversation_id IS NOT NULL THEN EXISTS (SELECT 1 FROM conversations c WHERE c.id = w.conversation_id AND `+vis+`) ELSE false END AS visible FROM w ORDER BY w.seq`, tn, int64(32600))
+	tList := time.Now()
+	_, _, _ = e.callExt(http.MethodGet, "/api/v1/external/conversations?status=open&limit=100", app.Credential.Token, nil)
+	line("first_list_call_ms_after_explain", float64(time.Since(tList).Microseconds())/1000)
 	srv := httptest.NewServer(e.ext)
 	t.Cleanup(srv.Close)
-	cli := crmsim.NewClient(srv.URL+"/api/v1/external", app.Credential.Token, nil)
+	cli := crmsim.NewClient(srv.URL+"/api/v1/external", app.Credential.Token, &http.Client{Timeout: 120 * time.Second})
 
 	// 3. reads: the first page and a walk through the pages (the cursor must stay fast at depth), single conversations, messages
 	var first, deep, one, msgs []time.Duration
@@ -103,7 +136,7 @@ func TestBenchmarkHeadlessAtScale(t *testing.T) {
 		if len(p.Items) > 0 && cursorPages%10 == 0 {
 			t2 := time.Now()
 			if _, err := cli.Conversation(e.ctx, p.Items[0].ID); err != nil {
-				t.Fatal(err)
+				t.Fatalf("get after %d pages: %v (took %v)", cursorPages, err, time.Since(t2))
 			}
 			one = append(one, time.Since(t2))
 			t3 := time.Now()
@@ -129,9 +162,13 @@ func TestBenchmarkHeadlessAtScale(t *testing.T) {
 	var after int64
 	pages, read := 0, 0
 	for {
+		tp := time.Now()
 		evs, next, more, err := cli.Events(e.ctx, after)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("events after %d: %v (took %v)", after, err, time.Since(tp))
+		}
+		if d := time.Since(tp); d > time.Second {
+			t.Logf("SLOW events page after=%d took %v", after, d)
 		}
 		read += len(evs)
 		after = next

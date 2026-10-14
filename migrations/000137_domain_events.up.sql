@@ -29,6 +29,9 @@ CREATE TABLE domain_events (
   payload JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (octet_length(payload::text) <= 2048)
 );
 CREATE UNIQUE INDEX domain_events_seq_uq ON domain_events (tenant_id, seq) WHERE seq IS NOT NULL;
+-- The journal is rewritten in bulk (every fact is updated once, when it gets its number) and trimmed in bulk (retention): the planner's statistics go stale quickly, and a
+-- stale estimate that says "no row has a number" is what makes a read of the journal choose a terrible plan (seen in the 30 000-conversation benchmark). Analyze early.
+ALTER TABLE domain_events SET (autovacuum_analyze_scale_factor = 0.02, autovacuum_vacuum_scale_factor = 0.05);
 CREATE INDEX domain_events_unsequenced_idx ON domain_events (xid, ord) WHERE seq IS NULL;
 CREATE INDEX domain_events_retention_idx ON domain_events (tenant_id, occurred_at) WHERE seq IS NOT NULL;
 

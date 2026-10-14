@@ -793,7 +793,6 @@ func TestBootstrapWhileTheDataMovesRebuildsTheFinalState(t *testing.T) {
 	}
 }
 
-
 // A change of holder made by a LEGACY writer (a person assigned in the Workspace, the router, a release) names only assigned_to_user_id; the guard moves the control
 // version. The journal must still say so, with the origin, or an external application would never learn that a person took the conversation.
 func TestJournalSaysWhenALegacyWriterChangesWhoHoldsTheConversation(t *testing.T) {
