@@ -23,6 +23,7 @@ import { finalizedNotice } from '../../lib/attendance';
 import { emitInboxNotice, useInboxNotice } from '../../lib/inboxNotice';
 import { useAccess } from '../../lib/useAccess';
 import TenantContextBar from './TenantContextBar';
+import ExternalHoldPanel, { HOLDER_LABEL, isHeldExternally } from './ExternalHoldPanel';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -36,6 +37,8 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   const [conversation, setConversation] = useState<ConversationItem | null>(null);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // 409/412: the conversation changed under the person (another holder, a close, a transfer); offer to read it again instead of retrying blind
+  const [staleHint, setStaleHint] = useState(false);
   // One Idempotency-Key per distinct text: a retry after a network failure or a
   // timeout re-sends the same key, so the backend (required header, 8-128 chars
   // of [A-Za-z0-9._:-] per contracts/openapi/omnira-v1.yaml) never queues a
@@ -133,6 +136,15 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   const [notice, clearNotice] = useInboxNotice(conversationId);
   const { can } = useAccess();
   const metaLine = !!cs && cs.window_required;
+  // Read the conversation, its context and its messages again: what a person does after a 409/412, or when the holder changed.
+  const refreshConversation = async () => {
+    setSendError(null);
+    setStaleHint(false);
+    for (const key of ['inbox-conversation-detail', 'inbox-context', 'inbox-messages', 'channel-state']) {
+      await queryClient.invalidateQueries({ queryKey: [key, tenantId, conversationId] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+  };
   const claim = async () => {
     setClaiming(true);
     setSendError(null);
@@ -144,15 +156,22 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       emitInboxNotice(conversationId, 'Atendimento assumido por você.');
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
-      else setSendError(err?.response?.status === 409 ? 'Este atendimento acabou de ser assumido por outro operador.' : 'Não foi possível assumir o atendimento.');
+      else {
+        setStaleHint(err?.response?.status === 409);
+        setSendError(err?.response?.status === 409 ? 'Este atendimento acabou de ser assumido por outro operador ou por um CRM.' : 'Não foi possível assumir o atendimento.');
+      }
     } finally {
       setClaiming(false);
     }
   };
-  const unassigned = !!conversation && conversation.status !== 'closed' && !conversation.assigned_to_user_id && conversation.conversation_kind !== 'internal';
+  // ADR-0046: an application holds it (assigned_to_user_id is empty for it, which must NOT read as "free to claim")
+  const heldByCRM = isHeldExternally(conversation?.control?.kind);
+  const unassigned = !!conversation && conversation.status !== 'closed' && !conversation.assigned_to_user_id && !heldByCRM && conversation.conversation_kind !== 'internal';
   const mine = !!conversation?.assigned_to_user_id && conversation.assigned_to_user_id === currentUserId();
   const ownerName = conversation?.assigned_to_name?.trim() || '';
-  const owner = !conversation?.assigned_to_user_id
+  const owner = heldByCRM
+    ? 'Aplicação externa (CRM)'
+    : !conversation?.assigned_to_user_id
     ? 'Sem responsável'
     : mine
       ? ownerName ? `${ownerName} (você)` : 'Você'
@@ -184,6 +203,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       return true;
     } catch (err: any) {
       if (isUnauthorized(err)) { handleUnauthorized(); return false; }
+      setStaleHint(err?.response?.status === 409 || err?.response?.status === 412);
       setSendError(attachmentId ? describeAttachmentError(err) : describeSendError(err));
       return false;
     } finally {
@@ -253,6 +273,11 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             <Icon name="contacts" size={12} />
             {owner}
           </span>
+          {conversation.control && conversation.status !== 'closed' && (
+            <span className="rounded-pill bg-surface-muted px-2 py-0.5 text-text-secondary" title="Quem atende esta conversa agora">
+              {HOLDER_LABEL[conversation.control.kind] ?? conversation.control.kind}
+            </span>
+          )}
           {unassigned && (
             <button type="button" onClick={() => void claim()} disabled={claiming} className="ml-auto font-medium text-accent-primary hover:underline disabled:opacity-60">
               {claiming ? 'Assumindo…' : 'Assumir atendimento'}
@@ -341,6 +366,8 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
         <div role="status" className="border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs text-text-secondary">
           Este atendimento está encerrado. O envio está indisponível. Se o contato escrever de novo, abre-se um atendimento novo.
         </div>
+      ) : heldByCRM ? (
+        <ExternalHoldPanel conversationId={conversationId} onRefresh={() => void refreshConversation()} />
       ) : unassigned && conversation?.contact_kind !== 'spam' ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs">
           <span role="status" className="text-text-secondary">Assuma o atendimento para responder.</span>
@@ -359,8 +386,13 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       ) : (
       <div className="px-3 py-2 border-t border-border-subtle">
         {sendError && (
-          <div role="alert" className="mb-3 p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
-            {sendError}
+          <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 p-2 bg-status-danger-soft text-status-danger text-xs rounded-control">
+            <span>{sendError}</span>
+            {staleHint && (
+              <button type="button" onClick={() => void refreshConversation()} className="font-semibold underline">
+                Atualizar conversa
+              </button>
+            )}
           </div>
         )}
         {channelDown && (
@@ -421,6 +453,7 @@ function describeSendError(err: any): string {
   const status = err?.response?.status;
   const body = typeof err?.response?.data === 'string' ? err.response.data : '';
   if (status === 409) {
+    if (body.includes('external application')) return 'Esta conversa agora é atendida por uma aplicação externa (CRM).';
     if (body.includes('window')) return 'Janela de 24 h da Meta fechada: só mensagem de template até o cliente escrever de novo.';
     if (body.includes('no active text channel')) return 'Esta conversa não tem um canal ativo para enviar (a empresa não tem uma linha conectada).';
     if (body.includes('finalized')) return 'Este atendimento foi finalizado.';

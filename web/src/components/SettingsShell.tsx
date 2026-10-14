@@ -36,6 +36,13 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
       { key: 'overflow', label: 'Transbordo e SLA', href: '/settings/attendance/overflow' },
     ],
   },
+  {
+    // ADR-0046: aplicações externas (CRMs) que usam a API headless. A rota responde "não habilitado" quando a plataforma não liga o recurso.
+    key: 'integrations',
+    label: 'Integrações',
+    href: '/settings/integrations',
+    subsections: [{ key: 'apps', label: 'Aplicações externas', href: '/settings/integrations/apps' }],
+  },
   { key: 'accounts', label: 'Empresas', href: '/accounts' },
 ]
 
