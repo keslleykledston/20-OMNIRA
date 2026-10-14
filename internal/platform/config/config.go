@@ -50,6 +50,8 @@ type Config struct {
 	// Default off: with it off none of those routes exists and the domain-event triggers emit nothing.
 	HeadlessEnabled bool
 	// HeadlessEventRetentionDays / HeadlessWebhookRetryHours: how long the journal of facts is kept and how long a webhook delivery is retried (ADR-0046).
+	// HeadlessWriteEnabled turns on the write commands of the external API (claim, release, transfer, messages, finalize). OFF by default; it needs HeadlessEnabled.
+	HeadlessWriteEnabled       bool
 	HeadlessEventRetentionDays int
 	HeadlessWebhookRetryHours  int
 	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
@@ -182,6 +184,7 @@ func Load() *Config {
 		RoutingEngineEnabled:          getEnv("OMNIRA_ROUTING_ENGINE_ENABLED", "false") == "true",
 		RoutingEngineSince:            parseRFC3339(os.Getenv("OMNIRA_ROUTING_ENGINE_SINCE")),
 		HeadlessEnabled:               getEnv("OMNIRA_HEADLESS_ENABLED", "false") == "true",
+		HeadlessWriteEnabled:          getEnv("OMNIRA_HEADLESS_WRITE_ENABLED", "false") == "true",
 		HeadlessEventRetentionDays:    getEnvInt("OMNIRA_HEADLESS_EVENT_RETENTION_DAYS", 30),
 		HeadlessWebhookRetryHours:     getEnvInt("OMNIRA_HEADLESS_WEBHOOK_RETRY_HOURS", 72),
 		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",

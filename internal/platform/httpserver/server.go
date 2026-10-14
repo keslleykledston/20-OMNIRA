@@ -636,6 +636,31 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/takeover", authnMiddleware(tenantSession(http.HandlerFunc(takeover.Takeover))))
 }
 
+// RegisterExternalWriteHandlers mounts the coordinated write commands of the external API (ADR-0046 H5) when both OMNIRA_HEADLESS_ENABLED and
+// OMNIRA_HEADLESS_WRITE_ENABLED are on. Every command reuses the application the Workspace and the Hub use: the control service, the message sender
+// (same 24 h window and templates, same delivery job), the attendance finalization and the sectors' eligibility and calendar.
+func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled bool, finalize externaladapters.Finalizer) {
+	if !enabled {
+		return
+	}
+	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
+	deps := externaladapters.WriteDeps{
+		Sender:    messagesapplication.NewExternalSender(messagesadapters.NewPostgresOutboundStore(dbPool)),
+		Finalize:  finalize,
+		Eligible:  externaladapters.SectorsEligible,
+		QueueOpen: externaladapters.SectorsQueueOpen,
+	}
+	w := externaladapters.NewWriteHandler(dbPool, deps)
+	post := func(path string, scope externaldomain.Scope, h http.Handler) {
+		s.mux.Handle("POST /api/v1/external/conversations/{id}/"+path, ext.Authenticated(externaladapters.RequireScope(scope, h)))
+	}
+	post("claim", externaldomain.ScopeConversationClaim, w.Claim())
+	post("release", externaldomain.ScopeConversationClaim, w.Release())
+	post("transfer", externaldomain.ScopeConversationTransfer, w.Transfer())
+	post("messages", externaldomain.ScopeMessageSend, w.Message())
+	post("finalize", externaldomain.ScopeConversationFinalize, w.Finalize())
+}
+
 func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {
 	if s.authenticator == nil {
 		return

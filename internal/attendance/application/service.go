@@ -371,6 +371,51 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true, Farewell: farewell}, nil
 }
 
+// FinalizeByExternalApp ends the attendance for an external application (ADR-0046) that HOLDS the conversation. The caller (the external write path) runs
+// this in a tenant-scoped SYSTEM session with the conversation already locked by the control service, has re-checked the installation in this transaction
+// and has proved the hold and the control version; what stays here is the attendance rule, the same as a person's finalize: the contact must be a customer,
+// local tickets are closed and ERP-linked ones are left alone, and an already finalized conversation returns its existing closure. The closure is attributed
+// to the installation (never to a user); the application's text is a short note, there is no summary and no follow-up (those are a person's confirmation).
+// No farewell is sent: the application sends its own message first if it wants one.
+func (s *Service) FinalizeByExternalApp(ctx context.Context, installationID uuid.UUID, conversationID uuid.UUID, reason domain.CloseReason, note string) (FinalizeResult, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil || tc.Source != tenancydomain.AccessSourceSystem || installationID == uuid.Nil {
+		return FinalizeResult{}, domain.ErrForbidden
+	}
+	in, err := domain.FinalizeInput{ConversationID: conversationID, Reason: reason, Note: note, SummaryTruth: domain.TruthAgentConfirmed}.Normalize()
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	facts, err := s.repo.LockConversation(ctx, conversationID)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	if facts.ContactID == nil || facts.Kind == "internal" {
+		return FinalizeResult{}, domain.ErrNotAContact
+	}
+	if facts.Status == "closed" {
+		existing, err := s.repo.ClosureByConversation(ctx, conversationID)
+		return FinalizeResult{Closure: existing}, err
+	}
+	closed, kept, err := s.repo.CloseLocalTickets(ctx, conversationID)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	if err := s.repo.MarkClosed(ctx, conversationID); err != nil {
+		return FinalizeResult{}, err
+	}
+	inst := installationID
+	closure := &domain.Closure{
+		ID: uuid.New(), TenantID: tc.TenantID, ConversationID: conversationID, ContactID: *facts.ContactID, ClosedBy: nil, ClosedByInstallation: &inst,
+		Source: domain.SourceExternalApp, Reason: in.Reason, Note: in.Note, SummaryTruth: in.SummaryTruth,
+		LocalTicketsClosed: closed, TicketsKept: kept, CreatedAt: s.now(),
+	}
+	if err := s.repo.InsertClosure(ctx, closure); err != nil {
+		return FinalizeResult{}, err
+	}
+	return FinalizeResult{Closure: closure, Changed: true}, nil
+}
+
 // FinalizeBySystem ends the attendance because the CONTACT asked for it (the flow engine is the actor, with a system
 // TenantContext). Same effects as an agent's finalize (conversation closed, local tickets closed, ERP and topic tickets left
 // alone) but recorded with source "system", no author, reason "other" and the command in the note. Idempotent: an already

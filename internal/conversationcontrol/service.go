@@ -226,6 +226,92 @@ func (s Service) TakeOver(ctx context.Context, q platformdb.Querier, tenantID, c
 	return s.Get(ctx, q, tenantID, conversationID)
 }
 
+// Target is where an application sends a conversation it holds: always a queue of the company, and optionally one person who is eligible in it.
+type Target struct {
+	QueueID uuid.UUID
+	UserID  *uuid.UUID
+}
+
+// Eligible says whether a person may receive a conversation of a queue now (membership, shift, capacity: the rule the router applies). It is a function
+// because the rule lives in the sectors module, which this package does not import.
+type Eligible func(ctx context.Context, q platformdb.Querier, tenantID, queueID, userID uuid.UUID) (bool, error)
+
+// TransferByApplication hands a conversation the application holds back to the company: into a queue (the router looks at it exactly as it does for a
+// conversation that just arrived) or straight to one eligible person of that queue. The version must match; the application must be the holder; a queue
+// that does not exist in the company, or a person who is not eligible in it, is ErrInvalidTarget and nothing changes. The application stops holding it in
+// the same statement, so no moment exists in which both sides think they own it.
+func (s Service) TransferByApplication(ctx context.Context, q platformdb.Querier, tenantID, conversationID, installationID uuid.UUID, ifMatch int64, to Target, actor Actor, eligible Eligible) (State, error) {
+	cur, err := s.Lock(ctx, q, tenantID, conversationID)
+	if err != nil {
+		return cur, err
+	}
+	if !cur.HeldBy(KindCRMApplication, installationID) {
+		return cur, ErrNotHolder
+	}
+	if ifMatch != cur.Version {
+		return cur, ErrStaleVersion
+	}
+	if cur.Status != "open" {
+		return cur, ErrClosed
+	}
+	var queueMode string
+	if err := q.QueryRow(ctx, `SELECT mode FROM queues WHERE tenant_id = $1 AND id = $2`, tenantID, to.QueueID).Scan(&queueMode); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cur, ErrInvalidTarget
+		}
+		return cur, err
+	}
+	if to.UserID != nil {
+		if eligible == nil {
+			return cur, ErrInvalidTarget
+		}
+		ok, err := eligible(ctx, q, tenantID, to.QueueID, *to.UserID)
+		if err != nil {
+			return cur, err
+		}
+		if !ok {
+			return cur, ErrInvalidTarget
+		}
+	}
+	if err := s.begin(ctx, q, tenantID); err != nil {
+		return cur, err
+	}
+	next := cur.Version + 1
+	if to.UserID == nil {
+		if _, err := q.Exec(ctx, `
+			UPDATE conversations
+			   SET queue_id = $3, assigned_to_user_id = NULL, assigned_at = NULL,
+			       control_kind = NULL, control_holder_id = NULL, control_since = NULL, control_origin = NULL, control_version = $4,
+			       routing_retry_at = CASE WHEN $5 IN ('round_robin', 'least_loaded') THEN now() + interval '90 seconds' ELSE NULL END, updated_at = now()
+			 WHERE tenant_id = $1 AND id = $2`, tenantID, conversationID, to.QueueID, next, queueMode); err != nil {
+			return cur, err
+		}
+		if err := s.record(ctx, q, tenantID, cur, actor, "crm_transfer_queue"); err != nil {
+			return cur, err
+		}
+		if err := s.requestRouting(ctx, q, tenantID, conversationID); err != nil {
+			return cur, err
+		}
+		return s.Get(ctx, q, tenantID, conversationID)
+	}
+	if _, err := q.Exec(ctx, `
+		UPDATE conversations
+		   SET queue_id = $3, assigned_to_user_id = $5, assigned_at = now(), routing_retry_at = NULL,
+		       control_kind = 'tenant_user', control_holder_id = $5, control_since = now(), control_origin = 'crm', control_version = $4, updated_at = now()
+		 WHERE tenant_id = $1 AND id = $2`, tenantID, conversationID, to.QueueID, next, *to.UserID); err != nil {
+		return cur, err
+	}
+	if err := s.record(ctx, q, tenantID, cur, actor, "crm_transfer_user"); err != nil {
+		return cur, err
+	}
+	if _, err := q.Exec(ctx, `
+		INSERT INTO assignment_events(tenant_id, conversation_id, from_user_id, to_user_id, changed_by, reason, actor_source)
+		VALUES ($1,$2,NULL,$3,NULL,'crm_transfer','system')`, tenantID, conversationID, *to.UserID); err != nil {
+		return cur, err
+	}
+	return s.Get(ctx, q, tenantID, conversationID)
+}
+
 // DrainInstallation frees every open conversation an installation holds, in the transaction that suspends or revokes it, and asks the router to
 // look at each. It returns how many it freed. Closed conversations lose their holder too (a closed conversation held by a revoked application would
 // be an orphan), without a routing request.

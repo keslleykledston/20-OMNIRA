@@ -9,6 +9,7 @@ BEGIN
 END $$;
 DROP FUNCTION IF EXISTS external_installation_allowlists(UUID, UUID);
 DROP FUNCTION IF EXISTS external_recheck(UUID, UUID, UUID);
+DROP FUNCTION IF EXISTS external_installation_gate_key(UUID);
 DROP FUNCTION IF EXISTS external_credential_touch(UUID, UUID, UUID);
 DROP FUNCTION IF EXISTS external_credential_lookup(TEXT);
 DROP TABLE IF EXISTS external_app_credentials;

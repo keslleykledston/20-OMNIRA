@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 PHASES=${*:-"h1 h2 h3"}
 NAME=omnira-headlessmut-$$; DB=omnira_test_headlessmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/external/delivery/worker.go internal/external/delivery/sign.go internal/external/netpolicy/ssrf.go internal/external/adapters/events_http.go internal/external/adapters/webhook_admin_http.go internal/external/adapters/event_visibility.go internal/media/adapters/reader.go internal/flows/adapters/effects_postgres.go internal/external/adapters/visibility.go internal/external/adapters/read_http.go internal/external/adapters/read_dto.go internal/messages/adapters/attachment_postgres.go internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go internal/conversationcontrol/service.go internal/conversationcontrol/http.go internal/routing/engine/engine.go internal/routing/adapters/assign.go internal/routing/adapters/postgres.go internal/messages/adapters/postgres.go internal/messages/adapters/attachment_postgres.go internal/messages/adapters/outbound_system.go internal/attendance/adapters/postgres.go internal/flows/application/engine.go internal/hub/replying/service.go"
+FILES="internal/external/adapters/write_http.go internal/messages/application/external_send.go internal/messages/adapters/outbound_external.go internal/conversationcontrol/service.go internal/attendance/application/service.go internal/external/delivery/worker.go internal/external/delivery/sign.go internal/external/netpolicy/ssrf.go internal/external/adapters/events_http.go internal/external/adapters/webhook_admin_http.go internal/external/adapters/event_visibility.go internal/media/adapters/reader.go internal/flows/adapters/effects_postgres.go internal/external/adapters/visibility.go internal/external/adapters/read_http.go internal/external/adapters/read_dto.go internal/messages/adapters/attachment_postgres.go internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go internal/conversationcontrol/service.go internal/conversationcontrol/http.go internal/routing/engine/engine.go internal/routing/adapters/assign.go internal/routing/adapters/postgres.go internal/messages/adapters/postgres.go internal/messages/adapters/attachment_postgres.go internal/messages/adapters/outbound_system.go internal/attendance/adapters/postgres.go internal/flows/application/engine.go internal/hub/replying/service.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -381,6 +381,105 @@ h4)
 			return errPaused
 		}" "		_ = active"
   mut "one slow receiver holds all the others" $WK "	sem := make(chan struct{}, w.Parallel)" "	sem := make(chan struct{}, 1)"
+  ;;
+h5)
+  echo "== H5: coordinated write commands, receipts, If-Match, transfer, finalize"
+  T_PKGS="./internal/external/adapters ./internal/messages/application ./internal/messages/adapters"; T_NEED=1
+  T_RUN="TestWrite|TestExternalSender|TestInsertQueuedExternal"
+  W=internal/external/adapters/write_http.go; ES=internal/messages/application/external_send.go; EO=internal/messages/adapters/outbound_external.go; CS=internal/conversationcontrol/service.go
+  AT=internal/attendance/application/service.go; MG=migrations/000139_external_commands.up.sql
+  mut "the Idempotency-Key is optional"                 $W "		if !idempotencyKeyPattern.MatchString(key) {" "		if false && !idempotencyKeyPattern.MatchString(key) {"
+  mut "If-Match is optional where it is required"       $W "		} else if spec.ifMatch == ifMatchRequired {" "		} else if false {"
+  mut "the receipt is not looked up"                    $W "		if err == nil {
+			if rHash != hash {" "		if false {
+			if rHash != hash {"
+  mut "a reused key with another payload is replayed"   $W "			if rHash != hash {
+				return refuse(" "			if false {
+				return refuse("
+  mut "a lost race on the receipt is not detected"      $W "		if tag.RowsAffected() != 1 {
+			return errReceiptRace" "		if false && tag.RowsAffected() != 1 {
+			return errReceiptRace"
+  mut "the receipt is not written"                      $W "VALUES (\$1,\$2,\$3,\$4,\$5,\$6,\$7,\$8,\$9,\$10::jsonb) ON CONFLICT DO NOTHING" "SELECT \$1,\$2,\$3,\$4,\$5,\$6,\$7,\$8,\$9,\$10::jsonb WHERE false ON CONFLICT DO NOTHING"
+  mut "the conversation is not locked before the receipt" $W "		if _, err := h.ctl.Lock(ctx, q, in.p.TenantID, in.conv); err != nil {
+			return h.fromControl(err, nil)
+		}" "		_ = h"
+  mut "the installation is not re-checked in the transaction" $W "		if err := RecheckPrincipal(ctx, q, in.p); err != nil {
+			return err
+		}" "		_ = RecheckPrincipal"
+  mut "an invisible conversation is not a 404"         $W "			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotVisible
+			}
+			return err
+		}
+		in.queueID = queue" "			if errors.Is(err, pgx.ErrNoRows) {
+				queue = nil
+			} else {
+				return err
+			}
+		}
+		in.queueID = queue"
+  mut "a send does not need the hold"                   $W "	if !cur.HeldBy(conversationcontrol.KindCRMApplication, in.p.InstallationID) {
+		if cur.Free() {" "	if false {
+		if cur.Free() {"
+  mut "a send does not check the version"               $W "	if in.ifMatch == nil || *in.ifMatch != cur.Version {
+		return refuse(http.StatusPreconditionFailed, \"stale_control_version\", \"The conversation changed\", \"The control version is not the current one; read the conversation again.\", &cur)
+	}
+	return nil" "	return nil"
+  mut "a send to a closed conversation is accepted"     $W "	if cur.Status != \"open\" {
+		return refuse(http.StatusConflict, \"conversation_closed\"" "	if false {
+		return refuse(http.StatusConflict, \"conversation_closed\""
+  mut "the outside-hours rule is ignored"               $W "&& in.queueID != nil && !in.p.AllowOutsideHours && h.d.QueueOpen != nil {" "&& false {"
+  mut "a transfer may use a queue outside the allow-list" $W "		if len(in.al.QueueIDs) > 0 && !containsUUID(in.al.QueueIDs, pl.QueueID) {" "		if false {"
+  mut "the message carries no origin (the audit names a person)" $W "VALUES (\$1, NULL, 'external_app.command'" "VALUES (\$1, \$1, 'external_app.command'"
+  mut "the sender does not check the 24 h window"       $ES "		if _, open := SessionWindow(sc.Provider, sc.LastInboundAt, now); !open {" "		if false {"
+  mut "the sender sends to a closed conversation"       $ES "	if sc.Closed {
+		return nil, ErrConversationClosed
+	}" ""
+  mut "the sender needs no channel"                     $ES "	if sc.ConnectionID == nil || !sc.ConnectionReady || sc.ToE164 == \"\" {
+		return nil, ErrChannelUnavailable
+	}" ""
+  mut "an unapproved template is sent"                  $ES "	if tpl == nil || tpl.Status != \"APPROVED\" || !tpl.Sendable {" "	if tpl == nil {"
+  mut "the insert does not prove the hold"        $EO "c.control_kind = 'crm_application' AND c.control_holder_id = \$7 AND c.control_version = \$10" "true"
+  mut "the insert ignores the control version"          $EO "AND c.control_holder_id = \$7 AND c.control_version = \$10" "AND c.control_holder_id = \$7 AND \$10 >= 0"
+  mut "the insert ignores a closed conversation"        $EO "		    AND c.status = 'open'
+" ""
+  mut "the transfer does not need the holder"           $CS "	if !cur.HeldBy(KindCRMApplication, installationID) {
+		return cur, ErrNotHolder
+	}
+	if ifMatch != cur.Version {
+		return cur, ErrStaleVersion
+	}
+	if cur.Status != \"open\" {
+		return cur, ErrClosed
+	}
+	var queueMode string" "	var queueMode string"
+  mut "a transfer to an ineligible person works"        $CS "		ok, err := eligible(ctx, q, tenantID, to.QueueID, *to.UserID)
+		if err != nil {
+			return cur, err
+		}
+		if !ok {
+			return cur, ErrInvalidTarget
+		}" "		_ = eligible"
+  mut "a transfer to a queue of another company works"  $CS "	if err := q.QueryRow(ctx, \`SELECT mode FROM queues WHERE tenant_id = \$1 AND id = \$2\`, tenantID, to.QueueID).Scan(&queueMode); err != nil {" "	if err := q.QueryRow(ctx, \`SELECT mode FROM queues WHERE id = \$2 AND \$1 IS NOT NULL\`, tenantID, to.QueueID).Scan(&queueMode); err != nil {"
+  mut "the transfer to a queue keeps the hold"          $CS "			   SET queue_id = \$3, assigned_to_user_id = NULL, assigned_at = NULL,
+			       control_kind = NULL, control_holder_id = NULL, control_since = NULL, control_origin = NULL, control_version = \$4," "			   SET queue_id = \$3, assigned_to_user_id = NULL, assigned_at = NULL, control_version = \$4,"
+  mut "finalize is attributed to a person"             $AT "ClosedBy: nil, ClosedByInstallation: &inst,
+		Source: domain.SourceExternalApp" "ClosedBy: nil, ClosedByInstallation: func() *uuid.UUID { _ = inst; return nil }(),
+		Source: domain.SourceSystem"
+  mut "finalize closes no local tickets"                $AT "	closed, kept, err := s.repo.CloseLocalTickets(ctx, conversationID)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	if err := s.repo.MarkClosed(ctx, conversationID); err != nil {
+		return FinalizeResult{}, err
+	}
+	inst := installationID" "	closed, kept := 0, 0
+	if err := s.repo.MarkClosed(ctx, conversationID); err != nil {
+		return FinalizeResult{}, err
+	}
+	inst := installationID"
+  sqlmut "a receipt can be changed"                     000139_external_commands.up.sql "GRANT SELECT, INSERT ON external_command_receipts TO omnira_app;" "GRANT SELECT, INSERT, UPDATE, DELETE ON external_command_receipts TO omnira_app;"
+  sqlmut "a receipt is scoped to the tenant only"       000139_external_commands.up.sql "PRIMARY KEY (tenant_id, installation_id, operation, idempotency_key)," "PRIMARY KEY (tenant_id, operation, idempotency_key),"
   ;;
 *) echo "unknown phase $phase"; exit 2;;
 esac

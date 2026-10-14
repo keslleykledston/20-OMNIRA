@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
 )
 
 // Gate 20 of ADR-0046: the external contract and the routes cannot drift. Forward: every operation documented in omnira-external-v1.yaml is a
@@ -50,6 +49,7 @@ func externalSpecOps(t *testing.T) []op {
 func TestEveryDocumentedExternalOperationIsARegisteredRoute(t *testing.T) {
 	s := New("127.0.0.1:0")
 	s.RegisterExternalHandlers(nil, true, ExternalOptions{Sealer: nilSealer{}})
+	s.RegisterExternalWriteHandlers(nil, true, nil)
 	for _, o := range externalSpecOps(t) {
 		concrete := paramRE.ReplaceAllString(o.path, "3f9c1b2e-0000-4000-8000-000000000001")
 		_, pattern := s.mux.Handler(httptest.NewRequest(o.method, concrete, nil))
@@ -76,6 +76,17 @@ func TestEveryRegisteredExternalRouteIsDocumented(t *testing.T) {
 	if len(found) == 0 {
 		t.Fatal("no /api/v1/external route found in server.go — the extraction is broken")
 	}
+	kept := found[:0]
+	for _, f := range found { // the literal prefix of a path built at registration time is not a route
+		if !strings.HasSuffix(f, "/") {
+			kept = append(kept, f)
+		}
+	}
+	found = kept
+	// the write commands are mounted through post("<command>", ...) in RegisterExternalWriteHandlers
+	for _, m := range regexp.MustCompile(`post\("([a-z]+)", externaldomain\.`).FindAllStringSubmatch(string(src), -1) {
+		found = append(found, "POST /api/v1/external/conversations/{}/"+m[1])
+	}
 	sort.Strings(found)
 	for _, f := range found {
 		if !documented[f] {
@@ -88,6 +99,7 @@ func TestEveryRegisteredExternalRouteIsDocumented(t *testing.T) {
 func TestExternalRoutesDoNotExistWhenHeadlessIsOff(t *testing.T) {
 	s := New("127.0.0.1:0")
 	s.RegisterExternalHandlers(nil, false, ExternalOptions{Sealer: nilSealer{}})
+	s.RegisterExternalWriteHandlers(nil, false, nil)
 	for _, o := range externalSpecOps(t) {
 		if _, pattern := s.mux.Handler(httptest.NewRequest(o.method, strings.ReplaceAll(o.path, "{", "x"), nil)); pattern != "" {
 			t.Errorf("%s %s is routed with OMNIRA_HEADLESS_ENABLED off", o.method, o.path)

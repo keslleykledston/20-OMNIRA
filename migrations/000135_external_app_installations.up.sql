@@ -156,12 +156,21 @@ $$;
 -- with clock_timestamp() (now() is the START of the transaction), at the moment of the recheck; a write that already passed it can commit up to its own
 -- remaining duration after the expiry (bounded by the statement/transaction timeouts). Expiry is a retention bound; revocation is the immediate tool.
 -- The functions run with the privileges of their owner, the migrating role (a superuser, which is why they can read the tables the policies hide).
+-- The gate of an installation. Row locks alone are not fair: writers that overlap each other can keep a FOR SHARE lock on the installation row for ever and
+-- starve the one FOR UPDATE that wants to revoke it. A heavyweight advisory lock IS fair (a request behind a waiting exclusive one queues): every external write
+-- takes the gate SHARED first, everything that changes the installation takes it EXCLUSIVE first, and only then the row locks follow (one order for all).
+CREATE FUNCTION external_installation_gate_key(p_installation UUID) RETURNS BIGINT
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
+AS $$ SELECT hashtextextended('omnira.external.installation:' || p_installation::text, 0) $$;
+GRANT EXECUTE ON FUNCTION external_installation_gate_key(UUID) TO omnira_app;
+
 CREATE FUNCTION external_recheck(p_tenant UUID, p_installation UUID, p_credential UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
 BEGIN
+  PERFORM pg_advisory_xact_lock_shared(external_installation_gate_key(p_installation));
   PERFORM 1
      FROM external_app_installations i
      JOIN external_app_credentials c ON c.tenant_id = i.tenant_id AND c.installation_id = i.id

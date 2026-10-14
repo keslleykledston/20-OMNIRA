@@ -205,10 +205,10 @@ func (r *PostgresRepository) MarkClosed(ctx context.Context, conversationID uuid
 func (r *PostgresRepository) InsertClosure(ctx context.Context, c *domain.Closure) error {
 	_, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO conversation_closures (id, tenant_id, conversation_id, contact_id, closed_by_user_id, source, reason, note, summary,
-		  summary_truth, local_tickets_closed, tickets_kept, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		  summary_truth, local_tickets_closed, tickets_kept, created_at, closed_by_installation_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		c.ID, c.TenantID, c.ConversationID, c.ContactID, c.ClosedBy, c.Source, c.Reason, c.Note, c.Summary, c.SummaryTruth,
-		c.LocalTicketsClosed, c.TicketsKept, c.CreatedAt)
+		c.LocalTicketsClosed, c.TicketsKept, c.CreatedAt, c.ClosedByInstallation)
 	return err
 }
 

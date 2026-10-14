@@ -37,6 +37,7 @@ tags:
   - { name: Conversations, description: "Read the conversations and their messages" }
   - { name: Contacts, description: "Read a contact" }
   - { name: Media, description: "Download a message's file" }
+  - { name: Commands, description: "Coordinated writes: claim, release, transfer, send, finalize" }
   - { name: Journal, description: "The durable journal of facts: checkpoint and replay" }
 paths:
   /external/me:
@@ -109,6 +110,137 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: sendExternalMessage
+      tags: [Commands]
+      summary: Queue a message for the customer
+      description: |
+        Needs the scope `message.send` and `If-Match`; this installation must HOLD the conversation at that version. **`202 Accepted` means QUEUED**: the message was
+        handed to the delivery job. It does not mean WhatsApp delivered it; follow `message.status_changed.v1` events or `GET .../messages`.
+        The same rules as a Workspace reply apply: inside the provider's 24-hour customer-service window free `text` is allowed; outside it only an approved
+        `template` is (`422 window_closed`). Attachments are not part of this version (NOT WIRED).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/claim:
+    post:
+      operationId: claimExternalConversation
+      tags: [Commands]
+      summary: Take a free conversation
+      description: |
+        Needs the scope `conversation.claim`. Gives a FREE, open conversation to this installation. Repeating the claim of a conversation it already holds changes
+        nothing (`changed: false`, same version). A conversation held by anyone else is `409 held_by_other`, never taken. Outside the queue's hours it is
+        `409 outside_hours` unless the administrator allowed this installation to work outside hours.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchOptional' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/release:
+    post:
+      operationId: releaseExternalConversation
+      tags: [Commands]
+      summary: Give a held conversation back to the company
+      description: Needs the scope `conversation.claim` and `If-Match`. The conversation becomes free and the router looks at it as it does for a new one.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/transfer:
+    post:
+      operationId: transferExternalConversation
+      tags: [Commands]
+      summary: Hand a held conversation to a queue (or to one eligible person of it)
+      description: |
+        Needs the scope `conversation.transfer` and `If-Match`. The installation stops holding the conversation in the same step. With only `queue_id` the router
+        decides, exactly as for a new conversation; with `user_id` that person must be eligible in the queue now (member, active, on shift, with capacity), else
+        `422 invalid_target` and nothing changes. The queue must be one this installation may use.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/finalize:
+    post:
+      operationId: finalizeExternalConversation
+      tags: [Commands]
+      summary: End the attendance
+      description: |
+        Needs the scope `conversation.finalize` and `If-Match`. The same finalization the Workspace and the Hub use: the conversation is closed, local tickets are
+        closed (tickets linked to the ERP are left alone) and the closure is recorded as made by this installation, never by a person. Closing releases the hold.
+        No ERP ticket is changed.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FinalizeRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
   /external/contacts/{id}:
     get:
       operationId: getExternalContact
@@ -184,16 +316,64 @@ components:
       scheme: bearer
       description: "omn_ext_<key_id>.<secret>; only a digest of the secret is stored by OMNIRA"
   parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._:-]{8,128}$' }, description: "Scopes the command to (installation, operation, key). The same key with the same payload returns the same answer (header Idempotent-Replay: true) and the same message_id; with a different payload it is 422 idempotency_key_reused" }
+    IfMatchRequired: { name: If-Match, in: header, required: true, schema: { type: string, example: '"control-7"' }, description: "The control version you read (the ETag of the conversation). 412 when it is not the current one, 428 when missing" }
+    IfMatchOptional: { name: If-Match, in: header, required: false, schema: { type: string, example: '"control-7"' }, description: "Optional on claim: a claim of a free conversation, or a repeated claim of one you already hold, does not need it. When sent it must be the current version (412 otherwise)" }
     Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 }, description: "Page size. The default is 50 (100 for /external/events)" }
     Cursor: { name: cursor, in: query, schema: { type: string }, description: "Opaque; the next_cursor of the previous page" }
   responses:
+    Command:
+      description: "The outcome of a command. The ETag is the control version after it (\"control-N\"); a replay carries Idempotent-Replay: true"
+      headers:
+        ETag: { schema: { type: string } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CommandResult' }
     Problem:
       description: "RFC 9457 problem document"
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
   schemas:
+    TransferRequest:
+      type: object
+      additionalProperties: false
+      required: [queue_id]
+      properties:
+        queue_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid, description: "Optional: one person eligible in that queue now" }
+    MessageRequest:
+      type: object
+      additionalProperties: false
+      description: "Exactly one of text and template"
+      properties:
+        text: { type: string, minLength: 1, maxLength: 4096 }
+        template:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: { type: string, format: uuid, description: "An approved template of the conversation's line" }
+            params: { type: array, items: { type: string } }
+    FinalizeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string, enum: [resolved, no_response, duplicate, spam, transferred, other], default: resolved }
+        note: { type: string, maxLength: 1000 }
+    CommandResult:
+      type: object
+      required: [conversation_id, status, control]
+      properties:
+        conversation_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, closed] }
+        control: { $ref: '#/components/schemas/Control' }
+        changed: { type: boolean, description: "claim, release, transfer: false when nothing had to change" }
+        message_id: { type: string, format: uuid, description: "message: the same id on every replay of the same Idempotency-Key" }
+        delivery: { type: string, enum: [queued], description: "message: queued is all that is promised" }
+        closure_id: { type: string, format: uuid }
+        reason: { type: string }
     Checkpoint:
       type: object
       required: [seq_head, min_seq, retention_days, at]

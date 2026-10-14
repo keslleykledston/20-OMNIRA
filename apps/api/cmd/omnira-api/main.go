@@ -23,6 +23,7 @@ import (
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
+	attendancedomain "github.com/omnira/omnira/internal/attendance/domain"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
@@ -218,7 +219,7 @@ func main() {
 		log.Printf("external API: the webhook administration is off, the credentials key is unusable: %v", serr)
 	}
 	srv.RegisterExternalHandlers(dbPool, cfg.HeadlessEnabled, httpserver.ExternalOptions{
-		Features: externaladapters.Features{Read: true, Events: true}, Media: externalMedia, Sealer: externalSealer, RetentionDays: cfg.HeadlessEventRetentionDays})
+		Features: externaladapters.Features{Read: true, Events: true, Write: cfg.HeadlessWriteEnabled}, Media: externalMedia, Sealer: externalSealer, RetentionDays: cfg.HeadlessEventRetentionDays})
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions).
@@ -367,6 +368,17 @@ func main() {
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
 	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
+	srv.RegisterExternalWriteHandlers(dbPool, cfg.HeadlessEnabled && cfg.HeadlessWriteEnabled, func(ctx context.Context, installation, conversation uuid.UUID, reason, note string) (externaladapters.FinalizeOutcome, error) {
+		res, err := attendanceService.FinalizeByExternalApp(ctx, installation, conversation, attendancedomain.CloseReason(reason), note)
+		if err != nil {
+			return externaladapters.FinalizeOutcome{}, err
+		}
+		out := externaladapters.FinalizeOutcome{Reason: reason}
+		if res.Closure != nil {
+			out.ClosureID, out.Reason = res.Closure.ID, string(res.Closure.Reason)
+		}
+		return out, nil
+	})
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
 		controlPlane := flowsapplication.NewControlPlane(flowRepo, flowRepo, flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))

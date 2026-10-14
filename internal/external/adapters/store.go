@@ -76,6 +76,10 @@ func isPgCode(err error, code string) bool {
 }
 
 func (Store) lock(ctx context.Context, q platformdb.Querier, tenantID, id uuid.UUID) (domain.Installation, error) {
+	// the gate first (exclusive, fair: waits for the writes in flight, makes later ones queue behind it), then the row
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(external_installation_gate_key($1))`, id); err != nil {
+		return domain.Installation{}, err
+	}
 	in, err := scanInstallation(q.QueryRow(ctx, `SELECT `+installationColumns+` FROM external_app_installations i WHERE i.tenant_id = $1 AND i.id = $2 FOR UPDATE OF i`, tenantID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return in, domain.ErrNotFound
