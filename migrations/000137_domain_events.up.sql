@@ -229,7 +229,10 @@ DECLARE
 BEGIN
   IF p_keep < interval '1 hour' THEN RAISE EXCEPTION 'retention shorter than one hour refused'; END IF;
   FOR t IN SELECT DISTINCT tenant_id FROM domain_events WHERE seq IS NOT NULL AND occurred_at < now() - p_keep LOOP
-    SELECT max(seq) INTO cut FROM domain_events WHERE tenant_id = t.tenant_id AND seq IS NOT NULL AND occurred_at < now() - p_keep;
+    -- numbers follow the transaction id, not the clock: a long transaction can hold a LOW number with a recent fact while a later one holds a higher number with an
+    -- old fact. Only the prefix made entirely of expired facts may go: stop right before the first fact that is still inside the retention.
+    SELECT COALESCE(min(seq) FILTER (WHERE occurred_at >= now() - p_keep) - 1, max(seq)) INTO cut FROM domain_events WHERE tenant_id = t.tenant_id AND seq IS NOT NULL;
+    CONTINUE WHEN cut IS NULL;
     UPDATE domain_event_cursors SET min_seq = cut + 1, updated_at = now() WHERE tenant_id = t.tenant_id AND min_seq < cut + 1;
     DELETE FROM domain_events WHERE tenant_id = t.tenant_id AND seq IS NOT NULL AND seq <= cut;
     GET DIAGNOSTICS n = ROW_COUNT;

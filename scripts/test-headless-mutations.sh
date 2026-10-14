@@ -366,6 +366,21 @@ h4)
 	}
 	var count int" "	var count int"
   mut "more than five subscriptions are allowed"         $WA "	if count >= maxSubscriptionsPerInstallation {" "	if false {"
+  sqlmut "retention removes a recent fact numbered below an old one" $J "SELECT COALESCE(min(seq) FILTER (WHERE occurred_at >= now() - p_keep) - 1, max(seq)) INTO cut FROM domain_events WHERE tenant_id = t.tenant_id AND seq IS NOT NULL;" "SELECT max(seq) INTO cut FROM domain_events WHERE tenant_id = t.tenant_id AND seq IS NOT NULL AND occurred_at < now() - p_keep;"
+  sqlmut "the delivery of a purged event waits for ever" $WH "          OR NOT EXISTS (SELECT 1 FROM domain_events e WHERE e.id = d.event_id AND e.tenant_id = d.tenant_id));" "          );"
+  sqlmut "a paused subscription is claimed" $WH "       AND EXISTS (SELECT 1 FROM webhook_subscriptions s WHERE s.id = d.subscription_id AND s.tenant_id = d.tenant_id AND s.status = 'active')
+     ORDER BY d.next_attempt_at" "     ORDER BY d.next_attempt_at"
+  sqlmut "a late completion overwrites the current attempt" $WH "AND d.status = 'pending' AND d.attempts = p_attempt;
+  GET DIAGNOSTICS n = ROW_COUNT;" "AND d.status = 'pending';
+  GET DIAGNOSTICS n = ROW_COUNT;"
+  sqlmut "the completion takes the delivery before the subscription" $WH "  PERFORM 1 FROM webhook_subscriptions s WHERE s.id = sub AND s.tenant_id = p_tenant FOR UPDATE;
+" ""
+  sqlmut "the limit of five is only a count" $WH "  PERFORM pg_advisory_xact_lock(hashtextextended('omnira.webhook_subscriptions:' || NEW.installation_id::text, 0));
+" ""
+  mut "the worker sends to a paused subscription" $WK "		if !*active {
+			return errPaused
+		}" "		_ = active"
+  mut "one slow receiver holds all the others" $WK "	sem := make(chan struct{}, w.Parallel)" "	sem := make(chan struct{}, 1)"
   ;;
 *) echo "unknown phase $phase"; exit 2;;
 esac

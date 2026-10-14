@@ -42,12 +42,19 @@ type Worker struct {
 	Lease   time.Duration // how long a claimed delivery stays hidden from the other workers
 	Window  time.Duration // how long a fact is retried
 	Batch   int
-	mu      sync.Mutex
+	// Parallel is how many subscriptions are served at once (one slow receiver must not hold the others back).
+	Parallel int
+	// AfterClaim runs once per round, between the claim and the first send. Tests use it to change the world in that window (pause, revoke).
+	AfterClaim func()
+	mu         sync.Mutex
 }
+
+// errPaused: the subscription was paused after the delivery was claimed; nothing is sent and the lease hands the delivery back.
+var errPaused = errors.New("delivery: the subscription is paused")
 
 func NewWorker(pool *pgxpool.Pool, secrets SecretOpener, client *http.Client) *Worker {
 	return &Worker{pool: pool, secrets: secrets, client: client, now: time.Now,
-		jitter: func() float64 { return (rand.Float64()*2 - 1) * 0.2 }, Lease: 2 * time.Minute, Window: RetryWindow, Batch: 50}
+		jitter: func() float64 { return (rand.Float64()*2 - 1) * 0.2 }, Lease: 2 * time.Minute, Window: RetryWindow, Batch: 50, Parallel: 8}
 }
 
 // WithClock is for tests.
@@ -105,9 +112,33 @@ func (w *Worker) Step(ctx context.Context) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	for _, c := range batch {
-		w.deliver(ctx, c)
+	if w.AfterClaim != nil && len(batch) > 0 {
+		w.AfterClaim()
 	}
+	// Subscriptions are independent: a receiver that is slow or down delays only its own deliveries. Inside one subscription the order of the claim (by sequence) is kept.
+	bySub := map[uuid.UUID][]claimed{}
+	var order []uuid.UUID
+	for _, c := range batch {
+		if _, seen := bySub[c.subscriptionID]; !seen {
+			order = append(order, c.subscriptionID)
+		}
+		bySub[c.subscriptionID] = append(bySub[c.subscriptionID], c)
+	}
+	sem := make(chan struct{}, w.Parallel)
+	var wg sync.WaitGroup
+	for _, id := range order {
+		group := bySub[id]
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			for _, c := range group {
+				w.deliver(ctx, c)
+			}
+		}()
+	}
+	wg.Wait()
 	return len(batch), nil
 }
 
@@ -136,14 +167,17 @@ func (w *Worker) complete(ctx context.Context, c claimed, ok bool, status int, c
 	if status != 0 {
 		st = &status
 	}
-	if _, err := w.pool.Exec(ctx, `SELECT webhook_complete($1,$2,$3,$4,$5,$6,$7)`, c.deliveryID, c.tenantID, ok, st, class, retryAt, giveUp); err != nil {
+	if _, err := w.pool.Exec(ctx, `SELECT webhook_complete($1,$2,$3,$4,$5,$6,$7,$8)`, c.deliveryID, c.tenantID, c.attempts, ok, st, class, retryAt, giveUp); err != nil {
 		deliveryMetric.Inc("internal")
 	}
 }
 
 func (w *Worker) deliver(ctx context.Context, c claimed) {
-	// 1. the fact must still be visible to the installation NOW (allow-lists, a conversation that turned internal or spam)
+	// 1. the subscription must still be active and the fact still visible to the installation NOW (a pause or an allow-list change after the claim stops the call)
 	visible, err := w.stillVisible(ctx, c)
+	if errors.Is(err, errPaused) {
+		return
+	}
 	if err != nil {
 		deliveryMetric.Inc("internal") // the lease will hand it back
 		return
@@ -258,6 +292,17 @@ func (w *Worker) stillVisible(ctx context.Context, c claimed) (bool, error) {
 				return nil
 			}
 			return err
+		}
+		var active *bool
+		if err := q.QueryRow(ctx, `SELECT webhook_subscription_active($1, $2)`, c.tenantID, c.subscriptionID).Scan(&active); err != nil {
+			return err
+		}
+		if active == nil { // deleted meanwhile
+			visible = false
+			return nil
+		}
+		if !*active {
+			return errPaused
 		}
 		v := adapters.Visibility{TenantID: c.tenantID, QueueIDs: al.QueueIDs, ChannelIDs: al.ChannelIDs}
 		visible, err = adapters.EventVisible(ctx, q, v, c.event.Aggregate.Type, c.event.Aggregate.ID, c.event.ConversationID)

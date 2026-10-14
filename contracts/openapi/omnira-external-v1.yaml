@@ -6,9 +6,9 @@ info:
   description: |
     The API an external application (a CRM) uses to see and attend the same conversations as the OMNIRA Workspace. ADR-0046.
 
-    **Status: LAB — IMPLEMENTED in phases.** `GET /external/me` and the read API (conversations, messages, contacts, media) are served; the event journal
-    and the write API arrive in the next phases and are added to this file when they are wired (`/external/me` reports `features` so a client can tell
-    what this build serves).
+    **Status: LAB — IMPLEMENTED in phases.** `GET /external/me`, the read API (conversations, messages, contacts, media) and the event journal
+    (`/external/sync/checkpoint`, `/external/events`; signed webhooks are configured by the company's administrator) are served; the write API is added to this
+    file when it is wired (`/external/me` reports `features` so a client can tell what this build serves).
 
     **What an installation sees.** Only conversations of its own company that are not conversations with staff, whose contact is not classified internal or
     spam, and, when the administrator limited the installation, only those of its queues and lines. Anything else is the same `404` as an id that does
@@ -169,7 +169,7 @@ paths:
         from the snapshot. `next_cursor` advances even when every fact of the window was filtered out.
       parameters:
         - { name: after, in: query, required: true, schema: { type: integer, format: int64, minimum: 0 } }
-        - { $ref: '#/components/parameters/Limit' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
       responses:
         '200': { description: A page of facts, content: { application/json: { schema: { $ref: '#/components/schemas/EventsPage' } } } }
         '400': { $ref: '#/components/responses/Problem' }
@@ -185,7 +185,7 @@ components:
       description: "omn_ext_<key_id>.<secret>; only a digest of the secret is stored by OMNIRA"
   parameters:
     Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 }, description: "Page size. The default is 50 (100 for /external/events)" }
     Cursor: { name: cursor, in: query, schema: { type: string }, description: "Opaque; the next_cursor of the previous page" }
   responses:
     Problem:

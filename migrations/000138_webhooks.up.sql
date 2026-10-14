@@ -45,7 +45,7 @@ CREATE TABLE webhook_deliveries (
   last_attempt_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   last_http_status INTEGER,
-  last_error_class TEXT,                                                     -- a closed vocabulary: timeout | connect | tls | blocked_address | http_status | redirect | not_visible | revoked
+  last_error_class TEXT,                                                     -- a closed vocabulary: timeout | connect | tls | blocked_address | http_status | redirect | not_visible | revoked | expired
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (subscription_id, event_seq),
   FOREIGN KEY (tenant_id, subscription_id) REFERENCES webhook_subscriptions (tenant_id, id) ON DELETE CASCADE
@@ -63,6 +63,18 @@ BEGIN
     EXECUTE format($p$CREATE POLICY %I ON %I FOR SELECT USING (actor_has_permission(tenant_id, current_user_id(), 'integration.read'))$p$, t || '_read', t);
   END LOOP;
 END $$;
+-- At most five subscriptions per installation, decided under a lock so that concurrent creations cannot all pass the count.
+CREATE FUNCTION webhook_subscriptions_limit() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('omnira.webhook_subscriptions:' || NEW.installation_id::text, 0));
+  IF (SELECT count(*) FROM webhook_subscriptions WHERE tenant_id = NEW.tenant_id AND installation_id = NEW.installation_id) >= 5 THEN
+    RAISE EXCEPTION 'at most 5 webhook subscriptions per installation' USING ERRCODE = 'OM006';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER webhook_subscriptions_limit_trg BEFORE INSERT ON webhook_subscriptions FOR EACH ROW EXECUTE FUNCTION webhook_subscriptions_limit();
 -- writing the subscription is the administrator's (integration.manage); writing a delivery is the worker's, through the functions below
 CREATE POLICY webhook_subscriptions_insert ON webhook_subscriptions FOR INSERT WITH CHECK (actor_has_permission(tenant_id, current_user_id(), 'integration.manage'));
 CREATE POLICY webhook_subscriptions_update ON webhook_subscriptions FOR UPDATE USING (actor_has_permission(tenant_id, current_user_id(), 'integration.manage'))
@@ -128,16 +140,21 @@ AS $$
 BEGIN
   IF p_limit < 1 OR p_limit > 500 THEN RAISE EXCEPTION 'batch size out of range'; END IF;
   -- deliveries that can no longer be made
-  UPDATE webhook_deliveries d SET status = 'cancelled', last_error_class = 'revoked'
+  -- (a paused subscription keeps its pending deliveries: they go out after it is resumed. A purged event can never be sent: the delivery ends instead of waiting for ever.)
+  UPDATE webhook_deliveries d SET status = 'cancelled',
+         last_error_class = CASE WHEN EXISTS (SELECT 1 FROM domain_events e WHERE e.id = d.event_id AND e.tenant_id = d.tenant_id) THEN 'revoked' ELSE 'expired' END
    WHERE d.status = 'pending' AND d.next_attempt_at <= now()
-     AND NOT EXISTS (SELECT 1 FROM webhook_subscriptions s
+     AND (NOT EXISTS (SELECT 1 FROM webhook_subscriptions s
                        JOIN external_app_installations i ON i.tenant_id = s.tenant_id AND i.id = s.installation_id AND i.status = 'active'
                        JOIN tenants t ON t.id = s.tenant_id AND t.status = 'active'
-                      WHERE s.id = d.subscription_id AND s.tenant_id = d.tenant_id AND s.status = 'active');
+                      WHERE s.id = d.subscription_id AND s.tenant_id = d.tenant_id)
+          OR NOT EXISTS (SELECT 1 FROM domain_events e WHERE e.id = d.event_id AND e.tenant_id = d.tenant_id));
   RETURN QUERY
   WITH due AS (
-    SELECT d.id FROM webhook_deliveries d WHERE d.status = 'pending' AND d.next_attempt_at <= now()
-     ORDER BY d.next_attempt_at, d.event_seq LIMIT p_limit FOR UPDATE SKIP LOCKED),
+    SELECT d.id FROM webhook_deliveries d
+     WHERE d.status = 'pending' AND d.next_attempt_at <= now()
+       AND EXISTS (SELECT 1 FROM webhook_subscriptions s WHERE s.id = d.subscription_id AND s.tenant_id = d.tenant_id AND s.status = 'active')
+     ORDER BY d.next_attempt_at, d.event_seq LIMIT p_limit FOR UPDATE OF d SKIP LOCKED),
   claimed AS (
     UPDATE webhook_deliveries d SET next_attempt_at = now() + p_lease, attempts = d.attempts + 1, last_attempt_at = now(),
                                    first_attempt_at = COALESCE(d.first_attempt_at, now())
@@ -154,28 +171,42 @@ BEGIN
 END $$;
 
 -- (3) Record the outcome of one attempt. ok -> delivered; otherwise retry at p_retry_at, or dead when the retry window is over (p_give_up).
-CREATE FUNCTION webhook_complete(p_delivery UUID, p_tenant UUID, p_ok BOOLEAN, p_http_status INTEGER, p_error_class TEXT, p_retry_at TIMESTAMPTZ, p_give_up BOOLEAN)
+CREATE FUNCTION webhook_complete(p_delivery UUID, p_tenant UUID, p_attempt INTEGER, p_ok BOOLEAN, p_http_status INTEGER, p_error_class TEXT, p_retry_at TIMESTAMPTZ, p_give_up BOOLEAN)
 RETURNS VOID
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
-DECLARE sub UUID;
+DECLARE sub UUID; n INTEGER;
 BEGIN
+  -- fencing: only the attempt that was claimed may record its outcome (a worker whose lease ran out and whose delivery was claimed again by another is ignored)
+  SELECT d.subscription_id INTO sub FROM webhook_deliveries d WHERE d.id = p_delivery AND d.tenant_id = p_tenant AND d.status = 'pending';
+  IF sub IS NULL THEN RETURN; END IF;
+  -- lock order: subscription first, then the delivery (the order the fan-out takes)
+  PERFORM 1 FROM webhook_subscriptions s WHERE s.id = sub AND s.tenant_id = p_tenant FOR UPDATE;
   UPDATE webhook_deliveries d SET
       status = CASE WHEN p_ok THEN 'delivered' WHEN p_error_class = 'not_visible' THEN 'cancelled' WHEN p_give_up THEN 'dead' ELSE 'pending' END,
       delivered_at = CASE WHEN p_ok THEN now() END,
       next_attempt_at = CASE WHEN p_ok OR p_give_up THEN d.next_attempt_at ELSE COALESCE(p_retry_at, now() + interval '1 minute') END,
       last_http_status = p_http_status,
       last_error_class = CASE WHEN p_ok THEN NULL ELSE left(p_error_class, 40) END
-   WHERE d.id = p_delivery AND d.tenant_id = p_tenant AND d.status = 'pending'
-   RETURNING d.subscription_id INTO sub;
-  IF sub IS NOT NULL THEN
+   WHERE d.id = p_delivery AND d.tenant_id = p_tenant AND d.status = 'pending' AND d.attempts = p_attempt;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n = 1 THEN
     UPDATE webhook_subscriptions SET last_delivery_at = now(), last_http_status = p_http_status,
            last_error_class = CASE WHEN p_ok THEN NULL ELSE left(p_error_class, 40) END,
            consecutive_failures = CASE WHEN p_ok THEN 0 ELSE consecutive_failures + 1 END
      WHERE id = sub AND tenant_id = p_tenant;
   END IF;
 END $$;
+
+-- (3b) Just before a call: is the subscription still active? (a pause lands between the claim and the send; NULL when it was deleted)
+CREATE FUNCTION webhook_subscription_active(p_tenant UUID, p_subscription UUID)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$ SELECT s.status = 'active' FROM webhook_subscriptions s WHERE s.id = p_subscription AND s.tenant_id = p_tenant $$;
+REVOKE ALL ON FUNCTION webhook_subscription_active(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION webhook_subscription_active(UUID, UUID) TO omnira_app;
 
 -- (4) How far behind the delivery is (alerts): pending deliveries and the age of the oldest one that is due.
 CREATE FUNCTION webhook_backlog(OUT pending BIGINT, OUT dead BIGINT, OUT oldest_due_seconds DOUBLE PRECISION)
@@ -184,8 +215,8 @@ SET search_path = pg_catalog, public, pg_temp
 AS $$ SELECT count(*) FILTER (WHERE status = 'pending'), count(*) FILTER (WHERE status = 'dead'),
               COALESCE(EXTRACT(EPOCH FROM now() - min(next_attempt_at) FILTER (WHERE status = 'pending' AND next_attempt_at <= now())), 0) FROM webhook_deliveries $$;
 
-REVOKE ALL ON FUNCTION webhook_fanout(INTEGER), webhook_claim(INTEGER, INTERVAL), webhook_complete(UUID, UUID, BOOLEAN, INTEGER, TEXT, TIMESTAMPTZ, BOOLEAN), webhook_backlog() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION webhook_fanout(INTEGER), webhook_claim(INTEGER, INTERVAL), webhook_complete(UUID, UUID, BOOLEAN, INTEGER, TEXT, TIMESTAMPTZ, BOOLEAN), webhook_backlog() TO omnira_app;
+REVOKE ALL ON FUNCTION webhook_fanout(INTEGER), webhook_claim(INTEGER, INTERVAL), webhook_complete(UUID, UUID, INTEGER, BOOLEAN, INTEGER, TEXT, TIMESTAMPTZ, BOOLEAN), webhook_backlog() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION webhook_fanout(INTEGER), webhook_claim(INTEGER, INTERVAL), webhook_complete(UUID, UUID, INTEGER, BOOLEAN, INTEGER, TEXT, TIMESTAMPTZ, BOOLEAN), webhook_backlog() TO omnira_app;
 
 -- (5) Rotation of the signing secret: the current one becomes the previous one (valid for p_keep), the new one becomes current. The ciphertext of the old secret is never
 -- readable by the caller, so this is a function; it checks the permission itself because it runs with the owner's rights.

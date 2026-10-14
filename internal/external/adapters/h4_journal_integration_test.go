@@ -639,15 +639,17 @@ func TestEventsAPICheckpointReplayVisibilityAndResync(t *testing.T) {
 		t.Errorf("at the head: %d %+v", code, p)
 	}
 	// retention: old facts leave, min_seq says exactly what is left, an older cursor must resynchronize
-	e.exec(`UPDATE domain_events SET occurred_at = now() - interval '40 days' WHERE tenant_id=$1 AND seq = 3`, a) // only the third is old: what leaves is still the whole prefix 1..3, never a hole
+	// facts 1..3 are old; 5 is old too but 4 is recent (numbers follow the transaction id, not the clock): only the prefix 1..3 may go, never 5 and never a hole
+	e.exec(`UPDATE domain_events SET occurred_at = now() - interval '40 days' WHERE tenant_id=$1 AND seq IN (1,2,3,5)`, a)
 	var purged int64
 	if err := e.app.QueryRow(e.ctx, `SELECT domain_events_purge(interval '30 days')`).Scan(&purged); err != nil || purged != 3 {
 		t.Fatalf("purge removed %d (%v), want 3", purged, err)
 	}
-	var holes int
+	var holes, kept int
 	_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM domain_events WHERE tenant_id=$1 AND seq IN (1,2,3)`, a).Scan(&holes)
-	if holes != 0 {
-		t.Fatalf("%d facts of the purged prefix remain: retention must cut a prefix, never leave holes", holes)
+	_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM domain_events WHERE tenant_id=$1 AND seq IN (4,5)`, a).Scan(&kept)
+	if holes != 0 || kept != 2 {
+		t.Fatalf("after the purge: %d of the prefix remain, %d of facts 4,5 remain (want 0 and 2): retention cuts a prefix of EXPIRED facts, never a recent one, never a hole", holes, kept)
 	}
 	if _, err := e.app.Exec(e.ctx, `SELECT domain_events_purge(interval '10 minutes')`); err == nil {
 		t.Error("a retention shorter than an hour must be refused")

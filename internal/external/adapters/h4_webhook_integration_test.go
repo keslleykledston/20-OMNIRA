@@ -805,8 +805,11 @@ func TestWebhookClaimNeverHandsOutWhatCannotBeSent(t *testing.T) {
 	if len(handed) != 1 || handed[0] != hLive.id {
 		t.Fatalf("handed out %v, want only the live subscription %s", handed, hLive.id)
 	}
-	if h.deliveries(hRev, "cancelled") != 1 || h.deliveries(hPaused, "cancelled") != 1 {
-		t.Errorf("cancelled: revoked=%d paused=%d, want 1 each", h.deliveries(hRev, "cancelled"), h.deliveries(hPaused, "cancelled"))
+	if h.deliveries(hRev, "cancelled") != 1 {
+		t.Errorf("cancelled: revoked=%d, want 1", h.deliveries(hRev, "cancelled"))
+	}
+	if h.deliveries(hPaused, "pending") != 1 {
+		t.Errorf("a paused subscription must keep its deliveries pending (they go out after the resume): pending=%d", h.deliveries(hPaused, "pending"))
 	}
 }
 

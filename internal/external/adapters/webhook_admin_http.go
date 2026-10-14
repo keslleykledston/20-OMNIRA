@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	"github.com/omnira/omnira/internal/external/domain"
 	"github.com/omnira/omnira/internal/external/netpolicy"
@@ -198,6 +199,11 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if _, err := q.Exec(r.Context(), `
 		INSERT INTO webhook_subscriptions(id, tenant_id, installation_id, url, event_types, key_id, secret_ciphertext, enqueued_through_seq, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, tc.TenantID, in.ID, req.URL, types, keyID, sealed, *head, tc.ActorID); err != nil {
+		var pe *pgconn.PgError
+		if errors.As(err, &pe) && pe.Code == "OM006" { // the count above is a courtesy; the trigger decides under a lock
+			http.Error(w, "an installation holds at most 5 webhook subscriptions", http.StatusConflict)
+			return
+		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
