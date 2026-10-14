@@ -87,6 +87,9 @@ h1)
   mut "no per-installation rate limit"                      $M "if allowed, wait := m.perApp.Allow(\"app:\"+p.InstallationID.String(), p.RatePerMin); !allowed {" "if allowed, wait := m.perApp.Allow(\"app:\"+p.InstallationID.String(), p.RatePerMin); !allowed && false {"
   mut "failed authentication is never throttled"            $M "if m.FailedAuthPerMinute > 0 {" "if false {"
   mut "scope is not checked"                                $M "if !p.Has(scope) {" "if !p.Has(scope) && false {"
+  mut "the throttle keys on the proxy, not on the client"   $M "(ip.IsLoopback() || ip.IsPrivate()) {" "(false) {"
+  mut "a public peer may choose its own throttle key"       $M "ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {" "ip != nil {"
+  mut "audit rows ignore the request id"                    $H "correlation = u // the log line and the audit row of one request share the id" "_ = u"
   mut "the recheck always passes"                           $R "if !ok {" "if false {"
   mut "unknown JSON fields are accepted by the admin API"   $H "dec.DisallowUnknownFields()" "_ = dec"
   mut "a revoked installation can still be edited"          $S "	if cur.Status == domain.StatusRevoked {
@@ -105,8 +108,8 @@ h1)
   sqlmut "lookup ignores credential expiry"                 000135_external_app_installations.up.sql "     AND c.revoked_at IS NULL AND c.expires_at > now()
      AND i.status = 'active'" "     AND c.revoked_at IS NULL
      AND i.status = 'active'"
-  sqlmut "recheck does not lock (revocation does not wait)" 000135_external_app_installations.up.sql "      FOR SHARE OF i, c;" "      ;"
-  sqlmut "recheck ignores a revoked credential"             000135_external_app_installations.up.sql "      AND c.id = p_credential AND c.revoked_at IS NULL AND c.expires_at > now()" "      AND c.id = p_credential"
+  sqlmut "recheck does not lock (revocation does not wait)" 000135_external_app_installations.up.sql "      FOR SHARE OF i, c, t;" "      ;"
+  sqlmut "recheck ignores a revoked credential"             000135_external_app_installations.up.sql "      AND c.id = p_credential AND c.revoked_at IS NULL AND c.expires_at > clock_timestamp()" "      AND c.id = p_credential"
   sqlmut "recheck is not bound to the tenant"               000135_external_app_installations.up.sql "    WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'
       AND c.id = p_credential" "    WHERE i.id = p_installation AND i.status = 'active'
       AND c.id = p_credential"
@@ -116,6 +119,10 @@ h1)
 \$\$;"
   sqlmut "the application role can read the digest"         000135_external_app_installations.up.sql "FROM PUBLIC, omnira_app;" "FROM PUBLIC;"
   sqlmut "a system session can read installations"          000135_external_app_installations.up.sql "FOR SELECT USING (actor_has_permission(tenant_id, current_user_id(), 'integration.read'))\$p\$, t || '_read', t);" "FOR SELECT USING (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'integration.read'))\$p\$, t || '_read', t);"
+  sqlmut "recheck does not lock the company (suspension does not wait)" 000135_external_app_installations.up.sql "      FOR SHARE OF i, c, t;" "      FOR SHARE OF i, c;"
+  sqlmut "recheck judges expiry with the start of the transaction"      000135_external_app_installations.up.sql "c.expires_at > clock_timestamp()" "c.expires_at > now()"
+  sqlmut "allow-list door ignores the company status"                   000135_external_app_installations.up.sql "    JOIN tenants t ON t.id = i.tenant_id AND t.status = 'active'
+   WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'" "   WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'"
   sqlmut "a queue of another company is accepted in the allow-list" 000135_external_app_installations.up.sql "  FOREIGN KEY (tenant_id, queue_id) REFERENCES queues (tenant_id, id) ON DELETE CASCADE" "  FOREIGN KEY (queue_id) REFERENCES queues (id) ON DELETE CASCADE"
   ;;
 *) echo "unknown phase $phase"; exit 2;;

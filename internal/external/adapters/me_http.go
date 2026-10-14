@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -65,6 +66,11 @@ func (h *MeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out.Allowlist.QueueIDs, out.Allowlist.ChannelIDs = al.QueueIDs, al.ChannelIDs
 		return err
 	})
+	if errors.Is(err, ErrInstallationInactive) {
+		externalMetric.Inc("unauthenticated")
+		WriteProblem(w, r, http.StatusUnauthorized, "unauthenticated", "Authentication required", "Send Authorization: Bearer <integration token>.")
+		return
+	}
 	if err != nil {
 		externalMetric.Inc("error")
 		WriteProblem(w, r, http.StatusServiceUnavailable, "unavailable", "Temporarily unavailable", "Try again shortly.")

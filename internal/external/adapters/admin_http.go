@@ -142,7 +142,13 @@ func (h *AdminHandler) record(r *http.Request, id uuid.UUID, action auditdomain.
 	if err != nil {
 		return
 	}
-	ev, err := auditdomain.NewAuditEvent(tc.TenantID, tc.ActorID, action, auditdomain.ResourceExternalApp, id, auditdomain.OutcomeSuccess, uuid.Nil)
+	correlation := uuid.Nil
+	if rid := r.Header.Get("X-Request-ID"); rid != "" {
+		if u, perr := uuid.Parse(rid); perr == nil {
+			correlation = u // the log line and the audit row of one request share the id
+		}
+	}
+	ev, err := auditdomain.NewAuditEvent(tc.TenantID, tc.ActorID, action, auditdomain.ResourceExternalApp, id, auditdomain.OutcomeSuccess, correlation)
 	if err != nil {
 		return
 	}

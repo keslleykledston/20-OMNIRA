@@ -95,3 +95,49 @@ func TestExternalRoutesDoNotExistWhenHeadlessIsOff(t *testing.T) {
 		}
 	}
 }
+
+// The administration routes (omnira-v1.yaml, tag ExternalApps) are routed exactly as documented, in both directions (Codex H1).
+func TestEveryRegisteredExternalAdminRouteIsDocumented(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	i := strings.Index(body, "func (s *Server) RegisterExternalHandlers")
+	j := strings.Index(body, "func (s *Server) RegisterInvitationHandlers")
+	if i < 0 || j < i {
+		t.Fatal("RegisterExternalHandlers not found")
+	}
+	documented := map[string]bool{}
+	for _, o := range specOps(t) {
+		documented[o.method+" "+paramRE.ReplaceAllString(o.path, "{}")] = true
+	}
+	re := regexp.MustCompile(`route\("(GET|POST|PUT|PATCH|DELETE) "\+appsPath(?:\+"([^"]*)")?`)
+	found := 0
+	for _, m := range re.FindAllStringSubmatch(body[i:j], -1) {
+		found++
+		key := m[1] + " " + paramRE.ReplaceAllString("/api/v1/tenants/{tenant_id}/integrations/apps"+m[2], "{}")
+		if !documented[key] {
+			t.Errorf("routed but not documented in contracts/openapi/omnira-v1.yaml: %s", key)
+		}
+	}
+	if found < 9 {
+		t.Fatalf("parsed %d admin routes, expected 9 — the extraction is broken", found)
+	}
+	// and the other way round: everything documented under integrations/apps is one of the registered routes
+	registered := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(body[i:j], -1) {
+		registered[m[1]+" "+paramRE.ReplaceAllString("/api/v1/tenants/{tenant_id}/integrations/apps"+m[2], "{}")] = true
+	}
+	var extra []string
+	for _, o := range specOps(t) {
+		k := o.method + " " + paramRE.ReplaceAllString(o.path, "{}")
+		if strings.Contains(o.path, "/integrations/apps") && !registered[k] {
+			extra = append(extra, k)
+		}
+	}
+	sort.Strings(extra)
+	if len(extra) > 0 {
+		t.Errorf("documented under integrations/apps but not registered: %v", extra)
+	}
+}

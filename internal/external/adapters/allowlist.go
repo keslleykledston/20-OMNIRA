@@ -2,8 +2,10 @@ package adapters
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/omnira/omnira/internal/external/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
@@ -18,6 +20,9 @@ type Allowlists struct {
 func LoadAllowlists(ctx context.Context, q platformdb.Querier, p *domain.Principal) (Allowlists, error) {
 	var qs, cs []string
 	if err := q.QueryRow(ctx, `SELECT queue_ids, channel_ids FROM external_installation_allowlists($1, $2)`, p.TenantID, p.InstallationID).Scan(&qs, &cs); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) { // installation or company stopped being usable since the authentication
+			return Allowlists{}, ErrInstallationInactive
+		}
 		return Allowlists{}, err
 	}
 	return Allowlists{QueueIDs: parseUUIDs(qs), ChannelIDs: parseUUIDs(cs)}, nil

@@ -35,10 +35,18 @@ func NewMiddlewareFor(l application.CredentialLookup) *Middleware {
 	return &Middleware{auth: application.NewAuthenticator(l), perApp: application.NewLimiter(), authBad: application.NewLimiter(), FailedAuthPerMinute: 30}
 }
 
+// remoteHost is the address a failed-authentication throttle keys on. Behind the project's nginx (a loopback or private peer, the same notion the
+// rest of the API uses for its proxy) the address is X-Real-IP, which nginx SETS to $remote_addr (it does not append to a client-supplied value, unlike
+// X-Forwarded-For, whose first hop the client chooses). A direct, public peer never chooses its own key.
 func remoteHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+		if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(real) != nil {
+			return real
+		}
 	}
 	return host
 }

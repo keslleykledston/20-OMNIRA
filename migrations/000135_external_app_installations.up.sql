@@ -150,9 +150,12 @@ AS $$
      AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
 $$;
 
--- (3) The second look of every mutation (ADR-0046): installation AND credential must be usable NOW, and both rows stay locked FOR SHARE until
--- the caller's transaction ends (locks belong to the transaction, not to the function). Revoking or suspending takes a conflicting lock,
--- so it either waits for the write to commit or happens first and the write is refused.
+-- (3) The second look of every mutation (ADR-0046): installation, credential AND company must be usable NOW, and the three rows stay locked FOR SHARE
+-- until the caller's transaction ends (locks belong to the transaction, not to the function). Revoking, suspending or suspending the company takes a
+-- conflicting lock, so it either waits for the write to commit or happens first and the write is refused. Expiry is a time, not a lock: it is judged
+-- with clock_timestamp() (now() is the START of the transaction), at the moment of the recheck; a write that already passed it can commit up to its own
+-- remaining duration after the expiry (bounded by the statement/transaction timeouts). Expiry is a retention bound; revocation is the immediate tool.
+-- The functions run with the privileges of their owner, the migrating role (a superuser, which is why they can read the tables the policies hide).
 CREATE FUNCTION external_recheck(p_tenant UUID, p_installation UUID, p_credential UUID)
 RETURNS BOOLEAN
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER
@@ -164,9 +167,9 @@ BEGIN
      JOIN external_app_credentials c ON c.tenant_id = i.tenant_id AND c.installation_id = i.id
      JOIN tenants t ON t.id = i.tenant_id
     WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'
-      AND c.id = p_credential AND c.revoked_at IS NULL AND c.expires_at > now()
+      AND c.id = p_credential AND c.revoked_at IS NULL AND c.expires_at > clock_timestamp()
       AND t.status = 'active'
-      FOR SHARE OF i, c;
+      FOR SHARE OF i, c, t;
   RETURN FOUND;
 END
 $$;
@@ -182,6 +185,7 @@ AS $$
          COALESCE((SELECT array_agg(ch.connection_id::text ORDER BY ch.connection_id) FROM external_app_installation_channels ch
                     WHERE ch.tenant_id = i.tenant_id AND ch.installation_id = i.id), ARRAY[]::TEXT[])
     FROM external_app_installations i
+    JOIN tenants t ON t.id = i.tenant_id AND t.status = 'active'
    WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'
 $$;
 

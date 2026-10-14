@@ -704,3 +704,209 @@ func TestTheLookupFunctionFiltersByItself(t *testing.T) {
 		t.Error("lookup returned a revoked credential")
 	}
 }
+
+// Codex H1 (HIGH): suspending the COMPANY is serialized with the recheck of a write (the tenant row is locked too), and a lookup that passed before
+// the suspension still ends in 401 at /external/me (the allow-list door refuses a suspended company).
+func TestSuspendingTheCompanyIsSerializedWithAWriteAndStopsMe(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin")
+	app := e.install(admin, a, "CRM", "message.send")
+	p := &domain.Principal{CredentialID: app.Credential.ID, InstallationID: app.Installation.ID, TenantID: a}
+
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(free)
+	go func() {
+		done <- platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(ctx context.Context) error {
+			if err := adapters.RecheckPrincipal(ctx, platformdb.QuerierFromContext(ctx, e.app), p); err != nil {
+				return err
+			}
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	suspended := make(chan error, 1)
+	go func() {
+		_, err := e.seed.Exec(e.ctx, `UPDATE tenants SET status='suspended' WHERE id=$1`, a)
+		suspended <- err
+	}()
+	select {
+	case err := <-suspended:
+		t.Fatalf("the company was suspended (%v) while a write that had passed its recheck was still open", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	free()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-suspended; err != nil {
+		t.Fatal(err)
+	}
+	// after the suspension: the recheck refuses, and so does /external/me even though the credential itself is untouched
+	err := platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(ctx context.Context) error {
+		return adapters.RecheckPrincipal(ctx, platformdb.QuerierFromContext(ctx, e.app), p)
+	})
+	if !errors.Is(err, adapters.ErrInstallationInactive) {
+		t.Fatalf("recheck for a suspended company = %v", err)
+	}
+	var qs, cs []string
+	if err := e.app.QueryRow(e.ctx, `SELECT queue_ids, channel_ids FROM external_installation_allowlists($1,$2)`, a, app.Installation.ID).Scan(&qs, &cs); err == nil {
+		t.Fatal("the allow-list door answered for a suspended company")
+	}
+	// a request whose lookup passed BEFORE the suspension must still end in 401: simulate by calling the handler's inner door with the principal
+	e.exec(`UPDATE tenants SET status='active' WHERE id=$1`, a)
+	_, out, _ := e.callExt(http.MethodGet, "/api/v1/external/me", app.Credential.Token, nil)
+	if !strings.Contains(string(out), a.String()) {
+		t.Fatalf("control: me for an active company = %s", out)
+	}
+}
+
+// Codex H1 (HIGH): expiry is judged with the real clock at the recheck, not with the start of the transaction.
+func TestRecheckJudgesExpiryWithTheRealClockNotTheTransactionStart(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	app := e.install(e.member(a, "tenant_admin"), a, "CRM", "message.send")
+	p := &domain.Principal{CredentialID: app.Credential.ID, InstallationID: app.Installation.ID, TenantID: a}
+	// the credential will expire in 2 seconds; the transaction starts BEFORE that and rechecks after it
+	e.exec(`UPDATE external_app_credentials SET created_at = now() - interval '1 day', expires_at = clock_timestamp() + interval '2 seconds' WHERE id=$1`, app.Credential.ID)
+	err := platformdb.WithSystemTenantSession(e.ctx, e.app, a, func(ctx context.Context) error {
+		q := platformdb.QuerierFromContext(ctx, e.app)
+		if err := adapters.RecheckPrincipal(ctx, q, p); err != nil {
+			t.Fatalf("control: the credential is still valid at the start: %v", err)
+		}
+		time.Sleep(2500 * time.Millisecond)
+		if err := adapters.RecheckPrincipal(ctx, q, p); !errors.Is(err, adapters.ErrInstallationInactive) {
+			t.Errorf("recheck after the expiry, inside the same transaction = %v, want ErrInstallationInactive", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Codex H1 (MEDIUM): behind the project's nginx every request comes from the proxy; the throttle keys on X-Real-IP (set by nginx), not on the proxy.
+func TestFailedAuthenticationThrottleSeesTheRealClientBehindTheProxy(t *testing.T) {
+	e := newEnv(t)
+	bad := "omn_ext_" + strings.Repeat("a", 16) + "." + strings.Repeat("B", 43)
+	e.addr = "10.20.0.5:40000" // the proxy (a private peer)
+	flood := func(realIP string) int {
+		last := 0
+		for i := 0; i < 60; i++ {
+			code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/me", bad, map[string]string{"X-Real-IP": realIP})
+			last = code
+			if code == http.StatusTooManyRequests {
+				return code
+			}
+		}
+		return last
+	}
+	if flood("203.0.113.50") != http.StatusTooManyRequests {
+		t.Fatal("one client failing 60 times behind the proxy was never throttled")
+	}
+	// another client behind the same proxy is NOT collateral damage
+	if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/me", bad, map[string]string{"X-Real-IP": "203.0.113.77"}); code != http.StatusUnauthorized {
+		t.Fatalf("another client behind the same proxy got %d, want 401", code)
+	}
+	// a public peer cannot pick its own key with the header
+	e.addr = "198.51.100.9:40000"
+	for i := 0; i < 60; i++ {
+		e.callExt(http.MethodGet, "/api/v1/external/me", bad, map[string]string{"X-Real-IP": "203.0.113." + strconv.Itoa(i+100)})
+	}
+	if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/me", bad, map[string]string{"X-Real-IP": "203.0.113.250"}); code != http.StatusTooManyRequests {
+		t.Fatalf("a public peer rotated X-Real-IP to dodge the throttle and got %d, want 429", code)
+	}
+}
+
+// Codex H1 (MEDIUM): the administration through the REAL authentication chain (cookie session + same-origin check), not with a principal injected.
+type fakeStore struct{ user uuid.UUID }
+
+func (f fakeStore) CreateSession(context.Context, uuid.UUID, string, time.Duration) (string, error) {
+	return "x", nil
+}
+func (f fakeStore) ResolveSession(_ context.Context, id string) (uuid.UUID, error) {
+	if id != "good" {
+		return uuid.Nil, errors.New("no")
+	}
+	return f.user, nil
+}
+func (f fakeStore) RevokeSession(context.Context, string) error  { return nil }
+func (f fakeStore) UpdateActivity(context.Context, string) error { return nil }
+
+type noBearer struct{}
+
+func (noBearer) Verify(context.Context, string) (*authn.Principal, error) {
+	return nil, errors.New("no bearer in this test")
+}
+
+func TestAdministrationRefusesCrossSiteCookieWritesThroughTheRealChain(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin")
+	app := e.install(admin, a, "CRM", "conversation.read")
+	authn.EnableOriginCheck("https://omnira.example")
+	t.Cleanup(authn.DisableOriginCheck)
+	chain := authn.WebMiddleware(noBearer{}, fakeStore{user: admin})(e.mux)
+
+	do := func(method, path, origin string, body string) int {
+		req := httptest.NewRequest(method, "/api/v1/tenants/"+a.String()+"/integrations/apps"+path, strings.NewReader(body))
+		req.AddCookie(&http.Cookie{Name: authn.SessionCookieName, Value: "good"})
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		chain.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	id := app.Installation.ID.String()
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "", `{"name":"evil","scopes":["conversation.read"]}`},
+		{http.MethodPatch, "/" + id, `{"name":"evil"}`},
+		{http.MethodPost, "/" + id + "/credentials", ``},
+		{http.MethodPost, "/" + id + "/revoke", ``},
+		{http.MethodDelete, "/" + id + "/credentials/" + app.Credential.ID.String(), ``},
+	} {
+		if code := do(c.method, c.path, "https://evil.example", c.body); code != http.StatusForbidden {
+			t.Errorf("cross-site %s %s = %d, want 403", c.method, c.path, code)
+		}
+		if code := do(c.method, c.path, "", c.body); code != http.StatusForbidden {
+			t.Errorf("%s %s with no Origin/Referer = %d, want 403", c.method, c.path, code)
+		}
+	}
+	// nothing the cross-site calls attempted happened
+	if code, body := e.admin(admin, a, http.MethodGet, "/"+id, nil); code != http.StatusOK || !strings.Contains(string(body), `"status":"active"`) || strings.Contains(string(body), "evil") {
+		t.Fatalf("the installation changed: %d %s", code, body)
+	}
+	// the same call from the application's own origin works; a safe GET from anywhere is not blocked
+	if code := do(http.MethodPost, "/"+id+"/credentials", "https://omnira.example", ``); code != http.StatusCreated {
+		t.Errorf("same-origin POST = %d, want 201", code)
+	}
+	if code := do(http.MethodGet, "", "https://evil.example", ``); code != http.StatusOK {
+		t.Errorf("cross-site GET = %d, want 200 (a safe method)", code)
+	}
+}
+
+// Codex H1 (LOW): the audit row of an administrative action carries the request id as its correlation id.
+func TestAuditRowsOfAdministrationCarryTheRequestID(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin")
+	rid := uuid.New()
+	b, _ := json.Marshal(map[string]any{"name": "CRM", "scopes": []string{"conversation.read"}})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tenants/"+a.String()+"/integrations/apps", bytes.NewReader(b))
+	req.Header.Set("X-Request-ID", rid.String())
+	req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: admin, Subject: admin.String()}))
+	rec := httptest.NewRecorder()
+	e.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	var got uuid.UUID
+	if err := e.seed.QueryRow(e.ctx, `SELECT correlation_id FROM audit_events WHERE tenant_id=$1 AND action='external_app.created'`, a).Scan(&got); err != nil || got != rid {
+		t.Fatalf("correlation id = %s (%v), want the request id %s", got, err, rid)
+	}
+}
