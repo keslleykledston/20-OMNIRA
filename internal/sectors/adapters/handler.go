@@ -780,6 +780,15 @@ const maxNoticeRunes = 500
 
 // GetClosedNotice returns the message the customer gets when this group is closed ("" = none).
 func (h *Handler) GetClosedNotice(w http.ResponseWriter, r *http.Request) {
+	h.getNotice(w, r, `SELECT closed_notice FROM queues WHERE tenant_id=$1 AND id=$2`)
+}
+
+// GetOpenNotice returns the message the customer gets when the group opens and the waiting conversation is released ("" = none).
+func (h *Handler) GetOpenNotice(w http.ResponseWriter, r *http.Request) {
+	h.getNotice(w, r, `SELECT open_notice FROM queues WHERE tenant_id=$1 AND id=$2`)
+}
+
+func (h *Handler) getNotice(w http.ResponseWriter, r *http.Request, query string) {
 	tc, q, ok := h.authorize(w, r, "agent.read")
 	if !ok {
 		return
@@ -789,7 +798,7 @@ func (h *Handler) GetClosedNotice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var text string
-	if err := q.QueryRow(r.Context(), `SELECT closed_notice FROM queues WHERE tenant_id=$1 AND id=$2`, tc.TenantID, queueID).Scan(&text); err != nil {
+	if err := q.QueryRow(r.Context(), query, tc.TenantID, queueID).Scan(&text); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "queue not found", http.StatusNotFound)
 			return
@@ -803,6 +812,16 @@ func (h *Handler) GetClosedNotice(w http.ResponseWriter, r *http.Request) {
 // PutClosedNotice sets (or, with empty text, removes) the closed notice. It is plain text sent to the customer by the routing engine, once per
 // episode; {{proxima_abertura}} is replaced by the next opening in the calendar's timezone.
 func (h *Handler) PutClosedNotice(w http.ResponseWriter, r *http.Request) {
+	h.putNotice(w, r, `UPDATE queues SET closed_notice=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, auditdomain.ActionClosedNoticeSaved)
+}
+
+// PutOpenNotice sets (or, with empty text, removes) the message sent once per episode when the group opens and the conversation that was waiting
+// for it is released to the queue.
+func (h *Handler) PutOpenNotice(w http.ResponseWriter, r *http.Request) {
+	h.putNotice(w, r, `UPDATE queues SET open_notice=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, auditdomain.ActionOpenNoticeSaved)
+}
+
+func (h *Handler) putNotice(w http.ResponseWriter, r *http.Request, update string, action auditdomain.AuditAction) {
 	tc, q, ok := h.authorize(w, r, "agent.manage")
 	if !ok {
 		return
@@ -828,7 +847,7 @@ func (h *Handler) PutClosedNotice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tag, err := q.Exec(r.Context(), `UPDATE queues SET closed_notice=$3, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, queueID, text)
+	tag, err := q.Exec(r.Context(), update, tc.TenantID, queueID, text)
 	if err != nil {
 		http.Error(w, "failed to update queue", http.StatusInternalServerError)
 		return
@@ -837,6 +856,6 @@ func (h *Handler) PutClosedNotice(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "queue not found", http.StatusNotFound)
 		return
 	}
-	h.record(r, auditdomain.ResourceQueue, queueID, auditdomain.ActionClosedNoticeSaved, map[string]any{"has_text": text != ""})
+	h.record(r, auditdomain.ResourceQueue, queueID, action, map[string]any{"has_text": text != ""})
 	write(w, http.StatusOK, map[string]any{"queue_id": queueID, "text": text})
 }

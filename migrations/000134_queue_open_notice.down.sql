@@ -1,0 +1,1 @@
+ALTER TABLE queues DROP COLUMN IF EXISTS open_notice;

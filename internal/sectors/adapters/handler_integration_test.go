@@ -1128,3 +1128,53 @@ func TestConversationRoutingViewShowsWhereWhyAndSLAWithoutLeakingAcrossCompanies
 		t.Fatalf("the administrator holds conversation.read_internal: %d", got)
 	}
 }
+
+// The opening message is independent from the closed one: same rules (permission, 500 characters, plain text, isolation, audit), its own column and action.
+func TestOpenNoticeAPIIsIndependentFromTheClosedNoticeAndFollowsTheSameRules(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin, agent := e.member(t, a, "tenant_admin"), e.member(t, a, "tenant_agent")
+	q, qb := e.queue(t, a, "Financeiro", false), e.queue(t, b, "Outra", false)
+	path := map[string]string{"queue_id": q.String()}
+	putOpen := func(actor uuid.UUID, p map[string]string, body any) int {
+		return e.call(t, a, actor, "PUT", "/x", e.h.PutOpenNotice, p, body).Code
+	}
+	if e.call(t, a, admin, "PUT", "/x", e.h.PutClosedNotice, path, map[string]any{"text": "Fechado."}).Code != http.StatusOK {
+		t.Fatal("closed notice save")
+	}
+	if putOpen(admin, path, map[string]any{"text": "  Já estamos atendendo.  "}) != http.StatusOK {
+		t.Fatal("save")
+	}
+	rec := e.call(t, a, admin, "GET", "/x", e.h.GetOpenNotice, path, nil)
+	if got := decode[map[string]any](t, rec)["text"]; rec.Code != http.StatusOK || got != "Já estamos atendendo." {
+		t.Fatalf("trimmed text is stored: %d %v", rec.Code, got)
+	}
+	if got := decode[map[string]any](t, e.call(t, a, admin, "GET", "/x", e.h.GetClosedNotice, path, nil))["text"]; got != "Fechado." {
+		t.Fatalf("saving one notice never changes the other: %v", got)
+	}
+	if auditCount(t, e, a, "queue.open_notice_saved") != 1 {
+		t.Fatal("saving is audited with its own action")
+	}
+	if putOpen(agent, path, map[string]any{"text": "x"}) != http.StatusForbidden {
+		t.Fatal("an attendant cannot change the notice")
+	}
+	if putOpen(admin, path, map[string]any{"text": strings.Repeat("a", 501)}) != http.StatusBadRequest {
+		t.Fatal("limited to 500 characters")
+	}
+	if putOpen(admin, path, map[string]any{"text": "linha\x07"}) != http.StatusBadRequest {
+		t.Fatal("control characters are refused")
+	}
+	if putOpen(admin, map[string]string{"queue_id": qb.String()}, map[string]any{"text": "invasao"}) != http.StatusNotFound {
+		t.Fatal("foreign queue")
+	}
+	var other string
+	if err := e.seed.QueryRow(context.Background(), `SELECT open_notice FROM queues WHERE id=$1`, qb).Scan(&other); err != nil || other != "" {
+		t.Fatalf("tenant B untouched: %q %v", other, err)
+	}
+	if putOpen(admin, path, map[string]any{"text": ""}) != http.StatusOK {
+		t.Fatal("empty removes the notice")
+	}
+	if decode[map[string]any](t, e.call(t, a, admin, "GET", "/x", e.h.GetOpenNotice, path, nil))["text"] != "" {
+		t.Fatal("removed")
+	}
+}

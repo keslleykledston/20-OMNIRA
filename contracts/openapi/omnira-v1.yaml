@@ -1124,6 +1124,45 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/queues/{queue_id}/open-notice:
+    get:
+      operationId: getQueueOpenNotice
+      tags: [Agents]
+      summary: Message the customer gets when this group opens and releases the waiting conversation
+      description: |
+        Requires `agent.read`. Answers `{queue_id, text}`; an empty text means the routing engine says nothing (opt-in).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      responses:
+        '200': { description: "OK" }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    put:
+      operationId: putQueueOpenNotice
+      tags: [Agents]
+      summary: Set or remove the opening message
+      description: |
+        Requires `agent.manage`. Plain text, at most 500 characters. Sent at most once per routing episode, only when a conversation that was waiting for the opening is woken up by its timer and released to the queue. Empty text removes it. Audited (`queue.open_notice_saved`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/QueueId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, maxLength: 500 }
+      responses:
+        '200': { description: "OK" }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/queues/{queue_id}/eligibility:
     get:
       operationId: getQueueEligibility

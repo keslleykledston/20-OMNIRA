@@ -160,7 +160,18 @@ type stateRow struct {
 
 // Decide runs inside the caller's system tenant session (the routing worker's), in the caller's transaction. The tenant comes from that
 // context; a conversation id of another tenant simply is not found.
+//
+// When the durable timer of a group that was closed wakes a conversation (TriggerOpenWakeup) and the conversation is released to the queue
+// (queued, or assigned by the engine), the customer is told so once per episode - only when the group has an open_notice text.
 func (e *Engine) Decide(ctx context.Context, req Request) (Decision, error) {
+	d, err := e.decide(ctx, req)
+	if err == nil && req.Trigger == TriggerOpenWakeup && (d.Kind == Enqueue || (d.Kind == AssignAgent && d.Reason != ReasonAlreadyAssigned)) {
+		e.noticeOpened(ctx, req.ConversationID)
+	}
+	return d, err
+}
+
+func (e *Engine) decide(ctx context.Context, req Request) (Decision, error) {
 	tc, err := tenancydomain.FromContext(ctx)
 	if err != nil || tc.TenantID == uuid.Nil || tc.Source != tenancydomain.AccessSourceSystem {
 		return Decision{}, errors.New("engine: system tenant context required")
@@ -1164,6 +1175,38 @@ func (e *Engine) noticeClosed(ctx context.Context, q platformdb.Querier, tenant,
 		}
 	}
 	_, _ = q.Exec(ctx, `RELEASE SAVEPOINT closed_notice`)
+}
+
+// noticeOpened tells the customer, once per episode, that the group is open and the attendance goes on. It reads the queue the conversation is in
+// NOW (the wake-up may have moved it along the chain) and, like noticeClosed, runs inside a savepoint: no failure of the message can change or
+// abort the routing that was just recorded.
+func (e *Engine) noticeOpened(ctx context.Context, conversation uuid.UUID) {
+	if e.notifier == nil {
+		return
+	}
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil || tc.TenantID == uuid.Nil {
+		return
+	}
+	q := platformdb.QuerierFromContext(ctx, e.pool)
+	var text string
+	var episode int
+	if err := q.QueryRow(ctx, `SELECT qq.open_notice, s.episode FROM routing_engine_state s
+		JOIN conversations c ON c.tenant_id=s.tenant_id AND c.id=s.conversation_id AND c.status='open'
+		JOIN queues qq ON qq.tenant_id=c.tenant_id AND qq.id=c.queue_id
+		WHERE s.tenant_id=$1 AND s.conversation_id=$2`, tc.TenantID, conversation).Scan(&text, &episode); err != nil || text == "" {
+		return
+	}
+	if _, err := q.Exec(ctx, `SAVEPOINT open_notice`); err != nil {
+		return
+	}
+	if err := e.notifier.Send(ctx, conversation, text, fmt.Sprintf("routing-opened:%s:%d", conversation, episode)); err != nil {
+		_, _ = q.Exec(ctx, `ROLLBACK TO SAVEPOINT open_notice`)
+		if e.logf != nil {
+			e.logf("routing: open notice not sent for %s: %v", conversation, err)
+		}
+	}
+	_, _ = q.Exec(ctx, `RELEASE SAVEPOINT open_notice`)
 }
 
 // renderNotice fills {{proxima_abertura}} with the next opening in the calendar's own timezone ("segunda-feira, 14/10 às 09:00"); when it
