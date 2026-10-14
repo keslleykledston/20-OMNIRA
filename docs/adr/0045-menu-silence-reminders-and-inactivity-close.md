@@ -1,6 +1,6 @@
 # ADR-0045 — Menu sem resposta: lembretes e encerramento por inatividade
 
-Status: **IMPLEMENTADA e IMPLANTADA em LAB** (2026-10-13; merge `9a26f9c`, imagens `sha-9a26f9c` de api, worker e web; gate de integração com o ajuste da contagem do catálogo). Aplicada na empresa K3G_Solutions (antes "Test Company LTDA"): fluxo "Recepção inteligente" v4 com menu de 120 s, 2 lembretes e, sem resposta, transbordo ao Suporte. Ainda não enviada ao GitHub. Pedido do dono depois do teste do motor de roteamento: se o cliente não escolhe no menu, lembrar; se continuar em silêncio, perguntar se ainda está aí; só então transbordar ao Suporte, ou encerrar por inatividade (configurável).
+Status: **IMPLEMENTADA e IMPLANTADA em LAB** (2026-10-13; merge `9a26f9c`, imagens `sha-9a26f9c` de api, worker e web; gate de integração com o ajuste da contagem do catálogo). Aplicada na empresa K3G_Solutions (antes "Test Company LTDA"): fluxo "Recepção inteligente" v4 com menu de 120 s, 2 lembretes e, sem resposta, transbordo ao Suporte. Enviada ao GitHub (`main` em 02b6367). Pedido do dono depois do teste do motor de roteamento: se o cliente não escolhe no menu, lembrar; se continuar em silêncio, perguntar se ainda está aí; só então transbordar ao Suporte, ou encerrar por inatividade (configurável).
 
 ## 1. Decisão
 
@@ -22,4 +22,5 @@ Status: **IMPLEMENTADA e IMPLANTADA em LAB** (2026-10-13; merge `9a26f9c`, image
 - Unitários (motor com relógio falso): lembrete aos 2 e 4 min com o menu junto, porta `timeout` aos 6 min fechando com `no_response`; transbordo em vez de fechar; resposta depois do lembrete segue; resposta inválida mantém a contagem; fechar sem a capacidade falha a corrida (a conversa volta aos humanos); limites validados. Dois mutantes mortos (lembretes desligados; contagem perdida em resposta inválida).
 - PostgreSQL real (`TestSilentMenuIsNudgedByDurableTimersThenClosedForInactivity`): timers duráveis lidos do banco como o sweeper do worker, 3 esperas, conversa `closed`, fechamento `system`/`no_response`.
 - Web: 979 testes Vitest, `tsc` limpo; inspetor edita o tempo e os lembretes (máx. 3) e o novo nó.
-- **Não provado:** conversa real de WhatsApp com a nova versão do fluxo (v4 publicada; falta uma mensagem nova do aparelho de teste ficando em silêncio).
+- **Provado em WhatsApp real (2026-10-13, aparelho de teste +5592991882864, K3G_Solutions, fluxo v4):** menu às 16:08:59, 1º lembrete 16:11:06, "ainda está aí?" 16:13:21, mensagem do Suporte 16:15:36 e `ENQUEUE` na fila Suporte às 16:15:37 (resumo "sem resposta após 2 lembretes"). Atrasos de 6 a 15 s por espera vêm do intervalo de leitura do sweeper.
+- **Decisão do dono (2026-10-13):** o desfecho padrão continua sendo a fila do Suporte. A conversa fica aberta e sem dono até alguém assumir (fila manual, ADR-0044 §11.9). O encerramento por inatividade (`close_conversation`) segue como opção de configuração, sem uso.
