@@ -19,10 +19,12 @@ import (
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
+	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	"github.com/omnira/omnira/internal/entitlements"
+	externaladapters "github.com/omnira/omnira/internal/external/adapters"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
@@ -556,6 +558,44 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 		s.mux.Handle("POST /api/v1/hubs/{hub_id}/companies", authnMiddleware(userSession(http.HandlerFunc(a.CreateCompany))))
 		s.mux.Handle("PATCH /api/v1/hubs/{hub_id}/companies/{tenant_id}", authnMiddleware(userSession(http.HandlerFunc(a.UpdateCompany))))
 	}
+}
+
+// RegisterExternalHandlers mounts the Headless integration (ADR-0046) when OMNIRA_HEADLESS_ENABLED is on:
+//   - the administration of external applications, for a PERSON (cookie session, same-origin, tenant authorization, integration.read/manage,
+//     not delegable to the Hub);
+//   - the external API itself, for an APPLICATION (bearer integration token; no cookie, no session, the tenant comes from the credential).
+//
+// With the flag off nothing here exists (404), so the platform is byte-for-byte what it was.
+func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, features externaladapters.Features) {
+	if !enabled {
+		return
+	}
+	// the external API: authenticated by the integration token only
+	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
+	s.mux.Handle("GET /api/v1/external/me", ext.Authenticated(externaladapters.NewMeHandler(dbPool, features)))
+
+	if s.authenticator == nil {
+		return // administration needs a working sign-in
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	memberRepo := tenancyadapters.NewPostgresMembershipRepository(dbPool)
+	tenantRepo := tenancyadapters.NewPostgresTenantRepository(dbPool)
+	authzSvc := tenancyapplication.NewAuthorizationService(memberRepo, tenantRepo)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	admin := externaladapters.NewAdminHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+	appsPath := "/api/v1/tenants/{tenant_id}/integrations/apps"
+	route := func(pattern string, h http.HandlerFunc) {
+		s.mux.Handle(pattern, authnMiddleware(tenantSession(h)))
+	}
+	route("GET "+appsPath, admin.List)
+	route("POST "+appsPath, admin.Create)
+	route("GET "+appsPath+"/{app_id}", admin.Get)
+	route("PATCH "+appsPath+"/{app_id}", admin.Update)
+	route("POST "+appsPath+"/{app_id}/suspend", admin.Transition(externaladapters.Suspend, auditdomain.ActionExternalAppSuspended))
+	route("POST "+appsPath+"/{app_id}/reactivate", admin.Transition(externaladapters.Reactivate, auditdomain.ActionExternalAppReactivated))
+	route("POST "+appsPath+"/{app_id}/revoke", admin.Transition(externaladapters.Revoke, auditdomain.ActionExternalAppRevoked))
+	route("POST "+appsPath+"/{app_id}/credentials", admin.IssueCredential)
+	route("DELETE "+appsPath+"/{app_id}/credentials/{credential_id}", admin.RevokeCredential)
 }
 
 func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {

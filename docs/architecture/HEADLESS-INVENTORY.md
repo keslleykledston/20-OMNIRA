@@ -24,7 +24,7 @@ Campo vizinho: `conversations.automation_mode` (`none|bot|waiting_human|human`, 
 - **Lista/filtro:** `inbox/adapters/http.go:155,171,243,323`, `contacts/adapters/contact360.go:183`, `hub/adapters/http.go:377`, `hub/adapters/postgres.go:338`, `worker/hubprojector/projector.go:75` (projeta `hub_inbox_items.assigned_user_id`), `sectors/adapters/conversation_routing.go:69`, `intelligence/adapters/routing_repository.go:364`.
 - **SLA/timer:** `routing/engine/engine.go:142,191`, `sla.go:338` (titular ⇒ relógios de atribuição/fila cumpridos), `sla.go:346` (1ª resposta só conta `sent_by_user_id IS NOT NULL`), `routing/adapters/liveness_postgres.go:73` + índice parcial `000040` (varredura de paradas), `sectors/adapters/store.go:517`.
 - **Flow / bot:** `flows/adapters/gate.go:79,81` (job de entrada condicionado a `IS NULL`), `flows/application/engine.go:131,139` (`controls`, `Startable`), `flows/adapters/postgres_runs.go:30`, **`messages/adapters/outbound_system.go:35`** (bot só fala se `IS NULL`).
-- **Outros:** trigger `conversations_realtime_trg` (`000026`) emite `assigned_to_user_id` no NOTIFY; `contacts/adapters/kind.go:187` e `000110:80` (tirar de fila spam, `IS NULL`).
+- **Outros:** trigger `conversations_realtime_trg` (`000026`, o único trigger de tempo real de conversa; `000016`, `000040` e `000076` não definem trigger AFTER) dispara em `UPDATE OF assigned_to_user_id, status` e emite `assigned_to_user_id` no NOTIFY — **não dispara se só o controle mudar**, então H2 o recria; `contacts/adapters/kind.go:187` e `000110:80` (tirar de fila spam, `IS NULL`).
 - Nenhum dashboard/relatório/métrica lê o titular (`internal/dashboard` sem ocorrência).
 
 ### `assignment_events`
@@ -63,7 +63,7 @@ Tokens opacos reutilizáveis: `authn/device_store.go` (prefixo, 32 bytes, só o 
 Registro de rotas: `s.mux.Handle("METHOD /api/v1/tenants/{tenant_id}/…", authnMiddleware(tenantSession(h)))`; `delegable_routes_test.go` fixa a lista de rotas delegáveis.
 
 ## 6. Migrations e RLS
-Última: `000134`; próxima livre: `000135` (livre em todas as branches). Modelos de FORCE RLS: `000127` (laço `DO $$` + políticas membership/sistema + FK composta) e `000130`; `000131` (trigger `forbid_tenant_change`); `000015` (append-only); `000121` (inserts escopados). `internal/platform/db/rls_completeness_test.go` reprova tabela com `tenant_id` sem RLS+FORCE+política.
+Em `88e1828` a última é `000134`; esta branch acrescenta `000135` (H1) e seguintes; os números 135+ estavam livres em todas as branches em 2026-10-14. Modelos de FORCE RLS: `000127` (laço `DO $$` + políticas membership/sistema + FK composta) e `000130`; `000131` (trigger `forbid_tenant_change`); `000015` (append-only); `000121` (inserts escopados). `internal/platform/db/rls_completeness_test.go` reprova tabela com `tenant_id` sem RLS+FORCE+política.
 
 ## 7. Matriz: módulos que migram para o titular canônico
 | Módulo | Mudança | Como |

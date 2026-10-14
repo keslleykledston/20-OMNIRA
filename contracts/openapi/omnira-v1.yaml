@@ -42,6 +42,7 @@ tags:
   - { name: Webhooks, description: Provider callbacks (server-to-server) }
   - { name: Tenancy, description: "Tenant access: fixed platform roles (read-only) and the caller's effective permissions" }
   - { name: Agents, description: "Operational agents and queues (groups)" }
+  - { name: ExternalApps, description: "Administration of external applications (CRM) that use the Headless API (ADR-0046). For a person with integration.manage; never reachable by a Hub agent" }
 security:
   - bearerAuth: []
   - cookieAuth: []
@@ -4767,6 +4768,172 @@ paths:
         '409': { description: "Connection inactive or provider mismatch", content: { text/plain: { schema: { type: string } } } }
         '413': { description: "Body too large (1 MiB)", content: { text/plain: { schema: { type: string } } } }
         '503': { description: "Verification key unreadable / intake unavailable — WAHA retries", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps:
+    get:
+      operationId: listExternalApps
+      tags: [ExternalApps]
+      summary: External applications installed on the company
+      description: |
+        Requires `integration.read` (administrators and supervisors). Only exists when `OMNIRA_HEADLESS_ENABLED=true`. The public record of each
+        credential is listed; the token and its digest are never returned after creation.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: The installations, live ones first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAppList' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+    post:
+      operationId: createExternalApp
+      tags: [ExternalApps]
+      summary: Install an external application and issue its first credential
+      description: |
+        Requires `integration.manage` (administrators). The response carries the integration `token` **once**; the server keeps only a digest.
+        Unknown fields (including `tenant_id`) are refused with `400`. `queue_ids` / `channel_ids` limit the application to those queues / lines
+        (empty = all of the company); an id of another company is `400`. A name is unique among live installations (`409`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExternalAppCreate' }
+      responses:
+        '201':
+          description: The installation and its first credential (token shown once)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalAppCreated' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '409': { description: "An installation with this name already exists", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}:
+    get:
+      operationId: getExternalApp
+      tags: [ExternalApps]
+      summary: One external application
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      responses:
+        '200':
+          description: The installation with its credentials' public records
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalApp' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    patch:
+      operationId: updateExternalApp
+      tags: [ExternalApps]
+      summary: Rename, change scopes, allow-lists or limits
+      description: Requires `integration.manage`. A revoked installation is final (`409`). `queue_ids` / `channel_ids` REPLACE the previous lists (`[]` clears).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExternalAppUpdate' }
+      responses:
+        '200':
+          description: The updated installation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalApp' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Name in use, or the installation is revoked", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/suspend:
+    post:
+      operationId: suspendExternalApp
+      tags: [ExternalApps]
+      summary: Suspend an installation (it stops authenticating; its conversations are released)
+      description: Requires `integration.manage`. Reversible with `reactivate`. Conversations the application held are released in the same transaction.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      responses:
+        '200': { description: "The installation and how many conversations were released", content: { application/json: { schema: { $ref: '#/components/schemas/ExternalAppTransition' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Not allowed from the current status", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/reactivate:
+    post:
+      operationId: reactivateExternalApp
+      tags: [ExternalApps]
+      summary: Reactivate a suspended installation
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      responses:
+        '200': { description: "The installation", content: { application/json: { schema: { $ref: '#/components/schemas/ExternalAppTransition' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Not allowed from the current status", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/revoke:
+    post:
+      operationId: revokeExternalApp
+      tags: [ExternalApps]
+      summary: Revoke an installation for good (credentials revoked, conversations released)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      responses:
+        '200': { description: "The installation and how many conversations were released", content: { application/json: { schema: { $ref: '#/components/schemas/ExternalAppTransition' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Already revoked", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/credentials:
+    post:
+      operationId: issueExternalAppCredential
+      tags: [ExternalApps]
+      summary: Issue the next credential (rotation); the token is shown once
+      description: At most two credentials stay live (`409`). Revoke the old one after the application switched.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+                ttl_days: { type: integer, minimum: 1, maximum: 730 }
+      responses:
+        '201': { description: "The credential, with its token (once)", content: { application/json: { schema: { $ref: '#/components/schemas/ExternalAppIssuedCredential' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Two live credentials already, or the installation is revoked", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/credentials/{credential_id}:
+    delete:
+      operationId: revokeExternalAppCredential
+      tags: [ExternalApps]
+      summary: Revoke one credential now
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+        - { name: credential_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Revoked }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
 components:
   securitySchemes:
     bearerAuth:
@@ -4794,6 +4961,11 @@ components:
       schema: { type: string, format: uuid }
     ConversationId:
       name: conversation_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AppId:
+      name: app_id
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -4857,6 +5029,89 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    ExternalAppCredential:
+      type: object
+      required: [id, key_id, label, created_at, expires_at, live]
+      properties:
+        id: { type: string, format: uuid }
+        key_id: { type: string, description: "Public half of the token (omn_ext_<key_id>.<secret>)" }
+        label: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        live: { type: boolean }
+    ExternalAppIssuedCredential:
+      allOf:
+        - { $ref: '#/components/schemas/ExternalAppCredential' }
+        - type: object
+          required: [token]
+          properties:
+            token: { type: string, description: "Shown once; the server keeps only a SHA-256 digest of the secret" }
+    ExternalApp:
+      type: object
+      required: [id, name, status, scopes, queue_ids, channel_ids, rate_limit_per_min, allow_outside_hours, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 80 }
+        status: { type: string, enum: [active, suspended, revoked] }
+        scopes:
+          type: array
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send] }
+        queue_ids: { type: array, items: { type: string, format: uuid } }
+        channel_ids: { type: array, items: { type: string, format: uuid } }
+        rate_limit_per_min: { type: integer, minimum: 10, maximum: 6000 }
+        lease_seconds: { type: integer, minimum: 60, maximum: 86400, nullable: true }
+        allow_outside_hours: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        suspended_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        credentials: { type: array, items: { $ref: '#/components/schemas/ExternalAppCredential' } }
+    ExternalAppList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ExternalApp' } }
+        count: { type: integer }
+    ExternalAppCreate:
+      type: object
+      additionalProperties: false
+      required: [name, scopes]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        scopes: { type: array, minItems: 1, items: { type: string } }
+        queue_ids: { type: array, items: { type: string, format: uuid } }
+        channel_ids: { type: array, items: { type: string, format: uuid } }
+        rate_limit_per_min: { type: integer, minimum: 10, maximum: 6000, default: 600 }
+        lease_seconds: { type: integer, minimum: 60, maximum: 86400, nullable: true }
+        allow_outside_hours: { type: boolean, default: false }
+        credential_ttl_days: { type: integer, minimum: 1, maximum: 730, default: 365 }
+        credential_label: { type: string, maxLength: 80 }
+    ExternalAppUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        scopes: { type: array, minItems: 1, items: { type: string } }
+        queue_ids: { type: array, items: { type: string, format: uuid } }
+        channel_ids: { type: array, items: { type: string, format: uuid } }
+        rate_limit_per_min: { type: integer, minimum: 10, maximum: 6000 }
+        lease_seconds: { type: integer, minimum: 60, maximum: 86400 }
+        clear_lease: { type: boolean }
+        allow_outside_hours: { type: boolean }
+    ExternalAppCreated:
+      type: object
+      required: [installation, credential]
+      properties:
+        installation: { $ref: '#/components/schemas/ExternalApp' }
+        credential: { $ref: '#/components/schemas/ExternalAppIssuedCredential' }
+    ExternalAppTransition:
+      type: object
+      required: [installation, released_conversations]
+      properties:
+        installation: { $ref: '#/components/schemas/ExternalApp' }
+        released_conversations: { type: integer, description: "Conversations the application held and that were released in the same transaction" }
     HubList:
       type: object
       required: [items]

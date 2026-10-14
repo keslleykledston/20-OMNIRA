@@ -1,0 +1,110 @@
+openapi: 3.0.3
+info:
+  title: OMNIRA External API (Headless)
+  version: 1.0.0-lab
+  license: { name: Proprietary, url: 'https://omnira.devops.k3gsolutions.com.br' }
+  description: |
+    The API an external application (a CRM) uses to see and attend the same conversations as the OMNIRA Workspace. ADR-0046.
+
+    **Status: LAB — IMPLEMENTED in phases.** `GET /external/me` is served in this phase; the read API, the event journal and the write API arrive in
+    the next phases and are added to this file when they are wired (`/external/me` reports `features` so a client can tell what this build serves).
+    `internal/platform/httpserver/external_contract_test.go` fails when a documented route and a registered route diverge.
+
+    **Authentication.** `Authorization: Bearer omn_ext_<key_id>.<secret>`. The token is created by a tenant administrator (Configurações > Integrações >
+    Aplicações externas), shown once, and belongs to ONE installation of ONE company. The company is the one of the installation: it is never
+    chosen by the request. A request carrying `tenant_id` (query), `X-Tenant-ID` or `X-Omnira-Acting-As` is refused with `400 tenant_not_accepted`.
+
+    **Errors.** `application/problem+json` (RFC 9457) with the extension members `code` (stable) and `request_id`. Every response carries
+    `X-Request-ID` (the caller's own, 8-64 characters of `[A-Za-z0-9._:-]`, or generated) and `Cache-Control: no-store`.
+    `401 unauthenticated` is the only answer to a bad, unknown, expired, revoked or suspended credential (the cause is never revealed);
+    `403 forbidden_scope` means the installation lacks the scope; `404` is uniform for anything invisible; `429 rate_limited` carries `Retry-After`.
+servers:
+  - url: /api/v1
+    description: Same host as the OMNIRA API
+security:
+  - integrationToken: []
+tags:
+  - { name: Identity, description: "Who the credential is and what it may do" }
+paths:
+  /external/me:
+    get:
+      operationId: getExternalMe
+      tags: [Identity]
+      summary: The installation behind the credential, its scopes, limits, allow-lists and the features this build serves
+      description: Needs no scope. Reads nothing about conversations.
+      responses:
+        '200':
+          description: The caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    integrationToken:
+      type: http
+      scheme: bearer
+      description: "omn_ext_<key_id>.<secret>; only a digest of the secret is stored by OMNIRA"
+  responses:
+    Problem:
+      description: "RFC 9457 problem document"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, example: "urn:omnira:problem:unauthenticated" }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code: { type: string, description: "Stable, machine readable" }
+        request_id: { type: string }
+    Me:
+      type: object
+      required: [api_version, installation, tenant, scopes, limits, allowlist, features, server_time]
+      properties:
+        api_version: { type: string, example: v1 }
+        installation:
+          type: object
+          required: [id, name, status]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            status: { type: string, enum: [active] }
+        tenant:
+          type: object
+          description: "Informative only: the credential decides the company, a request can never choose it"
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+        scopes:
+          type: array
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send] }
+        limits:
+          type: object
+          required: [rate_limit_per_min, allow_outside_hours]
+          properties:
+            rate_limit_per_min: { type: integer }
+            lease_seconds: { type: integer, nullable: true, description: "CRM lease; null = held until released" }
+            allow_outside_hours: { type: boolean }
+        allowlist:
+          type: object
+          description: "Empty arrays mean every queue / every line of the company"
+          required: [queue_ids, channel_ids]
+          properties:
+            queue_ids: { type: array, items: { type: string, format: uuid } }
+            channel_ids: { type: array, items: { type: string, format: uuid } }
+        features:
+          type: object
+          required: [read_api, events_api, write_api]
+          properties:
+            read_api: { type: boolean }
+            events_api: { type: boolean }
+            write_api: { type: boolean }
+        server_time: { type: string, format: date-time }

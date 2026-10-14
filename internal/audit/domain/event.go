@@ -98,6 +98,15 @@ const (
 	// never contains message content, the generated summary, or any PII —
 	// see internal/ai/adapters/http.go's audit helpers.
 	ActionAIConversationSummarize AuditAction = "ai.conversation.summarize"
+
+	// ADR-0046 (Headless): administration of external applications. Never carries a secret or a token.
+	ActionExternalAppCreated           AuditAction = "external_app.created"
+	ActionExternalAppUpdated           AuditAction = "external_app.updated"
+	ActionExternalAppSuspended         AuditAction = "external_app.suspended"
+	ActionExternalAppReactivated       AuditAction = "external_app.reactivated"
+	ActionExternalAppRevoked           AuditAction = "external_app.revoked"
+	ActionExternalAppCredentialIssued  AuditAction = "external_app.credential_issued"
+	ActionExternalAppCredentialRevoked AuditAction = "external_app.credential_revoked"
 )
 
 // AuditOutcome — resultado da operação.
@@ -132,6 +141,7 @@ const (
 	ResourceAgentShift        ResourceType = "agent_shift"
 	ResourceOverflowPolicy    ResourceType = "overflow_policy"
 	ResourceSLAPolicy         ResourceType = "sla_policy"
+	ResourceExternalApp       ResourceType = "external_app"
 )
 
 // AuditEvent — evento de auditoria.

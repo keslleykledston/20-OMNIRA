@@ -6,6 +6,7 @@ import (
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	ports "github.com/omnira/omnira/internal/channels/ports"
+	externaladapters "github.com/omnira/omnira/internal/external/adapters"
 	toolconnectors "github.com/omnira/omnira/internal/tool/connectors"
 	"log"
 	"os"
@@ -112,7 +113,7 @@ func main() {
 			srv.SetupPresence(valkeyClient)
 		}
 	}
-	tenancyadapters.EnableDelegatedServing(cfg.HubServeEnabled) // ADR-0040 phase 02; off by default
+	tenancyadapters.EnableDelegatedServing(cfg.HubServeEnabled)   // ADR-0040 phase 02; off by default
 	tenancyadapters.LeastLoadedEnabled = cfg.RoutingEngineEnabled // ADR-0044: least_loaded is only honoured by the central routing engine
 	srv.ConfigureRateLimits(cfg.RateLimitUserPerMin, cfg.RateLimitTenantPerMin)
 	srv.SetupRateLimiting()
@@ -199,6 +200,8 @@ func main() {
 	if cfg.HubAPIEnabled {
 		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)
 	}
+	// ADR-0046: the external (CRM) API and its administration. Off by default; the features reported by /external/me say what this build serves.
+	srv.RegisterExternalHandlers(dbPool, cfg.HeadlessEnabled, externaladapters.Features{})
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions).

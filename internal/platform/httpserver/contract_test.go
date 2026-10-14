@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	externaladapters "github.com/omnira/omnira/internal/external/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
@@ -94,6 +95,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterIntelligenceHandlers(nil, intelligenceadapters.NewTopicHandler(nil, nil, nil))
 	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
 	s.RegisterHubHandlers(nil, true, true)
+	s.RegisterExternalHandlers(nil, true, externaladapters.Features{})
 	return s
 }
 

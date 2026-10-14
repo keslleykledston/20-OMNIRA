@@ -46,6 +46,9 @@ type Config struct {
 	// RoutingEngineSince (OMNIRA_ROUTING_ENGINE_SINCE, RFC 3339) is the creation-date floor of the engine's recovery of MANUAL-queue conversations it never saw.
 	// Unset = that recovery is off: conversations already open when the engine is switched on are not pulled into it.
 	RoutingEngineSince time.Time
+	// HeadlessEnabled mounts the external (CRM) API under /api/v1/external and the administration of external applications (ADR-0046).
+	// Default off: with it off none of those routes exists and the domain-event triggers emit nothing.
+	HeadlessEnabled bool
 	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
 	HubAdminAPIEnabled bool
 	// HubAccessAPIEnabled mounts the people-and-permissions routes of ADR-0039 (hub admins only). Needs HubAPIEnabled.
@@ -175,6 +178,7 @@ func Load() *Config {
 		HubProjectorEnabled:           getEnv("OMNIRA_HUB_PROJECTOR_ENABLED", "false") == "true",
 		RoutingEngineEnabled:          getEnv("OMNIRA_ROUTING_ENGINE_ENABLED", "false") == "true",
 		RoutingEngineSince:            parseRFC3339(os.Getenv("OMNIRA_ROUTING_ENGINE_SINCE")),
+		HeadlessEnabled:               getEnv("OMNIRA_HEADLESS_ENABLED", "false") == "true",
 		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
 		HubAccessAPIEnabled:           getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
 		HubServeEnabled:               getEnv("OMNIRA_HUB_SERVE_ENABLED", "false") == "true",
