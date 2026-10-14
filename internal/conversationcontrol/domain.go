@@ -84,6 +84,9 @@ var (
 	ErrNotExternal   = errors.New("conversation is not held by an external application")
 	ErrReasonNeeded  = errors.New("a reason is required")
 	ErrInvalidTarget = errors.New("the target cannot hold this conversation")
+	// ErrNotAllowed: the session may not change the hold of an external application (it is neither a system session nor a person holding
+	// conversation.takeover_external). The database refuses it (SQLSTATE OM004); this is the same refusal, named.
+	ErrNotAllowed = errors.New("not allowed to change the control of an external application")
 )
 
 // ReasonMaxLen mirrors the CHECK of conversation_control_events.reason.

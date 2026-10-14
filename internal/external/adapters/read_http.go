@@ -427,6 +427,13 @@ func (h *ReadHandler) GetMedia(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, mediaports.ErrMediaNotFound) {
 			return errNotVisible
 		}
+		if err == nil && served.ID != id { // the reader opens by message; authorization was for THIS media id (a message can carry a row in each media table)
+			if served.File != nil {
+				served.File.Close()
+			}
+			served = nil
+			return errNotVisible
+		}
 		return err
 	})
 	if err != nil {

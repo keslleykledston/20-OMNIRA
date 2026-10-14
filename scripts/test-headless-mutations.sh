@@ -5,10 +5,10 @@
 #   usage: scripts/test-headless-mutations.sh [phase ...]   (default: every phase that exists)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PHASES=${*:-"h1"}
+PHASES=${*:-"h1 h2 h3"}
 NAME=omnira-headlessmut-$$; DB=omnira_test_headlessmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/external/adapters/visibility.go internal/external/adapters/read_http.go internal/external/adapters/read_dto.go internal/messages/adapters/attachment_postgres.go internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go internal/conversationcontrol/service.go internal/conversationcontrol/http.go internal/routing/engine/engine.go internal/routing/adapters/assign.go internal/routing/adapters/postgres.go internal/messages/adapters/postgres.go internal/messages/adapters/attachment_postgres.go internal/messages/adapters/outbound_system.go internal/attendance/adapters/postgres.go internal/flows/application/engine.go internal/hub/replying/service.go"
+FILES="internal/external/delivery/worker.go internal/external/delivery/sign.go internal/external/netpolicy/ssrf.go internal/external/adapters/events_http.go internal/external/adapters/webhook_admin_http.go internal/external/adapters/event_visibility.go internal/media/adapters/reader.go internal/flows/adapters/effects_postgres.go internal/external/adapters/visibility.go internal/external/adapters/read_http.go internal/external/adapters/read_dto.go internal/messages/adapters/attachment_postgres.go internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go internal/conversationcontrol/service.go internal/conversationcontrol/http.go internal/routing/engine/engine.go internal/routing/adapters/assign.go internal/routing/adapters/postgres.go internal/messages/adapters/postgres.go internal/messages/adapters/attachment_postgres.go internal/messages/adapters/outbound_system.go internal/attendance/adapters/postgres.go internal/flows/application/engine.go internal/hub/replying/service.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -233,7 +233,26 @@ h2)
   sqlmut "anyone can write the history"                    $M "WITH CHECK (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'conversation.takeover_external'));" "WITH CHECK (true);"
   sqlmut "supervisors lose the takeover permission"        $M "r.key IN ('tenant_admin', 'tenant_supervisor') AND p.key = 'conversation.takeover_external'" "r.key IN ('tenant_admin') AND p.key = 'conversation.takeover_external'"
   sqlmut "the backfill calls every holder a member"        $M "THEN 'tenant_user' ELSE 'hub_user' END," "THEN 'tenant_user' ELSE 'tenant_user' END,"
-  T_PKGS="./internal/hub/adapters"; T_NEED=1; T_RUN="TestHubReply_RefusesAConversationAnExternalApplicationHolds"
+  T_PKGS="./internal/conversationcontrol"; T_NEED=1; T_RUN="TestOnlyTheControlService|TestTheControlHistory|TestFlowEffects|TestGuard|TestClaim"
+  sqlmut "the capability check accepts any session (current_user, not session_user)" $M "SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user" "SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user"
+  sqlmut "the capability outlives the transaction"        $M "AND c.xid = pg_current_xact_id_if_assigned() AND c.tenant_id = p_tenant" "AND c.tenant_id = p_tenant"
+  sqlmut "the capability opens every company"             $M "AND c.xid = pg_current_xact_id_if_assigned() AND c.tenant_id = p_tenant)" "AND c.xid = pg_current_xact_id_if_assigned())"
+  sqlmut "an agent may obtain the capability"             $M "IF NOT (is_system_admin() OR actor_has_permission(p_tenant, current_user_id(), 'conversation.takeover_external')) THEN" "IF false THEN"
+  sqlmut "the guard does not ask for the capability"      $M "AND (touched OR NEW.assigned_to_user_id IS DISTINCT FROM OLD.assigned_to_user_id) AND NOT conversation_control_cap_valid(OLD.tenant_id) THEN" "AND false THEN"
+  sqlmut "a hold can be forged at INSERT"                 $M "IF NEW.control_kind IN ('crm_application', 'crm_agent_verified') AND NOT conversation_control_cap_valid(NEW.tenant_id) THEN" "IF false THEN"
+  sqlmut "the history needs no capability"                $M "  IF NOT conversation_control_cap_valid(p_tenant) THEN
+    RAISE EXCEPTION 'not allowed to write the control history'" "  IF false THEN
+    RAISE EXCEPTION 'not allowed to write the control history'"
+  sqlmut "anyone may insert into the history (the grant AND the missing INSERT policy are repeated defences)" $M "GRANT SELECT ON conversation_control_events TO omnira_app;" "GRANT SELECT, INSERT ON conversation_control_events TO omnira_app; CREATE POLICY conversation_control_events_forge ON conversation_control_events FOR INSERT WITH CHECK (true);"
+  mut "a flow requeues an application's hold"             internal/flows/adapters/effects_postgres.go "	    AND c.control_kind IS NULL -- an external application's hold is not requeued by a flow (ADR-0046)
+" ""
+  mut "a flow hands off an application's hold"            internal/flows/adapters/effects_postgres.go "WHERE tenant_id=\$1 AND id=\$2 AND control_kind IS NULL\`" "WHERE tenant_id=\$1 AND id=\$2\`"
+  T_PKGS="./internal/hub/adapters"; T_NEED=1; T_RUN="TestTheDelegatedReclassificationSideEffectsCheckTheKeyThemselves"
+  sqlmut "the delegated dequeue takes a conversation an application holds" $M "AND c.assigned_to_user_id IS NULL AND c.control_kind IS NULL AND c.queue_id IS NOT NULL
+    AND EXISTS (SELECT 1 FROM public.contacts ct" "AND c.assigned_to_user_id IS NULL AND c.queue_id IS NOT NULL
+    AND EXISTS (SELECT 1 FROM public.contacts ct"
+  T_RUN="TestHubReply_RefusesAConversationAnExternalApplicationHolds"
+  T_PKGS="./internal/hub/adapters"; T_NEED=1
   HS=internal/hub/replying/service.go
   mut "the Hub claims what an application holds"           $HS "	if held { // after the access check" "	if false { // after the access check"
   mut "the Hub claim is not typed"                         $HS "control_kind = 'hub_user', control_holder_id = \$3, control_version = control_version + 1, control_since = now(), control_origin = 'hub'
@@ -265,7 +284,88 @@ h3)
   mut "every media type is served inline"                    $R "	if isInlineSafeMime(served.Mime) {" "	if true {"
   mut "media is served without nosniff"                      $R "	hd.Set(\"X-Content-Type-Options\", \"nosniff\")" "	_ = hd"
   mut "an installation may claim a held conversation (can)"  $D "Claim:    open && c.State == \"unassigned\" && p.Has(domain.ScopeConversationClaim)," "Claim:    open && p.Has(domain.ScopeConversationClaim),"
+  mut "a media id that is not the message's is served"       $R "		if err == nil && served.ID != id {" "		if false && err == nil && served.ID != id {"
   mut "the sender kind of a person is wrong"                 $R "m.Sender = SenderDTO{Kind: \"agent\"}" "m.Sender = SenderDTO{Kind: \"contact\"}"
+  ;;
+h4)
+  echo "== H4: journal, sequencer, events API, SSRF, signature, delivery"
+  T_PKGS="./internal/external/adapters ./internal/external/delivery ./internal/external/netpolicy"; T_NEED=3
+  T_RUN="TestJournal|TestSequencer|TestProducers|TestEventsAPI|TestBootstrap|TestWebhook|TestSignature|TestVerify|TestBackoff|TestBlockedIP|TestValidateURL|TestClient"
+  J=000137_domain_events.up.sql; WH=000138_webhooks.up.sql
+  EV=internal/external/adapters/events_http.go; WK=internal/external/delivery/worker.go; SG=internal/external/delivery/sign.go; NP=internal/external/netpolicy/ssrf.go; WA=internal/external/adapters/webhook_admin_http.go
+  sqlmut "a fact is numbered below an open transaction"  $J "WHERE e.seq IS NULL AND e.xid < horizon.h ORDER BY e.xid, e.ord LIMIT p_limit" "WHERE e.seq IS NULL ORDER BY e.xid, e.ord LIMIT p_limit"
+  sqlmut "facts are numbered out of transaction order"   $J "ORDER BY e.xid, e.ord LIMIT p_limit)
+    SELECT tenant_id, array_agg(id ORDER BY xid, ord) AS ids FROM due" "LIMIT p_limit)
+    SELECT tenant_id, array_agg(id) AS ids FROM due"
+  sqlmut "two sequencers run at once"                    $J "  IF NOT pg_try_advisory_xact_lock(hashtextextended('omnira.domain_events.sequencer', 0)) THEN
+    RETURN 0;
+  END IF;" ""
+  sqlmut "a fact is recorded without a live installation" $J "  IF NOT EXISTS (SELECT 1 FROM external_app_installations WHERE tenant_id = p_tenant AND status <> 'revoked') THEN
+    RETURN;
+  END IF;" ""
+  sqlmut "a fact of a hidden conversation is recorded"   $J "  IF p_conversation IS NOT NULL AND NOT external_conversation_visible(p_tenant, p_conversation) THEN
+    RETURN;
+  END IF;" ""
+  sqlmut "the visibility rule forgets spam contacts"     $J "AND vc.kind NOT IN ('internal', 'spam')))
+\$\$;" "AND vc.kind NOT IN ('internal')))
+\$\$;"
+  sqlmut "the message text travels in the fact"          $J "jsonb_build_object('direction', NEW.direction, 'type', NEW.message_type, 'status', NEW.status));" "jsonb_build_object('direction', NEW.direction, 'type', NEW.message_type, 'status', NEW.status, 'body', NEW.body));"
+  sqlmut "the status receipt fact is lost"               $J "FOR EACH ROW WHEN (NEW.status IS DISTINCT FROM OLD.status) EXECUTE FUNCTION domain_events_message_status();" "FOR EACH ROW WHEN (false) EXECUTE FUNCTION domain_events_message_status();"
+  sqlmut "retention drops facts that are not a prefix"   $J "DELETE FROM domain_events WHERE tenant_id = t.tenant_id AND seq IS NOT NULL AND seq <= cut;" "DELETE FROM domain_events WHERE tenant_id = t.tenant_id AND seq IS NOT NULL AND occurred_at < now() - p_keep;"
+  sqlmut "retention does not move min_seq"               $J "UPDATE domain_event_cursors SET min_seq = cut + 1, updated_at = now() WHERE tenant_id = t.tenant_id AND min_seq < cut + 1;" "SELECT 1;"
+  sqlmut "retention shorter than an hour is accepted"    $J "IF p_keep < interval '1 hour' THEN RAISE EXCEPTION 'retention shorter than one hour refused'; END IF;" ""
+  mut "the cursor from the future is accepted"           $EV "		if after > head {" "		if false {"
+  mut "a cursor older than the kept facts is accepted"   $EV "		if after+1 < min {" "		if false && after+1 < min {"
+  mut "an invisible fact is delivered"                   $EV "			if !visible {
+				continue
+			}" "			_ = visible"
+  mut "the cursor does not advance past filtered facts"  $EV "		out.NextCursor = strconv.FormatInt(last, 10)" "		out.NextCursor = strconv.FormatInt(after, 10)"
+  mut "a negative after is accepted"                     $EV "	if err != nil || after < 0 {" "	if err != nil {"
+  mut "another company's facts are readable (the journal predicate AND the visibility rule are repeated defences)" $EV "			   WHERE e.tenant_id = \`+t+\` AND e.seq IS NOT NULL" "			   WHERE e.seq IS NOT NULL" "		visConv := v.Conversation(\"c\", &args)" "		visConv := \"true\"; _ = v.Conversation(\"c\", &args)"
+  sqlmut "a fact is fanned out to a revoked installation" $WH "JOIN external_app_installations i ON i.tenant_id = s.tenant_id AND i.id = s.installation_id AND i.status = 'active'
+     WHERE s.status = 'active'" "JOIN external_app_installations i ON i.tenant_id = s.tenant_id AND i.id = s.installation_id
+     WHERE s.status = 'active'"
+  sqlmut "a delivery of a revoked installation is claimed" $WH "  UPDATE webhook_deliveries d SET status = 'cancelled', last_error_class = 'revoked'
+   WHERE d.status = 'pending' AND d.next_attempt_at <= now()" "  UPDATE webhook_deliveries d SET status = 'cancelled', last_error_class = 'revoked'
+   WHERE false AND d.status = 'pending' AND d.next_attempt_at <= now()"
+  sqlmut "the same fact is delivered twice"               $WH "  UNIQUE (subscription_id, event_seq)," "  UNIQUE (id),"
+  sqlmut "a fact that stopped being visible is dead, not cancelled" $WH "WHEN p_error_class = 'not_visible' THEN 'cancelled' " ""
+  sqlmut "the rotation keeps no previous secret"         $WH "previous_key_id = key_id, previous_secret_ciphertext = secret_ciphertext, previous_valid_until = now() + p_keep," "previous_key_id = NULL, previous_secret_ciphertext = NULL, previous_valid_until = NULL,"
+  sqlmut "anyone may rotate a secret"                    $WH "  IF NOT actor_has_permission(p_tenant, current_user_id(), 'integration.manage') THEN RETURN FALSE; END IF;" ""
+  sqlmut "the sealed secret is readable"                 $WH "GRANT SELECT (id, tenant_id, installation_id, url," "GRANT SELECT (secret_ciphertext, id, tenant_id, installation_id, url,"
+  mut "the signature ignores the timestamp"              $SG "	m.Write([]byte(strconv.FormatInt(timestamp, 10)))
+	m.Write([]byte{'.'})" "	m.Write([]byte{'.'})"
+  mut "an old call verifies"                             $SG "	if d > MaxClockSkew || d < -MaxClockSkew {
+		return false
+	}" "	_ = d"
+  mut "backoff has no ceiling"                           $SG "	if d > time.Hour {
+		d = time.Hour
+	}" ""
+  mut "the signature header drops the previous secret"   $SG "	if len(previous) > 0 {" "	if false {"
+  mut "the worker does not re-ask visibility"            $WK "	if !visible {" "	if false && !visible {"
+  mut "a redirect counts as success"                     $WK "	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		w.fail(ctx, c, resp.StatusCode, \"redirect\")" "	case false:
+		w.fail(ctx, c, resp.StatusCode, \"redirect\")"
+  mut "any status counts as success"                     $WK "	case resp.StatusCode >= 200 && resp.StatusCode < 300:" "	case true:"
+  mut "the retry window never ends"                      $WK "	if next.Sub(first) > w.Window {" "	if false && next.Sub(first) > w.Window {"
+  mut "the previous secret never expires"                $WK "c.prevValidUntil.After(w.now())" "true"
+  mut "the delivery id changes at every attempt"         $WK "	req.Header.Set(\"X-Omnira-Delivery-ID\", c.deliveryID.String())" "	req.Header.Set(\"X-Omnira-Delivery-ID\", uuid.NewString())"
+  mut "private addresses are dialed"                     $NP "				if !o.Allow(ip) {
+					return nil, ErrBlockedAddress
+				}" "				_ = ip"
+  mut "redirects are followed"                           $NP "		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }," ""
+  mut "the metadata address is allowed (prefix list AND IsLinkLocalUnicast)" $NP "		\"169.254.0.0/16\",  // link-local, AWS/GCP/Azure metadata
+" "" " || addr.IsLinkLocalUnicast()" ""
+  mut "IPv4-mapped IPv6 is not unmapped"                 $NP "	addr = addr.Unmap()" ""
+  mut "any port is allowed"                              $NP "			if !o.Ports[port] {
+				return nil, fmt.Errorf(\"%w: port %s\", ErrBadURL, port)
+			}" ""
+  mut "the webhook URL is not validated at save"         $WA "	if err := netpolicy.ValidateURL(req.URL); err != nil {
+		http.Error(w, \"the webhook URL must be https, on a public address, with no credentials, on port 443 or 8443\", http.StatusBadRequest)
+		return
+	}
+	var count int" "	var count int"
+  mut "more than five subscriptions are allowed"         $WA "	if count >= maxSubscriptionsPerInstallation {" "	if false {"
   ;;
 *) echo "unknown phase $phase"; exit 2;;
 esac

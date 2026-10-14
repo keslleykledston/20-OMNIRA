@@ -211,7 +211,14 @@ func main() {
 			log.Printf("external API: media store unavailable, media downloads disabled: %v", err)
 		}
 	}
-	srv.RegisterExternalHandlers(dbPool, cfg.HeadlessEnabled, externaladapters.Features{Read: true}, externalMedia)
+	var externalSealer externaladapters.Sealer // the signing secrets of webhook subscriptions are sealed with the platform key (ADR-0009)
+	if sealer, serr := channelcrypto.NewAESGCM(cfg.CredentialsKey); serr == nil {
+		externalSealer = sealer
+	} else if cfg.HeadlessEnabled {
+		log.Printf("external API: the webhook administration is off, the credentials key is unusable: %v", serr)
+	}
+	srv.RegisterExternalHandlers(dbPool, cfg.HeadlessEnabled, httpserver.ExternalOptions{
+		Features: externaladapters.Features{Read: true, Events: true}, Media: externalMedia, Sealer: externalSealer, RetentionDays: cfg.HeadlessEventRetentionDays})
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions).

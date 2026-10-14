@@ -4936,6 +4936,149 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "Already revoked", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/webhooks:
+    get:
+      operationId: listExternalAppWebhooks
+      tags: [ExternalApps]
+      summary: Webhook subscriptions of an external application (never their secrets)
+      description: Requires `integration.read`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      responses:
+        '200': { description: The subscriptions, content: { application/json: { schema: { $ref: '#/components/schemas/WebhookList' } } } }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    post:
+      operationId: createExternalAppWebhook
+      tags: [ExternalApps]
+      summary: Subscribe an HTTPS endpoint to facts; the signing secret is shown once
+      description: |
+        Requires `integration.manage`. The URL must be https, on a public address, with no credentials, on port 443 or 8443 (the address is checked again at every
+        delivery, so a name that later resolves to a private network is refused). At most 5 subscriptions per installation. A new subscription starts from NOW
+        (it does not replay the journal). Each call is signed: `X-Omnira-Signature: v1=HMAC_SHA256(secret, "<X-Omnira-Timestamp>.<raw body>")` (two values during a rotation),
+        with `X-Omnira-Event-ID`, `X-Omnira-Delivery-ID` (stable across retries) and `X-Omnira-Key-ID`. 2xx acknowledges; anything else is retried with backoff for 72 h, then the
+        delivery is dead-lettered (and can be retried by an administrator).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [url, event_types]
+              properties:
+                url: { type: string, format: uri }
+                event_types: { type: array, minItems: 1, items: { type: string } }
+      responses:
+        '201': { description: The subscription and its secret (once), content: { application/json: { schema: { $ref: '#/components/schemas/WebhookCreated' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Revoked installation, or already 5 subscriptions", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/webhooks/{hook_id}:
+    patch:
+      operationId: updateExternalAppWebhook
+      tags: [ExternalApps]
+      summary: Change the URL, the event types or pause/resume a subscription
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+        - { $ref: '#/components/parameters/HookId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                url: { type: string, format: uri }
+                event_types: { type: array, minItems: 1, items: { type: string } }
+                status: { type: string, enum: [active, paused] }
+      responses:
+        '200': { description: The subscription, content: { application/json: { schema: { $ref: '#/components/schemas/Webhook' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+    delete:
+      operationId: deleteExternalAppWebhook
+      tags: [ExternalApps]
+      summary: Delete a subscription (its deliveries go with it)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+        - { $ref: '#/components/parameters/HookId' }
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/webhooks/{hook_id}/rotate-secret:
+    post:
+      operationId: rotateExternalAppWebhookSecret
+      tags: [ExternalApps]
+      summary: New signing secret (shown once); the old one keeps verifying for keep_hours
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+        - { $ref: '#/components/parameters/HookId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                keep_hours: { type: integer, minimum: 1, maximum: 168, default: 24 }
+      responses:
+        '200': { description: The new secret, content: { application/json: { schema: { type: object, required: [key_id, secret], properties: { key_id: { type: string }, secret: { type: string }, previous_valid_hours: { type: integer } } } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/webhooks/{hook_id}/deliveries:
+    get:
+      operationId: listExternalAppWebhookDeliveries
+      tags: [ExternalApps]
+      summary: The delivery history and the dead-letter list (status=dead)
+      description: Requires `integration.read`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+        - { $ref: '#/components/parameters/HookId' }
+        - { name: status, in: query, schema: { type: string, enum: [pending, delivered, dead, cancelled] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200': { description: The deliveries, content: { application/json: { schema: { $ref: '#/components/schemas/WebhookDeliveryList' } } } }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/webhooks/{hook_id}/deliveries/{delivery_id}/retry:
+    post:
+      operationId: retryExternalAppWebhookDelivery
+      tags: [ExternalApps]
+      summary: Put a dead (or cancelled) delivery back in the queue, with a fresh retry window
+      description: Requires `integration.manage`. The installation must be active.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+        - { $ref: '#/components/parameters/HookId' }
+        - { name: delivery_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '202': { description: Queued again }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "The installation is not active", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/integrations/apps/{app_id}/credentials:
     post:
       operationId: issueExternalAppCredential
@@ -5005,6 +5148,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    HookId:
+      name: hook_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     AppId:
       name: app_id
       in: path
@@ -5070,6 +5218,57 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    Webhook:
+      type: object
+      required: [id, url, event_types, status, key_id, enqueued_through_seq, consecutive_failures, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        event_types: { type: array, items: { type: string } }
+        status: { type: string, enum: [active, paused] }
+        key_id: { type: string, description: "Sent in X-Omnira-Key-ID" }
+        previous_key_id: { type: string, nullable: true }
+        previous_valid_until: { type: string, format: date-time, nullable: true }
+        enqueued_through_seq: { type: integer, format: int64 }
+        consecutive_failures: { type: integer }
+        last_delivery_at: { type: string, format: date-time, nullable: true }
+        last_http_status: { type: integer, nullable: true }
+        last_error_class: { type: string, nullable: true, description: "timeout | connect | tls | blocked_address | http_status | redirect | not_visible | revoked" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    WebhookList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Webhook' } }
+        count: { type: integer }
+    WebhookCreated:
+      type: object
+      required: [subscription, secret]
+      properties:
+        subscription: { $ref: '#/components/schemas/Webhook' }
+        secret: { type: string, description: "whsec_..., shown once; only a sealed copy is kept" }
+    WebhookDelivery:
+      type: object
+      required: [id, event_id, event_seq, status, attempts, next_attempt_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        event_seq: { type: integer, format: int64 }
+        status: { type: string, enum: [pending, delivered, dead, cancelled] }
+        attempts: { type: integer }
+        next_attempt_at: { type: string, format: date-time }
+        last_attempt_at: { type: string, format: date-time, nullable: true }
+        delivered_at: { type: string, format: date-time, nullable: true }
+        last_http_status: { type: integer, nullable: true }
+        last_error_class: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    WebhookDeliveryList:
+      type: object
+      required: [items, count]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/WebhookDelivery' } }
+        count: { type: integer }
     ExternalAppCredential:
       type: object
       required: [id, key_id, label, created_at, expires_at, live]

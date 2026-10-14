@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
+	"github.com/omnira/omnira/internal/conversationcontrol"
 	"github.com/omnira/omnira/internal/external/adapters"
 	"github.com/omnira/omnira/internal/external/domain"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -43,6 +44,9 @@ type env struct {
 	addr string
 	seq  int
 	n    int // a counter for unique phone numbers and names in the fixtures
+	// adminH is the administration handler mounted on mux (the webhook administration shares it)
+	adminH  *adapters.AdminHandler
+	session func(http.Handler) http.Handler
 }
 
 func newEnv(t *testing.T) *env {
@@ -64,7 +68,9 @@ func newEnv(t *testing.T) *env {
 
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(app), tenancyadapters.NewPostgresTenantRepository(app))
 	tenantSession := tenancyadapters.AuthorizationMiddleware(app, authz)
-	admin := adapters.NewAdminHandler(app, auditadapters.NewPostgresAuditEventRepository(app))
+	e.session = tenantSession
+	admin := adapters.NewAdminHandler(app, auditadapters.NewPostgresAuditEventRepository(app)).WithDrainer(conversationcontrol.Service{}.DrainInstallation)
+	e.adminH = admin
 	e.mux = http.NewServeMux()
 	base := "/api/v1/tenants/{tenant_id}/integrations/apps"
 	route := func(p string, h http.HandlerFunc) { e.mux.Handle(p, tenantSession(h)) }

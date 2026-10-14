@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	externaladapters "github.com/omnira/omnira/internal/external/adapters"
 )
 
 // Gate 20 of ADR-0046: the external contract and the routes cannot drift. Forward: every operation documented in omnira-external-v1.yaml is a
@@ -50,7 +49,7 @@ func externalSpecOps(t *testing.T) []op {
 
 func TestEveryDocumentedExternalOperationIsARegisteredRoute(t *testing.T) {
 	s := New("127.0.0.1:0")
-	s.RegisterExternalHandlers(nil, true, externaladapters.Features{}, nil)
+	s.RegisterExternalHandlers(nil, true, ExternalOptions{Sealer: nilSealer{}})
 	for _, o := range externalSpecOps(t) {
 		concrete := paramRE.ReplaceAllString(o.path, "3f9c1b2e-0000-4000-8000-000000000001")
 		_, pattern := s.mux.Handler(httptest.NewRequest(o.method, concrete, nil))
@@ -88,7 +87,7 @@ func TestEveryRegisteredExternalRouteIsDocumented(t *testing.T) {
 // With the flag off the surface does not exist at all.
 func TestExternalRoutesDoNotExistWhenHeadlessIsOff(t *testing.T) {
 	s := New("127.0.0.1:0")
-	s.RegisterExternalHandlers(nil, false, externaladapters.Features{}, nil)
+	s.RegisterExternalHandlers(nil, false, ExternalOptions{Sealer: nilSealer{}})
 	for _, o := range externalSpecOps(t) {
 		if _, pattern := s.mux.Handler(httptest.NewRequest(o.method, strings.ReplaceAll(o.path, "{", "x"), nil)); pattern != "" {
 			t.Errorf("%s %s is routed with OMNIRA_HEADLESS_ENABLED off", o.method, o.path)
@@ -141,3 +140,8 @@ func TestEveryRegisteredExternalAdminRouteIsDocumented(t *testing.T) {
 		t.Errorf("documented under integrations/apps but not registered: %v", extra)
 	}
 }
+
+// nilSealer lets the contract tests mount the webhook administration without a platform key.
+type nilSealer struct{}
+
+func (nilSealer) Encrypt(b []byte) ([]byte, error) { return b, nil }

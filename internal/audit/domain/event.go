@@ -108,6 +108,11 @@ const (
 	ActionExternalAppCredentialIssued  AuditAction = "external_app.credential_issued"
 	ActionExternalAppCredentialRevoked AuditAction = "external_app.credential_revoked"
 	ActionConversationTakenOver        AuditAction = "conversation.takeover_external"
+	ActionExternalWebhookCreated       AuditAction = "external_app.webhook_created"
+	ActionExternalWebhookUpdated       AuditAction = "external_app.webhook_updated"
+	ActionExternalWebhookDeleted       AuditAction = "external_app.webhook_deleted"
+	ActionExternalWebhookSecretRotated AuditAction = "external_app.webhook_secret_rotated"
+	ActionExternalWebhookRetried       AuditAction = "external_app.webhook_delivery_retried"
 )
 
 // AuditOutcome — resultado da operação.

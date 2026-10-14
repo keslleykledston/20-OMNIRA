@@ -37,6 +37,7 @@ tags:
   - { name: Conversations, description: "Read the conversations and their messages" }
   - { name: Contacts, description: "Read a contact" }
   - { name: Media, description: "Download a message's file" }
+  - { name: Journal, description: "The durable journal of facts: checkpoint and replay" }
 paths:
   /external/me:
     get:
@@ -140,6 +141,42 @@ paths:
         '409': { $ref: '#/components/responses/Problem' }
         '410': { $ref: '#/components/responses/Problem' }
         '413': { $ref: '#/components/responses/Problem' }
+  /external/sync/checkpoint:
+    get:
+      operationId: getExternalCheckpoint
+      tags: [Journal]
+      summary: Where the journal is now (read it FIRST, then the snapshot, then the events after it)
+      description: |
+        Needs the scope `events.read`. Bootstrap without a gap: (1) read this checkpoint; (2) page the snapshot (`/external/conversations`, `/messages`); (3) read
+        `/external/events?after=<seq_head>` until `has_more` is false. A change committed before the checkpoint but numbered after it is both in the snapshot and
+        replayed (harmless: events are references); a change after the snapshot is replayed; none falls in between.
+      responses:
+        '200': { description: The checkpoint, content: { application/json: { schema: { $ref: '#/components/schemas/Checkpoint' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/events:
+    get:
+      operationId: listExternalEvents
+      tags: [Journal]
+      summary: The facts after a sequence number (at least once; replayable for the retention period)
+      description: |
+        Needs the scope `events.read`. `after` is required: the `seq_head` of the checkpoint, or the `next_cursor` of the previous page. Facts are written in the
+        transaction of the change they describe and numbered per company in an order that never lets a fact appear under a number already read. Each fact is
+        re-checked for visibility when it is read (an installation limited to a queue never hears about another queue). Envelopes carry references and
+        counters, never a message body, a phone number or an attachment: fetch the content from the read API.
+        `410 resync_required` when `after` is older than the facts kept (default 30 days) or is not a number this journal issued: read the checkpoint and rebuild
+        from the snapshot. `next_cursor` advances even when every fact of the window was filtered out.
+      parameters:
+        - { name: after, in: query, required: true, schema: { type: integer, format: int64, minimum: 0 } }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200': { description: A page of facts, content: { application/json: { schema: { $ref: '#/components/schemas/EventsPage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     integrationToken:
@@ -157,6 +194,47 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
   schemas:
+    Checkpoint:
+      type: object
+      required: [seq_head, min_seq, retention_days, at]
+      properties:
+        seq_head: { type: integer, format: int64, description: "The highest sequence number given. Start the replay with after=seq_head" }
+        min_seq: { type: integer, format: int64, description: "The lowest sequence number still kept" }
+        retention_days: { type: integer }
+        at: { type: string, format: date-time }
+    Event:
+      type: object
+      required: [event_id, seq, type, version, occurred_at, tenant_id, aggregate, origin, data]
+      properties:
+        event_id: { type: string, format: uuid, description: "Born with the fact and stable for ever: the key to deduplicate on" }
+        seq: { type: integer, format: int64 }
+        type: { type: string, enum: [conversation.created.v1, conversation.control_changed.v1, conversation.closed.v1, message.created.v1, message.status_changed.v1, contact.updated.v1, ticket.linked.v1] }
+        version: { type: integer }
+        occurred_at: { type: string, format: date-time }
+        tenant_id: { type: string, format: uuid, description: "Informative only" }
+        aggregate:
+          type: object
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [conversation, message, contact, ticket] }
+            id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        aggregate_version: { type: integer, format: int64, description: "For conversation facts the control version: order one conversation's facts by it" }
+        origin:
+          type: object
+          required: [kind]
+          properties:
+            kind: { type: string, enum: [channel, workspace, hub, crm, automation, system] }
+            mine: { type: boolean, description: "The fact was caused by this installation (so it can recognise its own echo and still follow later statuses)" }
+        data: { type: object, additionalProperties: true, description: "References and counters only" }
+    EventsPage:
+      type: object
+      required: [items, next_cursor, has_more, head]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Event' } }
+        next_cursor: { type: string, description: "Pass as `after` for the next page" }
+        has_more: { type: boolean }
+        head: { type: integer, format: int64 }
     Holder:
       type: object
       required: [kind, mine]

@@ -49,6 +49,9 @@ type Config struct {
 	// HeadlessEnabled mounts the external (CRM) API under /api/v1/external and the administration of external applications (ADR-0046).
 	// Default off: with it off none of those routes exists and the domain-event triggers emit nothing.
 	HeadlessEnabled bool
+	// HeadlessEventRetentionDays / HeadlessWebhookRetryHours: how long the journal of facts is kept and how long a webhook delivery is retried (ADR-0046).
+	HeadlessEventRetentionDays int
+	HeadlessWebhookRetryHours  int
 	// HubAdminAPIEnabled mounts the control-plane routes (companies, capabilities) of ADR-0038. Needs HubAPIEnabled.
 	HubAdminAPIEnabled bool
 	// HubAccessAPIEnabled mounts the people-and-permissions routes of ADR-0039 (hub admins only). Needs HubAPIEnabled.
@@ -179,6 +182,8 @@ func Load() *Config {
 		RoutingEngineEnabled:          getEnv("OMNIRA_ROUTING_ENGINE_ENABLED", "false") == "true",
 		RoutingEngineSince:            parseRFC3339(os.Getenv("OMNIRA_ROUTING_ENGINE_SINCE")),
 		HeadlessEnabled:               getEnv("OMNIRA_HEADLESS_ENABLED", "false") == "true",
+		HeadlessEventRetentionDays:    getEnvInt("OMNIRA_HEADLESS_EVENT_RETENTION_DAYS", 30),
+		HeadlessWebhookRetryHours:     getEnvInt("OMNIRA_HEADLESS_WEBHOOK_RETRY_HOURS", 72),
 		HubAdminAPIEnabled:            getEnv("OMNIRA_HUB_ADMIN_API_ENABLED", "false") == "true",
 		HubAccessAPIEnabled:           getEnv("OMNIRA_HUB_ACCESS_API_ENABLED", "false") == "true",
 		HubServeEnabled:               getEnv("OMNIRA_HUB_SERVE_ENABLED", "false") == "true",

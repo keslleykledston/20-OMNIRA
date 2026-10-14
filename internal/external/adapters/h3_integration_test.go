@@ -618,6 +618,9 @@ func TestEveryStatementOfTheExternalReadSideNamesTheTenant(t *testing.T) {
 			if !(strings.Contains(sql, "SELECT ") || strings.Contains(sql, "UPDATE ") || strings.Contains(sql, "INSERT ") || strings.Contains(sql, "DELETE ")) || !strings.Contains(sql, " FROM ") && !strings.Contains(sql, "UPDATE ") && !strings.Contains(sql, "INSERT ") {
 				continue
 			}
+			if strings.Contains(m[1], "external_installation_allowlists(") || strings.Contains(m[1], "external_credential_") || strings.Contains(m[1], "external_recheck(") {
+				continue // a call to a SECURITY DEFINER door that binds tenant + installation itself
+			}
 			checked++
 			// the shared constants carry the tenant through Visibility (conversation_select), which is built with it
 			if !strings.Contains(m[1], "tenant_id") && !strings.Contains(m[1], "conversations c") {
@@ -670,5 +673,66 @@ func TestReadAPIListLatencyOnAMidSizeCompany(t *testing.T) {
 	t.Logf("list of 50 on %d conversations: p50=%v p95=%v", n, p50, p95)
 	if p95 > 2*time.Second {
 		t.Errorf("p95 %v is far beyond what the keyset query should cost", p95)
+	}
+}
+
+// Codex H2/H3 HIGH: the file served is the one of the media id that was authorized. A message can carry a row in each media table; asking for the id of the one the
+// reader would not open first must not serve the other one.
+func TestReadAPIMediaServesTheRequestedMediaNotAnotherOfTheSameMessage(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	store, err := mediaadapters.NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.readAPI(mediaadapters.NewReader(e.app, store))
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin")
+	app := e.install(admin, a, "CRM", readScopes...)
+	conv, _ := e.conv(a, convOpts{})
+	msg := uuid.New()
+	e.exec(`INSERT INTO messages(id,tenant_id,conversation_id,direction,message_type,body,status) VALUES($1,$2,$3,'outbound','image','','sent')`, msg, a, conv)
+	inbound, outbound := uuid.New(), uuid.New()
+	e.exec(`INSERT INTO message_media(id,tenant_id,message_id,status,kind,mime,size_bytes,sha256) VALUES($1,$2,$3,'clean','image','image/png',8,$4)`, inbound, a, msg, strings.Repeat("a", 64))
+	e.exec(`INSERT INTO message_outbound_media(id,tenant_id,conversation_id,uploaded_by,kind,mime,size_bytes,sha256,message_id) VALUES($1,$2,$3,$4,'image','image/png',8,$5,$6)`, outbound, a, conv, admin, strings.Repeat("b", 64), msg)
+	w := mediaports.Work{ID: inbound, TenantID: a, MessageID: msg}
+	if err := store.PutQuarantine(w, []byte("INBOUND!")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Promote(w); err != nil {
+		t.Fatal(err)
+	}
+	if code, body, _ := e.callExt(http.MethodGet, "/api/v1/external/media/"+inbound.String(), app.Credential.Token, nil); code != 200 || string(body) != "INBOUND!" {
+		t.Fatalf("control: the inbound media = %d %q", code, body)
+	}
+	code, body, _ := e.callExt(http.MethodGet, "/api/v1/external/media/"+outbound.String(), app.Credential.Token, nil)
+	if code == 200 || strings.Contains(string(body), "INBOUND!") {
+		t.Fatalf("the id of one media served the file of another: %d %q", code, body)
+	}
+}
+
+// A cursor is a position, not a capability: one issued for a conversation's messages used on another conversation only positions inside that one.
+func TestReadAPIACursorOfOneConversationRevealsNothingOfAnother(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a := e.tenant()
+	app := e.install(e.member(a, "tenant_admin"), a, "CRM", readScopes...)
+	one, _ := e.conv(a, convOpts{})
+	two, _ := e.conv(a, convOpts{})
+	for i := 0; i < 5; i++ {
+		e.message(a, one, "inbound", fmt.Sprintf("um %d", i), "received", time.Duration(10-i)*time.Minute, nil)
+		e.message(a, two, "inbound", fmt.Sprintf("dois %d", i), "received", time.Duration(10-i)*time.Minute, nil)
+	}
+	code, body, _ := e.callExt(http.MethodGet, "/api/v1/external/conversations/"+one.String()+"/messages?limit=2", app.Credential.Token, nil)
+	var p struct {
+		NextCursor string `json:"next_cursor"`
+	}
+	_ = json.Unmarshal(body, &p)
+	if code != 200 || p.NextCursor == "" {
+		t.Fatalf("page of the first conversation = %d %s", code, body)
+	}
+	_, body, _ = e.callExt(http.MethodGet, "/api/v1/external/conversations/"+two.String()+"/messages?limit=50&cursor="+p.NextCursor, app.Credential.Token, nil)
+	if strings.Contains(string(body), "um ") {
+		t.Fatalf("the other conversation's page contains the first one's messages: %s", body)
 	}
 }

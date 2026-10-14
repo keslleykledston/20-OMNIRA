@@ -25,6 +25,7 @@ import (
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	cc "github.com/omnira/omnira/internal/conversationcontrol"
+	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesports "github.com/omnira/omnira/internal/messages/ports"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -168,6 +169,16 @@ func (e *env) human(tenant, user uuid.UUID, fn func(ctx context.Context) error) 
 	})
 }
 
+// sysCap is a system session that has asked for the capability of the control service, like the service itself does before a change of hold.
+func (e *env) sysCap(tenant uuid.UUID, fn func(ctx context.Context, q platformdb.Querier) error) error {
+	return e.sys(tenant, func(ctx context.Context, q platformdb.Querier) error {
+		if _, err := q.Exec(ctx, `SELECT conversation_control_begin($1)`, tenant); err != nil {
+			return err
+		}
+		return fn(ctx, q)
+	})
+}
+
 func pgCode(err error) string {
 	var pe *pgconn.PgError
 	if errors.As(err, &pe) {
@@ -262,7 +273,7 @@ func TestGuardDerivesForLegacyWritersAndRaisesOverAnExternalHold(t *testing.T) {
 		{"a Hub agent", `UPDATE conversations SET assigned_to_user_id=$3, control_kind='hub_user', control_holder_id=$3, control_origin='hub', control_version=control_version+1, control_since=now() WHERE tenant_id=$1 AND id=$2`, []any{tn, conv, u1}},
 		{"another application", `UPDATE conversations SET control_kind='crm_application', control_holder_id=$3, control_origin='crm', control_version=control_version+1, control_since=now() WHERE tenant_id=$1 AND id=$2`, []any{tn, conv, other2}},
 	} {
-		err = e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+		err = e.sysCap(tn, func(ctx context.Context, q platformdb.Querier) error { // even WITH the capability
 			_, err := q.Exec(ctx, w.sql, w.args...)
 			return err
 		})
@@ -274,7 +285,7 @@ func TestGuardDerivesForLegacyWritersAndRaisesOverAnExternalHold(t *testing.T) {
 		t.Fatalf("the hold changed: %+v", c)
 	}
 	// a canonical write must advance the version by exactly one
-	err = e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+	err = e.sysCap(tn, func(ctx context.Context, q platformdb.Querier) error {
 		_, err := q.Exec(ctx, `UPDATE conversations SET control_kind=NULL, control_holder_id=NULL, control_since=NULL, control_origin=NULL WHERE tenant_id=$1 AND id=$2`, tn, conv)
 		return err
 	})
@@ -283,7 +294,7 @@ func TestGuardDerivesForLegacyWritersAndRaisesOverAnExternalHold(t *testing.T) {
 	}
 	// the holder must exist in this company
 	conv2 := e.conversation(tn, nil, nil)
-	err = e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+	err = e.sysCap(tn, func(ctx context.Context, q platformdb.Querier) error {
 		_, err := q.Exec(ctx, `UPDATE conversations SET control_kind='crm_application', control_holder_id=$3, control_version=control_version+1, control_since=now(), control_origin='crm' WHERE tenant_id=$1 AND id=$2`, tn, conv2, uuid.New())
 		return err
 	})
@@ -293,7 +304,7 @@ func TestGuardDerivesForLegacyWritersAndRaisesOverAnExternalHold(t *testing.T) {
 	// an installation of ANOTHER company cannot hold this company's conversation
 	other := e.tenant()
 	foreign := e.installation(other)
-	err = e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+	err = e.sysCap(tn, func(ctx context.Context, q platformdb.Querier) error {
 		_, err := q.Exec(ctx, `UPDATE conversations SET control_kind='crm_application', control_holder_id=$3, control_version=control_version+1, control_since=now(), control_origin='crm' WHERE tenant_id=$1 AND id=$2`, tn, conv2, foreign)
 		return err
 	})
@@ -301,7 +312,7 @@ func TestGuardDerivesForLegacyWritersAndRaisesOverAnExternalHold(t *testing.T) {
 		t.Fatalf("another company's application = %v, want OM003", err)
 	}
 	// the shape: an application holder never coexists with a human assignee
-	err = e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+	err = e.sysCap(tn, func(ctx context.Context, q platformdb.Querier) error {
 		_, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, control_kind='crm_application', control_holder_id=$4, control_version=control_version+1, control_since=now(), control_origin='crm' WHERE tenant_id=$1 AND id=$2`, tn, conv2, u1, inst)
 		return err
 	})
@@ -783,26 +794,256 @@ func TestFinalizingReleasesTheApplicationHold(t *testing.T) {
 	}
 }
 
-// The typed history can be written only by who may take a conversation over (or by the system sessions that run the canonical service).
-func TestAnAgentCannotWriteTheControlHistory(t *testing.T) {
+// The typed history is written ONLY by conversation_control_record, which needs the capability of the control service and records what the conversation is now.
+func TestTheControlHistoryCannotBeForged(t *testing.T) {
 	e := newEnv(t)
 	tn := e.tenant()
-	agent := e.user(tn, "tenant_agent")
+	agent, sup := e.user(tn, "tenant_agent"), e.user(tn, "tenant_supervisor")
+	inst := e.installation(tn)
 	conv := e.conversation(tn, nil, nil)
-	err := e.human(tn, agent, func(ctx context.Context) error {
-		_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, `INSERT INTO conversation_control_events(tenant_id,conversation_id,control_version,actor_kind,reason) VALUES($1,$2,1,'tenant_user','forged')`, tn, conv)
-		return err
-	})
-	if err == nil {
-		t.Fatal("an agent wrote the control history")
+	insert := `INSERT INTO conversation_control_events(tenant_id,conversation_id,control_version,actor_kind,reason) VALUES($1,$2,1,'tenant_user','forged')`
+	// nobody inserts directly: not an agent, not a supervisor, not even a system session
+	for name, run := range map[string]func() error{
+		"an agent": func() error {
+			return e.human(tn, agent, func(ctx context.Context) error {
+				_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, insert, tn, conv)
+				return err
+			})
+		},
+		"a supervisor": func() error {
+			return e.human(tn, sup, func(ctx context.Context) error {
+				_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, insert, tn, conv)
+				return err
+			})
+		},
+		"a system session": func() error {
+			return e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+				_, err := q.Exec(ctx, insert, tn, conv)
+				return err
+			})
+		},
+	} {
+		if err := run(); pgCode(err) != "42501" {
+			t.Errorf("%s inserted into the history: %v, want permission denied", name, err)
+		}
 	}
-	sup := e.user(tn, "tenant_supervisor")
-	err = e.human(tn, sup, func(ctx context.Context) error {
-		_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, `INSERT INTO conversation_control_events(tenant_id,conversation_id,control_version,actor_kind,reason) VALUES($1,$2,1,'tenant_user','takeover')`, tn, conv)
+	record := `SELECT conversation_control_record($1,$2,NULL,NULL,'tenant_user',NULL,'forged',NULL,NULL)`
+	// the function refuses a writer without the capability
+	for name, run := range map[string]func() error{
+		"an agent": func() error {
+			return e.human(tn, agent, func(ctx context.Context) error {
+				_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, record, tn, conv)
+				return err
+			})
+		},
+		"a supervisor": func() error {
+			return e.human(tn, sup, func(ctx context.Context) error {
+				_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, record, tn, conv)
+				return err
+			})
+		},
+		"a system session without begin": func() error {
+			return e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+				_, err := q.Exec(ctx, record, tn, conv)
+				return err
+			})
+		},
+	} {
+		// (a system session is not a superuser and has not asked: refused)
+		if err := run(); pgCode(err) != "OM004" {
+			t.Errorf("%s wrote the history without the capability: %v, want OM004", name, err)
+		}
+	}
+	// with the capability (the claim asks for it) it writes what the conversation IS: the version and the holder come from the row, not from the caller
+	if _, _, err := e.claim(tn, conv, inst, nil); err != nil {
+		t.Fatal(err)
+	}
+	var version int64
+	var toKind, actorKind string
+	if err := e.seed.QueryRow(e.ctx, `SELECT control_version, to_kind, actor_kind FROM conversation_control_events WHERE conversation_id=$1 AND reason='crm_claim'`, conv).Scan(&version, &toKind, &actorKind); err != nil || version != 1 || toKind != "crm_application" || actorKind != "crm_application" {
+		t.Fatalf("the recorded state is not the real one: v%d %s %s (%v)", version, toKind, actorKind, err)
+	}
+	// a second row for the same version is refused (one description per real change)
+	err := e.sysCap(tn, func(ctx context.Context, q platformdb.Querier) error {
+		_, err := q.Exec(ctx, `SELECT conversation_control_record($1,$2,NULL,NULL,'crm_application',$3,'a note',NULL,NULL)`, tn, conv, inst)
 		return err
 	})
+	if pgCode(err) != "23505" {
+		t.Fatalf("a second history row for one version = %v, want a unique violation", err)
+	}
+}
+
+// The guard is a boundary: only a transaction that obtained the capability (a system session, or a person holding conversation.takeover_external) changes,
+// gives or ends the hold of an external application. An agent with arbitrary SQL cannot release, steal or forge one.
+func TestOnlyTheControlServiceChangesAnExternalHold(t *testing.T) {
+	e := newEnv(t)
+	tn, other := e.tenant(), e.tenant()
+	agent, sup := e.user(tn, "tenant_agent"), e.user(tn, "tenant_supervisor")
+	inst := e.installation(tn)
+	held, free := e.conversation(tn, nil, nil), e.conversation(tn, nil, nil)
+	if _, _, err := e.claim(tn, held, inst, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := e.control(held)
+
+	type attempt struct {
+		sql  string
+		args []any
+	}
+	attempts := map[string]attempt{
+		"release it":                 {`UPDATE conversations SET control_kind=NULL, control_holder_id=NULL, control_since=NULL, control_origin=NULL, control_version=control_version+1 WHERE id=$1`, []any{held}},
+		"hand it to a person":        {`UPDATE conversations SET assigned_to_user_id=$2, control_kind='tenant_user', control_holder_id=$2, control_origin='workspace', control_version=control_version+1 WHERE id=$1`, []any{held, agent}},
+		"only bump the version":      {`UPDATE conversations SET control_version=control_version+9 WHERE id=$1`, []any{held}},
+		"rewrite where it came from": {`UPDATE conversations SET control_origin='system' WHERE id=$1`, []any{held}},
+		"assign it the old way":      {`UPDATE conversations SET assigned_to_user_id=$2 WHERE id=$1`, []any{held, agent}},
+	}
+	forge := attempt{`UPDATE conversations SET control_kind='crm_application', control_holder_id=$2, control_origin='crm', control_since=now(), control_version=control_version+1 WHERE id=$1`, []any{free, inst}}
+	for who, run := range map[string]func(a attempt) error{
+		"an agent": func(a attempt) error {
+			return e.human(tn, agent, func(ctx context.Context) error {
+				_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, a.sql, a.args...)
+				return err
+			})
+		},
+		"a supervisor (raw SQL, without the capability)": func(a attempt) error {
+			return e.human(tn, sup, func(ctx context.Context) error {
+				_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, a.sql, a.args...)
+				return err
+			})
+		},
+		"a system session (without the capability)": func(a attempt) error {
+			return e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+				_, err := q.Exec(ctx, a.sql, a.args...)
+				return err
+			})
+		},
+	} {
+		for what, a := range attempts {
+			if err := run(a); pgCode(err) != "OM001" {
+				t.Errorf("%s: %s = %v, want OM001", who, what, err)
+			}
+		}
+		if err := run(forge); pgCode(err) != "OM001" { // forging a hold on a FREE conversation
+			t.Errorf("%s: forging a hold = %v, want OM001", who, err)
+		}
+	}
+	if got := e.control(held); got.Version != want.Version || *got.Kind != "crm_application" || *got.Holder != inst {
+		t.Fatalf("the hold changed: before %+v after %+v", want, got)
+	}
+	if got := e.control(free); got.Kind != nil {
+		t.Fatalf("a forged hold stuck: %+v", got)
+	}
+	// forging at INSERT
+	err := e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+		_, err := q.Exec(ctx, `INSERT INTO conversations(id,tenant_id,contact_id,status,control_kind,control_holder_id,control_since,control_origin,control_version)
+		                       SELECT $1,$2,contact_id,'open','crm_application',$3,now(),'crm',1 FROM conversations WHERE id=$4`, uuid.New(), tn, inst, free)
+		return err
+	})
+	if pgCode(err) != "OM001" {
+		t.Errorf("inserting a conversation already held by an application = %v, want OM001", err)
+	}
+
+	// who can get the capability
+	if err := e.human(tn, agent, func(ctx context.Context) error {
+		_, err := platformdb.QuerierFromContext(ctx, e.app).Exec(ctx, `SELECT conversation_control_begin($1)`, tn)
+		return err
+	}); pgCode(err) != "OM004" {
+		t.Errorf("an agent obtained the capability: %v, want OM004", err)
+	}
+	// a supervisor who asks (that is what the takeover does) may; the SAME change then goes through
+	if err := e.human(tn, sup, func(ctx context.Context) error {
+		q := platformdb.QuerierFromContext(ctx, e.app)
+		if _, err := q.Exec(ctx, `SELECT conversation_control_begin($1)`, tn); err != nil {
+			return err
+		}
+		_, err := q.Exec(ctx, `UPDATE conversations SET control_kind=NULL, control_holder_id=NULL, control_since=NULL, control_origin=NULL, control_version=control_version+1 WHERE id=$1`, held)
+		return err
+	}); err != nil {
+		t.Errorf("a supervisor with the capability could not release: %v", err)
+	}
+	if got := e.control(held); got.Kind != nil || got.Version != want.Version+1 {
+		t.Fatalf("after the supervisor's capability-backed release: %+v", got)
+	}
+
+	// the capability ends with the transaction (the same backend, the next transaction has none) and belongs to ONE company
+	cfg, err := pgxpool.ParseConfig(os.Getenv("OMNIRA_APP_DATABASE_URL"))
 	if err != nil {
-		t.Fatalf("control: a supervisor may write it: %v", err)
+		t.Fatal(err)
+	}
+	cfg.MaxConns = 1
+	one, err := pgxpool.NewWithConfig(e.ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer one.Close()
+	if _, _, err := e.claim(tn, held, inst, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := platformdb.WithSystemTenantSession(e.ctx, one, tn, func(ctx context.Context) error {
+		_, err := platformdb.QuerierFromContext(ctx, one).Exec(ctx, `SELECT conversation_control_begin($1)`, tn)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = platformdb.WithSystemTenantSession(e.ctx, one, tn, func(ctx context.Context) error { // same backend, next transaction
+		_, err := platformdb.QuerierFromContext(ctx, one).Exec(ctx, `UPDATE conversations SET control_kind=NULL, control_holder_id=NULL, control_since=NULL, control_origin=NULL, control_version=control_version+1 WHERE id=$1`, held)
+		return err
+	})
+	if pgCode(err) != "OM001" {
+		t.Errorf("the capability of a finished transaction still worked: %v", err)
+	}
+	otherInst := e.installation(other)
+	otherConv := e.conversation(other, nil, nil)
+	if _, _, err := e.claim(other, otherConv, otherInst, nil); err != nil {
+		t.Fatal(err)
+	}
+	err = e.sys(tn, func(ctx context.Context, q platformdb.Querier) error { // a capability for tenant tn does not open tenant other
+		if _, err := q.Exec(ctx, `SELECT conversation_control_begin($1)`, tn); err != nil {
+			return err
+		}
+		_, err := q.Exec(ctx, `UPDATE conversations SET control_kind=NULL, control_holder_id=NULL, control_since=NULL, control_origin=NULL, control_version=control_version+1 WHERE id=$1`, otherConv)
+		return err
+	})
+	if pgCode(err) != "OM001" {
+		t.Errorf("the capability of one company released another company's hold: %v", err)
+	}
+}
+
+// The flow's queue / hand-off effects do not touch a conversation an application holds, and keep working for a free one.
+func TestFlowEffectsLeaveAnExternalHoldAlone(t *testing.T) {
+	e := newEnv(t)
+	tn := e.tenant()
+	inst := e.installation(tn)
+	q1 := e.queue(tn, "manual")
+	held, free := e.conversation(tn, nil, nil), e.conversation(tn, nil, nil)
+	if _, _, err := e.claim(tn, held, inst, nil); err != nil {
+		t.Fatal(err)
+	}
+	fx := flowsadapters.NewPostgresEffects(e.app, nil)
+	state := func(conv uuid.UUID) (queue *uuid.UUID, mode string) {
+		if err := e.seed.QueryRow(e.ctx, `SELECT queue_id, automation_mode FROM conversations WHERE id=$1`, conv).Scan(&queue, &mode); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if err := e.sys(tn, func(ctx context.Context, q platformdb.Querier) error { return fx.Handoff(ctx, held, &q1) }); err != nil {
+		t.Fatalf("handoff over a hold: %v", err)
+	}
+	if queue, mode := state(held); queue != nil || mode == "waiting_human" {
+		t.Fatalf("a flow moved a conversation an application holds: queue=%v mode=%s", queue, mode)
+	}
+	if err := e.sys(tn, func(ctx context.Context, q platformdb.Querier) error { return fx.Handoff(ctx, free, &q1) }); err != nil {
+		t.Fatalf("control: handoff of a free conversation: %v", err)
+	}
+	if queue, mode := state(free); queue == nil || *queue != q1 || mode != "waiting_human" {
+		t.Fatalf("control: a free conversation must be queued and handed off: queue=%v mode=%s", queue, mode)
+	}
+	// a queue that does not exist is still an error (not hidden by the hold)
+	if err := e.sys(tn, func(ctx context.Context, q platformdb.Querier) error {
+		missing := uuid.New()
+		return fx.AssignQueue(ctx, held, &missing)
+	}); err == nil {
+		t.Fatal("a missing queue must still be reported")
 	}
 }
 

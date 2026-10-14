@@ -8,7 +8,10 @@ import (
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
+	headlessdelivery "github.com/omnira/omnira/internal/external/delivery"
+	"github.com/omnira/omnira/internal/external/netpolicy"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	headlessworker "github.com/omnira/omnira/internal/worker/headless"
 	"log"
 	"net/http"
 	"os"
@@ -230,6 +233,19 @@ func main() {
 		interval := time.Duration(cfg.HubProjectorIntervalSeconds) * time.Second
 		go hubprojector.New(dbPool).Run(workerCtx, interval)
 		log.Printf("Hub inbox projector started (every %s)\n", interval)
+	}
+	// ADR-0046 H4: the external API's background work — numbering the journal, fanning facts out to webhook subscriptions, delivering them at least once, expiring
+	// old facts. Only when OMNIRA_HEADLESS_ENABLED=true and the Headless migrations (135+) are applied.
+	if cfg.HeadlessEnabled {
+		hookCipher, herr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
+		if herr != nil {
+			log.Fatalf("headless: the credentials key is unusable (webhook secrets cannot be opened): %v", herr)
+		}
+		hookClient := netpolicy.NewClient(netpolicy.Options{})
+		hookWorker := headlessdelivery.NewWorker(dbPool, hookCipher, hookClient)
+		hookWorker.Window = time.Duration(cfg.HeadlessWebhookRetryHours) * time.Hour
+		go headlessworker.New(dbPool, hookWorker, cfg.HeadlessEventRetentionDays).Run(workerCtx)
+		log.Printf("Headless worker started (journal sequencer, webhook delivery, retention %dd, retry window %dh)\n", cfg.HeadlessEventRetentionDays, cfg.HeadlessWebhookRetryHours)
 	}
 	// ADR-0038 phase 4: distribute new conversations among the members of round-robin work pools (needs migration 104).
 	if cfg.HubDistributorEnabled {

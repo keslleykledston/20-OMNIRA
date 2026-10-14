@@ -78,6 +78,9 @@ func (h *TakeoverHandler) Takeover(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrReasonNeeded):
 		http.Error(w, "a reason is required", http.StatusBadRequest)
 		return
+	case errors.Is(err, ErrNotAllowed):
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	case errors.Is(err, ErrNotFound):
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return

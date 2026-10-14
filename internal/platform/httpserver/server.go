@@ -26,6 +26,7 @@ import (
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	"github.com/omnira/omnira/internal/entitlements"
 	externaladapters "github.com/omnira/omnira/internal/external/adapters"
+	externaldelivery "github.com/omnira/omnira/internal/external/delivery"
 	externaldomain "github.com/omnira/omnira/internal/external/domain"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
@@ -569,20 +570,32 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 //   - the external API itself, for an APPLICATION (bearer integration token; no cookie, no session, the tenant comes from the credential).
 //
 // With the flag off nothing here exists (404), so the platform is byte-for-byte what it was.
-func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, features externaladapters.Features, media mediaports.MediaReader) {
+// ExternalOptions are the parts of the external API that depend on how the process is configured.
+type ExternalOptions struct {
+	Features      externaladapters.Features
+	Media         mediaports.MediaReader  // cleared-files reader; nil: the media route answers 404
+	Sealer        externaladapters.Sealer // encrypts webhook signing secrets; nil: the webhook administration is not mounted
+	RetentionDays int                     // how long the journal is kept (reported by the checkpoint)
+}
+
+func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o ExternalOptions) {
 	if !enabled {
 		return
 	}
 	// the external API: authenticated by the integration token only
 	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
-	s.mux.Handle("GET /api/v1/external/me", ext.Authenticated(externaladapters.NewMeHandler(dbPool, features)))
+	s.mux.Handle("GET /api/v1/external/me", ext.Authenticated(externaladapters.NewMeHandler(dbPool, o.Features)))
 	// the read side (H3): one visibility rule for all of it (externaladapters.Visibility)
-	read := externaladapters.NewReadHandler(dbPool, media)
+	read := externaladapters.NewReadHandler(dbPool, o.Media)
+	events := externaladapters.NewEventsHandler(dbPool, o.RetentionDays)
 	s.mux.Handle("GET /api/v1/external/conversations", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.ListConversations))))
 	s.mux.Handle("GET /api/v1/external/conversations/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.GetConversation))))
 	s.mux.Handle("GET /api/v1/external/conversations/{id}/messages", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMessageRead, http.HandlerFunc(read.ListMessages))))
 	s.mux.Handle("GET /api/v1/external/contacts/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactRead, http.HandlerFunc(read.GetContact))))
 	s.mux.Handle("GET /api/v1/external/media/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMediaRead, http.HandlerFunc(read.GetMedia))))
+	// the durable journal (H4): the checkpoint to bootstrap from and the facts after a sequence number
+	s.mux.Handle("GET /api/v1/external/sync/checkpoint", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.Checkpoint))))
+	s.mux.Handle("GET /api/v1/external/events", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.ListEvents))))
 
 	if s.authenticator == nil {
 		return // administration needs a working sign-in
@@ -609,6 +622,16 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, fe
 	route("POST "+appsPath+"/{app_id}/revoke", admin.Transition(externaladapters.Revoke, auditdomain.ActionExternalAppRevoked))
 	route("POST "+appsPath+"/{app_id}/credentials", admin.IssueCredential)
 	route("DELETE "+appsPath+"/{app_id}/credentials/{credential_id}", admin.RevokeCredential)
+	if o.Sealer != nil { // the webhook subscriptions of an installation (needs the platform key to seal the signing secrets)
+		hooks := externaladapters.NewWebhookHandler(admin, o.Sealer, externaldelivery.NewSecret)
+		route("GET "+appsPath+"/{app_id}/webhooks", hooks.List)
+		route("POST "+appsPath+"/{app_id}/webhooks", hooks.Create)
+		route("PATCH "+appsPath+"/{app_id}/webhooks/{hook_id}", hooks.Update)
+		route("DELETE "+appsPath+"/{app_id}/webhooks/{hook_id}", hooks.Delete)
+		route("POST "+appsPath+"/{app_id}/webhooks/{hook_id}/rotate-secret", hooks.Rotate)
+		route("GET "+appsPath+"/{app_id}/webhooks/{hook_id}/deliveries", hooks.Deliveries)
+		route("POST "+appsPath+"/{app_id}/webhooks/{hook_id}/deliveries/{delivery_id}/retry", hooks.Retry)
+	}
 	// the supervisor's explicit takeover of a conversation an application holds (conversation.takeover_external, reason, confirmation)
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/takeover", authnMiddleware(tenantSession(http.HandlerFunc(takeover.Takeover))))
 }

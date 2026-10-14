@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
@@ -51,15 +52,26 @@ func (s Service) Lock(ctx context.Context, q platformdb.Querier, tenantID, conve
 	return s.load(ctx, q, tenantID, conversationID, true)
 }
 
-func (Service) record(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, before State, afterKind *Kind, afterHolder *uuid.UUID, version int64, actor Actor, reason string) error {
-	var fromKind, toKind *string
+// begin asks the database for the capability to change the hold of an external application in THIS transaction (see migration 136): granted to a system
+// session and to a person holding conversation.takeover_external, refused (ErrNotAllowed) to anybody else.
+func (Service) begin(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID) error {
+	if _, err := q.Exec(ctx, `SELECT conversation_control_begin($1)`, tenantID); err != nil {
+		var pe *pgconn.PgError
+		if errors.As(err, &pe) && pe.Code == "OM004" {
+			return ErrNotAllowed
+		}
+		return err
+	}
+	return nil
+}
+
+// record writes the typed history through conversation_control_record: the database fills in what the conversation IS now (version, holder) and refuses a
+// writer without the capability, so a row can only describe a change that happened in this transaction.
+func (Service) record(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, before State, actor Actor, reason string) error {
+	var fromKind *string
 	if before.Kind != nil {
 		k := string(*before.Kind)
 		fromKind = &k
-	}
-	if afterKind != nil {
-		k := string(*afterKind)
-		toKind = &k
 	}
 	var actorID *uuid.UUID
 	if actor.ID != uuid.Nil {
@@ -72,11 +84,8 @@ func (Service) record(ctx context.Context, q platformdb.Querier, tenantID uuid.U
 		}
 		return &s
 	}
-	_, err := q.Exec(ctx, `
-		INSERT INTO conversation_control_events(tenant_id, conversation_id, control_version, from_kind, from_holder_id, to_kind, to_holder_id,
-		                                        actor_kind, actor_id, reason, request_id, claimed_agent_ref)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		tenantID, before.ConversationID, version, fromKind, before.HolderID, toKind, afterHolder, string(actor.Kind), actorID, reason, nz(actor.RequestID), nz(actor.ClaimedAgentRef))
+	_, err := q.Exec(ctx, `SELECT conversation_control_record($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		tenantID, before.ConversationID, fromKind, before.HolderID, string(actor.Kind), actorID, reason, nz(actor.RequestID), nz(actor.ClaimedAgentRef))
 	return err
 }
 
@@ -125,14 +134,16 @@ func (s Service) ClaimByApplication(ctx context.Context, q platformdb.Querier, t
 	if ifMatch != nil && *ifMatch != cur.Version {
 		return cur, false, ErrStaleVersion
 	}
+	if err := s.begin(ctx, q, tenantID); err != nil {
+		return cur, false, err
+	}
 	next := cur.Version + 1
 	if _, err := q.Exec(ctx, `
 		UPDATE conversations SET control_kind = 'crm_application', control_holder_id = $3, control_version = $4, control_since = now(), control_origin = 'crm', updated_at = now()
 		 WHERE tenant_id = $1 AND id = $2`, tenantID, conversationID, installationID, next); err != nil {
 		return cur, false, err
 	}
-	kind := KindCRMApplication
-	if err := s.record(ctx, q, tenantID, cur, &kind, &installationID, next, actor, "crm_claim"); err != nil {
+	if err := s.record(ctx, q, tenantID, cur, actor, "crm_claim"); err != nil {
 		return cur, false, err
 	}
 	st, err := s.Get(ctx, q, tenantID, conversationID)
@@ -157,13 +168,16 @@ func (s Service) ReleaseByApplication(ctx context.Context, q platformdb.Querier,
 
 // free sets the conversation free (the conversation is locked and loaded by the caller), records it and asks the router to look at it.
 func (s Service) free(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID, cur State, actor Actor, reason string) (State, error) {
+	if err := s.begin(ctx, q, tenantID); err != nil {
+		return cur, err
+	}
 	next := cur.Version + 1
 	if _, err := q.Exec(ctx, `
 		UPDATE conversations SET control_kind = NULL, control_holder_id = NULL, control_since = NULL, control_origin = NULL, control_version = $3, updated_at = now()
 		 WHERE tenant_id = $1 AND id = $2`, tenantID, cur.ConversationID, next); err != nil {
 		return cur, err
 	}
-	if err := s.record(ctx, q, tenantID, cur, nil, nil, next, actor, reason); err != nil {
+	if err := s.record(ctx, q, tenantID, cur, actor, reason); err != nil {
 		return cur, err
 	}
 	if err := s.requestRouting(ctx, q, tenantID, cur.ConversationID); err != nil {
@@ -190,6 +204,9 @@ func (s Service) TakeOver(ctx context.Context, q platformdb.Querier, tenantID, c
 	if !cur.HeldExternally() {
 		return cur, ErrNotExternal
 	}
+	if err := s.begin(ctx, q, tenantID); err != nil {
+		return cur, err
+	}
 	next := cur.Version + 1
 	if _, err := q.Exec(ctx, `
 		UPDATE conversations
@@ -198,8 +215,7 @@ func (s Service) TakeOver(ctx context.Context, q platformdb.Querier, tenantID, c
 		 WHERE tenant_id = $1 AND id = $2`, tenantID, conversationID, supervisor, next); err != nil {
 		return cur, err
 	}
-	kind := KindTenantUser
-	if err := s.record(ctx, q, tenantID, cur, &kind, &supervisor, next, Actor{Kind: ActorTenantUser, ID: supervisor, RequestID: requestID}, "takeover: "+why); err != nil {
+	if err := s.record(ctx, q, tenantID, cur, Actor{Kind: ActorTenantUser, ID: supervisor, RequestID: requestID}, "takeover: "+why); err != nil {
 		return cur, err
 	}
 	if _, err := q.Exec(ctx, `
