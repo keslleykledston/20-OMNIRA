@@ -64,6 +64,16 @@ type WriteDeps struct {
 // SectorsEligible is the rule the router applies to a person of a queue (membership, active, shift, capacity). Presence is not asked: it lives in Valkey,
 // which is not transactional, and a transfer to a named person is the application's explicit choice.
 func SectorsEligible(ctx context.Context, q platformdb.Querier, tenant, queue, user uuid.UUID) (bool, error) {
+	// The same protocol the router follows before it hands a conversation to a person (engine.tryAssignLocked): the member row, then the person's advisory lock,
+	// and only THEN the fresh snapshot. Both stay held until the transaction ends, so the router (or another transfer) cannot use up the capacity between the
+	// look and the update.
+	var member int
+	if err := q.QueryRow(ctx, `SELECT 1 FROM queue_members WHERE tenant_id=$1 AND queue_id=$2 AND user_id=$3 FOR UPDATE`, tenant, queue, user).Scan(&member); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('routing:agent:' || $1::text || ':' || $2::text, 0))`, tenant, user); err != nil {
+		return false, err
+	}
 	snap, err := sectorsadapters.SnapshotWith(ctx, q, tenant, queue, time.Now(), nil, sectorsadapters.SnapshotOptions{Only: &user, SkipPresence: true})
 	if err != nil {
 		return false, err
@@ -155,17 +165,50 @@ type cmdSpec struct {
 
 // ---- payloads ----
 
-type emptyPayload struct{}
+// ExternalAgentID is a free label the application may attach to say which of ITS operators acted. It is recorded in the history and the audit as UNVERIFIED
+// metadata (never an identity, never a user of OMNIRA, never used to decide anything).
+const maxExternalAgentID = 80
+
+var externalAgentPattern = regexp.MustCompile(`^[A-Za-z0-9._:@/+ -]{1,80}$`)
+
+func checkAgentRef(ref string) error {
+	if ref != "" && !externalAgentPattern.MatchString(ref) {
+		return errors.New("external_agent_id must be 1 to 80 characters of letters, digits and . _ : @ / + - or space")
+	}
+	return nil
+}
+
+type emptyPayload struct {
+	ExternalAgentID string `json:"external_agent_id,omitempty"`
+}
 
 func decodeEmpty(body []byte) (any, []byte, error) {
-	if len(bytes.TrimSpace(body)) == 0 {
-		return emptyPayload{}, []byte("{}"), nil
-	}
 	var v emptyPayload
-	if err := strictJSON(body, &v); err != nil {
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := strictJSON(body, &v); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := checkAgentRef(v.ExternalAgentID); err != nil {
 		return nil, nil, err
 	}
-	return v, []byte("{}"), nil
+	c, _ := json.Marshal(v)
+	return v, c, nil
+}
+
+// agentRefOf reads the label out of whichever payload the command carried.
+func agentRefOf(p any) string {
+	switch v := p.(type) {
+	case emptyPayload:
+		return v.ExternalAgentID
+	case transferPayload:
+		return v.ExternalAgentID
+	case messagePayload:
+		return v.ExternalAgentID
+	case finalizePayload:
+		return v.ExternalAgentID
+	}
+	return ""
 }
 
 func strictJSON(body []byte, dst any) error {
@@ -174,15 +217,16 @@ func strictJSON(body []byte, dst any) error {
 	if err := dec.Decode(dst); err != nil {
 		return errors.New("the body must be a JSON object with the documented fields only")
 	}
-	if dec.More() {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) { // anything after the object (a second document, even whitespace-separated) is refused
 		return errors.New("the body must be one JSON object")
 	}
 	return nil
 }
 
 type transferPayload struct {
-	QueueID uuid.UUID  `json:"queue_id"`
-	UserID  *uuid.UUID `json:"user_id,omitempty"`
+	QueueID         uuid.UUID  `json:"queue_id"`
+	UserID          *uuid.UUID `json:"user_id,omitempty"`
+	ExternalAgentID string     `json:"external_agent_id,omitempty"`
 }
 
 func decodeTransfer(body []byte) (any, []byte, error) {
@@ -192,6 +236,9 @@ func decodeTransfer(body []byte) (any, []byte, error) {
 	}
 	if v.QueueID == uuid.Nil {
 		return nil, nil, errors.New("queue_id is required")
+	}
+	if err := checkAgentRef(v.ExternalAgentID); err != nil {
+		return nil, nil, err
 	}
 	c, _ := json.Marshal(v)
 	return v, c, nil
@@ -203,8 +250,9 @@ type templatePayload struct {
 }
 
 type messagePayload struct {
-	Text     string           `json:"text,omitempty"`
-	Template *templatePayload `json:"template,omitempty"`
+	Text            string           `json:"text,omitempty"`
+	Template        *templatePayload `json:"template,omitempty"`
+	ExternalAgentID string           `json:"external_agent_id,omitempty"`
 }
 
 func decodeMessage(body []byte) (any, []byte, error) {
@@ -218,13 +266,17 @@ func decodeMessage(body []byte) (any, []byte, error) {
 	if v.Template != nil && v.Template.ID == uuid.Nil {
 		return nil, nil, errors.New("template.id is required")
 	}
+	if err := checkAgentRef(v.ExternalAgentID); err != nil {
+		return nil, nil, err
+	}
 	c, _ := json.Marshal(v)
 	return v, c, nil
 }
 
 type finalizePayload struct {
-	Reason string `json:"reason,omitempty"`
-	Note   string `json:"note,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	Note            string `json:"note,omitempty"`
+	ExternalAgentID string `json:"external_agent_id,omitempty"`
 }
 
 func decodeFinalize(body []byte) (any, []byte, error) {
@@ -239,6 +291,9 @@ func decodeFinalize(body []byte) (any, []byte, error) {
 	}
 	if !attendancedomain.CloseReason(v.Reason).Valid() {
 		return nil, nil, errors.New("reason must be one of resolved, no_response, duplicate, spam, transferred, other")
+	}
+	if err := checkAgentRef(v.ExternalAgentID); err != nil {
+		return nil, nil, err
 	}
 	c, _ := json.Marshal(v)
 	return v, c, nil
@@ -289,10 +344,17 @@ func (h *WriteHandler) claimSpec() cmdSpec {
 		}
 		// Outside the sector's calendar an application may not take a conversation unless the administrator allowed it for this installation.
 		// Repeating a claim it already holds changes nothing, so the calendar is not asked again.
-		if !cur.HeldBy(conversationcontrol.KindCRMApplication, in.p.InstallationID) && in.queueID != nil && !in.p.AllowOutsideHours && h.d.QueueOpen != nil {
-			open, err := h.d.QueueOpen(ctx, q, in.p.TenantID, *in.queueID)
-			if err != nil {
+		if !cur.HeldBy(conversationcontrol.KindCRMApplication, in.p.InstallationID) && !in.p.AllowOutsideHours && h.d.QueueOpen != nil {
+			var queue *uuid.UUID // read now, with the conversation locked: the queue it is in is the one whose calendar decides
+			if err := q.QueryRow(ctx, `SELECT queue_id FROM conversations WHERE tenant_id = $1 AND id = $2`, in.p.TenantID, in.conv).Scan(&queue); err != nil {
 				return nil, err
+			}
+			open := true
+			if queue != nil {
+				var err error
+				if open, err = h.d.QueueOpen(ctx, q, in.p.TenantID, *queue); err != nil {
+					return nil, err
+				}
 			}
 			if !open {
 				return nil, refuse(http.StatusConflict, "outside_hours", "Outside the sector's hours", "The conversation's queue is closed now and this installation is not allowed to claim outside hours.", &cur)
@@ -321,12 +383,29 @@ func (h *WriteHandler) releaseSpec() cmdSpec {
 	}}
 }
 
+// heartbeat: "I am still here". It changes nothing about the conversation; it proves the holder and the version and (like every command of the holder) renews the lease.
+func (h *WriteHandler) heartbeatSpec() cmdSpec {
+	return cmdSpec{op: "heartbeat", ifMatch: ifMatchRequired, decode: decodeEmpty, run: func(h *WriteHandler, ctx context.Context, q platformdb.Querier, in *cmdInput) (*cmdOutput, error) {
+		cur, err := h.ctl.Lock(ctx, q, in.p.TenantID, in.conv)
+		if err != nil {
+			return nil, h.fromControl(err, &cur)
+		}
+		if err := h.mustHold(cur, in); err != nil {
+			return nil, err
+		}
+		changed := false
+		r := result(cur, in.p.InstallationID)
+		r.Changed = &changed
+		return &cmdOutput{status: http.StatusOK, body: r, version: cur.Version}, nil
+	}}
+}
+
 func (h *WriteHandler) transferSpec() cmdSpec {
 	return cmdSpec{op: "transfer", ifMatch: ifMatchRequired, decode: decodeTransfer, run: func(h *WriteHandler, ctx context.Context, q platformdb.Querier, in *cmdInput) (*cmdOutput, error) {
 		pl := in.payload.(transferPayload)
 		// the target must be inside what the installation may see (a queue it could not read would make the conversation vanish from its view)
 		if len(in.al.QueueIDs) > 0 && !containsUUID(in.al.QueueIDs, pl.QueueID) {
-			return nil, refuse(http.StatusUnprocessableEntity, "invalid_target", "Invalid target", "The queue is not one this installation may use.", nil)
+			return nil, refuse(http.StatusForbidden, "queue_not_allowed", "Queue not allowed", "The queue is not one this installation may use.", nil)
 		}
 		st, err := h.ctl.TransferByApplication(ctx, q, in.p.TenantID, in.conv, in.p.InstallationID, *in.ifMatch,
 			conversationcontrol.Target{QueueID: pl.QueueID, UserID: pl.UserID}, h.actor(in), h.d.Eligible)
@@ -407,7 +486,7 @@ func (h *WriteHandler) mustHold(cur conversationcontrol.State, in *cmdInput) err
 }
 
 func (h *WriteHandler) actor(in *cmdInput) conversationcontrol.Actor {
-	return conversationcontrol.Actor{Kind: conversationcontrol.ActorCRMApplication, ID: in.p.InstallationID, RequestID: in.requestID}
+	return conversationcontrol.Actor{Kind: conversationcontrol.ActorCRMApplication, ID: in.p.InstallationID, RequestID: in.requestID, ClaimedAgentRef: agentRefOf(in.payload)}
 }
 
 func containsUUID(list []uuid.UUID, id uuid.UUID) bool {
@@ -479,11 +558,12 @@ func (h *WriteHandler) fromAttendance(err error, st *conversationcontrol.State) 
 
 // ---- the engine ----
 
-func (h *WriteHandler) Claim() http.Handler    { return h.handle(h.claimSpec()) }
-func (h *WriteHandler) Release() http.Handler  { return h.handle(h.releaseSpec()) }
-func (h *WriteHandler) Transfer() http.Handler { return h.handle(h.transferSpec()) }
-func (h *WriteHandler) Message() http.Handler  { return h.handle(h.messageSpec()) }
-func (h *WriteHandler) Finalize() http.Handler { return h.handle(h.finalizeSpec()) }
+func (h *WriteHandler) Claim() http.Handler     { return h.handle(h.claimSpec()) }
+func (h *WriteHandler) Release() http.Handler   { return h.handle(h.releaseSpec()) }
+func (h *WriteHandler) Transfer() http.Handler  { return h.handle(h.transferSpec()) }
+func (h *WriteHandler) Message() http.Handler   { return h.handle(h.messageSpec()) }
+func (h *WriteHandler) Finalize() http.Handler  { return h.handle(h.finalizeSpec()) }
+func (h *WriteHandler) Heartbeat() http.Handler { return h.handle(h.heartbeatSpec()) }
 
 func (h *WriteHandler) handle(spec cmdSpec) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -585,17 +665,23 @@ func (h *WriteHandler) transact(ctx context.Context, spec cmdSpec, in *cmdInput,
 			return err
 		}
 		in.al, in.vis = al, NewVisibility(in.p, al)
-		// 2. the conversation must be one this installation may see: the same uniform 404 for "does not exist" and "not yours"
-		var args Args
-		pred := in.vis.Conversation("c", &args)
-		var queue *uuid.UUID
-		if err := q.QueryRow(ctx, `SELECT c.queue_id FROM conversations c WHERE `+pred+` AND c.id = `+args.Add(in.conv), args.Values()...).Scan(&queue); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return errNotVisible
-			}
+		// 2. is the conversation one this installation may see? (read without a lock: a conversation that is NOT visible is never locked on behalf of an application)
+		visible, queue, err := h.visibleConversation(ctx, q, in)
+		if err != nil {
 			return err
 		}
 		in.queueID = queue
+		if !visible {
+			// a command that was already done keeps its answer even if the conversation has since left the installation's view (same key, same payload =
+			// same receipt); anything else is the uniform 404
+			if rec, found, err := h.receipt(ctx, q, in, spec.op, key, hash); err != nil {
+				return err
+			} else if found {
+				out, stored, replay = rec.out, rec.body, true
+				return h.renew(ctx, q, in)
+			}
+			return errNotVisible
+		}
 		// 3. lock the conversation: concurrent commands on it (and retries of one command) are serialized here, so a retry always sees the first one's receipt
 		if _, err := h.ctl.Lock(ctx, q, in.p.TenantID, in.conv); err != nil {
 			return h.fromControl(err, nil)
@@ -604,28 +690,20 @@ func (h *WriteHandler) transact(ctx context.Context, spec cmdSpec, in *cmdInput,
 			return err
 		}
 		// 4. a receipt of this key? the same command gets the same answer, a different one is refused
-		var rHash string
-		var rStatus int
-		var rBody []byte
-		var rVersion *int64
-		err = q.QueryRow(ctx, `
-			SELECT request_hash, status_code, response::text, control_version FROM external_command_receipts
-			 WHERE tenant_id = $1 AND installation_id = $2 AND operation = $3 AND idempotency_key = $4`,
-			in.p.TenantID, in.p.InstallationID, spec.op, key).Scan(&rHash, &rStatus, &rBody, &rVersion)
-		if err == nil {
-			if rHash != hash {
-				return refuse(http.StatusUnprocessableEntity, "idempotency_key_reused", "Idempotency-Key reused", "The key was already used with a different request.", nil)
-			}
-			v := int64(0)
-			if rVersion != nil {
-				v = *rVersion
-			}
-			out, stored, replay = &cmdOutput{status: rStatus, version: v}, rBody, true
-			return nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if rec, found, err := h.receipt(ctx, q, in, spec.op, key, hash); err != nil {
 			return err
+		} else if found {
+			out, stored, replay = rec.out, rec.body, true
+			return h.renew(ctx, q, in)
 		}
+		// the permission to act is judged AGAIN with the conversation locked: a queue, a line or a contact classification that changed after the first look
+		// (Workspace, Routing, a reclassification) cannot be raced, because the row is ours now
+		if visible, queue, err = h.visibleConversation(ctx, q, in); err != nil {
+			return err
+		} else if !visible {
+			return errNotVisible
+		}
+		in.queueID = queue
 		// 5. do it, with the same application the Workspace and the Hub use
 		o, err := spec.run(h, ctx, q, in)
 		if err != nil {
@@ -648,7 +726,8 @@ func (h *WriteHandler) transact(ctx context.Context, spec cmdSpec, in *cmdInput,
 		}
 		// 7. the audit row names the APPLICATION; no person is impersonated
 		meta, _ := json.Marshal(map[string]any{"operation": spec.op, "conversation_id": in.conv.String(), "installation_id": in.p.InstallationID.String(),
-			"actor_kind": "crm_application", "control_version": o.version, "status": o.status})
+			"actor_kind": "crm_application", "control_version": o.version, "status": o.status,
+			"external_agent_id": agentRefOf(in.payload), "external_agent_verified": false})
 		if _, err := q.Exec(ctx, `
 			INSERT INTO audit_events(tenant_id, actor_id, action, resource_type, resource_id, outcome, correlation_id, metadata)
 			VALUES ($1, NULL, 'external_app.command', 'conversation', $2, 'success', $3, $4::jsonb)`,
@@ -656,9 +735,70 @@ func (h *WriteHandler) transact(ctx context.Context, spec cmdSpec, in *cmdInput,
 			return err
 		}
 		out, stored = o, body
-		return nil
+		return h.renew(ctx, q, in)
 	})
 	return out, stored, replay, err
+}
+
+type foundReceipt struct {
+	out  *cmdOutput
+	body []byte
+}
+
+// visibleConversation: is the conversation one this installation may see (same tenant, not staff, contact neither internal nor spam, inside the allow-lists)?
+func (h *WriteHandler) visibleConversation(ctx context.Context, q platformdb.Querier, in *cmdInput) (bool, *uuid.UUID, error) {
+	var args Args
+	pred := in.vis.Conversation("c", &args)
+	var queue *uuid.UUID
+	if err := q.QueryRow(ctx, `SELECT c.queue_id FROM conversations c WHERE `+pred+` AND c.id = `+args.Add(in.conv), args.Values()...).Scan(&queue); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+	return true, queue, nil
+}
+
+// receipt looks for the stored answer of (installation, operation, key). The same payload gets the same answer; another payload under the same key is refused.
+func (h *WriteHandler) receipt(ctx context.Context, q platformdb.Querier, in *cmdInput, op, key, hash string) (foundReceipt, bool, error) {
+	var rHash string
+	var rStatus int
+	var rBody []byte
+	var rVersion *int64
+	err := q.QueryRow(ctx, `
+		SELECT request_hash, status_code, response::text, control_version FROM external_command_receipts
+		 WHERE tenant_id = $1 AND installation_id = $2 AND operation = $3 AND idempotency_key = $4`,
+		in.p.TenantID, in.p.InstallationID, op, key).Scan(&rHash, &rStatus, &rBody, &rVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return foundReceipt{}, false, nil
+	}
+	if err != nil {
+		return foundReceipt{}, false, err
+	}
+	if rHash != hash {
+		return foundReceipt{}, false, refuse(http.StatusUnprocessableEntity, "idempotency_key_reused", "Idempotency-Key reused", "The key was already used with a different request.", nil)
+	}
+	v := int64(0)
+	if rVersion != nil {
+		v = *rVersion
+	}
+	return foundReceipt{out: &cmdOutput{status: rStatus, version: v}, body: rBody}, true, nil
+}
+
+// renew pushes the lease of a conversation this installation STILL holds forward (any command, a replay or a heartbeat counts as life). With no lease configured
+// for the installation, or when the hold ended with this command, nothing is written.
+func (h *WriteHandler) renew(ctx context.Context, q platformdb.Querier, in *cmdInput) error {
+	if in.p.LeaseSeconds == nil {
+		return nil
+	}
+	_, err := q.Exec(ctx, `
+		INSERT INTO external_conversation_leases(tenant_id, conversation_id, installation_id, lease_until, renewed_at)
+		SELECT c.tenant_id, c.id, $3, now() + make_interval(secs => $4), now()
+		  FROM conversations c
+		 WHERE c.tenant_id = $1 AND c.id = $2 AND c.status = 'open' AND c.control_kind = 'crm_application' AND c.control_holder_id = $3
+		ON CONFLICT (tenant_id, conversation_id) DO UPDATE SET installation_id = EXCLUDED.installation_id, lease_until = EXCLUDED.lease_until, renewed_at = now()`,
+		in.p.TenantID, in.conv, in.p.InstallationID, float64(*in.p.LeaseSeconds))
+	return err
 }
 
 func (h *WriteHandler) fail(w http.ResponseWriter, r *http.Request, err error) {

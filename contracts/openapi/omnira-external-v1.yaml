@@ -152,6 +152,11 @@ paths:
         - { $ref: '#/components/parameters/Id' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
         - { $ref: '#/components/parameters/IfMatchOptional' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
       responses:
         '200': { $ref: '#/components/responses/Command' }
         '400': { $ref: '#/components/responses/Problem' }
@@ -172,6 +177,11 @@ paths:
         - { $ref: '#/components/parameters/Id' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
         - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
       responses:
         '200': { $ref: '#/components/responses/Command' }
         '400': { $ref: '#/components/responses/Problem' }
@@ -191,7 +201,7 @@ paths:
       description: |
         Needs the scope `conversation.transfer` and `If-Match`. The installation stops holding the conversation in the same step. With only `queue_id` the router
         decides, exactly as for a new conversation; with `user_id` that person must be eligible in the queue now (member, active, on shift, with capacity), else
-        `422 invalid_target` and nothing changes. The queue must be one this installation may use.
+        `422 invalid_target` and nothing changes. The queue must be one this installation may use (`403 queue_not_allowed` otherwise).
       parameters:
         - { $ref: '#/components/parameters/Id' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -210,6 +220,35 @@ paths:
         '409': { $ref: '#/components/responses/Problem' }
         '412': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/heartbeat:
+    post:
+      operationId: heartbeatExternalConversation
+      tags: [Commands]
+      summary: Renew the lease of a conversation this installation holds
+      description: |
+        Needs the scope `conversation.claim` and `If-Match`. Only meaningful for an installation that has a lease (the administrator sets `lease_seconds`): while it holds a
+        conversation, every command it makes and every heartbeat push the expiry forward. If it falls silent for the lease plus a grace period (120 s) the platform frees the
+        conversation with the reason `lease_expired`, the router looks at it again and the application finds out by the control version (`412` / `409` on its next command,
+        `conversation.control_changed.v1` in the journal). A person's hold never expires. A heartbeat with a stale version is `412`: the application lost the conversation.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
         '428': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
   /external/conversations/{id}/finalize:
@@ -316,7 +355,7 @@ components:
       scheme: bearer
       description: "omn_ext_<key_id>.<secret>; only a digest of the secret is stored by OMNIRA"
   parameters:
-    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._:-]{8,128}$' }, description: "Scopes the command to (installation, operation, key). The same key with the same payload returns the same answer (header Idempotent-Replay: true) and the same message_id; with a different payload it is 422 idempotency_key_reused" }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._:-]{8,128}$' }, description: "Scopes the command to (installation, operation, key). The same key with the same payload returns the same answer (header Idempotent-Replay: true) and the same message_id, even if the conversation has since left the installation's view; with a different payload it is 422 idempotency_key_reused" }
     IfMatchRequired: { name: If-Match, in: header, required: true, schema: { type: string, example: '"control-7"' }, description: "The control version you read (the ETag of the conversation). 412 when it is not the current one, 428 when missing" }
     IfMatchOptional: { name: If-Match, in: header, required: false, schema: { type: string, example: '"control-7"' }, description: "Optional on claim: a claim of a free conversation, or a repeated claim of one you already hold, does not need it. When sent it must be the current version (412 otherwise)" }
     Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -336,11 +375,24 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
   schemas:
+    ExternalAgentID:
+      type: string
+      minLength: 1
+      maxLength: 80
+      pattern: '^[A-Za-z0-9._:@/+ -]{1,80}$'
+      description: "Which of YOUR operators acted. Recorded in the control history and the audit as UNVERIFIED metadata: it is a label, never an identity, never a user of OMNIRA, and nothing is decided by it. Any command may carry it (claim and release take a body with only this field). It is part of the request: the same Idempotency-Key with another label is 422"
+    CommandBody:
+      type: object
+      additionalProperties: false
+      description: "Body of claim, release and heartbeat: empty, or only the label"
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
     TransferRequest:
       type: object
       additionalProperties: false
       required: [queue_id]
       properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
         queue_id: { type: string, format: uuid }
         user_id: { type: string, format: uuid, description: "Optional: one person eligible in that queue now" }
     MessageRequest:
@@ -348,6 +400,7 @@ components:
       additionalProperties: false
       description: "Exactly one of text and template"
       properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
         text: { type: string, minLength: 1, maxLength: 4096 }
         template:
           type: object
@@ -360,6 +413,7 @@ components:
       type: object
       additionalProperties: false
       properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
         reason: { type: string, enum: [resolved, no_response, duplicate, spam, transferred, other], default: resolved }
         note: { type: string, maxLength: 1000 }
     CommandResult:

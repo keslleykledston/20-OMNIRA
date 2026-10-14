@@ -62,6 +62,7 @@ func (e *env) writeAPI() {
 	post("transfer", domain.ScopeConversationTransfer, w.Transfer())
 	post("messages", domain.ScopeMessageSend, w.Message())
 	post("finalize", domain.ScopeConversationFinalize, w.Finalize())
+	post("heartbeat", domain.ScopeConversationClaim, w.Heartbeat())
 }
 
 type cmdResp struct {
@@ -533,7 +534,7 @@ func TestWriteInvisibleConversationsAndMissingScopes(t *testing.T) {
 	}
 	// a queue the installation cannot use is not a transfer target either
 	vq1 := e.cmd(limited.Credential.Token, inQ1, "claim", "key-q1-0000002", "", nil).Doc.Control.Version
-	if r := e.cmd(limited.Credential.Token, inQ1, "transfer", "key-trf-q2-0001", match(vq1), map[string]any{"queue_id": q2}); r.Code != 422 {
+	if r := e.cmd(limited.Credential.Token, inQ1, "transfer", "key-trf-q2-0001", match(vq1), map[string]any{"queue_id": q2}); r.Code != 403 || r.Doc.Code != "queue_not_allowed" {
 		t.Errorf("transfer to a queue outside the allow-list = %d %s", r.Code, r.Raw)
 	}
 	// scopes

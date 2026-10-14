@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -98,8 +99,11 @@ func (s *ExternalSender) Send(ctx context.Context, m ExternalMessage) (*ports.Qu
 	}
 	sum := sha256.Sum256([]byte(m.ConversationID.String() + "\ntpl:" + m.TemplateID.String() + "\n" + strings.Join(m.TemplateParams, "\x1f")))
 	msg, err := s.store.InsertQueuedExternalTemplate(ctx, m.InstallationID, m.ControlVersion, *sc, body, hex.EncodeToString(sum[:]),
-		ports.TemplateSend{Name: tpl.Name, Language: tpl.Language, Params: m.TemplateParams})
+		ports.TemplateSend{Name: tpl.Name, Language: tpl.Language, Params: m.TemplateParams, ID: tpl.ID, ConnectionID: *sc.ConnectionID})
 	if err != nil {
+		if errors.Is(err, ports.ErrTemplateGone) {
+			return nil, ErrTemplateNotAllowed
+		}
 		return nil, err
 	}
 	log.Printf("messages: accepted external template message_id=%s tenant_id=%s conversation_id=%s outcome=queued", msg.ID, tc.TenantID, m.ConversationID)

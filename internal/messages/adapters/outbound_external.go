@@ -19,6 +19,11 @@ var _ ports.ExternalOutboundStore = (*PostgresOutboundStore)(nil)
 // "assigned to the sender" the statement requires that THIS installation holds the conversation at exactly the control version the caller proved, so a
 // transfer, a takeover, a close or a release that got there first leaves the message unwritten.
 func (s *PostgresOutboundStore) InsertQueuedExternal(ctx context.Context, installation uuid.UUID, controlVersion int64, in ports.SendContext, body, hash string) (*ports.QueuedMessage, error) {
+	return s.insertQueuedExternal(ctx, installation, controlVersion, in, body, hash, in.Provider == "meta_cloud")
+}
+
+// insertQueuedExternal: enforceWindow is true for free text on a provider with the 24 h customer-service window (a template is allowed outside it).
+func (s *PostgresOutboundStore) insertQueuedExternal(ctx context.Context, installation uuid.UUID, controlVersion int64, in ports.SendContext, body, hash string, enforceWindow bool) (*ports.QueuedMessage, error) {
 	tenantID, err := tenantOf(ctx)
 	if err != nil {
 		return nil, err
@@ -35,6 +40,8 @@ func (s *PostgresOutboundStore) InsertQueuedExternal(ctx context.Context, instal
 		    AND c.status = 'open'
 		    AND c.channel_connection_id IS NOT DISTINCT FROM $4::uuid
 		    AND c.control_kind = 'crm_application' AND c.control_holder_id = $7 AND c.control_version = $10   -- held by this installation, at this version
+		    AND (NOT $11::bool OR EXISTS (SELECT 1 FROM messages w WHERE w.tenant_id = c.tenant_id AND w.conversation_id = c.id AND w.direction = 'inbound'
+		                                   AND w.created_at > now() - interval '24 hours'))     -- the provider's 24 h customer-service window, proved here for a free text
 		  FOR SHARE OF c
 		), ins AS (
 		  INSERT INTO messages
@@ -53,7 +60,7 @@ func (s *PostgresOutboundStore) InsertQueuedExternal(ctx context.Context, instal
 		  RETURNING id
 		)
 		SELECT id, created_at FROM ins`,
-		msg.ID, tenantID, in.ConversationID, in.ConnectionID, body, hash, installation, uuid.New(), uuid.New(), controlVersion).
+		msg.ID, tenantID, in.ConversationID, in.ConnectionID, body, hash, installation, uuid.New(), uuid.New(), controlVersion, enforceWindow).
 		Scan(&msg.ID, &msg.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ports.ErrConversationChanged
@@ -65,11 +72,23 @@ func (s *PostgresOutboundStore) InsertQueuedExternal(ctx context.Context, instal
 }
 
 func (s *PostgresOutboundStore) InsertQueuedExternalTemplate(ctx context.Context, installation uuid.UUID, controlVersion int64, in ports.SendContext, body, hash string, tpl ports.TemplateSend) (*ports.QueuedMessage, error) {
-	msg, err := s.InsertQueuedExternal(ctx, installation, controlVersion, in, body, hash)
+	tenantID, err := tenantOf(ctx)
 	if err != nil {
 		return nil, err
 	}
-	tenantID, err := tenantOf(ctx)
+	// the template must STILL be approved and sendable for this line, proved now and kept (FOR SHARE) until the message is committed
+	var one int
+	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
+		SELECT 1 FROM channel_message_templates
+		 WHERE tenant_id = $1 AND id = $2 AND connection_id = $3 AND status = 'APPROVED' AND sendable
+		 FOR SHARE`, tenantID, tpl.ID, tpl.ConnectionID).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ports.ErrTemplateGone
+	}
+	if err != nil {
+		return nil, fmt.Errorf("messages: re-check template: %w", err)
+	}
+	msg, err := s.insertQueuedExternal(ctx, installation, controlVersion, in, body, hash, false)
 	if err != nil {
 		return nil, err
 	}

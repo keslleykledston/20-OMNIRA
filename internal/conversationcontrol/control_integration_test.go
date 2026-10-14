@@ -1251,3 +1251,56 @@ func TestEveryFreeCheckAsksAboutTheExternalControl(t *testing.T) {
 
 // pgx import is used by the notification test helper types; keep the compiler honest.
 var _ = pgx.ErrNoRows
+
+// ExpireLease frees a hold only if THAT installation still holds the open conversation (a release, a transfer, a takeover or a close that got there first wins).
+func TestExpireLeaseFreesOnlyWhatTheSameInstallationStillHolds(t *testing.T) {
+	e := newEnv(t)
+	tn := e.tenant()
+	inst, other := e.installation(tn), e.installation(tn)
+	q := e.queue(tn, "round_robin")
+	conv := e.conversation(tn, &q, nil)
+	expire := func(c, who uuid.UUID) (bool, error) {
+		var did bool
+		err := e.sysCap(tn, func(ctx context.Context, qq platformdb.Querier) error {
+			var err error
+			did, err = cc.Service{}.ExpireLease(ctx, qq, tn, c, who)
+			return err
+		})
+		return did, err
+	}
+	if did, err := expire(conv, inst); err != nil || did {
+		t.Fatalf("a free conversation: %v %v", did, err)
+	}
+	if _, _, err := e.claim(tn, conv, inst, nil); err != nil {
+		t.Fatal(err)
+	}
+	if did, err := expire(conv, other); err != nil || did {
+		t.Fatalf("another installation's expiry freed this hold: %v %v", did, err)
+	}
+	var kind *string
+	_ = e.seed.QueryRow(e.ctx, `SELECT control_kind FROM conversations WHERE id=$1`, conv).Scan(&kind)
+	if kind == nil || *kind != "crm_application" {
+		t.Fatalf("the hold was lost: %v", kind)
+	}
+	if did, err := expire(conv, inst); err != nil || !did {
+		t.Fatalf("the holder's expiry: %v %v", did, err)
+	}
+	var reason, actor string
+	_ = e.seed.QueryRow(e.ctx, `SELECT reason, actor_kind FROM conversation_control_events WHERE conversation_id=$1 ORDER BY control_version DESC LIMIT 1`, conv).Scan(&reason, &actor)
+	if reason != "lease_expired" || actor != "system" {
+		t.Errorf("history: %s by %s", reason, actor)
+	}
+	// a closed conversation is not touched
+	conv2 := e.conversation(tn, &q, nil)
+	if _, _, err := e.claim(tn, conv2, inst, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.seed.Exec(e.ctx, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, conv2)
+	var k2 *string
+	_ = e.seed.QueryRow(e.ctx, `SELECT control_kind FROM conversations WHERE id=$1`, conv2).Scan(&k2)
+	if k2 != nil { // closing released it already (ADR-0046): nothing left to expire
+		if did, _ := expire(conv2, inst); did {
+			t.Error("a closed conversation was freed by an expiry")
+		}
+	}
+}

@@ -2,9 +2,13 @@ package ports
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 )
+
+// ErrTemplateGone: the template that was loaded is no longer approved and sendable for that line (it changed between the read and the insert).
+var ErrTemplateGone = errors.New("messages: the template is no longer approved for this line")
 
 // ExternalOutboundStore is the outbound store as an external application's write path uses it (ADR-0046 H5). The Postgres store implements it next to
 // OutboundStore and SystemOutboundStore; the human Sender never sees it. There is NO idempotency here: the receipt of the command (written in the same

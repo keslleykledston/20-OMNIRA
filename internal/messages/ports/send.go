@@ -77,6 +77,10 @@ type TemplateSend struct {
 	Name     string
 	Language string
 	Params   []string
+	// ID and ConnectionID identify the approved template that was loaded; the external write path re-proves, in the statement that queues the message, that it is
+	// still approved and sendable for that line (it may have changed since it was read).
+	ID           uuid.UUID
+	ConnectionID uuid.UUID
 }
 
 // PermissionChecker resolves role permissions of a user in the TenantContext tenant.

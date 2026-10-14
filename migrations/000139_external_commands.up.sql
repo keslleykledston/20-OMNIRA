@@ -7,7 +7,7 @@ SET LOCAL lock_timeout = '5s';
 CREATE TABLE external_command_receipts (
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   installation_id UUID NOT NULL,
-  operation TEXT NOT NULL CHECK (operation IN ('claim', 'release', 'transfer', 'message', 'finalize')),
+  operation TEXT NOT NULL CHECK (operation IN ('claim', 'release', 'transfer', 'message', 'finalize', 'heartbeat')),
   idempotency_key TEXT NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9._:-]{8,128}$'),
   request_hash TEXT NOT NULL CHECK (char_length(request_hash) = 64),
   conversation_id UUID NOT NULL,
@@ -44,6 +44,43 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION external_command_receipts_purge(INTERVAL) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION external_command_receipts_purge(INTERVAL) TO omnira_app;
+
+-- The CRM lease (ADR-0046 §6.1): optional per installation (external_app_installations.lease_seconds; NULL = the application holds until it releases). While the
+-- installation holds a conversation, every command it makes and its heartbeat push the expiry forward; a hold whose lease (plus the grace period) ran out is freed by the
+-- worker with the reason lease_expired and the router looks at the conversation again. A person is never expired.
+CREATE TABLE external_conversation_leases (
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL,
+  installation_id UUID NOT NULL,
+  lease_until TIMESTAMPTZ NOT NULL,
+  renewed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, conversation_id),
+  FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (tenant_id, installation_id) REFERENCES external_app_installations (tenant_id, id) ON DELETE CASCADE
+);
+CREATE INDEX external_conversation_leases_due_idx ON external_conversation_leases (lease_until);
+CREATE TRIGGER external_conversation_leases_tenant_immutable BEFORE UPDATE OF tenant_id ON external_conversation_leases
+  FOR EACH ROW EXECUTE FUNCTION forbid_tenant_change();
+ALTER TABLE external_conversation_leases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE external_conversation_leases FORCE ROW LEVEL SECURITY;
+CREATE POLICY external_conversation_leases_system ON external_conversation_leases FOR ALL USING (is_system_admin()) WITH CHECK (is_system_admin());
+REVOKE ALL ON external_conversation_leases FROM PUBLIC, omnira_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON external_conversation_leases TO omnira_app;
+
+-- The worker's door to the leases that ran out (the table is readable only by a system session of ONE company, the worker has none yet).
+CREATE FUNCTION external_leases_due(p_grace INTERVAL, p_limit INTEGER)
+RETURNS TABLE (tenant_id UUID, conversation_id UUID, installation_id UUID)
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT l.tenant_id, l.conversation_id, l.installation_id
+    FROM external_conversation_leases l
+   WHERE l.lease_until + p_grace < now()
+   ORDER BY l.lease_until
+   LIMIT LEAST(GREATEST(p_limit, 1), 500)
+$$;
+REVOKE ALL ON FUNCTION external_leases_due(INTERVAL, INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION external_leases_due(INTERVAL, INTEGER) TO omnira_app;
 
 -- an application can close an attendance (the same closure record as a person or the system, attributed to the installation)
 ALTER TABLE conversation_closures DROP CONSTRAINT conversation_closures_source_check;

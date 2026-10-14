@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	externaladapters "github.com/omnira/omnira/internal/external/adapters"
 	"github.com/omnira/omnira/internal/external/delivery"
 	"github.com/omnira/omnira/internal/platform/opsmetrics"
 )
@@ -96,6 +97,26 @@ func (r *Runner) Run(ctx context.Context) {
 				log.Printf("headless: purge: %v", err)
 			} else if n > 0 {
 				log.Printf("headless: purged %d expired journal facts", n)
+			}
+			// command receipts are only needed for the longest sensible retry of a client
+			if _, err := r.pool.Exec(ctx, `SELECT external_command_receipts_purge(interval '7 days')`); err != nil && ctx.Err() == nil {
+				log.Printf("headless: receipts purge: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	go func() { // the CRM lease: a hold whose application went silent is freed (ADR-0046 §6.1) and the router looks at the conversation again
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			if n, err := externaladapters.SweepLeases(ctx, r.pool, externaladapters.LeaseGrace, 200); err != nil && ctx.Err() == nil {
+				log.Printf("headless: lease sweep: %v", err)
+			} else if n > 0 {
+				log.Printf("headless: freed %d conversations whose application stopped renewing its lease", n)
 			}
 			select {
 			case <-ctx.Done():

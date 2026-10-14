@@ -659,6 +659,7 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 	post("transfer", externaldomain.ScopeConversationTransfer, w.Transfer())
 	post("messages", externaldomain.ScopeMessageSend, w.Message())
 	post("finalize", externaldomain.ScopeConversationFinalize, w.Finalize())
+	post("heartbeat", externaldomain.ScopeConversationClaim, w.Heartbeat())
 }
 
 func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {

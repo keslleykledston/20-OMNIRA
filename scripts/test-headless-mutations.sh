@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 PHASES=${*:-"h1 h2 h3"}
 NAME=omnira-headlessmut-$$; DB=omnira_test_headlessmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/external/adapters/write_http.go internal/messages/application/external_send.go internal/messages/adapters/outbound_external.go internal/conversationcontrol/service.go internal/attendance/application/service.go internal/external/delivery/worker.go internal/external/delivery/sign.go internal/external/netpolicy/ssrf.go internal/external/adapters/events_http.go internal/external/adapters/webhook_admin_http.go internal/external/adapters/event_visibility.go internal/media/adapters/reader.go internal/flows/adapters/effects_postgres.go internal/external/adapters/visibility.go internal/external/adapters/read_http.go internal/external/adapters/read_dto.go internal/messages/adapters/attachment_postgres.go internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go internal/conversationcontrol/service.go internal/conversationcontrol/http.go internal/routing/engine/engine.go internal/routing/adapters/assign.go internal/routing/adapters/postgres.go internal/messages/adapters/postgres.go internal/messages/adapters/attachment_postgres.go internal/messages/adapters/outbound_system.go internal/attendance/adapters/postgres.go internal/flows/application/engine.go internal/hub/replying/service.go"
+FILES="internal/external/adapters/lease_sweeper.go internal/external/adapters/write_http.go internal/messages/application/external_send.go internal/messages/adapters/outbound_external.go internal/conversationcontrol/service.go internal/attendance/application/service.go internal/external/delivery/worker.go internal/external/delivery/sign.go internal/external/netpolicy/ssrf.go internal/external/adapters/events_http.go internal/external/adapters/webhook_admin_http.go internal/external/adapters/event_visibility.go internal/media/adapters/reader.go internal/flows/adapters/effects_postgres.go internal/external/adapters/visibility.go internal/external/adapters/read_http.go internal/external/adapters/read_dto.go internal/messages/adapters/attachment_postgres.go internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go internal/conversationcontrol/service.go internal/conversationcontrol/http.go internal/routing/engine/engine.go internal/routing/adapters/assign.go internal/routing/adapters/postgres.go internal/messages/adapters/postgres.go internal/messages/adapters/attachment_postgres.go internal/messages/adapters/outbound_system.go internal/attendance/adapters/postgres.go internal/flows/application/engine.go internal/hub/replying/service.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -384,8 +384,8 @@ h4)
   ;;
 h5)
   echo "== H5: coordinated write commands, receipts, If-Match, transfer, finalize"
-  T_PKGS="./internal/external/adapters ./internal/messages/application ./internal/messages/adapters"; T_NEED=1
-  T_RUN="TestWrite|TestExternalSender|TestInsertQueuedExternal"
+  T_PKGS="./internal/external/adapters ./internal/messages/application ./internal/messages/adapters ./internal/conversationcontrol"; T_NEED=1
+  T_RUN="TestWrite|TestExternalSender|TestInsertQueuedExternal|TestExpireLease"
   W=internal/external/adapters/write_http.go; ES=internal/messages/application/external_send.go; EO=internal/messages/adapters/outbound_external.go; CS=internal/conversationcontrol/service.go
   AT=internal/attendance/application/service.go; MG=migrations/000139_external_commands.up.sql
   mut "the Idempotency-Key is optional"                 $W "		if !idempotencyKeyPattern.MatchString(key) {" "		if false && !idempotencyKeyPattern.MatchString(key) {"
@@ -478,6 +478,47 @@ h5)
 		return FinalizeResult{}, err
 	}
 	inst := installationID"
+  LS=internal/external/adapters/lease_sweeper.go
+  mut "visibility is not judged again under the lock"      $W "		} else if !visible {
+			return errNotVisible
+		}
+		in.queueID = queue" "		} else if false {
+			return errNotVisible
+		}
+		in.queueID = queue"
+  mut "a replay is refused once the conversation left the view" $W "			} else if found {
+				out, stored, replay = rec.out, rec.body, true
+				return h.renew(ctx, q, in)
+			}
+			return errNotVisible" "			} else if false && found {
+				out, stored, replay = rec.out, rec.body, true
+				return h.renew(ctx, q, in)
+			}
+			return errNotVisible"
+  mut "the capacity of a person is not locked for the transfer" $W "WHERE tenant_id=\$1 AND queue_id=\$2 AND user_id=\$3 FOR UPDATE\`, tenant, queue, user)" "WHERE tenant_id=\$1 AND queue_id=\$2 AND user_id=\$3\`, tenant, queue, user)" "SELECT pg_advisory_xact_lock(hashtextextended('routing:agent:' || \$1::text || ':' || \$2::text, 0))" "SELECT 1 WHERE \$1::text IS NOT NULL AND \$2::text IS NOT NULL"
+  mut "a template is not re-proved when queued"            $EO "AND status = 'APPROVED' AND sendable" "AND true"
+  mut "the 24 h window is not re-proved when queued"       $EO "AND (NOT \$11::bool OR EXISTS" "AND (true OR EXISTS"
+  mut "the lease is never renewed"                         $W "	if in.p.LeaseSeconds == nil {
+		return nil
+	}" "	if true {
+		return nil
+	}"
+  mut "the grace period is ignored"                        $LS "const LeaseGrace = 120 * time.Second" "const LeaseGrace = 0 * time.Second"
+  mut "a renewed lease is expired anyway"                  $LS "			if !stillExpired {
+				return nil
+			}" "			_ = stillExpired"
+  mut "an expiry frees what another holder has"            $CS "	if !cur.HeldBy(KindCRMApplication, installationID) || cur.Status != \"open\" {
+		return false, nil
+	}
+	if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, \"lease_expired\")" "	if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, \"lease_expired\")"
+  mut "a heartbeat does not need the hold"                 $W "		if err := h.mustHold(cur, in); err != nil {
+			return nil, err
+		}
+		changed := false" "		changed := false"
+  mut "the agent label is not recorded"                    $W "RequestID: in.requestID, ClaimedAgentRef: agentRefOf(in.payload)}" "RequestID: in.requestID}"
+  mut "the agent label is not validated"                   $W "	if ref != \"\" && !externalAgentPattern.MatchString(ref) {" "	if false {"
+  mut "a second JSON document is ignored"                  $W "	if _, err := dec.Token(); !errors.Is(err, io.EOF) {" "	if false {"
+  mut "a queue outside the allow-list is a 422"            $W "refuse(http.StatusForbidden, \"queue_not_allowed\"" "refuse(http.StatusUnprocessableEntity, \"queue_not_allowed\""
   sqlmut "a receipt can be changed"                     000139_external_commands.up.sql "GRANT SELECT, INSERT ON external_command_receipts TO omnira_app;" "GRANT SELECT, INSERT, UPDATE, DELETE ON external_command_receipts TO omnira_app;"
   sqlmut "a receipt is scoped to the tenant only"       000139_external_commands.up.sql "PRIMARY KEY (tenant_id, installation_id, operation, idempotency_key)," "PRIMARY KEY (tenant_id, operation, idempotency_key),"
   ;;

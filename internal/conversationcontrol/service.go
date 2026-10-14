@@ -354,6 +354,26 @@ func (s Service) DrainInstallation(ctx context.Context, q platformdb.Querier, te
 	return n, nil
 }
 
+// ExpireLease frees a conversation whose holder (an application) stopped renewing its lease. The caller has decided that the lease ran out; this
+// re-reads the conversation under its lock and only frees it if THAT installation still holds it (a release, a transfer, a takeover or a close that got
+// there first wins). The reason is lease_expired and the router looks at it again.
+func (s Service) ExpireLease(ctx context.Context, q platformdb.Querier, tenantID, conversationID, installationID uuid.UUID) (bool, error) {
+	cur, err := s.Lock(ctx, q, tenantID, conversationID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !cur.HeldBy(KindCRMApplication, installationID) || cur.Status != "open" {
+		return false, nil
+	}
+	if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, "lease_expired"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ReleaseOnClose frees the hold of an external application when the attendance is finalized by anyone (the conversation is already locked and
 // closed by the caller). A closed conversation held by an application would be an orphan: the contact's next message starts a NEW conversation.
 func (s Service) ReleaseOnClose(ctx context.Context, q platformdb.Querier, tenantID, conversationID uuid.UUID) (bool, error) {
