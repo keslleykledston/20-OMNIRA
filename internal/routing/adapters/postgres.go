@@ -53,7 +53,7 @@ func (r *PostgresAssignmentRepository) ClaimUnassigned(ctx context.Context, conv
 		), claimed AS (
 		  UPDATE conversations
 		  SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
-		  WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND EXISTS(SELECT 1 FROM eligible)
+		  WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND control_kind IS NULL AND EXISTS(SELECT 1 FROM eligible)
 		  RETURNING tenant_id, id
 		), recorded AS (
 		  INSERT INTO assignment_events(tenant_id,conversation_id,from_user_id,to_user_id,changed_by,reason)
@@ -92,7 +92,7 @@ func (r *PostgresAssignmentRepository) assignRoundRobinLegacy(ctx context.Contex
 	err := q.QueryRow(ctx, `
 		WITH target AS (
 		  SELECT tenant_id,id,queue_id FROM conversations
-		  WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL
+		  WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND control_kind IS NULL AND queue_id IS NOT NULL
 		  FOR UPDATE
 		), candidate AS (
 		  SELECT qm.id,qm.user_id
@@ -106,7 +106,7 @@ func (r *PostgresAssignmentRepository) assignRoundRobinLegacy(ctx context.Contex
 		  FOR UPDATE OF qm SKIP LOCKED LIMIT 1
 		), assigned AS (
 		  UPDATE conversations c SET assigned_to_user_id=candidate.user_id,assigned_at=now(),updated_at=now()
-		  FROM target,candidate WHERE c.tenant_id=target.tenant_id AND c.id=target.id AND c.assigned_to_user_id IS NULL
+		  FROM target,candidate WHERE c.tenant_id=target.tenant_id AND c.id=target.id AND c.assigned_to_user_id IS NULL AND c.control_kind IS NULL
 		  RETURNING c.tenant_id,c.id,candidate.id AS member_id,candidate.user_id
 		), touched AS (
 		  UPDATE queue_members qm SET last_assigned_at=now() FROM assigned a WHERE qm.id=a.member_id RETURNING a.*
@@ -149,7 +149,7 @@ func (r *PostgresAssignmentRepository) assignRoundRobinPresenceAware(ctx context
 	var queueID uuid.UUID
 	err := q.QueryRow(ctx, `
 		SELECT queue_id FROM conversations
-		WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL
+		WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND control_kind IS NULL AND queue_id IS NOT NULL
 		FOR UPDATE`, tenantID, conversationID).Scan(&queueID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Not routable (already assigned, no queue, or unknown) — same
@@ -277,7 +277,7 @@ func (r *PostgresAssignmentRepository) tryAssign(ctx context.Context, q platform
 		  FOR UPDATE OF qm SKIP LOCKED
 		), assigned AS (
 		  UPDATE conversations c SET assigned_to_user_id=candidate.user_id,assigned_at=now(),updated_at=now()
-		  FROM candidate WHERE c.tenant_id=$1 AND c.id=$4 AND c.assigned_to_user_id IS NULL
+		  FROM candidate WHERE c.tenant_id=$1 AND c.id=$4 AND c.assigned_to_user_id IS NULL AND c.control_kind IS NULL
 		  RETURNING c.tenant_id,c.id,candidate.id AS member_id,candidate.user_id
 		), touched AS (
 		  UPDATE queue_members qm SET last_assigned_at=now() FROM assigned a WHERE qm.id=a.member_id RETURNING a.*

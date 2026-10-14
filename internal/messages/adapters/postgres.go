@@ -46,12 +46,12 @@ func (s *PostgresOutboundStore) LoadSendContext(ctx context.Context, conversatio
 		SELECT c.id, c.assigned_to_user_id, c.channel_connection_id,
 		       (cc.status = 'active' AND cc.capabilities ? 'text'), ct.phone_e164, COALESCE(cc.provider,''),
 		       (SELECT max(m.created_at) FROM messages m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id AND m.direction = 'inbound'),
-		       (c.status = 'closed')
+		       (c.status = 'closed'), COALESCE(c.control_kind IN ('crm_application','crm_agent_verified'), false)
 		FROM conversations c
 		JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
 		LEFT JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.channel_connection_id
 		WHERE c.tenant_id = $1 AND c.id = $2`, tenantID, conversationID).
-		Scan(&out.ConversationID, &out.AssignedTo, &out.ConnectionID, &ready, &phone, &out.Provider, &out.LastInboundAt, &out.Closed)
+		Scan(&out.ConversationID, &out.AssignedTo, &out.ConnectionID, &ready, &phone, &out.Provider, &out.LastInboundAt, &out.Closed, &out.HeldExternally)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -125,6 +125,7 @@ func (s *PostgresOutboundStore) InsertQueued(ctx context.Context, sender uuid.UU
 		  WHERE c.tenant_id = $2 AND c.id = $3
 		    AND c.channel_connection_id IS NOT DISTINCT FROM $4::uuid
 		    AND (NOT $11::bool OR c.assigned_to_user_id = $8)
+		    AND COALESCE(c.control_kind, '') NOT IN ('crm_application','crm_agent_verified') -- a person never writes into a conversation an application holds (ADR-0046)
 		  FOR SHARE OF c            -- blocks a concurrent assign/unassign (FOR UPDATE) until we commit
 		), ins AS (
 		  INSERT INTO messages

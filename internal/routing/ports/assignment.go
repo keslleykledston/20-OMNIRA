@@ -2,9 +2,15 @@ package ports
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 )
+
+// ErrHeldByExternal: an external application holds the conversation (ADR-0046). A person cannot claim, assign, release or transfer it; a supervisor
+// with conversation.takeover_external takes it over explicitly, with a reason. The manual paths see it BEFORE writing (the guard trigger in the
+// database is only the net under them).
+var ErrHeldByExternal = errors.New("routing: conversation is held by an external application")
 
 // AssignmentChange is one applied assignee transition, recorded append-only.
 type AssignmentChange struct {

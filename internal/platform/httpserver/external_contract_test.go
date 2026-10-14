@@ -50,7 +50,7 @@ func externalSpecOps(t *testing.T) []op {
 
 func TestEveryDocumentedExternalOperationIsARegisteredRoute(t *testing.T) {
 	s := New("127.0.0.1:0")
-	s.RegisterExternalHandlers(nil, true, externaladapters.Features{})
+	s.RegisterExternalHandlers(nil, true, externaladapters.Features{}, nil)
 	for _, o := range externalSpecOps(t) {
 		concrete := paramRE.ReplaceAllString(o.path, "3f9c1b2e-0000-4000-8000-000000000001")
 		_, pattern := s.mux.Handler(httptest.NewRequest(o.method, concrete, nil))
@@ -88,7 +88,7 @@ func TestEveryRegisteredExternalRouteIsDocumented(t *testing.T) {
 // With the flag off the surface does not exist at all.
 func TestExternalRoutesDoNotExistWhenHeadlessIsOff(t *testing.T) {
 	s := New("127.0.0.1:0")
-	s.RegisterExternalHandlers(nil, false, externaladapters.Features{})
+	s.RegisterExternalHandlers(nil, false, externaladapters.Features{}, nil)
 	for _, o := range externalSpecOps(t) {
 		if _, pattern := s.mux.Handler(httptest.NewRequest(o.method, strings.ReplaceAll(o.path, "{", "x"), nil)); pattern != "" {
 			t.Errorf("%s %s is routed with OMNIRA_HEADLESS_ENABLED off", o.method, o.path)

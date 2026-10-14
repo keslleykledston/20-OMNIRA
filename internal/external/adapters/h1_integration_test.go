@@ -42,6 +42,7 @@ type env struct {
 	// failed-authentication throttle of one test case cannot leak into another
 	addr string
 	seq  int
+	n    int // a counter for unique phone numbers and names in the fixtures
 }
 
 func newEnv(t *testing.T) *env {

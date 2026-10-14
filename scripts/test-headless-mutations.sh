@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 PHASES=${*:-"h1"}
 NAME=omnira-headlessmut-$$; DB=omnira_test_headlessmut
 WORK=$(mktemp -d); mkdir -p "$WORK/orig" "$WORK/mig"
-FILES="internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go"
+FILES="internal/external/adapters/visibility.go internal/external/adapters/read_http.go internal/external/adapters/read_dto.go internal/messages/adapters/attachment_postgres.go internal/external/domain/token.go internal/external/application/auth.go internal/external/adapters/middleware.go internal/external/adapters/recheck.go internal/external/adapters/admin_http.go internal/external/adapters/store.go internal/external/adapters/problem.go internal/conversationcontrol/service.go internal/conversationcontrol/http.go internal/routing/engine/engine.go internal/routing/adapters/assign.go internal/routing/adapters/postgres.go internal/messages/adapters/postgres.go internal/messages/adapters/attachment_postgres.go internal/messages/adapters/outbound_system.go internal/attendance/adapters/postgres.go internal/flows/application/engine.go internal/hub/replying/service.go"
 for f in $FILES; do mkdir -p "$WORK/orig/$(dirname "$f")"; cp "$f" "$WORK/orig/$f"; done
 cleanup() { for f in $FILES; do cp "$WORK/orig/$f" "$f"; done; docker rm -fv "$NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -24,14 +24,15 @@ mkdb() { # mkdb <migrations dir>
     -e PGHOST=127.0.0.1 -e PGUSER=omnira -e PGPASSWORD=pw -e PGDATABASE=$DB postgres:16-alpine sh /tools/migrate-sql.sh up | tail -1
   docker exec "$NAME" psql -U omnira -d postgres -X -q -c "GRANT CONNECT ON DATABASE $DB TO omnira_app" >/dev/null
 }
+T_PKGS="./internal/external/adapters ./internal/external/application"; T_RUN=""; T_NEED=2; MIGDIR=""
 run() { # the host toolchain with its warm module and build caches
-  OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false \
+  OMNIRA_INTEGRATION_TEST=1 GOFLAGS=-buildvcs=false OMNIRA_TEST_MIGRATIONS_DIR="$MIGDIR" \
     OMNIRA_DATABASE_URL="postgres://omnira:pw@127.0.0.1:$PORT/$DB?sslmode=disable" \
     OMNIRA_APP_DATABASE_URL="postgres://omnira_app:omnira_app@127.0.0.1:$PORT/$DB?sslmode=disable" \
-    go test -count=1 -timeout 120s ./internal/external/adapters ./internal/external/application 2>&1
+    go test -count=1 -timeout 180s ${T_RUN:+-run "$T_RUN"} $T_PKGS 2>&1
 }
 # NOTE: exit status of a pipeline ending in grep is grep's, so the verdict is read from the output.
-verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge 2 ]; }
+verdict_green() { echo "$1" | grep -q "^FAIL" && return 1; [ "$(echo "$1" | grep -c '^ok')" -ge "$T_NEED" ]; }
 
 mkdb "$PWD/migrations"
 out=$(run || true); verdict_green "$out" || { echo "$out" | tail -20; echo "FAIL: baseline is red"; exit 1; }
@@ -45,21 +46,38 @@ killed() { # killed <name> <output>
 }
 N=0; FROM=${MUT_FROM:-1}   # MUT_FROM=<n> resumes at the n-th mutant (a long run that stopped on a survivor need not repeat the ones already killed)
 skip() { N=$((N+1)); [ "$N" -lt "$FROM" ]; }
-mut() { # mut <name> <file> <from> <to>
+mut() { # mut <name> <file> <from> <to> [<from> <to> ...]   (the first occurrence of each pair; several pairs fall together, for defences repeated on purpose)
+  skip && return 0
+  local name="$1" file="$2"; shift 2
+  python3 - "$file" "$WORK/orig/$file" "$@" <<'PY'
+import sys
+p,orig=sys.argv[1:3]
+rest=sys.argv[3:]
+s=open(orig).read()
+for i in range(0,len(rest),2):
+    f,t=rest[i],rest[i+1]
+    assert f in s, "mutation target not found: "+f
+    s=s.replace(f,t,1)
+open(p,'w').write(s)
+PY
+  killed "$name" "$(run || true)"
+  cp "$WORK/orig/$file" "$file"
+}
+mutall() { # mutall <name> <file> <from> <to>   (EVERY occurrence: a defence repeated on purpose has to fall as a whole)
   skip && return 0
   python3 - "$2" "$WORK/orig/$2" "$3" "$4" <<'PY'
 import sys
 p,orig,f,t=sys.argv[1:5]
 s=open(orig).read()
 assert f in s, "mutation target not found: "+f
-open(p,'w').write(s.replace(f,t,1))
+open(p,'w').write(s.replace(f,t))
 PY
   killed "$1" "$(run || true)"
   cp "$WORK/orig/$2" "$2"
 }
 sqlmut() { # sqlmut <name> <migration file> <from> <to>
   skip && return 0
-  rm -rf "$WORK/mig"; mkdir -p "$WORK/mig"; cp migrations/*.sql "$WORK/mig/"
+  rm -rf "$WORK/mig"; mkdir -p "$WORK/mig"; cp migrations/*.sql "$WORK/mig/"; MIGDIR="$WORK/mig"
   python3 - "$WORK/mig/$2" "$3" "$4" <<'PY'
 import sys
 p,f,t=sys.argv[1:4]; s=open(p).read()
@@ -68,6 +86,7 @@ open(p,'w').write(s.replace(f,t,1))
 PY
   mkdb "$WORK/mig"
   killed "$1" "$(run || true)"
+  MIGDIR=""
 }
 
 for phase in $PHASES; do
@@ -124,6 +143,129 @@ h1)
   sqlmut "allow-list door ignores the company status"                   000135_external_app_installations.up.sql "    JOIN tenants t ON t.id = i.tenant_id AND t.status = 'active'
    WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'" "   WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'"
   sqlmut "a queue of another company is accepted in the allow-list" 000135_external_app_installations.up.sql "  FOREIGN KEY (tenant_id, queue_id) REFERENCES queues (tenant_id, id) ON DELETE CASCADE" "  FOREIGN KEY (queue_id) REFERENCES queues (id) ON DELETE CASCADE"
+  ;;
+h2)
+  echo "== H2: typed control, guard, canonical service, legacy writers"
+  T_PKGS="./internal/conversationcontrol ./internal/messages/adapters ./internal/flows/application"; T_NEED=3
+  T_RUN="TestTheBotNeverActs|TestEveryOutboundTargetExcludesAnExternalHold|TestEveryFreeCheckAsksAboutTheExternalControl|TestSupervisor|TestNo|TestClaim|TestGuard|TestDrain|TestFinal|TestExactly|TestControl|TestMigration|TestAnAgent"
+  CS=internal/conversationcontrol/service.go; CH=internal/conversationcontrol/http.go; EN=internal/routing/engine/engine.go
+  RA=internal/routing/adapters/assign.go; RP=internal/routing/adapters/postgres.go; MP=internal/messages/adapters/postgres.go
+  MS=internal/messages/adapters/outbound_system.go; AT=internal/attendance/adapters/postgres.go
+  M=000136_conversation_control.up.sql
+  mut "the engine assigns over an application's hold"       $EN "	case c.held: // an external application holds it" "	case false: // an external application holds it" "		if held { // an application took it while we were choosing: leave it alone" "		if false { // an application took it while we were choosing: leave it alone"
+  mut "the manual path does not see the hold"                $RA "	if held {
+		return nil, true, ports.ErrHeldByExternal
+	}" "	_ = held"
+  mutall "the legacy round robin and claim ignore the hold"  $RP " AND control_kind IS NULL" ""
+  mut "LoadSendContext does not report the hold"             $MP "COALESCE(c.control_kind IN ('crm_application','crm_agent_verified'), false)
+		FROM conversations c" "false
+		FROM conversations c"
+  mut "a person's reply may land in an application's hold"   $MP "		    AND COALESCE(c.control_kind, '') NOT IN ('crm_application','crm_agent_verified')" "		    AND true"
+  mut "the bot may speak over an application's hold"         $MS " AND c.control_kind IS NULL" ""
+  mut "an application claims over a person"                  $CS "	if !cur.Free() {
+		return cur, false, ErrHeldByOther
+	}
+	if ifMatch != nil && *ifMatch != cur.Version {" "	if ifMatch != nil && *ifMatch != cur.Version {"
+  mut "a repeated claim ignores a stale version"             $CS "		if ifMatch != nil && *ifMatch != cur.Version {
+			return cur, false, ErrStaleVersion
+		}
+		return cur, false, nil" "		return cur, false, nil"
+  mut "a claim of a free conversation ignores the version"   $CS "	if !cur.Free() {
+		return cur, false, ErrHeldByOther
+	}
+	if ifMatch != nil && *ifMatch != cur.Version {
+		return cur, false, ErrStaleVersion
+	}" "	if !cur.Free() {
+		return cur, false, ErrHeldByOther
+	}"
+  mut "a closed conversation can be claimed"                 $CS "	if cur.Status != \"open\" {
+		return cur, false, ErrClosed
+	}" "	_ = cur.Status"
+  mut "release ignores the version"                          $CS "	if ifMatch != cur.Version {
+		return cur, ErrStaleVersion
+	}" "	_ = ifMatch"
+  mut "anyone can release"                                   $CS "	if !cur.HeldBy(KindCRMApplication, installationID) {
+		return cur, ErrNotHolder
+	}" "	_ = installationID"
+  mut "a release does not ask the router to look again"      $CS "AND qq.mode IN ('round_robin', 'least_loaded')" "AND true"
+  mut "the drain frees another installation's conversations" $CS "AND control_holder_id = \$2" ""
+  mut "the drain frees another company's conversations"      $CS "WHERE tenant_id = \$1 AND control_kind = 'crm_application'" "WHERE control_kind = 'crm_application'"
+  mut "a takeover needs no external hold"                    $CS "	if !cur.HeldExternally() {
+		return cur, ErrNotExternal
+	}" "	_ = cur"
+  mut "a takeover of a finalized conversation"               $CS "	if cur.Status != \"open\" {
+		return cur, ErrClosed
+	}
+	if !cur.HeldExternally() {" "	if !cur.HeldExternally() {"
+  mut "a takeover needs no reason"                           $CS "	if r == \"\" {" "	if false {"
+  mut "closing frees a person's hold too"                    $CS "	if !cur.HeldExternally() {
+		return false, nil
+	}" "	_ = cur"
+  mut "finalizing leaves the application holding"            $AT "	if _, err := (conversationcontrol.Service{}).ReleaseOnClose(ctx, r.q(ctx), tenant, conversationID); err != nil {
+		return err
+	}" "	_ = conversationcontrol.Service{}"
+  mut "the takeover needs no confirmation"                   $CH "!errors.Is(err, io.EOF) || !req.Confirm {" "!errors.Is(err, io.EOF) {"
+  mut "the takeover needs no permission"                     $CH "	if !ok {
+		http.Error(w, \"forbidden\", http.StatusForbidden)
+		return
+	}
+	conversationID, err" "	_ = ok
+	conversationID, err"
+  mut "the takeover accepts unknown fields"                  $CH "dec.DisallowUnknownFields()" "_ = dec"
+  mut "the bot starts on an application's conversation"      internal/flows/application/engine.go "f.AssignedTo != nil || f.HeldExternally ||" "f.AssignedTo != nil ||"
+  mut "the bot controls an application's conversation"       internal/flows/application/engine.go " && f.AssignedTo == nil && !f.HeldExternally" " && f.AssignedTo == nil"
+  mut "an attachment may land in an application's hold"      internal/messages/adapters/attachment_postgres.go "		    AND COALESCE(c.control_kind, '') NOT IN ('crm_application','crm_agent_verified')" "		    AND true"
+  sqlmut "the guard lets a legacy writer take an application's hold" $M "    IF OLD.control_kind IN ('crm_application', 'crm_agent_verified') THEN
+      RAISE EXCEPTION 'conversation is held by an external application' USING ERRCODE = 'OM001';
+    END IF;" "    IF false THEN
+      RAISE EXCEPTION 'conversation is held by an external application' USING ERRCODE = 'OM001';
+    END IF;"
+  sqlmut "a Hub agent or another application can overwrite the hold" $M "AND (NEW.control_kind = 'hub_user' OR (NEW.control_kind IN ('crm_application', 'crm_agent_verified') AND NEW.control_holder_id IS DISTINCT FROM OLD.control_holder_id)) THEN" "AND false THEN"
+  sqlmut "a change of holder may skip the version"         $M "    IF NEW.control_version <> OLD.control_version + 1 THEN" "    IF false THEN"
+  sqlmut "the holder need not exist"                       $M "AND NOT external_installation_exists(NEW.tenant_id, NEW.control_holder_id) THEN" "AND false THEN"
+  sqlmut "the holder may live in another company"          $M "WHERE tenant_id = p_tenant AND id = p_installation) \$\$;" "WHERE id = p_installation) \$\$;"
+  sqlmut "an application holder may coexist with an assignee" $M "control_origin IS NOT NULL
+        AND assigned_to_user_id IS NULL));" "control_origin IS NOT NULL));"
+  sqlmut "the realtime function ignores the control"       $M "OR NEW.status IS DISTINCT FROM OLD.status
+        OR NEW.control_version IS DISTINCT FROM OLD.control_version THEN" "OR NEW.status IS DISTINCT FROM OLD.status THEN"
+  sqlmut "the realtime trigger does not watch the control" $M "AFTER INSERT OR UPDATE OF assigned_to_user_id, status, control_version ON conversations" "AFTER INSERT OR UPDATE OF assigned_to_user_id, status ON conversations"
+  sqlmut "the history can be rewritten"                    $M "REVOKE ALL ON conversation_control_events FROM PUBLIC, omnira_app;" "REVOKE ALL ON conversation_control_events FROM PUBLIC;"
+  sqlmut "anyone can write the history"                    $M "WITH CHECK (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'conversation.takeover_external'));" "WITH CHECK (true);"
+  sqlmut "supervisors lose the takeover permission"        $M "r.key IN ('tenant_admin', 'tenant_supervisor') AND p.key = 'conversation.takeover_external'" "r.key IN ('tenant_admin') AND p.key = 'conversation.takeover_external'"
+  sqlmut "the backfill calls every holder a member"        $M "THEN 'tenant_user' ELSE 'hub_user' END," "THEN 'tenant_user' ELSE 'tenant_user' END,"
+  T_PKGS="./internal/hub/adapters"; T_NEED=1; T_RUN="TestHubReply_RefusesAConversationAnExternalApplicationHolds"
+  HS=internal/hub/replying/service.go
+  mut "the Hub claims what an application holds"           $HS "	if held { // after the access check" "	if false { // after the access check"
+  mut "the Hub claim is not typed"                         $HS "control_kind = 'hub_user', control_holder_id = \$3, control_version = control_version + 1, control_since = now(), control_origin = 'hub'
+		                        WHERE" "
+		                        WHERE"
+  ;;
+h3)
+  echo "== H3: visibility, pagination, control document, messages, media"
+  T_PKGS="./internal/external/adapters"; T_NEED=1
+  T_RUN="TestReadAPI|TestEveryStatementOfTheExternalReadSide"
+  V=internal/external/adapters/visibility.go; R=internal/external/adapters/read_http.go; D=internal/external/adapters/read_dto.go
+  mut "staff conversations are visible"                      $V "		alias + \".internal_user_id IS NULL\",
+		alias + \".conversation_kind <> 'internal'\"," "		\"true\",
+		\"true\"," "		\"EXISTS (SELECT 1 FROM contacts vc WHERE vc.tenant_id = \" + alias + \".tenant_id AND vc.id = \" + alias + \".contact_id AND vc.kind NOT IN ('internal', 'spam'))\"," "		\"true\","
+  mut "spam contacts are visible"                            $V "vc.kind NOT IN ('internal', 'spam')" "vc.kind NOT IN ('internal')"
+  mut "internal contacts are visible"                        $V "vc.kind NOT IN ('internal', 'spam')" "vc.kind NOT IN ('spam')"
+  mut "the queue allow-list is ignored"                      $V "	if len(v.QueueIDs) > 0 {" "	if false {"
+  mut "the line allow-list is ignored"                       $V "	if len(v.ChannelIDs) > 0 {" "	if false {"
+  mut "another company's conversations are visible"          $V "		alias + \".tenant_id = \" + t," "		\"true\" + t[:0],"
+  mut "the control version is not the ETag"                  $R "	w.Header().Set(\"ETag\", fmt.Sprintf(\`\"control-%d\"\`, d.Control.Version))" "	w.Header().Set(\"ETag\", fmt.Sprintf(\`\"x-%d\"\`, d.Control.Version))"
+  mut "limit 0 is accepted"                                  $R "n < 1 || n > maxPageSize" "n < 0 || n > maxPageSize"
+  mut "limit above the maximum is accepted"                  $R "n < 1 || n > maxPageSize" "n < 1"
+  mut "pages repeat their last row"                          $R "where += \" AND (\" + sortCol + \", c.id) < (\"" "where += \" AND (\" + sortCol + \", c.id) <= (\""
+  mut "message pages repeat their last row"                  $R "order, cmp := \"ASC\", \">\"" "order, cmp := \"ASC\", \">=\""
+  mut "the messages of a hidden conversation are an empty page" $R "		if !exists {
+			return errNotVisible
+		}" "		_ = exists"
+  mut "the media of a hidden conversation is served"         $R "WHERE \`+vis+\` LIMIT 1" "WHERE c.tenant_id = \$1 AND (\`+vis+\` OR true) LIMIT 1"
+  mut "every media type is served inline"                    $R "	if isInlineSafeMime(served.Mime) {" "	if true {"
+  mut "media is served without nosniff"                      $R "	hd.Set(\"X-Content-Type-Options\", \"nosniff\")" "	_ = hd"
+  mut "an installation may claim a held conversation (can)"  $D "Claim:    open && c.State == \"unassigned\" && p.Has(domain.ScopeConversationClaim)," "Claim:    open && p.Has(domain.ScopeConversationClaim),"
+  mut "the sender kind of a person is wrong"                 $R "m.Sender = SenderDTO{Kind: \"agent\"}" "m.Sender = SenderDTO{Kind: \"contact\"}"
   ;;
 *) echo "unknown phase $phase"; exit 2;;
 esac

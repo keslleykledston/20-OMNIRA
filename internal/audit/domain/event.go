@@ -107,6 +107,7 @@ const (
 	ActionExternalAppRevoked           AuditAction = "external_app.revoked"
 	ActionExternalAppCredentialIssued  AuditAction = "external_app.credential_issued"
 	ActionExternalAppCredentialRevoked AuditAction = "external_app.credential_revoked"
+	ActionConversationTakenOver        AuditAction = "conversation.takeover_external"
 )
 
 // AuditOutcome — resultado da operação.

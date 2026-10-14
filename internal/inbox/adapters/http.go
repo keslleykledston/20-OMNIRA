@@ -56,6 +56,9 @@ type ConversationItem struct {
 	Status                      string     `json:"status"`
 	Title                       string     `json:"title"`
 	AssignedToUserID            *uuid.UUID `json:"assigned_to_user_id,omitempty"`
+	// Control is who holds the conversation, typed (ADR-0046): kind tenant_user | hub_user | crm_application, the version the clients
+	// compare, and where it came from. Absent while free. An external application is named by kind only; its operator is never shown.
+	Control *ControlItem `json:"control,omitempty"`
 	// AssignedToName is the owner's display name (single-conversation read only), so the UI can say who has the attendance.
 	AssignedToName string     `json:"assigned_to_name,omitempty"`
 	QueueID        *uuid.UUID `json:"queue_id,omitempty"`
@@ -85,6 +88,15 @@ type ConversationItem struct {
 	LastMessageType      string  `json:"last_message_type,omitempty"`
 	LastMessagePreview   string  `json:"last_message_preview,omitempty"`
 	WaitingSince         *string `json:"waiting_since,omitempty"`
+}
+
+// ControlItem is the typed holder of a conversation. Version only grows; a client that read version N and acts later learns about a change by the
+// version it gets back.
+type ControlItem struct {
+	Kind    string  `json:"kind"`
+	Origin  string  `json:"origin,omitempty"`
+	Version int64   `json:"version"`
+	Since   *string `json:"since,omitempty"`
 }
 
 type MessageItem struct {
@@ -243,7 +255,8 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
 		       `+displayNameSQL+`,coalesce(co.phone_e164,''),t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at,
 		       `+activity+`,lm.created_at,coalesce(lm.direction,''),coalesce(lm.message_type,''),left(coalesce(lm.body,''),160),w.since,coalesce(co.kind,''),
-		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,''),coalesce(co.internal_role,'')
+		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,''),coalesce(co.internal_role,''),
+		       c.control_kind,c.control_origin,c.control_version,c.control_since
 		FROM conversations c LEFT JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN users iu ON iu.id=c.internal_user_id
 		LEFT JOIN LATERAL (SELECT tk.status,tk.priority FROM tickets tk
@@ -322,7 +335,8 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 	item, err := scanConversationItem(platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `
 		SELECT c.id,c.contact_id,c.channel_connection_id,c.status,c.title,c.assigned_to_user_id,c.queue_id,
 		       `+displayNameSQL+`,coalesce(co.phone_e164,''),t.status,t.priority,c.crm_contact_id,c.created_at,c.updated_at,coalesce(co.kind,''),
-		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,''),coalesce(co.internal_role,'')
+		       c.conversation_kind,c.has_unclassified_participants,c.internal_user_id,coalesce(co.whatsapp_name,''),coalesce(co.internal_role,''),
+		       c.control_kind,c.control_origin,c.control_version,c.control_since
 		FROM conversations c LEFT JOIN contacts co ON co.id=c.contact_id AND co.tenant_id=c.tenant_id
 		LEFT JOIN users iu ON iu.id=c.internal_user_id
 		LEFT JOIN tickets t ON t.conversation_id=c.id AND t.tenant_id=c.tenant_id AND t.status IN ('open','in_progress','waiting')
@@ -421,9 +435,13 @@ func scanConversationItem(row rowScanner) (ConversationItem, error) {
 	var status string
 	var ticketStatus, ticketPriority *string
 	var created, updated time.Time
+	var ctrlKind, ctrlOrigin *string
+	var ctrlVersion int64
+	var ctrlSince *time.Time
 	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated, &item.ContactKind,
-		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName, &item.ContactInternalRole)
+		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName, &item.ContactInternalRole, &ctrlKind, &ctrlOrigin, &ctrlVersion, &ctrlSince)
 	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
+	item.Control = controlItem(ctrlKind, ctrlOrigin, ctrlVersion, ctrlSince)
 	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
 	return item, err
 }
@@ -434,10 +452,14 @@ func scanConversationListItem(row rowScanner) (ConversationItem, time.Time, erro
 	var ticketStatus, ticketPriority *string
 	var created, updated, activity time.Time
 	var lastAt, waitingSince *time.Time
+	var ctrlKind, ctrlOrigin *string
+	var ctrlVersion int64
+	var ctrlSince *time.Time
 	err := row.Scan(&item.ID, &item.ContactID, &item.ChannelConnectionID, &status, &item.Title, &item.AssignedToUserID, &item.QueueID, &item.ContactName, &item.ContactPhone, &ticketStatus, &ticketPriority, &item.CRMContactID, &created, &updated,
 		&activity, &lastAt, &item.LastMessageDirection, &item.LastMessageType, &item.LastMessagePreview, &waitingSince, &item.ContactKind,
-		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName, &item.ContactInternalRole)
+		&item.ConversationKind, &item.HasUnclassifiedParticipants, &item.InternalUserID, &item.ContactWhatsAppName, &item.ContactInternalRole, &ctrlKind, &ctrlOrigin, &ctrlVersion, &ctrlSince)
 	item.Status, item.TicketStatus, item.TicketPriority = status, ticketStatus, ticketPriority
+	item.Control = controlItem(ctrlKind, ctrlOrigin, ctrlVersion, ctrlSince)
 	item.CreatedAt, item.UpdatedAt = created.UTC().Format(time.RFC3339Nano), updated.UTC().Format(time.RFC3339Nano)
 	if lastAt != nil {
 		v := lastAt.UTC().Format(time.RFC3339Nano)
@@ -686,4 +708,19 @@ func isInlineSafeMime(mime string) bool {
 		return true
 	}
 	return false
+}
+
+func controlItem(kind, origin *string, version int64, since *time.Time) *ControlItem {
+	if kind == nil {
+		return nil
+	}
+	c := &ControlItem{Kind: *kind, Version: version}
+	if origin != nil {
+		c.Origin = *origin
+	}
+	if since != nil {
+		v := since.UTC().Format(time.RFC3339Nano)
+		c.Since = &v
+	}
+	return c
 }

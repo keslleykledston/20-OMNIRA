@@ -27,7 +27,7 @@ func (r *PostgresFlowRepository) LoadConversation(ctx context.Context, id uuid.U
 	var f ports.ConversationFacts
 	var mode string
 	err = r.q(ctx).QueryRow(ctx, `
-		SELECT c.id, c.tenant_id, c.conversation_kind, c.status, c.automation_mode, c.assigned_to_user_id, c.queue_id,
+		SELECT c.id, c.tenant_id, c.conversation_kind, c.status, c.automation_mode, c.assigned_to_user_id, COALESCE(c.control_kind IN ('crm_application','crm_agent_verified'), false), c.queue_id,
 		       c.channel_connection_id, COALESCE(cc.provider, ''),
 		       EXISTS (SELECT 1 FROM identity_resolution_conflicts ic WHERE ic.tenant_id = c.tenant_id AND ic.contact_id = c.contact_id AND ic.status = 'open'), c.contact_id,
 		       COALESCE(NULLIF(ct.alias, ''), NULLIF(ct.whatsapp_name, ''), ct.display_name, ''), COALESCE(ct.phone_e164, ''),
@@ -38,7 +38,7 @@ func (r *PostgresFlowRepository) LoadConversation(ctx context.Context, id uuid.U
 		LEFT JOIN contacts ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contact_id
 		WHERE c.tenant_id = $1 AND c.id = $2
 		FOR UPDATE OF c`, tenantID, id).
-		Scan(&f.ID, &f.TenantID, &f.Kind, &f.Status, &mode, &f.AssignedTo, &f.QueueID, &f.ConnectionID, &f.Provider,
+		Scan(&f.ID, &f.TenantID, &f.Kind, &f.Status, &mode, &f.AssignedTo, &f.HeldExternally, &f.QueueID, &f.ConnectionID, &f.Provider,
 			&f.IdentityConflict, &f.ContactID, &f.ContactName, &f.ContactPhone, &f.ContactKind, &f.ActiveCustomerAccountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound

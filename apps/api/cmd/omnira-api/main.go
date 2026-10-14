@@ -7,6 +7,8 @@ import (
 	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	ports "github.com/omnira/omnira/internal/channels/ports"
 	externaladapters "github.com/omnira/omnira/internal/external/adapters"
+	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
+	mediaports "github.com/omnira/omnira/internal/media/ports"
 	toolconnectors "github.com/omnira/omnira/internal/tool/connectors"
 	"log"
 	"os"
@@ -201,7 +203,15 @@ func main() {
 		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)
 	}
 	// ADR-0046: the external (CRM) API and its administration. Off by default; the features reported by /external/me say what this build serves.
-	srv.RegisterExternalHandlers(dbPool, cfg.HeadlessEnabled, externaladapters.Features{})
+	var externalMedia mediaports.MediaReader // the same cleared-files-only reader the workspace uses (ADR-0016); without a media directory the media route answers 404
+	if cfg.MediaDir != "" {
+		if store, err := mediaadapters.OpenFileStore(cfg.MediaDir); err == nil {
+			externalMedia = mediaadapters.NewReader(dbPool, store)
+		} else {
+			log.Printf("external API: media store unavailable, media downloads disabled: %v", err)
+		}
+	}
+	srv.RegisterExternalHandlers(dbPool, cfg.HeadlessEnabled, externaladapters.Features{Read: true}, externalMedia)
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions).

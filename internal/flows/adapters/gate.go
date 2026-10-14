@@ -76,9 +76,9 @@ func (g *Gate) OnInbound(ctx context.Context, conversationID, messageID uuid.UUI
 			SELECT $1, $2, $3, 'conversation', $4, $5, jsonb_build_object('message_id', $6::text, 'new_conversation', $7::boolean)
 			WHERE EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $2 AND id = $8 AND automation_mode = 'bot')
 			   OR EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $2 AND id = $8 AND automation_mode = 'waiting_human'
-			              AND status = 'open' AND assigned_to_user_id IS NULL)
+			              AND status = 'open' AND assigned_to_user_id IS NULL AND control_kind IS NULL)
 			   OR (EXISTS (SELECT 1 FROM flows WHERE tenant_id = $2 AND status = 'published' AND flow_type = 'INBOUND' AND restart_policy = 'always')
-			       AND EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $2 AND id = $8 AND status = 'open' AND assigned_to_user_id IS NULL
+			       AND EXISTS (SELECT 1 FROM conversations WHERE tenant_id = $2 AND id = $8 AND status = 'open' AND assigned_to_user_id IS NULL AND control_kind IS NULL
 			                   AND contact_id IS NOT NULL AND conversation_kind IN ('customer_service','unclassified')))`,
 			uuid.New(), tc.TenantID, JobFlowInbound, conversationID.String(), uuid.New(), messageID.String(), newConversation, conversationID)
 		return err

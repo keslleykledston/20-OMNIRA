@@ -107,6 +107,7 @@ func (s *PostgresOutboundStore) InsertQueuedMedia(ctx context.Context, sender uu
 		  WHERE c.tenant_id = $2 AND c.id = $3
 		    AND c.channel_connection_id IS NOT DISTINCT FROM $4::uuid
 		    AND (NOT $11::bool OR c.assigned_to_user_id = $8)
+		    AND COALESCE(c.control_kind, '') NOT IN ('crm_application','crm_agent_verified') -- a person never writes into a conversation an application holds (ADR-0046)
 		  FOR SHARE OF c
 		), claim AS (
 		  SELECT id FROM message_outbound_media

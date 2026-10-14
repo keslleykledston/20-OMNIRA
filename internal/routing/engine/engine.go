@@ -47,6 +47,7 @@ const (
 // Reasons are a closed set (they are stored and shown).
 const (
 	ReasonAlreadyAssigned   = "already_assigned"
+	ReasonHeldExternally    = "held_by_external_application" // ADR-0046: an external application holds it; the engine never assigns over it
 	ReasonNoQueue           = "no_queue"
 	ReasonClosed            = "conversation_closed"
 	ReasonManualQueue       = "manual_queue"
@@ -133,15 +134,16 @@ type convRow struct {
 	closedAt   *time.Time
 	status     string
 	mode       string
+	held       bool // an external application holds it (control_kind is set while assigned_to_user_id stays NULL)
 }
 
 // loadConv reads the conversation row the decision rests on. Decide reads it once under its lock; the path where a started flow already routed the
 // conversation (entFlowSettled) reads it again, because the flow changed it in this same transaction.
 func loadConv(ctx context.Context, q platformdb.Querier, tenant, id uuid.UUID) (convRow, error) {
 	var c convRow
-	err := q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.closed_at, c.status, COALESCE(qq.mode, '')
+	err := q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.closed_at, c.status, COALESCE(qq.mode, ''), COALESCE(c.control_kind IN ('crm_application','crm_agent_verified'), false)
 		FROM conversations c LEFT JOIN queues qq ON qq.tenant_id=c.tenant_id AND qq.id=c.queue_id
-		WHERE c.tenant_id=$1 AND c.id=$2`, tenant, id).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.closedAt, &c.status, &c.mode)
+		WHERE c.tenant_id=$1 AND c.id=$2`, tenant, id).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.closedAt, &c.status, &c.mode, &c.held)
 	return c, err
 }
 
@@ -188,9 +190,9 @@ func (e *Engine) decide(ctx context.Context, req Request) (Decision, error) {
 
 	// 1. the conversation row is the serialization point: two workers for the same conversation queue up here
 	var c convRow
-	err = q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.closed_at, c.status, COALESCE(qq.mode, '')
+	err = q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.assigned_at, c.created_at, c.closed_at, c.status, COALESCE(qq.mode, ''), COALESCE(c.control_kind IN ('crm_application','crm_agent_verified'), false)
 		FROM conversations c LEFT JOIN queues qq ON qq.tenant_id=c.tenant_id AND qq.id=c.queue_id
-		WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c`, tenant, req.ConversationID).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.closedAt, &c.status, &c.mode)
+		WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c`, tenant, req.ConversationID).Scan(&c.queueID, &c.assigned, &c.assignedAt, &c.createdAt, &c.closedAt, &c.status, &c.mode, &c.held)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Decision{}, ErrNotFound
 	}
@@ -198,7 +200,7 @@ func (e *Engine) decide(ctx context.Context, req Request) (Decision, error) {
 		return Decision{}, err
 	}
 	// 2. the routing state (created on first sight; a person's action starts a new episode)
-	st, err := loadState(ctx, q, tenant, req.ConversationID, c.queueID, c.status == "open" && c.assigned == nil)
+	st, err := loadState(ctx, q, tenant, req.ConversationID, c.queueID, c.status == "open" && c.assigned == nil && !c.held)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -230,6 +232,11 @@ func (e *Engine) decide(ctx context.Context, req Request) (Decision, error) {
 	switch {
 	case c.status != "open":
 		return finish(Decision{Kind: NoAction, Reason: ReasonClosed}, "done")
+	case c.held: // an external application holds it (ADR-0046): never assign over it, and stop the timers of this episode
+		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
+			return Decision{}, err
+		}
+		return finish(Decision{Kind: NoAction, Reason: ReasonHeldExternally}, "assigned")
 	case c.assigned != nil: // somebody (a person, an earlier run) already owns it: never reassign
 		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
 			return Decision{}, err
@@ -320,14 +327,14 @@ func (e *Engine) decide(ctx context.Context, req Request) (Decision, error) {
 			switch {
 			case c.status != "open":
 				state = "done"
-			case c.assigned != nil:
+			case c.assigned != nil || c.held:
 				state = "assigned"
 			}
 			out, err := persist(ctx, q, tenant, req.ConversationID, &st, trigger, detail, res.decision, state)
 			if err != nil {
 				return out, err
 			}
-			if c.status != "open" || c.assigned != nil {
+			if c.status != "open" || c.assigned != nil || c.held {
 				if _, err := e.syncSLA(ctx, q, tenant, req.ConversationID, c, &st, now); err != nil {
 					return out, err
 				}
@@ -417,8 +424,12 @@ func (e *Engine) evaluate(ctx context.Context, q platformdb.Querier, tenant uuid
 		}
 		// lost a race (capacity, lock, or the conversation was taken meanwhile): look at the conversation again before the next candidate
 		var owner *uuid.UUID
-		if err := q.QueryRow(ctx, `SELECT assigned_to_user_id FROM conversations WHERE tenant_id=$1 AND id=$2`, tenant, req.ConversationID).Scan(&owner); err != nil {
+		var held bool
+		if err := q.QueryRow(ctx, `SELECT assigned_to_user_id, COALESCE(control_kind IN ('crm_application','crm_agent_verified'), false) FROM conversations WHERE tenant_id=$1 AND id=$2`, tenant, req.ConversationID).Scan(&owner, &held); err != nil {
 			return outcome{}, err
+		}
+		if held { // an application took it while we were choosing: leave it alone
+			return outcome{kind: oAssigned, plain: Decision{Kind: NoAction, Reason: ReasonHeldExternally}}, nil
 		}
 		if owner != nil {
 			return outcome{kind: oAssigned, plain: Decision{Kind: AssignAgent, Reason: ReasonAlreadyAssigned, Destination: "agent:" + owner.String(), AssignedUser: *owner}}, nil
@@ -639,7 +650,7 @@ func (e *Engine) enter(ctx context.Context, q platformdb.Querier, tenant uuid.UU
 		}
 		if _, err := q.Exec(ctx, `UPDATE conversations SET queue_id=$3, updated_at=now(),
 			routing_retry_at = CASE WHEN $4 IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
-			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, dest, mode); err != nil {
+			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND control_kind IS NULL AND status='open'`, tenant, req.ConversationID, dest, mode); err != nil {
 			return entRejected, entryResult{}, "", err
 		}
 		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
@@ -834,7 +845,7 @@ func (e *Engine) pickAgent(ctx context.Context, q platformdb.Querier, tenant uui
 		}
 	}
 	tag, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
-		WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, user)
+		WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND control_kind IS NULL AND status='open'`, tenant, req.ConversationID, user)
 	if err != nil {
 		return uuid.Nil, false, err
 	}
@@ -938,7 +949,7 @@ func (e *Engine) pickOnCall(ctx context.Context, q platformdb.Querier, tenant uu
 			}
 		}
 		tag, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
-			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, req.ConversationID, user)
+			WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND control_kind IS NULL AND status='open'`, tenant, req.ConversationID, user)
 		if err != nil {
 			return uuid.Nil, false, err
 		}
@@ -1049,7 +1060,7 @@ func tryAssignLocked(ctx context.Context, q platformdb.Querier, tenant, queue, c
 		return false, nil
 	}
 	tag, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=$3, assigned_at=now(), updated_at=now()
-		WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND status='open'`, tenant, conversation, cand.UserID)
+		WHERE tenant_id=$1 AND id=$2 AND assigned_to_user_id IS NULL AND control_kind IS NULL AND status='open'`, tenant, conversation, cand.UserID)
 	if err != nil {
 		return false, err
 	}

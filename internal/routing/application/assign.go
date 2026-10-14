@@ -19,6 +19,7 @@ var (
 	ErrNotFound        = errors.New("routing: conversation not found")
 	ErrConflict        = errors.New("routing: conversation already assigned to another agent")
 	ErrInvalidAssignee = errors.New("routing: assignee is not an eligible agent of this tenant")
+	ErrHeldByExternal  = ports.ErrHeldByExternal
 )
 
 // AssignResult reports the resulting assignee and whether anything changed.

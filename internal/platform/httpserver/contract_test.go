@@ -95,7 +95,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterIntelligenceHandlers(nil, intelligenceadapters.NewTopicHandler(nil, nil, nil))
 	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
 	s.RegisterHubHandlers(nil, true, true)
-	s.RegisterExternalHandlers(nil, true, externaladapters.Features{})
+	s.RegisterExternalHandlers(nil, true, externaladapters.Features{}, nil)
 	return s
 }
 

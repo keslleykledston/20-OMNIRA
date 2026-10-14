@@ -4768,6 +4768,47 @@ paths:
         '409': { description: "Connection inactive or provider mismatch", content: { text/plain: { schema: { type: string } } } }
         '413': { description: "Body too large (1 MiB)", content: { text/plain: { schema: { type: string } } } }
         '503': { description: "Verification key unreadable / intake unavailable — WAHA retries", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/takeover:
+    post:
+      operationId: takeOverExternalConversation
+      tags: [ExternalApps]
+      summary: Take a conversation away from an external application (supervisor)
+      description: |
+        Requires `conversation.takeover_external` (administrators and supervisors). Only exists when `OMNIRA_HEADLESS_ENABLED=true`. A written `reason` and
+        `confirm: true` are required; the takeover is never automatic after a conflict. The caller becomes the holder (`tenant_user`); the typed history
+        (`conversation_control_events`) and the audit trail record who, when and why. `409` when the conversation is not held by an external application or is
+        finalized.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/ConversationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, confirm]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 80 }
+                confirm: { type: boolean }
+      responses:
+        '200':
+          description: The caller now holds the conversation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversation_id, control_kind, control_version]
+                properties:
+                  conversation_id: { type: string, format: uuid }
+                  control_kind: { type: string, enum: [tenant_user] }
+                  control_version: { type: integer, format: int64 }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
+        '409': { description: "Not held by an external application, or finalized", content: { text/plain: { schema: { type: string } } } }
   /tenants/{tenant_id}/integrations/apps:
     get:
       operationId: listExternalApps
@@ -5955,6 +5996,15 @@ components:
         status: { type: string, example: open }
         title: { type: string }
         assigned_to_user_id: { type: string, format: uuid, description: 'absent when unassigned' }
+        control:
+          type: object
+          description: "ADR-0046: who holds the conversation, typed. Absent while free. An external application is named by kind only; its operator is never shown. `version` only grows; clients compare it."
+          required: [kind, version]
+          properties:
+            kind: { type: string, enum: [tenant_user, hub_user, crm_application, crm_agent_verified] }
+            origin: { type: string, enum: [workspace, hub, crm, system] }
+            version: { type: integer, format: int64 }
+            since: { type: string, format: date-time }
         queue_id: { type: string, format: uuid }
         contact_name: { type: string, description: "The principal name: the team's alias, else the name declared on WhatsApp" }
         contact_whatsapp_name: { type: string, description: 'What the person declared on WhatsApp; shown smaller below contact_name when it differs' }
@@ -6248,7 +6298,7 @@ components:
         timestamp: { type: string, format: date-time }
         data:
           type: object
-          description: 'References only. message_received {message_id, direction, status}; message_status {message_id, status}; conversation_updated {reason, assigned_to_user_id, status}.'
+          description: 'References only. message_received {message_id, direction, status}; message_status {message_id, status}; conversation_updated {reason, assigned_to_user_id, status, control_kind, control_version}.'
           additionalProperties: true
     CreateConnectionRequest:
       type: object

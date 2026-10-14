@@ -16,6 +16,9 @@ type ConversationFacts struct {
 	Status         string
 	AutomationMode domain.AutomationMode
 	AssignedTo     *uuid.UUID
+	// HeldExternally: an external application holds the conversation (ADR-0046). assigned_to_user_id stays NULL for it, so the bot must be told
+	// explicitly: it never speaks over, starts on, or routes a conversation an application holds.
+	HeldExternally bool
 	QueueID        *uuid.UUID
 	ConnectionID   *uuid.UUID
 	Provider       string

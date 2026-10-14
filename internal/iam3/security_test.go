@@ -17,13 +17,13 @@ import (
 // internal/tenancy/adapters/team_http_test.go.
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
-		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "channel.manage", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal",
+		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "channel.manage", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "conversation.takeover_external",
 		"dashboard.read", "group.manage", "group.read", "identity.manage", "integration.manage", "integration.read", "membership.manage", "membership.read", "routing.override", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.manage", "tenant.read", "topic.manage", "topic.read",
 		// Flow Builder (ADR-0019, migration 000083). Editing and publishing are separate keys on purpose.
 		"flow.archive", "flow.create", "flow.edit", "flow.publish", "flow.test", "flow.view", "flow_run.view", "flow_template.install", "flow_template.view",
 	},
 	"tenant_supervisor": {
-		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "dashboard.read", "group.manage", "group.read", "integration.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read", "topic.manage", "topic.read",
+		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "conversation.takeover_external", "dashboard.read", "group.manage", "group.read", "integration.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read", "topic.manage", "topic.read",
 		// Flow Builder (ADR-0019): may look and simulate, never edit or publish.
 		"flow.test", "flow.view", "flow_run.view", "flow_template.view",
 	},

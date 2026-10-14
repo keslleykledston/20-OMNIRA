@@ -22,9 +22,11 @@ import (
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
+	"github.com/omnira/omnira/internal/conversationcontrol"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	"github.com/omnira/omnira/internal/entitlements"
 	externaladapters "github.com/omnira/omnira/internal/external/adapters"
+	externaldomain "github.com/omnira/omnira/internal/external/domain"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
@@ -33,6 +35,7 @@ import (
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
+	mediaports "github.com/omnira/omnira/internal/media/ports"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -566,13 +569,20 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 //   - the external API itself, for an APPLICATION (bearer integration token; no cookie, no session, the tenant comes from the credential).
 //
 // With the flag off nothing here exists (404), so the platform is byte-for-byte what it was.
-func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, features externaladapters.Features) {
+func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, features externaladapters.Features, media mediaports.MediaReader) {
 	if !enabled {
 		return
 	}
 	// the external API: authenticated by the integration token only
 	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
 	s.mux.Handle("GET /api/v1/external/me", ext.Authenticated(externaladapters.NewMeHandler(dbPool, features)))
+	// the read side (H3): one visibility rule for all of it (externaladapters.Visibility)
+	read := externaladapters.NewReadHandler(dbPool, media)
+	s.mux.Handle("GET /api/v1/external/conversations", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.ListConversations))))
+	s.mux.Handle("GET /api/v1/external/conversations/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.GetConversation))))
+	s.mux.Handle("GET /api/v1/external/conversations/{id}/messages", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMessageRead, http.HandlerFunc(read.ListMessages))))
+	s.mux.Handle("GET /api/v1/external/contacts/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactRead, http.HandlerFunc(read.GetContact))))
+	s.mux.Handle("GET /api/v1/external/media/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMediaRead, http.HandlerFunc(read.GetMedia))))
 
 	if s.authenticator == nil {
 		return // administration needs a working sign-in
@@ -582,7 +592,10 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, fe
 	tenantRepo := tenancyadapters.NewPostgresTenantRepository(dbPool)
 	authzSvc := tenancyapplication.NewAuthorizationService(memberRepo, tenantRepo)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
-	admin := externaladapters.NewAdminHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
+	// suspending or revoking an installation frees, in the same transaction, every conversation it holds (ADR-0046 §6)
+	admin := externaladapters.NewAdminHandler(dbPool, auditRepo).WithDrainer(conversationcontrol.Service{}.DrainInstallation)
+	takeover := conversationcontrol.NewTakeoverHandler(dbPool, auditRepo)
 	appsPath := "/api/v1/tenants/{tenant_id}/integrations/apps"
 	route := func(pattern string, h http.HandlerFunc) {
 		s.mux.Handle(pattern, authnMiddleware(tenantSession(h)))
@@ -596,6 +609,8 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, fe
 	route("POST "+appsPath+"/{app_id}/revoke", admin.Transition(externaladapters.Revoke, auditdomain.ActionExternalAppRevoked))
 	route("POST "+appsPath+"/{app_id}/credentials", admin.IssueCredential)
 	route("DELETE "+appsPath+"/{app_id}/credentials/{credential_id}", admin.RevokeCredential)
+	// the supervisor's explicit takeover of a conversation an application holds (conversation.takeover_external, reason, confirmation)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/takeover", authnMiddleware(tenantSession(http.HandlerFunc(takeover.Takeover))))
 }
 
 func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {

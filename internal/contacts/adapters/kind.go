@@ -184,7 +184,7 @@ func dequeueSpam(ctx context.Context, q platformdb.Querier, tc *tenancydomain.Te
 	}
 	tag, err := q.Exec(ctx, `
 		UPDATE conversations SET queue_id = NULL, routing_retry_at = NULL, updated_at = now()
-		WHERE tenant_id = $1 AND contact_id = $2 AND status = 'open' AND assigned_to_user_id IS NULL AND queue_id IS NOT NULL`,
+		WHERE tenant_id = $1 AND contact_id = $2 AND status = 'open' AND assigned_to_user_id IS NULL AND control_kind IS NULL AND queue_id IS NOT NULL`,
 		tc.TenantID, contactID)
 	if err != nil {
 		return 0, err

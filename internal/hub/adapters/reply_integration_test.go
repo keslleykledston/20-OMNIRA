@@ -565,3 +565,53 @@ func TestHubItem_AccessSaysWhetherFinalizeMayBeOffered(t *testing.T) {
 		t.Fatal("key withdrawn from the grant: finalize is no longer offered")
 	}
 }
+
+// ADR-0046: a conversation an external application holds is neither claimed, answered nor handed over by a Hub agent; the Hub's own writes are typed
+// (hub_user) and a release frees the control. The pool distribution never offers it either.
+func TestHubReply_RefusesAConversationAnExternalApplicationHolds(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	w.connect("A")
+	alice := w.hubAgent("alice")
+	w.grantReply(alice, "A")
+	inst := uuid.New()
+	w.exec(`INSERT INTO external_app_installations(id,tenant_id,name,scopes) VALUES($1,$2,'crm',ARRAY['conversation.claim'])`, inst, w.tenant["A"])
+	w.exec(`UPDATE conversations SET control_kind='crm_application', control_holder_id=$2, control_version=control_version+1, control_since=now(), control_origin='crm' WHERE id=$1`, w.conv["A"], inst)
+
+	if code := api.claim(alice, "A", "A"); code != 409 {
+		t.Fatalf("a Hub agent claimed a conversation an application holds: %d, want 409", code)
+	}
+	if code, _, _ := api.reply(alice, "A", "A", "oi", "key-alice-held-1"); code != 409 {
+		t.Fatalf("a Hub agent replied into a conversation an application holds: %d, want 409", code)
+	}
+	if a := w.assignee("A"); a != nil || w.outbound("A") != 0 {
+		t.Fatal("the Hub changed a conversation an application holds")
+	}
+	var kind string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT control_kind FROM conversations WHERE id=$1`, w.conv["A"]).Scan(&kind))
+	if kind != "crm_application" {
+		t.Fatalf("the hold changed to %s", kind)
+	}
+
+	// once the application lets go, the Hub claims it, and the claim is TYPED: hub_user, origin hub, the version advanced
+	w.exec(`UPDATE conversations SET control_kind=NULL, control_holder_id=NULL, control_since=NULL, control_origin=NULL, control_version=control_version+1 WHERE id=$1`, w.conv["A"])
+	if code := api.claim(alice, "A", "A"); code != 200 {
+		t.Fatalf("claim after the release: %d", code)
+	}
+	var holder uuid.UUID
+	var origin string
+	var version int64
+	w.must(w.owner.QueryRow(w.ctx, `SELECT control_kind, control_holder_id, control_origin, control_version FROM conversations WHERE id=$1`, w.conv["A"]).Scan(&kind, &holder, &origin, &version))
+	if kind != "hub_user" || holder != alice || origin != "hub" || version != 3 {
+		t.Fatalf("the Hub claim is not typed: %s %s %s v%d", kind, holder, origin, version)
+	}
+	// handing it back to the queue frees the control as well
+	if code, body, _ := api.post(alice, w.hub, w.itemID("A"), "transfer", map[string]any{"expected_tenant_id": w.tenant["A"], "to_user_id": nil}, nil); code != 200 {
+		t.Fatalf("release: %d %s", code, body)
+	}
+	var free *string
+	w.must(w.owner.QueryRow(w.ctx, `SELECT control_kind FROM conversations WHERE id=$1`, w.conv["A"]).Scan(&free))
+	if free != nil || w.assignee("A") != nil {
+		t.Fatalf("after the Hub released it: control=%v assignee=%v", free, w.assignee("A"))
+	}
+}
