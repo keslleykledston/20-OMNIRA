@@ -26,3 +26,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0036 - Estratégia de evolução do frontend: o OMNIRA é a aplicação, protótipos gerados são só referência de UX — aceita
 - 0043 - Setores: a fila é o setor; entrada por canal (S0–S2 implementadas, S3/S4 propostas)
 - 0045 - Menu sem resposta: lembretes e encerramento por inatividade (nó close_conversation) — implementada em LAB na branch feat/menu-idle-reminders
+- 0046 - OMNIRA Headless / Híbrido: CRM externo e Workspace sobre um único controle de conversa (identidade de aplicação, journal durável, webhooks) — implementação local na branch feat/headless-crm-dual-operation
