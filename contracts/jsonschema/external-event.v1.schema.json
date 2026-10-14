@@ -1,0 +1,639 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnira.devops.k3gsolutions.com.br/contracts/external-event.v1.schema.json",
+  "title": "OMNIRA external event v1 (ADR-0046)",
+  "description": "The envelope of a fact (journal and webhook body). References and counters only: never a message body, a phone number, a name or an attachment. Unknown event types must be ignored by a receiver (new types are additive).",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "channel",
+            "workspace",
+            "hub",
+            "crm",
+            "automation",
+            "system"
+          ]
+        },
+        "mine": {
+          "type": "boolean"
+        }
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "conversation",
+            "message",
+            "contact",
+            "ticket"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data",
+        "aggregate_version",
+        "conversation_id"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "conversation.created.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "conversation"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "open",
+                "closed"
+              ]
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate_version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data",
+        "aggregate_version",
+        "conversation_id"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "conversation.control_changed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "conversation"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "control",
+            "previous"
+          ],
+          "properties": {
+            "control": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "kind",
+                "version"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "unassigned",
+                    "held"
+                  ]
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "tenant_user",
+                    "hub_user",
+                    "crm_application",
+                    "crm_agent_verified",
+                    null
+                  ]
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "previous": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "kind"
+              ],
+              "properties": {
+                "state": {
+                  "enum": [
+                    "unassigned",
+                    "held"
+                  ]
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate_version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data",
+        "aggregate_version",
+        "conversation_id"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "conversation.closed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "conversation"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate_version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data",
+        "conversation_id"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "message.created.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "message"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "direction",
+            "type",
+            "status"
+          ],
+          "properties": {
+            "direction": {
+              "enum": [
+                "inbound",
+                "outbound"
+              ]
+            },
+            "type": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data",
+        "conversation_id"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "message.status_changed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "message"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "previous"
+          ],
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "previous": {
+              "type": "string"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "contact.updated.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "contact"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fields"
+          ],
+          "properties": {
+            "fields": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "name",
+                  "whatsapp_name",
+                  "phone_e164",
+                  "kind"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data",
+        "conversation_id"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "ticket.linked.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "ticket"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    }
+  ]
+}

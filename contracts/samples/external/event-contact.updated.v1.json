@@ -1,0 +1,20 @@
+{
+  "event_id": "7d1e0c00-0000-4000-8000-000000000006",
+  "seq": 6,
+  "type": "contact.updated.v1",
+  "version": 1,
+  "occurred_at": "2026-10-14T20:00:00Z",
+  "tenant_id": "0b2a6a4e-8f0d-4a6f-9d9a-5a1f00000001",
+  "aggregate": {
+    "type": "contact",
+    "id": "c0c0c000-0000-4000-8000-0000000000b1"
+  },
+  "origin": {
+    "kind": "workspace"
+  },
+  "data": {
+    "fields": [
+      "name"
+    ]
+  }
+}

@@ -303,6 +303,7 @@ h4)
   sqlmut "a fact is recorded without a live installation" $J "  IF NOT EXISTS (SELECT 1 FROM external_app_installations WHERE tenant_id = p_tenant AND status <> 'revoked') THEN
     RETURN;
   END IF;" ""
+  sqlmut "a legacy writer's change of holder is not a fact" $J "CREATE TRIGGER domain_events_conversation_changed_trg AFTER UPDATE ON conversations" "CREATE TRIGGER domain_events_conversation_changed_trg AFTER UPDATE OF control_version, status ON conversations"
   sqlmut "a fact of a hidden conversation is recorded"   $J "  IF p_conversation IS NOT NULL AND NOT external_conversation_visible(p_tenant, p_conversation) THEN
     RETURN;
   END IF;" ""
@@ -325,9 +326,9 @@ h4)
   sqlmut "a fact is fanned out to a revoked installation" $WH "JOIN external_app_installations i ON i.tenant_id = s.tenant_id AND i.id = s.installation_id AND i.status = 'active'
      WHERE s.status = 'active'" "JOIN external_app_installations i ON i.tenant_id = s.tenant_id AND i.id = s.installation_id
      WHERE s.status = 'active'"
-  sqlmut "a delivery of a revoked installation is claimed" $WH "  UPDATE webhook_deliveries d SET status = 'cancelled', last_error_class = 'revoked'
-   WHERE d.status = 'pending' AND d.next_attempt_at <= now()" "  UPDATE webhook_deliveries d SET status = 'cancelled', last_error_class = 'revoked'
-   WHERE false AND d.status = 'pending' AND d.next_attempt_at <= now()"
+  sqlmut "a delivery of a revoked installation is claimed" $WH "   WHERE d.status = 'pending' AND d.next_attempt_at <= now()
+     AND (NOT EXISTS (SELECT 1 FROM webhook_subscriptions s" "   WHERE false AND d.status = 'pending' AND d.next_attempt_at <= now()
+     AND (NOT EXISTS (SELECT 1 FROM webhook_subscriptions s"
   sqlmut "the same fact is delivered twice"               $WH "  UNIQUE (subscription_id, event_seq)," "  UNIQUE (id),"
   sqlmut "a fact that stopped being visible is dead, not cancelled" $WH "WHEN p_error_class = 'not_visible' THEN 'cancelled' " ""
   sqlmut "the rotation keeps no previous secret"         $WH "previous_key_id = key_id, previous_secret_ciphertext = secret_ciphertext, previous_valid_until = now() + p_keep," "previous_key_id = NULL, previous_secret_ciphertext = NULL, previous_valid_until = NULL,"

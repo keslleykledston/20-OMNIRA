@@ -118,7 +118,9 @@ BEGIN
   END IF;
   RETURN NULL;
 END $$;
-CREATE TRIGGER domain_events_conversation_changed_trg AFTER UPDATE OF control_version, status ON conversations
+-- Not "UPDATE OF control_version": a legacy writer (the Workspace assigning a person, the router) names assigned_to_user_id and the BEFORE guard is what moves
+-- control_version, and a column list only looks at what the statement itself sets. The WHEN keeps the function from running for any other update.
+CREATE TRIGGER domain_events_conversation_changed_trg AFTER UPDATE ON conversations
   FOR EACH ROW WHEN (NEW.control_version IS DISTINCT FROM OLD.control_version OR NEW.status IS DISTINCT FROM OLD.status)
   EXECUTE FUNCTION domain_events_conversation_changed();
 

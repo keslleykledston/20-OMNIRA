@@ -792,3 +792,38 @@ func TestBootstrapWhileTheDataMovesRebuildsTheFinalState(t *testing.T) {
 		t.Fatalf("only %d conversations compared", n)
 	}
 }
+
+
+// A change of holder made by a LEGACY writer (a person assigned in the Workspace, the router, a release) names only assigned_to_user_id; the guard moves the control
+// version. The journal must still say so, with the origin, or an external application would never learn that a person took the conversation.
+func TestJournalSaysWhenALegacyWriterChangesWhoHoldsTheConversation(t *testing.T) {
+	e := newEnv(t)
+	e.eventsAPI()
+	a := e.tenant()
+	app := e.install(e.member(a, "tenant_admin"), a, "CRM", journalScopes...)
+	agent := e.member(a, "tenant_agent")
+	conv, _ := e.conv(a, convOpts{})
+	e.sequence()
+	cp := e.allEvents(app.Credential.Token, 0)
+	e.exec(`UPDATE conversations SET assigned_to_user_id=$2, assigned_at=now() WHERE id=$1`, conv, agent) // exactly what the Workspace's assign does
+	e.sequence()
+	evs := e.allEvents(app.Credential.Token, int64(len(cp)))
+	if len(evs) != 1 || evs[0].Type != "conversation.control_changed.v1" || evs[0].AggregateVer == nil || *evs[0].AggregateVer != 1 || evs[0].Origin.Kind != "workspace" {
+		t.Fatalf("a person taking the conversation produced %+v", evs)
+	}
+	if evs[0].Data["control"].(map[string]any)["kind"] != "tenant_user" {
+		t.Errorf("data = %v", evs[0].Data)
+	}
+	e.exec(`UPDATE conversations SET assigned_to_user_id=NULL WHERE id=$1`, conv) // and the release
+	e.sequence()
+	evs = e.allEvents(app.Credential.Token, int64(len(cp)))
+	if len(evs) != 2 || evs[1].AggregateVer == nil || *evs[1].AggregateVer != 2 || evs[1].Data["control"].(map[string]any)["state"] != "unassigned" {
+		t.Fatalf("the release produced %+v", evs)
+	}
+	// a plain update that moves nothing says nothing
+	e.exec(`UPDATE conversations SET updated_at=now() WHERE id=$1`, conv)
+	e.sequence()
+	if more := e.allEvents(app.Credential.Token, int64(len(cp))); len(more) != 2 {
+		t.Errorf("an update that changed no control produced a fact: %d", len(more))
+	}
+}

@@ -1,0 +1,107 @@
+asyncapi: 2.6.0
+info:
+  title: OMNIRA external events (Headless)
+  version: 1.0.0-lab
+  description: |
+    The facts an external application (a CRM) receives about the conversations it may see (ADR-0046). Two ways to get the same facts, with the same envelope:
+
+    * **Pull** — `GET /api/v1/external/events?after=<seq>` (see `omnira-external-v1.yaml`). Durable, ordered per company by `seq`, kept for the retention period (30 days by
+      default). This is the source of truth: a receiver that was down reads what it missed from here. `410 resync_required` when the cursor is older than what is kept.
+    * **Push** — signed HTTPS webhooks to the endpoints the company's administrator configured. At least once: a fact may arrive more than once and out of order across
+      conversations; deduplicate by `event_id`, order one conversation's facts by `aggregate_version`.
+
+    **The envelope never carries content.** No message text, no phone number, no name, no attachment: only identifiers, kinds, statuses and counters. Fetch the content with
+    the read API (`GET /external/conversations/{id}/messages`, `/contacts/{id}`, `/media/{id}`) — which re-checks, at that moment, that the installation may see it.
+    Only facts of conversations the installation may see are sent; a conversation that stops being visible simply stops producing facts.
+
+    **Bootstrap without gaps:** read `GET /external/sync/checkpoint` FIRST, then page the snapshot (`/external/conversations`, `/messages`), then read the events after the
+    checkpoint's `seq_head`. A fact already reflected in the snapshot and replayed is harmless (it is a reference), and a fact after the checkpoint is always replayed.
+
+    ## Signature
+    `X-Omnira-Signature: v1=<hex>` where `<hex>` = HMAC-SHA256(secret, `<X-Omnira-Timestamp>` + `.` + RAW BODY BYTES). Verify the raw bytes you received (do not parse and
+    re-serialize). During a secret rotation the header carries two values separated by a comma (`v1=<new>,v1=<old>`); accept if either matches. Reject a timestamp more than
+    5 minutes away from your clock (replay). A worked, verifiable example is `contracts/samples/external/webhook-delivery.sample.json`.
+
+    ## Headers of every call
+    `X-Omnira-Event-ID` (the `event_id`, stable for ever), `X-Omnira-Delivery-ID` (stable across retries of one delivery), `X-Omnira-Timestamp`, `X-Omnira-Signature`,
+    `X-Omnira-Key-ID` (which secret signed it), `Content-Type: application/json`.
+
+    ## Answers and retries
+    Answer 2xx to acknowledge. Anything else (or no answer within the timeout) is retried with exponential backoff (5 s doubling to 1 h, ±20 % jitter) for 72 hours; after that the
+    delivery goes to the dead-letter list, where the administrator can re-send it. A redirect is **not** followed (it counts as a failure). The endpoint must be `https`, on a public
+    address, with no credentials in the URL, on port 443 or 8443; the address is checked again at every connection.
+  license: { name: Proprietary }
+defaultContentType: application/json
+channels:
+  customer-webhook:
+    description: The HTTPS endpoint of the application. OMNIRA POSTs one fact per call.
+    bindings:
+      http: { type: request, method: POST }
+    publish:
+      operationId: receiveExternalEvent
+      summary: A fact about a conversation, message, contact or ticket the installation may see
+      message:
+        oneOf:
+          - $ref: '#/components/messages/ConversationCreated'
+          - $ref: '#/components/messages/ConversationControlChanged'
+          - $ref: '#/components/messages/ConversationClosed'
+          - $ref: '#/components/messages/MessageCreated'
+          - $ref: '#/components/messages/MessageStatusChanged'
+          - $ref: '#/components/messages/ContactUpdated'
+          - $ref: '#/components/messages/TicketLinked'
+components:
+  messageTraits:
+    signed:
+      headers:
+        type: object
+        required: [X-Omnira-Signature, X-Omnira-Timestamp, X-Omnira-Event-ID, X-Omnira-Delivery-ID, X-Omnira-Key-ID]
+        properties:
+          X-Omnira-Signature: { type: string, example: 'v1=ba29bcae4c7101a52658c2ef2eb1a7b26f55a4547c84909da224acb26bc51eda' }
+          X-Omnira-Timestamp: { type: string, description: Unix seconds }
+          X-Omnira-Event-ID: { type: string, format: uuid }
+          X-Omnira-Delivery-ID: { type: string, format: uuid }
+          X-Omnira-Key-ID: { type: string }
+  messages:
+    ConversationCreated:
+      name: conversation.created.v1
+      title: A conversation was created
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-conversation.created.v1.json' } }]
+    ConversationControlChanged:
+      name: conversation.control_changed.v1
+      title: Who holds the conversation changed (claim, release, transfer, takeover, lease expiry, close)
+      description: "`aggregate_version` is the new control version; `origin.mine` is true when THIS installation caused it, so it can recognise its own echo and still follow later statuses."
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-conversation.control_changed.v1.json' } }]
+    ConversationClosed:
+      name: conversation.closed.v1
+      title: The attendance was finalized
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-conversation.closed.v1.json' } }]
+    MessageCreated:
+      name: message.created.v1
+      title: A message was received or queued (no content)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-message.created.v1.json' } }]
+    MessageStatusChanged:
+      name: message.status_changed.v1
+      title: The delivery status of a message changed (queued, sent, delivered, read, failed...)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-message.status_changed.v1.json' } }]
+    ContactUpdated:
+      name: contact.updated.v1
+      title: Fields of a contact changed (WHICH fields, never their values)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-contact.updated.v1.json' } }]
+    TicketLinked:
+      name: ticket.linked.v1
+      title: A conversation's ticket was linked to the ERP
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-ticket.linked.v1.json' } }]
