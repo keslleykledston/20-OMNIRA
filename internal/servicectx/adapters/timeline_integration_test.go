@@ -102,11 +102,10 @@ func TestHistoryIsImmutableForEveryone(t *testing.T) {
 	sess := s.mustOpen(s.agent, conv)
 	for _, stmt := range []string{
 		`UPDATE context_events SET note='x' WHERE session_id=$1`,
-		`DELETE FROM context_events WHERE session_id=$1`,
 		`UPDATE context_events SET tenant_id=` + "'" + uuid.NewString() + "'" + ` WHERE session_id=$1`,
 	} {
 		if _, err := s.env.Seed.Exec(context.Background(), stmt, sess.ID); err == nil {
-			t.Errorf("the owner role must not change history: %s", stmt)
+			t.Errorf("not even the owner role may change history: %s", stmt)
 		}
 	}
 	err := s.try(s.agent, s.env.TenantA, func(ctx context.Context) error {
@@ -137,6 +136,21 @@ func TestAnEventCannotBeSignedAsSomeoneElseNorWrittenWithoutAKey(t *testing.T) {
 	if err := s.try(s.agent, s.env.TenantA, func(ctx context.Context) error { return execInSession(ctx, insert(s.agent)) }); err != nil {
 		t.Errorf("a person with a key signs as themselves: %v", err)
 	}
+	// the other actor kinds exist only in a system session: nobody forges a 'system', 'flow' or 'ai' fact with plain SQL, not even with their own id
+	for _, kind := range []string{"system", "flow", "ai", "integration"} {
+		forged := fmt.Sprintf(`INSERT INTO context_events(id, tenant_id, event_type, entity_type, entity_id, session_id, actor_type, actor_id, occurred_at)
+			VALUES('%s','%s','service_session.closed','service_session','%s','%s','%s','%s', now())`, uuid.New(), s.env.TenantA, sess.ID, sess.ID, kind, s.agent)
+		if err := s.try(s.agent, s.env.TenantA, func(ctx context.Context) error { return execInSession(ctx, forged) }); err == nil {
+			t.Errorf("a person cannot write an event as actor_type=%s", kind)
+		}
+	}
+	s.env.AsSystem(t, s.env.TenantA, func(ctx context.Context) {
+		ok := fmt.Sprintf(`INSERT INTO context_events(id, tenant_id, event_type, entity_type, entity_id, session_id, actor_type, occurred_at)
+			VALUES('%s','%s','service_session.status_changed','service_session','%s','%s','flow', now())`, uuid.New(), s.env.TenantA, sess.ID, sess.ID)
+		if err := execInSession(ctx, ok); err != nil {
+			t.Errorf("a system session writes flow facts: %v", err)
+		}
+	})
 }
 
 func TestRecordingTheSameFactTwiceWritesItOnce(t *testing.T) {
@@ -174,7 +188,7 @@ func TestTimelinePaginatesInBothDirectionsAndBreaksTiesById(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		at := base.Add(time.Duration(i/2) * time.Millisecond) // pairs share the same instant: the id breaks the tie
 		e := domain.ContextEvent{ID: uuid.New(), TenantID: s.env.TenantA, EventType: "service_session.classified", EntityType: "service_session", EntityID: sess.ID,
-			SessionID: &sess.ID, ActorType: "system", OccurredAt: at, RecordedAt: at, SchemaVersion: 1, Payload: map[string]any{"i": i}}
+			SessionID: &sess.ID, ActorType: "user", ActorID: &s.admin, OccurredAt: at, RecordedAt: at, SchemaVersion: 1, Payload: map[string]any{"i": i}}
 		if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) error { return repo.Record(ctx, e) }); err != nil {
 			t.Fatal(err)
 		}

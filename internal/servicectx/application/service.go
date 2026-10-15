@@ -41,6 +41,9 @@ type Service struct {
 	events       ports.Events
 	links        ports.LinkCounter
 	timeline     ports.TimelineRepository
+	cases        ports.CaseRepository
+	tasks        ports.TaskRepository
+	ctxRepo      ports.ContextRepository
 	reopenWindow time.Duration
 	metrics      Metrics
 }
@@ -136,10 +139,39 @@ func (s *Service) allow(ctx context.Context, c caller, perm string) error {
 	return nil
 }
 
-// OpenResult says whether the call created the session or returned the one that already stood for the request.
+// OpenResult says whether the call created the session or returned one that already stood. Replay is true only when an Idempotency-Key was recognised (the same
+// request again); returning the conversation's active session to a request that did not repeat anything is not a replay.
 type OpenResult struct {
 	Session *domain.Session
 	Created bool
+	Replay  bool
+}
+
+// replay recognises an Idempotency-Key: it serializes the requests that carry the key, and returns the receipt an earlier request with the SAME fingerprint left
+// (nil when the key is new). The same key with another request is refused.
+func (s *Service) replay(ctx context.Context, scope, key, hash string) (*ports.Receipt, error) {
+	if key == "" {
+		return nil, nil
+	}
+	if err := s.repo.LockScopedIdempotency(ctx, scope, key); err != nil {
+		return nil, err
+	}
+	rec, err := s.repo.ReceiptFor(ctx, scope, key)
+	if err != nil || rec == nil {
+		return nil, err
+	}
+	if rec.RequestHash != hash {
+		return nil, domain.ErrIdempotencyMismatch
+	}
+	return rec, nil
+}
+
+// remember leaves the receipt of a request that carried a key, whatever its answer was.
+func (s *Service) remember(ctx context.Context, scope, key, hash string, id uuid.UUID) error {
+	if key == "" {
+		return nil
+	}
+	return s.repo.SaveReceipt(ctx, scope, key, hash, id)
 }
 
 // Open starts a session, or returns the one already standing for the request: the same Idempotency-Key with the same request, or the conversation's
@@ -157,20 +189,16 @@ func (s *Service) Open(ctx context.Context, raw domain.OpenInput) (OpenResult, e
 		return OpenResult{}, err
 	}
 	hash := in.Hash()
-	if in.IdempotencyKey != "" {
-		if err := s.repo.LockIdempotency(ctx, in.IdempotencyKey); err != nil {
-			return OpenResult{}, err
-		}
-		prev, err := s.repo.SessionByIdempotency(ctx, in.IdempotencyKey)
+	rec, err := s.replay(ctx, ports.ScopeSessionOpen, in.IdempotencyKey, hash)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	if rec != nil && rec.SessionID != nil {
+		prev, err := s.repo.GetSession(ctx, *rec.SessionID)
 		if err != nil {
 			return OpenResult{}, err
 		}
-		if prev != nil {
-			if prev.RequestHash == nil || *prev.RequestHash != hash {
-				return OpenResult{}, domain.ErrIdempotencyMismatch
-			}
-			return OpenResult{Session: prev}, nil
-		}
+		return OpenResult{Session: prev, Replay: true}, nil
 	}
 	var facts *ports.ConversationFacts
 	if in.ConversationID != nil {
@@ -188,11 +216,18 @@ func (s *Service) Open(ctx context.Context, raw domain.OpenInput) (OpenResult, e
 			return OpenResult{}, err
 		}
 		if active != nil {
+			// the key still leaves its receipt: a retry after this session closed must get THIS answer, not open another
+			if err := s.remember(ctx, ports.ScopeSessionOpen, in.IdempotencyKey, hash, active.ID); err != nil {
+				return OpenResult{}, err
+			}
 			return OpenResult{Session: active}, nil
 		}
 	}
 	sess, err := s.create(ctx, c, in, facts, hash)
 	if err != nil {
+		return OpenResult{}, err
+	}
+	if err := s.remember(ctx, ports.ScopeSessionOpen, in.IdempotencyKey, hash, sess.ID); err != nil {
 		return OpenResult{}, err
 	}
 	return OpenResult{Session: sess, Created: true}, nil
@@ -239,10 +274,6 @@ func (s *Service) create(ctx context.Context, c caller, in domain.OpenInput, fac
 		ep := in.ExternalProtocol
 		sess.ExternalProtocol = &ep
 	}
-	if in.IdempotencyKey != "" {
-		k := in.IdempotencyKey
-		sess.IdempotencyKey, sess.RequestHash = &k, &hash
-	}
 	if err := s.repo.InsertSession(ctx, sess); err != nil {
 		return nil, err
 	}
@@ -252,7 +283,7 @@ func (s *Service) create(ctx context.Context, c caller, in domain.OpenInput, fac
 	if err := s.emit(ctx, c, domain.EvSessionOpened, sess, now, map[string]any{"source": in.Source, "channel": sess.OriginChannel, "has_conversation": sess.ConversationID != nil}, ""); err != nil {
 		return nil, err
 	}
-	s.audit.Record(ctx, ActionSessionOpened, ResourceSession, sess.ID, map[string]any{"source": in.Source, "protocol": sess.Protocol})
+	s.record(ctx, c, ActionSessionOpened, ResourceSession, sess.ID, map[string]any{"source": in.Source, "protocol": sess.Protocol})
 	s.metrics.Inc("service_sessions_opened_total", in.Source)
 	return sess, nil
 }
@@ -288,6 +319,18 @@ func channelToken(p string) string {
 		return ""
 	}
 	return string(out)
+}
+
+// record writes the audit row. A system session acting on behalf of a person (a Hub agent finalizing through the Hub's write path) has no actor of its own, so the
+// person is named in the metadata: the trail never loses who did it.
+func (s *Service) record(ctx context.Context, c caller, action, resource string, id uuid.UUID, meta map[string]any) {
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	if c.onBehalf != nil {
+		meta["acting_user_id"] = c.onBehalf.String()
+	}
+	s.audit.Record(ctx, action, resource, id, meta)
 }
 
 // emit records the event on the timeline in the same transaction as the change.
@@ -484,7 +527,7 @@ func (s *Service) Patch(ctx context.Context, id uuid.UUID, in domain.PatchInput,
 	if err := s.emit(ctx, c, domain.EvSessionClassified, sess, at, changed, ""); err != nil {
 		return nil, err
 	}
-	s.audit.Record(ctx, ActionSessionClassified, ResourceSession, sess.ID, map[string]any{"fields": len(changed)})
+	s.record(ctx, c, ActionSessionClassified, ResourceSession, sess.ID, map[string]any{"fields": len(changed)})
 	return sess, nil
 }
 
@@ -522,7 +565,7 @@ func (s *Service) SetStatus(ctx context.Context, id uuid.UUID, to domain.Session
 	if err := s.emit(ctx, c, domain.EvSessionStatus, sess, at, map[string]any{"from": string(from), "to": string(to)}, ""); err != nil {
 		return nil, err
 	}
-	s.audit.Record(ctx, ActionSessionStatus, ResourceSession, sess.ID, map[string]any{"from": string(from), "to": string(to)})
+	s.record(ctx, c, ActionSessionStatus, ResourceSession, sess.ID, map[string]any{"from": string(from), "to": string(to)})
 	return sess, nil
 }
 
@@ -595,7 +638,7 @@ func (s *Service) finish(ctx context.Context, c caller, sess *domain.Session, in
 	if err := s.emit(ctx, c, domain.EvSessionClosed, sess, at, payload, ""); err != nil {
 		return nil, err
 	}
-	s.audit.Record(ctx, ActionSessionClosed, ResourceSession, sess.ID, map[string]any{"result": canonical, "to": string(to), "source": source})
+	s.record(ctx, c, ActionSessionClosed, ResourceSession, sess.ID, map[string]any{"result": canonical, "to": string(to), "source": source})
 	s.metrics.Inc("service_sessions_closed_total", canonical)
 	return sess, nil
 }
@@ -668,7 +711,7 @@ func (s *Service) Reopen(ctx context.Context, id uuid.UUID, raw domain.ReopenInp
 	if err := s.emit(ctx, c, domain.EvSessionReopened, sess, at, map[string]any{"previous_result": prev, "reopen_count": sess.ReopenCount}, in.Reason); err != nil {
 		return nil, err
 	}
-	s.audit.Record(ctx, ActionSessionReopened, ResourceSession, sess.ID, map[string]any{"reopen_count": sess.ReopenCount})
+	s.record(ctx, c, ActionSessionReopened, ResourceSession, sess.ID, map[string]any{"reopen_count": sess.ReopenCount})
 	s.metrics.Inc("service_sessions_reopened_total")
 	return sess, nil
 }

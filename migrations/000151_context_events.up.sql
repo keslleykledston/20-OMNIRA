@@ -40,23 +40,25 @@ CREATE INDEX context_events_case_idx     ON context_events (tenant_id, case_id, 
 CREATE INDEX context_events_contact_idx  ON context_events (tenant_id, contact_id, occurred_at DESC, id DESC) WHERE contact_id IS NOT NULL;
 CREATE INDEX context_events_customer_idx ON context_events (tenant_id, customer_id, occurred_at DESC, id DESC) WHERE customer_id IS NOT NULL;
 
--- history is immutable for every writer, the owner role included
+-- history is never CHANGED, by anybody (the owner role included): a trigger refuses every UPDATE. It is never DELETED by the application: the application role has
+-- no DELETE privilege. There is deliberately no DELETE trigger: removing a whole company (its rows go with it, by the foreign key) must stay possible for the
+-- owner role, and a trigger on DELETE would also fire for that cascade.
 CREATE FUNCTION context_events_immutable() RETURNS trigger AS $$
 BEGIN
   RAISE EXCEPTION 'context_events is append-only' USING ERRCODE = '23514';
 END;
 $$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
 CREATE TRIGGER context_events_no_update BEFORE UPDATE ON context_events FOR EACH ROW EXECUTE FUNCTION context_events_immutable();
-CREATE TRIGGER context_events_no_delete BEFORE DELETE ON context_events FOR EACH ROW EXECUTE FUNCTION context_events_immutable();
 
 ALTER TABLE context_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE context_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY context_events_read_tenant ON context_events FOR SELECT
-  USING (has_active_membership(tenant_id, current_user_id()) OR is_system_admin());
--- an event is written by a person who holds ANY service key, and a person can only sign it as themselves (or leave the actor empty for a system fact)
+  USING (is_system_admin() OR tenant_id IN (SELECT service_read_tenants()));
+-- A person who holds ANY service key writes events, and only as THEMSELVES: actor_type 'user' and their own id. The other actor kinds (system, flow, ai, integration)
+-- exist only in a system session (the worker, the flow engine, a Hub write path acting on behalf of somebody), so nobody can forge them with plain SQL.
 CREATE POLICY context_events_insert_tenant ON context_events FOR INSERT
   WITH CHECK (is_system_admin()
-    OR ((actor_id IS NULL OR actor_id = current_user_id())
+    OR (actor_type = 'user' AND actor_id = current_user_id()
         AND (actor_has_permission(tenant_id, current_user_id(), 'service.create') OR actor_has_permission(tenant_id, current_user_id(), 'service.update')
           OR actor_has_permission(tenant_id, current_user_id(), 'service.close') OR actor_has_permission(tenant_id, current_user_id(), 'service.assign')
           OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external') OR actor_has_permission(tenant_id, current_user_id(), 'service.request_external'))));

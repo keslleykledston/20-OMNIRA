@@ -26,7 +26,7 @@ type Handler struct {
 }
 
 func NewHandler(svc *application.Service, catalog *application.Catalog) *Handler {
-	return &Handler{svc: svc, catalog: catalog}
+	return &Handler{svc: svc, catalog: catalog, cases: &CasesHandler{svc: svc}}
 }
 
 // Registrar is the part of http.ServeMux the module needs (a test can record the routes).
@@ -56,7 +56,8 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	mux.Handle("GET "+base+"/service-sessions/{session_id}/timeline", route(application.PermRead, h.sessionTimeline))
 	mux.Handle("GET "+base+"/contacts/{contact_id}/service-timeline", route(application.PermRead, h.contactTimeline))
 	mux.Handle("GET "+base+"/contacts/{contact_id}/service-context", route(application.PermRead, h.contactContext))
-	// catalogs: the company's own categories and result codes. Never delegable (configuration of the company).
+	// catalogs: the company's own categories and result codes. READING them is delegable like the rest of the module (an agent acting for the company needs the
+	// list to classify); CHANGING them is the company's configuration and is never delegable.
 	mux.Handle("GET "+base+"/service-categories", route(application.PermRead, h.listCategories))
 	mux.Handle("POST "+base+"/service-categories", wrap(h.createCategory))
 	mux.Handle("PATCH "+base+"/service-categories/{category_id}", wrap(h.patchCategory))
@@ -227,7 +228,9 @@ func (h *Handler) open(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if !res.Created {
 		status = http.StatusOK
-		w.Header().Set("Idempotent-Replay", "true")
+	}
+	if res.Replay {
+		w.Header().Set("Idempotent-Replay", "true") // only when the Idempotency-Key was recognised, not whenever an existing session is returned
 	}
 	writeSession(w, status, res.Session, nil)
 }
@@ -720,7 +723,17 @@ func (h *Handler) contactContext(w http.ResponseWriter, r *http.Request) {
 		d := toDTO(cc.ActiveSession, nil)
 		active = &d
 	}
+	now := time.Now().UTC()
+	cases := make([]caseDTO, 0, len(cc.OpenCases))
+	for i := range cc.OpenCases {
+		cases = append(cases, toCaseDTO(&cc.OpenCases[i]))
+	}
+	tasks := make([]taskDTO, 0, len(cc.PendingTasks))
+	for i := range cc.PendingTasks {
+		tasks = append(tasks, toTaskDTO(&cc.PendingTasks[i], now))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"open_cases": cases, "pending_tasks": tasks,
 		"contact_id": cc.ContactID, "customers": customers, "needs_customer_selection": cc.NeedsSelection, "selected_customer_id": cc.SelectedCustomerID,
 		"active_session": active, "recent_sessions": recent, "recent_events": events,
 	})

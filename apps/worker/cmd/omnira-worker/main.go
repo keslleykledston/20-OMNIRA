@@ -7,9 +7,9 @@ import (
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
-	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	"log"
 	"net/http"
 	"os"
@@ -512,7 +512,7 @@ func main() {
 			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
 		if cfg.ServiceContextEnabled && cfg.ServiceFinalizeHookEnabled {
 			// ADR-0049: a flow that ends the attendance also closes its service session (source "flow"), in the same transaction
-			serviceSvc, _, _ := servicectxadapters.Build(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+			serviceSvc, _, _ := servicectxadapters.Build(dbPool)
 			attendanceForFlows.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc))
 		}
 		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows).WithEngineRouting(cfg.RoutingEngineEnabled)

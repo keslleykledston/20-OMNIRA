@@ -19,7 +19,6 @@ import (
 	"github.com/nats-io/nats.go"
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
-	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
@@ -44,6 +43,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
@@ -361,7 +361,7 @@ func main() {
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
 	if cfg.ServiceContextEnabled {
-		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool)
 		if cfg.ServiceFinalizeHookEnabled {
 			attendanceService.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc)) // ADR-0049: finalizing also closes the service session
 		}

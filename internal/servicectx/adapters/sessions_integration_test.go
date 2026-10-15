@@ -510,14 +510,16 @@ func TestOptimisticVersionIsRequiredAndAdvancedByTheDatabase(t *testing.T) {
 	if ok != 1 || lost != 1 {
 		t.Fatalf("exactly one closer wins, got ok=%d lost=%d", ok, lost)
 	}
-	// the database advances the version itself, even for a writer that forgets
+	// the database advances the version itself, even for a writer that forgets (an ACTIVE session: an ended one only changes by being reopened)
+	other, _ := s.conversation()
+	live := s.mustOpen(s.agent, other)
 	var v int
 	s.env.AsSystem(t, s.env.TenantA, func(ctx context.Context) {
-		if err := execInSession(ctx, `UPDATE service_sessions SET resolution_note='x' WHERE id=$1`, sess.ID); err != nil {
+		if err := execInSession(ctx, `UPDATE service_sessions SET resolution_note='x' WHERE id=$1`, live.ID); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if err := s.env.Seed.QueryRow(context.Background(), `SELECT version FROM service_sessions WHERE id=$1`, sess.ID).Scan(&v); err != nil || v < 3 {
+	if err := s.env.Seed.QueryRow(context.Background(), `SELECT version FROM service_sessions WHERE id=$1`, live.ID).Scan(&v); err != nil || v != live.Version+1 {
 		t.Fatalf("version after a raw update: %d %v", v, err)
 	}
 }

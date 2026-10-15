@@ -101,18 +101,9 @@ func (r *PostgresRepository) ReadConversation(ctx context.Context, id uuid.UUID)
 	return r.conversation(ctx, id, false)
 }
 
-func (r *PostgresRepository) LockIdempotency(ctx context.Context, key string) error {
-	tenant, err := tenantOf(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = r.q(ctx).Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenant.String()+":service-session-idem:"+key)
-	return err
-}
-
 const sessionColumns = `id, tenant_id, protocol, protocol_sequence, external_protocol, conversation_id, contact_id, customer_id, queue_id, category_id,
 	status, resolution_code, resolution_canonical, resolution_note, origin_channel, opened_source, closed_source, opened_by_user_id, closed_by_user_id,
-	opened_at, first_response_at, closed_at, reopen_count, idempotency_key, request_hash, version, created_at, updated_at`
+	opened_at, first_response_at, closed_at, reopen_count, version, created_at, updated_at`
 
 func scanSession(row pgx.Row) (*domain.Session, error) {
 	s := &domain.Session{}
@@ -120,7 +111,7 @@ func scanSession(row pgx.Row) (*domain.Session, error) {
 	var note *string
 	if err := row.Scan(&s.ID, &s.TenantID, &s.Protocol, &s.ProtocolSequence, &s.ExternalProtocol, &s.ConversationID, &s.ContactID, &s.CustomerID, &s.QueueID,
 		&s.CategoryID, &status, &s.ResolutionCode, &s.ResolutionCanonical, &note, &s.OriginChannel, &s.OpenedSource, &s.ClosedSource, &s.OpenedBy, &s.ClosedBy,
-		&s.OpenedAt, &s.FirstResponseAt, &s.ClosedAt, &s.ReopenCount, &s.IdempotencyKey, &s.RequestHash, &s.Version, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		&s.OpenedAt, &s.FirstResponseAt, &s.ClosedAt, &s.ReopenCount, &s.Version, &s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
 	}
 	s.Status = domain.SessionStatus(status)
@@ -151,10 +142,6 @@ func (r *PostgresRepository) optional(s *domain.Session, err error) (*domain.Ses
 		return nil, nil
 	}
 	return s, err
-}
-
-func (r *PostgresRepository) SessionByIdempotency(ctx context.Context, key string) (*domain.Session, error) {
-	return r.optional(r.one(ctx, `idempotency_key = $2`, false, key))
 }
 
 func (r *PostgresRepository) ActiveByConversation(ctx context.Context, conversationID uuid.UUID) (*domain.Session, error) {
@@ -195,10 +182,10 @@ func (r *PostgresRepository) NextProtocol(ctx context.Context, kind, prefix stri
 func (r *PostgresRepository) InsertSession(ctx context.Context, s *domain.Session) error {
 	_, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO service_sessions (id, tenant_id, protocol, protocol_sequence, external_protocol, conversation_id, contact_id, customer_id, queue_id, category_id,
-			status, origin_channel, opened_source, opened_by_user_id, opened_at, idempotency_key, request_hash, version, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+			status, origin_channel, opened_source, opened_by_user_id, opened_at, version, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		s.ID, s.TenantID, s.Protocol, s.ProtocolSequence, s.ExternalProtocol, s.ConversationID, s.ContactID, s.CustomerID, s.QueueID, s.CategoryID,
-		string(s.Status), s.OriginChannel, s.OpenedSource, s.OpenedBy, s.OpenedAt, s.IdempotencyKey, s.RequestHash, s.Version, s.CreatedAt, s.UpdatedAt)
+		string(s.Status), s.OriginChannel, s.OpenedSource, s.OpenedBy, s.OpenedAt, s.Version, s.CreatedAt, s.UpdatedAt)
 	return mapErr(err)
 }
 
@@ -459,4 +446,48 @@ func (r *PostgresRepository) SessionMessages(ctx context.Context, s *domain.Sess
 		next = encodeCursor(last.CreatedAt, last.ID)
 	}
 	return out, next, nil
+}
+
+func (r *PostgresRepository) LockScopedIdempotency(ctx context.Context, scope, key string) error {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = r.q(ctx).Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenant.String()+":service-"+scope+"-idem:"+key)
+	return err
+}
+
+func (r *PostgresRepository) ReceiptFor(ctx context.Context, scope, key string) (*ports.Receipt, error) {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rec := &ports.Receipt{}
+	err = r.q(ctx).QueryRow(ctx, `SELECT request_hash, session_id, case_id, task_id FROM service_command_receipts WHERE tenant_id=$1 AND scope=$2 AND idempotency_key=$3`,
+		tenant, scope, key).Scan(&rec.RequestHash, &rec.SessionID, &rec.CaseID, &rec.TaskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return rec, err
+}
+
+func (r *PostgresRepository) SaveReceipt(ctx context.Context, scope, key, requestHash string, entityID uuid.UUID) error {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	var sess, cs, task *uuid.UUID
+	switch scope {
+	case ports.ScopeSessionOpen:
+		sess = &entityID
+	case ports.ScopeCaseOpen:
+		cs = &entityID
+	case ports.ScopeTaskCreate:
+		task = &entityID
+	default:
+		return fmt.Errorf("servicectx: unknown receipt scope %q", scope)
+	}
+	_, err = r.q(ctx).Exec(ctx, `INSERT INTO service_command_receipts (tenant_id, scope, idempotency_key, request_hash, session_id, case_id, task_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		tenant, scope, key, requestHash, sess, cs, task)
+	return mapErr(err)
 }

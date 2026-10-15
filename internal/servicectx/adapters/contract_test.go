@@ -79,3 +79,59 @@ func TestOpenAPIAndRoutesAgree(t *testing.T) {
 		}
 	}
 }
+
+// Semantic guard over the spec text: every change to an existing record declares its precondition (If-Match, 412, 428) and every answer that returns a record
+// declares the ETag the next change must echo. The route test above only proves the routes exist.
+func TestOpenAPIDeclaresTheConcurrencyContract(t *testing.T) {
+	raw, err := os.ReadFile("../../../contracts/openapi/service-context-v1.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opStart := regexp.MustCompile(`^    (get|post|put|patch|delete):\s*$`)
+	var ops []struct{ name, text string }
+	var cur *struct{ name, text string }
+	inPaths := false
+	for _, line := range strings.Split(string(raw), "\n") {
+		switch {
+		case line == "paths:":
+			inPaths = true
+		case line == "components:":
+			inPaths = false
+			if cur != nil {
+				ops = append(ops, *cur)
+				cur = nil
+			}
+		case inPaths && (opStart.MatchString(line) || specPath.MatchString(line)):
+			if cur != nil {
+				ops = append(ops, *cur)
+				cur = nil
+			}
+			if opStart.MatchString(line) {
+				cur = &struct{ name, text string }{name: line}
+			}
+		case inPaths && cur != nil:
+			cur.text += line + "\n"
+			if m := regexp.MustCompile(`operationId: (\w+)`).FindStringSubmatch(line); m != nil {
+				cur.name = m[1]
+			}
+		}
+	}
+	if len(ops) < 25 {
+		t.Fatalf("parsed only %d operations", len(ops))
+	}
+	record := regexp.MustCompile(`'(200|201)': \{[^\n]*schema: \{ \$ref: '#/components/schemas/(Session|Case|Task)' \}`)
+	for _, op := range ops {
+		if strings.Contains(op.text, "parameters/IfMatch") {
+			for _, code := range []string{"'412'", "'428'"} {
+				if !strings.Contains(op.text, code) {
+					t.Errorf("%s changes an existing record with If-Match but does not declare %s", op.name, code)
+				}
+			}
+		}
+		for _, line := range strings.Split(op.text, "\n") {
+			if record.MatchString(line) && !strings.Contains(line, "ETag") {
+				t.Errorf("%s returns a record without declaring its ETag: %s", op.name, strings.TrimSpace(line))
+			}
+		}
+	}
+}

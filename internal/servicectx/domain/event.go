@@ -14,6 +14,17 @@ const (
 	EvSessionStatus     = "service_session.status_changed"
 	EvSessionClosed     = "service_session.closed"
 	EvSessionReopened   = "service_session.reopened"
+
+	EvCaseOpened        = "service_case.opened"
+	EvCaseUpdated       = "service_case.updated"
+	EvCaseStatus        = "service_case.status_changed"
+	EvCaseAssigned      = "service_case.assigned"
+	EvCaseSessionLinked = "service_case.session_linked"
+
+	EvTaskCreated  = "service_task.created"
+	EvTaskUpdated  = "service_task.updated"
+	EvTaskStatus   = "service_task.status_changed"
+	EvTaskAssigned = "service_task.assigned"
 )
 
 // Actor kinds of an event.

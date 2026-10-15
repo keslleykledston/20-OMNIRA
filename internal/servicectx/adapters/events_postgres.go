@@ -22,6 +22,13 @@ func (r *PostgresRepository) Record(ctx context.Context, e domain.ContextEvent) 
 	if err := e.Validate(); err != nil {
 		return err
 	}
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	if e.TenantID != tenant { // the event belongs to the company of the session that writes it, never to one named by the caller
+		return domain.ErrForbidden
+	}
 	payload, err := json.Marshal(e.Payload)
 	if err != nil {
 		return err
@@ -30,14 +37,30 @@ func (r *PostgresRepository) Record(ctx context.Context, e domain.ContextEvent) 
 	if e.DedupKey != "" {
 		dedup = &e.DedupKey
 	}
-	_, err = r.q(ctx).Exec(ctx, `
+	tag, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO context_events (id, tenant_id, event_type, entity_type, entity_id, session_id, case_id, conversation_id, contact_id, customer_id,
 			actor_type, actor_id, source_system, occurred_at, recorded_at, schema_version, payload, note, correlation_id, causation_id, dedup_key)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 		ON CONFLICT (tenant_id, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING`,
 		e.ID, e.TenantID, e.EventType, e.EntityType, e.EntityID, e.SessionID, e.CaseID, e.ConversationID, e.ContactID, e.CustomerID,
 		e.ActorType, e.ActorID, nonEmpty(e.SourceSystem, "omnira"), e.OccurredAt, e.RecordedAt, nonZero(e.SchemaVersion, 1), payload, e.Note, e.CorrelationID, e.CausationID, dedup)
-	return mapErr(err)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 && dedup != nil {
+		// the fact was already recorded under this key: fine if it is the same fact, a conflict if the key was reused for another one
+		var sameType string
+		var sameEntity uuid.UUID
+		var samePayload bool
+		if err := r.q(ctx).QueryRow(ctx, `SELECT event_type, entity_id, payload = $3::jsonb FROM context_events WHERE tenant_id=$1 AND dedup_key=$2`,
+			e.TenantID, *dedup, payload).Scan(&sameType, &sameEntity, &samePayload); err != nil {
+			return err
+		}
+		if sameType != e.EventType || sameEntity != e.EntityID || !samePayload {
+			return domain.ErrIdempotencyMismatch
+		}
+	}
+	return nil
 }
 
 func nonEmpty(s, def string) string {

@@ -102,8 +102,6 @@ CREATE TABLE service_sessions (
   first_response_at   TIMESTAMPTZ,
   closed_at           TIMESTAMPTZ,
   reopen_count        INTEGER NOT NULL DEFAULT 0 CHECK (reopen_count >= 0),
-  idempotency_key     TEXT CHECK (idempotency_key IS NULL OR idempotency_key ~ '^[A-Za-z0-9._:-]{8,128}$'),
-  request_hash        TEXT,
   version             INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -114,7 +112,6 @@ CREATE TABLE service_sessions (
   CHECK ((status IN ('closed', 'abandoned')) = (resolution_code IS NOT NULL)),
   CHECK ((resolution_code IS NULL) = (resolution_canonical IS NULL)),
   CHECK (closed_at IS NULL OR closed_at >= opened_at),
-  CHECK ((idempotency_key IS NULL) = (request_hash IS NULL)),
   FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id),
   FOREIGN KEY (tenant_id, contact_id)      REFERENCES contacts (tenant_id, id),
   FOREIGN KEY (tenant_id, customer_id)     REFERENCES customer_accounts (tenant_id, id),
@@ -125,7 +122,6 @@ CREATE TABLE service_sessions (
 CREATE UNIQUE INDEX service_sessions_one_active_uq ON service_sessions (tenant_id, conversation_id)
   WHERE conversation_id IS NOT NULL AND status IN ('open', 'in_progress', 'waiting');
 CREATE UNIQUE INDEX service_sessions_external_protocol_uq ON service_sessions (tenant_id, external_protocol) WHERE external_protocol IS NOT NULL;
-CREATE UNIQUE INDEX service_sessions_idempotency_uq ON service_sessions (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX service_sessions_conversation_idx ON service_sessions (tenant_id, conversation_id, opened_at DESC) WHERE conversation_id IS NOT NULL;
 CREATE INDEX service_sessions_contact_idx  ON service_sessions (tenant_id, contact_id, opened_at DESC) WHERE contact_id IS NOT NULL;
 CREATE INDEX service_sessions_customer_idx ON service_sessions (tenant_id, customer_id, opened_at DESC) WHERE customer_id IS NOT NULL;
@@ -149,6 +145,33 @@ CREATE TABLE service_session_episodes (
 CREATE UNIQUE INDEX service_session_episodes_one_open_uq ON service_session_episodes (tenant_id, session_id) WHERE ended_at IS NULL;
 CREATE INDEX service_session_episodes_range_idx ON service_session_episodes (tenant_id, session_id, started_at);
 
+-- 3c. idempotency receipts. A request that carries an Idempotency-Key leaves a receipt WHETHER it created the record or was answered with one that already
+-- stood (for instance the conversation's active session): a retry after the commit, even after that record changed or was closed, gets the same answer, and the
+-- same key with another request is refused. One table for every kind of record; 000152 adds the case and task references.
+CREATE TABLE service_command_receipts (
+  tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  scope           TEXT NOT NULL CHECK (scope IN ('session.open', 'case.open', 'task.create')),
+  idempotency_key TEXT NOT NULL CHECK (idempotency_key ~ '^[A-Za-z0-9._:-]{8,128}$'),
+  request_hash    TEXT NOT NULL,
+  session_id      UUID,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (tenant_id, scope, idempotency_key),
+  CONSTRAINT service_command_receipts_target CHECK (scope = 'session.open' AND session_id IS NOT NULL),
+  FOREIGN KEY (tenant_id, session_id) REFERENCES service_sessions (tenant_id, id)
+);
+
+-- 3d. who may READ: a member whose role holds service.read (the key is asked of the database, not only of the application). The set of companies is computed
+-- ONCE per statement (an uncorrelated subquery), not once per row. Inside a Hub delegation this answers nothing: delegates read through the policies of 000154.
+CREATE FUNCTION service_read_tenants() RETURNS SETOF UUID AS $$
+  SELECT m.tenant_id
+  FROM public.memberships m
+  JOIN public.role_permissions rp ON rp.role_id = m.role_id AND rp.permission_key = 'service.read'
+  WHERE m.user_id = public.current_user_id() AND m.status = 'active'
+    AND NULLIF(current_setting('app.acting_hub', true), '') IS NULL;
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+REVOKE EXECUTE ON FUNCTION service_read_tenants() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION service_read_tenants() TO omnira_app;
+
 -- 4. row guards ---------------------------------------------------------------------------------------------------------------------------
 -- A new session of a conversation opens only AFTER the previous one closed: the intervals that decide which messages belong to a session stay disjoint.
 CREATE FUNCTION service_sessions_before_insert() RETURNS trigger AS $$
@@ -164,11 +187,12 @@ END;
 $$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
 CREATE TRIGGER service_sessions_before_insert_trg BEFORE INSERT ON service_sessions FOR EACH ROW EXECUTE FUNCTION service_sessions_before_insert();
 
--- UPDATE: the identity of the row never moves; the version and the clock are advanced HERE (so no writer can skip the optimistic check); and the
--- key asked of the person depends on WHAT changes (closing/reopening = service.close, anything else = service.update). The system session
--- (flows, finalize on behalf of the system) is the one exception: it is not a person.
+-- UPDATE: the identity of the row never moves; the version and the clock are advanced HERE (so no writer can skip the optimistic check); the transitions are the
+-- ones of the state machine (an ended session only changes by being REOPENED, and a reopening is only for the latest session of a conversation that is still open);
+-- and the key asked of the person depends on WHAT changes (closing/reopening = service.close, anything else = service.update). The system session (flows, finalize on
+-- behalf of the system) is the one exception to the KEYS, never to the state machine: it is not a person, but it does not get to break the rules.
 CREATE FUNCTION service_sessions_before_update() RETURNS trigger AS $$
-DECLARE need TEXT;
+DECLARE need TEXT; reopening BOOLEAN; conv_status TEXT;
 BEGIN
   IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.protocol IS DISTINCT FROM OLD.protocol
      OR NEW.protocol_sequence IS DISTINCT FROM OLD.protocol_sequence OR NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
@@ -176,15 +200,40 @@ BEGIN
      OR NEW.opened_by_user_id IS DISTINCT FROM OLD.opened_by_user_id OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
     RAISE EXCEPTION 'the identity of a service session never changes' USING ERRCODE = '23514';
   END IF;
+  reopening := OLD.status IN ('closed', 'abandoned') AND NEW.status NOT IN ('closed', 'abandoned');
+  IF OLD.status IN ('closed', 'abandoned') AND NOT reopening THEN
+    RAISE EXCEPTION 'a closed or abandoned service session can only be reopened' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.status <> OLD.status AND NOT (
+        (OLD.status = 'open'        AND NEW.status IN ('in_progress', 'waiting', 'closed', 'abandoned'))
+     OR (OLD.status = 'in_progress' AND NEW.status IN ('waiting', 'closed', 'abandoned'))
+     OR (OLD.status = 'waiting'     AND NEW.status IN ('in_progress', 'closed', 'abandoned'))
+     OR (reopening                  AND NEW.status = 'in_progress')) THEN
+    RAISE EXCEPTION 'service session: % -> % is not an allowed transition', OLD.status, NEW.status USING ERRCODE = '23514';
+  END IF;
   IF (OLD.status IN ('closed', 'abandoned')) <> (NEW.status IN ('closed', 'abandoned')) THEN need := 'service.close'; ELSE need := 'service.update'; END IF;
   IF NOT public.is_system_admin() AND NOT public.actor_has_permission(NEW.tenant_id, public.current_user_id(), need) THEN
     RAISE EXCEPTION 'service session: % required', need USING ERRCODE = '42501';
   END IF;
-  -- only the LATEST session of a conversation can be reopened (the intervals of the later ones must stay theirs)
-  IF OLD.status IN ('closed', 'abandoned') AND NEW.status NOT IN ('closed', 'abandoned') AND NEW.conversation_id IS NOT NULL AND EXISTS (
-       SELECT 1 FROM public.service_sessions s
-       WHERE s.tenant_id = NEW.tenant_id AND s.conversation_id = NEW.conversation_id AND s.id <> NEW.id AND s.opened_at >= OLD.opened_at) THEN
-    RAISE EXCEPTION 'only the latest service session of a conversation can be reopened' USING ERRCODE = '23514';
+  IF reopening THEN
+    IF NEW.reopen_count <> OLD.reopen_count + 1 THEN
+      RAISE EXCEPTION 'reopening counts exactly once' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.conversation_id IS NOT NULL THEN
+      SELECT c.status INTO conv_status FROM public.conversations c WHERE c.tenant_id = NEW.tenant_id AND c.id = NEW.conversation_id;
+      IF conv_status IS DISTINCT FROM 'open' THEN
+        RAISE EXCEPTION 'a session of a closed conversation cannot be reopened' USING ERRCODE = '23514';
+      END IF;
+      IF EXISTS (SELECT 1 FROM public.service_sessions s
+                 WHERE s.tenant_id = NEW.tenant_id AND s.conversation_id = NEW.conversation_id AND s.id <> NEW.id AND s.opened_at >= OLD.opened_at) THEN
+        RAISE EXCEPTION 'only the latest service session of a conversation can be reopened' USING ERRCODE = '23514';
+      END IF;
+    END IF;
+  ELSIF NEW.reopen_count <> OLD.reopen_count THEN
+    RAISE EXCEPTION 'reopen_count only moves when a session is reopened' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.status IN ('closed', 'abandoned') AND NEW.closed_at > clock_timestamp() + interval '1 minute' THEN
+    RAISE EXCEPTION 'a session cannot close in the future' USING ERRCODE = '23514';
   END IF;
   NEW.version := OLD.version + 1;
   NEW.updated_at := now();
@@ -193,19 +242,57 @@ END;
 $$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
 CREATE TRIGGER service_sessions_before_update_trg BEFORE UPDATE ON service_sessions FOR EACH ROW EXECUTE FUNCTION service_sessions_before_update();
 
+-- An episode is a stretch of the session being in course. It starts only while the session is active, no earlier than the session opened and after the session's previous
+-- episode ended; its number is the next one. Once written it only gets its end. (Two sessions of one conversation never share an instant because only ONE of them can be
+-- active, by the unique index, and only the latest can be reopened, by the row guard: an episode only exists while its session is active.)
+CREATE FUNCTION service_session_episodes_before_insert() RETURNS trigger AS $$
+DECLARE opened TIMESTAMPTZ; st TEXT; last_seq INTEGER;
+BEGIN
+  SELECT s.opened_at, s.status INTO opened, st FROM public.service_sessions s WHERE s.tenant_id = NEW.tenant_id AND s.id = NEW.session_id;
+  IF st IS NULL OR st NOT IN ('open', 'in_progress', 'waiting') THEN
+    RAISE EXCEPTION 'an episode belongs to a session in course' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.started_at < opened THEN
+    RAISE EXCEPTION 'an episode cannot start before its session' USING ERRCODE = '23514';
+  END IF;
+  SELECT COALESCE(max(e.seq), 0) INTO last_seq FROM public.service_session_episodes e WHERE e.tenant_id = NEW.tenant_id AND e.session_id = NEW.session_id;
+  IF NEW.seq <> last_seq + 1 THEN
+    RAISE EXCEPTION 'episodes are numbered one after the other' USING ERRCODE = '23514';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.service_session_episodes e WHERE e.tenant_id = NEW.tenant_id AND e.session_id = NEW.session_id AND (e.ended_at IS NULL OR e.ended_at > NEW.started_at)) THEN
+    RAISE EXCEPTION 'the previous episode of this session has not ended' USING ERRCODE = '23P01';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
+CREATE TRIGGER service_session_episodes_before_insert_trg BEFORE INSERT ON service_session_episodes FOR EACH ROW EXECUTE FUNCTION service_session_episodes_before_insert();
+
+CREATE FUNCTION service_session_episodes_before_update() RETURNS trigger AS $$
+BEGIN
+  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.session_id IS DISTINCT FROM OLD.session_id
+     OR NEW.seq IS DISTINCT FROM OLD.seq OR NEW.started_at IS DISTINCT FROM OLD.started_at OR OLD.ended_at IS NOT NULL OR NEW.ended_at IS NULL THEN
+    RAISE EXCEPTION 'an episode only gets its end, once' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
+CREATE TRIGGER service_session_episodes_before_update_trg BEFORE UPDATE ON service_session_episodes FOR EACH ROW EXECUTE FUNCTION service_session_episodes_before_update();
+
+
 -- 5. RLS ----------------------------------------------------------------------------------------------------------------------------------
 DO $$
 DECLARE t TEXT; w TEXT;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['service_counters', 'service_categories', 'service_resolution_codes', 'service_sessions', 'service_session_episodes'] LOOP
+  FOREACH t IN ARRAY ARRAY['service_counters', 'service_categories', 'service_resolution_codes', 'service_sessions', 'service_session_episodes', 'service_command_receipts'] LOOP
     w := CASE t
            WHEN 'service_session_episodes' THEN '(actor_has_permission(tenant_id, current_user_id(), ''service.create'') OR actor_has_permission(tenant_id, current_user_id(), ''service.close''))'
+           WHEN 'service_command_receipts' THEN '(actor_has_permission(tenant_id, current_user_id(), ''service.create'') OR actor_has_permission(tenant_id, current_user_id(), ''service.update''))'
            WHEN 'service_counters'         THEN 'actor_has_permission(tenant_id, current_user_id(), ''service.create'')'
            WHEN 'service_sessions'         THEN 'actor_has_permission(tenant_id, current_user_id(), ''service.create'')'
            ELSE                                 'actor_has_permission(tenant_id, current_user_id(), ''tenant.manage'')' END;
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
-    EXECUTE format('CREATE POLICY %I ON %I FOR SELECT USING (has_active_membership(tenant_id, current_user_id()) OR is_system_admin())', t || '_read_tenant', t);
+    EXECUTE format('CREATE POLICY %I ON %I FOR SELECT USING (is_system_admin() OR tenant_id IN (SELECT service_read_tenants()))', t || '_read_tenant', t);
     EXECUTE format('CREATE POLICY %I ON %I FOR INSERT WITH CHECK (is_system_admin() OR %s)', t || '_insert_tenant', t, w);
     EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OF tenant_id ON %I FOR EACH ROW EXECUTE FUNCTION forbid_tenant_change()', t || '_tenant_immutable', t);
   END LOOP;
@@ -228,5 +315,7 @@ BEGIN
 END $$;
 -- nothing here is ever deleted by the application: sessions are a record; catalog entries are deactivated
 -- (the default privileges of migration 000006 hand DELETE to every new table, so it is taken back explicitly)
-REVOKE DELETE ON service_counters, service_categories, service_resolution_codes, service_sessions, service_session_episodes FROM omnira_app;
+REVOKE DELETE ON service_counters, service_categories, service_resolution_codes, service_sessions, service_session_episodes, service_command_receipts FROM omnira_app;
+REVOKE UPDATE ON service_command_receipts FROM omnira_app;
 GRANT SELECT, INSERT, UPDATE ON service_counters, service_categories, service_resolution_codes, service_sessions, service_session_episodes TO omnira_app;
+GRANT SELECT, INSERT ON service_command_receipts TO omnira_app;

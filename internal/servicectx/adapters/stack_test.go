@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	"github.com/omnira/omnira/internal/flows/flowstest"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/adapters"
@@ -30,7 +29,7 @@ func newStack(t *testing.T) *stack {
 	t.Helper()
 	env := flowstest.New(t)
 	s := &stack{t: t, env: env, admin: env.UserA, agent: uuid.New(), observer: uuid.New(), limited: uuid.New()}
-	s.svc, s.catalog, s.handler = adapters.Build(env.App, auditadapters.NewPostgresAuditEventRepository(env.App))
+	s.svc, s.catalog, s.handler = adapters.Build(env.App)
 	ctx := context.Background()
 	var agentRole uuid.UUID
 	if err := env.Seed.QueryRow(ctx, `SELECT id FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL LIMIT 1`).Scan(&agentRole); err != nil {
@@ -41,6 +40,8 @@ func newStack(t *testing.T) *stack {
 	for _, k := range []string{"service.read", "service.create", "service.update", "conversation.claim"} {
 		s.exec(`INSERT INTO role_permissions(role_id, permission_key) VALUES($1,$2)`, limitedRole, k)
 	}
+	// the observer holds one unrelated key, so the join on role permissions is not empty: only the missing service.read keeps it out
+	s.exec(`INSERT INTO role_permissions(role_id, permission_key) VALUES($1,'tenant.read')`, observerRole)
 	for u, role := range map[uuid.UUID]uuid.UUID{s.agent: agentRole, s.observer: observerRole, s.limited: limitedRole} {
 		s.exec(`INSERT INTO users(id, external_subject, email, status) VALUES($1,$2,$3,'active')`, u, u, u.String()+"@invalid")
 		s.exec(`INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, env.TenantA, u, role)

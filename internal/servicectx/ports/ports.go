@@ -20,6 +20,21 @@ type ConversationFacts struct {
 	Channel    string // provider of the line (whatsapp, ...), "" when unknown
 }
 
+// Receipt scopes (one per kind of record that takes an Idempotency-Key).
+const (
+	ScopeSessionOpen = "session.open"
+	ScopeCaseOpen    = "case.open"
+	ScopeTaskCreate  = "task.create"
+)
+
+// Receipt is what an Idempotency-Key points to. Exactly one of the ids is set, by scope.
+type Receipt struct {
+	RequestHash string
+	SessionID   *uuid.UUID
+	CaseID      *uuid.UUID
+	TaskID      *uuid.UUID
+}
+
 // SessionFilter narrows a listing. Cursor is opaque to callers (keyset on opened_at, id).
 type SessionFilter struct {
 	Status         domain.SessionStatus
@@ -53,9 +68,12 @@ type Repository interface {
 	// Now is the database clock (clock_timestamp): opened_at and closed_at come from the same clock that stamps messages, never from the app server's.
 	Now(ctx context.Context) (time.Time, error)
 
-	// LockIdempotency serializes requests that carry the same key (transaction-scoped).
-	LockIdempotency(ctx context.Context, key string) error
-	SessionByIdempotency(ctx context.Context, key string) (*domain.Session, error)
+	// LockScopedIdempotency serializes requests that carry the same key for one kind of record (transaction-scoped).
+	LockScopedIdempotency(ctx context.Context, scope, key string) error
+	// ReceiptFor reads the receipt an earlier request with this key left (nil when none); SaveReceipt leaves one. The receipt is left WHETHER the request created
+	// the record or was answered with one that already stood, so a retry after the commit always gets the same answer.
+	ReceiptFor(ctx context.Context, scope, key string) (*Receipt, error)
+	SaveReceipt(ctx context.Context, scope, key, requestHash string, entityID uuid.UUID) error
 	ActiveByConversation(ctx context.Context, conversationID uuid.UUID) (*domain.Session, error)
 	LatestByConversation(ctx context.Context, conversationID uuid.UUID) (*domain.Session, error)
 	GetSession(ctx context.Context, id uuid.UUID) (*domain.Session, error)
@@ -187,4 +205,63 @@ type TimelineRepository interface {
 	LinkedCustomers(ctx context.Context, contactID uuid.UUID) ([]LinkedCustomer, error)
 	// SessionsOfContact are the contact's most recent sessions; with a customer, those of that customer plus those with none.
 	SessionsOfContact(ctx context.Context, contactID uuid.UUID, customerID *uuid.UUID, limit int) ([]domain.Session, error)
+}
+
+// ---- cases and tasks (ADR-0049 phase 3) ----
+
+type CaseFilter struct {
+	Status          domain.CaseStatus
+	CustomerID      *uuid.UUID
+	AssignedAgentID *uuid.UUID
+	AssignedTeamID  *uuid.UUID
+	SessionID       *uuid.UUID // cases linked to this session
+	Priority        domain.Priority
+	CaseNumber      string
+	OnlyWorking     bool
+	Cursor          string
+	Limit           int
+}
+
+type CaseRepository interface {
+	// LockCase reads FOR UPDATE. GetCase is the plain read.
+	LockCase(ctx context.Context, id uuid.UUID) (*domain.Case, error)
+	GetCase(ctx context.Context, id uuid.UUID) (*domain.Case, error)
+	ListCases(ctx context.Context, f CaseFilter) ([]domain.Case, string, error)
+	InsertCase(ctx context.Context, c *domain.Case) error
+	UpdateCase(ctx context.Context, c *domain.Case, expectedVersion int) error
+	// LinkCaseSession records that a session refers to a case. It reports false (and changes nothing) when the link already stood.
+	LinkCaseSession(ctx context.Context, caseID, sessionID uuid.UUID, relation string, by *uuid.UUID, at time.Time) (bool, error)
+	SessionsOfCase(ctx context.Context, caseID uuid.UUID) ([]domain.Session, error)
+	IsActiveMember(ctx context.Context, userID uuid.UUID) (bool, error)
+}
+
+type TaskFilter struct {
+	Status         domain.TaskStatus
+	PendingOnly    bool
+	OverdueOnly    bool
+	AssignedUserID *uuid.UUID
+	AssignedTeamID *uuid.UUID
+	SessionID      *uuid.UUID
+	CaseID         *uuid.UUID
+	ContactID      *uuid.UUID
+	Cursor         string
+	Limit          int
+}
+
+type TaskRepository interface {
+	LockTask(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+	GetTask(ctx context.Context, id uuid.UUID) (*domain.Task, error)
+	// TaskByFlowEffect finds the task a flow step already made (the engine may replay a step).
+	TaskByFlowEffect(ctx context.Context, runID uuid.UUID, seq int) (*domain.Task, error)
+	ListTasks(ctx context.Context, f TaskFilter, now time.Time) ([]domain.Task, string, error)
+	InsertTask(ctx context.Context, t *domain.Task) error
+	UpdateTask(ctx context.Context, t *domain.Task, expectedVersion int) error
+}
+
+// ContextRepository feeds the aggregated customer context with what is open.
+type ContextRepository interface {
+	// OpenCasesForContext are the working cases that matter for a contact: the ones its sessions are linked to and, when a customer is selected, that customer's.
+	// needsSelection narrows to what is tied to no customer. A customer's case never appears under a contact that is not tied to that customer.
+	OpenCasesForContext(ctx context.Context, contactID uuid.UUID, customerID *uuid.UUID, needsSelection bool, limit int) ([]domain.Case, error)
+	PendingTasksForContext(ctx context.Context, contactID uuid.UUID, customerID *uuid.UUID, needsSelection bool, limit int) ([]domain.Task, error)
 }

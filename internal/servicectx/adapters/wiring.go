@@ -7,16 +7,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
-	auditports "github.com/omnira/omnira/internal/audit/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/application"
 )
 
 // Build assembles the module on one pool: the service (sessions), the company's catalogs and the HTTP handler.
-func Build(pool *pgxpool.Pool, audit auditports.AuditEventRepository) (*application.Service, *application.Catalog, *Handler) {
+func Build(pool *pgxpool.Pool) (*application.Service, *application.Catalog, *Handler) {
 	repo := NewPostgresRepository(pool)
 	authz := NewAuthorizer(pool)
-	svc := application.NewService(repo, authz, NewAuditor(audit)).WithEvents(repo).WithTimeline(repo)
+	svc := application.NewService(repo, authz, NewAuditor(pool)).WithEvents(repo).WithTimeline(repo).WithCases(repo).WithTasks(repo).WithContext(repo).WithLinkCounter(repo)
 	catalog := application.NewCatalog(repo, authz, svc)
 	return svc, catalog, NewHandler(svc, catalog)
 }
