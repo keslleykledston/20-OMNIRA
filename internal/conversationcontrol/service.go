@@ -207,6 +207,11 @@ func (s Service) TakeOver(ctx context.Context, q platformdb.Querier, tenantID, c
 	if err := s.begin(ctx, q, tenantID); err != nil {
 		return cur, err
 	}
+	if cur.Kind != nil && *cur.Kind == KindCRMApplication && cur.HolderID != nil {
+		if err := s.cancelQueued(ctx, q, tenantID, conversationID, *cur.HolderID); err != nil {
+			return cur, err
+		}
+	}
 	next := cur.Version + 1
 	if _, err := q.Exec(ctx, `
 		UPDATE conversations
@@ -312,6 +317,66 @@ func (s Service) TransferByApplication(ctx context.Context, q platformdb.Querier
 	return s.Get(ctx, q, tenantID, conversationID)
 }
 
+// cancelQueued ends, as failed with the reason control_lost, the messages an application queued that the delivery worker has not sent yet. It is called in the same
+// transaction that takes the conversation away from that application AGAINST its will (a supervisor's takeover, a suspension or revocation, an expired lease, a scope or
+// allow-list change): a message it queued while it held the conversation must not leave after somebody else took over. When the application itself lets go (release,
+// transfer, finalize) what it queued before is still its own and goes out. A message the worker already picked is not touched (it is sent; the UPDATE waits for the worker's
+// row lock and finds it no longer queued).
+func (Service) cancelQueued(ctx context.Context, q platformdb.Querier, tenantID, conversationID, installationID uuid.UUID) error {
+	_, err := q.Exec(ctx, `
+		UPDATE messages SET status = 'failed', failure_reason = 'control_lost', updated_at = now()
+		 WHERE tenant_id = $1 AND conversation_id = $2 AND sent_by_installation_id = $3 AND direction = 'outbound' AND status = 'queued'`,
+		tenantID, conversationID, installationID)
+	return err
+}
+
+// DrainOutOfScope frees the conversations an installation holds that it may no longer hold: its scopes lost conversation.claim, or the conversation is outside its (new)
+// queue or line allow-list. Without it a CRM whose permission was narrowed would keep a conversation it can no longer see or touch, with no way to give it back.
+func (s Service) DrainOutOfScope(ctx context.Context, q platformdb.Querier, tenantID, installationID uuid.UUID, reason string) (int, error) {
+	why, err := checkReason(reason)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := q.Query(ctx, `
+		SELECT c.id FROM conversations c
+		 WHERE c.tenant_id = $1 AND c.control_kind = 'crm_application' AND c.control_holder_id = $2
+		   AND ( NOT EXISTS (SELECT 1 FROM external_app_installations i WHERE i.tenant_id = c.tenant_id AND i.id = $2 AND i.status = 'active' AND 'conversation.claim' = ANY (i.scopes))
+		      OR (EXISTS (SELECT 1 FROM external_app_installation_queues x WHERE x.tenant_id = c.tenant_id AND x.installation_id = $2)
+		          AND NOT EXISTS (SELECT 1 FROM external_app_installation_queues x WHERE x.tenant_id = c.tenant_id AND x.installation_id = $2 AND x.queue_id = c.queue_id))
+		      OR (EXISTS (SELECT 1 FROM external_app_installation_channels x WHERE x.tenant_id = c.tenant_id AND x.installation_id = $2)
+		          AND NOT EXISTS (SELECT 1 FROM external_app_installation_channels x WHERE x.tenant_id = c.tenant_id AND x.installation_id = $2 AND x.connection_id = c.channel_connection_id)) )
+		 ORDER BY c.id FOR UPDATE OF c`, tenantID, installationID)
+	if err != nil {
+		return 0, err
+	}
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		cur, err := s.Get(ctx, q, tenantID, id)
+		if err != nil {
+			return 0, err
+		}
+		if err := s.cancelQueued(ctx, q, tenantID, id, installationID); err != nil {
+			return 0, err
+		}
+		if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, "installation "+why); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
 // DrainInstallation frees every open conversation an installation holds, in the transaction that suspends or revokes it, and asks the router to
 // look at each. It returns how many it freed. Closed conversations lose their holder too (a closed conversation held by a revoked application would
 // be an orphan), without a routing request.
@@ -346,6 +411,11 @@ func (s Service) DrainInstallation(ctx context.Context, q platformdb.Querier, te
 		if err != nil {
 			return n, err
 		}
+		if cur.HeldBy(KindCRMApplication, installationID) { // not yet closed-and-released
+			if err := s.cancelQueued(ctx, q, tenantID, id, installationID); err != nil {
+				return n, err
+			}
+		}
 		if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, "installation "+why); err != nil {
 			return n, err
 		}
@@ -358,6 +428,11 @@ func (s Service) DrainInstallation(ctx context.Context, q platformdb.Querier, te
 // re-reads the conversation under its lock and only frees it if THAT installation still holds it (a release, a transfer, a takeover or a close that got
 // there first wins). The reason is lease_expired and the router looks at it again.
 func (s Service) ExpireLease(ctx context.Context, q platformdb.Querier, tenantID, conversationID, installationID uuid.UUID) (bool, error) {
+	return s.ExpireHold(ctx, q, tenantID, conversationID, installationID, "lease_expired")
+}
+
+// ExpireHold is ExpireLease with the reason the worker records (lease_expired, no_credential).
+func (s Service) ExpireHold(ctx context.Context, q platformdb.Querier, tenantID, conversationID, installationID uuid.UUID, reason string) (bool, error) {
 	cur, err := s.Lock(ctx, q, tenantID, conversationID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -368,7 +443,10 @@ func (s Service) ExpireLease(ctx context.Context, q platformdb.Querier, tenantID
 	if !cur.HeldBy(KindCRMApplication, installationID) || cur.Status != "open" {
 		return false, nil
 	}
-	if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, "lease_expired"); err != nil {
+	if err := s.cancelQueued(ctx, q, tenantID, conversationID, installationID); err != nil {
+		return false, err
+	}
+	if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, reason); err != nil {
 		return false, err
 	}
 	return true, nil

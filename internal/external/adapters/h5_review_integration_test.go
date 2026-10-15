@@ -184,12 +184,12 @@ func TestWriteLeaseIsRenewedExpiredAndRaceFree(t *testing.T) {
 		t.Errorf("heartbeat with a stale version = %d, want 412 (the application learns it lost the conversation)", r.Code)
 	}
 	// still within the lease: the worker leaves it alone
-	if n, err := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50); err != nil || n != 0 {
+	if n, err := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50, tn); err != nil || n != 0 {
 		t.Fatalf("sweep with a live lease freed %d (%v)", n, err)
 	}
 	// ran out, but inside the grace period: still left alone
 	e.exec(`UPDATE external_conversation_leases SET lease_until = now() - interval '30 seconds' WHERE conversation_id=$1`, conv)
-	if n, _ := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50); n != 0 {
+	if n, _ := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50, tn); n != 0 {
 		t.Fatalf("sweep inside the grace period freed %d", n)
 	}
 	// ran out, listed by the worker, and RENEWED before the worker judged it: the renewal wins
@@ -197,7 +197,7 @@ func TestWriteLeaseIsRenewedExpiredAndRaceFree(t *testing.T) {
 	adapters.LeaseSweepHookAfterDue = func() {
 		e.exec(`UPDATE external_conversation_leases SET lease_until = now() + interval '5 minutes' WHERE conversation_id=$1`, conv)
 	}
-	n, err := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50)
+	n, err := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50, tn)
 	adapters.LeaseSweepHookAfterDue = nil
 	if err != nil || n != 0 {
 		t.Fatalf("a lease renewed after it was listed was freed anyway: %d (%v)"+"", n, err)
@@ -209,7 +209,7 @@ func TestWriteLeaseIsRenewedExpiredAndRaceFree(t *testing.T) {
 	}
 	// ran out for good: freed with its reason, the router is asked, the application finds out by the version
 	e.exec(`UPDATE external_conversation_leases SET lease_until = now() - interval '10 minutes' WHERE conversation_id=$1`, conv)
-	if n, err := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50); err != nil || n != 1 {
+	if n, err := adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 50, tn); err != nil || n != 1 {
 		t.Fatalf("sweep of an expired lease freed %d (%v)", n, err)
 	}
 	var kind *string
@@ -254,7 +254,7 @@ func TestWriteLeaseIsRenewedExpiredAndRaceFree(t *testing.T) {
 			<-start
 			hb = e.cmdSafe(tok, c, "heartbeat", fmt.Sprintf("key-lease-h%03d", i), match(cv), nil, &mu)
 		}()
-		go func() { defer wg.Done(); <-start; _, _ = adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 500) }()
+		go func() { defer wg.Done(); <-start; _, _ = adapters.SweepLeases(e.ctx, e.app, adapters.LeaseGrace, 500, tn) }()
 		close(start)
 		wg.Wait()
 		var k *string

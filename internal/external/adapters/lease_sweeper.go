@@ -21,12 +21,22 @@ var LeaseSweepHookAfterDue func()
 
 // SweepLeases frees the conversations whose application stopped renewing its lease (ADR-0046 §6.1). It is safe to run in several workers: each conversation is
 // re-read under its own lock and freed only if the same installation still holds it AND its lease is still expired. Returns how many it freed.
-func SweepLeases(ctx context.Context, pool *pgxpool.Pool, grace time.Duration, limit int) (int, error) {
-	rows, err := pool.Query(ctx, `SELECT tenant_id, conversation_id, installation_id FROM external_leases_due(make_interval(secs => $1), $2)`, grace.Seconds(), limit)
+//
+// only, when given, limits the sweep to those companies (the worker passes none: it serves every company; tests pass their own so that a sweep never touches the
+// holds of another test sharing the database).
+func SweepLeases(ctx context.Context, pool *pgxpool.Pool, grace time.Duration, limit int, only ...uuid.UUID) (int, error) {
+	var tenants []uuid.UUID
+	if len(only) > 0 {
+		tenants = only
+	}
+	rows, err := pool.Query(ctx, `SELECT tenant_id, conversation_id, installation_id FROM external_leases_due(make_interval(secs => $1), $2, $3)`, grace.Seconds(), limit, tenants)
 	if err != nil {
 		return 0, err
 	}
-	type due struct{ tenant, conversation, installation uuid.UUID }
+	type due struct {
+		tenant, conversation, installation uuid.UUID
+		orphan                             bool
+	}
 	var list []due
 	for rows.Next() {
 		var d due
@@ -38,6 +48,23 @@ func SweepLeases(ctx context.Context, pool *pgxpool.Pool, grace time.Duration, l
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	// holds whose application has no usable credential left (tokens expired or all revoked): they can never be renewed or released by the application
+	orows, err := pool.Query(ctx, `SELECT tenant_id, conversation_id, installation_id FROM external_orphan_holds($1, $2)`, limit, tenants)
+	if err != nil {
+		return 0, err
+	}
+	for orows.Next() {
+		d := due{orphan: true}
+		if err := orows.Scan(&d.tenant, &d.conversation, &d.installation); err != nil {
+			orows.Close()
+			return 0, err
+		}
+		list = append(list, d)
+	}
+	orows.Close()
+	if err := orows.Err(); err != nil {
 		return 0, err
 	}
 	if LeaseSweepHookAfterDue != nil {
@@ -62,7 +89,15 @@ func SweepLeases(ctx context.Context, pool *pgxpool.Pool, grace time.Duration, l
 				return derr // the hold ended some other way: the lease row is just stale
 			}
 			var stillExpired bool
-			if err := q.QueryRow(ctx, `
+			reason := "lease_expired"
+			if d.orphan {
+				reason = "no_credential"
+				if err := q.QueryRow(ctx, `
+					SELECT NOT EXISTS (SELECT 1 FROM external_app_credentials k WHERE k.tenant_id = $1 AND k.installation_id = $2 AND k.revoked_at IS NULL AND k.expires_at > now())`,
+					d.tenant, d.installation).Scan(&stillExpired); err != nil {
+					return err
+				}
+			} else if err := q.QueryRow(ctx, `
 				SELECT COALESCE((SELECT l.lease_until + make_interval(secs => $4) < now() FROM external_conversation_leases l
 				                  WHERE l.tenant_id = $1 AND l.conversation_id = $2 AND l.installation_id = $3), false)`,
 				d.tenant, d.conversation, d.installation, grace.Seconds()).Scan(&stillExpired); err != nil {
@@ -71,7 +106,7 @@ func SweepLeases(ctx context.Context, pool *pgxpool.Pool, grace time.Duration, l
 			if !stillExpired {
 				return nil
 			}
-			ok, err := (conversationcontrol.Service{}).ExpireLease(ctx, q, d.tenant, d.conversation, d.installation)
+			ok, err := (conversationcontrol.Service{}).ExpireHold(ctx, q, d.tenant, d.conversation, d.installation, reason)
 			if err != nil {
 				return err
 			}

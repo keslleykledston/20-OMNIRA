@@ -826,3 +826,38 @@ func TestJournalSaysWhenALegacyWriterChangesWhoHoldsTheConversation(t *testing.T
 		t.Errorf("an update that changed no control produced a fact: %d", len(more))
 	}
 }
+
+// Nobody can fabricate a fact with a direct call: the doors that write a fact or judge visibility are not executable by the application role, while the triggers (which run
+// with the owner's rights) keep producing.
+func TestTheApplicationRoleCannotFabricateAFactOrProbeVisibility(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(), e.tenant()
+	e.install(e.member(a, "tenant_admin"), a, "CRM", journalScopes...)
+	conv, _ := e.conv(b, convOpts{})
+	for name, c := range map[string]struct {
+		stmt string
+		args []any
+	}{
+		"emit":    {`SELECT emit_domain_event($1, 'message.created.v1', 'message', gen_random_uuid(), NULL, NULL, 'crm', NULL, '{}'::jsonb)`, []any{a}},
+		"visible": {`SELECT external_conversation_visible($1, $2)`, []any{a, conv}},
+	} {
+		_, err := e.app.Exec(e.ctx, c.stmt, c.args...)
+		var pe *pgconn.PgError
+		if !asPg(err, &pe) || pe.Code != "42501" {
+			t.Errorf("%s by the application role: %v, want permission denied", name, err)
+		}
+	}
+	// and the legitimate producers still work
+	e.message(a, mustConv(e, a), "inbound", "x", "received", 0, nil)
+	e.sequence()
+	var n int
+	_ = e.seed.QueryRow(e.ctx, `SELECT count(*) FROM domain_events WHERE tenant_id=$1 AND event_type='message.created.v1'`, a).Scan(&n)
+	if n != 1 {
+		t.Errorf("the trigger produced %d message facts, want 1", n)
+	}
+}
+
+func mustConv(e *env, tenant uuid.UUID) uuid.UUID {
+	c, _ := e.conv(tenant, convOpts{})
+	return c
+}

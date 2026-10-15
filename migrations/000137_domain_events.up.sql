@@ -89,7 +89,7 @@ END $$;
 
 -- ------------------------------------------------------------------------------------------------------------------------------ producers
 -- conversation.created.v1
-CREATE FUNCTION domain_events_conversation_created() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+CREATE FUNCTION domain_events_conversation_created() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
   PERFORM emit_domain_event(NEW.tenant_id, 'conversation.created.v1', 'conversation', NEW.id, NEW.id, NEW.control_version, 'channel', NULL,
                             jsonb_build_object('status', NEW.status));
@@ -99,7 +99,7 @@ CREATE TRIGGER domain_events_conversation_created_trg AFTER INSERT ON conversati
 
 -- conversation.control_changed.v1 and conversation.closed.v1. The origin of a control change is where the NEW hold came from; a release or a drain has no new
 -- hold, so it is the origin of the one that ended. The canonical service may say better with the transaction-local hint omnira.event_origin (informative).
-CREATE FUNCTION domain_events_conversation_changed() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+CREATE FUNCTION domain_events_conversation_changed() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   hint TEXT := current_setting('omnira.event_origin', true);
   origin TEXT;
@@ -128,7 +128,7 @@ CREATE TRIGGER domain_events_conversation_changed_trg AFTER UPDATE ON conversati
   EXECUTE FUNCTION domain_events_conversation_changed();
 
 -- message.created.v1: references and the kind only, never the text
-CREATE FUNCTION domain_events_message_created() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+CREATE FUNCTION domain_events_message_created() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE origin TEXT; inst UUID;
 BEGIN
   IF NEW.direction = 'inbound' THEN origin := 'channel';
@@ -142,7 +142,7 @@ END $$;
 CREATE TRIGGER domain_events_message_created_trg AFTER INSERT ON messages FOR EACH ROW EXECUTE FUNCTION domain_events_message_created();
 
 -- message.status_changed.v1: a delivery receipt is the channel talking; the sending side (queued, sent, failed, uncertain) is the platform
-CREATE FUNCTION domain_events_message_status() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+CREATE FUNCTION domain_events_message_status() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
   PERFORM emit_domain_event(NEW.tenant_id, 'message.status_changed.v1', 'message', NEW.id, NEW.conversation_id, NULL,
                             CASE WHEN NEW.status IN ('delivered', 'read') THEN 'channel' ELSE 'system' END, NULL,
@@ -153,7 +153,7 @@ CREATE TRIGGER domain_events_message_status_trg AFTER UPDATE OF status ON messag
   FOR EACH ROW WHEN (NEW.status IS DISTINCT FROM OLD.status) EXECUTE FUNCTION domain_events_message_status();
 
 -- contact.updated.v1: WHICH fields changed, never their values. A contact that becomes internal or spam is silently no longer readable.
-CREATE FUNCTION domain_events_contact_updated() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+CREATE FUNCTION domain_events_contact_updated() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE changed TEXT[] := ARRAY[]::TEXT[];
 BEGIN
   IF NEW.kind IN ('internal', 'spam') THEN RETURN NULL; END IF;
@@ -171,7 +171,7 @@ CREATE TRIGGER domain_events_contact_updated_trg AFTER UPDATE OF display_name, a
   FOR EACH ROW EXECUTE FUNCTION domain_events_contact_updated();
 
 -- ticket.linked.v1: only when the ticket has a REAL link to the ERP (ADR-0013); the ticket's content is not ours to publish
-CREATE FUNCTION domain_events_ticket_linked() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+CREATE FUNCTION domain_events_ticket_linked() RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
   IF NEW.external_ticket_id IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.external_ticket_id IS DISTINCT FROM NEW.external_ticket_id) THEN
     PERFORM emit_domain_event(NEW.tenant_id, 'ticket.linked.v1', 'ticket', NEW.id, NEW.conversation_id, NULL, 'system', NULL,
@@ -246,7 +246,8 @@ BEGIN
   RETURN gone;
 END $$;
 
+-- The producers are triggers that run with the owner's rights (SECURITY DEFINER), so the application role does not need - and does not get - the two doors that write a fact or
+-- judge visibility: nobody can fabricate a fact for a webhook with a direct call. The sequencer, the backlog gauge and the purge are the worker's doors.
 REVOKE ALL ON FUNCTION external_conversation_visible(UUID, UUID), emit_domain_event(UUID, TEXT, TEXT, UUID, UUID, BIGINT, TEXT, UUID, JSONB),
-  domain_events_sequence(INTEGER), domain_events_backlog(), domain_events_purge(INTERVAL) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION external_conversation_visible(UUID, UUID), emit_domain_event(UUID, TEXT, TEXT, UUID, UUID, BIGINT, TEXT, UUID, JSONB),
-  domain_events_sequence(INTEGER), domain_events_backlog(), domain_events_purge(INTERVAL) TO omnira_app;
+  domain_events_sequence(INTEGER), domain_events_backlog(), domain_events_purge(INTERVAL) FROM PUBLIC, omnira_app;
+GRANT EXECUTE ON FUNCTION domain_events_sequence(INTEGER), domain_events_backlog(), domain_events_purge(INTERVAL) TO omnira_app;

@@ -69,7 +69,7 @@ func newEnv(t *testing.T) *env {
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(app), tenancyadapters.NewPostgresTenantRepository(app))
 	tenantSession := tenancyadapters.AuthorizationMiddleware(app, authz)
 	e.session = tenantSession
-	admin := adapters.NewAdminHandler(app, auditadapters.NewPostgresAuditEventRepository(app)).WithDrainer(conversationcontrol.Service{}.DrainInstallation)
+	admin := adapters.NewAdminHandler(app, auditadapters.NewPostgresAuditEventRepository(app)).WithDrainer(conversationcontrol.Service{}.DrainInstallation).WithScopeDrainer(conversationcontrol.Service{}.DrainOutOfScope)
 	e.adminH = admin
 	e.mux = http.NewServeMux()
 	base := "/api/v1/tenants/{tenant_id}/integrations/apps"

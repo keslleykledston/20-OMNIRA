@@ -73,19 +73,37 @@ REVOKE ALL ON external_conversation_leases FROM PUBLIC, omnira_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON external_conversation_leases TO omnira_app;
 
 -- The worker's door to the leases that ran out (the table is readable only by a system session of ONE company, the worker has none yet).
-CREATE FUNCTION external_leases_due(p_grace INTERVAL, p_limit INTEGER)
+CREATE FUNCTION external_leases_due(p_grace INTERVAL, p_limit INTEGER, p_tenants UUID[] DEFAULT NULL)
 RETURNS TABLE (tenant_id UUID, conversation_id UUID, installation_id UUID)
 LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
 AS $$
   SELECT l.tenant_id, l.conversation_id, l.installation_id
     FROM external_conversation_leases l
-   WHERE l.lease_until + p_grace < now()
+   WHERE l.lease_until + p_grace < now() AND (p_tenants IS NULL OR l.tenant_id = ANY (p_tenants))
    ORDER BY l.lease_until
    LIMIT LEAST(GREATEST(p_limit, 1), 500)
 $$;
-REVOKE ALL ON FUNCTION external_leases_due(INTERVAL, INTEGER) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION external_leases_due(INTERVAL, INTEGER) TO omnira_app;
+REVOKE ALL ON FUNCTION external_leases_due(INTERVAL, INTEGER, UUID[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION external_leases_due(INTERVAL, INTEGER, UUID[]) TO omnira_app;
+
+-- A hold whose application has NO usable credential left (every token revoked or expired): it can no longer renew, release or answer, so the worker gives the
+-- conversation back. (Revoking the last token in the administration does it at once; this catches the tokens that simply expire.)
+CREATE FUNCTION external_orphan_holds(p_limit INTEGER, p_tenants UUID[] DEFAULT NULL)
+RETURNS TABLE (tenant_id UUID, conversation_id UUID, installation_id UUID)
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+  SELECT c.tenant_id, c.id, c.control_holder_id
+    FROM conversations c
+   WHERE c.control_kind = 'crm_application' AND c.status = 'open' AND (p_tenants IS NULL OR c.tenant_id = ANY (p_tenants))
+     AND NOT EXISTS (SELECT 1 FROM external_app_credentials k
+                      WHERE k.tenant_id = c.tenant_id AND k.installation_id = c.control_holder_id AND k.revoked_at IS NULL AND k.expires_at > now())
+   ORDER BY c.updated_at
+   LIMIT LEAST(GREATEST(p_limit, 1), 500)
+$$;
+REVOKE ALL ON FUNCTION external_orphan_holds(INTEGER, UUID[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION external_orphan_holds(INTEGER, UUID[]) TO omnira_app;
 
 -- an application can close an attendance (the same closure record as a person or the system, attributed to the installation)
 ALTER TABLE conversation_closures DROP CONSTRAINT conversation_closures_source_check;

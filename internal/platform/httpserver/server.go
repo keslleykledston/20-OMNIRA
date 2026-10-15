@@ -607,7 +607,7 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
 	// suspending or revoking an installation frees, in the same transaction, every conversation it holds (ADR-0046 §6)
-	admin := externaladapters.NewAdminHandler(dbPool, auditRepo).WithDrainer(conversationcontrol.Service{}.DrainInstallation)
+	admin := externaladapters.NewAdminHandler(dbPool, auditRepo).WithDrainer(conversationcontrol.Service{}.DrainInstallation).WithScopeDrainer(conversationcontrol.Service{}.DrainOutOfScope)
 	takeover := conversationcontrol.NewTakeoverHandler(dbPool, auditRepo)
 	appsPath := "/api/v1/tenants/{tenant_id}/integrations/apps"
 	route := func(pattern string, h http.HandlerFunc) {

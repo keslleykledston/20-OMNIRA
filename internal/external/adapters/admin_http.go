@@ -26,6 +26,8 @@ type AdminHandler struct {
 	store Store
 	audit auditports.AuditEventRepository
 	drain Drainer
+	// scopeDrain frees what the installation may no longer hold after its scopes or allow-lists changed (see conversationcontrol.DrainOutOfScope).
+	scopeDrain Drainer
 }
 
 func NewAdminHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository) *AdminHandler {
@@ -34,6 +36,9 @@ func NewAdminHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository) 
 
 // WithDrainer sets what runs, in the same transaction, when an installation is suspended or revoked (releases the conversations it holds).
 func (h *AdminHandler) WithDrainer(d Drainer) *AdminHandler { h.drain = d; return h }
+
+// WithScopeDrainer sets what runs, in the same transaction, when scopes or allow-lists are narrowed.
+func (h *AdminHandler) WithScopeDrainer(d Drainer) *AdminHandler { h.scopeDrain = d; return h }
 
 const (
 	permRead   = "integration.read"
@@ -395,7 +400,15 @@ func (h *AdminHandler) Update(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	h.record(r, id, auditdomain.ActionExternalAppUpdated, map[string]any{"name": inst.Name, "scopes": domain.ScopeStrings(inst.Scopes)})
+	released := 0
+	if h.scopeDrain != nil && (in.Scopes != nil || in.QueueIDs != nil || in.ChannelIDs != nil) {
+		var derr error
+		if released, derr = h.scopeDrain(r.Context(), q, tc.TenantID, id, "scope or allow-list changed"); derr != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+	h.record(r, id, auditdomain.ActionExternalAppUpdated, map[string]any{"name": inst.Name, "scopes": domain.ScopeStrings(inst.Scopes), "released_conversations": released})
 	creds, _ := h.store.Credentials(r.Context(), q, tc.TenantID, id)
 	writeJSON(w, http.StatusOK, viewOf(inst, creds, time.Now()))
 }
@@ -476,6 +489,20 @@ func (h *AdminHandler) RevokeCredential(w http.ResponseWriter, r *http.Request) 
 	if err := h.store.RevokeCredential(r.Context(), q, tc.TenantID, id, cid); err != nil {
 		mapStoreError(w, err)
 		return
+	}
+	// the last usable credential gone: the application can no longer say a word, so what it holds goes back to the company now (an expired one is caught by the worker)
+	if h.drain != nil {
+		var live int
+		if err := q.QueryRow(r.Context(), `SELECT count(*) FROM external_app_credentials WHERE tenant_id = $1 AND installation_id = $2 AND revoked_at IS NULL AND expires_at > now()`, tc.TenantID, id).Scan(&live); err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if live == 0 {
+			if _, err := h.drain(r.Context(), q, tc.TenantID, id, "no usable credential"); err != nil {
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 	h.record(r, id, auditdomain.ActionExternalAppCredentialRevoked, map[string]any{"credential_id": cid.String()})
 	w.WriteHeader(http.StatusNoContent)

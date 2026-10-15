@@ -290,7 +290,7 @@ h3)
 h4)
   echo "== H4: journal, sequencer, events API, SSRF, signature, delivery"
   T_PKGS="./internal/external/adapters ./internal/external/delivery ./internal/external/netpolicy"; T_NEED=3
-  T_RUN="TestJournal|TestSequencer|TestProducers|TestEventsAPI|TestBootstrap|TestWebhook|TestSignature|TestVerify|TestBackoff|TestBlockedIP|TestValidateURL|TestClient"
+  T_RUN="TestTheApplicationRole|TestJournal|TestSequencer|TestProducers|TestEventsAPI|TestBootstrap|TestWebhook|TestSignature|TestVerify|TestBackoff|TestBlockedIP|TestValidateURL|TestClient"
   J=000137_domain_events.up.sql; WH=000138_webhooks.up.sql
   EV=internal/external/adapters/events_http.go; WK=internal/external/delivery/worker.go; SG=internal/external/delivery/sign.go; NP=internal/external/netpolicy/ssrf.go; WA=internal/external/adapters/webhook_admin_http.go
   sqlmut "a fact is numbered below an open transaction"  $J "WHERE e.seq IS NULL AND e.xid < horizon.h ORDER BY e.xid, e.ord LIMIT p_limit" "WHERE e.seq IS NULL ORDER BY e.xid, e.ord LIMIT p_limit"
@@ -304,6 +304,7 @@ h4)
     RETURN;
   END IF;" ""
   sqlmut "a legacy writer's change of holder is not a fact" $J "CREATE TRIGGER domain_events_conversation_changed_trg AFTER UPDATE ON conversations" "CREATE TRIGGER domain_events_conversation_changed_trg AFTER UPDATE OF control_version, status ON conversations"
+  sqlmut "the application role may write a fact directly" $J "GRANT EXECUTE ON FUNCTION domain_events_sequence(INTEGER), domain_events_backlog(), domain_events_purge(INTERVAL) TO omnira_app;" "GRANT EXECUTE ON FUNCTION domain_events_sequence(INTEGER), domain_events_backlog(), domain_events_purge(INTERVAL), emit_domain_event(UUID, TEXT, TEXT, UUID, UUID, BIGINT, TEXT, UUID, JSONB) TO omnira_app;"
   sqlmut "a fact of a hidden conversation is recorded"   $J "  IF p_conversation IS NOT NULL AND NOT external_conversation_visible(p_tenant, p_conversation) THEN
     RETURN;
   END IF;" ""
@@ -386,7 +387,7 @@ h4)
 h5)
   echo "== H5: coordinated write commands, receipts, If-Match, transfer, finalize"
   T_PKGS="./internal/external/adapters ./internal/messages/application ./internal/messages/adapters ./internal/conversationcontrol"; T_NEED=1
-  T_RUN="TestWrite|TestExternalSender|TestInsertQueuedExternal|TestExpireLease"
+  T_RUN="TestWrite|TestExternalSender|TestInsertQueuedExternal|TestExpireLease|TestQueuedMessages|TestHoldsAreFreed"
   W=internal/external/adapters/write_http.go; ES=internal/messages/application/external_send.go; EO=internal/messages/adapters/outbound_external.go; CS=internal/conversationcontrol/service.go
   AT=internal/attendance/application/service.go; MG=migrations/000139_external_commands.up.sql
   mut "the Idempotency-Key is optional"                 $W "		if !idempotencyKeyPattern.MatchString(key) {" "		if false && !idempotencyKeyPattern.MatchString(key) {"
@@ -520,6 +521,24 @@ h5)
   mut "the agent label is not validated"                   $W "	if ref != \"\" && !externalAgentPattern.MatchString(ref) {" "	if false {"
   mut "a second JSON document is ignored"                  $W "	if _, err := dec.Token(); !errors.Is(err, io.EOF) {" "	if false {"
   mut "a queue outside the allow-list is a 422"            $W "refuse(http.StatusForbidden, \"queue_not_allowed\"" "refuse(http.StatusUnprocessableEntity, \"queue_not_allowed\""
+  AD=internal/external/adapters/admin_http.go; SW=internal/external/adapters/lease_sweeper.go
+  mut "a takeover leaves the CRM's queued message to go out"   $CS "	if cur.Kind != nil && *cur.Kind == KindCRMApplication && cur.HolderID != nil {
+		if err := s.cancelQueued(" "	if false && cur.Kind != nil && *cur.Kind == KindCRMApplication && cur.HolderID != nil {
+		if err := s.cancelQueued("
+  mut "a lease expiry leaves the queued message to go out"      $CS "	if err := s.cancelQueued(ctx, q, tenantID, conversationID, installationID); err != nil {
+		return false, err
+	}
+	if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, reason)" "	if _, err := s.free(ctx, q, tenantID, cur, Actor{Kind: ActorSystem}, reason)"
+  mut "a suspension or revocation leaves the queued message"    $CS "		if cur.HeldBy(KindCRMApplication, installationID) { // not yet closed-and-released" "		if false { // not yet closed-and-released"
+  mut "narrowing scopes or allow-lists keeps the hold"          $AD "	if h.scopeDrain != nil && (in.Scopes != nil" "	if false && h.scopeDrain != nil && (in.Scopes != nil"
+  mut "revoking the last token keeps the hold"                  $AD "		if live == 0 {" "		if false {"
+  mut "the queue allow-list is not part of the out-of-scope test" $CS "AND NOT EXISTS (SELECT 1 FROM external_app_installation_queues x WHERE x.tenant_id = c.tenant_id AND x.installation_id = \$2 AND x.queue_id = c.queue_id))" "AND false)"
+  mut "the line allow-list is not part of the out-of-scope test"  $CS "AND NOT EXISTS (SELECT 1 FROM external_app_installation_channels x WHERE x.tenant_id = c.tenant_id AND x.installation_id = \$2 AND x.connection_id = c.channel_connection_id)) )" "AND false) )"
+  mut "losing the claim scope keeps the hold"                   $CS "NOT EXISTS (SELECT 1 FROM external_app_installations i WHERE i.tenant_id = c.tenant_id AND i.id = \$2 AND i.status = 'active' AND 'conversation.claim' = ANY (i.scopes))" "false"
+  mut "expired tokens keep the hold"                            $SW "				reason = \"no_credential\"" "				reason = \"no_credential\"
+				if true {
+					return nil
+				}"
   sqlmut "a receipt can be changed"                     000139_external_commands.up.sql "GRANT SELECT, INSERT ON external_command_receipts TO omnira_app;" "GRANT SELECT, INSERT, UPDATE, DELETE ON external_command_receipts TO omnira_app;"
   sqlmut "a receipt is scoped to the tenant only"       000139_external_commands.up.sql "PRIMARY KEY (tenant_id, installation_id, operation, idempotency_key)," "PRIMARY KEY (tenant_id, operation, idempotency_key),"
   ;;

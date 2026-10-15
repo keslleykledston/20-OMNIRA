@@ -1,5 +1,6 @@
+DROP FUNCTION IF EXISTS external_orphan_holds(INTEGER, UUID[]);
 DROP INDEX IF EXISTS idx_conversations_tenant_created;
-DROP FUNCTION IF EXISTS external_leases_due(INTERVAL, INTEGER);
+DROP FUNCTION IF EXISTS external_leases_due(INTERVAL, INTEGER, UUID[]);
 DROP TABLE IF EXISTS external_conversation_leases;
 ALTER TABLE conversation_closures DROP CONSTRAINT IF EXISTS conversation_closures_closer_shape, DROP CONSTRAINT IF EXISTS conversation_closures_installation_fk;
 DELETE FROM conversation_closures WHERE source = 'external_app';
