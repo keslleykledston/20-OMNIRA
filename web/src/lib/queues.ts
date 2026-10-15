@@ -5,7 +5,7 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './
 export type QueueMode = 'manual' | 'round_robin' | 'least_loaded'
 
 // Mirrors QueueItem in internal/tenancy/adapters/queues_http.go. The UI calls
-// queues "grupos". member_count / available_count are queue ELIGIBILITY, not
+// queues "filas". member_count / available_count are queue ELIGIBILITY, not
 // presence (who is online lives in /agents/presence).
 export interface Queue {
   id: string
@@ -46,7 +46,7 @@ export const queuesAPI = {
   remove: (id: string) => call<void>(() => axios.delete(`${base()}/${id}`, { headers: authHeaders() })),
 }
 
-// ADR-0043 (S2): which queue ("grupo") a channel line sends NEW conversations to. A line absent from the list uses the default.
+// ADR-0043 (S2): which queue ("fila") a channel line sends NEW conversations to. A line absent from the list uses the default.
 export interface LineQueue {
   connection_id: string
   queue_id: string
@@ -55,7 +55,7 @@ export interface LineQueue {
 export const lineQueuesAPI = {
   list: () =>
     call<{ items: LineQueue[] }>(() => axios.get(`${base()}/lines`, { headers: authHeaders() })).then((r) => r.items),
-  // queueId null clears the rule: the line goes back to the default group
+  // queueId null clears the rule: the line goes back to the default queue
   set: (connectionId: string, queueId: string | null) =>
     call<LineQueue>(() =>
       axios.put(`${API_BASE}/tenants/${getTenantId()}/channels/lines/${connectionId}/queue`, { queue_id: queueId }, { headers: authHeaders() }),
@@ -67,19 +67,19 @@ export const lineQueuesAPI = {
 export function queueErrorMessage(err: any, fallback = 'Não foi possível concluir a alteração.'): string {
   const status = err?.response?.status
   const text = typeof err?.response?.data === 'string' ? err.response.data.toLowerCase() : ''
-  if (status === 403) return 'Você não tem permissão para alterar grupos.'
-  if (status === 404) return 'Este grupo não existe mais. Atualize a página.'
+  if (status === 403) return 'Você não tem permissão para alterar filas.'
+  if (status === 404) return 'Esta fila não existe mais. Atualize a página.'
   if (status === 400) return 'Confira o nome: use de 1 a 60 caracteres.'
   if (status === 409) {
-    if (text.includes('already exists')) return 'Já existe um grupo com esse nome.'
+    if (text.includes('already exists')) return 'Já existe uma fila com esse nome.'
     if (text.includes('unsetting') || text.includes('choose another queue')) {
-      return 'Para trocar o grupo padrão, escolha outro grupo como padrão.'
+      return 'Para trocar a fila padrão, escolha outra fila como padrão.'
     }
     if (text.includes('default queue cannot be deleted')) {
-      return 'O grupo padrão não pode ser excluído. Defina outro como padrão antes.'
+      return 'A fila padrão não pode ser excluída. Defina outra como padrão antes.'
     }
-    if (text.includes('still has conversations')) return 'Este grupo ainda tem conversas e não pode ser excluído.'
-    if (text.includes('channel line still sends')) return 'Um canal ainda envia conversas novas para este grupo. Mude o canal antes de excluir.'
+    if (text.includes('still has conversations')) return 'Esta fila ainda tem conversas e não pode ser excluída.'
+    if (text.includes('channel line still sends')) return 'Um canal ainda envia conversas novas para esta fila. Mude o canal antes de excluir.'
     if (text.includes('routing engine')) return 'A estratégia Menor carga exige o motor de roteamento, que não está ligado neste ambiente.'
   }
   return fallback

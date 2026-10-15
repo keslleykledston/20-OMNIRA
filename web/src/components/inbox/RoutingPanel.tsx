@@ -12,8 +12,8 @@ function when(iso?: string, tz?: string): string {
   }
 }
 
-// ADR-0044: onde a conversa está (setor, grupo, responsável), por que espera, quando pode mudar, as metas de SLA e o histórico de decisões.
-// Só leitura. Sem permissão ou sem motor ligado, mostra o que houver (setor/grupo/horário) e some o resto.
+// ADR-0044: onde a conversa está (setor, fila, responsável), por que espera, quando pode mudar, as metas de SLA e o histórico de decisões.
+// Só leitura. Sem permissão ou sem motor ligado, mostra o que houver (setor/fila/horário) e some o resto.
 export default function RoutingPanel({ conversationId }: { conversationId: string }) {
   const q = useQuery({ queryKey: ['conv-routing', conversationId], queryFn: () => routingAPI.conversation(conversationId), retry: false, refetchInterval: 30_000 })
   if (q.isLoading) return <Skeleton className="m-4 h-20" />
@@ -25,7 +25,7 @@ export default function RoutingPanel({ conversationId }: { conversationId: strin
     <section aria-label="Roteamento" className="space-y-3 px-4 pb-4 text-sm">
       <dl className="space-y-1">
         <div className="flex justify-between gap-3"><dt className="text-text-secondary">Setor</dt><dd className="text-right text-text-primary">{r.sector?.name ?? 'Sem setor'}</dd></div>
-        <div className="flex justify-between gap-3"><dt className="text-text-secondary">Grupo</dt><dd className="text-right text-text-primary">{r.queue?.name ?? 'Sem grupo'}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-text-secondary">Fila</dt><dd className="text-right text-text-primary">{r.queue?.name ?? 'Sem fila'}</dd></div>
         <div className="flex justify-between gap-3"><dt className="text-text-secondary">Atendente</dt><dd className="text-right text-text-primary">{r.assigned ? r.assigned.name || 'Atribuída' : 'Ninguém ainda'}</dd></div>
       </dl>
 

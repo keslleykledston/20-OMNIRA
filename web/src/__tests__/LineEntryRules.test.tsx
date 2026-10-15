@@ -33,7 +33,7 @@ describe('LineEntryRules (ADR-0043, entrada por canal)', () => {
     mount()
     const select = await screen.findByRole('combobox', { name: /WhatsApp \+55 92 9000-0001/ })
     await waitFor(() => expect((select as HTMLSelectElement).value).toBe('g-fin'))
-    expect(screen.getByRole('option', { name: 'Grupo padrão (Triagem)' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Fila padrão (Triagem)' })).toBeTruthy()
   })
 
   it('sets the rule with PUT and clears it with null', async () => {

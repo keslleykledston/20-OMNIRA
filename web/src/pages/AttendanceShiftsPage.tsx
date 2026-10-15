@@ -22,7 +22,7 @@ function ShiftsSection({ manage }: { manage: boolean }) {
   const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false })
 
   const calName = (id: string) => calendars.data?.items.find((c) => c.id === id)?.name ?? 'horário removido'
-  const scopeName = (s: AgentShift) => (s.queue_id ? `grupo ${queues.data?.find((q) => q.id === s.queue_id)?.name ?? '?'}` : s.sector_id ? `setor ${sectors.data?.find((x) => x.id === s.sector_id)?.name ?? '?'}` : 'todos os setores e grupos')
+  const scopeName = (s: AgentShift) => (s.queue_id ? `fila ${queues.data?.find((q) => q.id === s.queue_id)?.name ?? '?'}` : s.sector_id ? `setor ${sectors.data?.find((x) => x.id === s.sector_id)?.name ?? '?'}` : 'todos os setores e filas')
   const scopeBody = (scope: string) => (scope.startsWith('q:') ? { queue_id: scope.slice(2) } : scope.startsWith('s:') ? { sector_id: scope.slice(2) } : {})
 
   const set = useMutation({
@@ -38,7 +38,7 @@ function ShiftsSection({ manage }: { manage: boolean }) {
       <Notice>Quem não tem escala fica disponível 24 horas (padrão). A escala de uma pessoa vale somente dentro do horário do setor: o atendente só recebe conversa quando o setor está aberto <em>e</em> ele está de turno, online e com capacidade.</Notice>
       {error && <ErrorState title="Não foi possível concluir" message={error} isDismissible onDismiss={() => setError(null)} />}
       {agents.isLoading && <Skeleton className="h-32" />}
-      {agents.data && active.length === 0 && <EmptyState title="Nenhum atendente ativo" description="Ative agentes em Pessoas › Agentes para definir escalas." />}
+      {agents.data && active.length === 0 && <EmptyState title="Nenhum atendente ativo" description="Em Pessoas, abra a pessoa e ligue “Recebe conversas” para definir a escala dela." />}
       {active.map((a) => {
         const mine = (shifts.data ?? []).filter((s) => s.user_id === a.user_id)
         const d = draft[a.user_id] ?? { calendar: '', scope: '' }
@@ -66,9 +66,9 @@ function ShiftsSection({ manage }: { manage: boolean }) {
                 </Field>
                 <Field label="Vale para">
                   <select aria-label={`Escopo da escala de ${a.name || a.email}`} className={selectClass} value={d.scope} onChange={(e) => setDraft({ ...draft, [a.user_id]: { ...d, scope: e.target.value } })}>
-                    <option value="">Todos os setores e grupos</option>
+                    <option value="">Todos os setores e filas</option>
                     {sectors.data?.map((s) => <option key={s.id} value={`s:${s.id}`}>Setor {s.name}</option>)}
-                    {queues.data?.map((q) => <option key={q.id} value={`q:${q.id}`}>Grupo {q.name}</option>)}
+                    {queues.data?.map((q) => <option key={q.id} value={`q:${q.id}`}>Fila {q.name}</option>)}
                   </select>
                 </Field>
                 <Button size="sm" disabled={!d.calendar || set.isPending} onClick={() => { set.mutate({ user_id: a.user_id, calendar_id: d.calendar, scope: d.scope }); setDraft({ ...draft, [a.user_id]: { calendar: '', scope: '' } }) }}>Definir escala</Button>

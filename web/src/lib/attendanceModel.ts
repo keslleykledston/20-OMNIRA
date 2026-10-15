@@ -111,7 +111,7 @@ export const TRIGGER_LABELS: Record<string, string> = {
 }
 
 export const DEST_LABELS: Record<OverflowStep['destination_kind'], string> = {
-  queue: 'Outro grupo',
+  queue: 'Outra fila',
   oncall: 'Plantão',
   agent: 'Atendente específico',
   sector: 'Outro setor',
@@ -159,7 +159,7 @@ export function policyProblems(p: OverflowPolicy, originQueue: string): string[]
     if (!s.destination_id) out.push(`Etapa ${n}: escolha o destino.`)
     if (s.triggers.includes('max_wait') && s.wait_seconds <= 0) out.push(`Etapa ${n}: o gatilho de tempo máximo precisa de uma espera maior que zero.`)
     const key = `${s.destination_kind}:${s.destination_id}`
-    if (s.destination_id && seen.has(key)) out.push(`Etapa ${n}: o destino repete o grupo de origem ou uma etapa anterior (a conversa voltaria a um lugar onde já esteve).`)
+    if (s.destination_id && seen.has(key)) out.push(`Etapa ${n}: o destino repete a fila de origem ou uma etapa anterior (a conversa voltaria a um lugar onde já esteve).`)
     seen.add(key)
   })
   return out
@@ -212,9 +212,9 @@ export const DECISION_LABELS: Record<string, string> = {
 
 export const REASON_LABELS: Record<string, string> = {
   already_assigned: 'já tinha dono',
-  no_queue: 'sem grupo',
+  no_queue: 'sem fila',
   conversation_closed: 'conversa encerrada',
-  manual_queue: 'grupo de atribuição manual',
+  manual_queue: 'fila de atribuição manual',
   sector_closed: 'setor fechado',
   never_opens: 'o setor não abre dentro do horizonte',
   no_eligible_agent: 'nenhum atendente elegível',

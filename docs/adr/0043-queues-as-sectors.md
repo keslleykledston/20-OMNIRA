@@ -7,6 +7,8 @@ Estado do projeto: `LAB`. Relaciona: ADR-0018 (decisão num ponto só, 404 fora 
 
 Não se cria a entidade `Department`. Cada tenant cria quantas filas quiser (Comercial, Financeiro, Suporte…); a fila já tem membros, capacidade, modo manual/rodízio e é a unidade que os fluxos (`assign_queue`, `human_handoff`) e o Hub (work pool = "uma fila de uma instância") usam. Uma entidade nova agrupando filas só se justifica se aparecer um setor que **contém várias filas**; até lá seria complexidade sem uso. Na interface o texto continua "grupo" (a tela existente); renomear para "Setor" fica para depois, porque "Grupos" também é a palavra dos grupos de WhatsApp (ADR-0015) e a troca merece uma decisão de vocabulário única.
 
+**Decisão de vocabulário (dono, 2026-10-14):** na tela a fila se chama **"Fila"** (a palavra que o dono usa); "Setor" agrupa filas (ADR-0044) e "Grupos" fica só para os grupos de WhatsApp. Aplicado em todas as telas que falavam "grupo" no sentido de fila (Pessoas, Filas e setores, Horários, Escalas, Transbordo e SLA, entrada por canal, Conversas "Minhas filas", painel de roteamento, editor de fluxos, mensagens de erro). Nada muda na API nem no banco (`queues`, `queue_id`).
+
 ## 2. S2 — regra de entrada por canal (migration 122)
 
 - `channel_connections.default_queue_id` (nulo = comportamento antigo). Chave estrangeira **composta** `(tenant_id, default_queue_id) → queues(tenant_id, id)`, `ON DELETE RESTRICT`: o banco recusa uma linha apontar para fila de outro tenant e recusa apagar fila para a qual uma linha aponta.

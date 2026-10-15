@@ -178,7 +178,7 @@ export default function AttendanceCalendarsPage() {
   useEffect(() => { if (!editing) void refresh() }, [editing]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <AttendanceFrame title="Horários" description="Quando cada setor ou grupo atende: horário comercial, 24 horas ou personalizado, com feriados, exceções e suspensão de emergência.">
+    <AttendanceFrame title="Horários" description="Quando cada setor ou fila atende: horário comercial, 24 horas ou personalizado, com feriados, exceções e suspensão de emergência.">
       {({ manage }) => (
         <div className="space-y-6">
           {manage && <div className="flex justify-end"><Button onClick={() => setEditing({ calendar: null })}>+ Novo horário</Button></div>}
@@ -196,7 +196,7 @@ export default function AttendanceCalendarsPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="secondary" onClick={() => void open(c.id)}>{manage ? 'Editar' : 'Ver'}</Button>
-                    {manage && <Button size="sm" variant="secondary" disabled={c.in_use > 0} title={c.in_use > 0 ? 'Em uso: troque o horário dos setores e grupos antes de remover.' : undefined} onClick={() => setRemoving(c)}>Remover</Button>}
+                    {manage && <Button size="sm" variant="secondary" disabled={c.in_use > 0} title={c.in_use > 0 ? 'Em uso: troque o horário dos setores e filas antes de remover.' : undefined} onClick={() => setRemoving(c)}>Remover</Button>}
                   </div>
                 </div>
               </Card>
@@ -204,7 +204,7 @@ export default function AttendanceCalendarsPage() {
           </div>
           {canTenant && list.data && list.data.items.length > 0 && (
             <Card padding="compact">
-              <Field label="Horário padrão da empresa" hint="Vale para os setores e grupos que não têm horário próprio. Sem padrão, esses ficam abertos 24 horas.">
+              <Field label="Horário padrão da empresa" hint="Vale para os setores e filas que não têm horário próprio. Sem padrão, esses ficam abertos 24 horas.">
                 <select className={`${selectClass} max-w-sm`} value={list.data.default_calendar_id ?? ''} disabled={setDefault.isPending} onChange={(e) => setDefault.mutate(e.target.value || null)}>
                   <option value="">Sem padrão (sempre aberto)</option>
                   {list.data.items.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}

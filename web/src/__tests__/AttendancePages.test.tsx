@@ -447,10 +447,10 @@ describe('Atendimento › Transbordo e SLA', () => {
     const user = userEvent.setup()
     const calls = serve(world())
     page()
-    await screen.findByText(/Este grupo não tem transbordo/)
+    await screen.findByText(/Esta fila não tem transbordo/)
     await user.click(screen.getByRole('button', { name: '+ Etapa' }))
     expect(screen.getByLabelText('Etapa 1')).toBeInTheDocument()
-    // o primeiro destino sugerido nunca é o próprio grupo de origem (Cobrança)
+    // o primeiro destino sugerido nunca é a própria fila de origem (Cobrança)
     await user.selectOptions(screen.getByLabelText('Escolha o destino da etapa 1'), 'q-sup')
     await user.click(screen.getByRole('button', { name: 'Salvar política' }))
     await waitFor(() => {
@@ -459,7 +459,7 @@ describe('Atendimento › Transbordo e SLA', () => {
       expect(put?.body.steps[0]).toMatchObject({ position: 1, destination_kind: 'queue', destination_id: 'q-sup', triggers: ['after_hours', 'no_eligible_agent'] })
     })
     expect(await screen.findByText(/reavaliadas com a nova política/)).toBeInTheDocument()
-    // o grupo de origem não é oferecido como destino
+    // a fila de origem não é oferecida como destino
     expect(within(screen.getByLabelText('Escolha o destino da etapa 1')).queryByRole('option', { name: 'Cobrança' })).toBeNull()
   })
 
@@ -477,11 +477,11 @@ describe('Atendimento › Transbordo e SLA', () => {
     void user
   })
 
-  it('destino Hub lista só contratos (nunca operadores) e exige o grupo que o Hub atende', async () => {
+  it('destino Hub lista só contratos (nunca operadores) e exige a fila que o Hub atende', async () => {
     const user = userEvent.setup()
     serve(world())
     page()
-    await screen.findByText(/Este grupo não tem transbordo/)
+    await screen.findByText(/Esta fila não tem transbordo/)
     await user.click(screen.getByRole('button', { name: '+ Etapa' }))
     await user.selectOptions(screen.getByLabelText('Destino da etapa 1'), 'hub')
     const dest = screen.getByLabelText('Escolha o destino da etapa 1')
@@ -494,7 +494,7 @@ describe('Atendimento › Transbordo e SLA', () => {
     const user = userEvent.setup()
     const calls = serve(world())
     page()
-    await screen.findByText(/Este grupo não tem transbordo/)
+    await screen.findByText(/Esta fila não tem transbordo/)
     await user.click(screen.getByRole('button', { name: '+ Etapa' }))
     await user.selectOptions(screen.getByLabelText('Destino da etapa 1'), 'flow')
     const dest = screen.getByLabelText('Escolha o destino da etapa 1')

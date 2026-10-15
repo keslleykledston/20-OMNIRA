@@ -34,9 +34,9 @@ describe('queueErrorMessage', () => {
   const err = (status: number, data = '') => ({ response: { status, data } })
 
   it('turns the API reasons into sentences the operator can act on', () => {
-    expect(queueErrorMessage(err(409, 'a queue with this name already exists'))).toBe('Já existe um grupo com esse nome.')
-    expect(queueErrorMessage(err(409, 'choose another queue as the default instead of unsetting it'))).toMatch(/escolha outro grupo/i)
-    expect(queueErrorMessage(err(409, 'the default queue cannot be deleted; choose another default first'))).toMatch(/padrão não pode ser excluído/)
+    expect(queueErrorMessage(err(409, 'a queue with this name already exists'))).toBe('Já existe uma fila com esse nome.')
+    expect(queueErrorMessage(err(409, 'choose another queue as the default instead of unsetting it'))).toMatch(/escolha outra fila/i)
+    expect(queueErrorMessage(err(409, 'the default queue cannot be deleted; choose another default first'))).toMatch(/padrão não pode ser excluída/)
     expect(queueErrorMessage(err(409, 'the queue still has conversations and cannot be deleted'))).toMatch(/ainda tem conversas/)
     expect(queueErrorMessage(err(403, 'forbidden'))).toMatch(/permissão/)
     expect(queueErrorMessage(err(404, 'queue not found'))).toMatch(/não existe mais/)

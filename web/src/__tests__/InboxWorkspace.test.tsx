@@ -317,7 +317,7 @@ describe('InboxWorkspace — list paging, search and filters', () => {
     await waitFor(() => expect(listCalls().some((p) => p.assigned === 'me')).toBe(true));
     await user.click(screen.getByRole('tab', { name: 'Aguardando' }));
     await waitFor(() => expect(listCalls().some((p) => p.waiting === true && p.assigned === undefined)).toBe(true));
-    // ADR-0043: "Meus grupos" lives in the Mais… menu and asks the server for the groups I belong to
+    // ADR-0043: "Minhas filas" lives in the Mais… menu and asks the server for the queues I belong to
     await user.selectOptions(screen.getByRole('combobox', { name: 'Mais filtros' }), 'my_groups');
     await waitFor(() => expect(listCalls().some((p) => p.queue === 'mine' && p.assigned === undefined)).toBe(true));
     await user.click(screen.getByRole('tab', { name: 'Todas' }));

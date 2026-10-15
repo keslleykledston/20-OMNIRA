@@ -106,7 +106,7 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
     </Select>
   )
 
-  // Um lugar é um setor OU um grupo (fila), sempre por id: renomear não quebra o fluxo; um setor desativado ou removido faz o nó seguir a saída "indisponível".
+  // Um lugar é um setor OU uma fila, sempre por id: renomear não quebra o fluxo; um setor desativado ou removido faz o nó seguir a saída "indisponível".
   const placeSelect = (label: string, hint: string) => {
     const sectorId = typeof cfg.sector === 'string' ? cfg.sector : ''
     const queueId = typeof cfg.queue === 'string' ? cfg.queue : ''
@@ -117,12 +117,12 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
         const [kind, id] = v.split(':')
         set({ sector: kind === 'sector' ? id : undefined, queue: kind === 'queue' ? id : undefined })
       }}>
-        <option value="">Selecione um setor ou grupo</option>
+        <option value="">Selecione um setor ou fila</option>
         {value && !known && <option value={value}>Item que não existe mais</option>}
         <optgroup label="Setores">
           {sectors.map((x) => <option key={x.id} value={`sector:${x.id}`}>{x.active ? x.name : `${x.name} (inativo)`}</option>)}
         </optgroup>
-        <optgroup label="Grupos">
+        <optgroup label="Filas">
           {queues.map((x) => <option key={x.id} value={`queue:${x.id}`}>{x.name}</option>)}
         </optgroup>
       </Select>
@@ -132,7 +132,7 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
   let form: ReactNode = null
   switch (node.type) {
     case 'check_schedule':
-      form = placeSelect('Consultar o horário de', 'Usa o mesmo calendário do setor ou grupo (feriados, exceções e suspensões incluídos). Nada é configurado aqui.')
+      form = placeSelect('Consultar o horário de', 'Usa o mesmo calendário do setor ou fila (feriados, exceções e suspensões incluídos). Nada é configurado aqui.')
       break
     case 'check_availability':
       form = placeSelect('Consultar a disponibilidade de', 'Disponível = aberto e com ao menos um atendente elegível agora (escala, presença e capacidade).')
@@ -152,7 +152,7 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
       form = (
         <>
           <Select label="Setor" value={fromVar ? '__variable' : typeof cfg.sector === 'string' ? cfg.sector : ''} disabled={ro}
-            hint="O servidor escolhe o grupo do setor (aberto e com atendente elegível). Setor inativo ou removido segue a saída “indisponível”."
+            hint="O servidor escolhe a fila do setor (aberta e com atendente elegível). Setor inativo ou removido segue a saída “indisponível”."
             onChange={(v) => set(v === '__variable' ? { sector: undefined, from_variable: 'sector' } : { sector: v || undefined, from_variable: undefined })}>
             <option value="">Selecione um setor</option>
             <option value="__variable">O setor que o cliente escolheu</option>
@@ -164,7 +164,7 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
       break
     }
     case 'apply_overflow':
-      form = <p className="text-sm text-text-secondary">Pede ao motor de roteamento para decidir agora, com a política de transbordo do grupo da conversa (horário, escala, capacidade, plantão e etapas). Não há o que configurar aqui: as regras ficam em Setores e transbordo.</p>
+      form = <p className="text-sm text-text-secondary">Pede ao motor de roteamento para decidir agora, com a política de transbordo da fila da conversa (horário, escala, capacidade, plantão e etapas). Não há o que configurar aqui: as regras ficam em Atendimento › Filas e setores e › Transbordo e SLA.</p>
       break
     case 'send_message':
       form = <TextArea label="Texto da mensagem" value={str(cfg, 'text')} disabled={ro} rows={4} helperText={`Use {{variavel}} para inserir dados. ${varHint ?? ''}`} onChange={(e) => set({ text: e.target.value })} />
