@@ -388,8 +388,18 @@ function AccessSection({ person, busy, onSetStatus }: { person: PersonEntry; bus
   )
 }
 
-function InvitationBody({ person, readiness, can, busy, actions }: {
-  person: PersonEntry; readiness: Readiness; can: PersonSheetProps['can']; busy: string | null; actions: PersonSheetActions
+function planSentence(inv: NonNullable<PersonEntry['invitation']>, sectors: SheetSector[] | null): string {
+  if (!inv.attends) return 'Volte a esta ficha depois do aceite, ligue “Recebe conversas” e escolha as filas da pessoa.'
+  const names = new Map((sectors ?? []).flatMap((s) => s.queues).map((q) => [q.id, q.name]))
+  const chosen = (inv.queue_ids ?? []).map((id) => names.get(id)).filter((n): n is string => !!n)
+  if (chosen.length === 0) return 'Ao aceitar, a pessoa já passa a atender, pela fila padrão de transbordo da empresa.'
+  const list = chosen.length === 1 ? chosen[0] : `${chosen.slice(0, -1).join(', ')} e ${chosen[chosen.length - 1]}`
+  const cap = inv.queue_capacity ?? 1
+  return `Ao aceitar, a pessoa já recebe conversas de ${list}, até ${cap} ${cap === 1 ? 'conversa' : 'conversas'} ao mesmo tempo em cada fila.`
+}
+
+function InvitationBody({ person, readiness, sectors, can, busy, actions }: {
+  person: PersonEntry; readiness: Readiness; sectors: SheetSector[] | null; can: PersonSheetProps['can']; busy: string | null; actions: PersonSheetActions
 }) {
   const inv = person.invitation!
   const [confirm, setConfirm] = useState(false)
@@ -413,7 +423,7 @@ function InvitationBody({ person, readiness, can, busy, actions }: {
       </Section>
       {open && (
         <Section title="Depois do aceite">
-          <p className="text-sm text-text-secondary">Volte a esta ficha, ligue “Recebe conversas” e escolha as filas da pessoa.</p>
+          <p className="text-sm text-text-secondary">{planSentence(inv, sectors)}</p>
         </Section>
       )}
       {open && can.manageMembers && (
@@ -464,7 +474,7 @@ export function PersonSheet(props: PersonSheetProps) {
         {notice && <p role="status" className="rounded-control border border-status-success-border bg-status-success-soft px-3 py-2 text-sm text-status-success">{notice}</p>}
         {error && <p role="alert" className="mt-2 rounded-control border border-status-danger-border bg-status-danger-soft px-3 py-2 text-sm text-status-danger">{error}</p>}
         {person.invitation ? (
-          <InvitationBody person={person} readiness={readiness} can={can} busy={busy} actions={props} />
+          <InvitationBody person={person} readiness={readiness} sectors={sectors} can={can} busy={busy} actions={props} />
         ) : (
           <>
             {person.state === 'active' && sectors && (

@@ -558,7 +558,8 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 	}
 }
 
-func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender) {
+// logins (ADR-0046) is nil unless invitations should prepare the invitee's sign-in account at Keycloak.
+func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInviteURL bool, webBaseURL string, sender tenancyadapters.InvitationSender, logins *tenancyadapters.KeycloakLogins) {
 	if s.authenticator == nil {
 		return
 	}
@@ -570,6 +571,9 @@ func (s *Server) RegisterInvitationHandlers(dbPool *pgxpool.Pool, devExposeInvit
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
 	h := tenancyadapters.NewInvitationsHandler(dbPool, auditRepo, sender, devExposeInviteURL, webBaseURL)
+	if logins != nil {
+		h.WithLoginPreparer(logins)
+	}
 
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/team/invitations", authnMiddleware(tenantSession(http.HandlerFunc(h.CreateInvitation))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/team/invitations", authnMiddleware(tenantSession(http.HandlerFunc(h.ListInvitations))))

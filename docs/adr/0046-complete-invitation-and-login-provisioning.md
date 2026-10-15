@@ -1,6 +1,6 @@
 # ADR-0046 — Convite completo: função e filas no convite, e conta de login criada pelo OMNIRA
 
-Status: **PROPOSTA** (2026-10-14), aguarda o dono. Fase 2 do redesenho de Pessoas (a Fase 1 é o commit `a206b91`: uma página de Pessoas com a ficha da pessoa). Nada desta proposta está construído.
+Status: **IMPLEMENTADA** (2026-10-14), ampliando o fluxo de convite existente. O dono pediu "implante as melhorias propostas" sem responder §6; adotadas as recomendações: caminho A; conta de convite cancelado é **desabilitada**; a autorização por e-mail do Hub **não** cria conta nesta fase; a edição de e-mail no Keycloak **não** foi mudada (continua pendência do dono, para não alterar o comportamento atual). Diferenças da proposta, para ampliar sem criar peças novas: o plano fica em **colunas** de `membership_invitations` (migration 136, sem tabela nova; a fila é conferida contra a instância ao convidar e de novo ao aceitar) e não há `PATCH` do plano. O marcador `omnira_provisioned` exige no realm `unmanagedAttributePolicy=ADMIN_EDIT` (Keycloak 25 descarta atributos não declarados); sem ele a conta funciona, mas reenviar/cancelar não a tocam, e o adaptador avisa no log. Provas: unidade (`keycloak_logins_test.go`), Postgres com instâncias A/B (`invitations_plan_test.go`), Keycloak 25 real descartável (`scripts/test-keycloak-logins.sh`), Vitest e Playwright com mocks.
 
 ## 1. Contexto: o que acontece hoje
 

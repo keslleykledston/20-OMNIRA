@@ -23,6 +23,16 @@ export interface Invitation {
   accepted_at?: string;
   revoked_at?: string;
   invite_url?: string;
+  // ADR-0046: applied when the person accepts (attend, in which queues of this instance, how many conversations at once in each).
+  attends?: boolean;
+  queue_ids?: string[];
+  queue_capacity?: number;
+}
+
+export interface AttendancePlan {
+  attends: boolean;
+  queue_ids: string[];
+  queue_capacity: number;
 }
 
 export type AcceptStatus =
@@ -60,8 +70,8 @@ async function callNoRedirect<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 
 export const invitationsAPI = {
   list: () => call<{ items: Invitation[] }>(() => axios.get(teamBase(), { headers: authHeaders() })).then((d) => d.items),
-  create: (email: string, roleKey: string) =>
-    call<Invitation>(() => axios.post(teamBase(), { email, role_key: roleKey }, { headers: authHeaders() })),
+  create: (email: string, roleKey: string, plan?: AttendancePlan) =>
+    call<Invitation>(() => axios.post(teamBase(), { email, role_key: roleKey, ...(plan?.attends ? plan : {}) }, { headers: authHeaders() })),
   resend: (id: string) =>
     call<Invitation>(() => axios.post(`${teamBase()}/${id}/resend`, {}, { headers: authHeaders() })),
   revoke: (id: string) =>
@@ -93,8 +103,14 @@ export function invitationErrorMessage(err: any, fallback = 'Não foi possível 
     case 410:
       return 'Este convite expirou.';
     case 422:
+      if (typeof err?.response?.data === 'string' && err.response.data.includes('queue')) {
+        return 'Uma das filas escolhidas não existe mais nesta instância. Atualize a página e escolha de novo.';
+      }
       return 'Essa função não pode ser atribuída aqui.';
     case 502:
+      if (typeof err?.response?.data === 'string' && err.response.data.includes('sign-in account')) {
+        return 'O convite foi registrado, mas a conta de login da pessoa não pôde ser preparada. Abra a pessoa na lista e use "Reenviar convite".';
+      }
       return 'O convite foi registrado, mas o e-mail não pôde ser entregue. Abra a pessoa na lista e use "Reenviar convite".';
     case 503:
       return 'O envio de convites não está configurado neste ambiente.';

@@ -177,11 +177,12 @@ Para aceitar o convite, acesse o link abaixo e entre com o mesmo e-mail em que r
 
 {{.URL}}
 
-Sua senha temporária (válida por 72h):
+{{if .Password}}Sua senha temporária (válida por 72h):
 {{.Password}}
 
 Ao fazer login, você será obrigado a criar uma nova senha permanente.
-
+{{else}}Entre com a sua conta de sempre, usando este mesmo e-mail.
+{{end}}
 O link é pessoal, pode ser usado uma única vez e expira em {{.Expires}}.
 Se você não esperava este convite, ignore esta mensagem.
 `))
@@ -193,9 +194,9 @@ var invitationHTMLTemplate = htmltemplate.Must(htmltemplate.New("html").Parse(`<
 <p>Para aceitar o convite, use o botão abaixo e entre com o mesmo e-mail em que recebeu esta mensagem:</p>
 <p><a href="{{.URL}}" style="display:inline-block;padding:10px 18px;background:#0a84ff;color:#fff;border-radius:8px;text-decoration:none">Aceitar convite</a></p>
 <p style="font-size:13px;color:#636366">Se o botão não funcionar, copie este endereço: {{.URL}}</p>
-<p><strong>Sua senha temporária (válida por 72h):</strong><br>
+{{if .Password}}<p><strong>Sua senha temporária (válida por 72h):</strong><br>
 <code style="background:#f2f2f2;padding:8px;border-radius:4px;font-family:monospace;font-size:12px">{{.Password}}</code></p>
-<p>Ao fazer login, você será obrigado a criar uma nova senha permanente.</p>
+<p>Ao fazer login, você será obrigado a criar uma nova senha permanente.</p>{{else}}<p>Entre com a sua conta de sempre, usando este mesmo e-mail.</p>{{end}}
 <p style="font-size:13px;color:#636366">O link é pessoal, pode ser usado uma única vez e expira em {{.Expires}}.<br>Se você não esperava este convite, ignore esta mensagem.</p>
 </body></html>
 `))

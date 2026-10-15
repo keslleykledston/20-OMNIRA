@@ -28,17 +28,37 @@ func Verify(hash, password string) bool {
 	return err == nil
 }
 
-// Generate gera uma senha temporária aleatória segura (12 caracteres alphanumeric + símbolos).
+// Generate gera uma senha temporária aleatória segura (12 caracteres alphanumeric + símbolos) com ao menos uma maiúscula, uma minúscula
+// e um dígito: a política de senha do realm do Keycloak exige os três, e a senha do convite vira a do login criado (ADR-0046).
 func Generate() (string, error) {
 	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*"
 	b := make([]byte, TempLength)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	for {
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		for i := range b {
+			b[i] = charset[int(b[i])%len(charset)]
+		}
+		if hasUpperLowerDigit(b) {
+			return string(b), nil
+		}
 	}
-	for i := range b {
-		b[i] = charset[int(b[i])%len(charset)]
+}
+
+func hasUpperLowerDigit(b []byte) bool {
+	var upper, lower, digit bool
+	for _, c := range b {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			upper = true
+		case c >= 'a' && c <= 'z':
+			lower = true
+		case c >= '0' && c <= '9':
+			digit = true
+		}
 	}
-	return string(b), nil
+	return upper && lower && digit
 }
 
 // ExpiresAt retorna o tempo de expiração de uma senha temporária (72h no futuro).

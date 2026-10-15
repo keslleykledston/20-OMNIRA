@@ -258,6 +258,58 @@ describe('Pessoas: adicionar pessoa', () => {
   })
 })
 
+describe('Pessoas: convite com plano de atendimento (ADR-0046)', () => {
+  it('um agente convidado já leva as filas e a capacidade, aplicadas no aceite', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await screen.findByRole('button', { name: /Adicionar pessoa/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Adicionar pessoa' })
+    await user.type(within(dialog).getByLabelText('E-mail'), 'agente.novo@k3g.com')
+    expect(within(dialog).getByRole('switch', { name: 'Vai atender conversas' })).toHaveAttribute('aria-checked', 'true')
+    await user.click(within(dialog).getByLabelText('Recebe conversas da fila Cobrança'))
+    await user.click(within(dialog).getByRole('button', { name: 'Aumentar: Conversas ao mesmo tempo em cada fila' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Enviar convite' }))
+    await waitFor(() => expect(calls.find((c) => c.url.endsWith('/team/invitations'))?.body).toEqual({
+      email: 'agente.novo@k3g.com', role_key: 'tenant_agent', attends: true, queue_ids: ['q-fin'], queue_capacity: 2,
+    }))
+  })
+
+  it('administrador e supervisor não atendem por padrão, e sem atender o convite não leva plano', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await screen.findByRole('button', { name: /Adicionar pessoa/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Adicionar pessoa' })
+    await user.type(within(dialog).getByLabelText('E-mail'), 'chefe@k3g.com')
+    await user.click(within(dialog).getByRole('radio', { name: /Administrador/ }))
+    expect(within(dialog).getByRole('switch', { name: 'Vai atender conversas' })).toHaveAttribute('aria-checked', 'false')
+    expect(within(dialog).queryByLabelText('Recebe conversas da fila Cobrança')).toBeNull()
+    await user.click(within(dialog).getByRole('button', { name: 'Enviar convite' }))
+    await waitFor(() => expect(calls.find((c) => c.url.endsWith('/team/invitations'))?.body).toEqual({ email: 'chefe@k3g.com', role_key: 'tenant_admin' }))
+  })
+
+  it('a ficha do convite diz o que a pessoa vai fazer ao aceitar', async () => {
+    const user = userEvent.setup()
+    serve(world({ invitations: [invitation('i7', 'plano@k3g.com', { attends: true, queue_ids: ['q-fin', 'q-sup'], queue_capacity: 2 })] }))
+    page()
+    await user.click(await rowOf('plano@k3g.com'))
+    expect(within(sheet()).getByText('Ao aceitar, a pessoa já recebe conversas de Cobrança e Suporte N1, até 2 conversas ao mesmo tempo em cada fila.')).toBeInTheDocument()
+  })
+
+  it('explica quando a conta de login não pôde ser preparada (502) e aponta o reenvio', async () => {
+    const user = userEvent.setup()
+    const w = world()
+    serve(w)
+    page()
+    await user.click(await screen.findByRole('button', { name: /Adicionar pessoa/ }))
+    await user.type(screen.getByLabelText('E-mail'), 'semlogin@k3g.com')
+    w.failNext = { status: 502, data: 'invitation created but the sign-in account could not be prepared; use resend' }
+    await user.click(screen.getByRole('button', { name: 'Enviar convite' }))
+    expect(await screen.findByText(/a conta de login da pessoa não pôde ser preparada/)).toBeInTheDocument()
+  })
+})
+
 describe('Pessoas: a ficha', () => {
   it('muda a função só depois de salvar e explica o conflito do último administrador', async () => {
     const user = userEvent.setup()

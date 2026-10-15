@@ -8,7 +8,7 @@ import { PersonSheet, type SheetSector } from '../components/people/PersonSheet'
 import { InviteDialog } from '../components/people/InviteDialog'
 import { initialsOf, ToneDot, TonePill } from '../components/people/controls'
 import { agentsAPI } from '../lib/agents'
-import { invitationErrorMessage, invitationsAPI } from '../lib/invitations'
+import { invitationErrorMessage, invitationsAPI, type AttendancePlan } from '../lib/invitations'
 import {
   buildPeople,
   filterPeople,
@@ -232,7 +232,7 @@ export default function PeoplePage() {
   const closeSheet = useCallback(() => setOpenKey(null), [])
 
   const createInvitation = useMutation({
-    mutationFn: ({ email, roleKey }: { email: string; roleKey: string }) => invitationsAPI.create(email, roleKey),
+    mutationFn: ({ email, roleKey, plan }: { email: string; roleKey: string; plan?: AttendancePlan }) => invitationsAPI.create(email, roleKey, plan),
     onSuccess: (inv) => {
       setInviteOpen(false)
       setPageError(null)
@@ -435,9 +435,11 @@ export default function PeoplePage() {
         <InviteDialog
           roles={roles.data ?? []}
           people={people}
+          sectors={sheetSectors}
+          canPlan={canManageAgents}
           isSaving={createInvitation.isPending}
           onCancel={() => setInviteOpen(false)}
-          onConfirm={(email, roleKey) => createInvitation.mutate({ email, roleKey })}
+          onConfirm={(email, roleKey, plan) => createInvitation.mutate({ email, roleKey, plan })}
           onOpenPerson={openPerson}
         />
       )}

@@ -194,7 +194,19 @@ func main() {
 		srv.RegisterDeviceAdminHandlers(dbPool, tenancyadapters.NewDeviceAdminHandler(dbPool, authn.NewPostgresDeviceStore(dbPool), auditadapters.NewPostgresAuditEventRepository(dbPool)))
 	}
 	srv.RegisterPresenceHandlers(dbPool)
-	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender)
+	// ADR-0046: with real sign-in, invitations create (or refresh) the invitee's Keycloak account so the e-mailed password works.
+	var invitationLogins *tenancyadapters.KeycloakLogins
+	if cfg.InviteProvisionLogin {
+		realm := tenancyadapters.RealmFromIssuer(cfg.AuthIssuer)
+		switch {
+		case cfg.AuthMode != "oidc" || realm == "" || cfg.KeycloakProvisionerSecret == "":
+			log.Printf("invitations: OMNIRA_INVITE_PROVISION_LOGIN ignored (needs OIDC mode, a /realms/ issuer and OMNIRA_KEYCLOAK_PROVISIONER_SECRET)")
+		default:
+			invitationLogins = tenancyadapters.NewKeycloakLogins(cfg.KeycloakAdminURL, realm, cfg.KeycloakProvisionerClientID, cfg.KeycloakProvisionerSecret)
+			log.Printf("invitations: sign-in accounts are prepared at Keycloak realm %s by client %s", realm, cfg.KeycloakProvisionerClientID)
+		}
+	}
+	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender, invitationLogins)
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)
 	if cfg.HubAPIEnabled {
 		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)

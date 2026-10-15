@@ -21,6 +21,11 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_AUTH_COOKIE_SECURE: ${OMNIRA_AUTH_COOKIE_SECURE-false}
   # Seconds without activity before the OMNIRA session ends (unset = 7200). The Keycloak realm's "SSO Session Idle" must be at least as long.
   OMNIRA_SESSION_IDLE_TIMEOUT: ${OMNIRA_SESSION_IDLE_TIMEOUT-}
+  # ADR-0046: invitations create the invitee's Keycloak account (OIDC only; true + secret). The client may only view and manage users.
+  OMNIRA_INVITE_PROVISION_LOGIN: ${OMNIRA_INVITE_PROVISION_LOGIN-}
+  OMNIRA_KEYCLOAK_ADMIN_URL: ${OMNIRA_KEYCLOAK_ADMIN_URL-}
+  OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID: ${OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID-}
+  OMNIRA_KEYCLOAK_PROVISIONER_SECRET: ${OMNIRA_KEYCLOAK_PROVISIONER_SECRET-}
   # Native app credentials (ADR-0022). Off unless ENABLED=true; needs OIDC mode and a redirect URI allowlist (comma separated).
   OMNIRA_AUTH_MOBILE_ENABLED: ${OMNIRA_AUTH_MOBILE_ENABLED-}
   OMNIRA_AUTH_MOBILE_CLIENT_ID: ${OMNIRA_AUTH_MOBILE_CLIENT_ID-}

@@ -61,6 +61,22 @@ type InvitationsHandler struct {
 	// verdade está configurado — NoopInvitationSender não conta. Sem isso,
 	// CreateInvitation persistiria um convite que ninguém jamais recebe.
 	deliveryAvailable bool
+	// login prepares the invitee's sign-in account at the identity provider (ADR-0046); nil = OMNIRA does not touch the IdP.
+	login loginPreparer
+}
+
+// loginPreparer is KeycloakLogins as seen by the invitations: Prepare makes the temporary password of the e-mail work (creating the
+// account, or refreshing one OMNIRA created that was never used) and says whether it did; Disable turns off such an unused account.
+type loginPreparer interface {
+	Prepare(ctx context.Context, email, tempPassword string) (passwordSet bool, err error)
+	Disable(ctx context.Context, email string) error
+}
+
+// WithLoginPreparer makes invitations prepare the invitee's sign-in account, so the temporary password in the e-mail is the one the
+// identity provider accepts.
+func (h *InvitationsHandler) WithLoginPreparer(p loginPreparer) *InvitationsHandler {
+	h.login = p
+	return h
 }
 
 func NewInvitationsHandler(pool *pgxpool.Pool, audit auditports.AuditEventRepository, sender InvitationSender, devExposeInviteURL bool, webBaseURL string) *InvitationsHandler {
@@ -96,6 +112,10 @@ type Invitation struct {
 	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	InviteURL  string     `json:"invite_url,omitempty"` // path relativo (sem host); apenas dev/lab, apenas na resposta de criação
+	// ADR-0046: what the person will do once they accept: attend, in which queues of this tenant, with what capacity in each.
+	Attends       bool        `json:"attends"`
+	QueueIDs      []uuid.UUID `json:"queue_ids"`
+	QueueCapacity int         `json:"queue_capacity"`
 }
 
 // effectiveStatus deriva "expired" de status=pending + expires_at no passado.
@@ -121,6 +141,70 @@ func generateInvitationToken() (raw string, hash string, err error) {
 type CreateInvitationRequest struct {
 	Email   string `json:"email"`
 	RoleKey string `json:"role_key"`
+	// Optional attendance plan (ADR-0046), applied when the invitation is accepted.
+	Attends       bool        `json:"attends,omitempty"`
+	QueueIDs      []uuid.UUID `json:"queue_ids,omitempty"`
+	QueueCapacity int         `json:"queue_capacity,omitempty"`
+}
+
+const maxPlannedQueues = 50
+
+// planFrom validates the attendance plan of a new invitation. Choosing who attends is agent.manage territory, so a plan also needs it.
+// Queues must belong to this tenant (RLS hides the others, so a foreign id simply does not count).
+func (h *InvitationsHandler) planFrom(r *http.Request, q platformdb.Querier, tenantID uuid.UUID, req CreateInvitationRequest) (Invitation, int, string) {
+	plan := Invitation{Attends: req.Attends, QueueIDs: []uuid.UUID{}, QueueCapacity: 1}
+	if !req.Attends {
+		if len(req.QueueIDs) > 0 {
+			return plan, http.StatusBadRequest, "queue_ids require attends=true"
+		}
+		return plan, 0, ""
+	}
+	if _, err := h.authorize(r, "agent.manage"); err != nil {
+		return plan, http.StatusForbidden, "choosing who attends needs agent.manage"
+	}
+	if req.QueueCapacity != 0 {
+		if req.QueueCapacity < 1 || req.QueueCapacity > 100 {
+			return plan, http.StatusBadRequest, "queue_capacity must be between 1 and 100"
+		}
+		plan.QueueCapacity = req.QueueCapacity
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, id := range req.QueueIDs {
+		if id != uuid.Nil && !seen[id] {
+			seen[id] = true
+			plan.QueueIDs = append(plan.QueueIDs, id)
+		}
+	}
+	if len(plan.QueueIDs) > maxPlannedQueues {
+		return plan, http.StatusBadRequest, "too many queues"
+	}
+	if len(plan.QueueIDs) > 0 {
+		var found int
+		if err := q.QueryRow(r.Context(), `SELECT count(*) FROM queues WHERE tenant_id=$1 AND id = ANY($2)`, tenantID, plan.QueueIDs).Scan(&found); err != nil {
+			return plan, http.StatusInternalServerError, "failed to check queues"
+		}
+		if found != len(plan.QueueIDs) {
+			return plan, http.StatusUnprocessableEntity, "queue not found in this tenant"
+		}
+	}
+	return plan, 0, ""
+}
+
+// prepareLogin makes the temporary password of the e-mail work at the identity provider (ADR-0046). Without a preparer the e-mail keeps
+// the password as before; with one, the password goes in the e-mail only when the account was created or refreshed for this invitation.
+func (h *InvitationsHandler) prepareLogin(ctx context.Context, inv Invitation, tempPassword string) (includePassword bool, outcome string, err error) {
+	if h.login == nil {
+		return true, "", nil
+	}
+	set, err := h.login.Prepare(ctx, inv.Email, tempPassword)
+	if err != nil {
+		log.Printf("tenancy: invitation %s sign-in account not prepared: %v", inv.ID, err)
+		return false, "failed", err
+	}
+	if set {
+		return true, "ready", nil
+	}
+	return false, "existing", nil
 }
 
 // CreateInvitation — POST /api/v1/tenants/{tenant_id}/team/invitations
@@ -181,6 +265,11 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, errOtherInstanceMessage, http.StatusConflict)
 		return
 	}
+	plan, status, reason := h.planFrom(r, q, tc.TenantID, req)
+	if status != 0 {
+		http.Error(w, reason, status)
+		return
+	}
 
 	// Política de duplicidade: no máximo um pending por (tenant, email). Um
 	// novo convite substitui o anterior — revoga e insere na mesma
@@ -206,10 +295,12 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 	expiresAt := time.Now().UTC().Add(invitationTTL)
 	err = q.QueryRow(r.Context(), `
 		WITH role AS (SELECT id, name FROM roles WHERE key=$1 AND tenant_id IS NULL)
-		INSERT INTO membership_invitations (tenant_id, email, role_id, token_hash, temporary_password_hash, created_by, expires_at)
-		SELECT $2, $3, role.id, $4, $5, $6, $7 FROM role
+		INSERT INTO membership_invitations (tenant_id, email, role_id, token_hash, temporary_password_hash, created_by, expires_at,
+		                                    attends, queue_ids, queue_capacity)
+		SELECT $2, $3, role.id, $4, $5, $6, $7, $8, $9, $10 FROM role
 		RETURNING id, (SELECT id FROM role), (SELECT name FROM role), created_at`,
 		req.RoleKey, tc.TenantID, email, hash, tempPasswordHash, tc.ActorID, expiresAt,
+		plan.Attends, plan.QueueIDs, plan.QueueCapacity,
 	).Scan(&inv.ID, &roleID, &inv.RoleName, &inv.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "role is not assignable in this tenant", http.StatusUnprocessableEntity)
@@ -223,9 +314,16 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 	inv.RoleKey = req.RoleKey
 	inv.Status = "pending"
 	inv.ExpiresAt = expiresAt
+	inv.Attends, inv.QueueIDs, inv.QueueCapacity = plan.Attends, plan.QueueIDs, plan.QueueCapacity
 	_ = q.QueryRow(r.Context(), `SELECT COALESCE(email,'') FROM users WHERE id=$1`, tc.ActorID).Scan(&inv.CreatedBy)
 
-	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationCreated, inv.ID, email, req.RoleKey)
+	includePassword, login, loginErr := h.prepareLogin(r.Context(), inv, tempPassword)
+	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationCreated, inv.ID, email, req.RoleKey, planAudit(inv, login))
+	if loginErr != nil {
+		// The invitation stays pending; "Reenviar" prepares the account again and sends the e-mail.
+		http.Error(w, "invitation created but the sign-in account could not be prepared; use resend", http.StatusBadGateway)
+		return
+	}
 
 	acceptPath := "/invite/" + raw
 	if h.devExposeInviteURL {
@@ -234,7 +332,7 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 		// gate de config.DevAuthActive do login). Nunca aparece em list.
 		inv.InviteURL = acceptPath
 	}
-	if err := h.deliver(r.Context(), q, tc, &inv, raw, tempPassword); err != nil {
+	if err := h.deliver(r.Context(), q, tc, &inv, raw, tempPassword, includePassword); err != nil {
 		http.Error(w, "invitation created but the e-mail could not be delivered; use resend", http.StatusBadGateway)
 		return
 	}
@@ -253,7 +351,7 @@ func (h *InvitationsHandler) ListInvitations(w http.ResponseWriter, r *http.Requ
 	}
 	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
 		SELECT i.id, i.email, r.key, r.name, i.status, i.expires_at, i.created_at, i.sent_at,
-		       i.accepted_at, i.revoked_at, COALESCE(u.email, '')
+		       i.accepted_at, i.revoked_at, COALESCE(u.email, ''), i.attends, i.queue_ids, i.queue_capacity
 		FROM membership_invitations i
 		JOIN roles r ON r.id = i.role_id
 		JOIN users u ON u.id = i.created_by
@@ -269,7 +367,8 @@ func (h *InvitationsHandler) ListInvitations(w http.ResponseWriter, r *http.Requ
 	for rows.Next() {
 		var inv Invitation
 		if err := rows.Scan(&inv.ID, &inv.Email, &inv.RoleKey, &inv.RoleName, &inv.Status,
-			&inv.ExpiresAt, &inv.CreatedAt, &inv.SentAt, &inv.AcceptedAt, &inv.RevokedAt, &inv.CreatedBy); err != nil {
+			&inv.ExpiresAt, &inv.CreatedAt, &inv.SentAt, &inv.AcceptedAt, &inv.RevokedAt, &inv.CreatedBy,
+			&inv.Attends, &inv.QueueIDs, &inv.QueueCapacity); err != nil {
 			http.Error(w, "failed to read invitations", http.StatusInternalServerError)
 			return
 		}
@@ -319,7 +418,14 @@ func (h *InvitationsHandler) RevokeInvitation(w http.ResponseWriter, r *http.Req
 	_ = platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
 		`SELECT email FROM membership_invitations WHERE id=$1`, invitationID).Scan(&email)
 
-	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationRevoked, invitationID, email, "")
+	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationRevoked, invitationID, email, "", nil)
+	// An account OMNIRA created for this invitation and nobody used is turned off (a later invitation turns it back on). Best effort:
+	// the invitation is cancelled either way.
+	if h.login != nil && email != "" {
+		if err := h.login.Disable(r.Context(), email); err != nil {
+			log.Printf("tenancy: invitation %s cancelled; unused sign-in account not disabled: %v", invitationID, err)
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -327,9 +433,12 @@ func (h *InvitationsHandler) RevokeInvitation(w http.ResponseWriter, r *http.Req
 // auth) não há e-mail: o admin copia o invite_url. Falha do provedor vira erro para o
 // chamador responder 502; o convite continua pending com sent_at nulo e pode ser reenviado.
 // O log traz só o id do convite — nunca o token, o link, senha nem o corpo do erro do provedor.
-func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, tc *domain.TenantContext, inv *Invitation, raw, tempPassword string) error {
+func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, tc *domain.TenantContext, inv *Invitation, raw, tempPassword string, includePassword bool) error {
 	if isNoopSender(h.sender) {
 		return nil
+	}
+	if !includePassword {
+		tempPassword = "" // the person signs in with the account they already have
 	}
 	var tenantName, inviter string
 	_ = q.QueryRow(ctx, `SELECT COALESCE(legal_name,'') FROM tenants WHERE id=$1`, tc.TenantID).Scan(&tenantName)
@@ -408,10 +517,10 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 	var inv Invitation
 	var status string
 	err = q.QueryRow(r.Context(), `
-		SELECT i.id, i.email, r.key, r.name, i.status, i.created_at
+		SELECT i.id, i.email, r.key, r.name, i.status, i.created_at, i.attends, i.queue_ids, i.queue_capacity
 		FROM membership_invitations i JOIN roles r ON r.id = i.role_id
 		WHERE i.id=$1 AND i.tenant_id=$2 FOR UPDATE OF i`, invitationID, tc.TenantID,
-	).Scan(&inv.ID, &inv.Email, &inv.RoleKey, &inv.RoleName, &status, &inv.CreatedAt)
+	).Scan(&inv.ID, &inv.Email, &inv.RoleKey, &inv.RoleName, &status, &inv.CreatedAt, &inv.Attends, &inv.QueueIDs, &inv.QueueCapacity)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "invitation not found", http.StatusNotFound)
 		return
@@ -457,12 +566,17 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	inv.Status = "pending"
-	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationResent, inv.ID, inv.Email, inv.RoleKey)
+	includePassword, login, loginErr := h.prepareLogin(r.Context(), inv, tempPassword)
+	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationResent, inv.ID, inv.Email, inv.RoleKey, planAudit(inv, login))
+	if loginErr != nil {
+		http.Error(w, "invitation reissued but the sign-in account could not be prepared; try again", http.StatusBadGateway)
+		return
+	}
 
 	if h.devExposeInviteURL {
 		inv.InviteURL = "/invite/" + raw
 	}
-	if err := h.deliver(r.Context(), q, tc, &inv, raw, tempPassword); err != nil {
+	if err := h.deliver(r.Context(), q, tc, &inv, raw, tempPassword, includePassword); err != nil {
 		http.Error(w, "invitation reissued but the e-mail could not be delivered; try again", http.StatusBadGateway)
 		return
 	}
@@ -490,11 +604,27 @@ func (h *InvitationsHandler) authorize(r *http.Request, permission string) (*dom
 	return tc, nil
 }
 
-func (h *InvitationsHandler) recordInvitation(ctx context.Context, tc *domain.TenantContext, action auditdomain.AuditAction, invitationID uuid.UUID, email, roleKey string) {
+// planAudit is what the audit trail keeps about the attendance plan and the sign-in account (never the password or the token).
+func planAudit(inv Invitation, login string) map[string]interface{} {
+	meta := map[string]interface{}{}
+	if inv.Attends {
+		meta["attends"] = true
+		meta["queue_count"] = len(inv.QueueIDs)
+	}
+	if login != "" {
+		meta["login"] = login
+	}
+	return meta
+}
+
+func (h *InvitationsHandler) recordInvitation(ctx context.Context, tc *domain.TenantContext, action auditdomain.AuditAction, invitationID uuid.UUID, email, roleKey string, extra map[string]interface{}) {
 	if h.audit == nil {
 		return
 	}
 	meta := map[string]interface{}{}
+	for k, v := range extra {
+		meta[k] = v
+	}
 	if roleKey != "" {
 		meta["role_key"] = roleKey
 	}
@@ -632,11 +762,14 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		var email, status, roleKey, tempPasswordHash string
 		var roleID uuid.UUID
 		var expiresAt time.Time
+		var plan Invitation
 		err := q.QueryRow(ctx, `
-			SELECT i.id, i.tenant_id, i.email, i.status, i.expires_at, i.role_id, i.temporary_password_hash, r.key
+			SELECT i.id, i.tenant_id, i.email, i.status, i.expires_at, i.role_id, i.temporary_password_hash, r.key,
+			       i.attends, i.queue_ids, i.queue_capacity
 			FROM membership_invitations i JOIN roles r ON r.id = i.role_id
 			WHERE i.token_hash = $1 FOR UPDATE OF i`, hash,
-		).Scan(&invitationID, &tenantID, &email, &status, &expiresAt, &roleID, &tempPasswordHash, &roleKey)
+		).Scan(&invitationID, &tenantID, &email, &status, &expiresAt, &roleID, &tempPasswordHash, &roleKey,
+			&plan.Attends, &plan.QueueIDs, &plan.QueueCapacity)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errInvitationNotFound
 		}
@@ -703,18 +836,25 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 		// do convite. Se já estiver ativa, o papel atual é preservado: um convite não
 		// rebaixa nem promove quem já é membro (isso é PATCH /team, com o invariante do
 		// último admin).
-		if _, err := q.Exec(ctx, `
+		var membershipID uuid.UUID
+		if err := q.QueryRow(ctx, `
 			INSERT INTO memberships (id, tenant_id, user_id, role_id, status)
 			VALUES ($1, $2, $3, $4, 'active')
 			ON CONFLICT (tenant_id, user_id)
 			DO UPDATE SET role_id = CASE WHEN memberships.status = 'active' THEN memberships.role_id ELSE EXCLUDED.role_id END,
-			              status = 'active', updated_at = now()`,
-			uuid.New(), tenantID, principal.UserID, roleID); err != nil {
+			              status = 'active', updated_at = now()
+			RETURNING id`,
+			uuid.New(), tenantID, principal.UserID, roleID).Scan(&membershipID); err != nil {
 			return err
+		}
+		if plan.Attends {
+			if err := applyAttendancePlan(ctx, q, tenantID, membershipID, principal.UserID, plan.QueueIDs, plan.QueueCapacity); err != nil {
+				return err
+			}
 		}
 
 		tc := &domain.TenantContext{TenantID: tenantID, ActorID: principal.UserID}
-		h.recordInvitation(ctx, tc, auditdomain.ActionInvitationAccepted, invitationID, email, roleKey)
+		h.recordInvitation(ctx, tc, auditdomain.ActionInvitationAccepted, invitationID, email, roleKey, planAudit(plan, ""))
 		return nil
 	})
 
@@ -738,6 +878,31 @@ func (h *InvitationsHandler) AcceptInvitation(w http.ResponseWriter, r *http.Req
 	default:
 		writeTeamJSON(w, map[string]any{"tenant_id": tenantID})
 	}
+}
+
+// applyAttendancePlan makes the new member an attendant as POST /agents does (profile active; somebody with no queue of their own joins
+// the company's default overflow queue, ADR-0044) and adds the queues chosen in the invitation that still exist in this tenant.
+func applyAttendancePlan(ctx context.Context, q platformdb.Querier, tenantID, membershipID, userID uuid.UUID, queueIDs []uuid.UUID, capacity int) error {
+	if _, err := q.Exec(ctx, `
+		INSERT INTO agent_profiles (tenant_id, membership_id, status) VALUES ($1, $2, 'active')
+		ON CONFLICT (tenant_id, membership_id) DO UPDATE SET status = 'active', updated_at = now()`, tenantID, membershipID); err != nil {
+		return err
+	}
+	if len(queueIDs) > 0 {
+		if _, err := q.Exec(ctx, `
+			INSERT INTO queue_members (tenant_id, queue_id, user_id, active, available, capacity)
+			SELECT q.tenant_id, q.id, $3, true, true, $4 FROM queues q WHERE q.tenant_id = $1 AND q.id = ANY($2)
+			ON CONFLICT (tenant_id, queue_id, user_id) DO NOTHING`, tenantID, queueIDs, userID, capacity); err != nil {
+			return err
+		}
+	}
+	_, err := q.Exec(ctx, `
+		INSERT INTO queue_members (tenant_id, queue_id, user_id, active, available, capacity)
+		SELECT t.id, t.default_overflow_queue_id, $2, true, true, 5 FROM tenants t
+		WHERE t.id = $1 AND t.default_overflow_queue_id IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM queue_members qm WHERE qm.tenant_id = t.id AND qm.user_id = $2)
+		ON CONFLICT (tenant_id, queue_id, user_id) DO NOTHING`, tenantID, userID)
+	return err
 }
 
 var (
