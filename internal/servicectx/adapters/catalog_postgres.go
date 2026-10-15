@@ -133,11 +133,14 @@ func (r *PostgresRepository) ReserveSessionPrefix(ctx context.Context, prefix st
 	if err != nil {
 		return err
 	}
-	var got string
-	err = r.q(ctx).QueryRow(ctx, `
-		INSERT INTO service_counters (tenant_id, kind, prefix, last_value) VALUES ($1, 'session', $2, 0)
-		ON CONFLICT (tenant_id, kind) DO UPDATE SET prefix = EXCLUDED.prefix, updated_at = now() WHERE service_counters.last_value = 0
-		RETURNING prefix`, tenant, prefix).Scan(&got)
+	// a prefix of another company is a unique violation: under a savepoint, so the caller's transaction stays usable
+	err = r.InSavepoint(ctx, func(ctx context.Context) error {
+		var got string
+		return r.q(ctx).QueryRow(ctx, `
+			INSERT INTO service_counters (tenant_id, kind, prefix, last_value) VALUES ($1, 'session', $2, 0)
+			ON CONFLICT (tenant_id, kind) DO UPDATE SET prefix = EXCLUDED.prefix, updated_at = now() WHERE service_counters.last_value = 0
+			RETURNING prefix`, tenant, prefix).Scan(&got)
+	})
 	if errors.Is(err, pgx.ErrNoRows) { // the row stands with protocols already issued: only the same prefix is a (harmless) repeat
 		cur, _, _, cerr := r.SessionPrefix(ctx)
 		if cerr != nil {

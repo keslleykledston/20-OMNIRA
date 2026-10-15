@@ -5,10 +5,12 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/platform/untrusted"
+	"golang.org/x/text/unicode/norm"
 )
 
 type SessionStatus string
@@ -356,17 +358,28 @@ func PrefixCandidates(name string) []string {
 	return out
 }
 
-// foldAccents maps the Latin letters with diacritics a Brazilian company name carries to their base letter.
+// foldAccents drops the marks of accented letters (Á, ç, Č, Å...) by decomposing them, and maps the few Latin letters that do not decompose.
 func foldAccents(s string) string {
-	const from = "ÁÀÂÃÄáàâãäÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÕÖóòôõöÚÙÛÜúùûüÇçÑñ"
-	const to = "AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuCcNn"
-	fr, tr := []rune(from), []rune(to)
 	return strings.Map(func(r rune) rune {
-		for i, f := range fr {
-			if f == r {
-				return tr[i]
-			}
+		switch r {
+		case 'Ł':
+			return 'L'
+		case 'ł':
+			return 'l'
+		case 'Ø':
+			return 'O'
+		case 'ø':
+			return 'o'
+		case 'Đ', 'Ð':
+			return 'D'
+		case 'đ', 'ð':
+			return 'd'
+		case 'ß':
+			return 's'
+		}
+		if unicode.Is(unicode.Mn, r) {
+			return -1
 		}
 		return r
-	}, s)
+	}, norm.NFD.String(s))
 }

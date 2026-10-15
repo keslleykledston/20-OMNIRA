@@ -14,7 +14,7 @@ Branch `feat/omnira-service-context-operations` (12 commits sobre `main` @ `26e4
 | 6 | 5 nós do Flow Builder; 4 ferramentas de IA (lê / propõe, pessoa aprova); métricas `omnira_service_*` | `internal/flows`, `internal/intelligence`, `internal/servicectx/adapters/{flow_effects,ai_bridge,metrics}.go` |
 | 7 | Documentação 09–13, matriz do Hub, riscos residuais | `docs/service-context/` |
 
-Flags (todas **desligadas** por padrão): `OMNIRA_SERVICE_CONTEXT_ENABLED`, `OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED`, `OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED`.
+Flags (todas **desligadas** por padrão): `OMNIRA_SERVICE_CONTEXT_ENABLED`, `OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED`, `OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED`, `OMNIRA_SERVICE_AUTO_OPEN_ON_CLAIM_ENABLED`.
 
 ## Validation Summary
 

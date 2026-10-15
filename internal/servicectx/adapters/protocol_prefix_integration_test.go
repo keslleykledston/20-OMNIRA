@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -233,5 +234,89 @@ func TestADefaultServiceReopensWithinTwentyFourHoursAndNotAfter(t *testing.T) {
 	soon, soonVersion := closeIt(23)
 	if r, err := s.reopen(s.svc, s.agent, soon.ID, soonVersion); err != nil || r.Status != domain.SessionInProgress {
 		t.Fatalf("23 hours after closing: %v", err)
+	}
+}
+
+// Whoever manages the company configures the prefix even without service.create (the owner of the company is not necessarily an attendant).
+func TestSomeoneWhoOnlyManagesTheCompanyCanReserveAndChangeThePrefix(t *testing.T) {
+	s := newStack(t)
+	manager, role := uuid.New(), uuid.New()
+	s.exec(`INSERT INTO roles(id, tenant_id, key, name) VALUES($1,$2,'manager-only','Manager only')`, role, s.env.TenantA)
+	s.exec(`INSERT INTO role_permissions(role_id, permission_key) VALUES($1,'tenant.manage')`, role)
+	s.exec(`INSERT INTO users(id, external_subject, email, status) VALUES($1,$2,$3,'active')`, manager, manager.String(), manager.String()+"@invalid")
+	s.exec(`INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, s.env.TenantA, manager, role)
+	t.Cleanup(func() { _, _ = s.env.Seed.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, manager) })
+	set := func(prefix string) error {
+		return s.try(manager, s.env.TenantA, func(ctx context.Context) error { _, e := s.catalog.SetProtocolPrefix(ctx, prefix); return e })
+	}
+	stored := func() string {
+		var p string
+		if err := s.env.Seed.QueryRow(context.Background(), `SELECT prefix FROM service_counters WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA).Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if err := set("MGA"); err != nil || stored() != "MGA" {
+		t.Fatalf("first reservation: %v %s", err, stored())
+	}
+	if err := set("MGB"); err != nil || stored() != "MGB" {
+		t.Fatalf("changing the reservation needs tenant.manage and nothing else: %v %s", err, stored())
+	}
+}
+
+func TestACounterMovesForwardByOneNeverByJumps(t *testing.T) {
+	s := newStack(t)
+	conv, _ := s.conversation()
+	s.mustOpen(s.agent, conv) // 1001
+	raw := func(sql string) error {
+		return s.try(s.agent, s.env.TenantA, func(ctx context.Context) error { return execInSession(ctx, sql, s.env.TenantA) })
+	}
+	if err := raw(`UPDATE service_counters SET last_value = last_value + 5 WHERE tenant_id = $1 AND kind = 'session'`); err == nil || !strings.Contains(err.Error(), "forward by one") {
+		t.Fatalf("a jump is refused: %v", err)
+	}
+	if err := raw(`UPDATE service_counters SET last_value = last_value + 1 WHERE tenant_id = $1 AND kind = 'session'`); err != nil {
+		t.Fatalf("one step is what the application does: %v", err)
+	}
+}
+
+// A refused prefix must not poison the transaction of whoever asked (the unique violation runs under a savepoint).
+func TestARefusedPrefixLeavesTheCallersTransactionUsable(t *testing.T) {
+	s := newStack(t)
+	if err := s.try(s.env.UserB, s.env.TenantB, func(ctx context.Context) error { _, e := s.catalog.SetProtocolPrefix(ctx, "SVP"); return e }); err != nil {
+		t.Fatal(err)
+	}
+	err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) error {
+		if _, e := s.catalog.SetProtocolPrefix(ctx, "SVP"); !errors.Is(e, domain.ErrPrefixTaken) {
+			return errors.New("expected ErrPrefixTaken, got " + e.Error())
+		}
+		_, e := s.catalog.SetProtocolPrefix(ctx, "SVQ") // same transaction, right after the refusal
+		return e
+	})
+	if err != nil {
+		t.Fatalf("the transaction survives a taken prefix: %v", err)
+	}
+}
+
+// Two companies with the same name opening their first protocol at the same instant end up with different prefixes.
+func TestTwoCompaniesWithTheSameNameGetDifferentPrefixesEvenAtTheSameInstant(t *testing.T) {
+	s := newStack(t)
+	s.nameTenants("Race Telecom", "Race Telecom")
+	convA, _ := s.conversation()
+	convB, _ := s.env.SeedConversation(t, s.env.TenantB, "none")
+	var wg sync.WaitGroup
+	var a, b *domain.Session
+	var ea, eb error
+	wg.Add(2)
+	go func() { defer wg.Done(); a, ea = s.openIn(s.env.TenantA, s.agent, convA) }()
+	go func() { defer wg.Done(); b, eb = s.openIn(s.env.TenantB, s.env.UserB, convB) }()
+	wg.Wait()
+	if ea != nil || eb != nil {
+		t.Fatalf("both open: %v %v", ea, eb)
+	}
+	if a.Protocol == b.Protocol || !strings.HasSuffix(a.Protocol, "-1001") || !strings.HasSuffix(b.Protocol, "-1001") {
+		t.Fatalf("different prefixes, both numbering from 1001: %s %s", a.Protocol, b.Protocol)
+	}
+	if got := []string{a.Protocol, b.Protocol}; !(got[0] == "RAC-1001" || got[1] == "RAC-1001") {
+		t.Fatalf("one of them has the first choice: %v", got)
 	}
 }

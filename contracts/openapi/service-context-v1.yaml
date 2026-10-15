@@ -26,7 +26,7 @@ paths:
       description: |
         Needs `service.create`. With `conversation_id` the contact comes from the conversation and the conversation's ACTIVE session is returned when it already
         has one (at most one is active at a time; many follow one another). Without a conversation it logs an attendance by another channel (a phone call).
-        The protocol (`AT-<n>`) is unique per company and allocated in the same transaction. A conversation that is closed, internal or not visible cannot have one.
+        The protocol (`<PREFIX>-<n>`, e.g. `KTG-1001`: the company's own 2-6 capital letters, numbers from 1001) is unique per company and allocated in the same transaction. A conversation that is closed, internal or not visible cannot have one.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 8, maxLength: 128 } }
@@ -150,7 +150,7 @@ paths:
       summary: Reopen a closed or abandoned session (narrow exception)
       description: |
         Needs `service.close` and `If-Match`. Only when the conversation is still open (a closed conversation is final, ADR-0020), the session is the
-        conversation's latest, no other one is active, and the reopen window (72 h) has not passed. The protocol is kept; a new episode starts, so the time
+        conversation's latest, no other one is active, and the reopen window (24 h) has not passed. The protocol is kept; a new episode starts, so the time
         spent closed is not absorbed. A reason is required.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
@@ -967,7 +967,7 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        protocol: { type: string, example: AT-10482 }
+        protocol: { type: string, example: KTG-1482 }
         external_protocol: { type: string, nullable: true }
         conversation_id: { type: string, format: uuid, nullable: true }
         contact_id: { type: string, format: uuid, nullable: true }

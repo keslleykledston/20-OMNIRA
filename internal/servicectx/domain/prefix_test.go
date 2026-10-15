@@ -8,14 +8,16 @@ import (
 
 func TestPrefixCandidatesComeFromTheLettersOfTheName(t *testing.T) {
 	for name, first := range map[string]string{
-		"Veloso Telecom":   "VEL",
-		"INFORR":           "INF",
-		"K3G Solutions":    "KGS", // digits are not letters: the administrator chooses KTG
-		"Conexão São José": "CON",
-		"  ágata   ":       "AGA",
-		"Zé":               "ZEX", // two letters are padded to three
-		"12345":            "ATX", // no letters at all: the default prefix, padded
-		"Ünïcode Ltda":     "UNI",
+		"Veloso Telecom":    "VEL",
+		"INFORR":            "INF",
+		"K3G Solutions":     "KGS", // digits are not letters: the administrator chooses KTG
+		"Conexão São José":  "CON",
+		"  ágata   ":        "AGA",
+		"Zé":                "ZEX", // two letters are padded to three
+		"12345":             "ATX", // no letters at all: the default prefix, padded
+		"Ünïcode Ltda":      "UNI",
+		"Łukasz Ørsted Åre": "LUK",
+		"Čeština Šíp":       "CES",
 	} {
 		got := domain.PrefixCandidates(name)
 		if len(got) == 0 || got[0] != first {
