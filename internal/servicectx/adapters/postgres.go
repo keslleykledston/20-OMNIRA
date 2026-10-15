@@ -500,7 +500,7 @@ func (r *PostgresRepository) SaveReceipt(ctx context.Context, scope, key, reques
 	}
 	var sess, cs, task, rec *uuid.UUID
 	switch scope {
-	case ports.ScopeSessionOpen:
+	case ports.ScopeSessionOpen, ports.ScopeFlowStep:
 		sess = &entityID
 	case ports.ScopeCaseOpen:
 		cs = &entityID
@@ -520,4 +520,15 @@ func (r *PostgresRepository) SaveReceipt(ctx context.Context, scope, key, reques
 // rest of the transaction stays usable.
 func (r *PostgresRepository) InSavepoint(ctx context.Context, fn func(ctx context.Context) error) error {
 	return platformdb.WithSavepoint(ctx, r.pool, fn)
+}
+
+// FlowRunAttends: the run is of this company and attends this conversation. The company comes from the session, never from the arguments.
+func (r *PostgresRepository) FlowRunAttends(ctx context.Context, runID, conversationID uuid.UUID) (bool, error) {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return false, err
+	}
+	var ok bool
+	err = r.q(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM flow_runs WHERE tenant_id = $1 AND id = $2 AND conversation_id = $3)`, tenant, runID, conversationID).Scan(&ok)
+	return ok, err
 }

@@ -46,3 +46,14 @@ Varredura de catálogo (`internal/platform/db/rls_completeness_test.go`): passa 
 ## Hub (Fase 5) e IA (Fase 6)
 
 Pendentes; ver `09-workspace-hub.md` e `10-flow-builder-ai.md` quando escritos. Regra já decidida: `service.request_external` **nunca** delegável e **nunca** executável por IA.
+
+
+## Riscos residuais conhecidos (decisão do dono quando for o caso)
+
+| # | Risco | Estado |
+|---|---|---|
+| R-1 | Uma sessão de **sistema** (worker, fluxo, hook) contorna o RLS: o que impede o dano é o código confiável (predicado `tenant_id` em todo SQL, gatilhos que valem também para o sistema, a fachada de fluxo exigindo run↔conversa). SQL cru dentro de uma sessão de sistema pode forjar o que quiser | modelo de código confiável; testado por mutação onde há defesa; sem defesa adicional possível sem remover o bypass do sistema |
+| R-AI-1 | `POST …/ai/tools/invoke` aceita `proposed_by` do cliente (`"ai"` ou `"agent"`); com `"agent"` a escrita executa direto (como a pessoa), com `"ai"` fica `pending_approval`. Quem usa a rota é sempre uma **pessoa autenticada** (o gateway não distingue um cliente de IA que use o token da pessoa) e nenhum componente de IA do servidor chama `Invoke` com `agent`. Para as ferramentas `service.*` isso significa: executar direto == a pessoa chamando a API REST dela mesma (origem `human`, mesmas chaves). Origem `ai` é "rótulo de proveniência", não fronteira de segurança | **comportamento herdado do ADR-0017 (também vale para `topic.apply_ticket_policy`), fora do escopo desta entrega**; apontado pelo Codex como HIGH (fase 6). Corrigir de verdade exige proveniência do lado servidor no gateway (ex.: chamadas de IA assinadas pelo próprio servidor) — decisão do dono |
+| R-2 | `completed_by_user_id` e demais "atores" de uma sessão de sistema são validados por membership ativa (000152) mas o sistema pode agir "em nome de" quem o código confiável indicar | idem R-1 |
+| R-3 | Testes com `sleep` fixo (episódios, timeline, HTTP) podem ficar frágeis sob carga | aceito; sem falha observada nas execuções registradas |
+| R-4 | Teste de finalização concorrente usa `time.After(700 ms)` para dar tempo à goroutine; testes de lease envelhecem registros artificialmente em vez de simular uma chamada ERP viva | aceito |

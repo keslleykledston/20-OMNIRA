@@ -2,12 +2,15 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/servicectx/domain"
+	"github.com/omnira/omnira/internal/servicectx/ports"
 )
 
 // The flow engine's door into the service context (ADR-0049 phase 6). A flow acts as the SYSTEM (it is not a person: no key is asked, and every event it writes
@@ -23,16 +26,25 @@ type FlowSession struct {
 	Created  bool
 }
 
-func (s *Service) flowCtx(ctx context.Context) (context.Context, error) {
-	ctx = context.WithValue(ctx, flowActorKey{}, true)
+// flowCtx admits a call only from a SYSTEM session (a person cannot act as a flow) AND only for a run that exists in this company and attends this very
+// conversation: the facade cannot know who is calling, but it refuses to act for a run on a conversation that is not the run's, so a caller inside the system
+// cannot sign work as "flow" on an arbitrary conversation.
+func (s *Service) flowCtx(ctx context.Context, conversationID, runID uuid.UUID) (context.Context, error) {
 	c, err := s.who(ctx)
 	if err != nil {
 		return ctx, err
 	}
 	if !c.system {
-		return ctx, domain.ErrForbidden // only the engine's system session is a flow: a person cannot act as one
+		return ctx, domain.ErrForbidden
 	}
-	return ctx, nil
+	ok, err := s.repo.FlowRunAttends(ctx, runID, conversationID)
+	if err != nil {
+		return ctx, err
+	}
+	if !ok {
+		return ctx, domain.ErrForbidden
+	}
+	return context.WithValue(ctx, flowActorKey{}, true), nil
 }
 
 var errNoActiveSession = errors.New("servicectx: the conversation has no active service session")
@@ -41,7 +53,7 @@ func flowKey(runID uuid.UUID, seq int) string { return fmt.Sprintf("flow:%s:%d",
 
 // FlowStart opens the conversation's service session (or returns the one standing).
 func (s *Service) FlowStart(ctx context.Context, conversationID, runID uuid.UUID, seq int) (FlowSession, error) {
-	ctx, err := s.flowCtx(ctx)
+	ctx, err := s.flowCtx(ctx, conversationID, runID)
 	if err != nil {
 		return FlowSession{}, err
 	}
@@ -66,13 +78,25 @@ func (s *Service) flowActive(ctx context.Context, conversationID uuid.UUID) (*do
 	return s.repo.LockSession(ctx, sess.ID)
 }
 
-// FlowClassify puts the session in a category of the company, named by its code. An unknown or inactive code is an error the flow takes on its error port.
-func (s *Service) FlowClassify(ctx context.Context, conversationID uuid.UUID, categoryCode string) error {
-	ctx, err := s.flowCtx(ctx)
+// FlowClassify puts the session in a category of the company, named by its code. An unknown or inactive code is an error the flow takes on its error port. The step
+// leaves a receipt: replayed, it does nothing, even if another session is active by then.
+func (s *Service) FlowClassify(ctx context.Context, conversationID, runID uuid.UUID, seq int, categoryCode string) error {
+	ctx, err := s.flowCtx(ctx, conversationID, runID)
 	if err != nil {
 		return err
 	}
-	return s.ClassifyByCode(ctx, conversationID, categoryCode)
+	hash := fingerprintOf("classify", conversationID.String(), strings.TrimSpace(categoryCode))
+	if rec, err := s.replay(ctx, ports.ScopeFlowStep, flowKey(runID, seq), hash); err != nil || rec != nil {
+		return err
+	}
+	if err := s.ClassifyByCode(ctx, conversationID, categoryCode); err != nil {
+		return err
+	}
+	sess, err := s.flowActive(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+	return s.remember(ctx, ports.ScopeFlowStep, flowKey(runID, seq), hash, sess.ID)
 }
 
 // ClassifyByCode puts the ACTIVE session of the conversation in the category with that code, with the caller's own authority (Patch asks for service.update when
@@ -109,7 +133,7 @@ func (s *Service) ClassifyByCode(ctx context.Context, conversationID uuid.UUID, 
 
 // FlowTask makes a pending task for the attendance. Its origin is "flow" and its idempotency is the step itself.
 func (s *Service) FlowTask(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description string, priority domain.Priority) (uuid.UUID, error) {
-	ctx, err := s.flowCtx(ctx)
+	ctx, err := s.flowCtx(ctx, conversationID, runID)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -132,7 +156,7 @@ func (s *Service) FlowTask(ctx context.Context, conversationID, runID uuid.UUID,
 
 // FlowOpenCase opens a case (ocorrência) from the attendance and returns its number.
 func (s *Service) FlowOpenCase(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description string, priority domain.Priority) (string, error) {
-	ctx, err := s.flowCtx(ctx)
+	ctx, err := s.flowCtx(ctx, conversationID, runID)
 	if err != nil {
 		return "", err
 	}
@@ -150,9 +174,10 @@ func (s *Service) FlowOpenCase(ctx context.Context, conversationID, runID uuid.U
 }
 
 // FlowClose ends the conversation's service session with a result. The CONVERSATION is not touched (that is close_conversation). false = there was no
-// active session, which is not an error: a replayed step, or an attendance that never had one.
-func (s *Service) FlowClose(ctx context.Context, conversationID uuid.UUID, resolutionCode, note string) (bool, error) {
-	ctx, err := s.flowCtx(ctx)
+// active session, or this step already did its work: neither is an error. The step leaves a receipt on the session it closed, so a replay never closes a
+// session that was opened afterwards.
+func (s *Service) FlowClose(ctx context.Context, conversationID, runID uuid.UUID, seq int, resolutionCode, note string) (bool, error) {
+	ctx, err := s.flowCtx(ctx, conversationID, runID)
 	if err != nil {
 		return false, err
 	}
@@ -164,6 +189,12 @@ func (s *Service) FlowClose(ctx context.Context, conversationID uuid.UUID, resol
 	if err != nil {
 		return false, err
 	}
+	hash := fingerprintOf("close", conversationID.String(), in.ResolutionCode, in.Note)
+	if rec, err := s.replay(ctx, ports.ScopeFlowStep, flowKey(runID, seq), hash); err != nil {
+		return false, err
+	} else if rec != nil {
+		return false, nil
+	}
 	sess, err := s.flowActive(ctx, conversationID)
 	if errors.Is(err, errNoActiveSession) {
 		return false, nil
@@ -174,5 +205,16 @@ func (s *Service) FlowClose(ctx context.Context, conversationID uuid.UUID, resol
 	if _, err := s.finish(ctx, c, sess, in, domain.SourceFlow, sess.Version); err != nil {
 		return false, err
 	}
+	if err := s.remember(ctx, ports.ScopeFlowStep, flowKey(runID, seq), hash, sess.ID); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func fingerprintOf(parts ...string) string {
+	h := sha256.New()
+	for _, p := range parts {
+		fmt.Fprintf(h, "%d:%s|", len(p), p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

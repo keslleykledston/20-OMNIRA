@@ -161,3 +161,23 @@ contrato e concessão DESSE Hub (escopo de fila incluído). Corrige a soma entre
 | `follow_up_items` | **chave** `attendance.history` (+ contato visível) | — (restritiva `*_acting_no_insert`) | chaves `followup.resolve` + `attendance.history`, só pendência ABERTA, só para `done`/`dropped` assinada por quem pede (restritiva `*_acting_resolve` exige a chave de resolver também de membro) | — | a política controla linhas e estado final; o gatilho `follow_up_items_acting_columns` trava as colunas (só status, quem, quando e nota mudam no contexto delegado). |
 
 Chaves novas (sem papel de empresa que as receba): `attendance.history` e `followup.resolve`, ambas no domínio `contact` com LEITURA, de propósito (ver ADR-0040 §20).
+
+
+## Service Context & Operations (ADR-0049, migration 000154)
+
+Domínio **`service`** (`service.read` = leitura; `service.create|update|close|assign|link_external` = escrita). `service.request_external` não está em `permission_domains`.
+Leitura delegada por `delegated_tenants('service','read')`; toda tabela abaixo tem política RESTRICTIVE de instância fixada; as marcadas "visível" também exigem que a linha pendure de algo visível ao delegado.
+
+| Tabela | membro (SELECT/INSERT/UPDATE) | delegado | escopo do delegado |
+|---|---|---|---|
+| `service_sessions` | `service.read` / `create` / `update`+`close` (gatilho por tipo de mudança) | sim, por concessão | conversa visível (fila do contrato) |
+| `service_session_episodes` | idem | sim | sessão visível |
+| `service_cases` | `read` / `create` / `update`·`close`·`assign` | sim | sessão de origem ou vinculada visível |
+| `service_case_sessions` | `read` / `update` ou `create` / — | sim | sessão visível |
+| `service_tasks` | `read` / `create` / `update`·`close`·`assign` | sim | sessão **ou** ocorrência visível (contato sozinho **não**) |
+| `context_events` | `read` / `service.*` só `actor_type='user'` com o próprio id / — | sim (leitura; escrita como o próprio usuário) | sessão ou ocorrência visível |
+| `external_records` | `read` / `link_external` / `link_external` | sim | via vínculo ativo pendurado em algo visível |
+| `service_external_links` | `read` / `link_external` / `link_external` | sim | sessão, ocorrência ou tarefa visível |
+| `external_record_requests` | `read` / **`request_external`** / `request_external` | **fechada** (leitura e escrita) | — |
+| `service_categories`, `service_resolution_codes` | `read` / `tenant.manage` | leitura | instância fixada |
+| `service_counters`, `service_command_receipts` | só para tomar número/recibo | leitura (`write` para tomar número) | instância fixada |

@@ -93,9 +93,9 @@ CREATE TABLE external_record_requests (
 CREATE UNIQUE INDEX external_record_requests_blocking_uq ON external_record_requests (tenant_id, session_id, operation) WHERE state IN ('in_flight', 'outcome_unknown');
 CREATE INDEX external_record_requests_state_idx ON external_record_requests (tenant_id, state, created_at) WHERE state IN ('in_flight', 'outcome_unknown');
 
--- the idempotency receipts also cover the inbound updates of the ERP (one delivery id, applied once)
+-- the idempotency receipts also cover the inbound updates of the ERP (one delivery id, applied once) and the steps of a flow that act on a session
 ALTER TABLE service_command_receipts DROP CONSTRAINT service_command_receipts_scope_check;
-ALTER TABLE service_command_receipts ADD CONSTRAINT service_command_receipts_scope_check CHECK (scope IN ('session.open', 'case.open', 'task.create', 'external.update'));
+ALTER TABLE service_command_receipts ADD CONSTRAINT service_command_receipts_scope_check CHECK (scope IN ('session.open', 'case.open', 'task.create', 'external.update', 'flow.step'));
 ALTER TABLE service_command_receipts ADD COLUMN external_record_id UUID;
 ALTER TABLE service_command_receipts ADD FOREIGN KEY (tenant_id, external_record_id) REFERENCES external_records (tenant_id, id);
 ALTER TABLE service_command_receipts DROP CONSTRAINT service_command_receipts_target;
@@ -103,7 +103,9 @@ ALTER TABLE service_command_receipts ADD CONSTRAINT service_command_receipts_tar
   (scope = 'session.open' AND session_id IS NOT NULL AND case_id IS NULL AND task_id IS NULL AND external_record_id IS NULL)
   OR (scope = 'case.open' AND case_id IS NOT NULL AND session_id IS NULL AND task_id IS NULL AND external_record_id IS NULL)
   OR (scope = 'task.create' AND task_id IS NOT NULL AND session_id IS NULL AND case_id IS NULL AND external_record_id IS NULL)
-  OR (scope = 'external.update' AND external_record_id IS NOT NULL AND session_id IS NULL AND case_id IS NULL AND task_id IS NULL));
+  OR (scope = 'external.update' AND external_record_id IS NOT NULL AND session_id IS NULL AND case_id IS NULL AND task_id IS NULL)
+  -- a flow step that acted on a session (classify, close): the step is done, whatever session is active when it is replayed
+  OR (scope = 'flow.step' AND session_id IS NOT NULL AND case_id IS NULL AND task_id IS NULL AND external_record_id IS NULL));
 
 -- row guards -------------------------------------------------------------------------------------------------------------------------------
 -- A record: identity immutable; version and clock advanced here; the provider's update time only moves FORWARD (an out-of-order update never rolls the projection

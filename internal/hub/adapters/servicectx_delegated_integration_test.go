@@ -486,6 +486,15 @@ func TestAContactOnlyTaskIsNotVisibleToADelegate(t *testing.T) {
 	if r := s.call(agent, "A", true, "GET", "/service-tasks?contact_id="+contact, ""); len(r.body["items"].([]any)) != 1 {
 		t.Fatalf("only the task that hangs from the session is listed: %v", r.body)
 	}
+	// the same for an EVENT tied to the contact alone (the owner writes one: a delegate or a member never could without a session or case to hang it from)
+	s.exec(`INSERT INTO context_events(id, tenant_id, event_type, entity_type, entity_id, contact_id, actor_type, occurred_at, note)
+		VALUES(gen_random_uuid(), $1, 'note.added', 'contact', $2, $2, 'system', now(), 'so do contato')`, s.tenant["A"], contact)
+	if r := s.call(agent, "A", true, "GET", "/contacts/"+contact+"/service-timeline", ""); r.code != http.StatusOK || strings.Contains(fmt.Sprint(r.body), "so do contato") {
+		t.Fatalf("a contact-only event is not in the delegate's timeline: %d %v", r.code, r.body)
+	}
+	if r := s.call(member, "A", false, "GET", "/contacts/"+contact+"/service-timeline", ""); !strings.Contains(fmt.Sprint(r.body), "so do contato") {
+		t.Fatalf("the member sees it: %d %v", r.code, r.body)
+	}
 	// and the delegate cannot create one tied to the contact alone
 	if r := s.call(agent, "A", true, "POST", "/service-tasks", fmt.Sprintf(`{"title":"Solta","contact_id":"%s"}`, contact)); r.code == http.StatusCreated {
 		t.Fatalf("a delegate cannot create work that hangs from nothing it sees: %d %v", r.code, r.body)

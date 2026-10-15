@@ -1,6 +1,6 @@
 -- Rolls back ADR-0049 phase 4. DESTRUCTIVE: external records, their links and requests are lost. Roll back 000154+ first.
 SET LOCAL lock_timeout = '5s';
-DELETE FROM service_command_receipts WHERE scope = 'external.update';
+DELETE FROM service_command_receipts WHERE scope IN ('external.update', 'flow.step');
 ALTER TABLE service_command_receipts DROP CONSTRAINT IF EXISTS service_command_receipts_target;
 ALTER TABLE service_command_receipts DROP COLUMN IF EXISTS external_record_id;
 ALTER TABLE service_command_receipts DROP CONSTRAINT IF EXISTS service_command_receipts_scope_check;

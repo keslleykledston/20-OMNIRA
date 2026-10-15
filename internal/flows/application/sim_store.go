@@ -237,7 +237,7 @@ func (f *simEffects) ServiceStart(_ context.Context, _ uuid.UUID, _ uuid.UUID, _
 	f.add("start_service_session", map[string]any{})
 	return "AT-SIM", true, nil
 }
-func (f *simEffects) ServiceClassify(_ context.Context, _ uuid.UUID, code string) error {
+func (f *simEffects) ServiceClassify(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int, code string) error {
 	f.add("classify_service_session", map[string]any{"category": code})
 	return nil
 }
@@ -249,7 +249,7 @@ func (f *simEffects) ServiceOpenCase(_ context.Context, _ uuid.UUID, _ uuid.UUID
 	f.add("open_service_case", map[string]any{"priority": priority})
 	return "OC-SIM", nil
 }
-func (f *simEffects) ServiceClose(_ context.Context, _ uuid.UUID, result, _ string) (bool, error) {
+func (f *simEffects) ServiceClose(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int, result, _ string) (bool, error) {
 	f.add("close_service_session", map[string]any{"result": result})
 	return true, nil
 }

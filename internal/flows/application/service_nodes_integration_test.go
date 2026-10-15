@@ -23,8 +23,8 @@ type serviceFx struct {
 func (s serviceFx) ServiceStart(ctx context.Context, c, r uuid.UUID, q int) (string, bool, error) {
 	return s.real.ServiceStart(ctx, c, r, q)
 }
-func (s serviceFx) ServiceClassify(ctx context.Context, c uuid.UUID, code string) error {
-	return s.real.ServiceClassify(ctx, c, code)
+func (s serviceFx) ServiceClassify(ctx context.Context, c, r uuid.UUID, q int, code string) error {
+	return s.real.ServiceClassify(ctx, c, r, q, code)
 }
 func (s serviceFx) ServiceTask(ctx context.Context, c, r uuid.UUID, q int, title, desc, pr string) error {
 	return s.real.ServiceTask(ctx, c, r, q, title, desc, pr)
@@ -32,8 +32,8 @@ func (s serviceFx) ServiceTask(ctx context.Context, c, r uuid.UUID, q int, title
 func (s serviceFx) ServiceOpenCase(ctx context.Context, c, r uuid.UUID, q int, title, desc, pr string) (string, error) {
 	return s.real.ServiceOpenCase(ctx, c, r, q, title, desc, pr)
 }
-func (s serviceFx) ServiceClose(ctx context.Context, c uuid.UUID, code, note string) (bool, error) {
-	return s.real.ServiceClose(ctx, c, code, note)
+func (s serviceFx) ServiceClose(ctx context.Context, c, r uuid.UUID, q int, code, note string) (bool, error) {
+	return s.real.ServiceClose(ctx, c, r, q, code, note)
 }
 
 func (x *rt) withServiceModule() *adapters.PostgresEffects {
@@ -181,18 +181,120 @@ func TestServiceEffectsAreIdempotentPerStep(t *testing.T) {
 	if n := x.q1(`SELECT count(*) FROM service_tasks WHERE tenant_id=$1`, x.tenant); n != 2 {
 		t.Fatalf("a different step is a different task: %d", n)
 	}
-	// closing twice: the second finds nothing active and says so, without an error
+	// closing twice by the SAME step: the second finds the step done and says so, without an error
 	var closed1, closed2 bool
 	do(func(ctx context.Context) (e error) {
-		closed1, e = real.ServiceClose(ctx, x.conv, "information_provided", "")
+		closed1, e = real.ServiceClose(ctx, x.conv, run, 5, "information_provided", "")
 		return
 	})
 	do(func(ctx context.Context) (e error) {
-		closed2, e = real.ServiceClose(ctx, x.conv, "information_provided", "")
+		closed2, e = real.ServiceClose(ctx, x.conv, run, 5, "information_provided", "")
 		return
 	})
 	if !closed1 || closed2 {
 		t.Fatalf("close: %v then %v", closed1, closed2)
+	}
+}
+
+// A step that classified or closed a session is DONE: replayed after another session was opened, it must not touch the new one.
+func TestAReplayedClassifyOrCloseNeverTouchesALaterSession(t *testing.T) {
+	x := newRT(t)
+	real := x.withServiceModule()
+	x.publish("noop", `{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},{"id":"fin","type":"end"}],"edges":[{"id":"1","source":"start","sourcePort":"next","target":"fin"}]}`)
+	if _, err := x.deliver(x.say("oi"), true); err != nil {
+		t.Fatal(err)
+	}
+	var run uuid.UUID
+	if err := x.env.Seed.QueryRow(context.Background(), `SELECT id FROM flow_runs WHERE conversation_id=$1`, x.conv).Scan(&run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.env.Seed.Exec(context.Background(), `INSERT INTO service_categories(tenant_id, code, label) VALUES($1,'suporte','Suporte'),($1,'outra','Outra')`, x.tenant); err != nil {
+		t.Fatal(err)
+	}
+	do := func(fn func(ctx context.Context) error) {
+		t.Helper()
+		if err := platformdbSystem(context.Background(), x.env, x.tenant, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var first, second string
+	do(func(ctx context.Context) (e error) { first, _, e = real.ServiceStart(ctx, x.conv, run, 1); return })
+	do(func(ctx context.Context) error { return real.ServiceClassify(ctx, x.conv, run, 2, "suporte") })
+	do(func(ctx context.Context) (e error) {
+		_, e = real.ServiceClose(ctx, x.conv, run, 3, "information_provided", "")
+		return
+	})
+	// the attendance goes on: a NEW session opens (another step)
+	do(func(ctx context.Context) (e error) { second, _, e = real.ServiceStart(ctx, x.conv, run, 4); return })
+	if first == second {
+		t.Fatalf("a new session was expected: %s", first)
+	}
+	// ... and the earlier steps are replayed (the engine retried them): nothing happens to the new session
+	do(func(ctx context.Context) error { return real.ServiceClassify(ctx, x.conv, run, 2, "suporte") })
+	var closed bool
+	do(func(ctx context.Context) (e error) {
+		closed, e = real.ServiceClose(ctx, x.conv, run, 3, "information_provided", "")
+		return
+	})
+	if closed {
+		t.Fatal("a replayed close reported that it closed something")
+	}
+	if n := x.q1(`SELECT count(*) FROM service_sessions WHERE conversation_id=$1 AND protocol=$2 AND status IN ('open','in_progress','waiting') AND category_id IS NULL`, x.conv, second); n != 1 {
+		t.Fatalf("the later session was left alone (still active, not classified): %d", n)
+	}
+	// the same step with another content is refused, not silently reused
+	err := platformdbSystem(context.Background(), x.env, x.tenant, func(ctx context.Context) error {
+		return real.ServiceClassify(ctx, x.conv, run, 2, "outra")
+	})
+	if err == nil {
+		t.Fatal("the same step with another category must be refused")
+	}
+}
+
+// The facade acts for a run only on the conversation that run attends (a caller inside the system cannot sign work as "flow" on another conversation).
+func TestTheFlowFacadeRefusesARunThatDoesNotAttendThatConversation(t *testing.T) {
+	x := newRT(t)
+	real := x.withServiceModule()
+	x.publish("noop", `{"schema_version":1,"nodes":[{"id":"start","type":"trigger"},{"id":"fin","type":"end"}],"edges":[{"id":"1","source":"start","sourcePort":"next","target":"fin"}]}`)
+	if _, err := x.deliver(x.say("oi"), true); err != nil {
+		t.Fatal(err)
+	}
+	var run uuid.UUID
+	if err := x.env.Seed.QueryRow(context.Background(), `SELECT id FROM flow_runs WHERE conversation_id=$1`, x.conv).Scan(&run); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := x.env.SeedConversation(t, x.tenant, "bot") // another conversation of the SAME company
+	deny := func(name string, fn func(ctx context.Context) error) {
+		t.Helper()
+		if err := platformdbSystem(context.Background(), x.env, x.tenant, fn); err == nil {
+			t.Errorf("%s: a run that does not attend the conversation must be refused", name)
+		}
+	}
+	deny("start", func(ctx context.Context) error { _, _, e := real.ServiceStart(ctx, other, run, 1); return e })
+	deny("task", func(ctx context.Context) error { return real.ServiceTask(ctx, other, run, 2, "x", "", "normal") })
+	deny("case", func(ctx context.Context) error {
+		_, e := real.ServiceOpenCase(ctx, other, run, 3, "x", "", "normal")
+		return e
+	})
+	deny("classify", func(ctx context.Context) error { return real.ServiceClassify(ctx, other, run, 4, "suporte") })
+	deny("close", func(ctx context.Context) error {
+		_, e := real.ServiceClose(ctx, other, run, 5, "information_provided", "")
+		return e
+	})
+	deny("a run that does not exist", func(ctx context.Context) error { _, _, e := real.ServiceStart(ctx, x.conv, uuid.New(), 1); return e })
+	for _, table := range []string{"service_sessions", "service_tasks", "service_cases"} {
+		if n := x.q1(`SELECT count(*) FROM `+table+` WHERE tenant_id=$1`, x.tenant); n != 0 {
+			t.Errorf("%s: nothing was written: %d", table, n)
+		}
+	}
+	// a run of ANOTHER company is not found either (the company comes from the session)
+	otherConv, _ := x.env.SeedConversation(t, x.env.TenantB, "bot")
+	err := platformdbSystem(context.Background(), x.env, x.env.TenantB, func(ctx context.Context) error {
+		_, _, e := real.ServiceStart(ctx, otherConv, run, 1)
+		return e
+	})
+	if err == nil {
+		t.Error("a run of another company must be refused")
 	}
 }
 

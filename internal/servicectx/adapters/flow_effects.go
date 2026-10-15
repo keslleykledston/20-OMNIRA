@@ -38,8 +38,10 @@ func (f *FlowEffects) ServiceStart(ctx context.Context, conversationID, runID uu
 	return
 }
 
-func (f *FlowEffects) ServiceClassify(ctx context.Context, conversationID uuid.UUID, categoryCode string) error {
-	return f.guard(ctx, func(ctx context.Context) error { return f.svc.FlowClassify(ctx, conversationID, categoryCode) })
+func (f *FlowEffects) ServiceClassify(ctx context.Context, conversationID, runID uuid.UUID, seq int, categoryCode string) error {
+	return f.guard(ctx, func(ctx context.Context) error {
+		return f.svc.FlowClassify(ctx, conversationID, runID, seq, categoryCode)
+	})
 }
 
 func (f *FlowEffects) ServiceTask(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) error {
@@ -58,9 +60,9 @@ func (f *FlowEffects) ServiceOpenCase(ctx context.Context, conversationID, runID
 	return
 }
 
-func (f *FlowEffects) ServiceClose(ctx context.Context, conversationID uuid.UUID, resultCode, note string) (closed bool, err error) {
+func (f *FlowEffects) ServiceClose(ctx context.Context, conversationID, runID uuid.UUID, seq int, resultCode, note string) (closed bool, err error) {
 	err = f.guard(ctx, func(ctx context.Context) error {
-		c, e := f.svc.FlowClose(ctx, conversationID, resultCode, note)
+		c, e := f.svc.FlowClose(ctx, conversationID, runID, seq, resultCode, note)
 		closed = c
 		return e
 	})

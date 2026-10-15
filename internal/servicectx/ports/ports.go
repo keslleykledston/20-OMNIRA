@@ -26,6 +26,7 @@ const (
 	ScopeCaseOpen    = "case.open"
 	ScopeTaskCreate  = "task.create"
 	ScopeExternalUpd = "external.update"
+	ScopeFlowStep    = "flow.step" // a step of a flow that acted on a session (classify, close)
 )
 
 // Receipt is what an Idempotency-Key points to. Exactly one of the ids is set, by scope.
@@ -73,6 +74,8 @@ type Repository interface {
 	// Now is the database clock (clock_timestamp): opened_at and closed_at come from the same clock that stamps messages, never from the app server's.
 	Now(ctx context.Context) (time.Time, error)
 
+	// FlowRunAttends says whether the run exists in this company and attends that conversation (the only runs the flow facade accepts).
+	FlowRunAttends(ctx context.Context, runID, conversationID uuid.UUID) (bool, error)
 	// LockScopedIdempotency serializes requests that carry the same key for one kind of record (transaction-scoped).
 	LockScopedIdempotency(ctx context.Context, scope, key string) error
 	// ReceiptFor reads the receipt an earlier request with this key left (nil when none); SaveReceipt leaves one. The receipt is left WHETHER the request created

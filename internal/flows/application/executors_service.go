@@ -59,7 +59,7 @@ func (classifyServiceSessionExec) Execute(in StepInput) (StepResult, error) {
 	if err != nil {
 		return routeError(in, err)
 	}
-	if err := sf.ServiceClassify(in.Ctx, in.Facts.ID, c.Category); err != nil {
+	if err := sf.ServiceClassify(in.Ctx, in.Facts.ID, in.RunID, in.Seq, c.Category); err != nil {
 		return routeError(in, err)
 	}
 	return StepResult{Port: "next", Output: map[string]any{"category": c.Category}}, nil
@@ -134,7 +134,7 @@ func (closeServiceSessionExec) Execute(in StepInput) (StepResult, error) {
 	if err != nil {
 		return routeError(in, err)
 	}
-	closed, err := sf.ServiceClose(in.Ctx, in.Facts.ID, c.Result, serviceText(in, c.Note))
+	closed, err := sf.ServiceClose(in.Ctx, in.Facts.ID, in.RunID, in.Seq, c.Result, serviceText(in, c.Note))
 	if err != nil {
 		return routeError(in, err)
 	}

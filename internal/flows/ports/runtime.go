@@ -139,10 +139,10 @@ type ConversationCloser interface {
 // module simply does not implement it, and the nodes take their error port.
 type ServiceFlow interface {
 	ServiceStart(ctx context.Context, conversationID, runID uuid.UUID, seq int) (protocol string, created bool, err error)
-	ServiceClassify(ctx context.Context, conversationID uuid.UUID, categoryCode string) error
+	ServiceClassify(ctx context.Context, conversationID, runID uuid.UUID, seq int, categoryCode string) error
 	ServiceTask(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) error
 	ServiceOpenCase(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) (caseNumber string, err error)
-	ServiceClose(ctx context.Context, conversationID uuid.UUID, resultCode, note string) (closed bool, err error)
+	ServiceClose(ctx context.Context, conversationID, runID uuid.UUID, seq int, resultCode, note string) (closed bool, err error)
 }
 
 // ChoiceOption is one tappable option of a menu sent as buttons/list.

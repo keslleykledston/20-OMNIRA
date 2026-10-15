@@ -92,11 +92,11 @@ func (e *PostgresEffects) ServiceStart(ctx context.Context, conversationID, runI
 	return e.service.ServiceStart(ctx, conversationID, runID, seq)
 }
 
-func (e *PostgresEffects) ServiceClassify(ctx context.Context, conversationID uuid.UUID, categoryCode string) error {
+func (e *PostgresEffects) ServiceClassify(ctx context.Context, conversationID, runID uuid.UUID, seq int, categoryCode string) error {
 	if e.service == nil {
 		return errNoService
 	}
-	return e.service.ServiceClassify(ctx, conversationID, categoryCode)
+	return e.service.ServiceClassify(ctx, conversationID, runID, seq, categoryCode)
 }
 
 func (e *PostgresEffects) ServiceTask(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) error {
@@ -113,11 +113,11 @@ func (e *PostgresEffects) ServiceOpenCase(ctx context.Context, conversationID, r
 	return e.service.ServiceOpenCase(ctx, conversationID, runID, seq, title, description, priority)
 }
 
-func (e *PostgresEffects) ServiceClose(ctx context.Context, conversationID uuid.UUID, resultCode, note string) (bool, error) {
+func (e *PostgresEffects) ServiceClose(ctx context.Context, conversationID, runID uuid.UUID, seq int, resultCode, note string) (bool, error) {
 	if e.service == nil {
 		return false, errNoService
 	}
-	return e.service.ServiceClose(ctx, conversationID, resultCode, note)
+	return e.service.ServiceClose(ctx, conversationID, runID, seq, resultCode, note)
 }
 
 func NewPostgresEffects(pool *pgxpool.Pool, sender SystemSender) *PostgresEffects {
