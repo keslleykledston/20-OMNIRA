@@ -119,7 +119,7 @@ func TestOpenAPIDeclaresTheConcurrencyContract(t *testing.T) {
 	if len(ops) < 25 {
 		t.Fatalf("parsed only %d operations", len(ops))
 	}
-	record := regexp.MustCompile(`'(200|201)': \{[^\n]*schema: \{ \$ref: '#/components/schemas/(Session|Case|Task|ExternalRecord)' \}`)
+	record := regexp.MustCompile(`'(200|201)': \{[^\n]*schema: \{ \$ref: '#/components/schemas/(Session|Case|Task|ExternalRecord|ExternalRequest)' \}`)
 	for _, op := range ops {
 		if strings.Contains(op.text, "parameters/IfMatch") {
 			for _, code := range []string{"'412'", "'428'"} {

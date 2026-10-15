@@ -40,6 +40,11 @@ func (s *Service) WithExternalTimings(callTimeout, reconcileMinAge time.Duration
 	if reconcileMinAge >= 0 {
 		s.reconcileAge = reconcileMinAge
 	}
+	// A request is only declared "not created" after it is old enough that its own call has surely ended: never less than twice the call's time limit, so a late answer
+	// of the original call can never find the request already settled as a failure.
+	if s.reconcileAge < 2*s.gatewayTO {
+		s.reconcileAge = 2 * s.gatewayTO
+	}
 	return s
 }
 
@@ -167,7 +172,7 @@ func (s *Service) LinkExternalRecord(ctx context.Context, raw domain.LinkInput) 
 	if err != nil {
 		return LinkResult{}, err
 	}
-	gw, err := s.gateways.Resolve(ctx, in.IntegrationID)
+	gw, err := s.gateways.Resolve(ctx, c.tc.TenantID, in.IntegrationID)
 	if err != nil {
 		return LinkResult{}, err
 	}
@@ -339,7 +344,7 @@ func (s *Service) RefreshExternalRecord(ctx context.Context, id uuid.UUID) (*dom
 	if err != nil {
 		return nil, err
 	}
-	gw, err := s.gateways.Resolve(ctx, rec.IntegrationID)
+	gw, err := s.gateways.Resolve(ctx, c.tc.TenantID, rec.IntegrationID)
 	if err != nil {
 		return nil, err
 	}
@@ -454,6 +459,15 @@ func timeKey(t *time.Time) string {
 
 // ---- asking the ERP to create a service order ----
 
+// allowAsk is the permission to ASK the ERP and keep what it answered: the key to ask (service.request_external) AND the key to tie the answer to our work
+// (service.link_external). The two are different keys on different tables in the database, and holding only one of them does not let anyone forge the other's rows.
+func (s *Service) allowAsk(ctx context.Context, c caller) error {
+	if err := s.allow(ctx, c, PermRequestExternal); err != nil {
+		return err
+	}
+	return s.allow(ctx, c, PermLinkExternal)
+}
+
 type RequestOutcome string
 
 const (
@@ -506,7 +520,7 @@ func (s *Service) RequestServiceOrder(ctx context.Context, raw domain.RequestInp
 	if err != nil {
 		return RequestResult{}, err
 	}
-	if err := s.allow(ctx, c, PermRequestExternal); err != nil {
+	if err := s.allowAsk(ctx, c); err != nil {
 		return RequestResult{}, err
 	}
 	if err := s.external(); err != nil {
@@ -519,7 +533,7 @@ func (s *Service) RequestServiceOrder(ctx context.Context, raw domain.RequestInp
 	if !ok {
 		return RequestResult{}, domain.Invalid("integration_id is not an integration of this company")
 	}
-	gw, err := s.gateways.Resolve(ctx, in.IntegrationID) // not configured is answered BEFORE any durable state exists
+	gw, err := s.gateways.Resolve(ctx, c.tc.TenantID, in.IntegrationID) // not configured is answered BEFORE any durable state exists
 	if err != nil {
 		return RequestResult{}, err
 	}
@@ -581,7 +595,7 @@ func (s *Service) RequestServiceOrder(ctx context.Context, raw domain.RequestInp
 		}
 		if gerr == nil && snap != nil {
 			clean, cerr := snap.Clean()
-			if cerr == nil {
+			if cerr == nil && clean.ExternalType == domain.ExternalTypeServiceOrder {
 				rec, e := s.settleSuccess(ctx, c, acquired, system, clean, "gateway", at, sess)
 				if e != nil {
 					return e
@@ -730,7 +744,7 @@ func (s *Service) ReconcileExternalRequest(ctx context.Context, id uuid.UUID) (R
 	if err != nil {
 		return ReconcileResult{}, err
 	}
-	if err := s.allow(ctx, c, PermRequestExternal); err != nil {
+	if err := s.allowAsk(ctx, c); err != nil {
 		return ReconcileResult{}, err
 	}
 	if err := s.external(); err != nil {
@@ -743,7 +757,11 @@ func (s *Service) ReconcileExternalRequest(ctx context.Context, id uuid.UUID) (R
 	if !req.State.Blocking() {
 		return ReconcileResult{Request: req}, nil
 	}
-	gw, err := s.gateways.Resolve(ctx, req.IntegrationID)
+	// a request still in flight may be answered at any moment by its own call: it is not reconciled while that call can still be alive
+	if now, nerr := s.repo.Now(ctx); nerr == nil && req.State == domain.RequestInFlight && now.Sub(req.CreatedAt) < s.gatewayTO+30*time.Second {
+		return ReconcileResult{Request: req, TooEarly: true}, nil
+	}
+	gw, err := s.gateways.Resolve(ctx, c.tc.TenantID, req.IntegrationID)
 	if err != nil {
 		return ReconcileResult{}, err
 	}
@@ -775,8 +793,8 @@ func (s *Service) ReconcileExternalRequest(ctx context.Context, id uuid.UUID) (R
 	}
 	if gerr == nil && snap != nil {
 		clean, cerr := snap.Clean()
-		if cerr != nil {
-			return ReconcileResult{Request: locked}, nil
+		if cerr != nil || clean.ExternalType != domain.ExternalTypeServiceOrder {
+			return ReconcileResult{Request: locked}, nil // an answer that is not a service order teaches nothing
 		}
 		rec, err := s.settleSuccess(ctx, c, locked, system, clean, "reconcile", at, sess)
 		if err != nil {
@@ -814,7 +832,7 @@ func (s *Service) ResolveExternalRequest(ctx context.Context, id uuid.UUID, raw 
 	if err != nil {
 		return ReconcileResult{}, err
 	}
-	if err := s.allow(ctx, c, PermRequestExternal); err != nil {
+	if err := s.allowAsk(ctx, c); err != nil {
 		return ReconcileResult{}, err
 	}
 	if err := s.external(); err != nil {
@@ -837,12 +855,15 @@ func (s *Service) ResolveExternalRequest(ctx context.Context, id uuid.UUID, raw 
 	}
 	var clean *domain.Snapshot
 	if in.Created {
-		gw, err := s.gateways.Resolve(ctx, req.IntegrationID)
+		gw, err := s.gateways.Resolve(ctx, c.tc.TenantID, req.IntegrationID)
 		if err != nil {
 			return ReconcileResult{}, err
 		}
 		if clean, err = s.readSnapshot(ctx, gw, domain.ExternalTypeServiceOrder, in.ExternalID); err != nil {
 			return ReconcileResult{}, err
+		}
+		if clean.ExternalType != domain.ExternalTypeServiceOrder || clean.ExternalID != in.ExternalID {
+			return ReconcileResult{}, domain.Invalid("the external system answered with another record")
 		}
 	}
 	locked, err := s.ext.LockRequest(ctx, id)

@@ -232,7 +232,26 @@ func (s *Service) Open(ctx context.Context, raw domain.OpenInput) (OpenResult, e
 			return OpenResult{Session: active}, nil
 		}
 	}
-	sess, err := s.create(ctx, c, in, facts, hash)
+	var sess *domain.Session
+	err = s.repo.InSavepoint(ctx, func(ctx context.Context) (e error) {
+		sess, e = s.create(ctx, c, in, facts, hash)
+		return e
+	})
+	if errors.Is(err, domain.ErrAlreadyActive) && in.ConversationID != nil {
+		// two people opened an attendance on the conversation at the same instant (a Hub delegate cannot lock the conversation): the one that committed first
+		// stands, the number this call took went back with the savepoint, and this call answers with the winner
+		active, aerr := s.repo.ActiveByConversation(ctx, *in.ConversationID)
+		if aerr != nil {
+			return OpenResult{}, aerr
+		}
+		if active != nil {
+			if err := s.remember(ctx, ports.ScopeSessionOpen, in.IdempotencyKey, hash, active.ID); err != nil {
+				return OpenResult{}, err
+			}
+			return OpenResult{Session: active}, nil
+		}
+		return OpenResult{}, domain.ErrConflict // an earlier session of the conversation ends after this one would start: try again
+	}
 	if err != nil {
 		return OpenResult{}, err
 	}
@@ -253,8 +272,10 @@ func (s *Service) create(ctx context.Context, c caller, in domain.OpenInput, fac
 	if facts != nil {
 		contact = facts.ContactID
 	}
-	if err := s.mustExist(ctx, contact, s.repo.ContactExists, "contact_id"); err != nil {
-		return nil, err
+	if facts == nil { // a contact that comes from the conversation row is valid by its foreign key; only one the caller names has to be proven to exist
+		if err := s.mustExist(ctx, contact, s.repo.ContactExists, "contact_id"); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.mustExist(ctx, in.CustomerID, s.repo.CustomerExists, "customer_id"); err != nil {
 		return nil, err

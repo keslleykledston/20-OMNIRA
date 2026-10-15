@@ -266,7 +266,7 @@ func TestADedupKeyIsOnlyTheSameFactIfEverythingMatches(t *testing.T) {
 	if err := rec(base()); err != nil {
 		t.Fatalf("the identical fact again is fine: %v", err)
 	}
-	if n := s.count(`SELECT count(*) FROM context_events WHERE dedup_key='full-fact-key-1'`); n != 1 {
+	if n := s.count(`SELECT count(*) FROM context_events WHERE dedup_key='full-fact-key-1' AND tenant_id=$1`, s.env.TenantA); n != 1 {
 		t.Fatalf("one fact: %d", n)
 	}
 	// the shape: a person's fact names the person

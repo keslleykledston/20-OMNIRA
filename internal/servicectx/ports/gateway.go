@@ -71,15 +71,17 @@ type CorrelationLookup interface {
 	FindByCorrelation(ctx context.Context, correlationKey string) (*domain.Snapshot, error)
 }
 
-// GatewayResolver returns the gateway of a company's integration, or domain.ErrNotConfigured. It never returns a fake one.
+// GatewayResolver returns the gateway of a company's integration, or domain.ErrNotConfigured. It never returns a fake one. The application has already proven that
+// the integration belongs to the company; an implementation must still resolve the credentials by BOTH ids (the integration AND the company), never by the integration
+// alone, so an adapter can never be reached with another company's credentials.
 type GatewayResolver interface {
-	Resolve(ctx context.Context, integrationID uuid.UUID) (ServiceOrderGateway, error)
+	Resolve(ctx context.Context, tenantID, integrationID uuid.UUID) (ServiceOrderGateway, error)
 }
 
 // NotConfigured is the resolver used when no adapter is installed: every integration answers ErrNotConfigured.
 type NotConfigured struct{}
 
-func (NotConfigured) Resolve(context.Context, uuid.UUID) (ServiceOrderGateway, error) {
+func (NotConfigured) Resolve(context.Context, uuid.UUID, uuid.UUID) (ServiceOrderGateway, error) {
 	return nil, domain.ErrNotConfigured
 }
 

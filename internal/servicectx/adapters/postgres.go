@@ -21,7 +21,10 @@ import (
 
 // PostgresRepository runs every statement on the request's tenant-scoped transaction (RLS) and ALSO filters by the tenant of the TenantContext: the
 // second barrier, never the only one.
-type PostgresRepository struct{ pool *pgxpool.Pool }
+type PostgresRepository struct {
+	pool        *pgxpool.Pool
+	lockTimeout time.Duration
+}
 
 var _ ports.Repository = (*PostgresRepository)(nil)
 
@@ -57,6 +60,9 @@ func mapErr(err error) error {
 		case "23P01":
 			return domain.ErrConflict
 		case "23514":
+			if strings.Contains(pe.Message, "the conversation is closed") || strings.Contains(pe.Message, "closed conversation") {
+				return domain.ErrConversationClosed // a finalization closed it while this call was waiting for it
+			}
 			return fmt.Errorf("%w: %s", domain.ErrInvalid, pe.Message)
 		}
 	}
@@ -84,7 +90,13 @@ func (r *PostgresRepository) conversation(ctx context.Context, id uuid.UUID, loc
 	}
 	sql := conversationFactsSQL
 	if lock {
-		sql += ` FOR UPDATE OF c`
+		// A member locks the row FOR UPDATE: the lock Finalize and the flow engine take, so the three are serialized. A Hub delegate has no UPDATE policy on
+		// conversations (ADR-0037: it never writes them) and Postgres refuses every row lock without one, so it reads without locking; what keeps it from
+		// interleaving with a finalization is the database itself (service_conversation_open_locked, taken by the row guards of the session), and what keeps two
+		// delegates from opening two sessions at once is the unique index of active sessions, which Open turns into "return the one that won".
+		if tc, terr := tenancydomain.FromContext(ctx); !(terr == nil && tc.Source == tenancydomain.AccessSourceHubServe) {
+			sql += ` FOR UPDATE OF c`
+		}
 	}
 	f := &ports.ConversationFacts{}
 	if err := r.q(ctx).QueryRow(ctx, sql, tenant, id).Scan(&f.ID, &f.ContactID, &f.Status, &f.Kind, &f.AssignedTo, &f.Channel); err != nil {
@@ -180,12 +192,22 @@ func (r *PostgresRepository) NextProtocol(ctx context.Context, kind, prefix stri
 }
 
 func (r *PostgresRepository) InsertSession(ctx context.Context, s *domain.Session) error {
+	if tenant, err := tenantOf(ctx); err != nil {
+		return err
+	} else if s.TenantID != tenant { // the company is the session's, never the object's
+		return domain.ErrForbidden
+	}
 	_, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO service_sessions (id, tenant_id, protocol, protocol_sequence, external_protocol, conversation_id, contact_id, customer_id, queue_id, category_id,
 			status, origin_channel, opened_source, opened_by_user_id, opened_at, version, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		s.ID, s.TenantID, s.Protocol, s.ProtocolSequence, s.ExternalProtocol, s.ConversationID, s.ContactID, s.CustomerID, s.QueueID, s.CategoryID,
 		string(s.Status), s.OriginChannel, s.OpenedSource, s.OpenedBy, s.OpenedAt, s.Version, s.CreatedAt, s.UpdatedAt)
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && ((pe.Code == "23505" && pe.ConstraintName == "service_sessions_one_active_uq") ||
+		(pe.Code == "23P01" && strings.Contains(pe.Message, "still open"))) {
+		return domain.ErrAlreadyActive // somebody else's session won the race: the caller returns that one
+	}
 	return mapErr(err)
 }
 
@@ -492,4 +514,10 @@ func (r *PostgresRepository) SaveReceipt(ctx context.Context, scope, key, reques
 	_, err = r.q(ctx).Exec(ctx, `INSERT INTO service_command_receipts (tenant_id, scope, idempotency_key, request_hash, session_id, case_id, task_id, external_record_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		tenant, scope, key, requestHash, sess, cs, task, rec)
 	return mapErr(err)
+}
+
+// InSavepoint runs fn inside a savepoint of the request's transaction: if it fails, everything it did (a protocol number taken, a row inserted) is undone while the
+// rest of the transaction stays usable.
+func (r *PostgresRepository) InSavepoint(ctx context.Context, fn func(ctx context.Context) error) error {
+	return platformdb.WithSavepoint(ctx, r.pool, fn)
 }

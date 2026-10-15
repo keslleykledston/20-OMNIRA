@@ -173,6 +173,20 @@ $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg
 REVOKE EXECUTE ON FUNCTION service_read_tenants() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION service_read_tenants() TO omnira_app;
 
+-- Is this conversation open? Asked with a KEY SHARE lock on the conversation row, taken as the table owner. A Hub delegate has no UPDATE policy on conversations (ADR-0037:
+-- it never writes them), so it can NOT lock the row itself the way a member does; yet an opening or a reopening of a session must not interleave with a finalization
+-- (which holds the row FOR UPDATE and then closes the conversation). KEY SHARE conflicts with that lock, so the call waits for the finalization to commit and then reads the
+-- fresh status. It answers only true/false/NULL, and only for a member of the company, a request acting for it, or the system.
+CREATE FUNCTION service_conversation_open_locked(p_tenant UUID, p_conv UUID) RETURNS BOOLEAN AS $$
+  SELECT c.status = 'open'
+  FROM public.conversations c
+  WHERE c.tenant_id = p_tenant AND c.id = p_conv
+    AND (public.is_system_admin() OR public.has_active_membership(p_tenant, public.current_user_id()) OR (public.acting_hub() IS NOT NULL AND p_tenant = public.acting_tenant()))
+  FOR KEY SHARE OF c;
+$$ LANGUAGE SQL VOLATILE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+REVOKE EXECUTE ON FUNCTION service_conversation_open_locked(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION service_conversation_open_locked(UUID, UUID) TO omnira_app;
+
 -- 4. row guards ---------------------------------------------------------------------------------------------------------------------------
 -- A new session of a conversation opens only AFTER the previous one closed: the intervals that decide which messages belong to a session stay disjoint.
 CREATE FUNCTION service_sessions_before_insert() RETURNS trigger AS $$
@@ -182,6 +196,12 @@ BEGIN
        WHERE s.tenant_id = NEW.tenant_id AND s.conversation_id = NEW.conversation_id
          AND (s.closed_at IS NULL OR s.closed_at > NEW.opened_at)) THEN
     RAISE EXCEPTION 'a service session of this conversation is still open or ends after this one starts' USING ERRCODE = '23P01';
+  END IF;
+  -- a new session cannot appear on a conversation that a finalization is closing right now (the finalization's own hook, which runs in a system session as
+  -- source 'finalize', is the one that may create a session on a conversation it has just closed)
+  IF NEW.conversation_id IS NOT NULL AND NEW.opened_source <> 'finalize' AND NOT public.is_system_admin()
+     AND public.service_conversation_open_locked(NEW.tenant_id, NEW.conversation_id) IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'the conversation is closed' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END;
@@ -193,7 +213,7 @@ CREATE TRIGGER service_sessions_before_insert_trg BEFORE INSERT ON service_sessi
 -- and the key asked of the person depends on WHAT changes (closing/reopening = service.close, anything else = service.update). The system session (flows, finalize on
 -- behalf of the system) is the one exception to the KEYS, never to the state machine: it is not a person, but it does not get to break the rules.
 CREATE FUNCTION service_sessions_before_update() RETURNS trigger AS $$
-DECLARE need TEXT; reopening BOOLEAN; conv_status TEXT;
+DECLARE need TEXT; reopening BOOLEAN;
 BEGIN
   IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.protocol IS DISTINCT FROM OLD.protocol
      OR NEW.protocol_sequence IS DISTINCT FROM OLD.protocol_sequence OR NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
@@ -224,8 +244,7 @@ BEGIN
       RAISE EXCEPTION 'reopening a session needs a reason' USING ERRCODE = '23514';
     END IF;
     IF NEW.conversation_id IS NOT NULL THEN
-      SELECT c.status INTO conv_status FROM public.conversations c WHERE c.tenant_id = NEW.tenant_id AND c.id = NEW.conversation_id;
-      IF conv_status IS DISTINCT FROM 'open' THEN
+      IF public.service_conversation_open_locked(NEW.tenant_id, NEW.conversation_id) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'a session of a closed conversation cannot be reopened' USING ERRCODE = '23514';
       END IF;
       IF EXISTS (SELECT 1 FROM public.service_sessions s

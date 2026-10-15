@@ -107,7 +107,8 @@ ALTER TABLE service_command_receipts ADD CONSTRAINT service_command_receipts_tar
 
 -- row guards -------------------------------------------------------------------------------------------------------------------------------
 -- A record: identity immutable; version and clock advanced here; the provider's update time only moves FORWARD (an out-of-order update never rolls the projection
--- back); changes need service.link_external or service.request_external (the system session, which applies the ERP's own updates, is exempt from the KEYS only).
+-- back); changes need service.link_external (the key of tying an ERP record to our work; asking the ERP for something is a different key, on a different table). The
+-- system session, which applies the ERP's own updates, is exempt from the KEYS only.
 CREATE FUNCTION external_records_before_update() RETURNS trigger AS $$
 BEGIN
   IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.integration_id IS DISTINCT FROM OLD.integration_id
@@ -118,9 +119,7 @@ BEGIN
   IF OLD.source_updated_at IS NOT NULL AND (NEW.source_updated_at IS NULL OR NEW.source_updated_at < OLD.source_updated_at) THEN
     RAISE EXCEPTION 'an external record never goes back in time' USING ERRCODE = '23514';
   END IF;
-  IF NOT public.is_system_admin()
-     AND NOT (public.actor_has_permission(NEW.tenant_id, public.current_user_id(), 'service.link_external')
-              OR public.actor_has_permission(NEW.tenant_id, public.current_user_id(), 'service.request_external')) THEN
+  IF NOT public.is_system_admin() AND NOT public.actor_has_permission(NEW.tenant_id, public.current_user_id(), 'service.link_external') THEN
     RAISE EXCEPTION 'external record: service.link_external required' USING ERRCODE = '42501';
   END IF;
   NEW.version := OLD.version + 1;
@@ -182,13 +181,13 @@ BEGIN
     EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE OF tenant_id ON %I FOR EACH ROW EXECUTE FUNCTION forbid_tenant_change()', t || '_tenant_immutable', t);
   END LOOP;
 END $$;
-CREATE POLICY external_records_insert_tenant ON external_records FOR INSERT WITH CHECK (is_system_admin() OR
-  actor_has_permission(tenant_id, current_user_id(), 'service.link_external') OR actor_has_permission(tenant_id, current_user_id(), 'service.request_external'));
+-- records and links are written with service.link_external ONLY; the table of requests to the ERP is written with service.request_external ONLY. Asking the ERP and
+-- keeping what it answered therefore needs both keys (the application asks for both), and holding one gives no way to forge the other's rows with plain SQL.
+CREATE POLICY external_records_insert_tenant ON external_records FOR INSERT WITH CHECK (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external'));
 CREATE POLICY external_records_update_tenant ON external_records FOR UPDATE
-  USING (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external') OR actor_has_permission(tenant_id, current_user_id(), 'service.request_external'))
-  WITH CHECK (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external') OR actor_has_permission(tenant_id, current_user_id(), 'service.request_external'));
-CREATE POLICY service_external_links_insert_tenant ON service_external_links FOR INSERT WITH CHECK (is_system_admin() OR
-  actor_has_permission(tenant_id, current_user_id(), 'service.link_external') OR actor_has_permission(tenant_id, current_user_id(), 'service.request_external'));
+  USING (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external'))
+  WITH CHECK (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external'));
+CREATE POLICY service_external_links_insert_tenant ON service_external_links FOR INSERT WITH CHECK (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external'));
 CREATE POLICY service_external_links_update_tenant ON service_external_links FOR UPDATE
   USING (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external'))
   WITH CHECK (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'service.link_external'));

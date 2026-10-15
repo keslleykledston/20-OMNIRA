@@ -58,6 +58,11 @@ func (r *PostgresRepository) GetCase(ctx context.Context, id uuid.UUID) (*domain
 }
 
 func (r *PostgresRepository) InsertCase(ctx context.Context, c *domain.Case) error {
+	if tenant, err := tenantOf(ctx); err != nil {
+		return err
+	} else if c.TenantID != tenant {
+		return domain.ErrForbidden
+	}
 	_, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO service_cases (id, tenant_id, case_number, case_sequence, title, description, customer_id, category_id, priority, status, assigned_team_id, assigned_agent_id,
 			origin_session_id, created_by_user_id, opened_at, version, created_at, updated_at)
@@ -258,6 +263,11 @@ func (r *PostgresRepository) GetTask(ctx context.Context, id uuid.UUID) (*domain
 }
 
 func (r *PostgresRepository) InsertTask(ctx context.Context, t *domain.Task) error {
+	if tenant, err := tenantOf(ctx); err != nil {
+		return err
+	} else if t.TenantID != tenant {
+		return domain.ErrForbidden
+	}
 	_, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO service_tasks (id, tenant_id, title, description, status, priority, assigned_user_id, assigned_team_id, due_at, origin_type, session_id, case_id, contact_id,
 			flow_run_id, flow_seq, created_by_user_id, version, created_at, updated_at)

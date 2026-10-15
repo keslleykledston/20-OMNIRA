@@ -68,3 +68,29 @@ func (s *stack) ageRequest(id uuid.UUID, d time.Duration) {
 		s.t.Fatal(err)
 	}
 }
+
+// noTriggers runs one statement as the owner with the triggers switched off, to craft a state the application can never reach.
+func (s *stack) noTriggers(sql string, args ...any) {
+	s.t.Helper()
+	ctx := context.Background()
+	tx, err := s.env.Seed.Begin(ctx)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		s.t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// forceRequestState crafts a request state the application would never go back to.
+func (s *stack) forceRequestState(id uuid.UUID, state string) {
+	s.t.Helper()
+	s.noTriggers(`UPDATE external_record_requests SET state=$2, failure_class=CASE WHEN $2 = 'in_flight' THEN NULL ELSE failure_class END WHERE id=$1`, id, state)
+}

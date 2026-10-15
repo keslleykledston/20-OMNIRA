@@ -98,6 +98,10 @@ func (s Snapshot) Clean() (Snapshot, error) {
 	if !out.StatusClass.Valid() {
 		out.StatusClass = StatusUnknown
 	}
+	if out.UpdatedAt != nil { // the database keeps microseconds: compare what it can keep
+		t := out.UpdatedAt.UTC().Truncate(time.Microsecond)
+		out.UpdatedAt = &t
+	}
 	return out, nil
 }
 

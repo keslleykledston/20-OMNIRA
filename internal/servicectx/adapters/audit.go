@@ -44,6 +44,16 @@ func (a *auditor) Record(ctx context.Context, action, resourceType string, resou
 		}
 	}
 	m := map[string]any{"actor_kind": kind}
+	if tc.Source == tenancydomain.AccessSourceHubServe && tc.HubID != nil {
+		// the trail of a delegated action says who acted, through which hub, contract and grant (ADR-0040)
+		m["via"], m["acting_as"], m["hub_id"] = "hub", tc.ActingAs(), tc.HubID.String()
+		if tc.ServiceContractID != nil {
+			m["contract_id"] = tc.ServiceContractID.String()
+		}
+		if tc.EffectiveGrantID != nil {
+			m["grant_id"] = tc.EffectiveGrantID.String()
+		}
+	}
 	for k, v := range meta {
 		m[k] = v
 	}

@@ -11,6 +11,7 @@ DROP FUNCTION IF EXISTS service_session_episodes_before_update();
 DROP FUNCTION IF EXISTS service_session_episodes_before_insert();
 DROP FUNCTION IF EXISTS service_sessions_before_update();
 DROP FUNCTION IF EXISTS service_sessions_before_insert();
+DROP FUNCTION IF EXISTS service_conversation_open_locked(UUID, UUID);
 DROP FUNCTION IF EXISTS service_read_tenants();
 DELETE FROM role_permissions WHERE permission_key LIKE 'service.%';
 DELETE FROM permissions WHERE key LIKE 'service.%';

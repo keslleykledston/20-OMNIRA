@@ -154,7 +154,7 @@ func TestWithoutAnAdapterTheERPIsNotConfiguredNeverFaked(t *testing.T) {
 	if !errors.Is(err, domain.ErrNotConfigured) {
 		t.Fatalf("a request without an adapter: %v", err)
 	}
-	if n := s.count(`SELECT count(*) FROM external_record_requests`); n != 0 {
+	if n := s.count(`SELECT count(*) FROM external_record_requests WHERE tenant_id=$1`, s.env.TenantA); n != 0 {
 		t.Fatalf("not configured is answered BEFORE any durable attempt exists: %d", n)
 	}
 }
@@ -287,7 +287,7 @@ func TestInboundUpdatesAreIdempotentOrderedAndNeverCreateRecords(t *testing.T) {
 		unk, err = s.svc.ApplyExternalUpdate(ctx, application.ExternalUpdate{IntegrationID: integ, DeliveryID: "delivery-0009",
 			Snapshot: domain.Snapshot{ExternalType: "service_order", ExternalID: "8888", StatusClass: domain.StatusOpen}})
 	})
-	if err != nil || !unk.Unknown || s.count(`SELECT count(*) FROM external_records WHERE external_id='8888'`) != 0 {
+	if err != nil || !unk.Unknown || s.count(`SELECT count(*) FROM external_records WHERE external_id='8888' AND tenant_id=$1`, s.env.TenantA) != 0 {
 		t.Fatalf("a push never creates a record: %+v %v", unk, err)
 	}
 	// the facts are attributed to the integration
@@ -599,7 +599,7 @@ func TestOnlyAdministratorsAndSupervisorsAskTheERPForAnything(t *testing.T) {
 	if s.gw.CreateCalls != 0 {
 		t.Fatal("the ERP was not called")
 	}
-	if n := s.count(`SELECT count(*) FROM external_record_requests`); n != 0 {
+	if n := s.count(`SELECT count(*) FROM external_record_requests WHERE tenant_id=$1`, s.env.TenantA); n != 0 {
 		t.Fatalf("no durable attempt for a refused person: %d", n)
 	}
 	// the database says the same to plain SQL
@@ -677,7 +677,7 @@ func TestExternalRecordsAndRequestsNeverCrossCompanies(t *testing.T) {
 	})
 	// the same ERP id under company B's integration is another record, not A's
 	s.exec(`INSERT INTO external_records(tenant_id, integration_id, external_system, external_type, external_id) VALUES($1,$2,'fake_erp','service_order','3001')`, s.env.TenantB, integB)
-	if n := s.count(`SELECT count(*) FROM external_records WHERE external_id='3001'`); n != 2 {
+	if n := s.count(`SELECT count(*) FROM external_records WHERE external_id='3001' AND tenant_id IN ($1,$2)`, s.env.TenantA, s.env.TenantB); n != 2 {
 		t.Fatalf("an external id is only unique within a company's integration: %d", n)
 	}
 	// composite keys: a link under B cannot point at A's record

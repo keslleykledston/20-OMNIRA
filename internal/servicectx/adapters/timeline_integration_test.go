@@ -168,7 +168,7 @@ func TestRecordingTheSameFactTwiceWritesItOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n := s.count(`SELECT count(*) FROM context_events WHERE dedup_key='retry-safe-key-1'`); n != 1 {
+	if n := s.count(`SELECT count(*) FROM context_events WHERE dedup_key='retry-safe-key-1' AND tenant_id=$1`, s.env.TenantA); n != 1 {
 		t.Fatalf("a retry writes nothing new: %d", n)
 	}
 	bad := ev()
@@ -260,7 +260,7 @@ func TestTheSessionTimelineShowsWhoHeldTheConversationOnlyWhileItWasInCourse(t *
 	if derived[beforeOpen] || derived[whileClosed] || !derived[during] || !derived[afterReopen] {
 		t.Fatalf("assignments in the session's episodes only: before=%v during=%v whileClosed=%v afterReopen=%v", derived[beforeOpen], derived[during], derived[whileClosed], derived[afterReopen])
 	}
-	if n := s.count(`SELECT count(*) FROM context_events WHERE event_type='conversation.assignment_changed'`); n != 0 {
+	if n := s.count(`SELECT count(*) FROM context_events WHERE event_type='conversation.assignment_changed' AND tenant_id=$1`, s.env.TenantA); n != 0 {
 		t.Fatal("the routing history is read, never copied into the timeline table")
 	}
 }

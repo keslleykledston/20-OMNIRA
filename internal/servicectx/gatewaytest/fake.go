@@ -47,6 +47,12 @@ type Fake struct {
 	Called  chan struct{} // signalled when a create call reaches the ERP (Hang)
 	release chan struct{}
 	Clock   func() time.Time
+	// ResolvedFor records every (company, integration) the resolver was asked for.
+	ResolvedFor [][2]uuid.UUID
+	// WrongAnswer makes Get/Create answer with a record of another type and id than the one asked for (a misbehaving adapter).
+	WrongAnswer bool
+	// OnCall runs inside CreateServiceOrder before it answers (tests use it to hold a lock or to sabotage the outcome write).
+	OnCall func()
 }
 
 func New() *Fake {
@@ -92,6 +98,9 @@ func (f *Fake) Get(ctx context.Context, t, id string) (*domain.Snapshot, error) 
 	f.GetCalls++
 	down := f.Down
 	r, ok := f.records[key(t, id)]
+	if f.WrongAnswer {
+		r, ok = domain.Snapshot{ExternalType: "customer", ExternalID: "not-" + id, StatusClass: domain.StatusOpen}, true
+	}
 	f.mu.Unlock()
 	if down {
 		return nil, &ports.GatewayError{Kind: ports.GatewayUnknown, Class: "timeout"}
@@ -107,7 +116,11 @@ func (f *Fake) CreateServiceOrder(ctx context.Context, req ports.CreateOrderRequ
 	f.CreateCalls++
 	mode := f.Mode
 	down := f.Down
+	hook := f.OnCall
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	select {
 	case f.Called <- struct{}{}:
 	default:
@@ -140,6 +153,9 @@ func (f *Fake) CreateServiceOrder(ctx context.Context, req ports.CreateOrderRequ
 	if mode == LoseAnswer {
 		return nil, &ports.GatewayError{Kind: ports.GatewayUnknown, Class: "timeout"}
 	}
+	if f.WrongAnswer {
+		return &domain.Snapshot{ExternalType: "customer", ExternalID: "wrong-" + id, StatusClass: domain.StatusOpen}, nil
+	}
 	return &snap, nil
 }
 
@@ -151,6 +167,9 @@ func (l lookupFake) FindByCorrelation(ctx context.Context, corr string) (*domain
 	k, ok := l.byCorr[corr]
 	down := l.Down
 	r := l.records[k]
+	if l.WrongAnswer && ok {
+		r = domain.Snapshot{ExternalType: "customer", ExternalID: "wrong", StatusClass: domain.StatusOpen}
+	}
 	l.mu.Unlock()
 	if down {
 		return nil, &ports.GatewayError{Kind: ports.GatewayUnknown, Class: "timeout"}
@@ -164,7 +183,10 @@ func (l lookupFake) FindByCorrelation(ctx context.Context, corr string) (*domain
 // Resolver hands the fake to every integration (the tests seed the integrations of the company).
 type Resolver struct{ F *Fake }
 
-func (r Resolver) Resolve(ctx context.Context, _ uuid.UUID) (ports.ServiceOrderGateway, error) {
+func (r Resolver) Resolve(ctx context.Context, tenantID, integrationID uuid.UUID) (ports.ServiceOrderGateway, error) {
+	r.F.mu.Lock()
+	r.F.ResolvedFor = append(r.F.ResolvedFor, [2]uuid.UUID{tenantID, integrationID})
+	r.F.mu.Unlock()
 	if r.F.Lookup {
 		return lookupFake{r.F}, nil
 	}

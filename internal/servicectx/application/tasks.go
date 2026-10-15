@@ -69,13 +69,20 @@ func (s *Service) CreateTask(ctx context.Context, raw domain.TaskOpenInput) (Tas
 		return TaskResult{Task: prev, Replay: true}, nil
 	}
 	contact := in.ContactID
+	if in.ContactID != nil { // a contact the caller names has to exist (and be visible to them)
+		if err := s.mustExist(ctx, in.ContactID, s.repo.ContactExists, "contact_id"); err != nil {
+			return TaskResult{}, err
+		}
+	}
 	if in.SessionID != nil {
 		sess, err := s.repo.GetSession(ctx, *in.SessionID)
 		if err != nil {
 			return TaskResult{}, err
 		}
 		if contact == nil {
-			contact = sess.ContactID
+			contact = sess.ContactID // valid by the session's own foreign key
+		} else if sess.ContactID != nil && *sess.ContactID != *contact {
+			return TaskResult{}, domain.Invalid("contact_id is not the contact of the session")
 		}
 	}
 	if in.CaseID != nil {
@@ -86,9 +93,6 @@ func (s *Service) CreateTask(ctx context.Context, raw domain.TaskOpenInput) (Tas
 		if cs.Status.Final() {
 			return TaskResult{}, domain.ErrInvalidTransition // a closed or cancelled case takes no new work
 		}
-	}
-	if err := s.mustExist(ctx, contact, s.repo.ContactExists, "contact_id"); err != nil {
-		return TaskResult{}, err
 	}
 	if err := s.checkRefs(ctx, refChecks{team: in.AssignedTeamID, agent: in.AssignedUserID}); err != nil {
 		return TaskResult{}, err

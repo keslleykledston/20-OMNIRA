@@ -17,7 +17,6 @@ import (
 	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
 	aiports "github.com/omnira/omnira/internal/ai/ports"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
-	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
@@ -44,6 +43,7 @@ import (
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
 	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -960,8 +960,9 @@ func (s *Server) RegisterServiceContextHandlers(dbPool *pgxpool.Pool, h *service
 		tenancyadapters.NewPostgresTenantRepository(dbPool),
 	)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
-	// members only for now: the Hub delegation (domain `service`) arrives with migration 000154 and passes tenancyadapters.Delegable here
-	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }, nil)
+	// ADR-0040: a Hub agent reaches a route only if it is marked with the key that opens it (tenancyadapters.Delegable); the data domain `service` (migration 000154)
+	// answers the same question again in the database. Routes that change the company's configuration or ask the ERP for anything are not marked at all.
+	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }, tenancyadapters.Delegable)
 }
 
 // RegisterFlowHandlers exposes the Flow Builder control plane (ADR-0019) behind authn + the tenant session. It is only

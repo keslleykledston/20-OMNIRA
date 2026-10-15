@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/domain"
 	"github.com/omnira/omnira/internal/servicectx/ports"
@@ -22,12 +23,15 @@ func (r *PostgresRepository) IntegrationSystem(ctx context.Context, integrationI
 	if err != nil {
 		return "", false, err
 	}
-	var provider string
-	err = r.q(ctx).QueryRow(ctx, `SELECT provider FROM channel_connections WHERE tenant_id=$1 AND id=$2`, tenant, integrationID).Scan(&provider)
-	if errors.Is(err, pgx.ErrNoRows) {
+	// through a narrow function: the connection table holds credentials and stays closed to a Hub delegate
+	var provider *string
+	if err := r.q(ctx).QueryRow(ctx, `SELECT service_integration_system($1, $2)`, tenant, integrationID).Scan(&provider); err != nil {
+		return "", false, err
+	}
+	if provider == nil {
 		return "", false, nil
 	}
-	return strings.ToLower(provider), err == nil, err
+	return *provider, true, nil
 }
 
 const recordColumns = `id, tenant_id, integration_id, external_system, external_type, external_id, display_ref, external_status, status_class, sync_state,
@@ -74,25 +78,44 @@ func (r *PostgresRepository) FindRecord(ctx context.Context, integrationID uuid.
 	return x, err
 }
 
+// InsertRecord creates the record, or returns the one that already stood. It reads first and then does a PLAIN insert (no ON CONFLICT): an INSERT ... ON CONFLICT
+// applies the SELECT policies to the new row, and a Hub delegate sees a record only through a link that does not exist yet. A concurrent creator is caught by the unique
+// index inside a savepoint; if the record that won hangs from nothing this caller can see, the caller learns nothing about it (not found).
 func (r *PostgresRepository) InsertRecord(ctx context.Context, x *domain.ExternalRecord) (*domain.ExternalRecord, bool, error) {
-	tag, err := r.q(ctx).Exec(ctx, `
-		INSERT INTO external_records (id, tenant_id, integration_id, external_system, external_type, external_id, display_ref, external_status, status_class, sync_state,
-			source_updated_at, last_synced_at, created_by_user_id, version, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-		ON CONFLICT (tenant_id, integration_id, external_type, external_id) DO NOTHING`,
-		x.ID, x.TenantID, x.IntegrationID, x.ExternalSystem, x.ExternalType, x.ExternalID, x.DisplayRef, x.ExternalStatus, string(x.StatusClass), x.SyncState,
-		x.SourceUpdatedAt, x.LastSyncedAt, x.CreatedBy, x.Version, x.CreatedAt, x.UpdatedAt)
-	if err != nil {
-		return nil, false, mapErr(err)
+	if tenant, err := tenantOf(ctx); err != nil {
+		return nil, false, err
+	} else if x.TenantID != tenant { // the company is the session's, never the object's
+		return nil, false, domain.ErrForbidden
 	}
-	if tag.RowsAffected() == 1 {
+	if found, err := r.FindRecord(ctx, x.IntegrationID, x.ExternalType, x.ExternalID); err != nil {
+		return nil, false, err
+	} else if found != nil {
+		return found, false, nil
+	}
+	err := platformdb.WithSavepoint(ctx, r.pool, func(ctx context.Context) error {
+		_, e := r.q(ctx).Exec(ctx, `
+			INSERT INTO external_records (id, tenant_id, integration_id, external_system, external_type, external_id, display_ref, external_status, status_class, sync_state,
+				source_updated_at, last_synced_at, created_by_user_id, version, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			x.ID, x.TenantID, x.IntegrationID, x.ExternalSystem, x.ExternalType, x.ExternalID, x.DisplayRef, x.ExternalStatus, string(x.StatusClass), x.SyncState,
+			x.SourceUpdatedAt, x.LastSyncedAt, x.CreatedBy, x.Version, x.CreatedAt, x.UpdatedAt)
+		return e
+	})
+	if err == nil {
 		return x, true, nil
 	}
-	found, err := r.FindRecord(ctx, x.IntegrationID, x.ExternalType, x.ExternalID)
-	if err != nil {
-		return nil, false, err
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23505" {
+		found, ferr := r.FindRecord(ctx, x.IntegrationID, x.ExternalType, x.ExternalID)
+		if ferr != nil {
+			return nil, false, ferr
+		}
+		if found == nil { // it exists but hangs from nothing this caller can see: the caller learns nothing about it
+			return nil, false, domain.ErrNotFound
+		}
+		return found, false, nil
 	}
-	return found, false, nil
+	return nil, false, mapErr(err)
 }
 
 func (r *PostgresRepository) ApplySnapshot(ctx context.Context, id uuid.UUID, snap domain.Snapshot, now time.Time) (bool, bool, *domain.ExternalRecord, error) {
@@ -104,13 +127,20 @@ func (r *PostgresRepository) ApplySnapshot(ctx context.Context, id uuid.UUID, sn
 	if err != nil {
 		return false, false, nil, err
 	}
-	// older than what was applied: ignored (the database refuses to go back in time too, as a backstop)
-	if snap.UpdatedAt != nil && before.SourceUpdatedAt != nil && snap.UpdatedAt.Before(*before.SourceUpdatedAt) {
-		return false, false, before, nil
+	// Order is decided by the PROVIDER's own update time. A snapshot with no time cannot be placed, so it never overwrites a record that already has one; an older one is
+	// ignored; one with the SAME time changes nothing unless its content differs (the ERP corrected itself within the same instant).
+	if before.SourceUpdatedAt != nil {
+		if snap.UpdatedAt == nil || snap.UpdatedAt.Before(*before.SourceUpdatedAt) {
+			return false, false, before, nil
+		}
+		if snap.UpdatedAt.Equal(*before.SourceUpdatedAt) && snap.ExternalStatus == before.ExternalStatus && snap.StatusClass == before.StatusClass &&
+			(snap.DisplayRef == "" || snap.DisplayRef == before.DisplayRef) {
+			return false, false, before, nil
+		}
 	}
 	src := snap.UpdatedAt
 	if src == nil {
-		src = before.SourceUpdatedAt // a snapshot without the provider's time never moves it
+		src = before.SourceUpdatedAt
 	}
 	row := r.q(ctx).QueryRow(ctx, `
 		UPDATE external_records SET display_ref=$3, external_status=$4, status_class=$5, sync_state='synced', source_updated_at=$6, last_synced_at=$7
@@ -422,12 +452,20 @@ func (r *PostgresRepository) InNewTransaction(ctx context.Context, fn func(ctx c
 		return errors.New("servicectx: tenant context required")
 	}
 	base := context.WithoutCancel(ctx) // the outcome of a call to the ERP must be written even if the caller went away
+	// ... but it must not wait forever on a lock held by someone else: a transaction that cannot get its lock fails, the attempt stays in flight, and reconciliation
+	// settles it (nothing is lost, nothing hangs)
+	bounded := func(sc context.Context) error {
+		if _, err := platformdb.QuerierFromContext(sc, r.pool).Exec(sc, fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, r.txLockTimeout().Milliseconds())); err != nil {
+			return err
+		}
+		return fn(sc)
+	}
 	switch tc.Source {
 	case tenancydomain.AccessSourceSystem:
-		return platformdb.WithSystemTenantSession(base, r.pool, tc.TenantID, func(sc context.Context) error { return fn(sc) })
+		return platformdb.WithSystemTenantSession(base, r.pool, tc.TenantID, bounded)
 	case tenancydomain.AccessSourceDirect:
 		return platformdb.WithTenantSession(base, r.pool, tc.ActorID, false, func(sc context.Context) error {
-			return fn(tenancydomain.WithTenantContext(sc, tc))
+			return bounded(tenancydomain.WithTenantContext(sc, tc))
 		})
 	default:
 		return domain.ErrForbidden // a Hub delegate never asks an ERP for anything (service.request_external is not delegable)
@@ -489,4 +527,14 @@ func (r *PostgresRepository) ExternalRecordsForContext(ctx context.Context, cont
 		out = append(out, *x)
 	}
 	return out, rows.Err()
+}
+
+// SetTxLockTimeout bounds how long the independent transactions of an ERP request wait for a lock (default 5 s).
+func (r *PostgresRepository) SetTxLockTimeout(d time.Duration) { r.lockTimeout = d }
+
+func (r *PostgresRepository) txLockTimeout() time.Duration {
+	if r.lockTimeout > 0 {
+		return r.lockTimeout
+	}
+	return 5 * time.Second
 }

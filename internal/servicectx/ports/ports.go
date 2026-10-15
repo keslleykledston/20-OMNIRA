@@ -67,6 +67,9 @@ type Repository interface {
 	// ReadConversation is the same without the lock.
 	ReadConversation(ctx context.Context, id uuid.UUID) (*ConversationFacts, error)
 
+	// InSavepoint runs fn so that, if it fails, everything it did is undone and the surrounding transaction stays usable (the protocol number goes back too).
+	InSavepoint(ctx context.Context, fn func(ctx context.Context) error) error
+
 	// Now is the database clock (clock_timestamp): opened_at and closed_at come from the same clock that stamps messages, never from the app server's.
 	Now(ctx context.Context) (time.Time, error)
 

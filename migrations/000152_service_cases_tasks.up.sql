@@ -277,6 +277,10 @@ BEGIN
   IF NEW.status = 'done' AND OLD.status <> 'done' AND NOT public.is_system_admin() AND NEW.completed_by_user_id IS DISTINCT FROM public.current_user_id() THEN
     RAISE EXCEPTION 'a task is completed in the name of whoever completes it' USING ERRCODE = '23514';
   END IF;
+  -- (a system session may complete a task on behalf of a person, never of somebody who does not belong to the company)
+  IF NEW.status = 'done' AND OLD.status <> 'done' AND NEW.completed_by_user_id IS NOT NULL AND NOT public.service_active_member(NEW.tenant_id, NEW.completed_by_user_id) THEN
+    RAISE EXCEPTION 'a task is completed by an active member of the company' USING ERRCODE = '23514';
+  END IF;
   IF NEW.status IN ('done', 'cancelled') AND NEW.status IS DISTINCT FROM OLD.status
      AND GREATEST(COALESCE(NEW.completed_at, '-infinity'), COALESCE(NEW.cancelled_at, '-infinity')) > clock_timestamp() + interval '1 minute' THEN
     RAISE EXCEPTION 'a task cannot be completed or cancelled in the future' USING ERRCODE = '23514';

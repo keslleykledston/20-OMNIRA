@@ -640,7 +640,7 @@ paths:
         content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalRequest' } } }
       responses:
         '201': { description: Linked, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalResponse' } } } }
-        '200': { description: The link already stood, content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalResponse' } } } }
+        '200': { description: The link already stood, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalResponse' } } } }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
@@ -723,7 +723,7 @@ paths:
       tags: [External requests]
       summary: Ask the ERP to create a service order for the session
       description: |
-        Available only with `OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED` (otherwise 404) and a gateway adapter for the integration (otherwise 503). Needs `service.request_external` (administrators and supervisors; NEVER delegable to a Hub, NEVER executable by the AI). `Idempotency-Key` is REQUIRED.
+        Available only with `OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED` (otherwise 404) and a gateway adapter for the integration (otherwise 503). Needs `service.request_external` AND `service.link_external` (asking, and keeping the answer; administrators and supervisors; NEVER delegable to a Hub, NEVER executable by the AI). `Idempotency-Key` is REQUIRED.
         The attempt is made DURABLE in its own transaction before the ERP is called and its outcome is written in another after, so a crash cannot make a call that may have reached the ERP look as if it never happened.
         `201` created; `200` + `Idempotent-Replay: true` the same key again (no new call); `422 external_rejected` the ERP definitively refused (nothing was created; the session is free to ask again); `202 outcome_unknown` NO ANSWER — the ERP may have processed it: nothing is repeated, the session is blocked from a new request until it is reconciled; `409 request_blocked` another request of the session is in flight or of unknown outcome.
       parameters:
@@ -770,7 +770,7 @@ paths:
         - { $ref: '#/components/parameters/TenantId' }
         - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200': { description: The request, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRequest' } } } }
+        '200': { description: The request, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRequest' } } } }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
@@ -782,7 +782,7 @@ paths:
       tags: [External requests]
       summary: Find out whether a request of unknown outcome was processed
       description: |
-        Needs `service.request_external`. Asks the ERP for the record by the correlation key OMNIRA sent. Found: confirmed (and linked). Not found: believed only when the request is old enough (an ERP may be eventually consistent), then it is a confirmed failure that frees the session. An ERP that does not answer teaches nothing. An ERP that cannot look a record up (`needs_manual`) is settled by `resolve`.
+        Needs `service.request_external` and `service.link_external`. A request still in flight (its own call may answer at any moment) is `too_early`. Asks the ERP for the record by the correlation key OMNIRA sent; an answer that is not a service order teaches nothing. Found: confirmed (and linked). Not found: believed only when the request is old enough (an ERP may be eventually consistent), then it is a confirmed failure that frees the session. An ERP that does not answer teaches nothing. An ERP that cannot look a record up (`needs_manual`) is settled by `resolve`.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -799,7 +799,7 @@ paths:
       tags: [External requests]
       summary: Settle by hand a request whose outcome is unknown
       description: |
-        Needs `service.request_external`. After somebody checked the ERP: it created the record (give its id; the ERP is asked to confirm it exists) or it created nothing (give the reason, kept in the history). A settled request is final (409).
+        Needs `service.request_external` and `service.link_external`. After somebody checked the ERP: it created the record (give its id; the ERP is asked to confirm it exists) or it created nothing (give the reason, kept in the history). A settled request is final (409).
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -813,6 +813,7 @@ paths:
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/service-categories:
     get:
