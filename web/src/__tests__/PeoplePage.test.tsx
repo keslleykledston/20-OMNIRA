@@ -21,6 +21,7 @@ interface World {
   online: string[]
   shifts: any[]
   failNext?: { status: number; data?: string } | null
+  agentsDown?: boolean
 }
 type Call = { method: string; url: string; body?: any }
 
@@ -86,7 +87,7 @@ function serve(w: World) {
     if (url.endsWith('/team')) return ok({ items: w.members })
     if (url.endsWith('/roles')) return ok({ items: ROLES })
     if (url.endsWith('/agents/presence')) return ok({ online_agent_profile_ids: w.online })
-    if (url.endsWith('/agents')) return ok({ items: w.agents })
+    if (url.endsWith('/agents')) return w.agentsDown ? Promise.reject({ response: { status: 503, data: 'down' } }) : ok({ items: w.agents })
     if (url.endsWith('/queues')) return ok({ items: w.queues })
     if (url.endsWith('/sectors')) return ok({ items: w.sectors })
     if (url.endsWith('/shifts')) return ok({ items: w.shifts })
@@ -426,6 +427,21 @@ describe('Pessoas: a ficha', () => {
     await user.click(within(s).getByLabelText('Participa da fila Suporte N1'))
     await user.click(within(await save(user, s)).getByRole('button', { name: 'Aplicar alterações' }))
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/agents/p-ana/queues/qm-ana'))).toBe(true))
+  })
+
+  it('pausar sem mexer nas filas não depende de reler as filas', async () => {
+    const user = userEvent.setup()
+    const w = world()
+    const calls = serve(w)
+    page()
+    await user.click(await rowOf('Ana Souza'))
+    const s = sheet()
+    await user.click(within(s).getByRole('switch', { name: 'Recebe conversas' }))
+    const confirm = await save(user, s)
+    w.agentsDown = true // the queue list cannot be read while saving
+    await user.click(within(confirm).getByRole('button', { name: 'Aplicar alterações' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/agents/p-ana'))?.body).toEqual({ status: 'disabled' }))
+    w.agentsDown = false
   })
 
   it('mexer na fila e pausar no mesmo salvamento aplica a fila antes da pausa', async () => {

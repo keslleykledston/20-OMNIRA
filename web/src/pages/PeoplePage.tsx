@@ -247,7 +247,7 @@ export default function PeoplePage() {
         else await agentsAPI.setStatus(profileId, 'active')
       }
       // queue edits are applied while the person still attends: before a pause, after switching on
-      if (profileId && (attendsOf(p, edits) || pausing)) {
+      if (profileId && (attendsOf(p, edits) || pausing) && Object.keys(edits.seats).length > 0) {
         const now = (await agentsAPI.list()).find((a) => a.id === profileId)?.queues ?? []
         const onServer = new Map(now.map((q) => [q.queue_id, q]))
         for (const queueId of Object.keys(edits.seats)) {
