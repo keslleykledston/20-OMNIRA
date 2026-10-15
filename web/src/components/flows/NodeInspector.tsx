@@ -312,6 +312,63 @@ export default function NodeInspector({ node, queues, sectors = [], subflows, va
         </>
       )
       break
+    case 'start_service_session':
+      form = (
+        <>
+          <p className="rounded-control bg-status-info-soft p-2 text-xs text-text-secondary">Abre o atendimento com protocolo (AT-n) desta conversa, ou usa o que já estiver aberto. Não encerra nem altera a conversa.</p>
+          <Input label="Guardar o protocolo na variável" value={str(cfg, 'variable')} disabled={ro} helperText="Opcional. Depois use {{protocolo}} nas mensagens." onChange={(e) => set({ variable: e.target.value || undefined })} />
+        </>
+      )
+      break
+    case 'classify_service_session':
+      form = <Input label="Código da categoria" value={str(cfg, 'category')} disabled={ro} helperText="O código de uma categoria ativa da empresa (ex.: suporte-tecnico). Se não existir, o fluxo segue a saída de erro." onChange={(e) => set({ category: e.target.value })} />
+      break
+    case 'create_service_task':
+      form = (
+        <>
+          <Input label="Título da tarefa" value={str(cfg, 'title')} disabled={ro} helperText={`Aceita {{variavel}}. ${varHint ?? ''}`} onChange={(e) => set({ title: e.target.value })} />
+          <TextArea label="Descrição" value={str(cfg, 'description')} disabled={ro} rows={3} onChange={(e) => set({ description: e.target.value || undefined })} />
+          <Select label="Prioridade" value={str(cfg, 'priority') || 'normal'} disabled={ro} hint="A tarefa nasce sem responsável: uma pessoa a assume." onChange={(v) => set({ priority: v })}>
+            <option value="low">Baixa</option>
+            <option value="normal">Normal</option>
+            <option value="high">Alta</option>
+            <option value="urgent">Urgente</option>
+          </Select>
+        </>
+      )
+      break
+    case 'open_service_case':
+      form = (
+        <>
+          <Input label="Título da ocorrência" value={str(cfg, 'title')} disabled={ro} helperText={`Aceita {{variavel}}. ${varHint ?? ''}`} onChange={(e) => set({ title: e.target.value })} />
+          <TextArea label="Descrição" value={str(cfg, 'description')} disabled={ro} rows={3} onChange={(e) => set({ description: e.target.value || undefined })} />
+          <Select label="Prioridade" value={str(cfg, 'priority') || 'normal'} disabled={ro} onChange={(v) => set({ priority: v })}>
+            <option value="low">Baixa</option>
+            <option value="normal">Normal</option>
+            <option value="high">Alta</option>
+            <option value="urgent">Urgente</option>
+          </Select>
+          <Input label="Guardar o número na variável" value={str(cfg, 'variable')} disabled={ro} helperText="Opcional. Depois use {{ocorrencia}} nas mensagens." onChange={(e) => set({ variable: e.target.value || undefined })} />
+        </>
+      )
+      break
+    case 'close_service_session':
+      form = (
+        <>
+          <p className="rounded-control bg-status-info-soft p-2 text-xs text-text-secondary">Encerra só o protocolo. A conversa continua aberta; para encerrá-la use “Encerrar atendimento”.</p>
+          <Select label="Resultado" value={str(cfg, 'result') || 'information_provided'} disabled={ro} onChange={(v) => set({ result: v })}>
+            <option value="information_provided">Informação prestada</option>
+            <option value="resolved_first_contact">Resolvido no primeiro contato</option>
+            <option value="task_created">Tarefa criada</option>
+            <option value="case_created">Ocorrência criada</option>
+            <option value="external_service_order">Ordem de serviço no ERP</option>
+            <option value="transferred">Transferido</option>
+            <option value="other">Outro</option>
+          </Select>
+          <Input label="Observação" value={str(cfg, 'note')} disabled={ro} helperText="Opcional. Aceita {{variavel}}." onChange={(e) => set({ note: e.target.value || undefined })} />
+        </>
+      )
+      break
     case 'assign_queue':
       form = queueSelect('Fila de destino', str(cfg, 'queue'), (v) => set({ queue: v }), false)
       break

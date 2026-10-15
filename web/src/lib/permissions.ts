@@ -21,6 +21,18 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       { key: 'conversation.read_internal', label: 'Ver conversas com contatos internos (equipe, parceiros, fornecedores)' },
     ],
   },
+  {
+    title: 'Atendimento com protocolo',
+    items: [
+      { key: 'service.read', label: 'Ver atendimentos com protocolo, ocorrências e tarefas' },
+      { key: 'service.create', label: 'Abrir atendimentos, ocorrências e tarefas' },
+      { key: 'service.update', label: 'Editar e classificar atendimentos, ocorrências e tarefas' },
+      { key: 'service.close', label: 'Encerrar atendimentos, resolver ocorrências e concluir tarefas' },
+      { key: 'service.assign', label: 'Atribuir ocorrências e tarefas a outras pessoas ou equipes' },
+      { key: 'service.link_external', label: 'Vincular registros do ERP/CRM ao atendimento' },
+      { key: 'service.request_external', label: 'Pedir ao ERP a criação de uma ordem de serviço' },
+    ],
+  },
   { title: 'Canais', items: [{ key: 'channel.manage', label: 'Gerenciar canais' }] },
   {
     title: 'Grupos',

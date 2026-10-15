@@ -34,6 +34,7 @@ import (
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
+	"github.com/omnira/omnira/internal/platform/claimhook"
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
@@ -43,6 +44,7 @@ import (
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
 	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -76,7 +78,12 @@ type Server struct {
 	sessionChecker authn.SessionChecker
 	natsConn       *nats.Conn
 	valkeyClient   *redis.Client
+	// claimHook tells the optional Service Context module that a person assumed a conversation (ADR-0049); main installs the module's function on it.
+	claimHook claimhook.Hook
 }
+
+// ClaimHook is the hook the claim routes (member self-claim, Hub agent claim in the workspace) run after a conversation was assumed. Empty = nothing happens.
+func (s *Server) ClaimHook() *claimhook.Hook { return &s.claimHook }
 
 // SetupPresence wires the Valkey client used by presence heartbeats
 // (ADR-0010). Optional: when nil, RegisterPresenceHandlers still registers
@@ -683,10 +690,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	assignHandler := routingadapters.NewAssignHandler(routingapplication.NewAssigner(
 		routingadapters.NewPostgresConversationAssigner(dbPool),
 		auditRec,
-	))
+	).WithClaimHook(&s.claimHook))
 	// ADR-0040 phase 03: a Hub agent attending the instance claims and answers through the Hub's own write path (delegatedWrites); everybody else
 	// reaches the original handler untouched. Delegable marks the route and names the key it needs in the delegated context.
-	delegatedWrites := hubadapters.NewDelegatedWrites(dbPool)
+	delegatedWrites := hubadapters.NewDelegatedWrites(dbPool).WithClaimHook(&s.claimHook)
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", tenancyadapters.Delegable("conversation.claim", authnMiddleware(tenantSession(delegatedWrites.Claim(http.HandlerFunc(assignHandler.Assign))))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", tenancyadapters.Delegable("conversation.claim", authnMiddleware(tenantSession(delegatedWrites.Release(http.HandlerFunc(assignHandler.Unassign))))))
 
@@ -944,6 +951,24 @@ func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendancea
 		return tenancyadapters.ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, dbPool), tenantID, userID, "conversation.read")
 	}, 5) // 5 drafts a minute per person, like the AI summary
 	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) })
+}
+
+// RegisterServiceContextHandlers exposes Service Context & Operations (ADR-0049): service sessions with a protocol, the company's catalogs, and (in later
+// phases) cases, tasks and external records, behind authn + the tenant session. Only called when OMNIRA_SERVICE_CONTEXT_ENABLED is true; the permission of
+// each operation (service.*) is asked by the service AND again by the database (row guards and policies of migration 000150).
+func (s *Server) RegisterServiceContextHandlers(dbPool *pgxpool.Pool, h *servicectxadapters.Handler) {
+	if s.authenticator == nil || h == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	// ADR-0040: a Hub agent reaches a route only if it is marked with the key that opens it (tenancyadapters.Delegable); the data domain `service` (migration 000154)
+	// answers the same question again in the database. Routes that change the company's configuration or ask the ERP for anything are not marked at all.
+	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }, tenancyadapters.Delegable)
 }
 
 // RegisterFlowHandlers exposes the Flow Builder control plane (ADR-0019) behind authn + the tenant session. It is only

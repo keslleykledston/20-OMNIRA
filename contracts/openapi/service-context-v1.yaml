@@ -1,0 +1,1301 @@
+openapi: 3.0.3
+info:
+  title: OMNIRA Service Context & Operations API
+  version: 0.1.0
+  description: |
+    Service sessions (atendimentos) with a protocol per company, the company's own categories and result codes, and — in later phases of ADR-0049 — cases,
+    tasks and external records. Kept as its own contract so the module ships without touching `omnira-v1.yaml`; a drift test
+    (`internal/servicectx/adapters/contract_test.go`) fails the build when this file and the routes diverge, in both directions.
+
+    Authentication is the session cookie; the tenant comes from the URL and is re-checked against the session's memberships (or a live Hub grant).
+    Authorization is by permission KEY (never role name): `service.read`, `service.create`, `service.update`, `service.close`, `service.assign`,
+    `service.link_external`, `service.request_external`. The database asks for the same keys again.
+
+    Conventions: bodies refuse unknown fields (a `tenant_id` in a body is an error, never an override). Every mutation of an existing record needs
+    `If-Match: "<version>"` (the `ETag` of the last read): missing = 428, stale = 412. `POST /service-sessions` takes an optional `Idempotency-Key`
+    (8-128 characters): the same key with the same request returns the same session (200, `Idempotent-Replay: true`); with another request, 422.
+    Errors are `{error, detail?}`.
+servers:
+  - url: /api/v1
+paths:
+  /tenants/{tenant_id}/service-sessions:
+    post:
+      operationId: openServiceSession
+      tags: [Service sessions]
+      summary: Open a service session (or return the one already standing for the request)
+      description: |
+        Needs `service.create`. With `conversation_id` the contact comes from the conversation and the conversation's ACTIVE session is returned when it already
+        has one (at most one is active at a time; many follow one another). Without a conversation it logs an attendance by another channel (a phone call).
+        The protocol (`<PREFIX>-<n>`, e.g. `KTG-1001`: the company's own 2-6 capital letters, numbers from 1001) is unique per company and allocated in the same transaction. A conversation that is closed, internal or not visible cannot have one.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/OpenSessionRequest' } } }
+      responses:
+        '201': { description: Created, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '200': { description: Already standing (replay or active session), headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listServiceSessions
+      tags: [Service sessions]
+      summary: List service sessions, newest first, by keyset cursor
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/SessionStatus' } }
+        - { name: conversation_id, in: query, schema: { type: string, format: uuid } }
+        - { name: contact_id, in: query, schema: { type: string, format: uuid } }
+        - { name: customer_id, in: query, schema: { type: string, format: uuid } }
+        - { name: queue_id, in: query, schema: { type: string, format: uuid } }
+        - { name: protocol, in: query, schema: { type: string } }
+        - { name: opened_from, in: query, schema: { type: string, format: date-time } }
+        - { name: opened_to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/SessionPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}:
+    get:
+      operationId: getServiceSession
+      tags: [Service sessions]
+      summary: Read a service session (with who holds its conversation now)
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/SessionId' } ]
+      responses:
+        '200': { description: The session, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: classifyServiceSession
+      tags: [Service sessions]
+      summary: Classify an active session (customer, department, category)
+      description: Needs `service.update` and `If-Match`. Only the fields sent change; nothing is cleared in this version. A closed session is read-only.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ClassifyRequest' } } }
+      responses:
+        '200': { description: Updated, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}/status:
+    post:
+      operationId: setServiceSessionStatus
+      tags: [Service sessions]
+      summary: Move an active session between in_progress and waiting
+      description: Needs `service.update` and `If-Match`. Closing, abandoning and reopening have their own operations (they ask for `service.close`).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [status], additionalProperties: false, properties: { status: { type: string, enum: [in_progress, waiting] } } } } }
+      responses:
+        '200': { description: Updated, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}/close:
+    post:
+      operationId: closeServiceSession
+      tags: [Service sessions]
+      summary: Close (or abandon) a session with a result
+      description: |
+        Needs `service.close` and `If-Match`. The result is the PRIMARY classification: one of the eight built-in codes or an active code of the company
+        (which points to a built-in one; reports aggregate by `resolution_canonical`). Tasks, cases and service orders are links, not results.
+        `abandon=true` ends it as `abandoned` (result `abandoned`); `abandoned` cannot be used with `abandon=false`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CloseRequest' } } }
+      responses:
+        '200': { description: Closed, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}/reopen:
+    post:
+      operationId: reopenServiceSession
+      tags: [Service sessions]
+      summary: Reopen a closed or abandoned session (narrow exception)
+      description: |
+        Needs `service.close` and `If-Match`. Only when the conversation is still open (a closed conversation is final, ADR-0020), the session is the
+        conversation's latest, no other one is active, and the reopen window (24 h) has not passed. The protocol is kept; a new episode starts, so the time
+        spent closed is not absorbed. A reason is required.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, maxLength: 300 } } } } }
+      responses:
+        '200': { description: Reopened, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}/messages:
+    get:
+      operationId: listServiceSessionMessages
+      tags: [Service sessions]
+      summary: The messages that belong to the session, BY REFERENCE (no body is copied)
+      description: A message belongs to the session when its `created_at` falls inside one of the session's episodes (half-open). Read the content through the Inbox API.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/MessageRefPage' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/conversations/{conversation_id}/service-session:
+    get:
+      operationId: getConversationServiceSession
+      tags: [Service sessions]
+      summary: The active session of a conversation, or the latest one when none is active
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { name: conversation_id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        '200': { description: The session, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Session' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}/timeline:
+    get:
+      operationId: getServiceSessionTimeline
+      tags: [Timeline]
+      summary: The history of one session
+      description: |
+        Stored events (`derived=false`: opened, classified, status changed, closed, reopened ...) plus, shown by reference and never copied, the routing module's
+        record of who held the conversation while the session was in course (`derived=true`, `conversation.assignment_changed`). Payloads carry ids, enums and
+        counts only; message content is never here. Ordered by `(occurred_at, id)`, newest first by default; paginated by keyset cursor.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/TimelinePage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/contacts/{contact_id}/service-timeline:
+    get:
+      operationId: getContactServiceTimeline
+      tags: [Timeline]
+      summary: The stored history around one contact, across its sessions
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/TimelinePage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/contacts/{contact_id}/service-context:
+    get:
+      operationId: getContactServiceContext
+      tags: [Timeline]
+      summary: The aggregated context an attendant needs when a contact writes
+      description: |
+        Recent sessions and their results, the active session and recent events. A contact may be tied to several companies (customer accounts), so the
+        context never guesses: without `customer_id` and with more than one link it answers `needs_customer_selection=true` and shows only what is tied to no
+        customer; with `customer_id` (which must be one of the contact's own active links, else 400) it narrows to that customer. Open cases and pending tasks follow
+        the same rule (a customer's case, task or external record never appears under another customer's selection).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: customer_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The context, content: { application/json: { schema: { $ref: '#/components/schemas/ContactContext' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-cases:
+    post:
+      operationId: openServiceCase
+      tags: [Cases]
+      summary: Open a case (ocorrência)
+      description: |
+        Needs `service.create` (and `service.assign` to give it a team or an agent). A case is deliberate: the system never makes one for a conversation by itself.
+        With `session_id` the session is kept as the case's origin and its customer is inherited when none is given.
+        `Idempotency-Key` makes a retry return the same case (200, `Idempotent-Replay: true`); with another request, 422.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/OpenCaseRequest' } } }
+      responses:
+        '201': { description: Created, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Case' } } } }
+        '200': { description: Already standing (replay), headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Case' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listServiceCases
+      tags: [Cases]
+      summary: List cases, newest first, by keyset cursor
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/CaseStatus' } }
+        - { name: working, in: query, schema: { type: boolean }, description: Only open, investigating or waiting. }
+        - { name: priority, in: query, schema: { $ref: '#/components/schemas/Priority' } }
+        - { name: customer_id, in: query, schema: { type: string, format: uuid } }
+        - { name: assigned_agent_id, in: query, schema: { type: string, format: uuid } }
+        - { name: assigned_team_id, in: query, schema: { type: string, format: uuid } }
+        - { name: session_id, in: query, schema: { type: string, format: uuid }, description: Cases linked to this session. }
+        - { name: case_number, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/CasePage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-cases/{case_id}:
+    get:
+      operationId: getServiceCase
+      tags: [Cases]
+      summary: Read a case
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: case_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The case, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Case' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateServiceCase
+      tags: [Cases]
+      summary: Edit a case that is not final
+      description: |
+        Needs `service.update` and `If-Match`. Only the fields sent change.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: case_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PatchCaseRequest' } } }
+      responses:
+        '200': { description: The case, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Case' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-cases/{case_id}/status:
+    post:
+      operationId: setServiceCaseStatus
+      tags: [Cases]
+      summary: Move a case between states
+      description: |
+        Moves follow `open -> investigating|waiting|resolved|cancelled`, `investigating <-> waiting`, `resolved -> closed | investigating (reopen)`; `closed` and `cancelled` are final.
+        `open|investigating|waiting` moves need `service.update`; resolving, closing, cancelling and reopening need `service.close`. Resolving needs `resolution`; cancelling and reopening need a `reason` (3-500 characters). Needs `If-Match`.
+        Nothing here touches a session or a task: their states are independent.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: case_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CaseStatusRequest' } } }
+      responses:
+        '200': { description: The case, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Case' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-cases/{case_id}/assign:
+    post:
+      operationId: assignServiceCase
+      tags: [Cases]
+      summary: Set who works the case
+      description: |
+        Needs `service.assign` and `If-Match`. The agent must be an active member of the company; sending neither clears the assignment.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: case_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AssignCaseRequest' } } }
+      responses:
+        '200': { description: The case, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Case' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-cases/{case_id}/sessions:
+    post:
+      operationId: linkServiceSessionToCase
+      tags: [Cases]
+      summary: Record that another attendance refers to this case
+      description: |
+        Needs `service.update`. Idempotent (200 when the link already stood, 201 when created). A final case takes no new links.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: case_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [session_id], additionalProperties: false, properties: { session_id: { type: string, format: uuid } } } } }
+      responses:
+        '201': { description: Linked, content: { application/json: { schema: { type: object } } } }
+        '200': { description: Already linked, content: { application/json: { schema: { type: object } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listServiceCaseSessions
+      tags: [Cases]
+      summary: The sessions that refer to the case
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: case_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Sessions, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Session' } } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-cases/{case_id}/timeline:
+    get:
+      operationId: getServiceCaseTimeline
+      tags: [Timeline]
+      summary: The history of one case
+      description: |
+        Stored events only, ordered like the session timeline.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: case_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/TimelinePage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-tasks:
+    post:
+      operationId: createServiceTask
+      tags: [Tasks]
+      summary: Create a task (a pending action)
+      description: |
+        Needs `service.create`; assigning to somebody other than yourself, or to a team, also needs `service.assign`. A task needs no case and no service order and can outlive the attendance. Its origin (`human`) is decided by the door, never by the body.
+        `Idempotency-Key` makes a retry return the same task.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateTaskRequest' } } }
+      responses:
+        '201': { description: Created, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '200': { description: Already standing (replay), headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listServiceTasks
+      tags: [Tasks]
+      summary: List tasks, newest first, by keyset cursor
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/TaskStatus' } }
+        - { name: pending, in: query, schema: { type: boolean } }
+        - { name: overdue, in: query, schema: { type: boolean }, description: Pending and past due. }
+        - { name: assigned_user_id, in: query, schema: { type: string, format: uuid } }
+        - { name: assigned_team_id, in: query, schema: { type: string, format: uuid } }
+        - { name: session_id, in: query, schema: { type: string, format: uuid } }
+        - { name: case_id, in: query, schema: { type: string, format: uuid } }
+        - { name: contact_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/TaskPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-tasks/{task_id}:
+    get:
+      operationId: getServiceTask
+      tags: [Tasks]
+      summary: Read a task
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The task, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateServiceTask
+      tags: [Tasks]
+      summary: Edit a pending task
+      description: |
+        Needs `service.update` and `If-Match`. Only a pending task is edited.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PatchTaskRequest' } } }
+      responses:
+        '200': { description: The task, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-tasks/{task_id}/assign:
+    post:
+      operationId: assignServiceTask
+      tags: [Tasks]
+      summary: Set who does the task
+      description: |
+        Needs `service.assign` and `If-Match`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AssignTaskRequest' } } }
+      responses:
+        '200': { description: The task, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-tasks/{task_id}/start:
+    post:
+      operationId: startServiceTask
+      tags: [Tasks]
+      summary: Start a task (open -> in_progress)
+      description: |
+        Needs `service.update` and `If-Match`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      responses:
+        '200': { description: The task, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-tasks/{task_id}/complete:
+    post:
+      operationId: completeServiceTask
+      tags: [Tasks]
+      summary: Complete a task
+      description: |
+        Needs `service.close` and `If-Match`. Completing a task NEVER resolves or closes a case.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      responses:
+        '200': { description: The task, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-tasks/{task_id}/cancel:
+    post:
+      operationId: cancelServiceTask
+      tags: [Tasks]
+      summary: Cancel a task
+      description: |
+        Needs `service.close`, `If-Match` and a `reason` (3-500 characters). A cancelled task is final.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, minLength: 3, maxLength: 500 } } } } }
+      responses:
+        '200': { description: The task, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-tasks/{task_id}/reopen:
+    post:
+      operationId: reopenServiceTask
+      tags: [Tasks]
+      summary: Reopen a completed task
+      description: |
+        Needs `service.close`, `If-Match` and a `reason`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: task_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IfMatch' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [reason], additionalProperties: false, properties: { reason: { type: string, minLength: 3, maxLength: 500 } } } } }
+      responses:
+        '200': { description: The task, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '412': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-records:
+    post:
+      operationId: linkExternalRecord
+      tags: [External records]
+      summary: Link a record the ERP/CRM already has to a session, a case or a task
+      description: |
+        Needs `service.link_external`. The ERP is the authority: it is asked to CONFIRM the record (this module never invents one), and the projection (status, class, sync state) is refreshed from what it says. The same ERP record can be linked to several targets and stays ONE record (unique by integration + type + id, per company). Linking twice returns the link that stands (200). An ERP that does not answer is `502 external_unavailable`, never a guess; no adapter for the integration is `503 not_configured`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalRequest' } } }
+      responses:
+        '201': { description: Linked, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalResponse' } } } }
+        '200': { description: The link already stood, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listExternalRecords
+      tags: [External records]
+      summary: List external records, newest first, by keyset cursor
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: integration_id, in: query, schema: { type: string, format: uuid } }
+        - { name: external_type, in: query, schema: { type: string } }
+        - { name: external_id, in: query, schema: { type: string } }
+        - { name: status_class, in: query, schema: { $ref: '#/components/schemas/StatusClass' } }
+        - { name: session_id, in: query, schema: { type: string, format: uuid }, description: Records actively linked to this session. }
+        - { name: case_id, in: query, schema: { type: string, format: uuid } }
+        - { name: task_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRecordPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-records/{record_id}:
+    get:
+      operationId: getExternalRecord
+      tags: [External records]
+      summary: Read an external record (the projection, not the ERP)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The record, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRecord' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-records/{record_id}/refresh:
+    post:
+      operationId: refreshExternalRecord
+      tags: [External records]
+      summary: Ask the ERP again and update the projection
+      description: |
+        Needs `service.link_external`. A server-side sync, so it takes no `If-Match`. An older snapshot (by the PROVIDER's own update time) never rolls the projection back. An ERP that does not answer leaves the record as it was, marked `stale`; one that no longer knows it marks it `conflict`; nothing is deleted. The status change is told on the timeline of every session, case and task the record is linked to.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The record, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRecord' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-record-links/{link_id}/unlink:
+    post:
+      operationId: unlinkExternalRecord
+      tags: [External records]
+      summary: End a link (it stays as history)
+      description: |
+        Needs `service.link_external`. Idempotent.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The link, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalLink' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}/external-service-orders:
+    post:
+      operationId: requestExternalServiceOrder
+      tags: [External requests]
+      summary: Ask the ERP to create a service order for the session
+      description: |
+        Available only with `OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED` (otherwise 404) and a gateway adapter for the integration (otherwise 503). Needs `service.request_external` AND `service.link_external` (asking, and keeping the answer; administrators and supervisors; NEVER delegable to a Hub, NEVER executable by the AI). `Idempotency-Key` is REQUIRED.
+        The attempt is made DURABLE in its own transaction before the ERP is called and its outcome is written in another after, so a crash cannot make a call that may have reached the ERP look as if it never happened.
+        `201` created; `200` + `Idempotent-Replay: true` the same key again (no new call); `422 external_rejected` the ERP definitively refused (nothing was created; the session is free to ask again); `202 outcome_unknown` NO ANSWER — the ERP may have processed it: nothing is repeated, the session is blocked from a new request until it is reconciled; `409 request_blocked` another request of the session is in flight or of unknown outcome.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderRequest' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderResponse' } } } }
+        '200': { description: Replay of the same Idempotency-Key, headers: { Idempotent-Replay: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderResponse' } } } }
+        '202': { description: No answer from the ERP - outcome unknown, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests:
+    get:
+      operationId: listExternalRequests
+      tags: [External requests]
+      summary: List the requests made to the ERP
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/RequestState' } }
+        - { name: session_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRequestPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests/{request_id}:
+    get:
+      operationId: getExternalRequest
+      tags: [External requests]
+      summary: Read a request made to the ERP
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The request, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRequest' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests/{request_id}/reconcile:
+    post:
+      operationId: reconcileExternalRequest
+      tags: [External requests]
+      summary: Find out whether a request of unknown outcome was processed
+      description: |
+        Needs `service.request_external` and `service.link_external`. A request still in flight (its own call may answer at any moment) is `too_early`. Asks the ERP for the record by the correlation key OMNIRA sent; an answer that is not a service order teaches nothing. Found: confirmed (and linked). Not found: believed only when the request is old enough (an ERP may be eventually consistent), then it is a confirmed failure that frees the session. An ERP that does not answer teaches nothing. An ERP that cannot look a record up (`needs_manual`) is settled by `resolve`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: What the reconciliation found, content: { application/json: { schema: { $ref: '#/components/schemas/ReconcileResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests/{request_id}/resolve:
+    post:
+      operationId: resolveExternalRequest
+      tags: [External requests]
+      summary: Settle by hand a request whose outcome is unknown
+      description: |
+        Needs `service.request_external` and `service.link_external`. After somebody checked the ERP: it created the record (give its id; the ERP is asked to confirm it exists) or it created nothing (give the reason, kept in the history). A settled request is final (409).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ResolveRequest' } } }
+      responses:
+        '200': { description: Settled, content: { application/json: { schema: { $ref: '#/components/schemas/ReconcileResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-settings/protocol-prefix:
+    get:
+      operationId: getServiceProtocolPrefix
+      tags: [Catalogs]
+      summary: The company's protocol prefix and the next protocol
+      description: "Members only (never delegable). Before the first protocol `configured` is false and `prefix` is only the suggestion derived from the company name (three letters, e.g. KTG); it is reserved by the first protocol or by PUT."
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      responses:
+        '200': { description: Settings, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolPrefix' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setServiceProtocolPrefix
+      tags: [Catalogs]
+      summary: Choose the protocol prefix (needs tenant.manage), only before the first protocol
+      description: "Two to six capital letters, no digits (a company called K3G uses KTG). 409 `prefix_taken` when another company uses it, 409 `prefix_locked` once a protocol was issued (repeating the current prefix is accepted). Numbers start at 1001."
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [prefix], additionalProperties: false, properties: { prefix: { type: string, pattern: '^[A-Za-z]{2,6}$' } } } } }
+      responses:
+        '200': { description: Reserved, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolPrefix' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-categories:
+    get:
+      operationId: listServiceCategories
+      tags: [Catalogs]
+      summary: The company's categories
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { name: include_inactive, in: query, schema: { type: boolean } } ]
+      responses:
+        '200': { description: Categories, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Category' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createServiceCategory
+      tags: [Catalogs]
+      summary: Add a category (needs tenant.manage)
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [code, label], additionalProperties: false, properties: { code: { type: string }, label: { type: string, maxLength: 80 } } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-categories/{category_id}:
+    patch:
+      operationId: updateServiceCategory
+      tags: [Catalogs]
+      summary: Rename or (de)activate a category (needs tenant.manage); entries are never deleted
+      description: "Catalog entries are the company's configuration, not operational records: they carry no `version` and take no `If-Match` (the last write wins)."
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { name: category_id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CatalogPatch' } } }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-result-codes:
+    get:
+      operationId: listServiceResultCodes
+      tags: [Catalogs]
+      summary: The company's own result codes (plus the built-in ones, which are always available)
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { name: include_inactive, in: query, schema: { type: boolean } } ]
+      responses:
+        '200': { description: Result codes, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/ResultCode' } }, built_in: { type: array, items: { type: string } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createServiceResultCode
+      tags: [Catalogs]
+      summary: Add a result code that points to a built-in one (needs tenant.manage)
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [code, canonical_code, label], additionalProperties: false, properties: { code: { type: string }, canonical_code: { $ref: '#/components/schemas/CanonicalResult' }, label: { type: string, maxLength: 80 } } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/ResultCode' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-result-codes/{code_id}:
+    patch:
+      operationId: updateServiceResultCode
+      tags: [Catalogs]
+      summary: Rename or (de)activate a result code (needs tenant.manage)
+      parameters: [ { $ref: '#/components/parameters/TenantId' }, { name: code_id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CatalogPatch' } } }
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/ResultCode' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    TenantId: { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+    SessionId: { name: session_id, in: path, required: true, schema: { type: string, format: uuid } }
+    IfMatch: { name: If-Match, in: header, required: true, description: 'The version you read, as the ETag: "3".', schema: { type: string } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, description: 'A stable code: not_found, forbidden, invalid, precondition_required, version_conflict, invalid_transition, reopen_not_allowed, conversation_closed, idempotency_key_reused, not_a_customer_conversation, unknown_result, not_configured, outcome_unknown, unauthorized, internal.' }
+        detail: { type: string }
+    SessionStatus: { type: string, enum: [open, in_progress, waiting, closed, abandoned] }
+    CanonicalResult:
+      type: string
+      enum: [information_provided, resolved_first_contact, task_created, case_created, external_service_order, transferred, abandoned, other]
+    OpenSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        conversation_id: { type: string, format: uuid, nullable: true }
+        contact_id: { type: string, format: uuid, nullable: true, description: Ignored when a conversation is given (the contact comes from it). }
+        customer_id: { type: string, format: uuid, nullable: true }
+        queue_id: { type: string, format: uuid, nullable: true, description: The department (queues are the sectors). }
+        category_id: { type: string, format: uuid, nullable: true }
+        origin_channel: { type: string, pattern: '^[a-z0-9_]{1,40}$', description: Defaults to the line's provider when a conversation is given. }
+        external_protocol: { type: string, maxLength: 80, description: A legacy or imported number; it never takes the place of the generated protocol. }
+    ClassifyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        customer_id: { type: string, format: uuid }
+        queue_id: { type: string, format: uuid }
+        category_id: { type: string, format: uuid }
+    CloseRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        resolution_code: { type: string, description: A built-in code or an active code of the company. Required unless abandon=true. }
+        note: { type: string, maxLength: 1000 }
+        abandon: { type: boolean }
+    Session:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        protocol: { type: string, example: KTG-1482 }
+        external_protocol: { type: string, nullable: true }
+        conversation_id: { type: string, format: uuid, nullable: true }
+        contact_id: { type: string, format: uuid, nullable: true }
+        customer_id: { type: string, format: uuid, nullable: true }
+        queue_id: { type: string, format: uuid, nullable: true }
+        category_id: { type: string, format: uuid, nullable: true }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        resolution_code: { type: string, nullable: true }
+        resolution_canonical: { $ref: '#/components/schemas/CanonicalResult' }
+        resolution_note: { type: string }
+        origin_channel: { type: string }
+        opened_source: { type: string, enum: [operator, finalize, flow, api, system] }
+        closed_source: { type: string, nullable: true }
+        opened_by_user_id: { type: string, format: uuid, nullable: true }
+        closed_by_user_id: { type: string, format: uuid, nullable: true }
+        assigned_to_user_id: { type: string, format: uuid, nullable: true, description: Who holds the conversation now (read live; not copied). }
+        opened_at: { type: string, format: date-time }
+        first_response_at: { type: string, format: date-time, nullable: true }
+        closed_at: { type: string, format: date-time, nullable: true }
+        reopen_count: { type: integer }
+        version: { type: integer }
+        updated_at: { type: string, format: date-time }
+    SessionPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Session' } }
+        next_cursor: { type: string }
+    MessageRefPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              direction: { type: string, enum: [inbound, outbound] }
+              type: { type: string }
+              status: { type: string }
+              created_at: { type: string, format: date-time }
+              sent_by_user_id: { type: string, format: uuid, nullable: true }
+        next_cursor: { type: string }
+    TimelineItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        event_type: { type: string, example: service_session.closed }
+        entity_type: { type: string }
+        entity_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid, nullable: true }
+        case_id: { type: string, format: uuid, nullable: true }
+        conversation_id: { type: string, format: uuid, nullable: true }
+        contact_id: { type: string, format: uuid, nullable: true }
+        customer_id: { type: string, format: uuid, nullable: true }
+        actor_type: { type: string, enum: [user, system, flow, ai, integration] }
+        actor_id: { type: string, format: uuid, nullable: true }
+        source_system: { type: string }
+        occurred_at: { type: string, format: date-time }
+        schema_version: { type: integer }
+        payload: { type: object, description: Ids, enums and counts only. }
+        note: { type: string, description: A reason a person typed (reopen, cancel); never message content. }
+        correlation_id: { type: string, format: uuid, nullable: true }
+        derived: { type: boolean, description: True for an entry read from another module's history (never stored here). }
+    TimelinePage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/TimelineItem' } }
+        next_cursor: { type: string }
+    ContactContext:
+      type: object
+      properties:
+        contact_id: { type: string, format: uuid }
+        customers: { type: array, items: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, is_primary: { type: boolean } } } }
+        needs_customer_selection: { type: boolean }
+        selected_customer_id: { type: string, format: uuid, nullable: true }
+        active_session: { allOf: [ { $ref: '#/components/schemas/Session' } ], nullable: true }
+        recent_sessions: { type: array, items: { $ref: '#/components/schemas/Session' } }
+        recent_events: { type: array, items: { $ref: '#/components/schemas/TimelineItem' } }
+        open_cases: { type: array, items: { $ref: '#/components/schemas/Case' } }
+        pending_tasks: { type: array, items: { $ref: '#/components/schemas/Task' } }
+        external_records: { type: array, items: { $ref: '#/components/schemas/ExternalRecord' } }
+    Priority: { type: string, enum: [low, normal, high, urgent] }
+    CaseStatus: { type: string, enum: [open, investigating, waiting, resolved, closed, cancelled] }
+    TaskStatus: { type: string, enum: [open, in_progress, done, cancelled] }
+    OpenCaseRequest:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        customer_id: { type: string, format: uuid, nullable: true }
+        category_id: { type: string, format: uuid, nullable: true }
+        priority: { $ref: '#/components/schemas/Priority' }
+        assigned_team_id: { type: string, format: uuid, nullable: true }
+        assigned_agent_id: { type: string, format: uuid, nullable: true }
+        session_id: { type: string, format: uuid, nullable: true }
+    PatchCaseRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        priority: { $ref: '#/components/schemas/Priority' }
+        category_id: { type: string, format: uuid }
+        customer_id: { type: string, format: uuid }
+    CaseStatusRequest:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status: { $ref: '#/components/schemas/CaseStatus' }
+        resolution: { type: string, maxLength: 4000, description: Required to resolve. }
+        reason: { type: string, minLength: 3, maxLength: 500, description: Required to cancel and to reopen a resolved case. }
+    AssignCaseRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        assigned_team_id: { type: string, format: uuid, nullable: true }
+        assigned_agent_id: { type: string, format: uuid, nullable: true }
+    Case:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        case_number: { type: string, example: OC-1042 }
+        title: { type: string }
+        description: { type: string }
+        customer_id: { type: string, format: uuid, nullable: true }
+        category_id: { type: string, format: uuid, nullable: true }
+        priority: { $ref: '#/components/schemas/Priority' }
+        status: { $ref: '#/components/schemas/CaseStatus' }
+        assigned_team_id: { type: string, format: uuid, nullable: true }
+        assigned_agent_id: { type: string, format: uuid, nullable: true }
+        origin_session_id: { type: string, format: uuid, nullable: true }
+        resolution: { type: string, nullable: true }
+        cancel_reason: { type: string, nullable: true }
+        opened_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        closed_at: { type: string, format: date-time, nullable: true }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        reopen_count: { type: integer }
+        version: { type: integer }
+        updated_at: { type: string, format: date-time }
+    CasePage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Case' } }
+        next_cursor: { type: string }
+    CreateTaskRequest:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        priority: { $ref: '#/components/schemas/Priority' }
+        assigned_user_id: { type: string, format: uuid, nullable: true }
+        assigned_team_id: { type: string, format: uuid, nullable: true }
+        due_at: { type: string, format: date-time, nullable: true }
+        session_id: { type: string, format: uuid, nullable: true }
+        case_id: { type: string, format: uuid, nullable: true }
+        contact_id: { type: string, format: uuid, nullable: true }
+    PatchTaskRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 4000 }
+        priority: { $ref: '#/components/schemas/Priority' }
+        due_at: { type: string, format: date-time }
+        clear_due: { type: boolean }
+    AssignTaskRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        assigned_user_id: { type: string, format: uuid, nullable: true }
+        assigned_team_id: { type: string, format: uuid, nullable: true }
+    Task:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        assigned_user_id: { type: string, format: uuid, nullable: true }
+        assigned_team_id: { type: string, format: uuid, nullable: true }
+        due_at: { type: string, format: date-time, nullable: true }
+        overdue: { type: boolean, description: Pending and past its due time. }
+        completed_at: { type: string, format: date-time, nullable: true }
+        completed_by_user_id: { type: string, format: uuid, nullable: true }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        cancel_reason: { type: string, nullable: true }
+        origin_type: { type: string, enum: [human, flow, ai, api] }
+        session_id: { type: string, format: uuid, nullable: true }
+        case_id: { type: string, format: uuid, nullable: true }
+        contact_id: { type: string, format: uuid, nullable: true }
+        reopen_count: { type: integer }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TaskPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Task' } }
+        next_cursor: { type: string }
+    StatusClass: { type: string, enum: [open, in_progress, done, cancelled, unknown], description: The ERP's own status normalized to a few classes. }
+    RequestState: { type: string, enum: [in_flight, confirmed_success, confirmed_failure, outcome_unknown] }
+    LinkExternalRequest:
+      type: object
+      required: [integration_id, external_type, external_id]
+      additionalProperties: false
+      properties:
+        integration_id: { type: string, format: uuid }
+        external_type: { type: string, example: service_order }
+        external_id: { type: string, maxLength: 120 }
+        session_id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+      description: Exactly one of session_id, case_id, task_id.
+    ExternalRecord:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        integration_id: { type: string, format: uuid }
+        external_system: { type: string }
+        external_type: { type: string }
+        external_id: { type: string }
+        display_ref: { type: string, example: OS 1042 }
+        external_status: { type: string }
+        status_class: { $ref: '#/components/schemas/StatusClass' }
+        sync_state: { type: string, enum: [synced, pending, stale, conflict, error] }
+        source_updated_at: { type: string, format: date-time, nullable: true, description: The PROVIDER's update time of the snapshot applied last; it only moves forward. }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ExternalLink:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        external_record_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid, nullable: true }
+        case_id: { type: string, format: uuid, nullable: true }
+        task_id: { type: string, format: uuid, nullable: true }
+        linked_at: { type: string, format: date-time }
+        unlinked_at: { type: string, format: date-time, nullable: true }
+    LinkExternalResponse:
+      type: object
+      properties:
+        record: { $ref: '#/components/schemas/ExternalRecord' }
+        link: { $ref: '#/components/schemas/ExternalLink' }
+        record_created: { type: boolean }
+        link_created: { type: boolean }
+    ExternalRecordPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ExternalRecord' } }
+        next_cursor: { type: string }
+    ServiceOrderRequest:
+      type: object
+      required: [integration_id, title]
+      additionalProperties: false
+      properties:
+        integration_id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid, nullable: true }
+        title: { type: string, maxLength: 120 }
+        description: { type: string, maxLength: 2000, description: What the ERP receives. Only the title is kept here. }
+    ExternalRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        integration_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid, nullable: true }
+        operation: { type: string, enum: [create_service_order] }
+        title: { type: string }
+        state: { $ref: '#/components/schemas/RequestState' }
+        external_record_id: { type: string, format: uuid, nullable: true }
+        failure_class: { type: string, nullable: true }
+        resolution_source: { type: string, enum: [gateway, reconcile, manual], nullable: true }
+        requested_by_user_id: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+    ServiceOrderResponse:
+      type: object
+      properties:
+        outcome: { type: string, enum: [created, replay, rejected, outcome_unknown, blocked] }
+        request: { $ref: '#/components/schemas/ExternalRequest' }
+        record: { allOf: [ { $ref: '#/components/schemas/ExternalRecord' } ], nullable: true }
+        error: { type: string }
+        detail: { type: string }
+    ExternalRequestPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ExternalRequest' } }
+        next_cursor: { type: string }
+    ReconcileResponse:
+      type: object
+      properties:
+        request: { $ref: '#/components/schemas/ExternalRequest' }
+        record: { allOf: [ { $ref: '#/components/schemas/ExternalRecord' } ], nullable: true }
+        needs_manual: { type: boolean, description: The ERP offers no way to look the record up; settle it with resolve. }
+        too_early: { type: boolean, description: The ERP does not know it YET; not believed until the request is old enough. }
+    ResolveRequest:
+      type: object
+      required: [created]
+      additionalProperties: false
+      properties:
+        created: { type: boolean }
+        external_id: { type: string, maxLength: 120, description: Required when created. }
+        reason: { type: string, minLength: 3, maxLength: 500, description: Required when nothing was created. }
+    ProtocolPrefix:
+      type: object
+      required: [prefix, configured, locked, next_protocol]
+      properties:
+        prefix: { type: string, example: KTG }
+        configured: { type: boolean, description: "The company has reserved the prefix (chosen, or by its first protocol). False = only the suggestion." }
+        locked: { type: boolean, description: "A protocol was issued: the prefix can no longer change." }
+        next_protocol: { type: string, example: KTG-1001 }
+    Category:
+      type: object
+      properties: { id: { type: string, format: uuid }, code: { type: string }, label: { type: string }, active: { type: boolean } }
+    ResultCode:
+      type: object
+      properties: { id: { type: string, format: uuid }, code: { type: string }, canonical_code: { $ref: '#/components/schemas/CanonicalResult' }, label: { type: string }, active: { type: boolean } }
+    CatalogPatch:
+      type: object
+      additionalProperties: false
+      properties: { label: { type: string, maxLength: 80 }, active: { type: boolean } }

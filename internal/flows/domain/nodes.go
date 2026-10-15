@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -72,7 +73,8 @@ func Specs() []NodeSpec {
 	order := []NodeType{NodeTrigger, NodeSendMessage, NodeAsk, NodeChoice, NodeCondition, NodeSwitch, NodeSetVariable,
 		NodeBusinessHours, NodeResolveContact, NodeResolveCustomerCtx, NodeCustomerChoice, NodeFindOpenTickets,
 		NodeCreateTicket, NodeAssignQueue, NodeHumanHandoff, NodeSubflow, NodeAIClassify, NodeAIExtract, NodeAISummarize, NodeEnd,
-		NodeCheckSchedule, NodeCheckAvailability, NodeSelectSector, NodeAssignSector, NodeApplyOverflow, NodeCloseConversation}
+		NodeCheckSchedule, NodeCheckAvailability, NodeSelectSector, NodeAssignSector, NodeApplyOverflow, NodeCloseConversation,
+		NodeStartServiceSession, NodeClassifyServiceSession, NodeCreateServiceTask, NodeOpenServiceCase, NodeCloseServiceSession}
 	out := make([]NodeSpec, 0, len(order))
 	for _, t := range order {
 		if s, ok := specs[t]; ok {
@@ -555,6 +557,64 @@ func init() {
 			return a
 		}})
 
+	// ---- ADR-0049: service session nodes. Local effects (the step's own transaction); every one takes `next` or, when wired, `error`.
+	register(NodeSpec{Type: NodeStartServiceSession, Label: "Start service session (protocol)", Category: "action", SideEffect: EffectLocal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: []Port{{"next", true}, {"error", false}}}
+			if c, ok := cfg[StartServiceSessionConfig](n, &a); ok && c.Variable != "" {
+				checkVarName(n, &a, "variable", c.Variable)
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeClassifyServiceSession, Label: "Classify service session", Category: "action", SideEffect: EffectLocal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: []Port{{"next", true}, {"error", false}}}
+			if c, ok := cfg[ClassifyServiceSessionConfig](n, &a); ok && !serviceCode.MatchString(c.Category) {
+				a.Issues = append(a.Issues, errIssue(n, "invalid_category", fmt.Sprintf("%q: category must be the code of one of the company's categories (lowercase letters, digits, _ . or -)", n.ID)))
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeCreateServiceTask, Label: "Create task", Category: "action", SideEffect: EffectLocal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: []Port{{"next", true}, {"error", false}}}
+			if c, ok := cfg[CreateServiceTaskConfig](n, &a); ok {
+				checkText(n, &a, "title", c.Title, true)
+				checkText(n, &a, "description", c.Description, false)
+				checkServicePriority(n, &a, c.Priority)
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeOpenServiceCase, Label: "Open case (ocorrência)", Category: "action", SideEffect: EffectLocal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: []Port{{"next", true}, {"error", false}}}
+			if c, ok := cfg[OpenServiceCaseConfig](n, &a); ok {
+				checkText(n, &a, "title", c.Title, true)
+				checkText(n, &a, "description", c.Description, false)
+				checkServicePriority(n, &a, c.Priority)
+				if c.Variable != "" {
+					checkVarName(n, &a, "variable", c.Variable)
+				}
+			}
+			return a
+		}})
+
+	register(NodeSpec{Type: NodeCloseServiceSession, Label: "Close service session", Category: "action", SideEffect: EffectLocal,
+		Analyze: func(n Node) NodeAnalysis {
+			a := NodeAnalysis{Ports: []Port{{"next", true}, {"error", false}}}
+			if c, ok := cfg[CloseServiceSessionConfig](n, &a); ok {
+				if c.Result == "abandoned" { // "abandoned" is the system's word for a session nobody finished; a flow that finishes it picks a real result
+					a.Issues = append(a.Issues, errIssue(n, "invalid_result", fmt.Sprintf("%q: a flow does not end a session as abandoned; pick the result that happened", n.ID)))
+				} else if !serviceCode.MatchString(c.Result) {
+					a.Issues = append(a.Issues, errIssue(n, "invalid_result", fmt.Sprintf("%q: result must be a result code (a built-in one such as information_provided, or an active code of the company)", n.ID)))
+				}
+				checkText(n, &a, "note", c.Note, false)
+			}
+			return a
+		}})
+
 	register(NodeSpec{Type: NodeEnd, Label: "End", Category: "flow", SideEffect: EffectNone, Terminal: true,
 		Analyze: func(n Node) NodeAnalysis {
 			a := NodeAnalysis{}
@@ -567,4 +627,15 @@ func init() {
 			}
 			return a
 		}})
+}
+
+// serviceCode is the shape of a category / result code: the same one the service module enforces on its catalogs.
+var serviceCode = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,39}$`)
+
+func checkServicePriority(n Node, a *NodeAnalysis, priority string) {
+	switch priority {
+	case "", "low", "normal", "high", "urgent":
+	default:
+		a.Issues = append(a.Issues, errIssue(n, "invalid_priority", fmt.Sprintf("%q: priority must be low, normal, high or urgent", n.ID)))
+	}
 }

@@ -133,4 +133,11 @@ const (
 	NodeApplyOverflow     NodeType = "apply_overflow"
 	// ADR-0045: ends the attendance from the flow (the contact stopped answering): an optional goodbye, then the conversation is closed by the system.
 	NodeCloseConversation NodeType = "close_conversation"
+	// ADR-0049 phase 6: the flow works the attendance's service session (protocol), as the system, inside the step's transaction. close_service_session ends the
+	// SERVICE session only; the conversation stays open (that is close_conversation).
+	NodeStartServiceSession    NodeType = "start_service_session"
+	NodeClassifyServiceSession NodeType = "classify_service_session"
+	NodeCreateServiceTask      NodeType = "create_service_task"
+	NodeOpenServiceCase        NodeType = "open_service_case"
+	NodeCloseServiceSession    NodeType = "close_service_session"
 )

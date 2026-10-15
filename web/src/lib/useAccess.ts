@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getTenantId } from './session'
-import { isActing } from './acting'
+import { getActingHub, isActing } from './acting'
 import { teamAPI } from './team'
 
 // Único ponto de autorização no frontend: as permissões efetivas vêm do backend
@@ -14,7 +14,7 @@ export function useAccess() {
   // the screen from offering what it will refuse).
   const acting = isActing()
   const query = useQuery({
-    queryKey: ['me-access', tenantId],
+    queryKey: ['me-access', tenantId, getActingHub()],
     queryFn: () => teamAPI.myAccess(),
     enabled: !!tenantId,
     retry: false,

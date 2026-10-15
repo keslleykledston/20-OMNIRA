@@ -8,8 +8,9 @@ import (
 
 func TestTheRegistryIsClosedAndHasNoDangerousTools(t *testing.T) {
 	reg := ToolRegistry()
-	// 5 topic tools + 3 contact-memory tools (ADR-0020, all read-only: see TestContactMemoryToolsAreReadOnly...)
-	if len(reg) != 8 {
+	// 5 topic tools + 3 contact-memory tools (ADR-0020, all read-only: see TestContactMemoryToolsAreReadOnly...) + 4 service tools (ADR-0049: two reads, two proposals;
+	// see TestServiceToolsAreReadOrProposeOnly)
+	if len(reg) != 12 {
 		t.Fatalf("registry has %d tools", len(reg))
 	}
 	// capabilities that must NEVER be reachable by the AI, however they are spelled
@@ -22,8 +23,8 @@ func TestTheRegistryIsClosedAndHasNoDangerousTools(t *testing.T) {
 		if s.Name != name || s.Args == nil || s.Permission == "" || (s.Risk != RiskRead && s.Risk != RiskLowWrite) {
 			t.Errorf("%s is incomplete: %+v", name, s)
 		}
-		if s.Risk == RiskLowWrite && s.Permission != "topic.manage" {
-			t.Errorf("a write tool must need topic.manage: %s", name)
+		if s.Risk == RiskLowWrite && s.Permission != "topic.manage" && s.Permission != "service.create" && s.Permission != "service.update" {
+			t.Errorf("a write tool must need topic.manage (or the service key of what it proposes): %s", name)
 		}
 	}
 }

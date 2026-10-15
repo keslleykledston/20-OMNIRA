@@ -3,8 +3,10 @@ package application
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/platform/claimhook"
 	"github.com/omnira/omnira/internal/routing/ports"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -33,8 +35,16 @@ type AssignResult struct {
 // role permissions in the TenantContext tenant; the conversation id alone
 // grants nothing.
 type Assigner struct {
-	repo  ports.ConversationAssigner
-	audit ports.AuditRecorder
+	repo    ports.ConversationAssigner
+	audit   ports.AuditRecorder
+	onClaim *claimhook.Hook
+}
+
+// WithClaimHook tells an optional module that a member took a conversation for themself (ADR-0049: the protocol opens without a click). The hook never
+// fails the claim. A manager assigning the conversation to someone else does not run it: only the person who assumes it opens the attendance.
+func (a *Assigner) WithClaimHook(h *claimhook.Hook) *Assigner {
+	a.onClaim = h
+	return a
 }
 
 func NewAssigner(repo ports.ConversationAssigner, audit ports.AuditRecorder) *Assigner {
@@ -128,6 +138,11 @@ func (a *Assigner) Assign(ctx context.Context, conversationID, target uuid.UUID)
 	change := ports.AssignmentChange{ConversationID: conversationID, From: current, To: &target, Actor: tc.ActorID, Reason: reason}
 	if err := a.apply(ctx, change); err != nil {
 		return AssignResult{}, err
+	}
+	if self {
+		if _, err := a.onClaim.Run(ctx, conversationID, tc.ActorID); err != nil {
+			log.Printf("routing: the claim hook of conversation %s failed: %v", conversationID, err) // the claim stands; the module is optional
+		}
 	}
 	return AssignResult{AssignedTo: &target, Changed: true}, nil
 }

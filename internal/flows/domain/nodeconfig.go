@@ -154,6 +154,38 @@ type CloseConversationConfig struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// StartServiceSessionConfig (ADR-0049): opens the attendance's service session (or finds the one standing). Variable, when set, receives the protocol (AT-n) so a
+// later message can quote it.
+type StartServiceSessionConfig struct {
+	Variable string `json:"variable,omitempty"`
+}
+
+// ClassifyServiceSessionConfig puts the session in one of the company's categories, named by its code.
+type ClassifyServiceSessionConfig struct {
+	Category string `json:"category"`
+}
+
+// CreateServiceTaskConfig makes a pending task for the attendance (origin "flow"; assigned to nobody: a person picks it up).
+type CreateServiceTaskConfig struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Priority    string `json:"priority,omitempty"` // low | normal (default) | high | urgent
+}
+
+// OpenServiceCaseConfig opens a case (ocorrência) from the attendance. Variable, when set, receives the case number (OC-n).
+type OpenServiceCaseConfig struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Priority    string `json:"priority,omitempty"`
+	Variable    string `json:"variable,omitempty"`
+}
+
+// CloseServiceSessionConfig ends the service session with a result (a built-in code or an active code of the company). The conversation is not closed.
+type CloseServiceSessionConfig struct {
+	Result string `json:"result"`
+	Note   string `json:"note,omitempty"`
+}
+
 type EndConfig struct {
 	Outcome string `json:"outcome,omitempty"` // resolved | abandoned | informational
 }

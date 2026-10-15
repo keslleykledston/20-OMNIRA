@@ -37,6 +37,11 @@ export const NODE_LABELS: Record<string, string> = {
   assign_sector: 'Direcionar para setor',
   apply_overflow: 'Aplicar transbordo',
   close_conversation: 'Encerrar atendimento',
+  start_service_session: 'Abrir protocolo',
+  classify_service_session: 'Classificar protocolo',
+  create_service_task: 'Criar tarefa',
+  open_service_case: 'Abrir ocorrência',
+  close_service_session: 'Encerrar protocolo',
 }
 
 export const CATEGORY_LABELS: Record<string, string> = {
@@ -142,6 +147,11 @@ export function portsOf(node: FlowNode): PortDef[] {
       return [req('none'), req('found')]
     case 'create_ticket':
     case 'assign_queue':
+    case 'start_service_session':
+    case 'classify_service_session':
+    case 'create_service_task':
+    case 'open_service_case':
+    case 'close_service_session':
       return [req('next'), opt('error')]
     case 'ai_classify_intent': {
       const intents = ((cfg as AIIntentCfg).intents ?? []).filter((i) => i.id)
@@ -232,6 +242,16 @@ export function defaultConfig(type: string): Record<string, unknown> | undefined
       return { timezone: 'America/Sao_Paulo', windows: [{ days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:00', end: '18:00' }] }
     case 'create_ticket':
       return { subject: '', priority: 'medium' }
+    case 'start_service_session':
+      return { variable: 'protocolo' }
+    case 'classify_service_session':
+      return { category: '' }
+    case 'create_service_task':
+      return { title: '', priority: 'normal' }
+    case 'open_service_case':
+      return { title: '', priority: 'normal' }
+    case 'close_service_session':
+      return { result: 'information_provided' }
     case 'select_sector':
       return { text: '' }
     case 'subflow':

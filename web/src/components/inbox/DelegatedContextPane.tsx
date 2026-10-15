@@ -16,6 +16,7 @@ import DelegatedTransferDialog from './DelegatedTransferDialog'
 import ConversationSummary from './ConversationSummary'
 import { TicketPanel } from '../TicketPanel'
 import { CollapsibleSection } from './CollapsibleSection'
+import ServiceSessionPanel from '../service/ServiceSessionPanel'
 import type { ConversationItem } from '../../types/api'
 
 interface ContactCard {
@@ -124,6 +125,11 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
           )}
         </section>
       </CollapsibleSection>
+      {can('service.read') && (
+        <CollapsibleSection id="d-service-session" title="Protocolo e tarefas" icon="tickets" defaultOpen>
+          <ServiceSessionPanel conversationId={conversationId} can={can} delegated conversationClosed={c?.status === 'closed'} />
+        </CollapsibleSection>
+      )}
       {contactId && can('contact.classify') && (
         <CollapsibleSection id="d-classify" title="Classificar o contato" icon="contacts" defaultOpen>
           <section aria-label="Classificar o contato">

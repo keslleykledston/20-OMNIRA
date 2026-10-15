@@ -134,6 +134,17 @@ type ConversationCloser interface {
 	CloseByFlow(ctx context.Context, conversationID uuid.UUID, reason, note string) error
 }
 
+// ServiceFlow is an optional Effects capability (ADR-0049 phase 6): the flow works the attendance's service session. The implementation acts as the SYSTEM, signs
+// what it writes "flow", and is idempotent per (run, seq). It may only touch the conversation the run is attending. An environment without the service-context
+// module simply does not implement it, and the nodes take their error port.
+type ServiceFlow interface {
+	ServiceStart(ctx context.Context, conversationID, runID uuid.UUID, seq int) (protocol string, created bool, err error)
+	ServiceClassify(ctx context.Context, conversationID, runID uuid.UUID, seq int, categoryCode string) error
+	ServiceTask(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) error
+	ServiceOpenCase(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) (caseNumber string, err error)
+	ServiceClose(ctx context.Context, conversationID, runID uuid.UUID, seq int, resultCode, note string) (closed bool, err error)
+}
+
 // ChoiceOption is one tappable option of a menu sent as buttons/list.
 type ChoiceOption struct {
 	ID    string

@@ -1,0 +1,239 @@
+asyncapi: 2.6.0
+info:
+  title: OMNIRA Service Context events
+  version: 1.0.0
+  description: |
+    The facts of Service Context & Operations (ADR-0049): service sessions with a protocol, cases, tasks and ERP/CRM records. Every event is written once, in the same
+    transaction as the change it describes, to the immutable `context_events` table; that table IS the durable journal. Events are NOT copied to `outbox_events`: the
+    publisher only has a stream for `job.*`. Delivering them to third parties (signed webhooks, cursor, retries with backoff, dead letter) is the job of the headless
+    webhook engine (branch feat/headless-crm-dual-operation, ADR-0048) once it is merged; until then this contract is what that engine will deliver.
+
+    The shape is the envelope of `contracts/jsonschema/service-context-event.v1.schema.json`. `event_id` is unique and stable: a consumer deduplicates on it and applies
+    an update only if it is newer than what it has (`occurred_at` plus the entity's own `version` from the REST API), so an event that arrives late or twice changes
+    nothing. A consumer only ever receives events of its own company; the company comes from the stored credential, never from the payload.
+
+    Payloads carry ids, enums and counts. They never carry a message, a customer's text or the note a person typed. The names below are the PUBLIC names: a case that is
+    opened is announced as `service_case.created`; a status change to resolved/done is announced additionally under its own name (`service_case.resolved`,
+    `service_task.completed`).
+defaultContentType: application/json
+channels:
+  service_session.opened.v1:
+    description: "A service session started (an attendance with a protocol)."
+    subscribe:
+      operationId: on_service_session_opened_v1
+      message:
+        name: service_session.opened.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { protocol: "AT-10482", source: "operator|finalize|flow|api|system", channel: "whatsapp", has_conversation: "boolean" }
+  service_session.classified.v1:
+    description: "Customer, department or category set on a session."
+    subscribe:
+      operationId: on_service_session_classified_v1
+      message:
+        name: service_session.classified.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { protocol: "AT-10482", fields: "ids of what was set (customer_id, queue_id, category_id)" }
+  service_session.status_changed.v1:
+    description: "A session moved between in_progress and waiting."
+    subscribe:
+      operationId: on_service_session_status_changed_v1
+      message:
+        name: service_session.status_changed.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { protocol: "AT-10482", from: "in_progress", to: "waiting" }
+  service_session.closed.v1:
+    description: "A session ended (closed or abandoned) with a result."
+    subscribe:
+      operationId: on_service_session_closed_v1
+      message:
+        name: service_session.closed.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { protocol: "AT-10482", from: "waiting", to: "closed|abandoned", result: "canonical result", result_code: "the company's own code when it differs", source: "operator|finalize|flow|api|system", has_first_response: "boolean" }
+  service_session.reopened.v1:
+    description: "A closed session was reopened (same protocol, new episode)."
+    subscribe:
+      operationId: on_service_session_reopened_v1
+      message:
+        name: service_session.reopened.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { protocol: "AT-10482", previous_result: "canonical result", reopen_count: 1 }
+  service_case.created.v1:
+    description: "A case (ocorr\u00eancia) was opened."
+    subscribe:
+      operationId: on_service_case_created_v1
+      message:
+        name: service_case.created.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { case_number: "OC-1042", priority: "normal", from_session: "boolean", assigned: "boolean" }
+  service_case.updated.v1:
+    description: "Descriptive fields of a case changed, or it moved between working states."
+    subscribe:
+      operationId: on_service_case_updated_v1
+      message:
+        name: service_case.updated.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { case_number: "OC-1042", fields: 2 }
+  service_case.resolved.v1:
+    description: "A case was resolved."
+    subscribe:
+      operationId: on_service_case_resolved_v1
+      message:
+        name: service_case.resolved.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { case_number: "OC-1042", from: "investigating", to: "resolved", reopen: false }
+  service_case.assigned.v1:
+    description: "A case was given to a team and/or a person."
+    subscribe:
+      operationId: on_service_case_assigned_v1
+      message:
+        name: service_case.assigned.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { case_number: "OC-1042", team: "boolean", agent: "boolean" }
+  service_case.session_linked.v1:
+    description: "Another attendance refers to the case."
+    subscribe:
+      operationId: on_service_case_session_linked_v1
+      message:
+        name: service_case.session_linked.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { case_number: "OC-1042", protocol: "AT-10490" }
+  service_task.created.v1:
+    description: "A task (pending action) was created."
+    subscribe:
+      operationId: on_service_task_created_v1
+      message:
+        name: service_task.created.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { origin: "human|flow|ai|api", priority: "normal", assigned: "boolean", has_due: "boolean" }
+  service_task.updated.v1:
+    description: "Fields of a pending task changed."
+    subscribe:
+      operationId: on_service_task_updated_v1
+      message:
+        name: service_task.updated.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { fields: 1 }
+  service_task.completed.v1:
+    description: "A task was completed. Completing a task never resolves a case."
+    subscribe:
+      operationId: on_service_task_completed_v1
+      message:
+        name: service_task.completed.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { from: "in_progress", to: "done", action: "complete" }
+  service_task.status_changed.v1:
+    description: "A task changed state (start, cancel, reopen)."
+    subscribe:
+      operationId: on_service_task_status_changed_v1
+      message:
+        name: service_task.status_changed.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { from: "open", to: "cancelled", action: "cancel" }
+  service_task.assigned.v1:
+    description: "A task was given to a person and/or a team."
+    subscribe:
+      operationId: on_service_task_assigned_v1
+      message:
+        name: service_task.assigned.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { user: "boolean", team: "boolean" }
+  external_record.linked.v1:
+    description: "An ERP/CRM record was linked to a session, case or task."
+    subscribe:
+      operationId: on_external_record_linked_v1
+      message:
+        name: external_record.linked.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { external_type: "service_order", status_class: "open", record_created: "boolean", via: "request (optional)" }
+  external_record.unlinked.v1:
+    description: "A link to an ERP/CRM record ended (it stays as history)."
+    subscribe:
+      operationId: on_external_record_unlinked_v1
+      message:
+        name: external_record.unlinked.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              {  }
+  external_record.status_changed.v1:
+    description: "The ERP's own status of a linked record changed (a refresh or an inbound update)."
+    subscribe:
+      operationId: on_external_record_status_changed_v1
+      message:
+        name: external_record.status_changed.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { external_type: "service_order", from: "open", to: "done" }
+  external_request.created.v1:
+    description: "A request to create a service order in the ERP was made durable (before the ERP is called)."
+    subscribe:
+      operationId: on_external_request_created_v1
+      message:
+        name: external_request.created.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { operation: "create_service_order" }
+  external_request.state_changed.v1:
+    description: "A request to the ERP changed state: confirmed_success, confirmed_failure or outcome_unknown (a timeout is NOT a failure)."
+    subscribe:
+      operationId: on_external_request_state_changed_v1
+      message:
+        name: external_request.state_changed.v1
+        payload:
+          $ref: 'https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json'
+        examples:
+          - payload:
+              { from: "in_flight", to: "outcome_unknown", source: "gateway|reconcile|manual" }

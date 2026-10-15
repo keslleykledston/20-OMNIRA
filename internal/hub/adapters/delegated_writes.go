@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/omnira/omnira/internal/hub/replying"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
+	"github.com/omnira/omnira/internal/platform/claimhook"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -31,6 +33,7 @@ import (
 // Two independent conditions must both hold: the new permission key (checked by Delegable before this runs: conversation.claim /
 // conversation.reply) and the legacy reply-capable grant (can_reply, checked by replying.Authorize with RequireReply). Provisioning sets both together.
 type DelegatedWrites struct {
+	onClaim    *claimhook.Hook // an optional module learns that the agent assumed the conversation (nil: nobody)
 	pool       *pgxpool.Pool
 	reply      *replying.Service
 	attendance *attendanceapplication.Service // the attendance rules a delegated finalize runs (nil: the route does not exist for a delegate)
@@ -39,6 +42,12 @@ type DelegatedWrites struct {
 // WithAttendance gives the Hub's write path the attendance service (ADR-0040 phase 05b: finalizing the attendance).
 func (d *DelegatedWrites) WithAttendance(svc *attendanceapplication.Service) *DelegatedWrites {
 	d.attendance = svc
+	return d
+}
+
+// WithClaimHook installs the hook that runs after a Hub agent claimed a conversation (ADR-0049: the protocol opens without a click).
+func (d *DelegatedWrites) WithClaimHook(h *claimhook.Hook) *DelegatedWrites {
+	d.onClaim = h
 	return d
 }
 
@@ -101,8 +110,40 @@ func (d *DelegatedWrites) Claim(original http.Handler) http.Handler {
 			writeReplyError(w, err)
 			return
 		}
+		if changed {
+			d.afterClaim(r.Context(), tc, t)
+		}
 		writeJSON(w, map[string]any{"conversation_id": t.Item.ConversationID, "assigned_to_user_id": tc.ActorID, "changed": changed})
 	})
+}
+
+// afterClaim lets the optional module open the attendance for the agent who just assumed the conversation. The key service.create is proven HERE, in the
+// delegated session (the write below runs in a system session that cannot see delegated keys); the hook runs in the Hub's write path with the delegation
+// re-proven under the conversation lock, and what it did is audited naming the hub, grant and contract. Nothing here can fail the claim, which already stands.
+func (d *DelegatedWrites) afterClaim(ctx context.Context, tc *tenancydomain.TenantContext, t *replying.Target) {
+	if !d.onClaim.Installed() {
+		return
+	}
+	var may bool
+	if err := platformdb.QuerierFromContext(ctx, d.pool).QueryRow(ctx, `SELECT actor_has_permission($1, $2, 'service.create')`, tc.TenantID, tc.ActorID).Scan(&may); err != nil || !may {
+		if err != nil {
+			log.Printf("hub: claim hook permission check of conversation %s failed: %v", t.Item.ConversationID, err)
+		}
+		return
+	}
+	err := d.reply.Act(ctx, tc.ActorID, t, "hub.service.session_opened_on_claim", func(c context.Context, _ *uuid.UUID, closed bool) (map[string]any, error) {
+		if closed {
+			return nil, nil
+		}
+		created, err := d.onClaim.Run(c, t.Item.ConversationID, tc.ActorID)
+		if err != nil || !created {
+			return nil, err
+		}
+		return map[string]any{"conversation_id": t.Item.ConversationID.String()}, nil
+	})
+	if err != nil {
+		log.Printf("hub: the claim hook of conversation %s failed: %v", t.Item.ConversationID, err)
+	}
 }
 
 // Release wraps POST /tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign: the holder gives the conversation back to the queue. Only the

@@ -43,6 +43,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/httpserver"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	ticketsadapters "github.com/omnira/omnira/internal/tickets/adapters"
 	ticketsapplication "github.com/omnira/omnira/internal/tickets/application"
@@ -349,6 +350,12 @@ func main() {
 		for name, run := range intelligenceapp.NewContactMemoryExecutors(contactMemory) { // ADR-0020: read-only memory of the topic's contact
 			toolExecutors[name] = run
 		}
+		if cfg.ServiceContextEnabled { // ADR-0049: the AI reads the service session and only PROPOSES a task / a classification (a person approves it)
+			bridgeSvc, _, _ := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
+			for name, run := range intelligenceapp.NewServiceExecutors(topicRepo, servicectxadapters.NewAIBridge(bridgeSvc)) {
+				toolExecutors[name] = run
+			}
+		}
 		topicHandler.WithTools(intelligenceapp.NewToolGateway(intelligenceadapters.NewPostgresToolCallRepository(dbPool), topicRepo, topicHandler.ToolAuthorizer(),
 			toolExecutors, intelligenceFlags))
 		srv.RegisterIntelligenceHandlers(dbPool, topicHandler)
@@ -359,6 +366,17 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
+	if cfg.ServiceContextEnabled {
+		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
+		if cfg.ServiceFinalizeHookEnabled {
+			attendanceService.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc)) // ADR-0049: finalizing also closes the service session
+		}
+		if cfg.ServiceAutoOpenOnClaimEnabled {
+			srv.ClaimHook().Set(servicectxadapters.ClaimHook(dbPool, serviceSvc)) // ADR-0049: assuming a conversation opens its protocol
+		}
+		srv.RegisterServiceContextHandlers(dbPool, serviceHandler)
+		log.Printf("Service Context & Operations API enabled (OMNIRA_SERVICE_CONTEXT_ENABLED=true, finalize hook=%v, auto-open on claim=%v)\n", cfg.ServiceFinalizeHookEnabled, cfg.ServiceAutoOpenOnClaimEnabled)
+	}
 	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)

@@ -9,6 +9,7 @@ import (
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	"log"
 	"net/http"
 	"os"
@@ -509,7 +510,20 @@ func main() {
 		// The contact's "end this attendance" command closes through the same use case as an agent's finalize (source "system").
 		attendanceForFlows := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
 			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
+		var serviceFlow *servicectxadapters.FlowEffects
+		if cfg.ServiceContextEnabled {
+			serviceSvc, _, _ := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
+			// ADR-0049 phase 6: the service-session nodes of the Flow Builder (without the module they take their error port)
+			serviceFlow = servicectxadapters.NewFlowEffects(dbPool, serviceSvc)
+			if cfg.ServiceFinalizeHookEnabled {
+				// a flow that ends the attendance also closes its service session (source "flow"), in the same transaction
+				attendanceForFlows.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc))
+			}
+		}
 		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows).WithEngineRouting(cfg.RoutingEngineEnabled)
+		if serviceFlow != nil {
+			flowEffects.WithService(serviceFlow)
+		}
 		flowCounters := flowsapplication.NewCounters()
 		prevMetrics := hc.ExtraMetrics
 		hc.ExtraMetrics = func() string {
