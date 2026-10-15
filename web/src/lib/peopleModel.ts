@@ -1,25 +1,164 @@
 import type { OperationalAgent } from './agents'
+import type { Invitation } from './invitations'
 import type { Queue } from './queues'
 import type { TeamMember } from './team'
+import { ROLE_DISPLAY_NAME } from './roles'
 
-// Shapes the "Pessoas e grupos" screen works with (camelCase, view-oriented).
-export interface PersonGroup {
+// The "Pessoas" screen works with one row per person: a member of this instance, or an invitation that is not a member yet.
+export interface PersonQueue {
   memberId: string
-  groupId: string
-  groupName: string
+  queueId: string
+  queueName: string
   available: boolean
   capacity: number
 }
 
-export interface PersonRow {
-  membershipId: string
-  name: string
-  email: string
-  roleName: string
-  operator: null | { profileId: string; status: 'active' | 'disabled'; groups: PersonGroup[] }
+export interface PersonAgent {
+  profileId: string
+  status: 'active' | 'disabled'
+  queues: PersonQueue[]
 }
 
-export interface GroupRow {
+export type PersonState = 'active' | 'inactive' | 'revoked' | 'invited' | 'invite_expired' | 'invite_revoked'
+
+export interface PersonEntry {
+  key: string
+  name: string
+  email: string
+  roleKey: string
+  roleLabel: string
+  state: PersonState
+  member?: TeamMember
+  invitation?: Invitation
+  agent: PersonAgent | null
+  online: boolean
+}
+
+export type Tone = 'ok' | 'warn' | 'info' | 'neutral'
+
+export interface Readiness {
+  tone: Tone
+  label: string
+  reason?: string
+}
+
+const byName = (a: PersonEntry, b: PersonEntry) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' })
+
+function agentOf(a: OperationalAgent | undefined): PersonAgent | null {
+  if (!a) return null
+  return {
+    profileId: a.id,
+    status: a.status,
+    queues: a.queues.map((q) => ({ memberId: q.id, queueId: q.queue_id, queueName: q.queue_name, available: q.available, capacity: q.capacity })),
+  }
+}
+
+const INVITATION_STATE: Partial<Record<Invitation['status'], PersonState>> = {
+  pending: 'invited',
+  expired: 'invite_expired',
+  revoked: 'invite_revoked',
+}
+
+// An accepted invitation is the member row itself, so it never becomes a second row.
+export function buildPeople(
+  members: TeamMember[],
+  agents: OperationalAgent[],
+  invitations: Invitation[],
+  onlineProfileIds: ReadonlySet<string> = new Set(),
+): PersonEntry[] {
+  const profileByMembership = new Map(agents.map((a) => [a.membership_id, a]))
+  const people: PersonEntry[] = members.map((m) => {
+    const agent = agentOf(profileByMembership.get(m.membership_id))
+    return {
+      key: m.membership_id,
+      name: m.name || m.email,
+      email: m.email,
+      roleKey: m.role_key,
+      roleLabel: ROLE_DISPLAY_NAME[m.role_key] ?? m.role_name,
+      state: m.status,
+      member: m,
+      agent,
+      online: agent ? onlineProfileIds.has(agent.profileId) : false,
+    }
+  })
+  for (const inv of invitations) {
+    const state = INVITATION_STATE[inv.status]
+    if (!state) continue
+    people.push({
+      key: `inv:${inv.id}`,
+      name: inv.email,
+      email: inv.email,
+      roleKey: inv.role_key,
+      roleLabel: ROLE_DISPLAY_NAME[inv.role_key] ?? inv.role_name,
+      state,
+      invitation: inv,
+      agent: null,
+      online: false,
+    })
+  }
+  return people.sort(byName)
+}
+
+export const isInvitation = (p: PersonEntry) => p.invitation !== undefined
+
+// Removed members and cancelled invitations stay out of the list unless asked for.
+export const isHistory = (p: PersonEntry) => p.state === 'revoked' || p.state === 'invite_revoked'
+
+export function readinessOf(p: PersonEntry): Readiness {
+  switch (p.state) {
+    case 'invited':
+      return p.invitation?.sent_at
+        ? { tone: 'info', label: 'Convite enviado' }
+        : { tone: 'warn', label: 'Convite não entregue', reason: 'O e-mail não chegou: reenvie o convite' }
+    case 'invite_expired':
+      return { tone: 'warn', label: 'Convite vencido', reason: 'Reenvie para a pessoa conseguir entrar' }
+    case 'invite_revoked':
+      return { tone: 'neutral', label: 'Convite cancelado' }
+    case 'revoked':
+      return { tone: 'neutral', label: 'Acesso removido' }
+    case 'inactive':
+      return { tone: 'neutral', label: 'Acesso suspenso' }
+  }
+  if (!p.agent) return { tone: 'neutral', label: 'Não atende' }
+  if (p.agent.status === 'disabled') return { tone: 'neutral', label: 'Em pausa' }
+  if (p.agent.queues.length === 0) return { tone: 'warn', label: 'Sem fila', reason: 'Falta escolher ao menos uma fila' }
+  if (!p.agent.queues.some((q) => q.available)) return { tone: 'warn', label: 'Indisponível', reason: 'Indisponível em todas as filas' }
+  return { tone: 'ok', label: 'Recebe conversas' }
+}
+
+export interface PeopleFilter {
+  tone: Tone | 'all'
+  role: string
+  queue: string
+  text: string
+  history: boolean
+}
+
+export const NO_FILTER: PeopleFilter = { tone: 'all', role: '', queue: '', text: '', history: false }
+
+export function filterPeople(people: PersonEntry[], f: PeopleFilter): PersonEntry[] {
+  const text = f.text.trim().toLowerCase()
+  return people.filter((p) => {
+    if (!f.history && isHistory(p)) return false
+    if (f.tone !== 'all' && readinessOf(p).tone !== f.tone) return false
+    if (f.role && p.roleKey !== f.role) return false
+    if (f.queue && !p.agent?.queues.some((q) => q.queueId === f.queue)) return false
+    if (!text) return true
+    return [p.name, p.email, ...(p.agent?.queues.map((q) => q.queueName) ?? [])].some((s) => s.toLowerCase().includes(text))
+  })
+}
+
+export function summarize(people: PersonEntry[]): Record<Tone | 'all', number> {
+  const counts = { all: 0, ok: 0, warn: 0, info: 0, neutral: 0 }
+  for (const p of people) {
+    if (isHistory(p)) continue
+    counts.all++
+    counts[readinessOf(p).tone]++
+  }
+  return counts
+}
+
+export interface QueueRow {
   id: string
   name: string
   mode: Queue['mode']
@@ -29,42 +168,7 @@ export interface GroupRow {
   openConversationCount: number
 }
 
-const byName = (a: { name: string; email: string }, b: { name: string; email: string }) =>
-  (a.name || a.email).localeCompare(b.name || b.email, 'pt-BR', { sensitivity: 'base' })
-
-// A person is a tenant member; they are an "operator" when they have an agent
-// profile. Only ACTIVE memberships are shown: a revoked or inactive member cannot
-// be made an operator (the API refuses) and would only add noise.
-export function buildPeople(members: TeamMember[], agents: OperationalAgent[]): PersonRow[] {
-  const profileByMembership = new Map(agents.map((a) => [a.membership_id, a]))
-  return members
-    .filter((m) => m.status === 'active')
-    .map((m): PersonRow => {
-      const agent = profileByMembership.get(m.membership_id)
-      return {
-        membershipId: m.membership_id,
-        name: m.name || m.email,
-        email: m.email,
-        roleName: m.role_name,
-        operator: agent
-          ? {
-              profileId: agent.id,
-              status: agent.status,
-              groups: agent.queues.map((q) => ({
-                memberId: q.id,
-                groupId: q.queue_id,
-                groupName: q.queue_name,
-                available: q.available,
-                capacity: q.capacity,
-              })),
-            }
-          : null,
-      }
-    })
-    .sort(byName)
-}
-
-export function buildGroups(queues: Queue[]): GroupRow[] {
+export function buildQueueRows(queues: Queue[]): QueueRow[] {
   return queues.map((q) => ({
     id: q.id,
     name: q.name,
@@ -76,10 +180,9 @@ export function buildGroups(queues: Queue[]): GroupRow[] {
   }))
 }
 
-// The tenant routes new conversations ONLY to the default group. With none, new
-// conversations are not distributed at all, so the screen warns about it.
-export function hasNoDefaultGroup(groups: GroupRow[]): boolean {
-  return groups.length > 0 && !groups.some((g) => g.isDefault)
+// New conversations go ONLY to the default queue; with none, they are not distributed at all.
+export function hasNoDefaultQueue(queues: QueueRow[]): boolean {
+  return queues.length > 0 && !queues.some((q) => q.isDefault)
 }
 
 export function pluralize(n: number, one: string, many: string): string {

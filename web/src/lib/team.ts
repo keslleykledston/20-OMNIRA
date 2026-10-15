@@ -70,7 +70,7 @@ export function teamErrorMessage(err: any, fallback = 'Não foi possível conclu
     case 404:
       return 'Membro não encontrado.';
     case 409:
-      return 'O tenant ficaria sem nenhum administrador ativo.';
+      return 'A instância ficaria sem nenhum administrador ativo.';
     case 422:
       return 'Essa função não pode ser atribuída aqui.';
     default:

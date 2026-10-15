@@ -13,9 +13,7 @@ import ToConsole from './components/ToConsole'
 import ConversationsEntry from './pages/ConversationsEntry'
 import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
-import TeamPage from './pages/TeamPage'
-import AgentsPage from './pages/AgentsPage'
-import PeopleAndGroupsPage from './pages/PeopleAndGroupsPage'
+import PeoplePage from './pages/PeoplePage'
 import SettingsPage from './pages/SettingsPage'
 import GroupsPage from './pages/GroupsPage'
 import AttendanceSectorsPage from './pages/AttendanceSectorsPage'
@@ -63,9 +61,11 @@ function AppRoutes() {
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
         <Route path="/settings/password" element={<PasswordChangePage />} />
-        <Route path="/settings/people/team" element={<TeamPage />} />
-        <Route path="/settings/people/agents" element={<AgentsPage />} />
-        <Route path="/settings/people" element={<Navigate to="/settings/people/team" replace />} />
+        <Route path="/settings/people" element={<PeoplePage />} />
+        {/* Older addresses of the people screens (Equipe e acesso, Agentes) land on the one Pessoas page. */}
+        <Route path="/settings/people/*" element={<Navigate to="/settings/people" replace />} />
+        <Route path="/settings/team" element={<Navigate to="/settings/people" replace />} />
+        <Route path="/settings/agents" element={<Navigate to="/settings/people" replace />} />
         <Route path="/settings/attendance" element={<Navigate to="/settings/attendance/sectors" replace />} />
         <Route path="/settings/attendance/sectors" element={<AttendanceSectorsPage />} />
         <Route path="/settings/attendance/calendars" element={<AttendanceCalendarsPage />} />

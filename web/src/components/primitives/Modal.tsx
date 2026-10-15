@@ -63,7 +63,8 @@ export function Modal({ open, title, description, onClose, children, footer, siz
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'var(--color-surface-overlay)' }}
+      // margin 0 inline: rendered in place, a parent's space-y-* margin would push the fixed overlay down and uncover the top
+      style={{ backgroundColor: 'var(--color-surface-overlay)', margin: 0 }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div

@@ -11,18 +11,17 @@ export interface SettingsSection {
   subsections?: SettingsSection[]
 }
 
-// Admin/settings IA (frozen, DESIGN.1-B): only routes that exist today in App.tsx.
-// Roles (/settings/roles) is reached from within "Equipe e acesso" (same as the
-// global Sidebar's alsoActiveOn), not a fifth top-level section.
+// Admin/settings IA: only routes that exist today in App.tsx. "Pessoas" is who works here (one page with a sheet per person);
+// "Atendimento" is how conversations flow (queues, sectors, hours, shifts, overflow).
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     key: 'people',
     label: 'Pessoas',
     href: '/settings/people',
     subsections: [
-      { key: 'team', label: 'Equipe e acesso', href: '/settings/people/team' },
-      { key: 'agents', label: 'Agentes', href: '/settings/people/agents' },
-    ]
+      { key: 'people', label: 'Equipe', href: '/settings/people' },
+      { key: 'roles', label: 'Funções e permissões', href: '/settings/roles' },
+    ],
   },
   {
     // ADR-0044: setores, horários, escalas, plantões, transbordo e SLA. Cada subseção é uma página própria, como em Pessoas.
@@ -30,7 +29,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: 'Atendimento',
     href: '/settings/attendance',
     subsections: [
-      { key: 'sectors', label: 'Setores', href: '/settings/attendance/sectors' },
+      { key: 'sectors', label: 'Filas e setores', href: '/settings/attendance/sectors' },
       { key: 'calendars', label: 'Horários', href: '/settings/attendance/calendars' },
       { key: 'shifts', label: 'Escalas e plantões', href: '/settings/attendance/shifts' },
       { key: 'overflow', label: 'Transbordo e SLA', href: '/settings/attendance/overflow' },

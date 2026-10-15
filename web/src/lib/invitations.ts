@@ -95,7 +95,7 @@ export function invitationErrorMessage(err: any, fallback = 'Não foi possível 
     case 422:
       return 'Essa função não pode ser atribuída aqui.';
     case 502:
-      return 'O convite foi registrado, mas o e-mail não pôde ser entregue. Use "Reenviar convite" na lista.';
+      return 'O convite foi registrado, mas o e-mail não pôde ser entregue. Abra a pessoa na lista e use "Reenviar convite".';
     case 503:
       return 'O envio de convites não está configurado neste ambiente.';
     default:
