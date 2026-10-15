@@ -286,6 +286,14 @@ func TestOnlyTheIssuingFunctionWritesACounter(t *testing.T) {
 		`INSERT INTO service_counters(tenant_id, kind, prefix, last_value) VALUES($1,'session','HAX',7)`, s.env.TenantB)
 	deny("a case counter with another prefix", s.env.UserB, s.env.TenantB,
 		`INSERT INTO service_counters(tenant_id, kind, prefix, last_value) VALUES($1,'case','HAX',0)`, s.env.TenantB)
+	// a SECURITY DEFINER function that is not the issuing one does not gain the right either (it runs as the owner, but the guard looks at who the login is
+	// and at the call stack)
+	s.exec(`CREATE FUNCTION zz_test_counter_writer(p UUID) RETURNS VOID AS $$ UPDATE service_counters SET last_value = last_value + 1 WHERE tenant_id = p $$ LANGUAGE SQL SECURITY DEFINER`)
+	s.exec(`GRANT EXECUTE ON FUNCTION zz_test_counter_writer(UUID) TO omnira_app`)
+	t.Cleanup(func() {
+		_, _ = s.env.Seed.Exec(context.Background(), `DROP FUNCTION IF EXISTS zz_test_counter_writer(UUID)`)
+	})
+	deny("another SECURITY DEFINER function moving the counter", s.agent, s.env.TenantA, `SELECT zz_test_counter_writer($1)`, s.env.TenantA)
 	// a reservation takes its number only through the function
 	if err := s.try(s.env.UserB, s.env.TenantB, func(ctx context.Context) error { _, e := s.catalog.SetProtocolPrefix(ctx, "RSV"); return e }); err != nil {
 		t.Fatal(err)

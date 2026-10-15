@@ -32,7 +32,7 @@ GRANT EXECUTE ON FUNCTION service_prefix_candidates(TEXT) TO omnira_app;
 
 -- Who may ask: the system, or a person (or a Hub delegate acting for exactly this company) who holds service.create.
 CREATE FUNCTION service_issue_protocol(p_tenant UUID, p_kind TEXT) RETURNS TABLE (o_prefix TEXT, o_last BIGINT) AS $$
-DECLARE v_start BIGINT; v_name TEXT; v_cand TEXT; v_tries INT := 0; v_prefix TEXT; v_last BIGINT;
+DECLARE v_start BIGINT; v_name TEXT; v_cand TEXT; v_tries INT := 0; v_prefix TEXT; v_last BIGINT; v_con TEXT;
 BEGIN
   IF p_kind NOT IN ('session', 'case') THEN
     RAISE EXCEPTION 'unknown counter kind' USING ERRCODE = 'invalid_parameter_value';
@@ -62,7 +62,8 @@ BEGIN
       RETURN QUERY SELECT v_prefix, v_last;
       RETURN;
     EXCEPTION WHEN unique_violation THEN
-      NULL; -- another company has this prefix: try the next candidate
+      GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+      IF v_con IS DISTINCT FROM 'service_counters_session_prefix_uq' THEN RAISE; END IF; -- only a taken prefix moves on to the next candidate
     END;
   END LOOP;
   RAISE EXCEPTION 'every candidate protocol prefix is taken' USING ERRCODE = 'unique_violation', CONSTRAINT = 'service_counters_session_prefix_uq';
@@ -82,14 +83,19 @@ $$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg
 REVOKE EXECUTE ON FUNCTION service_suggest_prefix(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION service_suggest_prefix(UUID) TO omnira_app;
 
--- Guard for the application role: a trusted writer is the owner (superuser or BYPASSRLS), or code running inside a SECURITY DEFINER function (current_user is
--- not the login role). The application role itself may only RESERVE a prefix and change a reservation.
+-- Guard for the application role. A trusted writer is (a) a session whose LOGIN role is the owner (superuser or BYPASSRLS: migrations, maintenance) or (b) code that
+-- runs inside service_issue_protocol itself (a SECURITY DEFINER function, found on the call stack): NOT any definer function, so a future function that happens to
+-- touch the table does not gain the right to move a counter. The application role itself may only RESERVE a prefix and change a reservation.
 DROP TRIGGER service_counters_before_update_trg ON service_counters;
 DROP FUNCTION service_counters_before_update();
 CREATE FUNCTION service_counters_guard() RETURNS trigger AS $$
-DECLARE trusted BOOLEAN;
+DECLARE trusted BOOLEAN; stack TEXT;
 BEGIN
-  trusted := current_user <> session_user OR COALESCE((SELECT r.rolsuper OR r.rolbypassrls FROM pg_catalog.pg_roles r WHERE r.rolname = current_user), false);
+  trusted := COALESCE((SELECT r.rolsuper OR r.rolbypassrls FROM pg_catalog.pg_roles r WHERE r.rolname = session_user), false);
+  IF NOT trusted AND current_user <> session_user THEN
+    GET DIAGNOSTICS stack = PG_CONTEXT;
+    trusted := position('PL/pgSQL function service_issue_protocol(uuid,text)' IN stack) > 0;
+  END IF;
   IF TG_OP = 'INSERT' THEN
     IF NOT trusted AND NEW.last_value <> 0 THEN
       RAISE EXCEPTION 'a protocol counter is created only by service_issue_protocol' USING ERRCODE = 'insufficient_privilege';

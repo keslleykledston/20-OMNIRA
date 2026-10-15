@@ -2,7 +2,7 @@
 
 ## Implementation Summary
 
-Branch `feat/omnira-service-context-operations` (18 commits sobre `main` @ `26e4f01`; 128 arquivos; **sem push, sem tag, sem merge**). Worktree `/data/cafegpt/tmp/wt-svcctx`.
+Branch `feat/omnira-service-context-operations` (20 commits sobre `main` @ `26e4f01`; 130 arquivos; **sem push, sem tag, sem merge**). Worktree `/data/cafegpt/tmp/wt-svcctx`.
 
 | Fase | Entrega | Onde |
 |---|---|---|
@@ -37,4 +37,4 @@ Ver `12-deployment-rollback.md`: migrations aditivas antes do binário, flags de
 
 **READY_FOR_REVIEW.**
 
-Não é `READY_FOR_STAGING`: falta aprovação humana do conjunto, decidir R-AI-1, e o smoke em staging. Não é `READY_FOR_PILOT`: não há evidência de gate de segurança + integração em ambiente real (nem adaptador de ERP), e a última correção de segurança (tombstone) não passou por nova rodada do Codex. Nenhuma alegação de `PRODUCTION_READY`.
+Não é `READY_FOR_STAGING`: falta aprovação humana do conjunto, decidir R-AI-1, e o smoke em staging. Não é `READY_FOR_PILOT`: não há evidência de gate de segurança + integração em ambiente real (nem adaptador de ERP), e o conjunto final dos riscos R-5/R-6 (000156) teve a rodada 10 do Codex, com os achados tratados (ver 14). Nenhuma alegação de `PRODUCTION_READY`.
