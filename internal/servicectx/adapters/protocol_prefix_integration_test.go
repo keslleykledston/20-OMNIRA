@@ -152,8 +152,9 @@ func TestTheDatabaseGuardsThePrefixAndTheCounter(t *testing.T) {
 		return s.try(user, s.env.TenantA, func(ctx context.Context) error { return execInSession(ctx, sql, args...) })
 	}
 	// reserved (no protocol yet): changing it needs tenant.manage, which the attendant does not have
-	if err := raw(s.agent, `UPDATE service_counters SET prefix = 'GRX' WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA); err == nil || !strings.Contains(err.Error(), "tenant.manage") {
-		t.Fatalf("an attendant cannot change a reserved prefix: %v", err)
+	_ = raw(s.agent, `UPDATE service_counters SET prefix = 'GRX' WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA) // the policy hides the row from the update: no error, no effect
+	if got := s.counterOf(s.env.TenantA); got != "GRD/0" {
+		t.Fatalf("an attendant cannot change a reserved prefix: %s", got)
 	}
 	// an attendant cannot reserve a prefix for a company that has none either
 	if err := s.try(s.agent, s.env.TenantB, func(ctx context.Context) error {
@@ -166,8 +167,9 @@ func TestTheDatabaseGuardsThePrefixAndTheCounter(t *testing.T) {
 	if err := raw(s.admin, `UPDATE service_counters SET prefix = 'GRX' WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA); err == nil || !strings.Contains(err.Error(), "frozen") {
 		t.Fatalf("not even the administrator changes a prefix in use: %v", err)
 	}
-	if err := raw(s.agent, `UPDATE service_counters SET last_value = 5 WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA); err == nil || !strings.Contains(err.Error(), "forward") {
-		t.Fatalf("a counter never goes back: %v", err)
+	_ = raw(s.agent, `UPDATE service_counters SET last_value = 5 WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA)
+	if got := s.counterOf(s.env.TenantA); got != "GRD/1001" {
+		t.Fatalf("a counter is moved only by the function: %s", got)
 	}
 	// the global index: another company cannot take a prefix that exists, even by raw SQL
 	if err := s.try(s.env.UserB, s.env.TenantB, func(ctx context.Context) error {
@@ -264,18 +266,142 @@ func TestSomeoneWhoOnlyManagesTheCompanyCanReserveAndChangeThePrefix(t *testing.
 	}
 }
 
-func TestACounterMovesForwardByOneNeverByJumps(t *testing.T) {
+// Risk R-5 closed: the application role cannot write a counter value by SQL at all. Numbers come from service_issue_protocol, which starts sessions at 1001.
+func TestOnlyTheIssuingFunctionWritesACounter(t *testing.T) {
 	s := newStack(t)
 	conv, _ := s.conversation()
-	s.mustOpen(s.agent, conv) // 1001
-	raw := func(sql string) error {
-		return s.try(s.agent, s.env.TenantA, func(ctx context.Context) error { return execInSession(ctx, sql, s.env.TenantA) })
+	s.mustOpen(s.agent, conv) // the function created the row at 1001
+	deny := func(what string, user uuid.UUID, tenant uuid.UUID, sql string, args ...any) {
+		t.Helper()
+		before := s.countersOf(tenant)
+		_ = s.try(user, tenant, func(ctx context.Context) error { return execInSession(ctx, sql, args...) }) // refused by an error, or hidden by the policy: no effect either way
+		if after := s.countersOf(tenant); after != before {
+			t.Errorf("%s must have no effect: %s -> %s", what, before, after)
+		}
 	}
-	if err := raw(`UPDATE service_counters SET last_value = last_value + 5 WHERE tenant_id = $1 AND kind = 'session'`); err == nil || !strings.Contains(err.Error(), "forward by one") {
-		t.Fatalf("a jump is refused: %v", err)
+	deny("a jump", s.agent, s.env.TenantA, `UPDATE service_counters SET last_value = last_value + 5 WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA)
+	deny("a single step by hand", s.agent, s.env.TenantA, `UPDATE service_counters SET last_value = last_value + 1 WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA)
+	deny("the administrator moving the counter by hand", s.admin, s.env.TenantA, `UPDATE service_counters SET last_value = last_value + 1 WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantA)
+	deny("an attendant creating the counter of a company that has none, at a number of its choice", s.env.UserB, s.env.TenantB,
+		`INSERT INTO service_counters(tenant_id, kind, prefix, last_value) VALUES($1,'session','HAX',7)`, s.env.TenantB)
+	deny("a case counter with another prefix", s.env.UserB, s.env.TenantB,
+		`INSERT INTO service_counters(tenant_id, kind, prefix, last_value) VALUES($1,'case','HAX',0)`, s.env.TenantB)
+	// a reservation takes its number only through the function
+	if err := s.try(s.env.UserB, s.env.TenantB, func(ctx context.Context) error { _, e := s.catalog.SetProtocolPrefix(ctx, "RSV"); return e }); err != nil {
+		t.Fatal(err)
 	}
-	if err := raw(`UPDATE service_counters SET last_value = last_value + 1 WHERE tenant_id = $1 AND kind = 'session'`); err != nil {
-		t.Fatalf("one step is what the application does: %v", err)
+	deny("moving a reservation by hand", s.env.UserB, s.env.TenantB, `UPDATE service_counters SET last_value = 7 WHERE tenant_id = $1 AND kind = 'session'`, s.env.TenantB)
+	convB, _ := s.env.SeedConversation(t, s.env.TenantB, "none")
+	if b, err := s.openIn(s.env.TenantB, s.env.UserB, convB); err != nil || b.Protocol != "RSV-1001" {
+		t.Fatalf("the reserved prefix takes the start through the function: %v %+v", err, b)
+	}
+}
+
+// The function asks the caller's key itself: a person cannot use it for another company or without service.create.
+func TestTheIssuingFunctionAsksTheKeyAndTheCompany(t *testing.T) {
+	s := newStack(t)
+	call := func(user, actingIn, target uuid.UUID, kind string) error {
+		return s.try(user, actingIn, func(ctx context.Context) error {
+			return execInSession(ctx, `SELECT * FROM service_issue_protocol($1, $2)`, target, kind)
+		})
+	}
+	if err := call(s.agent, s.env.TenantA, s.env.TenantB, "session"); err == nil {
+		t.Fatal("an attendant of A cannot issue a number of B")
+	}
+	if err := call(s.observer, s.env.TenantA, s.env.TenantA, "session"); err == nil {
+		t.Fatal("without service.create there is no number")
+	}
+	if err := call(s.agent, s.env.TenantA, s.env.TenantA, "other"); err == nil {
+		t.Fatal("unknown kind")
+	}
+	if err := call(s.agent, s.env.TenantA, s.env.TenantA, "session"); err != nil {
+		t.Fatalf("the attendant of A issues for A: %v", err)
+	}
+}
+
+// The candidates of a name (accents dropped, digits ignored, padded, fallback) now live in the database; the first free one is what a company gets.
+func TestTheDatabaseDerivesPrefixesFromNames(t *testing.T) {
+	s := newStack(t)
+	first := func(name string, n int) []string {
+		t.Helper()
+		var out []string
+		if err := s.env.Seed.QueryRow(context.Background(), `SELECT array_agg(c) FROM (SELECT c FROM service_prefix_candidates($1) c LIMIT $2) x`, name, n).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	for name, want := range map[string]string{
+		"Veloso Telecom": "VEL", "INFORR": "INF", "K3G Solutions": "KGS", "Conexão São José": "CON", "  ágata   ": "AGA", "Zé": "ZEX", "12345": "ATX", "Čeština Šíp": "CES",
+	} {
+		if got := first(name, 1); len(got) != 1 || got[0] != want {
+			t.Errorf("%q -> %v, want %s", name, got, want)
+		}
+	}
+	got := first("Veloso Telecom", 6)
+	if strings.Join(got, ",") != "VEL,VELO,VELOS,VELOSO,VEA,VEB" {
+		t.Fatalf("order: %v", got)
+	}
+	var n int
+	if err := s.env.Seed.QueryRow(context.Background(), `SELECT count(DISTINCT c) FROM service_prefix_candidates('Veloso Telecom') c WHERE c ~ '^[A-Z]{2,6}$'`).Scan(&n); err != nil || n < 600 {
+		t.Fatalf("plenty of valid candidates: %d %v", n, err)
+	}
+}
+
+// The suggestion skips what another company already uses, so the screen never proposes a prefix the first protocol would not get.
+func TestTheSuggestionSkipsPrefixesOfOtherCompanies(t *testing.T) {
+	s := newStack(t)
+	s.nameTenants("Sugar Co", "Other")
+	if err := s.try(s.env.UserB, s.env.TenantB, func(ctx context.Context) error { _, e := s.catalog.SetProtocolPrefix(ctx, "SUG"); return e }); err != nil {
+		t.Fatal(err)
+	}
+	r := s.call(s.mux(), s.agent, "GET", "/service-settings/protocol-prefix", "")
+	if r.code != http.StatusOK || r.body["prefix"] != "SUGA" || r.body["configured"] != false {
+		t.Fatalf("suggestion skips SUG: %d %v", r.code, r.body)
+	}
+	conv, _ := s.conversation()
+	if sess := s.mustOpen(s.agent, conv); sess.Protocol != "SUGA-1001" {
+		t.Fatalf("and the first protocol takes exactly that: %s", sess.Protocol)
+	}
+}
+
+// When every candidate is used by other companies the first protocol is refused with a clear conflict (the administrator then chooses a prefix).
+func TestWhenEveryCandidateIsTakenTheFirstProtocolAsksForAChoice(t *testing.T) {
+	s := newStack(t)
+	s.nameTenants("Exhaust Co", "Other")
+	var cands []string
+	if err := s.env.Seed.QueryRow(context.Background(), `SELECT array_agg(c) FROM (SELECT c FROM service_prefix_candidates('Exhaust Co') c LIMIT 80) x`).Scan(&cands); err != nil {
+		t.Fatal(err)
+	}
+	var tenants []uuid.UUID
+	seen := map[string]bool{}
+	t.Cleanup(func() {
+		for _, id := range tenants {
+			_, _ = s.env.Seed.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id)
+		}
+	})
+	for _, c := range cands {
+		if seen[c] {
+			continue // the list repeats a few (the third letter of the 2-letter family is also a 3-letter prefix)
+		}
+		seen[c] = true
+		id := uuid.New()
+		tenants = append(tenants, id)
+		s.exec(`INSERT INTO tenants(id, legal_name) VALUES($1, $2)`, id, "Squatter "+c)
+		s.exec(`INSERT INTO service_counters(tenant_id, kind, prefix, last_value) VALUES($1,'session',$2,0)`, id, c)
+	}
+	conv, _ := s.conversation()
+	if _, err := s.open(s.agent, domain.OpenInput{ConversationID: &conv}); !errors.Is(err, domain.ErrPrefixTaken) {
+		t.Fatalf("no free candidate: %v", err)
+	}
+	if n := s.count(`SELECT count(*) FROM service_counters WHERE tenant_id = $1`, s.env.TenantA); n != 0 {
+		t.Fatalf("nothing was left behind: %d", n)
+	}
+	// the administrator chooses and then it works
+	if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) error { _, e := s.catalog.SetProtocolPrefix(ctx, "QXZ"); return e }); err != nil {
+		t.Fatal(err)
+	}
+	if sess := s.mustOpen(s.agent, conv); sess.Protocol != "QXZ-1001" {
+		t.Fatalf("after the choice: %s", sess.Protocol)
 	}
 }
 
@@ -320,5 +446,53 @@ func TestTwoCompaniesWithTheSameNameGetDifferentPrefixesEvenAtTheSameInstant(t *
 	}
 	if got := []string{a.Protocol, b.Protocol}; !(got[0] == "RAC-1001" || got[1] == "RAC-1001") {
 		t.Fatalf("one of them has the first choice: %v", got)
+	}
+}
+
+// counterOf / countersOf show the counter rows of a company as the owner sees them ("PREFIX/last_value" per kind).
+func (s *stack) countersOf(tenant uuid.UUID) string {
+	s.t.Helper()
+	var out string
+	if err := s.env.Seed.QueryRow(context.Background(), `SELECT COALESCE(string_agg(kind || ':' || prefix || '/' || last_value, ',' ORDER BY kind), '') FROM service_counters WHERE tenant_id = $1`, tenant).Scan(&out); err != nil {
+		s.t.Fatal(err)
+	}
+	return out
+}
+
+func (s *stack) counterOf(tenant uuid.UUID) string {
+	s.t.Helper()
+	var out string
+	if err := s.env.Seed.QueryRow(context.Background(), `SELECT prefix || '/' || last_value FROM service_counters WHERE tenant_id = $1 AND kind = 'session'`, tenant).Scan(&out); err != nil {
+		s.t.Fatal(err)
+	}
+	return out
+}
+
+// Risk R-6: a custom role with service.create but NOT service.read used to fail halfway (the counter's INSERT ... RETURNING and the episode guard hit the read
+// policy, a 400/500 with a half-done request). Every write now also asks for service.read, so it is a clean 403 before anything is written.
+func TestAWriteKeyWithoutServiceReadIsRefusedUpFront(t *testing.T) {
+	s := newStack(t)
+	user, role := uuid.New(), uuid.New()
+	s.exec(`INSERT INTO roles(id, tenant_id, key, name) VALUES($1,$2,'create-only','Create only')`, role, s.env.TenantA)
+	s.exec(`INSERT INTO role_permissions(role_id, permission_key) VALUES($1,'service.create'), ($1,'conversation.read')`, role)
+	s.exec(`INSERT INTO users(id, external_subject, email, status) VALUES($1,$2,$3,'active')`, user, user.String(), user.String()+"@invalid")
+	s.exec(`INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, s.env.TenantA, user, role)
+	t.Cleanup(func() { _, _ = s.env.Seed.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, user) })
+	conv, _ := s.conversation()
+	mux := s.mux()
+	r := s.call(mux, user, "POST", "/service-sessions", `{"conversation_id":"`+conv.String()+`"}`, "Idempotency-Key", "create-only-"+uuid.NewString())
+	if r.code != http.StatusForbidden || r.body["error"] != "forbidden" {
+		t.Fatalf("a write key without service.read is refused up front, not halfway: %d %v", r.code, r.body)
+	}
+	if r := s.call(mux, user, "GET", "/service-settings/protocol-prefix", ""); r.code != http.StatusForbidden {
+		t.Fatalf("the settings need service.read too: %d", r.code)
+	}
+	if n := s.count(`SELECT count(*) FROM service_sessions WHERE conversation_id = $1`, conv); n != 0 || s.countersOf(s.env.TenantA) != "" {
+		t.Fatalf("nothing was written, no number burned: sessions=%d counters=%q", n, s.countersOf(s.env.TenantA))
+	}
+	// once the role also reads, it opens
+	s.exec(`INSERT INTO role_permissions(role_id, permission_key) VALUES($1,'service.read')`, role)
+	if r := s.call(mux, user, "POST", "/service-sessions", `{"conversation_id":"`+conv.String()+`"}`, "Idempotency-Key", "create-read-"+uuid.NewString()); r.code != http.StatusCreated {
+		t.Fatalf("with service.read as well: %d %v", r.code, r.body)
 	}
 }

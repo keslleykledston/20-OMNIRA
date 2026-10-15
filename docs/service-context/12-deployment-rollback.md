@@ -5,7 +5,7 @@ Estado: **nada implantado, nada empurrado** (sem push, sem tag, sem merge). Bran
 ## Ordem
 
 1. **Backup** (obrigatório antes de migrar): dump do banco de produção + conferir restore em ambiente descartável (`docs/ops` do projeto).
-2. **Migrations 000150 → 000155** com `tools/migrate-sql.sh up` (idempotente, uma transação por arquivo; lacunas de numeração são aceitas). São **aditivas**: tabelas novas, 7 chaves `service.*` (concedidas a papéis de sistema), 1 `ALTER` de CHECK em `permission_domains` (000154), funções/políticas novas e, na 000155, o índice único global do prefixo de protocolo. **A 000155 tem pré-voo:** se duas empresas já compartilham o prefixo (banco onde a 000150–154 já emitiu protocolos com o prefixo padrão `AT`), ela para com mensagem clara; dê um prefixo a cada empresa antes (protocolos emitidos não são renomeados). Em banco que nunca recebeu 000150–154 (produção em `main` @ 137) não há o que colidir. Reverter: `down` 155→150 (round-trip verificado). Nenhuma toca `messages`, `conversations`, `tickets`. **Antes do binário.**
+2. **Migrations 000150 → 000156** com `tools/migrate-sql.sh up` (idempotente, uma transação por arquivo; lacunas de numeração são aceitas). São **aditivas**: tabelas novas, 7 chaves `service.*` (concedidas a papéis de sistema), 1 `ALTER` de CHECK em `permission_domains` (000154), funções/políticas novas e, na 000155, o índice único global do prefixo de protocolo. **A 000155 tem pré-voo:** se duas empresas já compartilham o prefixo (banco onde a 000150–154 já emitiu protocolos com o prefixo padrão `AT`), ela para com mensagem clara; dê um prefixo a cada empresa antes (protocolos emitidos não são renomeados). Em banco que nunca recebeu 000150–154 (produção em `main` @ 137) não há o que colidir. A 000156 cria as funções que emitem o protocolo (`service_issue_protocol`, `service_prefix_candidates`, `service_suggest_prefix`) e troca as políticas do contador: o binário novo **depende dela** (sem a 000156 abrir sessão falha). Reverter: `down` 156→150 (round-trip verificado). Nenhuma toca `messages`, `conversations`, `tickets`. **Antes do binário.**
 3. Binário **com todas as flags desligadas** (padrão). Comportamento idêntico ao de hoje; as migrations não mudam nada visível.
 4. Ligar por etapas, observando `/metrics` (`omnira_service_*`) e logs (`service-context:`):
 
@@ -28,7 +28,7 @@ Papéis com `service.request_external`. Prefixo do protocolo: `GET/PUT /service-
 |---|---|
 | Comportamento inesperado | desligar a flag (efeito imediato após reinício; dados ficam) |
 | Binário | voltar o binário anterior: as migrations são aditivas e o binário antigo as ignora |
-| Migration | **roll-forward preferido**. `down` existe (155 → 150, um por vez com `migrate-sql.sh down`) e **apaga os dados novos** (sessões, eventos, tarefas…); só em ambiente sem dados que importem. Round-trip 150–154 verificado |
+| Migration | **roll-forward preferido**. `down` existe (156 → 150, um por vez com `migrate-sql.sh down`) e **apaga os dados novos** (sessões, eventos, tarefas…); só em ambiente sem dados que importem. Round-trip 150–154 verificado |
 
 ## Colisão com o headless
 

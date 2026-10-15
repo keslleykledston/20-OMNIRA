@@ -18,7 +18,7 @@ Flags (todas **desligadas** por padrão): `OMNIRA_SERVICE_CONTEXT_ENABLED`, `OMN
 
 ## Validation Summary
 
-Ver `11-test-evidence.md`. Em resumo: módulo, Hub, fluxos, IA, atendimento e web **passam**; a suíte inteira em série tem **90 pacotes ok e 4 falhando — exatamente os mesmos 4 (mesmos testes) que falham no `main` sem estas mudanças** (dependem de banco virgem) e que passam isolados. Migrations 150–154 com round-trip. 7 rodadas de revisão independente (Codex) com achados corrigidos e mutações verificadas.
+Ver `11-test-evidence.md`. Em resumo: módulo, Hub, fluxos, IA, atendimento e web **passam**; a suíte inteira em série tem **90 pacotes ok e 4 falhando — exatamente os mesmos 4 (mesmos testes) que falham no `main` sem estas mudanças** (dependem de banco virgem) e que passam isolados. Migrations 150–156 com round-trip. 7 rodadas de revisão independente (Codex) com achados corrigidos e mutações verificadas.
 
 ## Deployment Readiness
 

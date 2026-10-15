@@ -89,13 +89,14 @@ type Repository interface {
 	LockSession(ctx context.Context, id uuid.UUID) (*domain.Session, error)
 	ListSessions(ctx context.Context, f SessionFilter) ([]domain.Session, string, error)
 
-	// NextProtocol takes the company's counter row (creating it at start) and returns the next number. It must run in the same transaction as InsertSession.
-	// A row that only RESERVES a prefix (last_value 0) takes the start as its first number. ErrPrefixTaken when another company already uses the prefix.
-	NextProtocol(ctx context.Context, kind, prefix string, start int64) (string, int64, error)
+	// NextProtocol issues the company's next number through the database function service_issue_protocol (the only writer of a counter): it asks service.create,
+	// derives the prefix of a session counter that has none (first free candidate of the company name), starts sessions at 1001 and cases at 1000, and moves
+	// by one. ErrPrefixTaken when every candidate prefix is used. It must run in the same transaction as the insert of the record it numbers.
+	NextProtocol(ctx context.Context, kind string) (prefix string, seq int64, err error)
 	// SessionPrefix reads the company's session counter: the prefix, the last number issued (0 = only reserved), and whether the row exists.
 	SessionPrefix(ctx context.Context) (prefix string, last int64, found bool, err error)
-	// TenantName is the company's trade name (or legal name), the source of the suggested prefix.
-	TenantName(ctx context.Context) (string, error)
+	// SuggestPrefix is the first candidate prefix of the company's name that no other company uses (what a company that chose nothing would get).
+	SuggestPrefix(ctx context.Context) (string, error)
 	InsertSession(ctx context.Context, s *domain.Session) error
 	// UpdateSession writes the mutable columns when the stored version is expectedVersion; ErrConflict otherwise (ErrNotFound if it is gone or hidden).
 	UpdateSession(ctx context.Context, s *domain.Session, expectedVersion int) error

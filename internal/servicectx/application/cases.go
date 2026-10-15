@@ -138,7 +138,7 @@ func (s *Service) OpenCase(ctx context.Context, raw domain.CaseOpenInput) (CaseR
 	if customer == nil && origin != nil {
 		customer = origin.CustomerID
 	}
-	prefix, seq, err := s.repo.NextProtocol(ctx, "case", domain.DefaultCasePrefix, domain.DefaultCaseStart)
+	prefix, seq, err := s.repo.NextProtocol(ctx, "case")
 	if err != nil {
 		return CaseResult{}, err
 	}

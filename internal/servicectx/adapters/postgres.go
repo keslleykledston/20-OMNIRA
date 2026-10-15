@@ -174,22 +174,17 @@ func (r *PostgresRepository) LockSession(ctx context.Context, id uuid.UUID) (*do
 	return s, mapErr(err)
 }
 
-func (r *PostgresRepository) NextProtocol(ctx context.Context, kind, prefix string, start int64) (string, int64, error) {
+func (r *PostgresRepository) NextProtocol(ctx context.Context, kind string) (string, int64, error) {
 	tenant, err := tenantOf(ctx)
 	if err != nil {
 		return "", 0, err
 	}
-	var gotPrefix string
+	var prefix string
 	var v int64
-	// a row that only reserved its prefix (last_value 0) takes `start` as its first number; any other row moves forward by one
-	err = r.q(ctx).QueryRow(ctx, `
-		INSERT INTO service_counters (tenant_id, kind, prefix, last_value) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (tenant_id, kind) DO UPDATE SET last_value = CASE WHEN service_counters.last_value = 0 THEN $4 ELSE service_counters.last_value + 1 END, updated_at = now()
-		RETURNING prefix, last_value`, tenant, kind, prefix, start).Scan(&gotPrefix, &v)
-	if err != nil {
+	if err := r.q(ctx).QueryRow(ctx, `SELECT o_prefix, o_last FROM service_issue_protocol($1, $2)`, tenant, kind).Scan(&prefix, &v); err != nil {
 		return "", 0, mapPrefixErr(err)
 	}
-	return gotPrefix, v, nil
+	return prefix, v, nil
 }
 
 // mapPrefixErr turns the unique index on the session prefix into ErrPrefixTaken and the freeze trigger into ErrPrefixLocked.
@@ -223,16 +218,19 @@ func (r *PostgresRepository) SessionPrefix(ctx context.Context) (string, int64, 
 	return prefix, last, true, nil
 }
 
-func (r *PostgresRepository) TenantName(ctx context.Context) (string, error) {
+func (r *PostgresRepository) SuggestPrefix(ctx context.Context) (string, error) {
 	tenant, err := tenantOf(ctx)
 	if err != nil {
 		return "", err
 	}
-	var name string
-	if err := r.q(ctx).QueryRow(ctx, `SELECT COALESCE(NULLIF(btrim(trade_name), ''), legal_name) FROM tenants WHERE id = $1`, tenant).Scan(&name); err != nil {
+	var p *string
+	if err := r.q(ctx).QueryRow(ctx, `SELECT service_suggest_prefix($1)`, tenant).Scan(&p); err != nil {
 		return "", mapErr(err)
 	}
-	return name, nil
+	if p == nil {
+		return "", domain.ErrPrefixTaken
+	}
+	return *p, nil
 }
 
 func (r *PostgresRepository) InsertSession(ctx context.Context, s *domain.Session) error {

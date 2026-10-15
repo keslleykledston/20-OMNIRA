@@ -5,12 +5,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/platform/untrusted"
-	"golang.org/x/text/unicode/norm"
 )
 
 type SessionStatus string
@@ -95,9 +93,8 @@ func ValidSource(s string) bool {
 }
 
 const (
-	// DefaultSessionPrefix is the last resort: a company whose name has no letters at all and has chosen nothing.
-	DefaultSessionPrefix = "AT"
-	// DefaultSessionStart is the first protocol number a company gets (KTG-1001): it reads like a protocol, not like "1".
+	// DefaultSessionStart is the first protocol number a company gets (KTG-1001): it reads like a protocol, not like "1". The database function
+	// service_issue_protocol (migration 000156) is what issues it; this constant only previews the next number, and a test keeps both equal.
 	DefaultSessionStart int64 = 1001
 	// DefaultReopenWindow is how long after closing a session may be reopened (the owner's decision, 2026-10-15: a customer who comes back the next day
 	// opens a new protocol).
@@ -318,68 +315,3 @@ func ValidPrefix(p string) bool { return prefixRe.MatchString(p) }
 
 // NormalizePrefix upper-cases and trims what a person typed; the result may still be invalid (check it with ValidPrefix).
 func NormalizePrefix(p string) string { return strings.ToUpper(strings.TrimSpace(p)) }
-
-// PrefixCandidates proposes prefixes for a company name, best first: the first three letters ("Veloso" -> VEL), then four, five and six letters, then
-// the first two letters with every third one, then the first letter with every pair. Accents are dropped, digits and punctuation are ignored; a name with
-// fewer than two letters gets the default prefix as its base. The application tries them in order until one is free.
-func PrefixCandidates(name string) []string {
-	var base []rune
-	for _, r := range strings.ToUpper(foldAccents(name)) {
-		if r >= 'A' && r <= 'Z' {
-			base = append(base, r)
-		}
-	}
-	if len(base) < 2 {
-		base = []rune(DefaultSessionPrefix)
-	}
-	seen := map[string]bool{}
-	var out []string
-	add := func(p string) {
-		if ValidPrefix(p) && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	for n := 3; n <= 6; n++ {
-		if len(base) >= n {
-			add(string(base[:n]))
-		} else if n == 3 {
-			add(string(base) + "X")
-		}
-	}
-	for c := 'A'; c <= 'Z'; c++ {
-		add(string(base[:2]) + string(c))
-	}
-	for a := 'A'; a <= 'Z'; a++ {
-		for b := 'A'; b <= 'Z'; b++ {
-			add(string(base[:1]) + string(a) + string(b))
-		}
-	}
-	return out
-}
-
-// foldAccents drops the marks of accented letters (Á, ç, Č, Å...) by decomposing them, and maps the few Latin letters that do not decompose.
-func foldAccents(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case 'Ł':
-			return 'L'
-		case 'ł':
-			return 'l'
-		case 'Ø':
-			return 'O'
-		case 'ø':
-			return 'o'
-		case 'Đ', 'Ð':
-			return 'D'
-		case 'đ', 'ð':
-			return 'd'
-		case 'ß':
-			return 's'
-		}
-		if unicode.Is(unicode.Mn, r) {
-			return -1
-		}
-		return r
-	}, norm.NFD.String(s))
-}

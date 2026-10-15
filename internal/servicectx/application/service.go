@@ -153,6 +153,15 @@ func (s *Service) allow(ctx context.Context, c caller, perm string) error {
 	if !ok {
 		return domain.ErrForbidden
 	}
+	// Every write also needs to READ the module: its tables are read by service.read, and the row guards of a write look at the rows it touches. A role with a
+	// write key and no service.read could only fail halfway through, so it is refused up front (risk R-6).
+	if perm != PermRead && perm != PermManageCatalog {
+		if ok, err = s.authz.Has(ctx, c.tc.ActorID, PermRead); err != nil {
+			return err
+		} else if !ok {
+			return domain.ErrForbidden
+		}
+	}
 	return nil
 }
 
@@ -299,7 +308,7 @@ func (s *Service) create(ctx context.Context, c caller, in domain.OpenInput, fac
 	if err := s.mustExist(ctx, in.CategoryID, s.repo.ActiveCategoryExists, "category_id"); err != nil {
 		return nil, err
 	}
-	prefix, seq, err := s.nextSessionProtocol(ctx)
+	prefix, seq, err := s.repo.NextProtocol(ctx, "session")
 	if err != nil {
 		return nil, err
 	}
