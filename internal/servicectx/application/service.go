@@ -804,7 +804,7 @@ func (s *Service) OpenOnClaim(ctx context.Context, conversationID, actor uuid.UU
 
 // CloseForFinalize is called by the attendance finalization (ADR-0020), in ITS transaction and after it locked the conversation: the session of the
 // conversation is closed with the result that matches the finalization, or created and closed in one go when the attendance never had one (an
-// informational attendance gets its protocol when it ends). It does not ask for permissions: finalizing was authorized by its own rules. Idempotent.
+// informational attendance gets its protocol when it ends); a conversation whose session the operator already closed gets nothing more. It does not ask for permissions: finalizing was authorized by its own rules. Idempotent.
 func (s *Service) CloseForFinalize(ctx context.Context, conversationID uuid.UUID, reason string, source string, actor uuid.UUID) error {
 	c, err := s.who(ctx)
 	if err != nil {
@@ -825,6 +825,13 @@ func (s *Service) CloseForFinalize(ctx context.Context, conversationID uuid.UUID
 		return err
 	}
 	if sess == nil {
+		// The attendance already had its protocol and the operator closed it by hand before finalizing: that protocol is the record of this
+		// attendance, so finalizing opens no second (empty, instantly closed) one that would only burn a number.
+		if prev, err := s.repo.LatestByConversation(ctx, conversationID); err != nil {
+			return err
+		} else if prev != nil {
+			return nil
+		}
 		in := domain.OpenInput{ConversationID: &conversationID, Source: source, OriginChannel: "other"}
 		if in, err = in.Normalize(); err != nil {
 			return err

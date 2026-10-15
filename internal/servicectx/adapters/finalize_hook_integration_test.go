@@ -96,6 +96,32 @@ func TestFinalizeClosesTheSessionThatWasAlreadyOpenInsteadOfOpeningAnother(t *te
 	}
 }
 
+// The operator closes the session in the panel and then finalizes the attendance: the protocol that was closed by hand is the record, so no second,
+// empty protocol is created (seen in production on 2026-10-15: KTG-1002 closed by the operator, then KTG-1003 opened and closed by the finalize).
+func TestFinalizeAfterTheOperatorClosedTheSessionOpensNoSecondProtocol(t *testing.T) {
+	s := newStack(t)
+	conv, _ := s.conversation()
+	s.assign(conv, s.agent)
+	opened := s.mustOpen(s.agent, conv)
+	if _, err := s.closeSession(s.agent, opened.ID, domain.CloseInput{ResolutionCode: domain.ResInformationProvided}, opened.Version); err != nil {
+		t.Fatal(err)
+	}
+	before := s.counterOf(s.env.TenantA)
+	if err := s.finalize(s.attendance(true), s.agent, conv, attendancedomain.ReasonResolved); err != nil {
+		t.Fatal(err)
+	}
+	rows := s.sessionsOf(conv)
+	if len(rows) != 1 || rows[0].protocol != opened.Protocol || rows[0].status != "closed" || rows[0].closedSource != "operator" {
+		t.Fatalf("the session closed by hand stays the only one: %+v", rows)
+	}
+	if s.counterOf(s.env.TenantA) != before {
+		t.Fatal("no protocol number was spent")
+	}
+	if n := s.count(`SELECT count(*) FROM conversations WHERE id=$1 AND status='closed'`, conv); n != 1 {
+		t.Fatal("the conversation is finalized as before")
+	}
+}
+
 func TestFinalizeWithoutTheHookIsExactlyAsBefore(t *testing.T) {
 	s := newStack(t)
 	conv, _ := s.conversation()
