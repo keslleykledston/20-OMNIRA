@@ -24,6 +24,8 @@ import { emitInboxNotice } from '../../lib/inboxNotice';
 import { CollapsibleSection } from './CollapsibleSection';
 import { useChannelLines } from '../../lib/channelLines';
 import { currentUserId } from '../../lib/session';
+import { useAccess } from '../../lib/useAccess';
+import ServiceSessionPanel from '../service/ServiceSessionPanel';
 
 interface ContextPaneProps {
   conversationId: string;
@@ -38,6 +40,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
   const [assignError, setAssignError] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showFinalize, setShowFinalize] = useState(false);
+  const { can } = useAccess();
   const [tab, setTab] = useState<'details' | 'history'>('details');
   const tabsId = useId();
 
@@ -324,6 +327,12 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
           )}
         </div>
       </CollapsibleSection>
+
+      {!internal && (
+        <CollapsibleSection id="service-session" title="Protocolo e tarefas" icon="tickets" defaultOpen>
+          <ServiceSessionPanel conversationId={conversationId} can={can} conversationClosed={closed} />
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection id="contact" title="Contato" icon="contacts" defaultOpen>
         {/* PRODUCT.7B1C: the "Ver perfil 360°" link was removed: it pointed crm_contact_id (a K3G identity) at /contacts/:id
