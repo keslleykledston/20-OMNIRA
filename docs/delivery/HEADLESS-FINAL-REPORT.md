@@ -22,7 +22,7 @@ Branch `feat/headless-crm-dual-operation`, worktree `/data/cafegpt/tmp/wt-headle
 - Docs: `docs/adr/0046-…`, `docs/ops/HEADLESS-RUNBOOK.md`, `docs/ops/HEADLESS-LIVE-TEST.md`, `docs/delivery/HEADLESS-PHASE-REPORT.md`, `HEADLESS-BENCHMARK.md`, `HEADLESS-PROGRESS.md`, `docs/architecture/HEADLESS-{INVENTORY,THREAT-MODEL}.md`.
 
 ## 3. Evidência (rodada, não declarada)
-- **Suíte completa de integração** (`scripts/test-integration.sh` sem argumentos, Postgres+NATS descartáveis): 41 pacotes verdes na última execução completa; as correções finais (§5) foram verificadas nos pacotes afetados e na rodada de mutação, e a suíte completa é reexecutada antes da entrega (resultado no fim deste arquivo).
+- **Suíte completa de integração** (`scripts/test-integration.sh` sem argumentos, Postgres+NATS descartáveis, papel `omnira_app`): **41 pacotes verdes** na execução final, sobre o commit `43f6a82` (inclui as correções da revisão final).
 - **Web**: `vitest` 96 arquivos / 990 testes e `vite build` passando; `tsc --noEmit` limpo.
 - **Mutação**: `scripts/test-headless-mutations.sh h1 … h5` — ~200 mutantes, todos mortos (cada sobrevivente virou teste novo ou código redundante removido).
 - **Roundtrip** `up → down → up` com schema idêntico: 135, 136, 137, 138, 139.
