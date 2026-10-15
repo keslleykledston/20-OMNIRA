@@ -144,7 +144,7 @@ export default function HubAccessPage() {
         {data && personId && (() => {
           const person = data.agents.find((a) => a.user_id === personId);
           return person ? (
-            <HubPersonSheet hubId={hubId} agent={person} instances={data.instances} busy={setAccess.isPending || setManage.isPending}
+            <HubPersonSheet key={person.user_id} hubId={hubId} agent={person} instances={data.instances} busy={setAccess.isPending || setManage.isPending}
               onSetAccess={(user, tenant, mode) => setAccess.mutate({ user, tenant, mode })}
               onSetManage={(user, tenant, can) => setManage.mutate({ user, tenant, can })}
               onRemove={(a) => { setPersonId(null); setRemoveAgent(a); }}

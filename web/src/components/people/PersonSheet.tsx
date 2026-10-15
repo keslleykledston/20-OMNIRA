@@ -390,8 +390,13 @@ function AccessSection({ person, busy, onSetStatus }: { person: PersonEntry; bus
 
 function planSentence(inv: NonNullable<PersonEntry['invitation']>, sectors: SheetSector[] | null): string {
   if (!inv.attends) return 'Volte a esta ficha depois do aceite, ligue “Recebe conversas” e escolha as filas da pessoa.'
+  const planned = inv.queue_ids ?? []
+  // Queue names unknown here (not loaded, or no permission to read them): say how many, never claim the overflow queue.
+  if (sectors === null && planned.length > 0) {
+    return `Ao aceitar, a pessoa já recebe conversas de ${planned.length} ${planned.length === 1 ? 'fila escolhida' : 'filas escolhidas'} no convite.`
+  }
   const names = new Map((sectors ?? []).flatMap((s) => s.queues).map((q) => [q.id, q.name]))
-  const chosen = (inv.queue_ids ?? []).map((id) => names.get(id)).filter((n): n is string => !!n)
+  const chosen = planned.map((id) => names.get(id)).filter((n): n is string => !!n)
   if (chosen.length === 0) return 'Ao aceitar, a pessoa já passa a atender, pela fila padrão de transbordo da empresa.'
   const list = chosen.length === 1 ? chosen[0] : `${chosen.slice(0, -1).join(', ')} e ${chosen[chosen.length - 1]}`
   const cap = inv.queue_capacity ?? 1

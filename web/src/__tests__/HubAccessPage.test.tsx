@@ -293,6 +293,7 @@ describe('HubAccessPage: ficha da pessoa (ADR-0047)', () => {
     await waitFor(() => expect(within(sheet).getByLabelText('Xavier na equipe Suporte')).toBeChecked());
     const puts = vi.mocked(axios.put).mock.calls.filter((c) => String(c[0]).endsWith('/pools/p1/members'));
     expect(puts.at(-1)?.[1]).toEqual({ members: [{ user_id: 'u-y', max_open: 7 }, { user_id: 'u-x', max_open: 7 }] });
+    expect(await within(sheet).findByText(/até 7 conversas ao mesmo tempo/)).toBeInTheDocument();
   });
 
   it('avisa quando a pessoa também é membro direta de uma instância', async () => {
@@ -302,6 +303,7 @@ describe('HubAccessPage: ficha da pessoa (ADR-0047)', () => {
     const sheet = await screen.findByRole('dialog', { name: 'Ficha de y@k3g.com' });
     const beta = within(sheet).getByRole('listitem', { name: 'Beta — y@k3g.com' });
     expect(within(beta).getByText(/Também é membro direto desta instância/)).toBeInTheDocument();
+    expect(within(beta).getByText(/Como membro direto, recebe pelas filas que o administrador da instância definir/)).toBeInTheDocument();
   });
 });
 

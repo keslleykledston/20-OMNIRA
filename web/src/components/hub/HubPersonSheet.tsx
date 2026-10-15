@@ -103,14 +103,19 @@ export default function HubPersonSheet({ hubId, agent, instances, busy, onSetAcc
                 <div className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-text-tertiary">Recebe conversas de</p>
                   {mode !== 'reply' ? (
-                    <p className="text-sm text-text-secondary">Só com “Ler e responder” a pessoa recebe conversas desta instância.</p>
+                    <p className="text-sm text-text-secondary">
+                      {direct
+                        ? 'Pelas equipes do Hub, só com “Ler e responder”. Como membro direto, recebe pelas filas que o administrador da instância definir.'
+                        : 'Só com “Ler e responder” a pessoa recebe conversas desta instância.'}
+                    </p>
                   ) : pools.isLoading ? (
                     <p className="text-sm text-text-secondary">Carregando equipes…</p>
                   ) : covering.length === 0 ? (
                     <p className="text-sm text-text-secondary">Nenhuma equipe atende esta instância. Crie uma na aba Equipes.</p>
                   ) : (
                     covering.map((p) => {
-                      const member = p.members.some((m) => m.user_id === agent.user_id);
+                      const seat = p.members.find((m) => m.user_id === agent.user_id);
+                      const member = !!seat;
                       const scope = p.instances.find((x) => x.tenant_id === i.tenant_id)?.queue_id ? 'uma fila específica' : 'todas as filas';
                       const elsewhere = p.instances.filter((x) => x.tenant_id !== i.tenant_id).map((x) => nameOf.get(x.tenant_id) ?? x.name);
                       return (
@@ -119,7 +124,10 @@ export default function HubPersonSheet({ hubId, agent, instances, busy, onSetAcc
                             onChange={(e) => void togglePool(p, e.target.checked)}
                             aria-label={`${who} na equipe ${p.name}`} className="mt-0.5 h-4 w-4 accent-[var(--color-accent-primary)]" />
                           <span className="min-w-0">
-                            <span className="block font-medium text-text-primary">Equipe {p.name}</span>
+                            <span className="block font-medium text-text-primary">
+                              Equipe {p.name}
+                              {seat && <span className="font-normal text-text-secondary"> · até {seat.max_open} {seat.max_open === 1 ? 'conversa' : 'conversas'} ao mesmo tempo</span>}
+                            </span>
                             <span className="block text-xs text-text-tertiary">
                               {scope} desta instância
                               {elsewhere.length > 0 ? ` · a equipe também atende ${elsewhere.join(', ')}, e participar vale para todas` : ''}

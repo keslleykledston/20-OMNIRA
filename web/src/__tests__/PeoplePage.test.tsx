@@ -297,6 +297,14 @@ describe('Pessoas: convite com plano de atendimento (ADR-0046)', () => {
     expect(within(sheet()).getByText('Ao aceitar, a pessoa já recebe conversas de Cobrança e Suporte N1, até 2 conversas ao mesmo tempo em cada fila.')).toBeInTheDocument()
   })
 
+  it('sem os nomes das filas, a ficha do convite diz quantas filas o plano tem (não promete a fila padrão)', async () => {
+    const user = userEvent.setup()
+    serve(world({ permissions: ['membership.read', 'membership.manage'], invitations: [invitation('i9', 'semnomes@k3g.com', { attends: true, queue_ids: ['q-fin', 'q-sup'], queue_capacity: 2 })] }))
+    page()
+    await user.click(await rowOf('semnomes@k3g.com'))
+    expect(within(sheet()).getByText('Ao aceitar, a pessoa já recebe conversas de 2 filas escolhidas no convite.')).toBeInTheDocument()
+  })
+
   it('explica quando a conta de login não pôde ser preparada (502) e aponta o reenvio', async () => {
     const user = userEvent.setup()
     const w = world()
