@@ -47,6 +47,9 @@ const (
 	ActionInvitationRevoked        AuditAction = "membership.invitation.revoked"
 	ActionInvitationResent         AuditAction = "membership.invitation.resent"
 	ActionInvitationAccepted       AuditAction = "membership.invitation.accepted"
+	// ADR-0046: the invitee's sign-in account at the identity provider (prepared = created or refreshed, or left as the person's own).
+	ActionInvitationLoginPrepared  AuditAction = "membership.invitation.login_prepared"
+	ActionInvitationLoginDisabled  AuditAction = "membership.invitation.login_disabled"
 	ActionConversationAssigned     AuditAction = "conversation.assigned"
 	ActionConversationUnassigned   AuditAction = "conversation.unassigned"
 	ActionConversationTransferred  AuditAction = "conversation.transferred"

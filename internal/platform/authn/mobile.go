@@ -52,7 +52,8 @@ type SessionValidator interface {
 // ValidateSession reports whether a cookie session is still valid, WITHOUT touching last_activity_at (a stream must not keep a session alive).
 func (s *PostgresSessionStore) ValidateSession(ctx context.Context, sessionID string) error {
 	var one int
-	err := s.pool.QueryRow(ctx, `SELECT 1 FROM auth_sessions WHERE id=$1 AND revoked_at IS NULL AND expires_at > NOW()`, sessionID).Scan(&one)
+	err := s.pool.QueryRow(ctx, `SELECT 1 FROM auth_sessions WHERE id=$1 AND revoked_at IS NULL AND expires_at > NOW()
+		AND ($2::double precision <= 0 OR created_at + make_interval(secs => $2::double precision) > NOW())`, sessionID, s.max.Seconds()).Scan(&one)
 	if err != nil {
 		return errors.New("session not found or expired")
 	}

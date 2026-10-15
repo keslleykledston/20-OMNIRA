@@ -23,6 +23,22 @@ Status: **IMPLEMENTADA** (2026-10-14), ampliando o fluxo de convite existente. O
 - O Keycloak e o SMTP são chamados dentro da transação do convite (o SMTP já era assim). Se o commit falhar depois da chamada ao Keycloak, sobra uma conta presa a um convite que não existe. Ela é assumida quando vence (7 dias).
 - Não há outbox para esses efeitos externos.
 
+**Revisão do Codex, rodada 2: 2 HIGH, corrigidos antes do deploy:**
+- **Corrida entre convites para o mesmo e-mail.** Criar, reenviar e cancelar tomam um lock consultivo do Postgres por e-mail (`pg_advisory_xact_lock`), válido até o fim da transação do pedido e tomado antes de qualquer escrita em convite. Além disso, o adaptador relê a conta logo antes de gravar e só grava se ela ainda cumpre a regra. Se não cumprir, responde 502 e o convite pode ser reenviado.
+- **Conta sem vínculo completo** (sem convite ou com validade ilegível): ninguém a assume (falha fechada).
+
+Também corrigido nessa rodada:
+- A conta criada é conferida e, se preciso, removida pelo id que o Keycloak devolveu, nunca por busca.
+- Uma vaga antiga e inativa numa fila escolhida no convite volta ativa no aceite.
+- Eventos próprios `membership.invitation.login_prepared` e `membership.invitation.login_disabled`, com resultado `failure` quando o Keycloak falha.
+- A auditoria do plano no aceite fica num `SAVEPOINT`: uma falha dela não desfaz o aceite.
+- O script de configuração passa a senha do admin em `KC_CLI_PASSWORD`, fora da linha de comando. Ele retoma uma execução interrompida e põe o `.env` em 600 antes de gravar o segredo.
+
+**Riscos aceitos (MEDIUM):**
+- Uma conta desligada pelo OMNIRA que um administrador do Keycloak religa e depois desliga à mão volta a ser religada por um convite novo. Não há como distinguir os dois casos, e só o dono administra o Keycloak.
+- Cancelar com o Keycloak fora do ar cancela o convite e deixa a conta ligada. Isso fica registrado como falha na auditoria e tem a mesma exposição do convite vencido.
+- O convite não tem chave de idempotência: repetir o pedido substitui o convite, como antes.
+
 ## 1. Contexto: o que acontece hoje
 
 - Em produção o login é só pelo Keycloak (`OMNIRA_AUTH_MODE=oidc`, realm `omnira`, `registrationAllowed=false`). O OMNIRA **não** chama a API de administração do Keycloak.

@@ -31,8 +31,8 @@ for _ in $(seq 1 120); do
 done
 
 kc() { docker exec -i "$KC" /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kc.cfg; }
-docker exec "$KC" /opt/keycloak/bin/kcadm.sh config credentials --server "http://localhost:$PORT" --realm master --user admin \
-  --password "$ADMIN_PW" --config /tmp/kc.cfg >/dev/null
+printf '%s\n' "$ADMIN_PW" | docker exec -i "$KC" sh -c 'read -r P; KC_CLI_PASSWORD="$P" /opt/keycloak/bin/kcadm.sh config credentials \
+  --server "http://localhost:'"$PORT"'" --realm master --user admin --config /tmp/kc.cfg >/dev/null'
 
 echo "== realm changes with the production script (scripts/keycloak-provisioner-setup.sh)"
 install -m 600 /dev/null "$WORK/admin.pw" && printf '%s\n' "$ADMIN_PW" > "$WORK/admin.pw"
@@ -47,6 +47,13 @@ SECRET=$(grep '^OMNIRA_KEYCLOAK_PROVISIONER_SECRET=' "$WORK/env" | cut -d= -f2-)
 [ "$(stat -c %a "$WORK/env")" = 600 ] || { echo "FAIL: env file is not 600"; exit 1; }
 if setup >/dev/null 2>&1; then echo "FAIL: a second setup run must stop"; exit 1; fi
 echo "second setup run refused: ok"
+# a run that stopped before writing .env is finished by running it again: same client, same secret
+install -m 600 /dev/null "$WORK/env2"
+RESUMED=$(ENV_FILE="$WORK/env2" KEYCLOAK_ADMIN_PW_FILE="$WORK/admin.pw" KEYCLOAK_CONTAINER="$KC" KEYCLOAK_INTERNAL_URL="http://localhost:$PORT" \
+  KEYCLOAK_BACKUP_DIR="$WORK" scripts/keycloak-provisioner-setup.sh 2>&1) || { echo "FAIL: resumed run failed:"; echo "$RESUMED"; exit 1; }
+grep -q "already there: kept" <<<"$RESUMED" || { echo "FAIL: resumed run did not keep the client:"; echo "$RESUMED"; exit 1; }
+[ "$(grep '^OMNIRA_KEYCLOAK_PROVISIONER_SECRET=' "$WORK/env2" | cut -d= -f2-)" = "$SECRET" ] || { echo "FAIL: resumed run wrote another secret"; exit 1; }
+echo "resumed setup run kept the client and its secret: ok"
 
 echo "== two accounts created by hand: one still waiting for its first password (like sistema2), one in use"
 for u in manual-pending manual-used; do

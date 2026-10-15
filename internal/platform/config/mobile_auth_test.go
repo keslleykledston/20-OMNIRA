@@ -114,6 +114,13 @@ func TestSessionCeilingIsNeverShorterThanTheIdleTimeout(t *testing.T) {
 	if err := c.Validate(); err == nil {
 		t.Fatal("a ceiling shorter than the idle timeout accepted")
 	}
+	for _, bad := range [][2]int{{-1, 36000}, {21600, -1}} {
+		c.SessionIdleTimeout, c.SessionMaxLifetime = bad[0], bad[1]
+		if err := c.Validate(); err == nil {
+			t.Fatalf("negative lifetime %v accepted", bad)
+		}
+	}
+	c.SessionIdleTimeout = 21600
 	for _, max := range []int{0, 21600, 36000} {
 		c.SessionMaxLifetime = max
 		if err := c.Validate(); err != nil {

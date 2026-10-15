@@ -62,7 +62,8 @@ func (s *PostgresSessionStore) ResolveSession(ctx context.Context, sessionID str
 	err := s.pool.QueryRow(ctx, `
 		SELECT user_id FROM auth_sessions
 		WHERE id=$1 AND revoked_at IS NULL AND expires_at > NOW() AND session_account_active(id)
-	`, sessionID).Scan(&userID)
+		  AND ($2::double precision <= 0 OR created_at + make_interval(secs => $2::double precision) > NOW())
+	`, sessionID, s.max.Seconds()).Scan(&userID)
 
 	if err == pgx.ErrNoRows {
 		return uuid.Nil, errors.New("session not found or expired")
@@ -97,10 +98,10 @@ func (s *PostgresSessionStore) UpdateActivity(ctx context.Context, sessionID str
 	_, err := s.pool.Exec(ctx, `
 		UPDATE auth_sessions
 		SET last_activity_at = NOW(),
-		    expires_at = GREATEST(expires_at, LEAST(
-		        NOW() + make_interval(secs => $2::double precision),
+		    expires_at = LEAST(
+		        GREATEST(expires_at, NOW() + make_interval(secs => $2::double precision)),
 		        CASE WHEN $3::double precision > 0 THEN created_at + make_interval(secs => $3::double precision)
-		             ELSE 'infinity'::timestamptz END))
+		             ELSE 'infinity'::timestamptz END)
 		WHERE id=$1 AND revoked_at IS NULL AND expires_at > NOW()
 	`, sessionID, s.idle.Seconds(), s.max.Seconds())
 	return err

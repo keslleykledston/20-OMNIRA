@@ -24,6 +24,11 @@ Referências normativas: [OpenID Connect Core 1.0](https://openid.net/specs/open
 - O IdP deve cadastrar exatamente a redirect URI configurada e emitir `aud` compatível com `OMNIRA_AUTH_AUDIENCE`.
 - Usuários precisam ser previamente provisionados com `external_subject=sub` e membership ativa; identidade desconhecida falha fechada.
 - O cookie dura no máximo até a expiração do ID Token. Renovação silenciosa/refresh token não entra nesta fase; o usuário autentica novamente após expirar.
+- **Atualização (2026-10-14, pedido do dono: "6 h de inatividade").** Desde a store de sessão revogável (`auth_sessions`), o cookie guarda um id opaco, não o ID Token. A duração passa a ser a da sessão do OMNIRA:
+  - termina depois de `OMNIRA_SESSION_IDLE_TIMEOUT` sem uso (cada pedido empurra o prazo; um stream não conta como uso);
+  - nunca passa de `OMNIRA_SESSION_MAX_LIFETIME` desde o login (padrão 10 h, o mesmo teto do SSO no realm).
+  - A sessão é revogável no servidor (sair; conta do OMNIRA desativada).
+  - **Efeito aceito:** desativar alguém só no Keycloak não encerra uma sessão do OMNIRA já aberta antes do teto. Para cortar na hora, desative a conta no OMNIRA (o acesso a uma instância também cai na hora quando a pessoa é suspensa em Pessoas).
 - Logout local remove o cookie OMNIRA. Single logout no IdP pode ser acrescentado depois usando `end_session_endpoint`.
 - Ambientes com TLS encerrado no proxy devem configurar `OMNIRA_AUTH_COOKIE_SECURE=true`.
 

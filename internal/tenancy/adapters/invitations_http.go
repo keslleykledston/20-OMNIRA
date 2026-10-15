@@ -193,19 +193,30 @@ func (h *InvitationsHandler) planFrom(r *http.Request, q platformdb.Querier, ten
 
 // prepareLogin makes the temporary password of the e-mail work at the identity provider (ADR-0046). Without a preparer the e-mail keeps
 // the password as before; with one, the password goes in the e-mail only when the account was created or refreshed for this invitation.
-func (h *InvitationsHandler) prepareLogin(ctx context.Context, inv Invitation, tempPassword string, replaces []string) (includePassword bool, outcome string, err error) {
+func (h *InvitationsHandler) prepareLogin(ctx context.Context, tc *domain.TenantContext, inv Invitation, tempPassword string, replaces []string) (includePassword bool, outcome string, err error) {
 	if h.login == nil {
 		return true, "", nil
 	}
 	set, err := h.login.Prepare(ctx, LoginInvitation{Email: inv.Email, Password: tempPassword, ID: inv.ID.String(), ExpiresAt: inv.ExpiresAt, Replaces: replaces})
-	if err != nil {
+	switch {
+	case err != nil:
 		log.Printf("tenancy: invitation %s sign-in account not prepared: %v", inv.ID, err)
-		return false, "failed", err
+		includePassword, outcome = false, "failed"
+	case set:
+		includePassword, outcome = true, "ready"
+	default:
+		includePassword, outcome = false, "existing"
 	}
-	if set {
-		return true, "ready", nil
-	}
-	return false, "existing", nil
+	h.recordLogin(ctx, tc, auditdomain.ActionInvitationLoginPrepared, inv.ID, inv.Email, outcome, err == nil)
+	return includePassword, outcome, err
+}
+
+// lockInvitationLogin serializes, across API replicas and until the request's transaction ends, every invitation write that may touch
+// the sign-in account of this e-mail (create, resend, cancel): two of them never interleave their identity-provider reads and writes.
+// Taken before any invitation row is written or locked, so it never waits while holding a row another of them needs.
+func lockInvitationLogin(ctx context.Context, q platformdb.Querier, email string) error {
+	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('omnira.invitation-login:' || lower($1), 0))`, email)
+	return err
 }
 
 // CreateInvitation — POST /api/v1/tenants/{tenant_id}/team/invitations
@@ -271,6 +282,12 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 		http.Error(w, reason, status)
 		return
 	}
+	if h.login != nil {
+		if err := lockInvitationLogin(r.Context(), q, email); err != nil {
+			http.Error(w, "failed to create invitation", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	// Política de duplicidade: no máximo um pending por (tenant, email). Um
 	// novo convite substitui o anterior — revoga e insere na mesma
@@ -333,7 +350,7 @@ func (h *InvitationsHandler) CreateInvitation(w http.ResponseWriter, r *http.Req
 	inv.Attends, inv.QueueIDs, inv.QueueCapacity = plan.Attends, plan.QueueIDs, plan.QueueCapacity
 	_ = q.QueryRow(r.Context(), `SELECT COALESCE(email,'') FROM users WHERE id=$1`, tc.ActorID).Scan(&inv.CreatedBy)
 
-	includePassword, login, loginErr := h.prepareLogin(r.Context(), inv, tempPassword, replaced)
+	includePassword, login, loginErr := h.prepareLogin(r.Context(), tc, inv, tempPassword, replaced)
 	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationCreated, inv.ID, email, req.RoleKey, planAudit(inv, login))
 	if loginErr != nil {
 		// The invitation stays pending; "Reenviar" prepares the account again and sends the e-mail.
@@ -417,7 +434,17 @@ func (h *InvitationsHandler) RevokeInvitation(w http.ResponseWriter, r *http.Req
 	}
 
 	var email string
-	tag, err := platformdb.QuerierFromContext(r.Context(), h.pool).Exec(r.Context(), `
+	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	if h.login != nil {
+		var lockEmail string
+		if err := q.QueryRow(r.Context(), `SELECT email FROM membership_invitations WHERE id=$1 AND tenant_id=$2`, invitationID, tc.TenantID).Scan(&lockEmail); err == nil {
+			if err := lockInvitationLogin(r.Context(), q, lockEmail); err != nil {
+				http.Error(w, "failed to revoke invitation", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	tag, err := q.Exec(r.Context(), `
 		UPDATE membership_invitations SET status='revoked', revoked_at=now(), updated_at=now()
 		WHERE tenant_id=$1 AND id=$2 AND status='pending'`,
 		tc.TenantID, invitationID)
@@ -439,11 +466,15 @@ func (h *InvitationsHandler) RevokeInvitation(w http.ResponseWriter, r *http.Req
 	var extra map[string]interface{}
 	if h.login != nil && email != "" {
 		outcome := "untouched"
-		if disabled, err := h.login.Disable(r.Context(), email, invitationID.String()); err != nil {
+		disabled, err := h.login.Disable(r.Context(), email, invitationID.String())
+		if err != nil {
 			outcome = "disable_failed"
 			log.Printf("tenancy: invitation %s cancelled; unused sign-in account not disabled: %v", invitationID, err)
 		} else if disabled {
 			outcome = "disabled"
+		}
+		if err != nil || disabled {
+			h.recordLogin(r.Context(), tc, auditdomain.ActionInvitationLoginDisabled, invitationID, email, outcome, err == nil)
 		}
 		extra = map[string]interface{}{"login": outcome}
 	}
@@ -535,6 +566,15 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
+	if h.login != nil {
+		var lockEmail string
+		if err := q.QueryRow(r.Context(), `SELECT email FROM membership_invitations WHERE id=$1 AND tenant_id=$2`, invitationID, tc.TenantID).Scan(&lockEmail); err == nil {
+			if err := lockInvitationLogin(r.Context(), q, lockEmail); err != nil {
+				http.Error(w, "failed to read invitation", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
 
 	var inv Invitation
 	var status string
@@ -588,7 +628,7 @@ func (h *InvitationsHandler) ResendInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	inv.Status = "pending"
-	includePassword, login, loginErr := h.prepareLogin(r.Context(), inv, tempPassword, nil)
+	includePassword, login, loginErr := h.prepareLogin(r.Context(), tc, inv, tempPassword, nil)
 	h.recordInvitation(r.Context(), tc, auditdomain.ActionInvitationResent, inv.ID, inv.Email, inv.RoleKey, planAudit(inv, login))
 	if loginErr != nil {
 		http.Error(w, "invitation reissued but the sign-in account could not be prepared; try again", http.StatusBadGateway)
@@ -637,6 +677,24 @@ func planAudit(inv Invitation, login string) map[string]interface{} {
 		meta["login"] = login
 	}
 	return meta
+}
+
+// recordLogin audits what happened to the invitee's sign-in account (ADR-0046) as its own event, with a failure outcome when the identity
+// provider could not do it. Never the password, never a token.
+func (h *InvitationsHandler) recordLogin(ctx context.Context, tc *domain.TenantContext, action auditdomain.AuditAction, invitationID uuid.UUID, email, outcome string, ok bool) {
+	if h.audit == nil {
+		return
+	}
+	result := auditdomain.OutcomeSuccess
+	if !ok {
+		result = auditdomain.OutcomeFailure
+	}
+	_ = h.audit.Store(ctx, &auditdomain.AuditEvent{
+		ID: uuid.New(), TenantID: tc.TenantID, ActorID: tc.ActorID, Action: action,
+		ResourceType: auditdomain.ResourceMembership, ResourceID: invitationID,
+		Outcome: result, CorrelationID: uuid.New(), CausationID: invitationID,
+		Metadata: map[string]interface{}{"email": email, "login": outcome}, CreatedAt: time.Now().UTC(),
+	})
 }
 
 func (h *InvitationsHandler) recordInvitation(ctx context.Context, tc *domain.TenantContext, action auditdomain.AuditAction, invitationID uuid.UUID, email, roleKey string, extra map[string]interface{}) {
@@ -941,7 +999,7 @@ func applyAttendancePlan(ctx context.Context, q platformdb.Querier, tenantID, me
 		if err := seat(`
 			INSERT INTO queue_members (tenant_id, queue_id, user_id, active, available, capacity)
 			SELECT q.tenant_id, q.id, $3, true, true, $4 FROM queues q WHERE q.tenant_id = $1 AND q.id = ANY($2)
-			ON CONFLICT (tenant_id, queue_id, user_id) DO NOTHING
+			ON CONFLICT (tenant_id, queue_id, user_id) DO UPDATE SET active = true, available = true, capacity = EXCLUDED.capacity
 			RETURNING queue_id`, tenantID, queueIDs, userID, capacity); err != nil {
 			return uuid.Nil, nil, err
 		}
@@ -964,21 +1022,36 @@ func (h *InvitationsHandler) recordPlanApplied(ctx context.Context, tenantID, ac
 	if h.audit == nil {
 		return
 	}
+	// Inside a savepoint: in PostgreSQL a failed INSERT aborts the whole transaction, and the acceptance must not depend on its audit.
+	q := platformdb.QuerierFromContext(ctx, h.pool)
+	if _, err := q.Exec(ctx, `SAVEPOINT invitation_plan_audit`); err != nil {
+		log.Printf("tenancy: invitation %s plan audit skipped: %v", invitationID, err)
+		return
+	}
 	correlation := uuid.New()
-	store := func(action auditdomain.AuditAction, meta map[string]interface{}) {
+	store := func(action auditdomain.AuditAction, meta map[string]interface{}) error {
 		meta["via"] = "invitation"
 		meta["invitation_id"] = invitationID.String()
-		_ = h.audit.Store(ctx, &auditdomain.AuditEvent{
+		return h.audit.Store(ctx, &auditdomain.AuditEvent{
 			ID: uuid.New(), TenantID: tenantID, ActorID: actorID, Action: action,
 			ResourceType: auditdomain.ResourceAgentProfile, ResourceID: profileID,
 			Outcome: auditdomain.OutcomeSuccess, CorrelationID: correlation, CausationID: invitationID,
 			Metadata: meta, CreatedAt: time.Now().UTC(),
 		})
 	}
-	store(auditdomain.ActionAgentEnabled, map[string]interface{}{})
-	for _, q := range queues {
-		store(auditdomain.ActionAgentQueueAssigned, map[string]interface{}{"queue_id": q.String()})
+	err := store(auditdomain.ActionAgentEnabled, map[string]interface{}{})
+	for _, queue := range queues {
+		if err != nil {
+			break
+		}
+		err = store(auditdomain.ActionAgentQueueAssigned, map[string]interface{}{"queue_id": queue.String()})
 	}
+	if err != nil {
+		log.Printf("tenancy: invitation %s plan audit not recorded: %v", invitationID, err)
+		_, _ = q.Exec(ctx, `ROLLBACK TO SAVEPOINT invitation_plan_audit`)
+		return
+	}
+	_, _ = q.Exec(ctx, `RELEASE SAVEPOINT invitation_plan_audit`)
 }
 
 var (

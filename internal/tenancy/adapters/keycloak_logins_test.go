@@ -22,6 +22,10 @@ type fakeKeycloak struct {
 	deleted    []string
 	// dropUnmanaged simulates a realm whose user profile drops undeclared attributes (no ADMIN_EDIT).
 	dropUnmanaged bool
+	// noLocation: POST /users answers without the new id.
+	noLocation bool
+	// onGetByID runs when GET /users/{id} is served: another actor changing the account between the search and the write.
+	onGetByID func(id string)
 }
 
 const fakeSecret = "provisioner-s3cret"
@@ -126,7 +130,9 @@ func (f *fakeKeycloak) serve(w http.ResponseWriter, r *http.Request) {
 		if len(in.Credentials) > 0 {
 			f.passwords[id] = in.Credentials[0]
 		}
-		w.Header().Set("Location", "/admin/realms/omnira/users/"+id)
+		if !f.noLocation {
+			w.Header().Set("Location", "/admin/realms/omnira/users/"+id)
+		}
 		w.WriteHeader(http.StatusCreated)
 	case strings.HasSuffix(path, "/reset-password") && r.Method == http.MethodPut:
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/users/"), "/reset-password")
@@ -136,6 +142,9 @@ func (f *fakeKeycloak) serve(w http.ResponseWriter, r *http.Request) {
 		f.puts = append(f.puts, "reset:"+id)
 		w.WriteHeader(http.StatusNoContent)
 	case strings.HasPrefix(path, "/users/") && r.Method == http.MethodGet:
+		if f.onGetByID != nil {
+			f.onGetByID(strings.TrimPrefix(path, "/users/"))
+		}
 		u, ok := f.users[strings.TrimPrefix(path, "/users/")]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -330,6 +339,53 @@ func TestKeycloakLoginsFailsClosedWhenTheRealmDropsItsAttributes(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "Temp0rary!x") {
 		t.Fatalf("error leaks the password: %v", err)
+	}
+}
+
+func TestKeycloakLoginsFailsClosedOnAnIncompleteBinding(t *testing.T) {
+	f, k := newFakeKeycloak(t)
+	f.addUser("legacy", "semvinculo@empresa.com", true, true, true) // OMNIRA's marker, no invitation
+	f.addUser("broken", "validade@empresa.com", true, true, true)
+	f.bind("broken", "inv-b", time.Now().Add(-time.Hour), false)
+	f.users["broken"]["attributes"].(map[string]any)[expiresAttribute] = []any{"not-a-date"}
+	for _, email := range []string{"semvinculo@empresa.com", "validade@empresa.com"} {
+		if set, err := k.Prepare(context.Background(), loginFor(email, "inv-a", "N0va-Senha1")); err != nil || set {
+			t.Fatalf("Prepare(%s) = %v, %v; an account without a complete binding is nobody's to take", email, set, err)
+		}
+	}
+	if len(f.puts) != 0 || len(f.passwords) != 0 {
+		t.Fatalf("nothing may be written to an account with an incomplete binding: puts=%v passwords=%v", f.puts, f.passwords)
+	}
+}
+
+func TestKeycloakLoginsChecksTheAccountAgainRightBeforeWriting(t *testing.T) {
+	f, k := newFakeKeycloak(t)
+	f.addUser("x", "corrida@empresa.com", true, true, true)
+	// expired: inv-b may take it, but another invitation takes it first, between the search and the write
+	f.bind("x", "inv-a", time.Now().Add(-time.Minute), false)
+	f.onGetByID = func(id string) { f.bind(id, "inv-c", time.Now().Add(7*24*time.Hour), false) }
+	if set, err := k.Prepare(context.Background(), loginFor("corrida@empresa.com", "inv-b", "N0va-Senha1")); err == nil || set {
+		t.Fatalf("Prepare = %v, %v; want a refusal when the account changed after the search", set, err)
+	}
+	f.onGetByID = nil
+	f.bind("x", "inv-a", time.Now().Add(time.Hour), false)
+	f.onGetByID = func(id string) { f.bind(id, "inv-c", time.Now().Add(time.Hour), false) }
+	if off, err := k.Disable(context.Background(), "corrida@empresa.com", "inv-a"); err == nil || off {
+		t.Fatalf("Disable = %v, %v; want a refusal when the account is no longer this invitation's", off, err)
+	}
+	if len(f.puts) != 0 || f.users["x"]["enabled"] != true {
+		t.Fatalf("nothing may be written after the account changed: puts=%v", f.puts)
+	}
+}
+
+func TestKeycloakLoginsRemovesOnlyTheAccountItCreated(t *testing.T) {
+	f, k := newFakeKeycloak(t)
+	f.dropUnmanaged, f.noLocation = true, true
+	if set, err := k.Prepare(context.Background(), loginFor("semid@empresa.com", "inv-1", "Temp0rary!x")); err == nil || set {
+		t.Fatalf("Prepare = %v, %v; want an error when the new account's id is unknown", set, err)
+	}
+	if len(f.deleted) != 0 {
+		t.Fatalf("without the id Keycloak answered, nothing is removed: %v", f.deleted)
 	}
 }
 

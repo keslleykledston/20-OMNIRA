@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
+	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
 // ADR-0046: the invitation carries the attendance plan and the invitee's sign-in account is prepared before the e-mail goes out.
@@ -319,5 +321,102 @@ func TestAcceptingAPlanIsAuditedInTheNameOfWhoInvited(t *testing.T) {
 	want := []string{"agent.enabled ", "agent.queue_assigned " + support.String()}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("plan audit = %v, want %v", got, want)
+	}
+}
+
+// Create, resend and cancel take the per-e-mail lock inside the request's transaction (two of them never interleave their Keycloak calls).
+func TestInvitationWritesHoldThePerEmailLoginLock(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	h := NewInvitationsHandler(app, nil, &fakeSender{}, false, "https://app.test").WithLoginPreparer(&fakeLogins{set: true})
+	email := "lock-" + uuid.NewString()[:8] + "@empresa.com"
+	held := func(ctx context.Context) int {
+		var n int
+		if err := platformdb.QuerierFromContext(ctx, app).QueryRow(ctx, `
+			SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
+			  AND ((classid::bigint << 32) | objid::bigint) = hashtextextended('omnira.invitation-login:' || lower($1), 0)`, email).Scan(&n); err != nil {
+			t.Fatalf("pg_locks: %v", err)
+		}
+		return n
+	}
+	var inv Invitation
+	body, _ := json.Marshal(CreateInvitationRequest{Email: email, RoleKey: "tenant_agent"})
+	revoked, _ := json.Marshal(map[string]string{"status": "revoked"})
+	steps := []struct {
+		name string
+		run  func(ctx context.Context) *httptest.ResponseRecorder
+		want int
+	}{
+		{"create", func(ctx context.Context) *httptest.ResponseRecorder {
+			rec := doRequest(t, ctx, http.MethodPost, h.CreateInvitation, nil, body)
+			_ = json.Unmarshal(rec.Body.Bytes(), &inv)
+			return rec
+		}, http.StatusCreated},
+		{"resend", func(ctx context.Context) *httptest.ResponseRecorder {
+			return doRequest(t, ctx, http.MethodPost, h.ResendInvitation, map[string]string{"invitation_id": inv.ID.String()}, nil)
+		}, http.StatusOK},
+		{"cancel", func(ctx context.Context) *httptest.ResponseRecorder {
+			return doRequest(t, ctx, http.MethodPatch, h.RevokeInvitation, map[string]string{"invitation_id": inv.ID.String()}, revoked)
+		}, http.StatusNoContent},
+	}
+	for _, step := range steps {
+		if err := asActor(t, app, a.tenantID, admin, func(ctx context.Context) error {
+			if rec := step.run(ctx); rec.Code != step.want {
+				t.Fatalf("%s = %d %s", step.name, rec.Code, rec.Body.String())
+			}
+			if held(ctx) != 1 {
+				t.Fatalf("%s must hold the login lock of the e-mail until its transaction ends", step.name)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("%s session: %v", step.name, err)
+		}
+	}
+}
+
+func TestSignInAccountOutcomesAreAuditedOnTheirOwn(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	logins := &fakeLogins{err: errors.New("keycloak: POST /users answered 500")}
+	h := NewInvitationsHandler(app, auditadapters.NewPostgresAuditEventRepository(app), &fakeSender{}, false, "https://app.test").WithLoginPreparer(logins)
+	email := "auditoria-" + uuid.NewString()[:8] + "@empresa.com"
+	if code, _, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_agent"}); code != http.StatusBadGateway {
+		t.Fatalf("create = %d %s, want 502", code, body)
+	}
+	var outcome, login string
+	if err := seed.QueryRow(context.Background(), `
+		SELECT outcome, metadata->>'login' FROM audit_events
+		WHERE tenant_id=$1 AND action='membership.invitation.login_prepared' AND metadata->>'email'=$2`, a.tenantID, email).Scan(&outcome, &login); err != nil {
+		t.Fatalf("the sign-in account outcome must be its own audit event: %v", err)
+	}
+	if outcome != "failure" || login != "failed" {
+		t.Fatalf("a failed preparation is audited as a failure: outcome=%s login=%s", outcome, login)
+	}
+}
+
+func TestAcceptingAPlanBringsBackAnOldInactiveSeat(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	support := seedQueue(t, seed, a.tenantID, "Suporte "+uuid.NewString()[:6], "manual", false)
+	email := "volta-" + uuid.NewString()[:8] + "@empresa.com"
+	invitee := seedUnaffiliatedUser(t, seed, email)
+	if _, err := seed.Exec(context.Background(), `
+		INSERT INTO queue_members (tenant_id, queue_id, user_id, active, available, capacity) VALUES ($1, $2, $3, false, false, 1)`,
+		a.tenantID, support, invitee); err != nil {
+		t.Fatalf("old seat: %v", err)
+	}
+	h := newDevInvitationsHandler(app)
+	code, inv, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support}, QueueCapacity: 4})
+	if code != http.StatusCreated {
+		t.Fatalf("create = %d %s", code, body)
+	}
+	if got := acceptAs(h, invitee, rawTokenFromURL(t, inv.InviteURL)); got != http.StatusOK {
+		t.Fatalf("accept = %d", got)
+	}
+	if seats := queueSeats(t, seed, a.tenantID, invitee); seats[support] != 4 {
+		t.Fatalf("the queue chosen in the invitation is active again with the chosen capacity: %v", seats)
 	}
 }

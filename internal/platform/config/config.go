@@ -325,6 +325,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("OIDC em produção exige issuer e redirect URL HTTPS")
 		}
 	}
+	if c.SessionIdleTimeout < 0 || c.SessionMaxLifetime < 0 {
+		return fmt.Errorf("OMNIRA_SESSION_IDLE_TIMEOUT e OMNIRA_SESSION_MAX_LIFETIME não podem ser negativos")
+	}
 	if c.SessionIdleTimeout > 0 && c.SessionMaxLifetime > 0 && c.SessionMaxLifetime < c.SessionIdleTimeout {
 		return fmt.Errorf("OMNIRA_SESSION_MAX_LIFETIME (%d s) não pode ser menor que OMNIRA_SESSION_IDLE_TIMEOUT (%d s)", c.SessionMaxLifetime, c.SessionIdleTimeout)
 	}

@@ -53,6 +53,7 @@ type LoginInvitation struct {
 var (
 	errLoginMarkerDropped = errors.New("keycloak: the realm dropped the omnira attributes; set the user profile's unmanaged attribute policy to ADMIN_EDIT")
 	errLoginDisabledByAdm = errors.New("keycloak: the account was disabled by an administrator; it is not turned back on by an invitation")
+	errLoginChanged       = errors.New("keycloak: the account changed while it was being prepared; try again")
 )
 
 func NewKeycloakLogins(baseURL, realm, clientID, secret string) *KeycloakLogins {
@@ -108,10 +109,14 @@ func (u kcUser) waitsForFirstPassword() bool {
 	return false
 }
 
-// mayTakeOver: the account waits for the invitation inv, for one inv replaced, or for an invitation that is over.
+// mayTakeOver: the account waits for the invitation inv, for one inv replaced, or for an invitation that is over (cancelled: OMNIRA
+// turned it off; or past its expiry). Without a complete binding (invitation and a readable expiry) nobody may take it: fail closed.
 func (u kcUser) mayTakeOver(inv LoginInvitation, now time.Time) bool {
 	bound := u.attr(invitationAttribute)
-	if bound == "" || bound == inv.ID || u.disabledByOmnira() {
+	if bound == "" {
+		return false
+	}
+	if bound == inv.ID {
 		return true
 	}
 	for _, id := range inv.Replaces {
@@ -120,7 +125,20 @@ func (u kcUser) mayTakeOver(inv LoginInvitation, now time.Time) bool {
 		}
 	}
 	until, err := time.Parse(time.RFC3339, u.attr(expiresAttribute))
-	return err != nil || !now.Before(until)
+	if err != nil {
+		return false
+	}
+	return u.disabledByOmnira() || !now.Before(until)
+}
+
+// mayPrepare: an unused account OMNIRA created, on (or turned off by OMNIRA), that inv may take over.
+func (u kcUser) mayPrepare(inv LoginInvitation, now time.Time) bool {
+	return u.createdByOmnira() && u.waitsForFirstPassword() && (u.Enabled || u.disabledByOmnira()) && u.mayTakeOver(inv, now)
+}
+
+// mayDisable: an unused account OMNIRA created for exactly this invitation, still on.
+func (u kcUser) mayDisable(invitationID string) bool {
+	return u.createdByOmnira() && u.waitsForFirstPassword() && u.Enabled && u.attr(invitationAttribute) == invitationID
 }
 
 func binding(inv LoginInvitation) map[string]string {
@@ -162,7 +180,8 @@ func (k *KeycloakLogins) Prepare(ctx context.Context, inv LoginInvitation) (bool
 		return false, nil
 	}
 	// Bind first, then the password: a failure in between leaves the account bound to this invitation, so "Reenviar" takes it again.
-	if err := k.updateUser(ctx, u.ID, func(rep map[string]any) {
+	// The rule is checked again on the representation read right before the write (another actor may have changed it meanwhile).
+	if err := k.updateUser(ctx, u.ID, func(fresh kcUser) bool { return fresh.mayPrepare(inv, time.Now()) }, func(rep map[string]any) {
 		rep["enabled"] = true
 		setAttributes(rep, binding(inv), disabledAttribute)
 	}); err != nil {
@@ -182,10 +201,10 @@ func (k *KeycloakLogins) Disable(ctx context.Context, email, invitationID string
 	if err != nil || u == nil {
 		return false, err
 	}
-	if !u.createdByOmnira() || !u.waitsForFirstPassword() || !u.Enabled || u.attr(invitationAttribute) != invitationID {
+	if !u.mayDisable(invitationID) {
 		return false, nil
 	}
-	if err := k.updateUser(ctx, u.ID, func(rep map[string]any) {
+	if err := k.updateUser(ctx, u.ID, func(fresh kcUser) bool { return fresh.mayDisable(invitationID) }, func(rep map[string]any) {
 		rep["enabled"] = false
 		setAttributes(rep, map[string]string{disabledAttribute: "true"})
 	}); err != nil {
@@ -219,7 +238,7 @@ func (k *KeycloakLogins) create(ctx context.Context, inv LoginInvitation) (bool,
 		Attributes:      attrs,
 		Credentials:     []kcCredential{{Type: "password", Value: inv.Password, Temporary: true}},
 	}
-	err := k.call(ctx, http.MethodPost, "/users", u, nil)
+	header, err := k.do(ctx, http.MethodPost, "/users", u, nil)
 	var conflict *kcStatusError
 	if errors.As(err, &conflict) && conflict.status == http.StatusConflict {
 		return false, nil
@@ -228,13 +247,18 @@ func (k *KeycloakLogins) create(ctx context.Context, inv LoginInvitation) (bool,
 		return false, err
 	}
 	// Keycloak 24+ drops attributes its user profile does not declare unless the realm lets admins edit unmanaged ones. An account without
-	// the binding could never be recognised again (resend, cancel): fail closed, remove the account just created and say why.
-	created, err := k.find(ctx, inv.Email)
-	if err != nil {
+	// the binding could never be recognised again (resend, cancel): fail closed, remove THE account just created (by the id Keycloak
+	// answered, never by a search) and say why. Without that id nothing is removed.
+	id := createdID(header.Get("Location"))
+	if id == "" {
+		return false, errors.New("keycloak: account created but its id was not returned; cannot verify its binding")
+	}
+	var created kcUser
+	if err := k.call(ctx, http.MethodGet, "/users/"+url.PathEscape(id), nil, &created); err != nil {
 		return false, err
 	}
-	if created != nil && !created.createdByOmnira() {
-		if derr := k.call(ctx, http.MethodDelete, "/users/"+url.PathEscape(created.ID), nil, nil); derr != nil {
+	if !created.createdByOmnira() || created.attr(invitationAttribute) != inv.ID {
+		if derr := k.call(ctx, http.MethodDelete, "/users/"+url.PathEscape(id), nil, nil); derr != nil {
 			log.Printf("keycloak: account created without the omnira attributes could not be removed: %v", derr)
 		}
 		log.Printf("%v", errLoginMarkerDropped)
@@ -243,12 +267,37 @@ func (k *KeycloakLogins) create(ctx context.Context, inv LoginInvitation) (bool,
 	return true, nil
 }
 
+// createdID reads the new user's id from the Location header of POST /users (.../users/<id>).
+func createdID(location string) string {
+	i := strings.LastIndex(location, "/users/")
+	if i < 0 {
+		return ""
+	}
+	id := location[i+len("/users/"):]
+	if id == "" || strings.ContainsAny(id, "/?#") {
+		return ""
+	}
+	return id
+}
+
 // updateUser writes back the whole representation read from Keycloak with only what change touches, so names and attributes are kept.
-func (k *KeycloakLogins) updateUser(ctx context.Context, id string, change func(rep map[string]any)) error {
-	var rep map[string]any
+// still is asked again on that fresh representation: if the account no longer qualifies, nothing is written (errLoginChanged).
+func (k *KeycloakLogins) updateUser(ctx context.Context, id string, still func(kcUser) bool, change func(rep map[string]any)) error {
+	var raw json.RawMessage
 	path := "/users/" + url.PathEscape(id)
-	if err := k.call(ctx, http.MethodGet, path, nil, &rep); err != nil {
+	if err := k.call(ctx, http.MethodGet, path, nil, &raw); err != nil {
 		return err
+	}
+	var fresh kcUser
+	var rep map[string]any
+	if err := json.Unmarshal(raw, &fresh); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return err
+	}
+	if !still(fresh) {
+		return errLoginChanged
 	}
 	change(rep)
 	return k.call(ctx, http.MethodPut, path, rep, nil)
@@ -279,22 +328,28 @@ func (e *kcStatusError) Error() string {
 }
 
 func (k *KeycloakLogins) call(ctx context.Context, method, path string, body, out any) error {
+	_, err := k.do(ctx, method, path, body, out)
+	return err
+}
+
+// do is call that also returns the response headers (POST /users answers the new id in Location).
+func (k *KeycloakLogins) do(ctx context.Context, method, path string, body, out any) (http.Header, error) {
 	for attempt := 0; ; attempt++ {
 		token, err := k.accessToken(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		var reader io.Reader
 		if body != nil {
 			raw, err := json.Marshal(body)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			reader = bytes.NewReader(raw)
 		}
 		req, err := http.NewRequestWithContext(ctx, method, k.base+"/admin/realms/"+url.PathEscape(k.realm)+path, reader)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		if body != nil {
@@ -302,7 +357,7 @@ func (k *KeycloakLogins) call(ctx context.Context, method, path string, body, ou
 		}
 		res, err := k.client.Do(req)
 		if err != nil {
-			return fmt.Errorf("keycloak: %s unreachable", method)
+			return nil, fmt.Errorf("keycloak: %s unreachable", method)
 		}
 		data, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		res.Body.Close()
@@ -311,12 +366,12 @@ func (k *KeycloakLogins) call(ctx context.Context, method, path string, body, ou
 			continue
 		}
 		if res.StatusCode >= 300 {
-			return &kcStatusError{method: method, path: strings.SplitN(path, "?", 2)[0], status: res.StatusCode}
+			return res.Header, &kcStatusError{method: method, path: strings.SplitN(path, "?", 2)[0], status: res.StatusCode}
 		}
 		if out != nil && len(data) > 0 {
-			return json.Unmarshal(data, out)
+			return res.Header, json.Unmarshal(data, out)
 		}
-		return nil
+		return res.Header, nil
 	}
 }
 

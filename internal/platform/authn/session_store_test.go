@@ -286,6 +286,25 @@ func TestSessionExpirySlidesWithUseAndStopsAtTheCeiling(t *testing.T) {
 		t.Fatalf("a stream does not keep a session alive; %v left", got)
 	}
 
+	// a session from before a shorter ceiling was configured: signed in 5 h ago, still 4 h of expiry; the 3 h ceiling ends it now
+	late, err := store.CreateSession(ctx, userID, "oidc", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(late, "5 hours", "4 hours")
+	if _, err := store.ResolveSession(ctx, late); err == nil {
+		t.Fatal("a session past the ceiling must not resolve, whatever its stored expiry")
+	}
+	if err := store.ValidateSession(ctx, late); err == nil {
+		t.Fatal("a stream must not keep a session past the ceiling")
+	}
+	if err := store.UpdateActivity(ctx, late); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(late); got > 0 {
+		t.Fatalf("activity clamps the expiry to the ceiling; %v left", got)
+	}
+
 	fixed := NewPostgresSessionStore(pool) // no lifetime configured: the expiry stays where it was set
 	old, err := fixed.CreateSession(ctx, userID, "dev", time.Hour)
 	if err != nil {
