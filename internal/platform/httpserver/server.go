@@ -17,6 +17,7 @@ import (
 	aiadapters "github.com/omnira/omnira/internal/ai/adapters"
 	aiports "github.com/omnira/omnira/internal/ai/ports"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
@@ -944,6 +945,23 @@ func (s *Server) RegisterAttendanceHandlers(dbPool *pgxpool.Pool, h *attendancea
 		return tenancyadapters.ActorHasPermission(ctx, platformdb.QuerierFromContext(ctx, dbPool), tenantID, userID, "conversation.read")
 	}, 5) // 5 drafts a minute per person, like the AI summary
 	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) })
+}
+
+// RegisterServiceContextHandlers exposes Service Context & Operations (ADR-0049): service sessions with a protocol, the company's catalogs, and (in later
+// phases) cases, tasks and external records, behind authn + the tenant session. Only called when OMNIRA_SERVICE_CONTEXT_ENABLED is true; the permission of
+// each operation (service.*) is asked by the service AND again by the database (row guards and policies of migration 000150).
+func (s *Server) RegisterServiceContextHandlers(dbPool *pgxpool.Pool, h *servicectxadapters.Handler) {
+	if s.authenticator == nil || h == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	authzSvc := tenancyapplication.NewAuthorizationService(
+		tenancyadapters.NewPostgresMembershipRepository(dbPool),
+		tenancyadapters.NewPostgresTenantRepository(dbPool),
+	)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	// members only for now: the Hub delegation (domain `service`) arrives with migration 000154 and passes tenancyadapters.Delegable here
+	h.Routes(s.mux, func(fn http.HandlerFunc) http.Handler { return authnMiddleware(tenantSession(fn)) }, nil)
 }
 
 // RegisterFlowHandlers exposes the Flow Builder control plane (ADR-0019) behind authn + the tenant session. It is only

@@ -6,7 +6,7 @@ Ordem: cada fase termina em **gate** executado (testes em Postgres real, `go bui
 |---|---|---|---|
 | 0 | Auditoria, arquitetura, matriz, plano, ADR-0049 | — | Codex lê os documentos; achados CRITICAL/HIGH corrigidos |
 | 1 | `service_sessions`, protocolo, catálogos, estados, encerramento, `EnsureActive`, hook no `Finalize`, rotas REST, permissões, RLS | 000150 | atendimento informativo completo (protocolo → mensagens por intervalo → classificação → encerramento); concorrência de protocolo; idempotência; reabertura; N sessões/conversa; RLS A/B; Hub sem/ com concessão |
-| 2 | `context_events`, timeline paginada, visão `customer-context`, emissão ao outbox | 000151 | ordenação/paginação keyset, isolamento, sem duplicar mensagens, imutabilidade, evento idempotente |
+| 2 | `context_events` (imutável), timeline paginada, visão `customer-context` | 000151 | ordenação/paginação keyset, isolamento, sem duplicar mensagens, imutabilidade, evento idempotente |
 | 3 | `service_cases`, `service_case_sessions`, `service_tasks` | 000152 | os 5 cenários do Gate 3 do pedido; concorrência otimista (`If-Match`); cancelar exige motivo |
 | 4 | `external_records`, vínculos, `external_record_requests`, porta `ServiceOrderGateway` + fake, contratos OpenAPI/AsyncAPI, envelope de eventos | 000153 | timeout→`outcome_unknown` bloqueia retry; duplicação; evento fora de ordem (versão); reconciliação; revogação de acesso |
 | 5 | Delegação do Hub, UI do Workspace (painel + Hub) | 000154 | permissão negativa para delegado (sem concessão, só leitura, revogada, contrato inativo, outra instância); vitest; build web |

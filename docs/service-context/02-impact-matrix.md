@@ -6,11 +6,11 @@ Legenda: **A** = aditivo (arquivo/tabela novos) · **E** = edição pequena em a
 
 | Migration | Conteúdo | Tipo | Reversão |
 |---|---|---|---|
-| 000150 | contadores, catálogos (categorias, resultados), `service_sessions`, permissões `service.*`, RLS, domínio `service` em `permission_domains` | A (+ `ALTER` do CHECK de `permission_domains`) | `down` remove tabelas/permissões; `ALTER` volta ao CHECK anterior |
-| 000151 | `context_events` (append-only) + emissão ao outbox | A | `down` remove |
+| 000150 | contadores, catálogos (categorias, resultados), `service_sessions`, `service_session_episodes`, permissões `service.*`, RLS, gatilhos de linha | A | `down` remove tabelas e permissões |
+| 000151 | `context_events` (append-only, imutável) — **sem** emissão ao outbox | A | `down` remove |
 | 000152 | `service_cases`, `service_case_sessions`, `service_tasks` | A | `down` remove |
 | 000153 | `external_records`, `service_external_links`, `external_record_requests` | A | `down` remove |
-| 000154 | políticas delegadas do Hub (leitura/escrita por domínio `service`) | A | `down` remove políticas |
+| 000154 | domínio `service` em `permission_domains` (`ALTER` do CHECK) + políticas delegadas do Hub (leitura/escrita) | A (+ `ALTER` do CHECK) | `down` remove políticas e linhas, e volta o CHECK |
 
 Nenhuma migration altera tabela existente além do CHECK de `permission_domains`. Nenhuma toca `messages`, `conversations`, `tickets`. Roll-forward preferido; `down` só em ambiente sem dados (as tabelas são novas, a perda é dos dados novos).
 
@@ -20,14 +20,14 @@ Nenhuma migration altera tabela existente além do CHECK de `permission_domains`
 |---|---|---|
 | `internal/servicectx/{domain,application,ports,adapters}` | núcleo novo | A |
 | `internal/platform/httpserver/server.go` | `RegisterServiceContextHandlers` (+ marcação `Delegable`) | E (poucas linhas) |
-| `internal/platform/config/config.go`, `docker-compose.yml`, `.env.example` | 4 flags | E |
+| `internal/platform/config/config.go`, `docker-compose.yml`, `.env.example` | flags `OMNIRA_SERVICE_*` (2 na Fase 1; até 4 ao final) | E |
 | `apps/api/cmd/omnira-api/main.go` | monta o serviço | E |
 | `internal/attendance/application/service.go` | porta opcional `SessionCloser` chamada em `Finalize` | E (≈10 linhas, nil-safe) |
 | `internal/audit/domain/event.go` | constantes de ação/recurso | E |
 | `internal/flows/*` | novos nós (Fase 6) | E (procedimento de 9 passos) |
 | `internal/intelligence/*` | ferramentas de IA (Fase 6) | E |
 | `internal/platform/opsmetrics` | contadores novos | A |
-| `internal/worker/*` | nenhuma entrega nova na v1 (eventos ficam no outbox) | — |
+| `internal/worker/*` | nenhuma entrega nova na v1 (eventos ficam em `context_events`; entrega a terceiros = headless) | — |
 
 ## Contratos públicos
 
@@ -35,7 +35,7 @@ Nenhuma migration altera tabela existente além do CHECK de `permission_domains`
 |---|---|
 | `contracts/openapi/omnira-v1.yaml` | **inalterado**; módulo novo em `contracts/openapi/service-context-v1.yaml` (padrão de `flows-v1`/`attendance-v1`) com teste de aderência rota↔spec |
 | `contracts/asyncapi/` | novo `service-context-events-v1.yaml` + JSON Schema do envelope |
-| APIs existentes (`/finalize`, `/ticket`, `/inbox/*`) | comportamento idêntico com flags desligadas; com `OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED` a resposta de `/finalize` ganha o campo aditivo `service_session` |
+| APIs existentes (`/finalize`, `/ticket`, `/inbox/*`) | comportamento e resposta idênticos, com as flags desligadas **e** ligadas: o hook fecha a sessão por dentro e não altera o corpo de `/finalize` (a sessão se lê por `GET …/conversations/{id}/service-session`) |
 | Webhooks de entrada (WAHA/Meta) | — |
 
 ## Frontend

@@ -7,6 +7,7 @@ import (
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"log"
@@ -509,6 +510,11 @@ func main() {
 		// The contact's "end this attendance" command closes through the same use case as an agent's finalize (source "system").
 		attendanceForFlows := attendanceapplication.NewService(attendanceadapters.NewPostgresRepository(dbPool), attendanceadapters.NewAuthorizer(dbPool),
 			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
+		if cfg.ServiceContextEnabled && cfg.ServiceFinalizeHookEnabled {
+			// ADR-0049: a flow that ends the attendance also closes its service session (source "flow"), in the same transaction
+			serviceSvc, _, _ := servicectxadapters.Build(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+			attendanceForFlows.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc))
+		}
 		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows).WithEngineRouting(cfg.RoutingEngineEnabled)
 		flowCounters := flowsapplication.NewCounters()
 		prevMetrics := hc.ExtraMetrics

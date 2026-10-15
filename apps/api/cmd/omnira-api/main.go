@@ -19,6 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
+	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
@@ -359,6 +360,14 @@ func main() {
 		log.Printf("AI integration settings disabled: credential cipher unavailable")
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
+	if cfg.ServiceContextEnabled {
+		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool))
+		if cfg.ServiceFinalizeHookEnabled {
+			attendanceService.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc)) // ADR-0049: finalizing also closes the service session
+		}
+		srv.RegisterServiceContextHandlers(dbPool, serviceHandler)
+		log.Printf("Service Context & Operations API enabled (OMNIRA_SERVICE_CONTEXT_ENABLED=true, finalize hook=%v)\n", cfg.ServiceFinalizeHookEnabled)
+	}
 	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)

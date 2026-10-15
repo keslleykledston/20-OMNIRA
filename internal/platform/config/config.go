@@ -82,6 +82,11 @@ type Config struct {
 	// WhisperURL: the local speech-to-text server (omnira-whisper systemd unit). Empty disables transcription.
 	WhisperURL  string
 	MetaEnabled bool
+	// ServiceContextEnabled mounts the Service Context & Operations API (ADR-0049): service sessions with a protocol, cases, tasks and external records.
+	// Off by default: nothing changes when unset.
+	ServiceContextEnabled bool
+	// ServiceFinalizeHookEnabled makes the attendance finalization (ADR-0020) also close the conversation's service session in the same transaction.
+	ServiceFinalizeHookEnabled bool
 	// FlowsEnabled turns on the Flow Builder API and runtime (ADR-0019). Off by default: nothing changes when unset.
 	FlowsEnabled bool
 	// FlowsAIEnabled lets Flow AI nodes call the platform's configured model (also needs OMNIRA_AI_* ready). Off by default:
@@ -207,6 +212,8 @@ func Load() *Config {
 		ClamAVAddr:                    os.Getenv("OMNIRA_CLAMAV_ADDR"),
 		WhisperURL:                    os.Getenv("OMNIRA_WHISPER_URL"),
 		MetaEnabled:                   getEnv("OMNIRA_META_ENABLED", "false") == "true",
+		ServiceContextEnabled:         getEnv("OMNIRA_SERVICE_CONTEXT_ENABLED", "false") == "true",
+		ServiceFinalizeHookEnabled:    getEnv("OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED", "false") == "true",
 		FlowsEnabled:                  getEnv("OMNIRA_FLOWS_ENABLED", "false") == "true",
 		FlowsAIEnabled:                getEnv("OMNIRA_FLOWS_AI_ENABLED", "false") == "true",
 		PublicBaseURL:                 os.Getenv("OMNIRA_PUBLIC_BASE_URL"),

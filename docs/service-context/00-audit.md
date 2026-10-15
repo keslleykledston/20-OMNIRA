@@ -1,6 +1,6 @@
 # 00 — Auditoria do repositório (Fase 0)
 
-Data: 2026-10-15 · Branch: `feat/omnira-service-context-operations` · Baseline: `main` @ `26e4f01` (limpo, sem alterações pendentes).
+Data: 2026-10-15 · Branch: `feat/omnira-service-context-operations` · Baseline: `main` @ `26e4f01` (limpo, sem alterações pendentes; o commit desta fase é `d9cdfd4`, **só documentos** — a implementação das fases seguintes é trabalho posterior e não faz parte do que a Fase 0 declara).
 Método: leitura do código real (migrations, Go, web) e consultas **somente leitura** ao banco de desenvolvimento. Nenhum teste foi tratado como PASS sem rodar; esta fase não altera código.
 
 ## 1. Git, isolamento e trabalhos paralelos
@@ -27,7 +27,7 @@ Método: leitura do código real (migrations, Go, web) e consultas **somente lei
 | Setor / departamento | `sectors` e `queues` (ADR-0043: fila = setor). | `000127` | `department_id` → `queue_id` (FK composta) |
 | Catálogo de classificação | Não existe para atendimento. | — | Novos `service_categories` e `service_resolution_codes` (por tenant, com código canônico) |
 | Auditoria | `audit_events` + `AuditService.RecordEvent` | `000003`, `internal/audit` | Reutilizado (ações novas = constantes aditivas) |
-| Outbox / eventos | `outbox_events` + publisher; **só `job.*` vai ao JetStream** (`OMNIRA_JOBS`). Não há webhook de saída em `main`. | `000003`, `worker/publisher` | Eventos `service_*.v1` entram no outbox com envelope versionado; **entrega a terceiros depende do motor de webhooks da branch headless** (ver §6) |
+| Outbox / eventos | `outbox_events` + publisher. O publisher tenta publicar **todo** evento não publicado (`subjectForEvent`: `job.*` vai pelo próprio nome, os demais por `events.<tipo>.<agregado>`), mas o único stream é `OMNIRA_JOBS` (`job.>`). **No banco real só existem eventos `job.*`** (verificado: 8 tipos, todos `job.`). Um evento de domínio não-`job.` não teria stream e queimaria as retentativas. Não há webhook de saída em `main`. | `000003`, `worker/publisher/publisher.go:163`, `worker/jobsstream/config.go:45` | **Não emitir `service_*.v1` no outbox.** O diário durável é `context_events` (mesmo envelope versionado); a **entrega** a terceiros fica com o motor de webhooks da branch headless (ver §6) |
 | Idempotência | Padrão `Idempotency-Key` `^[A-Za-z0-9._:-]{8,128}$` + `request_hash`, repetido módulo a módulo (sem helper único). | várias | Mesmo padrão, coluna `idempotency_key`+`request_hash` por entidade |
 | IA | Gateway fechado de 8 ferramentas (`ToolRegistry`); escrita pedida por IA vira `pending_approval`; `ai_tool_calls` permanente. | `000069`, `internal/intelligence` | Ferramentas novas **de leitura** livres; **escrita só como `pending_approval`** |
 | Flow Builder | 26 tipos de nó; efeitos locais rodam na mesma transação do passo; `create_ticket`/`close_conversation` existem. | `internal/flows` | Novos nós seguem o procedimento de 9 passos (ver `10-flow-builder-ai.md`) |
@@ -52,7 +52,7 @@ Método: leitura do código real (migrations, Go, web) e consultas **somente lei
 - **Hub:** o agente do Hub **não é membro**. Entra por `hub_memberships → hub_tenant_service_contracts → effective_access_grants`; `lock_served_tenant` fixa uma instância; leitura via políticas `delegated_tenants(domínio, 'read')`, escrita via `delegated_tenants(domínio,'write')`, sempre com a restritiva `*_acting_one_instance`. `permission_domains.domain` tem CHECK fechado (`conversation, media, contact, ticket, flow, ai`) → um domínio novo `service` exige `ALTER` do CHECK. Rota só é alcançável por delegado se marcada `Delegable(...)`.
 - **Permissões existentes** relevantes: `conversation.*`, `ticket.read/create/update/reconcile`, `contact.*`, `account.*`, `attendance.history`, `followup.resolve`, `topic.*`, `flow.*`. Nenhuma cobre sessão/ocorrência/tarefa.
 - **Sessão de sistema** (worker, fluxos) usa `WithSystemTenantSession` e **contorna o RLS** (`is_system_admin()` está em toda política); a defesa ali é o predicado `tenant_id = $1` no código + o tenant lido da linha persistida, nunca do payload. Mantido: todo SQL novo filtra `tenant_id` explicitamente.
-- Funções `SECURITY DEFINER` novas: `SET search_path = pg_catalog, public, pg_temp`, `REVOKE EXECUTE FROM PUBLIC`, `GRANT … TO omnira_app` (teste de catálogo `definer_hardening_test.go` cobra).
+- Funções `SECURITY DEFINER`: o teste de catálogo `internal/platform/db/definer_hardening_test.go` verifica **apenas** `SECURITY DEFINER` + `search_path` fixo (não verifica `REVOKE EXECUTE FROM PUBLIC` nem o `GRANT` explícito — correção da revisão independente). Este trabalho **não cria função `SECURITY DEFINER`** na Fase 1 (as proteções são políticas RLS e gatilhos de linha com `SECURITY INVOKER`); qualquer função futura seguirá a convenção completa (`search_path`, `REVOKE ... FROM PUBLIC`, `GRANT ... TO omnira_app`) e ganhará asserções próprias.
 
 ## 6. Branch `feat/headless-crm-dual-operation` (leitura apenas)
 

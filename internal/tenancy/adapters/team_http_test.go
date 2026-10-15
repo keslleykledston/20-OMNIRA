@@ -348,15 +348,15 @@ func TestListRolesReturnsFixedPermissionMatrixReadOnly(t *testing.T) {
 	want := map[string][]string{
 		"tenant_admin": {
 			"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "channel.manage", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal",
-			"dashboard.read", "flow.archive", "flow.create", "flow.edit", "flow.publish", "flow.test", "flow.view", "flow_run.view", "flow_template.install", "flow_template.view", "group.manage", "group.read", "identity.manage", "membership.manage", "membership.read", "routing.override", "tenant.manage", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "topic.manage", "topic.read",
+			"dashboard.read", "flow.archive", "flow.create", "flow.edit", "flow.publish", "flow.test", "flow.view", "flow_run.view", "flow_template.install", "flow_template.view", "group.manage", "group.read", "identity.manage", "membership.manage", "membership.read", "routing.override", "service.assign", "service.close", "service.create", "service.link_external", "service.read", "service.request_external", "service.update", "tenant.manage", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "topic.manage", "topic.read",
 		},
-		"tenant_supervisor": {"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "dashboard.read", "flow.test", "flow.view", "flow_run.view", "flow_template.view", "group.manage", "group.read", "membership.read", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "topic.manage", "topic.read"},
+		"tenant_supervisor": {"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "dashboard.read", "flow.test", "flow.view", "flow_run.view", "flow_template.view", "group.manage", "group.read", "membership.read", "service.assign", "service.close", "service.create", "service.link_external", "service.read", "service.request_external", "service.update", "tenant.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "topic.manage", "topic.read"},
 		// PRODUCT.6-F: ticket.create does not imply ticket.read.
 		// PRODUCT.6-O2B1: ticket.update follows the same rationale.
 		// PRODUCT.7A1: ticket.reconcile (migration 000051) never granted to
 		// tenant_agent — support/admin operational visibility, not an
 		// operating-agent capability.
-		"tenant_agent": {"account.read", "contact.classify", "conversation.claim", "tenant.read", "ticket.create", "ticket.update", "topic.manage", "topic.read"},
+		"tenant_agent": {"account.read", "contact.classify", "conversation.claim", "service.close", "service.create", "service.link_external", "service.read", "service.update", "tenant.read", "ticket.create", "ticket.update", "topic.manage", "topic.read"},
 	}
 
 	// A member with membership.read (supervisor) sees exactly the three fixed roles and their sets.
