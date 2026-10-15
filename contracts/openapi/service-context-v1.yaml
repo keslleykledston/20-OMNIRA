@@ -815,6 +815,32 @@ paths:
         '409': { $ref: '#/components/responses/Error' }
         '502': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-settings/protocol-prefix:
+    get:
+      operationId: getServiceProtocolPrefix
+      tags: [Catalogs]
+      summary: The company's protocol prefix and the next protocol
+      description: "Members only (never delegable). Before the first protocol `configured` is false and `prefix` is only the suggestion derived from the company name (three letters, e.g. KTG); it is reserved by the first protocol or by PUT."
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      responses:
+        '200': { description: Settings, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolPrefix' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setServiceProtocolPrefix
+      tags: [Catalogs]
+      summary: Choose the protocol prefix (needs tenant.manage), only before the first protocol
+      description: "Two to six capital letters, no digits (a company called K3G uses KTG). 409 `prefix_taken` when another company uses it, 409 `prefix_locked` once a protocol was issued (repeating the current prefix is accepted). Numbers start at 1001."
+      parameters: [ { $ref: '#/components/parameters/TenantId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [prefix], additionalProperties: false, properties: { prefix: { type: string, pattern: '^[A-Za-z]{2,6}$' } } } } }
+      responses:
+        '200': { description: Reserved, content: { application/json: { schema: { $ref: '#/components/schemas/ProtocolPrefix' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/service-categories:
     get:
       operationId: listServiceCategories
@@ -1255,6 +1281,14 @@ components:
         created: { type: boolean }
         external_id: { type: string, maxLength: 120, description: Required when created. }
         reason: { type: string, minLength: 3, maxLength: 500, description: Required when nothing was created. }
+    ProtocolPrefix:
+      type: object
+      required: [prefix, configured, locked, next_protocol]
+      properties:
+        prefix: { type: string, example: KTG }
+        configured: { type: boolean, description: "The company has reserved the prefix (chosen, or by its first protocol). False = only the suggestion." }
+        locked: { type: boolean, description: "A protocol was issued: the prefix can no longer change." }
+        next_protocol: { type: string, example: KTG-1001 }
     Category:
       type: object
       properties: { id: { type: string, format: uuid }, code: { type: string }, label: { type: string }, active: { type: boolean } }

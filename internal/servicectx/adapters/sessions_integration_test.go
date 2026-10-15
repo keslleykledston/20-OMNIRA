@@ -72,7 +72,7 @@ func TestInformationalAttendanceHasProtocolMessagesClassificationAndResult(t *te
 	earlier := s.message(conv, "inbound", before, nil) // arrived BEFORE the attendance started: not classified yet
 
 	sess := s.mustOpen(s.agent, conv)
-	if sess.Protocol != "AT-10000" || sess.ProtocolSequence != 10000 || sess.Status != domain.SessionOpen || sess.Version != 1 {
+	if sess.Protocol != s.proto(s.env.TenantA, 1001) || sess.ProtocolSequence != 1001 || sess.Status != domain.SessionOpen || sess.Version != 1 {
 		t.Fatalf("first session of the company: %+v", sess)
 	}
 	if sess.ContactID == nil || *sess.ContactID != contact || sess.ConversationID == nil || *sess.ConversationID != conv {
@@ -197,7 +197,7 @@ func TestProtocolIsUniqueAndDenseUnderConcurrencyAndPerCompany(t *testing.T) {
 		t.Fatalf("%d sessions, want %d", len(seqs), n)
 	}
 	for i, v := range seqs {
-		if v != int64(10000+i) {
+		if v != int64(1001+i) {
 			t.Fatalf("protocols must be dense and unique, got %v", seqs)
 		}
 	}
@@ -211,7 +211,7 @@ func TestProtocolIsUniqueAndDenseUnderConcurrencyAndPerCompany(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if b.Protocol != "AT-10000" {
+	if b.Protocol != s.proto(s.env.TenantB, 1001) {
 		t.Fatalf("protocols are unique per company, not global: %s", b.Protocol)
 	}
 }
@@ -224,7 +224,7 @@ func TestARolledBackOpenGivesTheNumberBack(t *testing.T) {
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unknown queue: %v", err)
 	}
-	if sess := s.mustOpen(s.agent, conv); sess.Protocol != "AT-10000" {
+	if sess := s.mustOpen(s.agent, conv); sess.Protocol != s.proto(s.env.TenantA, 1001) {
 		t.Fatalf("a failed open leaves no hole: %s", sess.Protocol)
 	}
 }
@@ -302,7 +302,7 @@ func TestManySessionsInOneConversationEachWithItsOwnMessagesAndProtocol(t *testi
 	gap := s.message(conv, "inbound", time.Now().UTC(), nil) // between the two sessions: unclassified
 	time.Sleep(15 * time.Millisecond)
 	second := s.mustOpen(s.agent, conv)
-	if second.ID == first.ID || second.Protocol != "AT-10001" {
+	if second.ID == first.ID || second.Protocol != s.proto(s.env.TenantA, 1002) {
 		t.Fatalf("a new session of the same conversation has its own protocol: %+v", second)
 	}
 	if second.OpenedAt.Before(*closed.ClosedAt) {
@@ -677,9 +677,9 @@ func TestListPaginatesByKeysetWithFilters(t *testing.T) {
 	}
 	var byProtocol []domain.Session
 	s.as(s.agent, s.env.TenantA, func(ctx context.Context) {
-		byProtocol, _, _ = s.svc.List(ctx, ports.SessionFilter{Protocol: "at-10002"})
+		byProtocol, _, _ = s.svc.List(ctx, ports.SessionFilter{Protocol: strings.ToLower(s.proto(s.env.TenantA, 1003))})
 	})
-	if len(byProtocol) != 1 || byProtocol[0].Protocol != "AT-10002" {
+	if len(byProtocol) != 1 || byProtocol[0].Protocol != s.proto(s.env.TenantA, 1003) {
 		t.Fatalf("protocol filter: %v", byProtocol)
 	}
 }

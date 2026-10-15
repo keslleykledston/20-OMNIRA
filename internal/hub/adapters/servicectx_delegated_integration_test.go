@@ -101,7 +101,7 @@ func TestAHubAgentWorksASessionInsideItsScopeAndNowhereElse(t *testing.T) {
 		t.Fatalf("outside the delegated context: %d %v", r.code, r.body)
 	}
 	r := s.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, convA))
-	if r.code != http.StatusCreated || r.body["protocol"] != "AT-10000" || r.body["opened_by_user_id"] != agent.String() {
+	if r.code != http.StatusCreated || !strings.HasSuffix(fmt.Sprint(r.body["protocol"]), "-1001") || r.body["opened_by_user_id"] != agent.String() {
 		t.Fatalf("a delegate opens a session on a conversation of its scope: %d %v", r.code, r.body)
 	}
 	id := r.body["id"].(string)
@@ -444,7 +444,7 @@ func TestDelegatesOpeningTheSameConversationTogetherMakeOneSession(t *testing.T)
 	if n := s.count(`SELECT count(*) FROM service_sessions WHERE conversation_id = $1`, conv); n != 1 {
 		t.Fatalf("one session: %d", n)
 	}
-	if seq := s.ownerOne(`SELECT last_value::text FROM service_counters WHERE tenant_id = $1 AND kind = 'session'`, s.tenant["A"]); seq != "10000" {
+	if seq := s.ownerOne(`SELECT last_value::text FROM service_counters WHERE tenant_id = $1 AND kind = 'session'`, s.tenant["A"]); seq != "1001" {
 		t.Fatalf("the numbers the losers took went back with their savepoints: last=%s", seq)
 	}
 }

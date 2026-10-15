@@ -93,11 +93,13 @@ func ValidSource(s string) bool {
 }
 
 const (
+	// DefaultSessionPrefix is the last resort: a company whose name has no letters at all and has chosen nothing.
 	DefaultSessionPrefix = "AT"
-	// DefaultSessionStart is the first protocol number a company gets (AT-10000): it reads like a protocol, not like "1".
-	DefaultSessionStart int64 = 10000
-	// DefaultReopenWindow is how long after closing a session may be reopened.
-	DefaultReopenWindow = 72 * time.Hour
+	// DefaultSessionStart is the first protocol number a company gets (KTG-1001): it reads like a protocol, not like "1".
+	DefaultSessionStart int64 = 1001
+	// DefaultReopenWindow is how long after closing a session may be reopened (the owner's decision, 2026-10-15: a customer who comes back the next day
+	// opens a new protocol).
+	DefaultReopenWindow = 24 * time.Hour
 	MaxNoteLen          = 1000
 )
 
@@ -305,4 +307,66 @@ func id(p *uuid.UUID) string {
 		return "-"
 	}
 	return p.String()
+}
+
+var prefixRe = regexp.MustCompile(`^[A-Z]{2,6}$`)
+
+// ValidPrefix is the shape of a protocol prefix: two to six capital letters, no digits (a company called "K3G" uses KTG).
+func ValidPrefix(p string) bool { return prefixRe.MatchString(p) }
+
+// NormalizePrefix upper-cases and trims what a person typed; the result may still be invalid (check it with ValidPrefix).
+func NormalizePrefix(p string) string { return strings.ToUpper(strings.TrimSpace(p)) }
+
+// PrefixCandidates proposes prefixes for a company name, best first: the first three letters ("Veloso" -> VEL), then four, five and six letters, then
+// the first two letters with every third one, then the first letter with every pair. Accents are dropped, digits and punctuation are ignored; a name with
+// fewer than two letters gets the default prefix as its base. The application tries them in order until one is free.
+func PrefixCandidates(name string) []string {
+	var base []rune
+	for _, r := range strings.ToUpper(foldAccents(name)) {
+		if r >= 'A' && r <= 'Z' {
+			base = append(base, r)
+		}
+	}
+	if len(base) < 2 {
+		base = []rune(DefaultSessionPrefix)
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		if ValidPrefix(p) && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for n := 3; n <= 6; n++ {
+		if len(base) >= n {
+			add(string(base[:n]))
+		} else if n == 3 {
+			add(string(base) + "X")
+		}
+	}
+	for c := 'A'; c <= 'Z'; c++ {
+		add(string(base[:2]) + string(c))
+	}
+	for a := 'A'; a <= 'Z'; a++ {
+		for b := 'A'; b <= 'Z'; b++ {
+			add(string(base[:1]) + string(a) + string(b))
+		}
+	}
+	return out
+}
+
+// foldAccents maps the Latin letters with diacritics a Brazilian company name carries to their base letter.
+func foldAccents(s string) string {
+	const from = "ÁÀÂÃÄáàâãäÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÕÖóòôõöÚÙÛÜúùûüÇçÑñ"
+	const to = "AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuCcNn"
+	fr, tr := []rune(from), []rune(to)
+	return strings.Map(func(r rune) rune {
+		for i, f := range fr {
+			if f == r {
+				return tr[i]
+			}
+		}
+		return r
+	}, s)
 }

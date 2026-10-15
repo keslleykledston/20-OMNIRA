@@ -19,5 +19,7 @@ var (
 	ErrNotConfigured       = errors.New("servicectx: integration not configured for this company")
 	ErrOutcomeUnknown      = errors.New("servicectx: an earlier request has an unknown outcome and must be reconciled first")
 	ErrAlreadyActive       = errors.New("servicectx: the conversation already has an active session")
+	ErrPrefixTaken         = errors.New("servicectx: that protocol prefix belongs to another company")
+	ErrPrefixLocked        = errors.New("servicectx: the protocol prefix cannot change once a protocol was issued")
 	ErrExternalUnavailable = errors.New("servicectx: the external system did not answer")
 )

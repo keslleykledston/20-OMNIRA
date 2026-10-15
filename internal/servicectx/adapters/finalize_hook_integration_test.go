@@ -66,7 +66,7 @@ func TestFinalizeGivesAnInformationalAttendanceItsProtocolAndClosesIt(t *testing
 		t.Fatal(err)
 	}
 	rows := s.sessionsOf(conv)
-	if len(rows) != 1 || rows[0].protocol != "AT-10000" || rows[0].status != "closed" || rows[0].canonical != domain.ResInformationProvided ||
+	if len(rows) != 1 || rows[0].protocol != s.proto(s.env.TenantA, 1001) || rows[0].status != "closed" || rows[0].canonical != domain.ResInformationProvided ||
 		rows[0].openedSource != "finalize" || rows[0].closedSource != "finalize" || rows[0].openedBy == nil || *rows[0].openedBy != s.agent {
 		t.Fatalf("session after finalize: %+v", rows)
 	}

@@ -205,6 +205,11 @@ func (s *Service) Open(ctx context.Context, raw domain.OpenInput) (OpenResult, e
 	if err := s.allow(ctx, c, PermCreate); err != nil {
 		return OpenResult{}, err
 	}
+	return s.open(ctx, c, in)
+}
+
+// open is Open after the caller was identified, the input normalized and the key service.create proven.
+func (s *Service) open(ctx context.Context, c caller, in domain.OpenInput) (OpenResult, error) {
 	hash := in.Hash()
 	rec, err := s.replay(ctx, ports.ScopeSessionOpen, in.IdempotencyKey, hash)
 	if err != nil {
@@ -294,7 +299,7 @@ func (s *Service) create(ctx context.Context, c caller, in domain.OpenInput, fac
 	if err := s.mustExist(ctx, in.CategoryID, s.repo.ActiveCategoryExists, "category_id"); err != nil {
 		return nil, err
 	}
-	prefix, seq, err := s.repo.NextProtocol(ctx, "session", domain.DefaultSessionPrefix, domain.DefaultSessionStart)
+	prefix, seq, err := s.nextSessionProtocol(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -754,6 +759,38 @@ func (s *Service) Reopen(ctx context.Context, id uuid.UUID, raw domain.ReopenInp
 	s.record(ctx, c, ActionSessionReopened, ResourceSession, sess.ID, map[string]any{"reopen_count": sess.ReopenCount})
 	s.metrics.Inc("service_sessions_reopened_total")
 	return sess, nil
+}
+
+// OpenOnClaim is the hook of "assuming" a conversation (OMNIRA_SERVICE_AUTO_OPEN_ON_CLAIM_ENABLED): the person who took the conversation gets its protocol without
+// a click. It returns the session (nil when the person may not open one, which is not an error: taking a conversation never depends on this module), and says
+// whether it created it. A session that already stands is returned as it is. In a member's context the person needs service.create; in a system session (the Hub
+// write path, which already proved the delegated key) the person is named as the one acting.
+func (s *Service) OpenOnClaim(ctx context.Context, conversationID, actor uuid.UUID) (*domain.Session, bool, error) {
+	c, err := s.who(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if c.system && actor != uuid.Nil {
+		c.onBehalf = &actor
+	}
+	in, err := domain.OpenInput{ConversationID: &conversationID, Source: domain.SourceOperator}.Normalize()
+	if err != nil {
+		return nil, false, err
+	}
+	if err := s.allow(ctx, c, PermCreate); err != nil {
+		if errors.Is(err, domain.ErrForbidden) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	res, err := s.open(ctx, c, in)
+	if errors.Is(err, domain.ErrConversationClosed) || errors.Is(err, domain.ErrNotACustomerChat) {
+		return nil, false, nil // nothing to attend: not a customer chat, or already ended
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return res.Session, res.Created, nil
 }
 
 // CloseForFinalize is called by the attendance finalization (ADR-0020), in ITS transaction and after it locked the conversation: the session of the

@@ -127,3 +127,26 @@ func (r *PostgresRepository) UpdateResultCode(ctx context.Context, id uuid.UUID,
 	}
 	return &c, mapErr(err)
 }
+
+func (r *PostgresRepository) ReserveSessionPrefix(ctx context.Context, prefix string) error {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	var got string
+	err = r.q(ctx).QueryRow(ctx, `
+		INSERT INTO service_counters (tenant_id, kind, prefix, last_value) VALUES ($1, 'session', $2, 0)
+		ON CONFLICT (tenant_id, kind) DO UPDATE SET prefix = EXCLUDED.prefix, updated_at = now() WHERE service_counters.last_value = 0
+		RETURNING prefix`, tenant, prefix).Scan(&got)
+	if errors.Is(err, pgx.ErrNoRows) { // the row stands with protocols already issued: only the same prefix is a (harmless) repeat
+		cur, _, _, cerr := r.SessionPrefix(ctx)
+		if cerr != nil {
+			return cerr
+		}
+		if cur == prefix {
+			return nil
+		}
+		return domain.ErrPrefixLocked
+	}
+	return mapPrefixErr(err)
+}

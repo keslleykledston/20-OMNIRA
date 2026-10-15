@@ -90,7 +90,12 @@ type Repository interface {
 	ListSessions(ctx context.Context, f SessionFilter) ([]domain.Session, string, error)
 
 	// NextProtocol takes the company's counter row (creating it at start) and returns the next number. It must run in the same transaction as InsertSession.
+	// A row that only RESERVES a prefix (last_value 0) takes the start as its first number. ErrPrefixTaken when another company already uses the prefix.
 	NextProtocol(ctx context.Context, kind, prefix string, start int64) (string, int64, error)
+	// SessionPrefix reads the company's session counter: the prefix, the last number issued (0 = only reserved), and whether the row exists.
+	SessionPrefix(ctx context.Context) (prefix string, last int64, found bool, err error)
+	// TenantName is the company's trade name (or legal name), the source of the suggested prefix.
+	TenantName(ctx context.Context) (string, error)
 	InsertSession(ctx context.Context, s *domain.Session) error
 	// UpdateSession writes the mutable columns when the stored version is expectedVersion; ErrConflict otherwise (ErrNotFound if it is gone or hidden).
 	UpdateSession(ctx context.Context, s *domain.Session, expectedVersion int) error
@@ -161,6 +166,9 @@ type ResultCode struct {
 }
 
 type CatalogRepository interface {
+	// ReserveSessionPrefix sets the company's protocol prefix while no protocol was issued (ErrPrefixLocked afterwards, ErrPrefixTaken when it belongs to another
+	// company). The database also asks for tenant.manage.
+	ReserveSessionPrefix(ctx context.Context, prefix string) error
 	ListCategories(ctx context.Context, includeInactive bool) ([]Category, error)
 	CreateCategory(ctx context.Context, c *Category) error
 	UpdateCategory(ctx context.Context, id uuid.UUID, label *string, active *bool) (*Category, error)

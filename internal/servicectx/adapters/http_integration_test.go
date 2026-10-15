@@ -81,7 +81,7 @@ func TestHTTPSessionLifecycle(t *testing.T) {
 	}
 	key := "http-key-" + uuid.NewString()
 	r := s.call(mux, s.agent, "POST", "/service-sessions", body, "Idempotency-Key", key)
-	if r.code != http.StatusCreated || r.body["protocol"] != "AT-10000" || r.header.Get("ETag") != `"1"` || r.body["opened_source"] != "operator" {
+	if r.code != http.StatusCreated || r.body["protocol"] != s.proto(s.env.TenantA, 1001) || r.header.Get("ETag") != `"1"` || r.body["opened_source"] != "operator" {
 		t.Fatalf("create: %d %v %v", r.code, r.body, r.header)
 	}
 	id := r.body["id"].(string)

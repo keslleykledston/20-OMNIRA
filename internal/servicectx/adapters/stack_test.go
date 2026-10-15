@@ -10,6 +10,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/adapters"
 	"github.com/omnira/omnira/internal/servicectx/application"
+	"github.com/omnira/omnira/internal/servicectx/domain"
 	"github.com/omnira/omnira/internal/servicectx/gatewaytest"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -60,6 +61,16 @@ func (s *stack) exec(sql string, args ...any) {
 	if _, err := s.env.Seed.Exec(context.Background(), sql, args...); err != nil {
 		s.t.Fatalf("%v\n%s", err, sql)
 	}
+}
+
+// proto is the protocol number n of the company, written with the prefix the company ended up with (derived from its name at the first protocol).
+func (s *stack) proto(tenant uuid.UUID, n int64) string {
+	s.t.Helper()
+	var prefix string
+	if err := s.env.Seed.QueryRow(context.Background(), `SELECT prefix FROM service_counters WHERE tenant_id = $1 AND kind = 'session'`, tenant).Scan(&prefix); err != nil {
+		s.t.Fatalf("the company has no protocol counter yet: %v", err)
+	}
+	return domain.FormatProtocol(prefix, n)
 }
 
 func (s *stack) count(sql string, args ...any) (n int) {

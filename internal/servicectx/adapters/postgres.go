@@ -181,14 +181,58 @@ func (r *PostgresRepository) NextProtocol(ctx context.Context, kind, prefix stri
 	}
 	var gotPrefix string
 	var v int64
+	// a row that only reserved its prefix (last_value 0) takes `start` as its first number; any other row moves forward by one
 	err = r.q(ctx).QueryRow(ctx, `
 		INSERT INTO service_counters (tenant_id, kind, prefix, last_value) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (tenant_id, kind) DO UPDATE SET last_value = service_counters.last_value + 1, updated_at = now()
+		ON CONFLICT (tenant_id, kind) DO UPDATE SET last_value = CASE WHEN service_counters.last_value = 0 THEN $4 ELSE service_counters.last_value + 1 END, updated_at = now()
 		RETURNING prefix, last_value`, tenant, kind, prefix, start).Scan(&gotPrefix, &v)
 	if err != nil {
-		return "", 0, mapErr(err)
+		return "", 0, mapPrefixErr(err)
 	}
 	return gotPrefix, v, nil
+}
+
+// mapPrefixErr turns the unique index on the session prefix into ErrPrefixTaken and the freeze trigger into ErrPrefixLocked.
+func mapPrefixErr(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		switch {
+		case pe.Code == "23505" && pe.ConstraintName == "service_counters_session_prefix_uq":
+			return domain.ErrPrefixTaken
+		case pe.Code == "23514" && strings.Contains(pe.Message, "protocol prefix is frozen"):
+			return domain.ErrPrefixLocked
+		}
+	}
+	return mapErr(err)
+}
+
+func (r *PostgresRepository) SessionPrefix(ctx context.Context) (string, int64, bool, error) {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return "", 0, false, err
+	}
+	var prefix string
+	var last int64
+	err = r.q(ctx).QueryRow(ctx, `SELECT prefix, last_value FROM service_counters WHERE tenant_id = $1 AND kind = 'session'`, tenant).Scan(&prefix, &last)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	return prefix, last, true, nil
+}
+
+func (r *PostgresRepository) TenantName(ctx context.Context) (string, error) {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return "", err
+	}
+	var name string
+	if err := r.q(ctx).QueryRow(ctx, `SELECT COALESCE(NULLIF(btrim(trade_name), ''), legal_name) FROM tenants WHERE id = $1`, tenant).Scan(&name); err != nil {
+		return "", mapErr(err)
+	}
+	return name, nil
 }
 
 func (r *PostgresRepository) InsertSession(ctx context.Context, s *domain.Session) error {

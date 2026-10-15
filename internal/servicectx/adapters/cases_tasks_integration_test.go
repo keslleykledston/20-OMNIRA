@@ -457,9 +457,9 @@ func TestCaseNumbersAreDensePerCompanyAndIndependentOfSessions(t *testing.T) {
 	if n := s.count(`SELECT count(DISTINCT case_sequence) FROM service_cases WHERE tenant_id=$1 AND case_sequence BETWEEN 1000 AND 1011`, s.env.TenantA); n != 12 {
 		t.Fatalf("dense, unique numbers OC-1000..OC-1011: %d", n)
 	}
-	// the sessions' counter is separate: the first session is still AT-10000
+	// the sessions' counter is separate: the first session is still number 1001
 	conv, _ := s.conversation()
-	if sess := s.mustOpen(s.agent, conv); sess.Protocol != "AT-10000" {
+	if sess := s.mustOpen(s.agent, conv); sess.Protocol != s.proto(s.env.TenantA, 1001) {
 		t.Fatalf("session protocol: %s", sess.Protocol)
 	}
 }

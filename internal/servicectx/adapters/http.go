@@ -65,6 +65,9 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	mux.Handle("GET "+base+"/contacts/{contact_id}/service-context", route(application.PermRead, h.contactContext))
 	// catalogs: the company's own categories and result codes. READING them is delegable like the rest of the module (an agent acting for the company needs the
 	// list to classify); CHANGING them is the company's configuration and is never delegable.
+	// the protocol prefix is the company's configuration: members only, never delegable
+	mux.Handle("GET "+base+"/service-settings/protocol-prefix", wrap(h.getProtocolPrefix))
+	mux.Handle("PUT "+base+"/service-settings/protocol-prefix", wrap(h.setProtocolPrefix))
 	mux.Handle("GET "+base+"/service-categories", route(application.PermRead, h.listCategories))
 	mux.Handle("POST "+base+"/service-categories", wrap(h.createCategory))
 	mux.Handle("PATCH "+base+"/service-categories/{category_id}", wrap(h.patchCategory))
@@ -111,6 +114,10 @@ func fail(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, "reopen_not_allowed", "this record cannot be reopened")
 	case errors.Is(err, domain.ErrConversationClosed):
 		writeErr(w, http.StatusConflict, "conversation_closed", "the conversation is closed")
+	case errors.Is(err, domain.ErrPrefixTaken):
+		writeErr(w, http.StatusConflict, "prefix_taken", "another company already uses that prefix")
+	case errors.Is(err, domain.ErrPrefixLocked):
+		writeErr(w, http.StatusConflict, "prefix_locked", "the prefix cannot change once a protocol was issued")
 	case errors.Is(err, domain.ErrOutcomeUnknown):
 		writeErr(w, http.StatusConflict, "outcome_unknown", "an earlier request has an unknown outcome and must be reconciled first")
 	case errors.Is(err, domain.ErrIdempotencyMismatch):
@@ -538,6 +545,47 @@ func (h *Handler) patchCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, categoryDTO{c.ID, c.Code, c.Label, c.Active})
+}
+
+type protocolPrefixDTO struct {
+	Prefix       string `json:"prefix"`
+	Configured   bool   `json:"configured"`
+	Locked       bool   `json:"locked"`
+	NextProtocol string `json:"next_protocol"`
+}
+
+func toPrefixDTO(p application.ProtocolSettings) protocolPrefixDTO {
+	return protocolPrefixDTO{p.Prefix, p.Configured, p.Locked, p.Next}
+}
+
+func (h *Handler) getProtocolPrefix(w http.ResponseWriter, r *http.Request) {
+	if !authenticated(w, r) {
+		return
+	}
+	p, err := h.catalog.ProtocolSettings(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toPrefixDTO(p))
+}
+
+func (h *Handler) setProtocolPrefix(w http.ResponseWriter, r *http.Request) {
+	if !authenticated(w, r) {
+		return
+	}
+	var b struct {
+		Prefix string `json:"prefix"`
+	}
+	if !decode(w, r, &b) {
+		return
+	}
+	p, err := h.catalog.SetProtocolPrefix(r.Context(), b.Prefix)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toPrefixDTO(p))
 }
 
 func (h *Handler) listResultCodes(w http.ResponseWriter, r *http.Request) {

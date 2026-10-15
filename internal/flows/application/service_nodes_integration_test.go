@@ -83,7 +83,7 @@ func TestServiceNodesWorkTheRealModuleInsideTheStep(t *testing.T) {
 		Scan(&sessionID, &protocol, &status, &resolution, &closedSource, &category); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(protocol, "AT-") || status != "closed" || resolution != "information_provided" || closedSource != "flow" || category == nil {
+	if !strings.HasSuffix(protocol, "-1001") || status != "closed" || resolution != "information_provided" || closedSource != "flow" || category == nil {
 		t.Fatalf("session: %s %s %s %s %v", protocol, status, resolution, closedSource, category)
 	}
 	// the CONVERSATION is untouched by close_service_session
