@@ -54,6 +54,17 @@ RESUMED=$(ENV_FILE="$WORK/env2" KEYCLOAK_ADMIN_PW_FILE="$WORK/admin.pw" KEYCLOAK
 grep -q "already there: kept" <<<"$RESUMED" || { echo "FAIL: resumed run did not keep the client:"; echo "$RESUMED"; exit 1; }
 [ "$(grep '^OMNIRA_KEYCLOAK_PROVISIONER_SECRET=' "$WORK/env2" | cut -d= -f2-)" = "$SECRET" ] || { echo "FAIL: resumed run wrote another secret"; exit 1; }
 echo "resumed setup run kept the client and its secret: ok"
+# an existing client someone widened (one more realm-management role) stops the setup before its secret is used
+kc add-roles -r omnira --uusername service-account-omnira-provisioner --cclientid realm-management --rolename view-realm
+install -m 600 /dev/null "$WORK/env3"
+if ENV_FILE="$WORK/env3" KEYCLOAK_ADMIN_PW_FILE="$WORK/admin.pw" KEYCLOAK_CONTAINER="$KC" KEYCLOAK_INTERNAL_URL="http://localhost:$PORT" \
+  KEYCLOAK_BACKUP_DIR="$WORK" scripts/keycloak-provisioner-setup.sh >"$WORK/widened.log" 2>&1; then
+  echo "FAIL: a widened client was accepted"; exit 1
+fi
+grep -q "STOP: the service account holds more than" "$WORK/widened.log" || { echo "FAIL: widened client not explained:"; cat "$WORK/widened.log"; exit 1; }
+[ ! -s "$WORK/env3" ] || { echo "FAIL: the secret of a widened client was written"; exit 1; }
+kc remove-roles -r omnira --uusername service-account-omnira-provisioner --cclientid realm-management --rolename view-realm
+echo "widened client refused before its secret was used: ok"
 
 echo "== two accounts created by hand: one still waiting for its first password (like sistema2), one in use"
 for u in manual-pending manual-used; do

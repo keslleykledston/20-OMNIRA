@@ -113,7 +113,8 @@ func (u kcUser) waitsForFirstPassword() bool {
 // turned it off; or past its expiry). Without a complete binding (invitation and a readable expiry) nobody may take it: fail closed.
 func (u kcUser) mayTakeOver(inv LoginInvitation, now time.Time) bool {
 	bound := u.attr(invitationAttribute)
-	if bound == "" {
+	until, err := time.Parse(time.RFC3339, u.attr(expiresAttribute))
+	if bound == "" || err != nil {
 		return false
 	}
 	if bound == inv.ID {
@@ -124,11 +125,13 @@ func (u kcUser) mayTakeOver(inv LoginInvitation, now time.Time) bool {
 			return true
 		}
 	}
-	until, err := time.Parse(time.RFC3339, u.attr(expiresAttribute))
-	if err != nil {
-		return false
-	}
 	return u.disabledByOmnira() || !now.Before(until)
+}
+
+// boundTo: a complete binding to exactly this invitation (what create and the binding write leave behind).
+func (u kcUser) boundTo(inv LoginInvitation) bool {
+	return u.createdByOmnira() && u.attr(invitationAttribute) == inv.ID &&
+		u.attr(expiresAttribute) == inv.ExpiresAt.UTC().Format(time.RFC3339)
 }
 
 // mayPrepare: an unused account OMNIRA created, on (or turned off by OMNIRA), that inv may take over.
@@ -186,6 +189,15 @@ func (k *KeycloakLogins) Prepare(ctx context.Context, inv LoginInvitation) (bool
 		setAttributes(rep, binding(inv), disabledAttribute)
 	}); err != nil {
 		return false, err
+	}
+	// The password last, after reading the account once more: still unused, on and bound to this invitation (the person may have finished
+	// a first sign-in in between; then their own password stays).
+	var fresh kcUser
+	if err := k.call(ctx, http.MethodGet, "/users/"+url.PathEscape(u.ID), nil, &fresh); err != nil {
+		return false, err
+	}
+	if !fresh.boundTo(inv) || !fresh.waitsForFirstPassword() || !fresh.Enabled {
+		return false, errLoginChanged
 	}
 	if err := k.call(ctx, http.MethodPut, "/users/"+url.PathEscape(u.ID)+"/reset-password",
 		kcCredential{Type: "password", Value: inv.Password, Temporary: true}, nil); err != nil {
@@ -257,7 +269,7 @@ func (k *KeycloakLogins) create(ctx context.Context, inv LoginInvitation) (bool,
 	if err := k.call(ctx, http.MethodGet, "/users/"+url.PathEscape(id), nil, &created); err != nil {
 		return false, err
 	}
-	if !created.createdByOmnira() || created.attr(invitationAttribute) != inv.ID {
+	if !created.boundTo(inv) {
 		if derr := k.call(ctx, http.MethodDelete, "/users/"+url.PathEscape(id), nil, nil); derr != nil {
 			log.Printf("keycloak: account created without the omnira attributes could not be removed: %v", derr)
 		}

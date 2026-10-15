@@ -24,6 +24,8 @@ type fakeKeycloak struct {
 	dropUnmanaged bool
 	// noLocation: POST /users answers without the new id.
 	noLocation bool
+	// dropAttribute: the realm keeps every attribute but this one.
+	dropAttribute string
 	// onGetByID runs when GET /users/{id} is served: another actor changing the account between the search and the write.
 	onGetByID func(id string)
 }
@@ -117,7 +119,7 @@ func (f *fakeKeycloak) serve(w http.ResponseWriter, r *http.Request) {
 		id := "kc-" + in.Email
 		attrs := map[string]any{}
 		for k, v := range in.Attributes {
-			if !f.dropUnmanaged {
+			if !f.dropUnmanaged && k != f.dropAttribute {
 				attrs[k] = []any{v[0]}
 			}
 		}
@@ -375,6 +377,48 @@ func TestKeycloakLoginsChecksTheAccountAgainRightBeforeWriting(t *testing.T) {
 	}
 	if len(f.puts) != 0 || f.users["x"]["enabled"] != true {
 		t.Fatalf("nothing may be written after the account changed: puts=%v", f.puts)
+	}
+}
+
+func TestKeycloakLoginsNeverResetsAPasswordThePersonJustChose(t *testing.T) {
+	f, k := newFakeKeycloak(t)
+	f.addUser("p", "primeiro@empresa.com", true, true, true)
+	f.bind("p", "inv-a", time.Now().Add(time.Hour), false)
+	reads := 0
+	f.onGetByID = func(id string) {
+		if reads++; reads == 2 { // after the binding write, before the password: the person finishes the first sign-in
+			f.users[id]["requiredActions"] = []any{}
+		}
+	}
+	if set, err := k.Prepare(context.Background(), loginFor("primeiro@empresa.com", "inv-a", "N0va-Senha1")); err == nil || set {
+		t.Fatalf("Prepare = %v, %v; want a refusal once the account is in use", set, err)
+	}
+	if _, reset := f.passwords["p"]; reset {
+		t.Fatal("the password a person chose at the first sign-in must never be replaced")
+	}
+}
+
+func TestKeycloakLoginsWantsAReadableExpiryEvenForItsOwnInvitation(t *testing.T) {
+	f, k := newFakeKeycloak(t)
+	f.addUser("own", "propria@empresa.com", true, true, true)
+	f.bind("own", "inv-a", time.Now().Add(time.Hour), false)
+	f.users["own"]["attributes"].(map[string]any)[expiresAttribute] = []any{"amanha"}
+	if set, err := k.Prepare(context.Background(), loginFor("propria@empresa.com", "inv-a", "N0va-Senha1")); err != nil || set {
+		t.Fatalf("Prepare = %v, %v; an unreadable expiry is an incomplete binding, even for the same invitation", set, err)
+	}
+	if len(f.puts) != 0 {
+		t.Fatalf("nothing may be written: %v", f.puts)
+	}
+}
+
+func TestKeycloakLoginsWantsTheWholeBindingOnANewAccount(t *testing.T) {
+	f, k := newFakeKeycloak(t)
+	f.dropAttribute = expiresAttribute // the realm keeps the marker and the invitation but drops the expiry
+	if set, err := k.Prepare(context.Background(), loginFor("semvalidade@empresa.com", "inv-1", "Temp0rary!x")); err == nil || set {
+		t.Fatalf("Prepare = %v, %v; want an error when part of the binding is dropped", set, err)
+	}
+	if len(f.deleted) != 1 || f.deleted[0] != "kc-semvalidade@empresa.com" {
+		t.Fatalf("the incomplete account just created is removed by its id: %v", f.deleted)
 	}
 }
 

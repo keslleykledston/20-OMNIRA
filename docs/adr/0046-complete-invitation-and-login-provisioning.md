@@ -39,6 +39,14 @@ Também corrigido nessa rodada:
 - Cancelar com o Keycloak fora do ar cancela o convite e deixa a conta ligada. Isso fica registrado como falha na auditoria e tem a mesma exposição do convite vencido.
 - O convite não tem chave de idempotência: repetir o pedido substitui o convite, como antes.
 
+**Revisão do Codex, rodada 3: 2 HIGH e 2 MEDIUM, corrigidos:**
+- A senha temporária só é gravada depois de reler a conta mais uma vez: ainda sem uso, ligada e presa a este convite. Se a pessoa terminou o primeiro login no meio do caminho, a senha que ela escolheu fica.
+- A validade do vínculo é conferida antes de qualquer resposta positiva, inclusive para o próprio convite.
+- Uma conta nova precisa guardar os três marcadores (criada pelo OMNIRA, convite e validade). Se faltar qualquer um, ela é removida pelo id e o convite responde 502.
+- O script de configuração recusa um cliente `omnira-provisioner` já existente que não seja exatamente o esperado: confidencial, só conta de serviço, e só com os papéis padrão do realm mais `view-users` e `manage-users`. A recusa acontece antes de o segredo ser usado. O teste real cobre um cliente com um papel a mais.
+
+**Resíduo aceito:** entre a última leitura e cada escrita no Keycloak sobra uma janela de milissegundos. O Keycloak não tem escrita condicional, e as escritas do próprio OMNIRA para o mesmo e-mail já são serializadas pelo lock.
+
 ## 1. Contexto: o que acontece hoje
 
 - Em produção o login é só pelo Keycloak (`OMNIRA_AUTH_MODE=oidc`, realm `omnira`, `registrationAllowed=false`). O OMNIRA **não** chama a API de administração do Keycloak.
