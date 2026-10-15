@@ -566,7 +566,7 @@ func TestHubItem_AccessSaysWhetherFinalizeMayBeOffered(t *testing.T) {
 	}
 }
 
-// ADR-0046: a conversation an external application holds is neither claimed, answered nor handed over by a Hub agent; the Hub's own writes are typed
+// ADR-0048: a conversation an external application holds is neither claimed, answered nor handed over by a Hub agent; the Hub's own writes are typed
 // (hub_user) and a release frees the control. The pool distribution never offers it either.
 func TestHubReply_RefusesAConversationAnExternalApplicationHolds(t *testing.T) {
 	w := newWorld(t)

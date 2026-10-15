@@ -12,7 +12,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
-// EventsHandler serves the durable journal (ADR-0046 H4): the checkpoint a client bootstraps from and the facts after a sequence number. The journal is
+// EventsHandler serves the durable journal (ADR-0048 H4): the checkpoint a client bootstraps from and the facts after a sequence number. The journal is
 // written by triggers in the transaction of each change and numbered by the sequencer in an order that never lets a fact appear under a number already
 // read; this side only reads, and re-asks the visibility of every fact at the moment of reading (an installation limited to a queue never hears about
 // another queue, and a conversation that turned internal or spam stops being reported).

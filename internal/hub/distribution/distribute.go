@@ -114,7 +114,7 @@ func (s *Service) Distribute(ctx context.Context, hub, item uuid.UUID) (assigned
 		}
 		var queue, holder *uuid.UUID
 		var status string
-		var held bool // an external application holds it (ADR-0046): the pool never distributes it
+		var held bool // an external application holds it (ADR-0048): the pool never distributes it
 		err = q.QueryRow(c, `SELECT queue_id, status, assigned_to_user_id, COALESCE(control_kind IN ('crm_application','crm_agent_verified'), false) FROM conversations WHERE tenant_id = $1 AND id = $2 FOR UPDATE SKIP LOCKED`,
 			tenant, conversation).Scan(&queue, &status, &holder, &held)
 		if errors.Is(err, pgx.ErrNoRows) {

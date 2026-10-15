@@ -28,7 +28,7 @@ import (
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 )
 
-// ADR-0046 H5: the coordinated write commands. Real PostgreSQL as omnira_app, the real HTTP handlers, the real control service, sender and attendance service.
+// ADR-0048 H5: the coordinated write commands. Real PostgreSQL as omnira_app, the real HTTP handlers, the real control service, sender and attendance service.
 
 var writeScopes = append(append([]string{}, journalScopes...), "conversation.claim", "conversation.transfer", "conversation.finalize", "message.send")
 

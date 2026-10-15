@@ -7,7 +7,7 @@ import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '..
 import { emitInboxNotice } from '../../lib/inboxNotice'
 import { useAccess } from '../../lib/useAccess'
 
-// ADR-0046: a conversation an external application (CRM) holds. The platform shows the KIND of holder only (never an operator of the CRM) and the origin of
+// ADR-0048: a conversation an external application (CRM) holds. The platform shows the KIND of holder only (never an operator of the CRM) and the origin of
 // the last change. A supervisor with conversation.takeover_external may take it back: explicit, with a written reason and a confirmation — never automatic.
 
 export const HOLDER_LABEL: Record<string, string> = {

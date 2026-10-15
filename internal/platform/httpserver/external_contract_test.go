@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// Gate 20 of ADR-0046: the external contract and the routes cannot drift. Forward: every operation documented in omnira-external-v1.yaml is a
+// Gate 20 of ADR-0048: the external contract and the routes cannot drift. Forward: every operation documented in omnira-external-v1.yaml is a
 // registered route (real ServeMux matching). Reverse: every /api/v1/external route registered in server.go is documented. Removing a route or a
 // documented operation fails one of the two.
 

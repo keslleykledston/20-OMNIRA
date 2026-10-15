@@ -564,7 +564,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 	}
 }
 
-// RegisterExternalHandlers mounts the Headless integration (ADR-0046) when OMNIRA_HEADLESS_ENABLED is on:
+// RegisterExternalHandlers mounts the Headless integration (ADR-0048) when OMNIRA_HEADLESS_ENABLED is on:
 //   - the administration of external applications, for a PERSON (cookie session, same-origin, tenant authorization, integration.read/manage,
 //     not delegable to the Hub);
 //   - the external API itself, for an APPLICATION (bearer integration token; no cookie, no session, the tenant comes from the credential).
@@ -606,7 +606,7 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	authzSvc := tenancyapplication.NewAuthorizationService(memberRepo, tenantRepo)
 	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
 	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
-	// suspending or revoking an installation frees, in the same transaction, every conversation it holds (ADR-0046 §6)
+	// suspending or revoking an installation frees, in the same transaction, every conversation it holds (ADR-0048 §6)
 	admin := externaladapters.NewAdminHandler(dbPool, auditRepo).WithDrainer(conversationcontrol.Service{}.DrainInstallation).WithScopeDrainer(conversationcontrol.Service{}.DrainOutOfScope)
 	takeover := conversationcontrol.NewTakeoverHandler(dbPool, auditRepo)
 	appsPath := "/api/v1/tenants/{tenant_id}/integrations/apps"
@@ -636,7 +636,7 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/takeover", authnMiddleware(tenantSession(http.HandlerFunc(takeover.Takeover))))
 }
 
-// RegisterExternalWriteHandlers mounts the coordinated write commands of the external API (ADR-0046 H5) when both OMNIRA_HEADLESS_ENABLED and
+// RegisterExternalWriteHandlers mounts the coordinated write commands of the external API (ADR-0048 H5) when both OMNIRA_HEADLESS_ENABLED and
 // OMNIRA_HEADLESS_WRITE_ENABLED are on. Every command reuses the application the Workspace and the Hub use: the control service, the message sender
 // (same 24 h window and templates, same delivery job), the attendance finalization and the sectors' eligibility and calendar.
 func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled bool, finalize externaladapters.Finalizer) {

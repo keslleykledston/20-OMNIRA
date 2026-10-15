@@ -15,7 +15,7 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// ExternalSender queues outbound messages for an external application (ADR-0046 H5). It is separate from Sender (operators: conversation.claim, the
+// ExternalSender queues outbound messages for an external application (ADR-0048 H5). It is separate from Sender (operators: conversation.claim, the
 // assignee) and SystemSender (automation) on purpose, and reuses everything that is provider-facing: the same 24 h customer-service window, the same
 // approved-template rules and the same delivery job, so what leaves for WhatsApp is identical to what a Workspace or Hub reply produces.
 //

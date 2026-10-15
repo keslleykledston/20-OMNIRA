@@ -30,7 +30,7 @@ import (
 	"github.com/omnira/omnira/internal/testhelpers"
 )
 
-// ADR-0046 H1: identity of an external application. Real PostgreSQL as the application role (omnira_app, FORCE RLS, signed session context).
+// ADR-0048 H1: identity of an external application. Real PostgreSQL as the application role (omnira_app, FORCE RLS, signed session context).
 
 type env struct {
 	t    *testing.T

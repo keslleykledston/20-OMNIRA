@@ -1,22 +1,22 @@
 # Headless — relatório por fase (H0 a H6)
 
-Branch `feat/headless-crm-dual-operation` (worktree isolado, base `main@88e1828`). **Nada foi enviado, mesclado, implantado nem aplicado em banco real.** Migrations 135–139 só em Postgres descartável.
+Branch `feat/headless-crm-dual-operation` (worktree isolado, base `main@88e1828`). **Nada foi enviado, mesclado, implantado nem aplicado em banco real.** Migrations 137–141 só em Postgres descartável.
 Vocabulário de estado: IMPLEMENTED · NOT WIRED · UNIT / POSTGRES / HTTP / E2E VERIFIED · BLOCKED. Estado de produção: **LAB** (nenhuma declaração de pronto para produção).
 
 Convenções de evidência: «gate» = `scripts/test-integration.sh` (Postgres + NATS descartáveis, papel `omnira_app` sem privilégio de dono); «mutantes» = `scripts/test-headless-mutations.sh <fase>` (cada mutante recompila/reaplica e **precisa** derrubar ao menos um teste; sobrevivente = defeito de teste); «Codex» = revisão independente somente-leitura, CRITICAL/HIGH bloqueiam.
 
 ## H0 — Descoberta, ADR e modelo de ameaça — `8202064`
-- ADR-0046 (controle tipado em `conversations` com gatilho funil, `assigned_to_user_id` como projeção humana, `control_version` monotônica), inventário (leitores/escritores de `assigned_to_user_id`, envios, flows, Hub, realtime), modelo de ameaça.
+- ADR-0048 (controle tipado em `conversations` com gatilho funil, `assigned_to_user_id` como projeção humana, `control_version` monotônica), inventário (leitores/escritores de `assigned_to_user_id`, envios, flows, Hub, realtime), modelo de ameaça.
 - Codex H0: 2 CRITICAL + 4 HIGH (entre eles: `RETURN NULL` descartaria escritas legítimas; o gatilho não distingue `tenant_user` de `hub_user`; TOCTOU de revogação de credencial; leitura direta das tabelas de instalação). **Todos incorporados ao desenho** antes de codar (falha ruidosa `OM00x` no lugar de descarte; escritores legados derivam o controle; recheck cobre instalação + credencial + empresa; portas `SECURITY DEFINER`).
 
 ## H1 — Identidade da aplicação externa — `d58e803`, `b729e49`
-- Migration 135: instalações por empresa, credenciais (token opaco, só digest), allow-lists de fila/linha, portas `SECURITY DEFINER` (`external_authenticate`, `external_recheck`, `external_installation_allowlists`).
+- Migration 137: instalações por empresa, credenciais (token opaco, só digest), allow-lists de fila/linha, portas `SECURITY DEFINER` (`external_authenticate`, `external_recheck`, `external_installation_allowlists`).
 - API: `GET /external/me`, administração (criar/listar/atualizar/suspender/reativar/revogar/emitir e revogar credencial) para pessoa com `integration.manage`, nunca delegável ao Hub.
 - Codex H1: 2 HIGH (suspensão da empresa não serializada com o recheck; expiração só avaliada no início) + 3 MEDIUM (throttle atrás do nginx; teste de admin sem CSRF; contrato sem cobertura) + 1 LOW (correlação de auditoria) — **corrigidos** (travas, `clock_timestamp()`, `X-Real-IP` só de proxy privado, testes via `Server` real, correlation id).
 - POSTGRES/HTTP VERIFIED; mutantes `h1` mortos.
 
 ## H2 — Controle único e tipado — `7499f21` (+ correções `78f4c8c`)
-- Migration 136: `control_kind/holder/version/since/origin`, histórico append-only `conversation_control_events`, gatilho-guarda (falha ruidosa; capacidade por transação), `messages.sent_by_installation_id`.
+- Migration 138: `control_kind/holder/version/since/origin`, histórico append-only `conversation_control_events`, gatilho-guarda (falha ruidosa; capacidade por transação), `messages.sent_by_installation_id`.
 - Serviço canônico `internal/conversationcontrol` (claim, release, transfer, takeover de supervisor, drain na revogação, release no fechamento); todos os escritores legados (roteador, Hub, flows, atendimento, fila) respeitam o titular externo.
 - Corridas: 2/10/100 reivindicantes simultâneos → exatamente um titular; nenhum caminho legado rouba nem fala por cima.
 - POSTGRES VERIFIED; mutantes `h2` mortos (inclui capacidade, histórico forjável, dequeue do Hub, efeitos de Flow).
@@ -27,7 +27,7 @@ Convenções de evidência: «gate» = `scripts/test-integration.sh` (Postgres +
 - HTTP/POSTGRES VERIFIED; mutantes `h3` mortos.
 
 ## H4 — Journal durável, eventos e webhooks — `78f4c8c`, `1ea072d`, `0d8dca8`, `+ trigger`
-- Migrations 137 (journal por empresa com sequenciador de marca-d'água por `xid`, sem lock nos escritores; expurgo por prefixo; `min_seq`) e 138 (assinaturas/entregas, funções `SECURITY DEFINER`, segredos selados AES-GCM).
+- Migrations 139 (journal por empresa com sequenciador de marca-d'água por `xid`, sem lock nos escritores; expurgo por prefixo; `min_seq`) e 140 (assinaturas/entregas, funções `SECURITY DEFINER`, segredos selados AES-GCM).
 - `GET /external/sync/checkpoint`, `GET /external/events?after=` (410 `resync_required`, visibilidade reavaliada **na leitura**, sem conteúdo no envelope); webhooks HMAC-SHA256 `v1=` sobre `timestamp.corpo-bruto` (duas assinaturas na rotação), backoff até 1 h ±20 %, janela 72 h, fila de erros, reenvio, cliente anti-SSRF (IP/porta verificados a cada conexão, sem redirect), 5 endpoints por instalação.
 - Codex H4: 4 HIGH (expurgo cortaria fato recente por numeração de `xid`; ordem de locks assinatura/entrega; entrega órfã após expurgo; pausa ignorada após o claim) + 4 MEDIUM (fencing de tentativa; limite de 5 em corrida; entrega serial; checkpoint «mesma transação» no ADR) + 2 LOW — **todos corrigidos**; ADR/OpenAPI alinhados (o bootstrap converge por desenho, provado com dados mudando durante a paginação).
 - Defeito descoberto depois, pelo E2E (não pelo Codex): o gatilho de `conversation.control_changed` não disparava para escritor legado (o guarda move a versão num gatilho BEFORE e `UPDATE OF` só olha o `SET`); a atribuição feita pelo Workspace não gerava fato. **Corrigido** (`AFTER UPDATE ... WHEN`) com teste dedicado e mutante.
@@ -35,7 +35,7 @@ Convenções de evidência: «gate» = `scripts/test-integration.sh` (Postgres +
 - POSTGRES/HTTP VERIFIED; mutantes `h4` mortos (≈50).
 
 ## H5 — Escrita coordenada — `943909a`, `7af18b4`
-- Migration 139 (recibos append-only, leases, fechamento por instalação); `POST …/{claim,release,transfer,messages,finalize,heartbeat}` com `Idempotency-Key` (escopo tenant+instalação+operação+chave, hash canônico), `If-Match "control-N"` (claim sem ele quando livre; claim repetido pelo titular = 200 idempotente), `412/409/403/404/422/428`, `202` = só enfileirado.
+- Migration 141 (recibos append-only, leases, fechamento por instalação); `POST …/{claim,release,transfer,messages,finalize,heartbeat}` com `Idempotency-Key` (escopo tenant+instalação+operação+chave, hash canônico), `If-Match "control-N"` (claim sem ele quando livre; claim repetido pelo titular = 200 idempotente), `412/409/403/404/422/428`, `202` = só enfileirado.
 - Reusa o envio do Workspace (janela 24 h, template aprovado, job de entrega) com `INSERT` que prova titular+versão+janela+template na própria instrução; `finalize` com a mesma finalização do atendimento atribuída à instalação; transferência para fila ou pessoa elegível (mesmas travas do roteador); `claim` obedece ao calendário da fila; lease opcional com heartbeat e varredura.
 - Codex H5: 5 HIGH + 4 MEDIUM + 1 LOW (TOCTOU de visibilidade, replay após mudança de visibilidade, corrida de capacidade, template/janela no insert, lease NOT WIRED, rótulo `external_agent_id`, 403 de fila, JSON com 2 documentos) — **todos corrigidos**, cada um com teste de regressão e mutante.
 - Matriz de corridas (HTTP+Postgres): CRM × Workspace × roteador × transferência × fechamento × takeover × revogação; 10 requisições idênticas simultâneas = um efeito; mesma chave em duas conversas = um vencedor.

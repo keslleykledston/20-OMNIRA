@@ -1,4 +1,4 @@
-// Package crmsim is a small REFERENCE CRM for the OMNIRA headless API (ADR-0046). It is written the way a customer's integration would be: only the
+// Package crmsim is a small REFERENCE CRM for the OMNIRA headless API (ADR-0048). It is written the way a customer's integration would be: only the
 // standard library, only the documented HTTP contract (contracts/openapi/omnira-external-v1.yaml), no import of any OMNIRA package. It authenticates with an
 // integration token, bootstraps without gaps (checkpoint -> snapshot -> events), receives and verifies signed webhooks, deduplicates by event_id, sends with an
 // Idempotency-Key it keeps across retries, and reads 409/412 as "the conversation changed: read it again", never as "retry blindly".

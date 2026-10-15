@@ -155,7 +155,7 @@ func path0(string) string { return "sample" }
 
 func journalTypes(t *testing.T) []string {
 	t.Helper()
-	raw, err := os.ReadFile("../../../migrations/000137_domain_events.up.sql")
+	raw, err := os.ReadFile("../../../migrations/000139_domain_events.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

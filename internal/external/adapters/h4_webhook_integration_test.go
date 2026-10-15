@@ -27,7 +27,7 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// ADR-0046 H4: outbound webhooks. Real PostgreSQL as omnira_app and a fake TLS receiver that verifies the signature like a real CRM would.
+// ADR-0048 H4: outbound webhooks. Real PostgreSQL as omnira_app and a fake TLS receiver that verifies the signature like a real CRM would.
 
 type rcvCall struct {
 	header http.Header

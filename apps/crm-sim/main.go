@@ -1,4 +1,4 @@
-// crm-sim is the reference CRM for the OMNIRA headless API (ADR-0046): a small command line program that exercises every path an integration needs, against a
+// crm-sim is the reference CRM for the OMNIRA headless API (ADR-0048): a small command line program that exercises every path an integration needs, against a
 // local or sandbox OMNIRA. It is NOT a product and holds no data; it exists so that an integrator can see each call, header and error once, working.
 //
 //	OMNIRA_EXTERNAL_URL    https://host/api/v1/external   (no default: it must be named)

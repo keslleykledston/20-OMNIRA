@@ -1,4 +1,4 @@
--- ADR-0046 H4: outbound webhooks. Additive. A subscription belongs to ONE installation (so to one company), points to an HTTPS endpoint, and signs every call with its own
+-- ADR-0048 H4: outbound webhooks. Additive. A subscription belongs to ONE installation (so to one company), points to an HTTPS endpoint, and signs every call with its own
 -- secret (stored encrypted with the platform key, ADR-0009; shown once). A delivery is one fact for one subscription: at-least-once, with retry and a dead-letter state.
 -- Nothing here is readable or writable by a system session except through the SECURITY DEFINER functions the delivery worker uses.
 SET LOCAL lock_timeout = '5s';

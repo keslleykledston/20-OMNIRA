@@ -1,5 +1,5 @@
 -- OPERATIONAL GATE: backup and the owner's approval first. DATA LOSS: drops the durable journal of facts (domain_events, domain_event_cursors) and every producer trigger;
--- an external application that was following the journal must resynchronize from a snapshot. Webhook deliveries (migration 138) are dropped first by their own down.
+-- an external application that was following the journal must resynchronize from a snapshot. Webhook deliveries (migration 140) are dropped first by their own down.
 DROP TRIGGER IF EXISTS domain_events_ticket_linked_trg ON tickets;
 DROP TRIGGER IF EXISTS domain_events_contact_updated_trg ON contacts;
 DROP TRIGGER IF EXISTS domain_events_message_status_trg ON messages;

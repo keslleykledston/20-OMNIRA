@@ -1,4 +1,4 @@
--- ADR-0046 H2: ONE typed control of the conversation. Additive. Who holds a conversation (a tenant user, a Hub agent, an external
+-- ADR-0048 H2: ONE typed control of the conversation. Additive. Who holds a conversation (a tenant user, a Hub agent, an external
 -- application) lives in conversations.control_* with a monotonic control_version; assigned_to_user_id stays, as the projection for HUMAN holders
 -- (every existing reader keeps working). A guard trigger derives the control for the legacy writers (they never learn the new columns) and
 -- FAILS LOUD if one of them tries to take a conversation an external application holds. Nothing changes for a conversation no application holds.
@@ -175,7 +175,7 @@ CREATE TRIGGER conversations_realtime_trg AFTER INSERT OR UPDATE OF assigned_to_
   FOR EACH ROW EXECUTE FUNCTION conversations_realtime();
 
 -- Messages sent by an external application: the sender is the installation, never a users row. sent_by_user_id stays NULL (and so does the
--- idempotency_key: the receipt of the external command, ADR-0046 §5, is the authority and keeps the two partial unique indexes of messages out of it).
+-- idempotency_key: the receipt of the external command, ADR-0048 §5, is the authority and keeps the two partial unique indexes of messages out of it).
 ALTER TABLE messages ADD COLUMN sent_by_installation_id UUID;
 ALTER TABLE messages ADD CONSTRAINT messages_sent_by_installation_fk
   FOREIGN KEY (tenant_id, sent_by_installation_id) REFERENCES external_app_installations (tenant_id, id);

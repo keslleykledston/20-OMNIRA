@@ -3,7 +3,7 @@ info:
   title: OMNIRA external events (Headless)
   version: 1.0.0-lab
   description: |
-    The facts an external application (a CRM) receives about the conversations it may see (ADR-0046). Two ways to get the same facts, with the same envelope:
+    The facts an external application (a CRM) receives about the conversations it may see (ADR-0048). Two ways to get the same facts, with the same envelope:
 
     * **Pull** — `GET /api/v1/external/events?after=<seq>` (see `omnira-external-v1.yaml`). Durable, ordered per company by `seq`, kept for the retention period (30 days by
       default). This is the source of truth: a receiver that was down reads what it missed from here. `410 resync_required` when the cursor is older than what is kept.

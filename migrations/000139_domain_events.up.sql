@@ -1,4 +1,4 @@
--- ADR-0046 H4: the durable journal of facts for external applications. Additive. A fact is written IN THE SAME TRANSACTION as the change it describes (AFTER
+-- ADR-0048 H4: the durable journal of facts for external applications. Additive. A fact is written IN THE SAME TRANSACTION as the change it describes (AFTER
 -- triggers on conversations, messages, contacts and tickets, so EVERY writer is covered without being touched), and only while the company has a live external
 -- installation. The event carries references and counters, never a message body, a phone number or an attachment.
 --

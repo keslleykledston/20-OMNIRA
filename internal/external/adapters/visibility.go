@@ -8,7 +8,7 @@ import (
 	"github.com/omnira/omnira/internal/external/domain"
 )
 
-// Visibility is THE definition of which conversations an installation may see (ADR-0046 §2.4, Codex H0 HIGH): the company of the installation, never a
+// Visibility is THE definition of which conversations an installation may see (ADR-0048 §2.4, Codex H0 HIGH): the company of the installation, never a
 // conversation with staff (internal_user_id set, or conversation_kind internal), never a contact classified internal or spam (the derivation of
 // conversation_kind files spam under external_other, so the contact's own classification has to be asked), and, when the administrator limited the
 // installation, only its queues and its lines. Every read of the external API — lists, one conversation, messages, contacts, media, snapshot and events —

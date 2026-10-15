@@ -40,7 +40,7 @@ const (
 	SourceAgent      CloseSource = "agent"
 	SourceSupervisor CloseSource = "supervisor"
 	SourceSystem     CloseSource = "system"
-	// SourceExternalApp: an external application (ADR-0046) closed it; the closure names the installation, never a person.
+	// SourceExternalApp: an external application (ADR-0048) closed it; the closure names the installation, never a person.
 	SourceExternalApp CloseSource = "external_app"
 )
 

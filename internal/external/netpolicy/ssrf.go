@@ -1,4 +1,4 @@
-// Package netpolicy is the one place that decides which destinations the platform may call on behalf of a tenant (ADR-0046 H4): the HTTPS client that cannot be turned
+// Package netpolicy is the one place that decides which destinations the platform may call on behalf of a tenant (ADR-0048 H4): the HTTPS client that cannot be turned
 // against the platform's own network, and the validation of a webhook address.
 package netpolicy
 

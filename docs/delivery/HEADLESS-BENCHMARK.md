@@ -23,8 +23,8 @@ Como repetir: `OMNIRA_BENCH_CONVERSATIONS=30000 bash scripts/test-integration.sh
 Lag do sequenciador = tempo para numerar o atraso que a carga gerou (1,4 s para 120 mil fatos). Em operação normal o laço roda a cada 500 ms e o atraso é o de uma transação longa (alerta em 60 s, ver runbook).
 
 ## O que a medição achou (e o que foi feito)
-1. **Lista sem índice por `created_at`: ~1,4 s por página** com 30 000 conversas (o banco ordenava todas as conversas visíveis e avaliava as políticas de RLS em cada uma). Com `idx_conversations_tenant_created` (migration 139) a página caiu para ~17 ms. A ordenação por `updated_at` já tinha índice desde a migration 14.
-2. **Estatísticas velhas no journal**: depois de numerar 120 mil fatos de uma vez sem `ANALYZE`, uma página do journal passou de 2 minutos (plano ruim, o planejador achava que nenhum fato tinha número). Em produção o autovacuum corrige, mas o journal é reescrito e aparado em bloco: as migrations 137/138 passam a analisar cedo (`autovacuum_analyze_scale_factor = 0,02`) em `domain_events` e `webhook_deliveries`. O benchmark roda `ANALYZE` após a carga, como o autovacuum faria.
+1. **Lista sem índice por `created_at`: ~1,4 s por página** com 30 000 conversas (o banco ordenava todas as conversas visíveis e avaliava as políticas de RLS em cada uma). Com `idx_conversations_tenant_created` (migration 141) a página caiu para ~17 ms. A ordenação por `updated_at` já tinha índice desde a migration 14.
+2. **Estatísticas velhas no journal**: depois de numerar 120 mil fatos de uma vez sem `ANALYZE`, uma página do journal passou de 2 minutos (plano ruim, o planejador achava que nenhum fato tinha número). Em produção o autovacuum corrige, mas o journal é reescrito e aparado em bloco: as migrations 139/140 passam a analisar cedo (`autovacuum_analyze_scale_factor = 0,02`) em `domain_events` e `webhook_deliveries`. O benchmark roda `ANALYZE` após a carga, como o autovacuum faria.
 3. **Sem deadlock** sob 8 clientes + sequenciador + fan-out; a matriz de corridas (testes de H2 a H5) cobre ordens de lock com repetição.
 
 ## Limites desta medição

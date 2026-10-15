@@ -39,7 +39,7 @@ import (
 	"github.com/omnira/omnira/internal/testhelpers"
 )
 
-// ADR-0046 H2: ONE typed control of the conversation. Real PostgreSQL as omnira_app (FORCE RLS, signed session context).
+// ADR-0048 H2: ONE typed control of the conversation. Real PostgreSQL as omnira_app (FORCE RLS, signed session context).
 
 type env struct {
 	t    *testing.T
@@ -1163,7 +1163,7 @@ func TestControlChangesAreAnnouncedOnTheRealtimeChannel(t *testing.T) {
 	}
 }
 
-// The text of the backfill in migration 136 classifies existing holders: an active member is a tenant user, anyone else a Hub agent.
+// The text of the backfill in migration 138 classifies existing holders: an active member is a tenant user, anyone else a Hub agent.
 func TestMigrationBackfillClassifiesTheExistingHolders(t *testing.T) {
 	e := newEnv(t)
 	tn := e.tenant()
@@ -1183,7 +1183,7 @@ func TestMigrationBackfillClassifiesTheExistingHolders(t *testing.T) {
 	if dir == "" {
 		dir = "../../migrations"
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "000136_conversation_control.up.sql"))
+	raw, err := os.ReadFile(filepath.Join(dir, "000138_conversation_control.up.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1245,7 +1245,7 @@ func TestEveryFreeCheckAsksAboutTheExternalControl(t *testing.T) {
 		}
 	}
 	if len(offenders) > 0 {
-		t.Fatalf("these statements treat assigned_to_user_id IS NULL as \"free\" without asking about control_kind (ADR-0046): %v", offenders)
+		t.Fatalf("these statements treat assigned_to_user_id IS NULL as \"free\" without asking about control_kind (ADR-0048): %v", offenders)
 	}
 }
 
@@ -1298,7 +1298,7 @@ func TestExpireLeaseFreesOnlyWhatTheSameInstallationStillHolds(t *testing.T) {
 	e.seed.Exec(e.ctx, `UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, conv2)
 	var k2 *string
 	_ = e.seed.QueryRow(e.ctx, `SELECT control_kind FROM conversations WHERE id=$1`, conv2).Scan(&k2)
-	if k2 != nil { // closing released it already (ADR-0046): nothing left to expire
+	if k2 != nil { // closing released it already (ADR-0048): nothing left to expire
 		if did, _ := expire(conv2, inst); did {
 			t.Error("a closed conversation was freed by an expiry")
 		}

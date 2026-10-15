@@ -1,4 +1,4 @@
--- ADR-0046 H1: identity of an external application (a CRM) per tenant. Additive. Nothing here changes how members, the Hub or the
+-- ADR-0048 H1: identity of an external application (a CRM) per tenant. Additive. Nothing here changes how members, the Hub or the
 -- routing work; the external API is OFF unless OMNIRA_HEADLESS_ENABLED=true.
 --
 -- An application is NOT a user, NOT a membership and NOT a Hub agent. It is an installation approved by a tenant administrator, with
@@ -150,7 +150,7 @@ AS $$
      AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
 $$;
 
--- (3) The second look of every mutation (ADR-0046): installation, credential AND company must be usable NOW, and the three rows stay locked FOR SHARE
+-- (3) The second look of every mutation (ADR-0048): installation, credential AND company must be usable NOW, and the three rows stay locked FOR SHARE
 -- until the caller's transaction ends (locks belong to the transaction, not to the function). Revoking, suspending or suspending the company takes a
 -- conflicting lock, so it either waits for the write to commit or happens first and the write is refused. Expiry is a time, not a lock: it is judged
 -- with clock_timestamp() (now() is the START of the transaction), at the moment of the recheck; a write that already passed it can commit up to its own

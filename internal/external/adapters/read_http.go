@@ -19,7 +19,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/pagination"
 )
 
-// ReadHandler serves the read side of the external API (ADR-0046 H3). Every handler runs in a system tenant session whose tenant is the one of the
+// ReadHandler serves the read side of the external API (ADR-0048 H3). Every handler runs in a system tenant session whose tenant is the one of the
 // authenticated installation, builds its WHERE clause from Visibility (one rule for all), and answers 404 — the same document — for anything the
 // installation may not see: a missing id, another company's id, a staff conversation, an internal or spam contact, a queue outside its allow-list.
 type ReadHandler struct {

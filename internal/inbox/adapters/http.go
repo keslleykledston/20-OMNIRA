@@ -56,7 +56,7 @@ type ConversationItem struct {
 	Status                      string     `json:"status"`
 	Title                       string     `json:"title"`
 	AssignedToUserID            *uuid.UUID `json:"assigned_to_user_id,omitempty"`
-	// Control is who holds the conversation, typed (ADR-0046): kind tenant_user | hub_user | crm_application, the version the clients
+	// Control is who holds the conversation, typed (ADR-0048): kind tenant_user | hub_user | crm_application, the version the clients
 	// compare, and where it came from. Absent while free. An external application is named by kind only; its operator is never shown.
 	Control *ControlItem `json:"control,omitempty"`
 	// AssignedToName is the owner's display name (single-conversation read only), so the UI can say who has the attendance.

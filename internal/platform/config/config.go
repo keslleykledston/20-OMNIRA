@@ -46,10 +46,10 @@ type Config struct {
 	// RoutingEngineSince (OMNIRA_ROUTING_ENGINE_SINCE, RFC 3339) is the creation-date floor of the engine's recovery of MANUAL-queue conversations it never saw.
 	// Unset = that recovery is off: conversations already open when the engine is switched on are not pulled into it.
 	RoutingEngineSince time.Time
-	// HeadlessEnabled mounts the external (CRM) API under /api/v1/external and the administration of external applications (ADR-0046).
+	// HeadlessEnabled mounts the external (CRM) API under /api/v1/external and the administration of external applications (ADR-0048).
 	// Default off: with it off none of those routes exists and the domain-event triggers emit nothing.
 	HeadlessEnabled bool
-	// HeadlessEventRetentionDays / HeadlessWebhookRetryHours: how long the journal of facts is kept and how long a webhook delivery is retried (ADR-0046).
+	// HeadlessEventRetentionDays / HeadlessWebhookRetryHours: how long the journal of facts is kept and how long a webhook delivery is retried (ADR-0048).
 	// HeadlessWriteEnabled turns on the write commands of the external API (claim, release, transfer, messages, finalize). OFF by default; it needs HeadlessEnabled.
 	HeadlessWriteEnabled       bool
 	HeadlessEventRetentionDays int

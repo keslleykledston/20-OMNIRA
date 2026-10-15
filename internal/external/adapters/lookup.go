@@ -13,7 +13,7 @@ import (
 	"github.com/omnira/omnira/internal/external/domain"
 )
 
-// PostgresLookup reads a credential through the SECURITY DEFINER function external_credential_lookup (migration 135): the application role
+// PostgresLookup reads a credential through the SECURITY DEFINER function external_credential_lookup (migration 137): the application role
 // has no SELECT on the digest column, and this is the only lookup that happens before the tenant is known.
 type PostgresLookup struct {
 	pool    *pgxpool.Pool

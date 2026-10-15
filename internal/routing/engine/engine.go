@@ -47,7 +47,7 @@ const (
 // Reasons are a closed set (they are stored and shown).
 const (
 	ReasonAlreadyAssigned   = "already_assigned"
-	ReasonHeldExternally    = "held_by_external_application" // ADR-0046: an external application holds it; the engine never assigns over it
+	ReasonHeldExternally    = "held_by_external_application" // ADR-0048: an external application holds it; the engine never assigns over it
 	ReasonNoQueue           = "no_queue"
 	ReasonClosed            = "conversation_closed"
 	ReasonManualQueue       = "manual_queue"
@@ -232,7 +232,7 @@ func (e *Engine) decide(ctx context.Context, req Request) (Decision, error) {
 	switch {
 	case c.status != "open":
 		return finish(Decision{Kind: NoAction, Reason: ReasonClosed}, "done")
-	case c.held: // an external application holds it (ADR-0046): never assign over it, and stop the timers of this episode
+	case c.held: // an external application holds it (ADR-0048): never assign over it, and stop the timers of this episode
 		if err := cancelTimers(ctx, q, tenant, req.ConversationID, st.episode); err != nil {
 			return Decision{}, err
 		}

@@ -26,7 +26,7 @@ type SendContext struct {
 	// Closed: the attendance was finalized (ADR-0020). A reply would be stored in a closed conversation while the contact's next
 	// message starts a NEW one, splitting the context, so sending is refused.
 	Closed bool
-	// HeldExternally: an external application holds the conversation (ADR-0046). assigned_to_user_id is NULL for it, which a person's reply would
+	// HeldExternally: an external application holds the conversation (ADR-0048). assigned_to_user_id is NULL for it, which a person's reply would
 	// read as "unassigned"; the reply is refused with its own error instead.
 	HeldExternally bool
 }

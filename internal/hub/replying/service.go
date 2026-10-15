@@ -36,7 +36,7 @@ var (
 	ErrTaken = errors.New("replying: conversation is assigned to another agent")
 	// ErrClosed: the attendance was finalized.
 	ErrClosed = errors.New("replying: conversation is closed")
-	// ErrHeldByExternal: an external application holds the conversation (ADR-0046); the Hub neither takes it nor writes into it.
+	// ErrHeldByExternal: an external application holds the conversation (ADR-0048); the Hub neither takes it nor writes into it.
 	ErrHeldByExternal = errors.New("replying: conversation is held by an external application")
 	// ErrNotHolder: only the person who holds the conversation may hand it over.
 	ErrNotHolder = errors.New("replying: the conversation is not yours")

@@ -1,4 +1,4 @@
-// Package headless runs the background work of the external API (ADR-0046 H4): numbering the journal, fanning facts out to webhook subscriptions, delivering
+// Package headless runs the background work of the external API (ADR-0048 H4): numbering the journal, fanning facts out to webhook subscriptions, delivering
 // them, expiring old facts and reporting how far behind each step is. Everything is idempotent and safe to run in several workers.
 package headless
 
@@ -109,7 +109,7 @@ func (r *Runner) Run(ctx context.Context) {
 			}
 		}
 	}()
-	go func() { // the CRM lease: a hold whose application went silent is freed (ADR-0046 §6.1) and the router looks at the conversation again
+	go func() { // the CRM lease: a hold whose application went silent is freed (ADR-0048 §6.1) and the router looks at the conversation again
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
 		for {

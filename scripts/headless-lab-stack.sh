@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Isolated lab stack for the HEADLESS live test (ADR-0046). It is a SEPARATE docker compose project ("omnira-hl"): its own containers, network, volumes and database,
+# Isolated lab stack for the HEADLESS live test (ADR-0048). It is a SEPARATE docker compose project ("omnira-hl"): its own containers, network, volumes and database,
 # on host ports 4xxxx; it never touches the production stack that may be running on the same host (no container_name, no shared port, no shared volume).
 #
 #   scripts/headless-lab-stack.sh gen      write the compose file and the .env of the lab (nothing is started)

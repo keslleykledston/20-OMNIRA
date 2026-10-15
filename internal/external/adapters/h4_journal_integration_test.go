@@ -21,7 +21,7 @@ import (
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 )
 
-// ADR-0046 H4: the durable journal. Real PostgreSQL as omnira_app.
+// ADR-0048 H4: the durable journal. Real PostgreSQL as omnira_app.
 
 var journalScopes = append(append([]string{}, readScopes...), "events.read")
 

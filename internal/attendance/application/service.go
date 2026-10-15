@@ -371,7 +371,7 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 	return FinalizeResult{Closure: closure, FollowUps: items, Changed: true, Farewell: farewell}, nil
 }
 
-// FinalizeByExternalApp ends the attendance for an external application (ADR-0046) that HOLDS the conversation. The caller (the external write path) runs
+// FinalizeByExternalApp ends the attendance for an external application (ADR-0048) that HOLDS the conversation. The caller (the external write path) runs
 // this in a tenant-scoped SYSTEM session with the conversation already locked by the control service, has re-checked the installation in this transaction
 // and has proved the hold and the control version; what stays here is the attendance rule, the same as a person's finalize: the contact must be a customer,
 // local tickets are closed and ERP-linked ones are left alone, and an already finalized conversation returns its existing closure. The closure is attributed

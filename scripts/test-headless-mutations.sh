@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mutation test for the Headless / external-application invariants (ADR-0046): weakens the Go code and the SQL of the credential, the
+# Mutation test for the Headless / external-application invariants (ADR-0048): weakens the Go code and the SQL of the credential, the
 # authentication, the in-transaction recheck and the row policies in many ways; the real-Postgres suite must go red every time and green
 # on the original. Throwaway database only. Sections are added phase by phase (H1 credentials/authentication; H2 control; H4 journal; H5 writes).
 #   usage: scripts/test-headless-mutations.sh [phase ...]   (default: every phase that exists)
@@ -118,31 +118,31 @@ h1)
   mut "an installation can be revoked twice"                $S "case t == Revoke && cur.Status != domain.StatusRevoked:" "case t == Revoke:"
   mut "more than two live credentials are allowed"          $S "if live >= domain.MaxLiveCredentials {" "if false {"
   mut "the credential is not revoked with the installation" $S "UPDATE external_app_credentials SET revoked_at = now() WHERE tenant_id = \$1 AND installation_id = \$2 AND revoked_at IS NULL\`, tenantID, id); err == nil {" "SELECT 1\`); err == nil {"
-  sqlmut "lookup ignores the installation status"           000135_external_app_installations.up.sql "     AND i.status = 'active'
+  sqlmut "lookup ignores the installation status"           000137_external_app_installations.up.sql "     AND i.status = 'active'
      AND t.status = 'active'
 \$\$;" "     AND t.status = 'active'
 \$\$;"
-  sqlmut "lookup ignores the company status"                000135_external_app_installations.up.sql "     AND t.status = 'active'
+  sqlmut "lookup ignores the company status"                000137_external_app_installations.up.sql "     AND t.status = 'active'
 \$\$;" "\$\$;"
-  sqlmut "lookup ignores credential expiry"                 000135_external_app_installations.up.sql "     AND c.revoked_at IS NULL AND c.expires_at > now()
+  sqlmut "lookup ignores credential expiry"                 000137_external_app_installations.up.sql "     AND c.revoked_at IS NULL AND c.expires_at > now()
      AND i.status = 'active'" "     AND c.revoked_at IS NULL
      AND i.status = 'active'"
-  sqlmut "recheck does not lock (revocation does not wait)" 000135_external_app_installations.up.sql "      FOR SHARE OF i, c, t;" "      ;"
-  sqlmut "recheck ignores a revoked credential"             000135_external_app_installations.up.sql "      AND c.id = p_credential AND c.revoked_at IS NULL AND c.expires_at > clock_timestamp()" "      AND c.id = p_credential"
-  sqlmut "recheck is not bound to the tenant"               000135_external_app_installations.up.sql "    WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'
+  sqlmut "recheck does not lock (revocation does not wait)" 000137_external_app_installations.up.sql "      FOR SHARE OF i, c, t;" "      ;"
+  sqlmut "recheck ignores a revoked credential"             000137_external_app_installations.up.sql "      AND c.id = p_credential AND c.revoked_at IS NULL AND c.expires_at > clock_timestamp()" "      AND c.id = p_credential"
+  sqlmut "recheck is not bound to the tenant"               000137_external_app_installations.up.sql "    WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'
       AND c.id = p_credential" "    WHERE i.id = p_installation AND i.status = 'active'
       AND c.id = p_credential"
-  sqlmut "touch is not bound to the installation"           000135_external_app_installations.up.sql "   WHERE tenant_id = p_tenant AND installation_id = p_installation AND id = p_credential" "   WHERE id = p_credential"
-  sqlmut "allow-list door is not bound to the tenant"       000135_external_app_installations.up.sql "   WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'
+  sqlmut "touch is not bound to the installation"           000137_external_app_installations.up.sql "   WHERE tenant_id = p_tenant AND installation_id = p_installation AND id = p_credential" "   WHERE id = p_credential"
+  sqlmut "allow-list door is not bound to the tenant"       000137_external_app_installations.up.sql "   WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'
 \$\$;" "   WHERE i.id = p_installation AND i.status = 'active'
 \$\$;"
-  sqlmut "the application role can read the digest"         000135_external_app_installations.up.sql "FROM PUBLIC, omnira_app;" "FROM PUBLIC;"
-  sqlmut "a system session can read installations"          000135_external_app_installations.up.sql "FOR SELECT USING (actor_has_permission(tenant_id, current_user_id(), 'integration.read'))\$p\$, t || '_read', t);" "FOR SELECT USING (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'integration.read'))\$p\$, t || '_read', t);"
-  sqlmut "recheck does not lock the company (suspension does not wait)" 000135_external_app_installations.up.sql "      FOR SHARE OF i, c, t;" "      FOR SHARE OF i, c;"
-  sqlmut "recheck judges expiry with the start of the transaction"      000135_external_app_installations.up.sql "c.expires_at > clock_timestamp()" "c.expires_at > now()"
-  sqlmut "allow-list door ignores the company status"                   000135_external_app_installations.up.sql "    JOIN tenants t ON t.id = i.tenant_id AND t.status = 'active'
+  sqlmut "the application role can read the digest"         000137_external_app_installations.up.sql "FROM PUBLIC, omnira_app;" "FROM PUBLIC;"
+  sqlmut "a system session can read installations"          000137_external_app_installations.up.sql "FOR SELECT USING (actor_has_permission(tenant_id, current_user_id(), 'integration.read'))\$p\$, t || '_read', t);" "FOR SELECT USING (is_system_admin() OR actor_has_permission(tenant_id, current_user_id(), 'integration.read'))\$p\$, t || '_read', t);"
+  sqlmut "recheck does not lock the company (suspension does not wait)" 000137_external_app_installations.up.sql "      FOR SHARE OF i, c, t;" "      FOR SHARE OF i, c;"
+  sqlmut "recheck judges expiry with the start of the transaction"      000137_external_app_installations.up.sql "c.expires_at > clock_timestamp()" "c.expires_at > now()"
+  sqlmut "allow-list door ignores the company status"                   000137_external_app_installations.up.sql "    JOIN tenants t ON t.id = i.tenant_id AND t.status = 'active'
    WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'" "   WHERE i.tenant_id = p_tenant AND i.id = p_installation AND i.status = 'active'"
-  sqlmut "a queue of another company is accepted in the allow-list" 000135_external_app_installations.up.sql "  FOREIGN KEY (tenant_id, queue_id) REFERENCES queues (tenant_id, id) ON DELETE CASCADE" "  FOREIGN KEY (queue_id) REFERENCES queues (id) ON DELETE CASCADE"
+  sqlmut "a queue of another company is accepted in the allow-list" 000137_external_app_installations.up.sql "  FOREIGN KEY (tenant_id, queue_id) REFERENCES queues (tenant_id, id) ON DELETE CASCADE" "  FOREIGN KEY (queue_id) REFERENCES queues (id) ON DELETE CASCADE"
   ;;
 h2)
   echo "== H2: typed control, guard, canonical service, legacy writers"
@@ -151,7 +151,7 @@ h2)
   CS=internal/conversationcontrol/service.go; CH=internal/conversationcontrol/http.go; EN=internal/routing/engine/engine.go
   RA=internal/routing/adapters/assign.go; RP=internal/routing/adapters/postgres.go; MP=internal/messages/adapters/postgres.go
   MS=internal/messages/adapters/outbound_system.go; AT=internal/attendance/adapters/postgres.go
-  M=000136_conversation_control.up.sql
+  M=000138_conversation_control.up.sql
   mut "the engine assigns over an application's hold"       $EN "	case c.held: // an external application holds it" "	case false: // an external application holds it" "		if held { // an application took it while we were choosing: leave it alone" "		if false { // an application took it while we were choosing: leave it alone"
   mut "the manual path does not see the hold"                $RA "	if held {
 		return nil, true, ports.ErrHeldByExternal
@@ -244,7 +244,7 @@ h2)
     RAISE EXCEPTION 'not allowed to write the control history'" "  IF false THEN
     RAISE EXCEPTION 'not allowed to write the control history'"
   sqlmut "anyone may insert into the history (the grant AND the missing INSERT policy are repeated defences)" $M "GRANT SELECT ON conversation_control_events TO omnira_app;" "GRANT SELECT, INSERT ON conversation_control_events TO omnira_app; CREATE POLICY conversation_control_events_forge ON conversation_control_events FOR INSERT WITH CHECK (true);"
-  mut "a flow requeues an application's hold"             internal/flows/adapters/effects_postgres.go "	    AND c.control_kind IS NULL -- an external application's hold is not requeued by a flow (ADR-0046)
+  mut "a flow requeues an application's hold"             internal/flows/adapters/effects_postgres.go "	    AND c.control_kind IS NULL -- an external application's hold is not requeued by a flow (ADR-0048)
 " ""
   mut "a flow hands off an application's hold"            internal/flows/adapters/effects_postgres.go "WHERE tenant_id=\$1 AND id=\$2 AND control_kind IS NULL\`" "WHERE tenant_id=\$1 AND id=\$2\`"
   T_PKGS="./internal/hub/adapters"; T_NEED=1; T_RUN="TestTheDelegatedReclassificationSideEffectsCheckTheKeyThemselves"
@@ -291,7 +291,7 @@ h4)
   echo "== H4: journal, sequencer, events API, SSRF, signature, delivery"
   T_PKGS="./internal/external/adapters ./internal/external/delivery ./internal/external/netpolicy"; T_NEED=3
   T_RUN="TestTheApplicationRole|TestJournal|TestSequencer|TestProducers|TestEventsAPI|TestBootstrap|TestWebhook|TestSignature|TestVerify|TestBackoff|TestBlockedIP|TestValidateURL|TestClient"
-  J=000137_domain_events.up.sql; WH=000138_webhooks.up.sql
+  J=000139_domain_events.up.sql; WH=000140_webhooks.up.sql
   EV=internal/external/adapters/events_http.go; WK=internal/external/delivery/worker.go; SG=internal/external/delivery/sign.go; NP=internal/external/netpolicy/ssrf.go; WA=internal/external/adapters/webhook_admin_http.go
   sqlmut "a fact is numbered below an open transaction"  $J "WHERE e.seq IS NULL AND e.xid < horizon.h ORDER BY e.xid, e.ord LIMIT p_limit" "WHERE e.seq IS NULL ORDER BY e.xid, e.ord LIMIT p_limit"
   sqlmut "facts are numbered out of transaction order"   $J "ORDER BY e.xid, e.ord LIMIT p_limit)
@@ -389,7 +389,7 @@ h5)
   T_PKGS="./internal/external/adapters ./internal/messages/application ./internal/messages/adapters ./internal/conversationcontrol"; T_NEED=1
   T_RUN="TestWrite|TestExternalSender|TestInsertQueuedExternal|TestExpireLease|TestQueuedMessages|TestHoldsAreFreed"
   W=internal/external/adapters/write_http.go; ES=internal/messages/application/external_send.go; EO=internal/messages/adapters/outbound_external.go; CS=internal/conversationcontrol/service.go
-  AT=internal/attendance/application/service.go; MG=migrations/000139_external_commands.up.sql
+  AT=internal/attendance/application/service.go; MG=migrations/000141_external_commands.up.sql
   mut "the Idempotency-Key is optional"                 $W "		if !idempotencyKeyPattern.MatchString(key) {" "		if false && !idempotencyKeyPattern.MatchString(key) {"
   mut "If-Match is optional where it is required"       $W "		} else if spec.ifMatch == ifMatchRequired {" "		} else if false {"
   mut "the receipt is not looked up"                    $W "		if err == nil {
@@ -539,8 +539,8 @@ h5)
 				if true {
 					return nil
 				}"
-  sqlmut "a receipt can be changed"                     000139_external_commands.up.sql "GRANT SELECT, INSERT ON external_command_receipts TO omnira_app;" "GRANT SELECT, INSERT, UPDATE, DELETE ON external_command_receipts TO omnira_app;"
-  sqlmut "a receipt is scoped to the tenant only"       000139_external_commands.up.sql "PRIMARY KEY (tenant_id, installation_id, operation, idempotency_key)," "PRIMARY KEY (tenant_id, operation, idempotency_key),"
+  sqlmut "a receipt can be changed"                     000141_external_commands.up.sql "GRANT SELECT, INSERT ON external_command_receipts TO omnira_app;" "GRANT SELECT, INSERT, UPDATE, DELETE ON external_command_receipts TO omnira_app;"
+  sqlmut "a receipt is scoped to the tenant only"       000141_external_commands.up.sql "PRIMARY KEY (tenant_id, installation_id, operation, idempotency_key)," "PRIMARY KEY (tenant_id, operation, idempotency_key),"
   ;;
 *) echo "unknown phase $phase"; exit 2;;
 esac

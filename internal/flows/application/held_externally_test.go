@@ -8,7 +8,7 @@ import (
 	"github.com/omnira/omnira/internal/flows/ports"
 )
 
-// ADR-0046: the bot never speaks over, starts on, or routes a conversation an external application holds. assigned_to_user_id stays NULL for such a
+// ADR-0048: the bot never speaks over, starts on, or routes a conversation an external application holds. assigned_to_user_id stays NULL for such a
 // conversation, which the rules above would read as "nobody has it", so the facts carry the hold explicitly.
 func TestTheBotNeverActsOnAConversationAnExternalApplicationHolds(t *testing.T) {
 	contact := uuid.New()

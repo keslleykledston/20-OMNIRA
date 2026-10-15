@@ -14,7 +14,7 @@ import (
 	"github.com/omnira/omnira/internal/testhelpers"
 )
 
-// ADR-0046 H5: the statement that queues an application's message proves, by itself, that THIS installation holds the open conversation at THIS version.
+// ADR-0048 H5: the statement that queues an application's message proves, by itself, that THIS installation holds the open conversation at THIS version.
 func TestInsertQueuedExternalProvesTheHoldTheVersionAndTheOpenConversation(t *testing.T) {
 	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
 	ctx := context.Background()

@@ -215,7 +215,7 @@ func main() {
 	if cfg.HubAPIEnabled {
 		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)
 	}
-	// ADR-0046: the external (CRM) API and its administration. Off by default; the features reported by /external/me say what this build serves.
+	// ADR-0048: the external (CRM) API and its administration. Off by default; the features reported by /external/me say what this build serves.
 	var externalMedia mediaports.MediaReader // the same cleared-files-only reader the workspace uses (ADR-0016); without a media directory the media route answers 404
 	if cfg.MediaDir != "" {
 		if store, err := mediaadapters.OpenFileStore(cfg.MediaDir); err == nil {

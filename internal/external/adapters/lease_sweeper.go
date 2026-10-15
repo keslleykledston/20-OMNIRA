@@ -19,7 +19,7 @@ const LeaseGrace = 120 * time.Second
 // LeaseSweepHookAfterDue, when set (tests only), runs between the moment the expired leases are listed and the moment each one is judged under its lock.
 var LeaseSweepHookAfterDue func()
 
-// SweepLeases frees the conversations whose application stopped renewing its lease (ADR-0046 §6.1). It is safe to run in several workers: each conversation is
+// SweepLeases frees the conversations whose application stopped renewing its lease (ADR-0048 §6.1). It is safe to run in several workers: each conversation is
 // re-read under its own lock and freed only if the same installation still holds it AND its lease is still expired. Returns how many it freed.
 //
 // only, when given, limits the sweep to those companies (the worker passes none: it serves every company; tests pass their own so that a sweep never touches the

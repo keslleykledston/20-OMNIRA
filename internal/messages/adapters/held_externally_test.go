@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// ADR-0046: every statement that locks a conversation to write an OUTBOUND message into it (FOR SHARE OF c) must also refuse a conversation an external
+// ADR-0048: every statement that locks a conversation to write an OUTBOUND message into it (FOR SHARE OF c) must also refuse a conversation an external
 // application holds, so a person's reply (text, template, attachment) can never land in it, whatever races with the application's claim.
 func TestEveryOutboundTargetExcludesAnExternalHold(t *testing.T) {
 	files, err := filepath.Glob("*.go")

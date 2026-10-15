@@ -52,7 +52,7 @@ func (s Service) Lock(ctx context.Context, q platformdb.Querier, tenantID, conve
 	return s.load(ctx, q, tenantID, conversationID, true)
 }
 
-// begin asks the database for the capability to change the hold of an external application in THIS transaction (see migration 136): granted to a system
+// begin asks the database for the capability to change the hold of an external application in THIS transaction (see migration 138): granted to a system
 // session and to a person holding conversation.takeover_external, refused (ErrNotAllowed) to anybody else.
 func (Service) begin(ctx context.Context, q platformdb.Querier, tenantID uuid.UUID) error {
 	if _, err := q.Exec(ctx, `SELECT conversation_control_begin($1)`, tenantID); err != nil {

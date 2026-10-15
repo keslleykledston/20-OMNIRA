@@ -63,12 +63,12 @@ Tokens opacos reutilizáveis: `authn/device_store.go` (prefixo, 32 bytes, só o 
 Registro de rotas: `s.mux.Handle("METHOD /api/v1/tenants/{tenant_id}/…", authnMiddleware(tenantSession(h)))`; `delegable_routes_test.go` fixa a lista de rotas delegáveis.
 
 ## 6. Migrations e RLS
-Em `88e1828` a última é `000134`; esta branch acrescenta `000135` (H1) e seguintes; os números 135+ estavam livres em todas as branches em 2026-10-14. Modelos de FORCE RLS: `000127` (laço `DO $$` + políticas membership/sistema + FK composta) e `000130`; `000131` (trigger `forbid_tenant_change`); `000015` (append-only); `000121` (inserts escopados). `internal/platform/db/rls_completeness_test.go` reprova tabela com `tenant_id` sem RLS+FORCE+política.
+Em `88e1828` a última é `000134`; esta branch acrescenta `000137` (H1) e seguintes (renumeradas de 135 em 2026-10-15, quando a `main` passou a usar 135/136). Modelos de FORCE RLS: `000127` (laço `DO $$` + políticas membership/sistema + FK composta) e `000130`; `000131` (trigger `forbid_tenant_change`); `000015` (append-only); `000121` (inserts escopados). `internal/platform/db/rls_completeness_test.go` reprova tabela com `tenant_id` sem RLS+FORCE+política.
 
 ## 7. Matriz: módulos que migram para o titular canônico
 | Módulo | Mudança | Como |
 |---|---|---|
-| `conversations` | colunas de controle + versão | migration 135 (aditiva) + gatilho funil |
+| `conversations` | colunas de controle + versão | migration 137 (aditiva) + gatilho funil |
 | escritores legados (7) | **sem refatoração**: o gatilho deriva o controle e barra roubo de titular CRM | gatilho |
 | `engine.go:230`, liveness, spam dequeue | tratar `control_kind IS NOT NULL` como ocupada | SQL/Go pontual |
 | `outbound_system.go`, `flows/*` | bot não fala/inicia em conversa com titular CRM | predicado `control_kind IS NULL` |
@@ -77,4 +77,4 @@ Em `88e1828` a última é `000134`; esta branch acrescenta `000135` (H1) e segui
 | `sla.go:346` | 1ª resposta de aplicação conta | SQL pontual |
 | Hub (`hubprojector`, `replying`, `distribution`) | `hub_user` explícito; item mostra titular CRM | Go + SQL pontual |
 | `assignment_events` | intocado (humanos) | — |
-| eventos | `domain_events` por gatilho | migration 136 |
+| eventos | `domain_events` por gatilho | migration 138 |

@@ -1,4 +1,4 @@
-# ADR-0046 — OMNIRA Headless / Híbrido: CRM externo e Workspace sobre um único controle de conversa
+# ADR-0048 — OMNIRA Headless / Híbrido: CRM externo e Workspace sobre um único controle de conversa
 
 Status: **Accepted para implementação local** (2026-10-14). O dono mandou executar H0–H6 em worktree isolado (`feat/headless-crm-dual-operation`), sem push, merge ou deploy.
 As decisões abertas do plano (§14 do plano original) foram tomadas pelo critério de **menor risco** e estão marcadas "padrão adotado"; podem ser revistas.
@@ -28,7 +28,7 @@ Hoje o titular é só `conversations.assigned_to_user_id` (FK para `users`); nã
 
 **Decisão:** A, com **funil no banco**.
 
-### 2.1 Modelo (migration 135, aditiva)
+### 2.1 Modelo (migration 137, aditiva)
 Em `conversations`:
 - `control_kind TEXT NULL` ∈ `tenant_user | hub_user | crm_application | crm_agent_verified` (NULL = livre);
 - `control_holder_id UUID NULL` (usuário, ou `external_app_installations.id` para CRM);
@@ -77,7 +77,7 @@ Nenhuma chamada externa dentro da trava.
 ## 3. Identidade de aplicação (H1)
 - `external_app_installations`: **uma por tenant** (um CRM multiempresa = várias instalações, cada uma com credencial própria), `status` ∈ `active|suspended|revoked`, `scopes[]`, allowlist opcional de filas/canais, limites (rate, lease), `created_by`, datas.
 - `external_app_credentials`: segredo opaco `omn_ext_<id>.<secret>` (32 bytes de CSPRNG); só `SHA-256(secret)` fica no banco (alta entropia dispensa KDF lento; comparação em tempo constante); exibido uma vez; `expires_at`, `revoked_at`, `last_used_at`; rotação cria a nova antes de revogar a antiga (janela dupla curta configurável).
-- **Portas `SECURITY DEFINER` (migration 135), todas com `search_path` fixo, `EXECUTE` só para `omnira_app`, e presas a tenant + instalação (+ credencial onde importa):** `external_credential_lookup(key_id)` (única consulta anterior ao tenant; devolve o digest para comparação em tempo constante no Go), `external_credential_touch(tenant, instalação, credencial)`, `external_recheck(tenant, instalação, credencial)` (trava as duas linhas `FOR SHARE`; a trava pertence à transação do chamador) e `external_installation_allowlists(tenant, instalação)`. O tenant do `Principal` vem **da instalação** no banco, nunca de header, query ou corpo.
+- **Portas `SECURITY DEFINER` (migration 137), todas com `search_path` fixo, `EXECUTE` só para `omnira_app`, e presas a tenant + instalação (+ credencial onde importa):** `external_credential_lookup(key_id)` (única consulta anterior ao tenant; devolve o digest para comparação em tempo constante no Go), `external_credential_touch(tenant, instalação, credencial)`, `external_recheck(tenant, instalação, credencial)` (trava as duas linhas `FOR SHARE`; a trava pertence à transação do chamador) e `external_installation_allowlists(tenant, instalação)`. O tenant do `Principal` vem **da instalação** no banco, nunca de header, query ou corpo.
 - **Sem ramo de sistema nas policies:** as quatro tabelas (`external_app_*`) têm RLS FORCE com policies que exigem `integration.read/manage` de uma **pessoa** (`actor_has_permission`); **não há `is_system_admin()`**. Assim a API externa — que roda em sessão de sistema — não consegue ler, listar nem alterar instalações de nenhum tenant por esquecer um predicado; só alcança esses dados pelas funções acima. `secret_digest` não tem `SELECT` para o papel da aplicação (privilégio de coluna).
 - **Execução:** padrão do Hub (ADR-0037): autentica antes e executa em `WithSystemTenantSession` com o tenant da instalação, e **rechecagem dentro da mesma transação** (`external_recheck`: instalação **e** credencial usáveis agora, ambas travadas `FOR SHARE`) em toda mutação. Revogar/suspender (instalação) e revogar credencial tomam trava conflitante ⇒ ou esperam a escrita ou acontecem antes e a escrita é recusada. Não se amplia nenhuma policy de membership; a aplicação não vira usuário, membership nem `is_system_admin()`. O SQL das *tabelas de domínio* (conversas, mensagens, contatos) executado pela API externa continua em sessão de sistema (risco residual **R-1**); fica confinado a `internal/external/adapters`, é varrido por teste que exige predicado `tenant_id` e coberto por testes A/B/C por rota.
 - **Administração:** `tenants/{t}/integrations/apps…` com sessão humana (o `authn.WebMiddleware` aplica a checagem de mesma origem às escritas por cookie; teste de POST entre origens na revogação/rotação, H6), permissão nova `integration.manage` (somente `tenant_admin`; **não delegável** ao Hub). Segredos nunca em lista, log ou auditoria.
@@ -117,8 +117,8 @@ Nenhuma chamada externa dentro da trava.
 - AsyncAPI `contracts/asyncapi/omnira-external-events-v1.yaml` + JSON Schemas `contracts/schemas/external/*.json` + amostras assinadas verificadas por teste.
 - Teste de contrato: percorre as rotas registradas no `mux` e exige correspondência com a OpenAPI externa (remover uma rota ou evento falha — gate 20).
 
-## 8. Plano por fases (migrations 135+, todas aditivas, `.down` seguro)
-H1 135/136 (instalações, credenciais, permissões) · H2 137 (controle em conversas + gatilho + eventos de controle + backfill) · H3 sem schema (índices de leitura) · H4 138 (journal, cursor, assinaturas, entregas) · H5 139 (recibos, `sent_by_installation_id`) · H6 sem schema. Números provisórios; a numeração final é fixada no momento de cada fase (livres hoje em todas as branches).
+## 8. Plano por fases (migrations 137+, todas aditivas, `.down` seguro)
+H1 137 (instalações, credenciais, permissões) · H2 138 (controle em conversas + gatilho + eventos de controle + backfill) · H3 sem schema (índices de leitura) · H4 139 (journal, cursor) e 140 (assinaturas, entregas) · H5 141 (recibos, leases, fechamento por instalação, índice de lista) · H6 sem schema. Numeração renumerada de 135–139 para 137–141 em 2026-10-15, porque a `main` passou a usar 135/136 (convites de Pessoas) e o ADR-0046/0047 (Pessoas); este ADR passou de 0046 para 0048.
 
 ## 9. Consequências e riscos aceitos
 - A tabela quente `conversations` ganha 5 colunas e um gatilho BEFORE; medido no gate (carga 30 mil conversas).

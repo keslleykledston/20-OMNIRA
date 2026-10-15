@@ -18,7 +18,7 @@ export interface ConversationItem {
   created_at?: string;
   updated_at: string;
   assigned_to_user_id?: string;
-  // ADR-0046: who holds the conversation, typed. Absent while free. An external application is named by kind only (never its operator).
+  // ADR-0048: who holds the conversation, typed. Absent while free. An external application is named by kind only (never its operator).
   control?: { kind: 'tenant_user' | 'hub_user' | 'crm_application' | 'crm_agent_verified'; origin?: string; version: number; since?: string };
   // Owner's display name (single-conversation read only).
   assigned_to_name?: string;

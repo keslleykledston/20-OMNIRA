@@ -347,7 +347,7 @@ func TestTheDelegatedReclassificationSideEffectsCheckTheKeyThemselves(t *testing
 		}
 	})
 
-	t.Run("a conversation an external application holds is not taken out of its queue (ADR-0046)", func(t *testing.T) {
+	t.Run("a conversation an external application holds is not taken out of its queue (ADR-0048)", func(t *testing.T) {
 		w.grantKeys(g, "contact.classify")
 		inst := uuid.New()
 		w.exec(`INSERT INTO external_app_installations(id,tenant_id,name,scopes) VALUES($1,$2,'crm',ARRAY['conversation.claim'])`, inst, w.tenant["A"])

@@ -234,8 +234,8 @@ func main() {
 		go hubprojector.New(dbPool).Run(workerCtx, interval)
 		log.Printf("Hub inbox projector started (every %s)\n", interval)
 	}
-	// ADR-0046 H4: the external API's background work — numbering the journal, fanning facts out to webhook subscriptions, delivering them at least once, expiring
-	// old facts. Only when OMNIRA_HEADLESS_ENABLED=true and the Headless migrations (135+) are applied.
+	// ADR-0048 H4: the external API's background work — numbering the journal, fanning facts out to webhook subscriptions, delivering them at least once, expiring
+	// old facts. Only when OMNIRA_HEADLESS_ENABLED=true and the Headless migrations (137+) are applied.
 	if cfg.HeadlessEnabled {
 		hookCipher, herr := channelcrypto.NewAESGCM(cfg.CredentialsKey)
 		if herr != nil {

@@ -20,7 +20,7 @@ import (
 	mediaports "github.com/omnira/omnira/internal/media/ports"
 )
 
-// ADR-0046 H3: the read API. Real PostgreSQL as omnira_app, tenants A / B / C, the installation's token as the only credential.
+// ADR-0048 H3: the read API. Real PostgreSQL as omnira_app, tenants A / B / C, the installation's token as the only credential.
 
 var readScopes = []string{"conversation.read", "message.read", "contact.read", "media.read", "conversation.claim", "message.send"}
 

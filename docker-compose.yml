@@ -37,7 +37,7 @@ x-omnira-runtime: &omnira-runtime
   # true = api and worker refuse to start unless the database mode is enforce and they hold the key (set it once the rollout is finished)
   OMNIRA_SESSION_CTX_REQUIRE_ENFORCE: ${OMNIRA_SESSION_CTX_REQUIRE_ENFORCE-}
   OMNIRA_PUBLIC_BASE_URL: ${OMNIRA_PUBLIC_BASE_URL-}
-  # ADR-0046 Headless (API for external CRMs). BOTH are OFF unless set to the literal "true": with them off the routes /api/v1/external/* do not exist (404) and the worker
+  # ADR-0048 Headless (API for external CRMs). BOTH are OFF unless set to the literal "true": with them off the routes /api/v1/external/* do not exist (404) and the worker
   # does not run the journal sequencer, the webhook delivery or the lease sweeper. WRITE needs ENABLED. Pilot: one company, one CRM, one channel; see docs/ops/HEADLESS-RUNBOOK.md.
   OMNIRA_HEADLESS_ENABLED: ${OMNIRA_HEADLESS_ENABLED-false}
   OMNIRA_HEADLESS_WRITE_ENABLED: ${OMNIRA_HEADLESS_WRITE_ENABLED-false}

@@ -4,7 +4,7 @@ info:
   version: 1.0.0-lab
   license: { name: Proprietary, url: 'https://omnira.devops.k3gsolutions.com.br' }
   description: |
-    The API an external application (a CRM) uses to see and attend the same conversations as the OMNIRA Workspace. ADR-0046.
+    The API an external application (a CRM) uses to see and attend the same conversations as the OMNIRA Workspace. ADR-0048.
 
     **Status: LAB — IMPLEMENTED in phases.** `GET /external/me`, the read API (conversations, messages, contacts, media) and the event journal
     (`/external/sync/checkpoint`, `/external/events`; signed webhooks are configured by the company's administrator) are served; the write API is added to this

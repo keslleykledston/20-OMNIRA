@@ -14,7 +14,7 @@ import (
 
 var _ ports.ExternalOutboundStore = (*PostgresOutboundStore)(nil)
 
-// InsertQueuedExternal is InsertQueued for an external application (ADR-0046): sent_by_installation_id names the installation, sent_by_user_id is NULL
+// InsertQueuedExternal is InsertQueued for an external application (ADR-0048): sent_by_installation_id names the installation, sent_by_user_id is NULL
 // and the idempotency key is NULL too (the command receipt, written by the caller in this same transaction, makes a retry return this message). Instead of
 // "assigned to the sender" the statement requires that THIS installation holds the conversation at exactly the control version the caller proved, so a
 // transfer, a takeover, a close or a release that got there first leaves the message unwritten.

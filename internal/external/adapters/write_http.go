@@ -27,7 +27,7 @@ import (
 	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 )
 
-// The coordinated write side of the external API (ADR-0046 H5). Five commands on a conversation, all with the same shape:
+// The coordinated write side of the external API (ADR-0048 H5). Five commands on a conversation, all with the same shape:
 //
 //	authenticate (outside) -> ONE transaction: re-check the installation (installation lock first) -> the conversation must be visible (else the uniform 404)
 //	-> lock the conversation -> look for a receipt of this (installation, operation, key) -> prove the control (holder, version) -> execute the SAME application

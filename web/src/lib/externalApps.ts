@@ -2,7 +2,7 @@ import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session'
 
-// Mirrors the administration of external applications (ADR-0046): internal/external/adapters/{admin,webhook_admin}_http.go.
+// Mirrors the administration of external applications (ADR-0048): internal/external/adapters/{admin,webhook_admin}_http.go.
 // A token or a signing secret is shown ONCE, in the response that creates it; the API only keeps a digest / a sealed copy.
 
 export const SCOPES: { key: string; label: string; write: boolean }[] = [

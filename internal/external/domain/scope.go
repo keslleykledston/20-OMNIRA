@@ -1,4 +1,4 @@
-// Package domain is the vocabulary of the external (Headless) integration, ADR-0046: what an installed application is allowed to do,
+// Package domain is the vocabulary of the external (Headless) integration, ADR-0048: what an installed application is allowed to do,
 // what a credential looks like and who the authenticated caller is. No SQL, no HTTP.
 package domain
 

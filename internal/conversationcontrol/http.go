@@ -15,7 +15,7 @@ import (
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-// TakeoverHandler is the supervisor's explicit takeover of a conversation an external application holds (ADR-0046 §6.5). It needs
+// TakeoverHandler is the supervisor's explicit takeover of a conversation an external application holds (ADR-0048 §6.5). It needs
 // conversation.takeover_external, a written reason and a confirmation flag; it is never automatic after a conflict. The route names
 // {conversation_id}, so the tenant authorization middleware has already refused internal-contact conversations to whoever may not read them.
 type TakeoverHandler struct {

@@ -42,7 +42,7 @@ tags:
   - { name: Webhooks, description: Provider callbacks (server-to-server) }
   - { name: Tenancy, description: "Tenant access: fixed platform roles (read-only) and the caller's effective permissions" }
   - { name: Agents, description: "Operational agents and queues (groups)" }
-  - { name: ExternalApps, description: "Administration of external applications (CRM) that use the Headless API (ADR-0046). For a person with integration.manage; never reachable by a Hub agent" }
+  - { name: ExternalApps, description: "Administration of external applications (CRM) that use the Headless API (ADR-0048). For a person with integration.manage; never reachable by a Hub agent" }
 security:
   - bearerAuth: []
   - cookieAuth: []
@@ -6293,7 +6293,7 @@ components:
         assigned_to_user_id: { type: string, format: uuid, description: 'absent when unassigned' }
         control:
           type: object
-          description: "ADR-0046: who holds the conversation, typed. Absent while free. An external application is named by kind only; its operator is never shown. `version` only grows; clients compare it."
+          description: "ADR-0048: who holds the conversation, typed. Absent while free. An external application is named by kind only; its operator is never shown. `version` only grows; clients compare it."
           required: [kind, version]
           properties:
             kind: { type: string, enum: [tenant_user, hub_user, crm_application, crm_agent_verified] }

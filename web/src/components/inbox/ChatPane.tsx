@@ -164,7 +164,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       setClaiming(false);
     }
   };
-  // ADR-0046: an application holds it (assigned_to_user_id is empty for it, which must NOT read as "free to claim")
+  // ADR-0048: an application holds it (assigned_to_user_id is empty for it, which must NOT read as "free to claim")
   const heldByCRM = isHeldExternally(conversation?.control?.kind);
   const unassigned = !!conversation && conversation.status !== 'closed' && !conversation.assigned_to_user_id && !heldByCRM && conversation.conversation_kind !== 'internal';
   const mine = !!conversation?.assigned_to_user_id && conversation.assigned_to_user_id === currentUserId();

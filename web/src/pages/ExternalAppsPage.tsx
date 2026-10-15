@@ -140,7 +140,7 @@ function Detail({ appId, canManage, onChanged }: { appId: string; canManage: boo
   )
 }
 
-// Configurações > Integrações > Aplicações externas (ADR-0046): quem instala, revoga e acompanha os CRMs que usam a API headless.
+// Configurações > Integrações > Aplicações externas (ADR-0048): quem instala, revoga e acompanha os CRMs que usam a API headless.
 export default function ExternalAppsPage() {
   const tenantId = getTenantId()
   const access = useAccess()

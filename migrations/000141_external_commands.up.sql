@@ -1,4 +1,4 @@
--- ADR-0046 H5: coordinated writes by an external application.
+-- ADR-0048 H5: coordinated writes by an external application.
 --  * external_command_receipts: one row per accepted command, written in the transaction that performed it. Scope (tenant, installation, operation, key); a repeat with the same
 --    key and the same canonical payload gets the stored answer, a different payload is refused. Failures leave no receipt (their transaction rolls back).
 --  * conversation_closures learns that an application can close an attendance: source 'external_app' and the installation (never a user).
@@ -50,7 +50,7 @@ GRANT EXECUTE ON FUNCTION external_command_receipts_purge(INTERVAL) TO omnira_ap
 -- conversations); with it the scan stops after one page.
 CREATE INDEX idx_conversations_tenant_created ON conversations (tenant_id, created_at DESC, id DESC);
 
--- The CRM lease (ADR-0046 §6.1): optional per installation (external_app_installations.lease_seconds; NULL = the application holds until it releases). While the
+-- The CRM lease (ADR-0048 §6.1): optional per installation (external_app_installations.lease_seconds; NULL = the application holds until it releases). While the
 -- installation holds a conversation, every command it makes and its heartbeat push the expiry forward; a hold whose lease (plus the grace period) ran out is freed by the
 -- worker with the reason lease_expired and the router looks at the conversation again. A person is never expired.
 CREATE TABLE external_conversation_leases (

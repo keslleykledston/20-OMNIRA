@@ -1,6 +1,6 @@
 # Headless — threat model (STRIDE + OWASP API Top 10)
 
-Escopo: superfície `/api/v1/external/*`, administração de instalações, journal, webhooks de saída, controle de conversa. ADR: `docs/adr/0046-headless-hybrid-crm-dual-operation.md`.
+Escopo: superfície `/api/v1/external/*`, administração de instalações, journal, webhooks de saída, controle de conversa. ADR: `docs/adr/0048-headless-hybrid-crm-dual-operation.md`.
 Ativos: conversas/mensagens/mídia/contatos do tenant; titularidade (quem pode falar ao cliente); segredos (credencial de instalação, segredo de webhook); isolamento entre tenants.
 Atores: CRM legítimo; CRM comprometido/malicioso; tenant vizinho com credencial própria; agente do Workspace/Hub; atacante de rede; operador interno.
 

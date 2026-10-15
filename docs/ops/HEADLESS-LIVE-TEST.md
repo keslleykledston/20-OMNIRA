@@ -17,7 +17,7 @@ scripts/headless-lab-stack.sh config   # valida o compose gerado (nada sobe)
 scripts/headless-lab-stack.sh up       # projeto "omnira-hl": containers, rede, volumes e banco PRÓPRIOS; portas 4xxxx
 scripts/headless-lab-stack.sh status
 ```
-O laboratório liga `OMNIRA_HEADLESS_ENABLED` e `OMNIRA_HEADLESS_WRITE_ENABLED` **só nele**. Web: `http://127.0.0.1:43000`; API: `http://127.0.0.1:48080`. As migrations 135–139 rodam **no banco do laboratório**.
+O laboratório liga `OMNIRA_HEADLESS_ENABLED` e `OMNIRA_HEADLESS_WRITE_ENABLED` **só nele**. Web: `http://127.0.0.1:43000`; API: `http://127.0.0.1:48080`. As migrations 137–141 rodam **no banco do laboratório**.
 
 ## 2. Preparar a empresa de laboratório
 1. Entrar no web do laboratório (modo dev) com a empresa de demonstração que o `seed` cria (ou criar uma).

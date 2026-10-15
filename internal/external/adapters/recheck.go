@@ -7,8 +7,8 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 )
 
-// RecheckPrincipal is the second look of every external MUTATION, taken inside the transaction that writes (ADR-0046 §3, the pattern of
-// ADR-0037 for the Hub). external_recheck (migration 135) locks the installation row and the credential row FOR SHARE until the
+// RecheckPrincipal is the second look of every external MUTATION, taken inside the transaction that writes (ADR-0048 §3, the pattern of
+// ADR-0037 for the Hub). external_recheck (migration 137) locks the installation row and the credential row FOR SHARE until the
 // transaction ends and says whether both are usable now: revoking or suspending takes a conflicting row lock, so it either waits for this
 // write to commit or happens first and this write is refused. Authentication, done earlier outside the transaction, is only a pre-check.
 func RecheckPrincipal(ctx context.Context, q platformdb.Querier, p *domain.Principal) error {

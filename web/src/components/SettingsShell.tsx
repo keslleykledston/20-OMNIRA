@@ -36,7 +36,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     ],
   },
   {
-    // ADR-0046: aplicações externas (CRMs) que usam a API headless. A rota responde "não habilitado" quando a plataforma não liga o recurso.
+    // ADR-0048: aplicações externas (CRMs) que usam a API headless. A rota responde "não habilitado" quando a plataforma não liga o recurso.
     key: 'integrations',
     label: 'Integrações',
     href: '/settings/integrations',

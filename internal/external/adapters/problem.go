@@ -1,4 +1,4 @@
-// Package adapters is the HTTP and PostgreSQL side of the external (Headless) integration, ADR-0046.
+// Package adapters is the HTTP and PostgreSQL side of the external (Headless) integration, ADR-0048.
 //
 // Rule for every query in this package: the tenant is the tenant of the authenticated installation (Principal.TenantID, read from the
 // database by the credential), it appears as an explicit predicate, and no request field can change it. scripts and tests/lint

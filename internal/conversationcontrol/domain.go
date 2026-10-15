@@ -1,6 +1,6 @@
 // Package conversationcontrol is the ONE place that changes who holds a conversation when the holder is not decided by a legacy writer: an
 // external application claiming, releasing or transferring, a supervisor taking over from an application, and the drain that frees what an
-// installation holds when it stops being usable (ADR-0046 §2.3). Every operation runs in the caller's transaction, takes the conversation row
+// installation holds when it stops being usable (ADR-0048 §2.3). Every operation runs in the caller's transaction, takes the conversation row
 // FOR UPDATE first (the first lock of the project-wide order conversation -> routing state -> timer), advances control_version by exactly one on
 // a real change, and leaves an append-only, typed history row. An idempotent repetition changes nothing and writes nothing.
 package conversationcontrol

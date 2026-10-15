@@ -266,7 +266,7 @@ const assignQueueSQL = `
 	  FROM q
 	  WHERE c.tenant_id = $1 AND c.id = $2 AND ($3::uuid IS NOT NULL OR c.queue_id IS NULL)
 	    AND c.internal_user_id IS NULL
-	    AND c.control_kind IS NULL -- an external application's hold is not requeued by a flow (ADR-0046)
+	    AND c.control_kind IS NULL -- an external application's hold is not requeued by a flow (ADR-0048)
 	  RETURNING c.id, q.mode
 	), job AS (
 	  INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
