@@ -442,6 +442,17 @@ describe('Pessoas: a ficha de um convite', () => {
     await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/team/invitations/i1'))?.body).toEqual({ status: 'revoked' }))
   })
 
+  it('um convite vencido também pode ser cancelado (desliga a conta de login que ninguém usou)', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world({ invitations: [invitation('i8', 'vencido@k3g.com', { status: 'expired', expires_at: '2020-01-01T00:00:00Z' })] }))
+    page()
+    await user.click(await rowOf('vencido@k3g.com'))
+    const s = sheet()
+    await user.click(within(s).getByRole('button', { name: 'Cancelar convite' }))
+    await user.click(within(within(s).getByRole('alertdialog')).getByRole('button', { name: 'Cancelar convite' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/team/invitations/i8'))?.body).toEqual({ status: 'revoked' }))
+  })
+
   it('marca o convite que não chegou e oferece o link quando o servidor dá um', async () => {
     const user = userEvent.setup()
     serve(world({ invitations: [invitation('i3', 'sem-email@k3g.com', { sent_at: undefined, invite_url: '/invite/abc' })] }))

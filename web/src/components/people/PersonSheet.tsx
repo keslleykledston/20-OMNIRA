@@ -435,7 +435,8 @@ function InvitationBody({ person, readiness, sectors, can, busy, actions }: {
                 {copied ? 'Link copiado' : 'Copiar link (dev)'}
               </Button>
             )}
-            {inv.status === 'pending' && <Button size="sm" variant="danger" onClick={() => setConfirm(true)} disabled={busy === 'revoke'}>Cancelar convite</Button>}
+            {/* an expired invitation is still open on the server: cancelling it also turns off its unused sign-in account (ADR-0046) */}
+            <Button size="sm" variant="danger" onClick={() => setConfirm(true)} disabled={busy === 'revoke'}>Cancelar convite</Button>
           </div>
           {!can.resend && <p className="mt-2 text-xs text-text-tertiary">O envio de convites não está configurado neste ambiente.</p>}
           {confirm && (

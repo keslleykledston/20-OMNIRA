@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, Drawer, StatusBadge } from '../primitives';
 import { describeHubPoolError, hubPoolsAPI, type AccessAgent, type AccessInstance, type AccessMode, type WorkPool } from '../../lib/hub';
@@ -22,6 +22,8 @@ export default function HubPersonSheet({ hubId, agent, instances, busy, onSetAcc
   const qc = useQueryClient();
   const pools = useQuery({ queryKey: ['hub-pools', hubId], enabled: !!hubId, queryFn: () => hubPoolsAPI.list(hubId), retry: false });
   const [poolBusy, setPoolBusy] = useState<string | null>(null);
+  // Capacity the person had in each team, so leaving and joining again on this sheet keeps it instead of going back to the default.
+  const lastCapacity = useRef(new Map<string, number>());
   const [error, setError] = useState<string | null>(null);
   const who = agent.name || agent.email || 'Sem nome';
   const grant = new Map(agent.grants.map((g) => [g.tenant_id, g]));
@@ -34,8 +36,11 @@ export default function HubPersonSheet({ hubId, agent, instances, busy, onSetAcc
     try {
       const fresh = (await hubPoolsAPI.list(hubId)).find((p) => p.id === pool.id);
       if (!fresh) throw new Error('missing');
+      const mine = fresh.members.find((m) => m.user_id === agent.user_id);
+      if (mine) lastCapacity.current.set(pool.id, mine.max_open);
       const others = fresh.members.filter((m) => m.user_id !== agent.user_id).map((m) => ({ user_id: m.user_id, max_open: m.max_open }));
-      await hubPoolsAPI.setMembers(hubId, pool.id, on ? [...others, { user_id: agent.user_id, max_open: POOL_CAPACITY }] : others);
+      const capacity = mine?.max_open ?? lastCapacity.current.get(pool.id) ?? POOL_CAPACITY;
+      await hubPoolsAPI.setMembers(hubId, pool.id, on ? [...others, { user_id: agent.user_id, max_open: capacity }] : others);
     } catch (err) {
       setError(describeHubPoolError(err));
     } finally {
@@ -116,7 +121,8 @@ export default function HubPersonSheet({ hubId, agent, instances, busy, onSetAcc
                           <span className="min-w-0">
                             <span className="block font-medium text-text-primary">Equipe {p.name}</span>
                             <span className="block text-xs text-text-tertiary">
-                              {scope} desta instância{elsewhere.length > 0 ? ` · também atende ${elsewhere.join(', ')}` : ''}
+                              {scope} desta instância
+                              {elsewhere.length > 0 ? ` · a equipe também atende ${elsewhere.join(', ')}, e participar vale para todas` : ''}
                             </span>
                           </span>
                         </label>

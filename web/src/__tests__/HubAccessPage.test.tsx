@@ -246,7 +246,7 @@ describe('HubAccessPage: ficha da pessoa (ADR-0047)', () => {
     expect(within(sheet).getByLabelText('Acesso de Xavier em Beta')).toBeDisabled();
     const alfa = within(sheet).getByRole('listitem', { name: 'Alfa — Xavier' });
     expect(await within(alfa).findByLabelText('Xavier na equipe Suporte')).not.toBeChecked();
-    expect(within(alfa).getByText(/todas as filas desta instância · também atende Gama/)).toBeInTheDocument();
+    expect(within(alfa).getByText(/todas as filas desta instância · a equipe também atende Gama, e participar vale para todas/)).toBeInTheDocument();
     const gama = within(sheet).getByRole('listitem', { name: 'Gama — Xavier' });
     expect(within(gama).getByText(/Só com “Ler e responder”/)).toBeInTheDocument();
   });
@@ -272,6 +272,27 @@ describe('HubAccessPage: ficha da pessoa (ADR-0047)', () => {
       expect.stringMatching(/\/hubs\/hub-1\/pools\/p1\/members$/),
       { members: [{ user_id: 'u-y', max_open: 7 }, { user_id: 'u-z', max_open: 7 }, { user_id: 'u-x', max_open: 10 }] },
       expect.anything()));
+  });
+
+  it('sair e voltar para a equipe na mesma ficha mantém a capacidade que a pessoa tinha', async () => {
+    const user = userEvent.setup();
+    pools = [pool('p1', 'Suporte', [{ tenant_id: 'A' }], ['u-x', 'u-y'])]; // max_open 7 each
+    vi.mocked(axios.put).mockImplementation(async (url: string, body: any) => {
+      const m = String(url).match(/\/pools\/([^/]+)\/members$/);
+      if (m) pools = pools.map((p) => (p.id === m[1] ? { ...p, members: body.members.map((x: any) => ({ ...x, email: '', name: '', load: 0 })) } : p));
+      return { data: {} };
+    });
+    renderAt(<HubAccessPage />);
+    await user.click(await screen.findByRole('button', { name: 'Xavier' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Ficha de Xavier' });
+    const box = await within(sheet).findByLabelText('Xavier na equipe Suporte');
+    await waitFor(() => expect(box).toBeChecked());
+    await user.click(box);
+    await waitFor(() => expect(within(sheet).getByLabelText('Xavier na equipe Suporte')).not.toBeChecked());
+    await user.click(within(sheet).getByLabelText('Xavier na equipe Suporte'));
+    await waitFor(() => expect(within(sheet).getByLabelText('Xavier na equipe Suporte')).toBeChecked());
+    const puts = vi.mocked(axios.put).mock.calls.filter((c) => String(c[0]).endsWith('/pools/p1/members'));
+    expect(puts.at(-1)?.[1]).toEqual({ members: [{ user_id: 'u-y', max_open: 7 }, { user_id: 'u-x', max_open: 7 }] });
   });
 
   it('avisa quando a pessoa também é membro direta de uma instância', async () => {

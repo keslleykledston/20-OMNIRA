@@ -2,6 +2,11 @@
 
 Status: **IMPLEMENTADA, versão mínima** (2026-10-14). O dono pediu "implante as melhorias propostas" e "ampliando as features, não criando algo novo": a ficha da pessoa entrou no painel Acessos existente, **só no frontend**, com as APIs que já existem (acesso por instância, gestão de canais, Equipes). Não foram criados os endpoints nem a função do §2.2/§2.3: a lista da Equipe é relida logo antes de gravar (o `PUT` de membros substitui a lista inteira, como na aba Equipes); a função e as filas de um membro direto aparecem só como aviso ("membro direto desta instância"), sem detalhe; a Pessoas da instância **não** mostra quem atende pelo Hub (decisão §4.1 em aberto). Decisão §4.2 adotada: o admin do Hub não edita filas de membros diretos.
 
+Revisão do Codex (2026-10-14):
+- A ficha mantém a capacidade que a pessoa tinha ao sair e voltar para uma equipe.
+- A ficha diz quando participar da equipe vale para todas as instâncias dela.
+- **Risco aceito (MEDIUM):** o `PUT` de membros substitui a lista inteira. A ficha relê a lista logo antes de gravar, mas dois administradores gravando ao mesmo tempo ainda podem se sobrescrever. O mesmo vale para a aba Equipes, desde antes. O endpoint atômico do §2.2 fica para uma próxima fase.
+
 ## 1. Contexto
 
 - Pedido do dono: gerenciar uma pessoa (usuário do Hub/OMNIRA), **de quais instâncias** ela é agente e **de quais filas** de cada instância recebe conversas, num lugar só.
