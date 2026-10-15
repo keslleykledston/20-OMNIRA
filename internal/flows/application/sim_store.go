@@ -231,6 +231,28 @@ func (f *simEffects) CloseByFlow(_ context.Context, _ uuid.UUID, reason, _ strin
 	f.add("close_conversation", map[string]any{"reason": reason})
 	return nil
 }
+
+// Service-session nodes (ADR-0049): a simulation records what the node WOULD do and invents a plausible protocol; it never reaches the module.
+func (f *simEffects) ServiceStart(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int) (string, bool, error) {
+	f.add("start_service_session", map[string]any{})
+	return "AT-SIM", true, nil
+}
+func (f *simEffects) ServiceClassify(_ context.Context, _ uuid.UUID, code string) error {
+	f.add("classify_service_session", map[string]any{"category": code})
+	return nil
+}
+func (f *simEffects) ServiceTask(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int, _, _, priority string) error {
+	f.add("create_service_task", map[string]any{"priority": priority})
+	return nil
+}
+func (f *simEffects) ServiceOpenCase(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int, _, _, priority string) (string, error) {
+	f.add("open_service_case", map[string]any{"priority": priority})
+	return "OC-SIM", nil
+}
+func (f *simEffects) ServiceClose(_ context.Context, _ uuid.UUID, result, _ string) (bool, error) {
+	f.add("close_service_session", map[string]any{"result": result})
+	return true, nil
+}
 func (f *simEffects) ApplyOverflow(context.Context, uuid.UUID) (string, *uuid.UUID, error) {
 	out := "queued"
 	if f.sc.Routing != nil && f.sc.Routing.Overflow != "" {

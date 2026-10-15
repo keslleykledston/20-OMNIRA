@@ -28,7 +28,7 @@ func Build(pool *pgxpool.Pool, opts Options) (*application.Service, *application
 	repo := NewPostgresRepository(pool)
 	repo.SetTxLockTimeout(opts.TxLockTimeout)
 	authz := NewAuthorizer(pool)
-	svc := application.NewService(repo, authz, NewAuditor(pool)).WithEvents(repo).WithTimeline(repo).WithCases(repo).WithTasks(repo).WithContext(repo).WithLinkCounter(repo).WithExternal(repo, opts.Gateways)
+	svc := application.NewService(repo, authz, NewAuditor(pool)).WithEvents(repo).WithTimeline(repo).WithCases(repo).WithTasks(repo).WithContext(repo).WithLinkCounter(repo).WithCatalog(repo).WithExternal(repo, opts.Gateways)
 	catalog := application.NewCatalog(repo, authz, svc)
 	return svc, catalog, NewHandler(svc, catalog).WithExternalOrders(opts.ExternalOrders)
 }

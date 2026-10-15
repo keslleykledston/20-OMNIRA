@@ -24,9 +24,10 @@ type SystemSender interface {
 // PostgresEffects performs the data/action side of nodes inside the engine's transaction. It owns the SQL so nodes never
 // do; every statement filters by the session tenant and relies on RLS.
 type PostgresEffects struct {
-	pool   *pgxpool.Pool
-	sender SystemSender
-	closer AttendanceCloser
+	pool    *pgxpool.Pool
+	sender  SystemSender
+	closer  AttendanceCloser
+	service ports.ServiceFlow
 	// engineRouting: the central routing engine is on, so a conversation a flow puts in a MANUAL queue also gets its routing job (the engine
 	// never assigns inside a manual queue; it applies the closed-hours notice, the SLA clocks and the overflow chain).
 	engineRouting bool
@@ -72,6 +73,51 @@ func (e *PostgresEffects) CloseByFlow(ctx context.Context, conversationID uuid.U
 		return errors.New("flows: no attendance closer configured")
 	}
 	return c.CloseForFlow(ctx, conversationID, reason, note)
+}
+
+var _ ports.ServiceFlow = (*PostgresEffects)(nil)
+
+// WithService enables the service-session nodes (ADR-0049 phase 6). Without it every one of them fails with "not available" and takes its error port.
+func (e *PostgresEffects) WithService(s ports.ServiceFlow) *PostgresEffects {
+	e.service = s
+	return e
+}
+
+var errNoService = errors.New("flows: the service context is not available in this environment")
+
+func (e *PostgresEffects) ServiceStart(ctx context.Context, conversationID, runID uuid.UUID, seq int) (string, bool, error) {
+	if e.service == nil {
+		return "", false, errNoService
+	}
+	return e.service.ServiceStart(ctx, conversationID, runID, seq)
+}
+
+func (e *PostgresEffects) ServiceClassify(ctx context.Context, conversationID uuid.UUID, categoryCode string) error {
+	if e.service == nil {
+		return errNoService
+	}
+	return e.service.ServiceClassify(ctx, conversationID, categoryCode)
+}
+
+func (e *PostgresEffects) ServiceTask(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) error {
+	if e.service == nil {
+		return errNoService
+	}
+	return e.service.ServiceTask(ctx, conversationID, runID, seq, title, description, priority)
+}
+
+func (e *PostgresEffects) ServiceOpenCase(ctx context.Context, conversationID, runID uuid.UUID, seq int, title, description, priority string) (string, error) {
+	if e.service == nil {
+		return "", errNoService
+	}
+	return e.service.ServiceOpenCase(ctx, conversationID, runID, seq, title, description, priority)
+}
+
+func (e *PostgresEffects) ServiceClose(ctx context.Context, conversationID uuid.UUID, resultCode, note string) (bool, error) {
+	if e.service == nil {
+		return false, errNoService
+	}
+	return e.service.ServiceClose(ctx, conversationID, resultCode, note)
 }
 
 func NewPostgresEffects(pool *pgxpool.Pool, sender SystemSender) *PostgresEffects {

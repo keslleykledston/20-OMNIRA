@@ -44,6 +44,7 @@ type Service struct {
 	cases        ports.CaseRepository
 	tasks        ports.TaskRepository
 	ctxRepo      ports.ContextRepository
+	catalog      ports.CatalogRepository
 	ext          ports.ExternalRepository
 	gateways     ports.GatewayResolver
 	gatewayTO    time.Duration
@@ -73,6 +74,9 @@ func (s *Service) WithEvents(e ports.Events) *Service {
 }
 
 func (s *Service) WithLinkCounter(l ports.LinkCounter) *Service { s.links = l; return s }
+
+// WithCatalog gives the flow engine's facade the company's catalogs (a flow names a category by its code).
+func (s *Service) WithCatalog(c ports.CatalogRepository) *Service { s.catalog = c; return s }
 
 func (s *Service) WithReopenWindow(d time.Duration) *Service {
 	if d > 0 {
@@ -125,7 +129,11 @@ func (s *Service) who(ctx context.Context) (caller, error) {
 		return caller{}, errors.New("servicectx: tenant context required")
 	}
 	if tc.Source == tenancydomain.AccessSourceSystem {
-		return caller{tc: tc, system: true}, nil
+		c := caller{tc: tc, system: true}
+		if ctx.Value(flowActorKey{}) != nil { // the flow engine's facade (flow.go) marks the context; a system session of anything else keeps its own kind
+			c.kind = domain.ActorFlow
+		}
+		return c, nil
 	}
 	if tc.ActorID == uuid.Nil {
 		return caller{}, errors.New("servicectx: authenticated tenant context required")
