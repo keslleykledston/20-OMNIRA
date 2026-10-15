@@ -3,6 +3,7 @@ package password
 import (
 	"crypto/rand"
 	"fmt"
+	"math/big"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -30,15 +31,18 @@ func Verify(hash, password string) bool {
 
 // Generate gera uma senha temporária aleatória segura (12 caracteres alphanumeric + símbolos) com ao menos uma maiúscula, uma minúscula
 // e um dígito: a política de senha do realm do Keycloak exige os três, e a senha do convite vira a do login criado (ADR-0046).
+// Each character is drawn uniformly from the charset (rand.Int, no modulo bias).
 func Generate() (string, error) {
 	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*"
+	size := big.NewInt(int64(len(charset)))
 	b := make([]byte, TempLength)
 	for {
-		if _, err := rand.Read(b); err != nil {
-			return "", err
-		}
 		for i := range b {
-			b[i] = charset[int(b[i])%len(charset)]
+			n, err := rand.Int(rand.Reader, size)
+			if err != nil {
+				return "", err
+			}
+			b[i] = charset[n.Int64()]
 		}
 		if hasUpperLowerDigit(b) {
 			return string(b), nil

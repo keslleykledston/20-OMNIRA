@@ -2,6 +2,27 @@
 
 Status: **IMPLEMENTADA** (2026-10-14), ampliando o fluxo de convite existente. O dono pediu "implante as melhorias propostas" sem responder §6; adotadas as recomendações: caminho A; conta de convite cancelado é **desabilitada**; a autorização por e-mail do Hub **não** cria conta nesta fase; a edição de e-mail no Keycloak **não** foi mudada (continua pendência do dono, para não alterar o comportamento atual). Diferenças da proposta, para ampliar sem criar peças novas: o plano fica em **colunas** de `membership_invitations` (migration 136, sem tabela nova; a fila é conferida contra a instância ao convidar e de novo ao aceitar) e não há `PATCH` do plano. O marcador `omnira_provisioned` exige no realm `unmanagedAttributePolicy=ADMIN_EDIT` (Keycloak 25 descarta atributos não declarados); sem ele a conta funciona, mas reenviar/cancelar não a tocam, e o adaptador avisa no log. Provas: unidade (`keycloak_logins_test.go`), Postgres com instâncias A/B (`invitations_plan_test.go`), Keycloak 25 real descartável (`scripts/test-keycloak-logins.sh`), Vitest e Playwright com mocks.
 
+**Revisão do Codex, rodada 1 (2026-10-14): 1 HIGH e 10 MEDIUM, corrigidos antes do deploy:**
+- **HIGH: a conta ficava presa só ao "OMNIRA criou", não ao convite.** Agora fica presa ao convite que a criou: `omnira_invitation` e a validade dele, `omnira_invitation_expires`. Quando o OMNIRA a desliga por cancelamento, ela recebe `omnira_disabled`.
+  - Quem pode assumir a conta: o reenvio do mesmo convite; o convite que substitui o anterior na mesma instância (o `UPDATE ... RETURNING` passa os ids substituídos); ou um convite novo depois que o anterior venceu ou foi cancelado.
+  - Um convite de **outra** instância, com um convite ainda vivo, não redefine a senha nem desliga a conta. O e-mail desse convite manda usar a senha do primeiro convite.
+  - Cancelar desliga só a conta daquele convite.
+  - Uma conta desligada por um administrador do Keycloak nunca é religada (502).
+- **Falha fechada:** se o realm descartar os atributos (sem `ADMIN_EDIT`), a conta recém-criada é removida e o convite responde 502.
+- **A flag ligada sem configuração completa impede a API de subir** (`config.Validate`).
+- O segredo vai só para o serviço `api`, não para o worker.
+- O aceite audita `agent.enabled` e `agent.queue_assigned` em nome de quem convidou, com o convite como causa.
+- A auditoria do cancelamento diz se a conta foi desligada.
+- O down da 135 não reabre a política antiga (fica irreversível). O down da 136 avisa que descarta os planos.
+- A senha é sorteada sem viés (`rand.Int`).
+- A configuração do realm virou script versionado: `scripts/keycloak-provisioner-setup.sh`. O teste com Keycloak real roda esse mesmo script, com hostname público diferente da URL interna, como em produção.
+- Provas: 15 mutantes mortos.
+
+**Riscos aceitos (MEDIUM, ficam registrados):**
+- A conta de um convite que **só venceu** continua habilitada com a senha temporária até chegar um convite novo. Não há job de reconciliação. Só quem tem a caixa de e-mail conhece a senha, e sem convite a pessoa não ganha acesso a nada.
+- O Keycloak e o SMTP são chamados dentro da transação do convite (o SMTP já era assim). Se o commit falhar depois da chamada ao Keycloak, sobra uma conta presa a um convite que não existe. Ela é assumida quando vence (7 dias).
+- Não há outbox para esses efeitos externos.
+
 ## 1. Contexto: o que acontece hoje
 
 - Em produção o login é só pelo Keycloak (`OMNIRA_AUTH_MODE=oidc`, realm `omnira`, `registrationAllowed=false`). O OMNIRA **não** chama a API de administração do Keycloak.

@@ -207,3 +207,95 @@ func TestSessionOfAnInactiveAccountDoesNotResolve(t *testing.T) {
 		t.Fatalf("reactivating the account restores the session: %v", err)
 	}
 }
+
+// The browser session ends after the idle time WITHOUT use: each request pushes the expiry, never past the ceiling counted from the
+// sign-in, never bringing back an expired session, and a stream (ValidateSession) does not count as use.
+func TestSessionExpirySlidesWithUseAndStopsAtTheCeiling(t *testing.T) {
+	seedURL, _ := testhelpers.RequireIntegrationDatabase(t)
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	userID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id, external_subject, email, status) VALUES ($1, $2, $3, 'active')`,
+		userID, userID.String(), "idle-"+userID.String()[:8]+"@test.local"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID) })
+
+	set := func(id, createdAgo, expiresIn string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE auth_sessions SET created_at = NOW() - $2::interval, expires_at = NOW() + $3::interval WHERE id = $1`,
+			id, createdAgo, expiresIn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	left := func(id string) time.Duration {
+		t.Helper()
+		var d float64
+		if err := pool.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM expires_at - NOW()) FROM auth_sessions WHERE id = $1`, id).Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		return time.Duration(d * float64(time.Second))
+	}
+	near := func(got, want time.Duration) bool { return got > want-time.Minute && got < want+time.Minute }
+
+	store := NewPostgresSessionStore(pool).WithLifetime(time.Hour, 3*time.Hour)
+	id, err := store.CreateSession(ctx, userID, "oidc", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(id, "10 minutes", "5 minutes") // signed in 10 min ago, about to expire
+	if _, err := store.ResolveSession(ctx, id); err != nil {
+		t.Fatalf("a live session must resolve: %v", err)
+	}
+	if got := left(id); !near(got, time.Hour) {
+		t.Fatalf("a request pushes the expiry to now + idle; %v left", got)
+	}
+
+	set(id, "170 minutes", "5 minutes") // 2h50 after sign-in: the 3 h ceiling is 10 min away
+	if _, err := store.ResolveSession(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(id); !near(got, 10*time.Minute) {
+		t.Fatalf("the expiry never passes sign-in + ceiling; %v left", got)
+	}
+
+	set(id, "20 minutes", "-1 second")
+	if _, err := store.ResolveSession(ctx, id); err == nil {
+		t.Fatal("an expired session must not resolve")
+	}
+	if err := store.UpdateActivity(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(id); got > 0 {
+		t.Fatalf("activity never brings an expired session back; %v left", got)
+	}
+
+	stream, err := store.CreateSession(ctx, userID, "oidc", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(stream, "10 minutes", "5 minutes")
+	if err := store.ValidateSession(ctx, stream); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(stream); !near(got, 5*time.Minute) {
+		t.Fatalf("a stream does not keep a session alive; %v left", got)
+	}
+
+	fixed := NewPostgresSessionStore(pool) // no lifetime configured: the expiry stays where it was set
+	old, err := fixed.CreateSession(ctx, userID, "dev", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(old, "10 minutes", "5 minutes")
+	if _, err := fixed.ResolveSession(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(old); !near(got, 5*time.Minute) {
+		t.Fatalf("without a lifetime the expiry is fixed; %v left", got)
+	}
+}

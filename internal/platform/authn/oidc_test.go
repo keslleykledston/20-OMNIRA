@@ -38,11 +38,13 @@ func (r fakeOIDCResolver) SessionProfile(context.Context, uuid.UUID) (SessionPro
 
 type fakeSessionStore struct {
 	sessions map[string]uuid.UUID
+	ttl      time.Duration // of the last session created
 }
 
-func (s *fakeSessionStore) CreateSession(_ context.Context, userID uuid.UUID, _ string, _ time.Duration) (string, error) {
+func (s *fakeSessionStore) CreateSession(_ context.Context, userID uuid.UUID, _ string, ttl time.Duration) (string, error) {
 	sessionID := "session-" + userID.String()
 	s.sessions[sessionID] = userID
+	s.ttl = ttl
 	return sessionID, nil
 }
 func (s *fakeSessionStore) ResolveSession(_ context.Context, sessionID string) (uuid.UUID, error) {
@@ -104,7 +106,8 @@ func TestOIDCAuthorizationCodePKCEAndCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionStore := &fakeSessionStore{sessions: map[string]uuid.UUID{}}
-	h := NewOIDCHandler(auth, discovery, resolver, sessionStore, issuer, "client", "secret", "https://app.example/api/v1/auth/oidc/callback", "/login?oidc=complete", true)
+	h := NewOIDCHandler(auth, discovery, resolver, sessionStore, issuer, "client", "secret", "https://app.example/api/v1/auth/oidc/callback", "/login?oidc=complete", true).
+		WithSessionLifetime(6*time.Hour, 10*time.Hour)
 
 	startReq := httptest.NewRequest(http.MethodGet, "https://app.example/api/v1/auth/oidc/start", nil)
 	startRec := httptest.NewRecorder()
@@ -145,6 +148,10 @@ func TestOIDCAuthorizationCodePKCEAndCookie(t *testing.T) {
 	}
 	if session == nil || !session.HttpOnly || !session.Secure || session.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("unsafe session cookie: %#v", session)
+	}
+	// 6 h without use ends the session (the store pushes the expiry on each use); the cookie lasts as long as the session can: 10 h.
+	if sessionStore.ttl != 6*time.Hour || session.MaxAge != int((10*time.Hour).Seconds()) {
+		t.Fatalf("session lifetime: store ttl %v, cookie max-age %d; want 6h idle and a 10h cookie", sessionStore.ttl, session.MaxAge)
 	}
 	// The session cookie carries an opaque server-side session id, not the ID
 	// Token: it only identifies the user through the session store.

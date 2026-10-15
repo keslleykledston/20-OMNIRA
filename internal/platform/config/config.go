@@ -118,7 +118,8 @@ type Config struct {
 
 	AllowPrivilegedDB  bool
 	GracefulShutdown   int // segundos
-	SessionIdleTimeout int // segundos (padrão 7200 = 2h)
+	SessionIdleTimeout int // segundos (padrão 7200 = 2h): a sessão do navegador termina depois disso SEM uso; cada uso empurra o prazo
+	SessionMaxLifetime int // segundos (padrão 36000 = 10h, o mesmo teto do SSO no Keycloak): nenhuma sessão passa disso depois do login; 0 = sem teto
 
 	// AI* (PRODUCT.7C0/7C1): deliberately NOT validated by Validate() below.
 	// AI is an optional, best-effort subsystem — a misconfigured/incomplete
@@ -226,7 +227,8 @@ func Load() *Config {
 		KeycloakProvisionerSecret:     os.Getenv("OMNIRA_KEYCLOAK_PROVISIONER_SECRET"),
 		AllowPrivilegedDB:             getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
 		GracefulShutdown:              getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
-		SessionIdleTimeout:            getEnvInt("OMNIRA_SESSION_IDLE_TIMEOUT", 7200), // padrão: 2h
+		SessionIdleTimeout:            getEnvInt("OMNIRA_SESSION_IDLE_TIMEOUT", 7200),  // padrão: 2h
+		SessionMaxLifetime:            getEnvInt("OMNIRA_SESSION_MAX_LIFETIME", 36000), // padrão: 10h
 
 		AIEnabled:        getEnv("OMNIRA_AI_ENABLED", "false") == "true",
 		AIProvider:       strings.ToLower(strings.TrimSpace(getEnv("OMNIRA_AI_PROVIDER", "openai"))),
@@ -321,6 +323,26 @@ func (c *Config) Validate() error {
 		}
 		if c.Env == "production" && (issuerURL.Scheme != "https" || redirectURL.Scheme != "https") {
 			return fmt.Errorf("OIDC em produção exige issuer e redirect URL HTTPS")
+		}
+	}
+	if c.SessionIdleTimeout > 0 && c.SessionMaxLifetime > 0 && c.SessionMaxLifetime < c.SessionIdleTimeout {
+		return fmt.Errorf("OMNIRA_SESSION_MAX_LIFETIME (%d s) não pode ser menor que OMNIRA_SESSION_IDLE_TIMEOUT (%d s)", c.SessionMaxLifetime, c.SessionIdleTimeout)
+	}
+	// ADR-0046: com a flag ligada, o e-mail do convite promete uma senha que só o Keycloak honra. Configuração incompleta não sobe:
+	// ignorar a flag mandaria de novo senhas que o login não aceita.
+	if c.InviteProvisionLogin {
+		if authMode != "oidc" {
+			return fmt.Errorf("OMNIRA_INVITE_PROVISION_LOGIN=true exige OMNIRA_AUTH_MODE=oidc")
+		}
+		if c.KeycloakProvisionerSecret == "" || c.KeycloakProvisionerClientID == "" {
+			return fmt.Errorf("OMNIRA_INVITE_PROVISION_LOGIN=true exige OMNIRA_KEYCLOAK_PROVISIONER_SECRET e OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID")
+		}
+		if !strings.Contains(c.AuthIssuer, "/realms/") {
+			return fmt.Errorf("OMNIRA_INVITE_PROVISION_LOGIN=true exige um OMNIRA_AUTH_ISSUER do Keycloak (.../realms/<realm>)")
+		}
+		adminURL, err := url.Parse(c.KeycloakAdminURL)
+		if err != nil || adminURL.Host == "" || (adminURL.Scheme != "http" && adminURL.Scheme != "https") {
+			return fmt.Errorf("OMNIRA_KEYCLOAK_ADMIN_URL deve ser uma URL HTTP(S) absoluta")
 		}
 	}
 	if c.OutboundMediaEnabled && (c.MediaDir == "" || c.ClamAVAddr == "") {

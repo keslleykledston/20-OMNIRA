@@ -181,7 +181,7 @@ Para aceitar o convite, acesse o link abaixo e entre com o mesmo e-mail em que r
 {{.Password}}
 
 Ao fazer login, você será obrigado a criar uma nova senha permanente.
-{{else}}Entre com a sua conta de sempre, usando este mesmo e-mail.
+{{else}}Entre com a sua conta de sempre, usando este mesmo e-mail. Se ainda não criou a sua senha, use a senha temporária do primeiro convite do OMNIRA que chegou a este e-mail.
 {{end}}
 O link é pessoal, pode ser usado uma única vez e expira em {{.Expires}}.
 Se você não esperava este convite, ignore esta mensagem.
@@ -196,7 +196,7 @@ var invitationHTMLTemplate = htmltemplate.Must(htmltemplate.New("html").Parse(`<
 <p style="font-size:13px;color:#636366">Se o botão não funcionar, copie este endereço: {{.URL}}</p>
 {{if .Password}}<p><strong>Sua senha temporária (válida por 72h):</strong><br>
 <code style="background:#f2f2f2;padding:8px;border-radius:4px;font-family:monospace;font-size:12px">{{.Password}}</code></p>
-<p>Ao fazer login, você será obrigado a criar uma nova senha permanente.</p>{{else}}<p>Entre com a sua conta de sempre, usando este mesmo e-mail.</p>{{end}}
+<p>Ao fazer login, você será obrigado a criar uma nova senha permanente.</p>{{else}}<p>Entre com a sua conta de sempre, usando este mesmo e-mail. Se ainda não criou a sua senha, use a senha temporária do primeiro convite do OMNIRA que chegou a este e-mail.</p>{{end}}
 <p style="font-size:13px;color:#636366">O link é pessoal, pode ser usado uma única vez e expira em {{.Expires}}.<br>Se você não esperava este convite, ignore esta mensagem.</p>
 </body></html>
 `))

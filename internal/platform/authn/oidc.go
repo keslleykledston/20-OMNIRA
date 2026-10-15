@@ -301,11 +301,33 @@ type OIDCHandler struct {
 	postLoginURL string
 	secureCookie bool
 	sessionTTL   time.Duration
+	sessionMax   time.Duration
 }
 
 func NewOIDCHandler(auth *OIDCAuthenticator, discovery OIDCDiscovery, resolver OIDCIdentityResolver, sessionStore SessionStore, issuer, clientID, clientSecret, redirectURL, postLoginURL string, secureCookie bool) *OIDCHandler {
 	return &OIDCHandler{auth: auth, discovery: discovery, resolver: resolver, sessionStore: sessionStore, issuer: issuer, clientID: clientID, clientSecret: clientSecret,
 		redirectURL: redirectURL, postLoginURL: postLoginURL, secureCookie: secureCookie, sessionTTL: 15 * time.Minute}
+}
+
+// WithSessionLifetime sets how long a signed-in browser session lasts: idle without use (the session store pushes the expiry on each use,
+// see PostgresSessionStore.WithLifetime) and at most max after sign-in, which is also how long the cookie is kept. Non-positive values keep
+// the defaults (15 minutes, no separate ceiling).
+func (h *OIDCHandler) WithSessionLifetime(idle, max time.Duration) *OIDCHandler {
+	if idle > 0 {
+		h.sessionTTL = idle
+	}
+	if max > 0 {
+		h.sessionMax = max
+	}
+	return h
+}
+
+// cookieLifetime: the browser keeps the cookie as long as the session can live; the server decides when it ends.
+func (h *OIDCHandler) cookieLifetime() time.Duration {
+	if h.sessionMax > h.sessionTTL {
+		return h.sessionMax
+	}
+	return h.sessionTTL
 }
 
 func randomURLSafe(size int) (string, error) {
@@ -415,7 +437,7 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, h.cookie(SessionCookieName, sessionID, int(h.sessionTTL.Seconds())))
+	http.SetCookie(w, h.cookie(SessionCookieName, sessionID, int(h.cookieLifetime().Seconds())))
 	// Revalidado aqui mesmo vindo de um cookie HttpOnly próprio: nunca confiar
 	// cegamente num valor que atravessou um redirect externo (o IdP), mesmo
 	// que o caminho normal não permita adulteração.

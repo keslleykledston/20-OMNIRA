@@ -22,10 +22,20 @@ type SessionStore interface {
 
 type PostgresSessionStore struct {
 	pool *pgxpool.Pool
+	// idle > 0: each request a session serves pushes its expiry to now+idle, never past created_at+max (max > 0 = ceiling).
+	// idle = 0: the expiry stays where CreateSession put it.
+	idle, max time.Duration
 }
 
 func NewPostgresSessionStore(pool *pgxpool.Pool) *PostgresSessionStore {
 	return &PostgresSessionStore{pool: pool}
+}
+
+// WithLifetime makes browser sessions end after idle without use (each use pushes the expiry forward) and never later than max after
+// sign-in (0 = no ceiling). A stream (ValidateSession) does not count as use.
+func (s *PostgresSessionStore) WithLifetime(idle, max time.Duration) *PostgresSessionStore {
+	s.idle, s.max = idle, max
+	return s
 }
 
 // CreateSession generates opaque session ID and stores user_id server-side.
@@ -75,11 +85,24 @@ func (s *PostgresSessionStore) RevokeSession(ctx context.Context, sessionID stri
 	return err
 }
 
-// UpdateActivity updates last_activity_at for session.
+// UpdateActivity records the use of a session and, with an idle lifetime, pushes its expiry to now+idle: never backwards, never past
+// the ceiling, never for a session already revoked or expired.
 func (s *PostgresSessionStore) UpdateActivity(ctx context.Context, sessionID string) error {
+	if s.idle <= 0 {
+		_, err := s.pool.Exec(ctx, `
+			UPDATE auth_sessions SET last_activity_at=NOW() WHERE id=$1
+		`, sessionID)
+		return err
+	}
 	_, err := s.pool.Exec(ctx, `
-		UPDATE auth_sessions SET last_activity_at=NOW() WHERE id=$1
-	`, sessionID)
+		UPDATE auth_sessions
+		SET last_activity_at = NOW(),
+		    expires_at = GREATEST(expires_at, LEAST(
+		        NOW() + make_interval(secs => $2::double precision),
+		        CASE WHEN $3::double precision > 0 THEN created_at + make_interval(secs => $3::double precision)
+		             ELSE 'infinity'::timestamptz END))
+		WHERE id=$1 AND revoked_at IS NULL AND expires_at > NOW()
+	`, sessionID, s.idle.Seconds(), s.max.Seconds())
 	return err
 }
 

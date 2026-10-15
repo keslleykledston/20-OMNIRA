@@ -82,3 +82,47 @@ func TestOutboundMediaNeedsTheAntivirusAndTheMediaDirectory(t *testing.T) {
 		t.Fatal("must be off by default")
 	}
 }
+
+func TestInviteLoginProvisioningNeedsAKeycloakSetupOrDoesNotBoot(t *testing.T) {
+	ready := func(c *Config) {
+		c.InviteProvisionLogin, c.KeycloakAdminURL = true, "http://keycloak:8888"
+		c.KeycloakProvisionerClientID, c.KeycloakProvisionerSecret = "omnira-provisioner", "s3cret"
+	}
+	for name, mutate := range map[string]func(*Config){
+		"no secret":            func(c *Config) { ready(c); c.KeycloakProvisionerSecret = "" },
+		"no client":            func(c *Config) { ready(c); c.KeycloakProvisionerClientID = "" },
+		"mock sign-in":         func(c *Config) { ready(c); c.AuthMode = "mock" },
+		"issuer without realm": func(c *Config) { ready(c); c.AuthIssuer = "https://idp.example/" },
+		"admin URL not a URL":  func(c *Config) { ready(c); c.KeycloakAdminURL = "keycloak:8888" },
+	} {
+		c := oidcBase()
+		mutate(c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	c := oidcBase()
+	ready(c)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("complete setup rejected: %v", err)
+	}
+}
+
+func TestSessionCeilingIsNeverShorterThanTheIdleTimeout(t *testing.T) {
+	c := oidcBase()
+	c.SessionIdleTimeout, c.SessionMaxLifetime = 21600, 3600
+	if err := c.Validate(); err == nil {
+		t.Fatal("a ceiling shorter than the idle timeout accepted")
+	}
+	for _, max := range []int{0, 21600, 36000} {
+		c.SessionMaxLifetime = max
+		if err := c.Validate(); err != nil {
+			t.Fatalf("max %d rejected: %v", max, err)
+		}
+	}
+	t.Setenv("OMNIRA_SESSION_IDLE_TIMEOUT", "")
+	t.Setenv("OMNIRA_SESSION_MAX_LIFETIME", "")
+	if l := Load(); l.SessionIdleTimeout != 7200 || l.SessionMaxLifetime != 36000 {
+		t.Fatalf("defaults: idle %d max %d", l.SessionIdleTimeout, l.SessionMaxLifetime)
+	}
+}

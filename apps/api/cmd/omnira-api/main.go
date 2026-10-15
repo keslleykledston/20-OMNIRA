@@ -125,7 +125,9 @@ func main() {
 		authn.EnableOriginCheck(append([]string{cfg.AuthRedirectURL, cfg.WebBaseURL}, cfg.AllowedOrigins...)...)
 		log.Printf("origin check: cookie-authenticated writes must come from this application")
 	}
-	sessionStore := authn.NewPostgresSessionStore(dbPool)
+	// The browser session ends after OMNIRA_SESSION_IDLE_TIMEOUT without use and never after OMNIRA_SESSION_MAX_LIFETIME from sign-in.
+	sessionIdle, sessionMax := time.Duration(cfg.SessionIdleTimeout)*time.Second, time.Duration(cfg.SessionMaxLifetime)*time.Second
+	sessionStore := authn.NewPostgresSessionStore(dbPool).WithLifetime(sessionIdle, sessionMax)
 	if cfg.AuthMode == "oidc" {
 		resolver := authn.NewPostgresIdentityResolver(dbPool)
 		if cfg.HubAPIEnabled && cfg.HubAccessAPIEnabled {
@@ -166,7 +168,7 @@ func main() {
 			log.Printf("Native app credentials enabled (client %s, %d redirect URI(s))", cfg.MobileClientID, len(cfg.MobileRedirectURIs))
 		}
 		srv.RegisterOIDCAuthHandlers(apiAuthenticator, sessionStore, authn.NewOIDCHandler(oidcAuth, discovery, resolver, sessionStore, cfg.AuthIssuer,
-			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure))
+			cfg.AuthClientID, cfg.AuthClientSecret, cfg.AuthRedirectURL, cfg.AuthPostLoginURL, cfg.AuthCookieSecure).WithSessionLifetime(sessionIdle, sessionMax))
 		srv.SetSessionChecker(authn.NewSessionChecker(sessionStore, devices))
 		if mobile != nil {
 			srv.RegisterMobileAuthHandlers(mobile)
@@ -196,15 +198,14 @@ func main() {
 	srv.RegisterPresenceHandlers(dbPool)
 	// ADR-0046: with real sign-in, invitations create (or refresh) the invitee's Keycloak account so the e-mailed password works.
 	var invitationLogins *tenancyadapters.KeycloakLogins
+	// config.Validate already refused to boot an incomplete setup; the realm check is the last guard before the adapter exists.
 	if cfg.InviteProvisionLogin {
 		realm := tenancyadapters.RealmFromIssuer(cfg.AuthIssuer)
-		switch {
-		case cfg.AuthMode != "oidc" || realm == "" || cfg.KeycloakProvisionerSecret == "":
-			log.Printf("invitations: OMNIRA_INVITE_PROVISION_LOGIN ignored (needs OIDC mode, a /realms/ issuer and OMNIRA_KEYCLOAK_PROVISIONER_SECRET)")
-		default:
-			invitationLogins = tenancyadapters.NewKeycloakLogins(cfg.KeycloakAdminURL, realm, cfg.KeycloakProvisionerClientID, cfg.KeycloakProvisionerSecret)
-			log.Printf("invitations: sign-in accounts are prepared at Keycloak realm %s by client %s", realm, cfg.KeycloakProvisionerClientID)
+		if realm == "" {
+			log.Fatalf("invitations: OMNIRA_INVITE_PROVISION_LOGIN=true but no realm in OMNIRA_AUTH_ISSUER")
 		}
+		invitationLogins = tenancyadapters.NewKeycloakLogins(cfg.KeycloakAdminURL, realm, cfg.KeycloakProvisionerClientID, cfg.KeycloakProvisionerSecret)
+		log.Printf("invitations: sign-in accounts are prepared at Keycloak realm %s by client %s", realm, cfg.KeycloakProvisionerClientID)
 	}
 	srv.RegisterInvitationHandlers(dbPool, cfg.DevAuthActive(), cfg.WebBaseURL, invitationSender, invitationLogins)
 	crmHandler := srv.RegisterInboxHandlers(dbPool, cfg)

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# ADR-0046: KeycloakLogins against a REAL disposable Keycloak - the production image and realm file, plus the two realm changes production
-# receives (custom attributes editable by admins only; the omnira-provisioner client whose service account may only view and manage users).
-# Proves: a new invitee gets an account whose password is the e-mailed one, a resend or a new invitation refreshes only an unused account
-# OMNIRA created, a cancelled invitation turns it off, and accounts created by hand are never touched. Leaves nothing behind.
+# ADR-0046: KeycloakLogins against a REAL disposable Keycloak - the production image and realm file, set up by the SAME script production
+# runs (scripts/keycloak-provisioner-setup.sh: custom attributes editable by admins only; the omnira-provisioner client whose service
+# account may only view and manage users), with a public hostname that differs from the address the API calls, as in production.
+# Proves: a new invitee gets an account whose password is the e-mailed one; only that invitation (a resend, or one that replaced it or
+# came after it ended) refreshes it, an invitation of another instance cannot; a cancelled invitation turns it off; accounts created by
+# hand are never touched; the setup script refuses a second run. Leaves nothing behind.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -13,12 +15,14 @@ ADMIN_PW=$(rnd 24)
 PW_PENDING="Aa1$(rnd 12)"
 PW_USED="Aa1$(rnd 12)"
 
-cleanup() { docker rm -f "$KC" >/dev/null 2>&1 || true; }
+WORK=$(mktemp -d)
+cleanup() { docker rm -f "$KC" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
 echo "== disposable Keycloak (quay.io/keycloak/keycloak:25.0, deploy/keycloak/omnira-realm.json) on 127.0.0.1:$PORT"
 docker run -d --name "$KC" --label omnira.test=kclogins -p "127.0.0.1:$PORT:$PORT" \
-  -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PW" -e KC_HTTP_PORT="$PORT" -e KC_HOSTNAME="http://127.0.0.1:$PORT" \
+  -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PW" -e KC_HTTP_PORT="$PORT" -e KC_HOSTNAME="https://auth.kclogins.test" \
+  -e KC_HOSTNAME_STRICT=true \
   -e KC_HTTP_ENABLED=true -v "$PWD/deploy/keycloak/omnira-realm.json:/opt/keycloak/data/import/omnira-realm.json:ro" \
   quay.io/keycloak/keycloak:25.0 start-dev --import-realm >/dev/null
 for _ in $(seq 1 120); do
@@ -30,13 +34,19 @@ kc() { docker exec -i "$KC" /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kc.cfg
 docker exec "$KC" /opt/keycloak/bin/kcadm.sh config credentials --server "http://localhost:$PORT" --realm master --user admin \
   --password "$ADMIN_PW" --config /tmp/kc.cfg >/dev/null
 
-echo "== realm changes (same as production): admin-only custom attributes, provisioner client"
-kc get realms/omnira/users/profile | python3 -c 'import json,sys; d=json.load(sys.stdin); d["unmanagedAttributePolicy"]="ADMIN_EDIT"; print(json.dumps(d))' \
-  | kc update realms/omnira/users/profile -f - >/dev/null
-CID=$(kc create clients -r omnira -s clientId=omnira-provisioner -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true \
-  -s standardFlowEnabled=false -s directAccessGrantsEnabled=false -s implicitFlowEnabled=false -i)
-kc add-roles -r omnira --uusername service-account-omnira-provisioner --cclientid realm-management --rolename view-users --rolename manage-users
-SECRET=$(kc get "clients/$CID/client-secret" -r omnira | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+echo "== realm changes with the production script (scripts/keycloak-provisioner-setup.sh)"
+install -m 600 /dev/null "$WORK/admin.pw" && printf '%s\n' "$ADMIN_PW" > "$WORK/admin.pw"
+install -m 600 /dev/null "$WORK/env"
+setup() {
+  ENV_FILE="$WORK/env" KEYCLOAK_ADMIN_PW_FILE="$WORK/admin.pw" KEYCLOAK_CONTAINER="$KC" KEYCLOAK_INTERNAL_URL="http://localhost:$PORT" \
+    KEYCLOAK_BACKUP_DIR="$WORK" scripts/keycloak-provisioner-setup.sh
+}
+setup
+SECRET=$(grep '^OMNIRA_KEYCLOAK_PROVISIONER_SECRET=' "$WORK/env" | cut -d= -f2-)
+[ -n "$SECRET" ] && grep -q '^OMNIRA_INVITE_PROVISION_LOGIN=true$' "$WORK/env" || { echo "FAIL: the setup script did not fill the env file"; exit 1; }
+[ "$(stat -c %a "$WORK/env")" = 600 ] || { echo "FAIL: env file is not 600"; exit 1; }
+if setup >/dev/null 2>&1; then echo "FAIL: a second setup run must stop"; exit 1; fi
+echo "second setup run refused: ok"
 
 echo "== two accounts created by hand: one still waiting for its first password (like sistema2), one in use"
 for u in manual-pending manual-used; do

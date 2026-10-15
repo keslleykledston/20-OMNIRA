@@ -19,13 +19,10 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_AUTH_REDIRECT_URL: ${OMNIRA_AUTH_REDIRECT_URL-http://localhost:8080/api/v1/auth/oidc/callback}
   OMNIRA_AUTH_POST_LOGIN_URL: ${OMNIRA_AUTH_POST_LOGIN_URL-/login?oidc=complete}
   OMNIRA_AUTH_COOKIE_SECURE: ${OMNIRA_AUTH_COOKIE_SECURE-false}
-  # Seconds without activity before the OMNIRA session ends (unset = 7200). The Keycloak realm's "SSO Session Idle" must be at least as long.
+  # Seconds without activity before the OMNIRA session ends (unset = 7200; each request pushes it). The Keycloak realm's "SSO Session Idle"
+  # must be at least as long. MAX_LIFETIME = ceiling counted from sign-in (unset = 36000, like the realm's "SSO Session Max"; 0 = none).
   OMNIRA_SESSION_IDLE_TIMEOUT: ${OMNIRA_SESSION_IDLE_TIMEOUT-}
-  # ADR-0046: invitations create the invitee's Keycloak account (OIDC only; true + secret). The client may only view and manage users.
-  OMNIRA_INVITE_PROVISION_LOGIN: ${OMNIRA_INVITE_PROVISION_LOGIN-}
-  OMNIRA_KEYCLOAK_ADMIN_URL: ${OMNIRA_KEYCLOAK_ADMIN_URL-}
-  OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID: ${OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID-}
-  OMNIRA_KEYCLOAK_PROVISIONER_SECRET: ${OMNIRA_KEYCLOAK_PROVISIONER_SECRET-}
+  OMNIRA_SESSION_MAX_LIFETIME: ${OMNIRA_SESSION_MAX_LIFETIME-}
   # Native app credentials (ADR-0022). Off unless ENABLED=true; needs OIDC mode and a redirect URI allowlist (comma separated).
   OMNIRA_AUTH_MOBILE_ENABLED: ${OMNIRA_AUTH_MOBILE_ENABLED-}
   OMNIRA_AUTH_MOBILE_CLIENT_ID: ${OMNIRA_AUTH_MOBILE_CLIENT_ID-}
@@ -385,6 +382,11 @@ services:
     environment:
       <<: *omnira-runtime
       OMNIRA_HTTP_ADDR: ":8080"
+      # ADR-0046: only the API prepares invitees' Keycloak accounts; the worker never receives this realm credential.
+      OMNIRA_INVITE_PROVISION_LOGIN: ${OMNIRA_INVITE_PROVISION_LOGIN-}
+      OMNIRA_KEYCLOAK_ADMIN_URL: ${OMNIRA_KEYCLOAK_ADMIN_URL-}
+      OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID: ${OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID-}
+      OMNIRA_KEYCLOAK_PROVISIONER_SECRET: ${OMNIRA_KEYCLOAK_PROVISIONER_SECRET-}
     volumes:
       # read-only: the API only ever opens files the antivirus cleared
       - ${OMNIRA_MEDIA_HOST_PATH:-media_data}:/var/lib/omnira/media:ro

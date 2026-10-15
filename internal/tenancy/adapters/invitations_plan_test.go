@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 )
 
 // ADR-0046: the invitation carries the attendance plan and the invitee's sign-in account is prepared before the e-mail goes out.
@@ -16,21 +18,21 @@ import (
 type fakeLogins struct {
 	set      bool
 	err      error
-	prepared []string
-	disabled []string
+	prepared []LoginInvitation
+	disabled []string // "e-mail invitation-id"
 }
 
-func (f *fakeLogins) Prepare(_ context.Context, email, tempPassword string) (bool, error) {
-	if tempPassword == "" {
-		return false, errors.New("empty temporary password")
+func (f *fakeLogins) Prepare(_ context.Context, inv LoginInvitation) (bool, error) {
+	if inv.Password == "" || inv.ID == "" || inv.ExpiresAt.IsZero() {
+		return false, errors.New("incomplete login invitation")
 	}
-	f.prepared = append(f.prepared, email)
+	f.prepared = append(f.prepared, inv)
 	return f.set, f.err
 }
 
-func (f *fakeLogins) Disable(_ context.Context, email string) error {
-	f.disabled = append(f.disabled, email)
-	return nil
+func (f *fakeLogins) Disable(_ context.Context, email, invitationID string) (bool, error) {
+	f.disabled = append(f.disabled, email+" "+invitationID)
+	return true, nil
 }
 
 func invite(t *testing.T, app *pgxpool.Pool, h *InvitationsHandler, f teamFixture, admin uuid.UUID, req CreateInvitationRequest) (int, Invitation, string) {
@@ -249,7 +251,73 @@ func TestCancellingAnInvitationTurnsOffTheUnusedAccount(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("session: %v", err)
 	}
-	if len(logins.disabled) != 1 || logins.disabled[0] != email {
-		t.Fatalf("cancelling asks the sign-in side to turn off the unused account: %v", logins.disabled)
+	if len(logins.disabled) != 1 || logins.disabled[0] != email+" "+inv.ID.String() {
+		t.Fatalf("cancelling asks the sign-in side to turn off the unused account of THIS invitation: %v", logins.disabled)
+	}
+}
+
+func TestInvitingAgainHandsTheReplacedInvitationsAccountToTheNewOne(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	logins := &fakeLogins{set: true}
+	h := NewInvitationsHandler(app, nil, &fakeSender{}, false, "https://app.test").WithLoginPreparer(logins)
+	email := "de-novo-" + uuid.NewString()[:8] + "@empresa.com"
+
+	_, first, _ := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_agent"})
+	code, second, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_supervisor"})
+	if code != http.StatusCreated {
+		t.Fatalf("second invitation = %d %s", code, body)
+	}
+	if len(logins.prepared) != 2 {
+		t.Fatalf("each invitation prepares the sign-in account: %+v", logins.prepared)
+	}
+	p := logins.prepared[1]
+	if p.ID != second.ID.String() || len(p.Replaces) != 1 || p.Replaces[0] != first.ID.String() || !p.ExpiresAt.Equal(second.ExpiresAt) {
+		t.Fatalf("the new invitation is the account's, and it replaces exactly the previous one: %+v (first %s)", p, first.ID)
+	}
+	if len(logins.prepared[0].Replaces) != 0 {
+		t.Fatalf("a first invitation replaces nothing: %+v", logins.prepared[0])
+	}
+}
+
+func TestAcceptingAPlanIsAuditedInTheNameOfWhoInvited(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	support := seedQueue(t, seed, a.tenantID, "Suporte "+uuid.NewString()[:6], "manual", false)
+	email := "auditada-" + uuid.NewString()[:8] + "@empresa.com"
+	invitee := seedUnaffiliatedUser(t, seed, email)
+	h := NewInvitationsHandler(app, auditadapters.NewPostgresAuditEventRepository(app), nil, true, "https://app.test")
+
+	code, inv, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support}})
+	if code != http.StatusCreated {
+		t.Fatalf("create = %d %s", code, body)
+	}
+	if got := acceptAs(h, invitee, rawTokenFromURL(t, inv.InviteURL)); got != http.StatusOK {
+		t.Fatalf("accept = %d", got)
+	}
+	rows, err := seed.Query(context.Background(), `
+		SELECT action, actor_id, COALESCE(metadata->>'queue_id','') FROM audit_events
+		WHERE tenant_id=$1 AND metadata->>'invitation_id'=$2 ORDER BY action`, a.tenantID, inv.ID.String())
+	if err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var action, queue string
+		var actor uuid.UUID
+		if err := rows.Scan(&action, &actor, &queue); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if actor != admin {
+			t.Fatalf("%s is audited in the name of %s, want the inviter %s", action, actor, admin)
+		}
+		got = append(got, action+" "+queue)
+	}
+	want := []string{"agent.enabled ", "agent.queue_assigned " + support.String()}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("plan audit = %v, want %v", got, want)
 	}
 }

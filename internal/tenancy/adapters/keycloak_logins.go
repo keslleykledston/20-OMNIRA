@@ -16,9 +16,11 @@ import (
 )
 
 // KeycloakLogins creates the sign-in account of an invited e-mail in the Keycloak realm (ADR-0046), through the admin REST API with a client
-// whose service account holds only realm-management view-users and manage-users. Accounts it creates carry omnira_provisioned=true; it only
-// resets or disables such an account while it still waits for its first password (UPDATE_PASSWORD), so an account in use is never touched.
-// Nothing secret (client secret, token, password) ever reaches an error or a log line.
+// whose service account holds only realm-management view-users and manage-users. An account it creates is bound to the invitation that
+// created it (omnira_invitation + its expiry). It only refreshes, re-enables or disables such an account while it still waits for its first
+// password (UPDATE_PASSWORD), and only for that invitation, the invitations it replaced, or once that invitation is over (expired, or
+// cancelled: OMNIRA turned the account off). So an account in use is never touched, and an invitation of another instance cannot take over,
+// reset or turn off the account a live invitation is waiting on. Nothing secret (client secret, token, password) reaches an error or a log.
 type KeycloakLogins struct {
 	base     string
 	realm    string
@@ -31,7 +33,27 @@ type KeycloakLogins struct {
 	tokenUntil time.Time
 }
 
-const provisionedAttribute = "omnira_provisioned"
+const (
+	provisionedAttribute = "omnira_provisioned"
+	invitationAttribute  = "omnira_invitation"
+	expiresAttribute     = "omnira_invitation_expires"
+	disabledAttribute    = "omnira_disabled"
+)
+
+// LoginInvitation is what the sign-in account is prepared for: the e-mail, the temporary password the e-mail carries, and the invitation.
+type LoginInvitation struct {
+	Email     string
+	Password  string
+	ID        string
+	ExpiresAt time.Time
+	// Replaces lists the invitations of the same instance this one has just replaced (a new invitation to the same e-mail).
+	Replaces []string
+}
+
+var (
+	errLoginMarkerDropped = errors.New("keycloak: the realm dropped the omnira attributes; set the user profile's unmanaged attribute policy to ADMIN_EDIT")
+	errLoginDisabledByAdm = errors.New("keycloak: the account was disabled by an administrator; it is not turned back on by an invitation")
+)
 
 func NewKeycloakLogins(baseURL, realm, clientID, secret string) *KeycloakLogins {
 	return &KeycloakLogins{
@@ -66,10 +88,16 @@ type kcCredential struct {
 	Temporary bool   `json:"temporary"`
 }
 
-func (u kcUser) createdByOmnira() bool {
-	v := u.Attributes[provisionedAttribute]
-	return len(v) > 0 && v[0] == "true"
+func (u kcUser) attr(name string) string {
+	if v := u.Attributes[name]; len(v) > 0 {
+		return v[0]
+	}
+	return ""
 }
+
+func (u kcUser) createdByOmnira() bool { return u.attr(provisionedAttribute) == "true" }
+
+func (u kcUser) disabledByOmnira() bool { return u.attr(disabledAttribute) == "true" }
 
 func (u kcUser) waitsForFirstPassword() bool {
 	for _, a := range u.RequiredActions {
@@ -80,20 +108,44 @@ func (u kcUser) waitsForFirstPassword() bool {
 	return false
 }
 
-// Prepare makes tempPassword the sign-in password of email: it creates the account when there is none and resets it on an account this
-// service created that was never used. passwordSet=false means the person already has an account of their own, left untouched.
-func (k *KeycloakLogins) Prepare(ctx context.Context, email, tempPassword string) (bool, error) {
-	u, err := k.find(ctx, email)
+// mayTakeOver: the account waits for the invitation inv, for one inv replaced, or for an invitation that is over.
+func (u kcUser) mayTakeOver(inv LoginInvitation, now time.Time) bool {
+	bound := u.attr(invitationAttribute)
+	if bound == "" || bound == inv.ID || u.disabledByOmnira() {
+		return true
+	}
+	for _, id := range inv.Replaces {
+		if bound == id {
+			return true
+		}
+	}
+	until, err := time.Parse(time.RFC3339, u.attr(expiresAttribute))
+	return err != nil || !now.Before(until)
+}
+
+func binding(inv LoginInvitation) map[string]string {
+	return map[string]string{
+		provisionedAttribute: "true",
+		invitationAttribute:  inv.ID,
+		expiresAttribute:     inv.ExpiresAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// Prepare makes inv.Password the sign-in password of inv.Email: it creates the account when there is none, and refreshes an account this
+// service created, never used, that may be taken over (see mayTakeOver). passwordSet=false means the account is left as it is: the person's
+// own, already in use, or waiting on another live invitation (whose e-mail carries the password).
+func (k *KeycloakLogins) Prepare(ctx context.Context, inv LoginInvitation) (bool, error) {
+	u, err := k.find(ctx, inv.Email)
 	if err != nil {
 		return false, err
 	}
 	if u == nil {
-		created, err := k.create(ctx, email, tempPassword)
+		created, err := k.create(ctx, inv)
 		if err != nil || created {
 			return created, err
 		}
 		// Another request created it in between: decide on what is there now.
-		if u, err = k.find(ctx, email); err != nil {
+		if u, err = k.find(ctx, inv.Email); err != nil {
 			return false, err
 		}
 		if u == nil {
@@ -103,28 +155,43 @@ func (k *KeycloakLogins) Prepare(ctx context.Context, email, tempPassword string
 	if !u.createdByOmnira() || !u.waitsForFirstPassword() {
 		return false, nil
 	}
-	if err := k.call(ctx, http.MethodPut, "/users/"+url.PathEscape(u.ID)+"/reset-password",
-		kcCredential{Type: "password", Value: tempPassword, Temporary: true}, nil); err != nil {
+	if !u.Enabled && !u.disabledByOmnira() {
+		return false, errLoginDisabledByAdm
+	}
+	if !u.mayTakeOver(inv, time.Now()) {
+		return false, nil
+	}
+	// Bind first, then the password: a failure in between leaves the account bound to this invitation, so "Reenviar" takes it again.
+	if err := k.updateUser(ctx, u.ID, func(rep map[string]any) {
+		rep["enabled"] = true
+		setAttributes(rep, binding(inv), disabledAttribute)
+	}); err != nil {
 		return false, err
 	}
-	if !u.Enabled {
-		if err := k.setEnabled(ctx, u.ID, true); err != nil {
-			return false, err
-		}
+	if err := k.call(ctx, http.MethodPut, "/users/"+url.PathEscape(u.ID)+"/reset-password",
+		kcCredential{Type: "password", Value: inv.Password, Temporary: true}, nil); err != nil {
+		return false, err
 	}
 	return true, nil
 }
 
-// Disable turns off the account of email when this service created it and it was never used (the invitation was cancelled).
-func (k *KeycloakLogins) Disable(ctx context.Context, email string) error {
+// Disable turns off the account of email when this service created it for invitationID and it was never used (the invitation was
+// cancelled). disabled=false: nothing to turn off (another invitation's account, the person's own, already in use or already off).
+func (k *KeycloakLogins) Disable(ctx context.Context, email, invitationID string) (bool, error) {
 	u, err := k.find(ctx, email)
 	if err != nil || u == nil {
-		return err
+		return false, err
 	}
-	if !u.createdByOmnira() || !u.waitsForFirstPassword() || !u.Enabled {
-		return nil
+	if !u.createdByOmnira() || !u.waitsForFirstPassword() || !u.Enabled || u.attr(invitationAttribute) != invitationID {
+		return false, nil
 	}
-	return k.setEnabled(ctx, u.ID, false)
+	if err := k.updateUser(ctx, u.ID, func(rep map[string]any) {
+		rep["enabled"] = false
+		setAttributes(rep, map[string]string{disabledAttribute: "true"})
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (k *KeycloakLogins) find(ctx context.Context, email string) (*kcUser, error) {
@@ -141,12 +208,16 @@ func (k *KeycloakLogins) find(ctx context.Context, email string) (*kcUser, error
 	return nil, nil
 }
 
-func (k *KeycloakLogins) create(ctx context.Context, email, tempPassword string) (bool, error) {
+func (k *KeycloakLogins) create(ctx context.Context, inv LoginInvitation) (bool, error) {
+	attrs := map[string][]string{}
+	for name, v := range binding(inv) {
+		attrs[name] = []string{v}
+	}
 	u := kcUser{
-		Username: email, Email: email, EmailVerified: true, Enabled: true,
+		Username: inv.Email, Email: inv.Email, EmailVerified: true, Enabled: true,
 		RequiredActions: []string{"UPDATE_PASSWORD"},
-		Attributes:      map[string][]string{provisionedAttribute: {"true"}},
-		Credentials:     []kcCredential{{Type: "password", Value: tempPassword, Temporary: true}},
+		Attributes:      attrs,
+		Credentials:     []kcCredential{{Type: "password", Value: inv.Password, Temporary: true}},
 	}
 	err := k.call(ctx, http.MethodPost, "/users", u, nil)
 	var conflict *kcStatusError
@@ -156,23 +227,46 @@ func (k *KeycloakLogins) create(ctx context.Context, email, tempPassword string)
 	if err != nil {
 		return false, err
 	}
-	// Keycloak 24+ drops attributes its user profile does not declare unless the realm lets admins edit unmanaged ones. Without the
-	// marker the account still works, but a resend or a cancellation would leave it alone: say so where operators look.
-	if created, err := k.find(ctx, email); err == nil && created != nil && !created.createdByOmnira() {
-		log.Printf("keycloak: account created without the %s attribute; set the realm's unmanaged attribute policy to ADMIN_EDIT", provisionedAttribute)
+	// Keycloak 24+ drops attributes its user profile does not declare unless the realm lets admins edit unmanaged ones. An account without
+	// the binding could never be recognised again (resend, cancel): fail closed, remove the account just created and say why.
+	created, err := k.find(ctx, inv.Email)
+	if err != nil {
+		return false, err
+	}
+	if created != nil && !created.createdByOmnira() {
+		if derr := k.call(ctx, http.MethodDelete, "/users/"+url.PathEscape(created.ID), nil, nil); derr != nil {
+			log.Printf("keycloak: account created without the omnira attributes could not be removed: %v", derr)
+		}
+		log.Printf("%v", errLoginMarkerDropped)
+		return false, errLoginMarkerDropped
 	}
 	return true, nil
 }
 
-// setEnabled writes back the whole representation read from Keycloak with only `enabled` changed, so names and attributes are kept.
-func (k *KeycloakLogins) setEnabled(ctx context.Context, id string, enabled bool) error {
+// updateUser writes back the whole representation read from Keycloak with only what change touches, so names and attributes are kept.
+func (k *KeycloakLogins) updateUser(ctx context.Context, id string, change func(rep map[string]any)) error {
 	var rep map[string]any
 	path := "/users/" + url.PathEscape(id)
 	if err := k.call(ctx, http.MethodGet, path, nil, &rep); err != nil {
 		return err
 	}
-	rep["enabled"] = enabled
+	change(rep)
 	return k.call(ctx, http.MethodPut, path, rep, nil)
+}
+
+// setAttributes sets the given attributes on a user representation and removes the ones named in drop.
+func setAttributes(rep map[string]any, set map[string]string, drop ...string) {
+	attrs, _ := rep["attributes"].(map[string]any)
+	if attrs == nil {
+		attrs = map[string]any{}
+	}
+	for name, v := range set {
+		attrs[name] = []any{v}
+	}
+	for _, name := range drop {
+		delete(attrs, name)
+	}
+	rep["attributes"] = attrs
 }
 
 type kcStatusError struct {
