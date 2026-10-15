@@ -197,7 +197,8 @@ func (s *Service) FlowClose(ctx context.Context, conversationID, runID uuid.UUID
 	}
 	sess, err := s.flowActive(ctx, conversationID)
 	if errors.Is(err, errNoActiveSession) {
-		return false, nil
+		// nothing to close is this step's final outcome: remembered, so a session opened later is not closed by a replay
+		return false, s.remember(ctx, ports.ScopeFlowStep, flowKey(runID, seq), hash, uuid.Nil)
 	}
 	if err != nil {
 		return false, err

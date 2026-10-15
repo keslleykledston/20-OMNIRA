@@ -104,8 +104,9 @@ ALTER TABLE service_command_receipts ADD CONSTRAINT service_command_receipts_tar
   OR (scope = 'case.open' AND case_id IS NOT NULL AND session_id IS NULL AND task_id IS NULL AND external_record_id IS NULL)
   OR (scope = 'task.create' AND task_id IS NOT NULL AND session_id IS NULL AND case_id IS NULL AND external_record_id IS NULL)
   OR (scope = 'external.update' AND external_record_id IS NOT NULL AND session_id IS NULL AND case_id IS NULL AND task_id IS NULL)
-  -- a flow step that acted on a session (classify, close): the step is done, whatever session is active when it is replayed
-  OR (scope = 'flow.step' AND session_id IS NOT NULL AND case_id IS NULL AND task_id IS NULL AND external_record_id IS NULL));
+  -- a flow step that acted on a session (classify, close): the step is done, whatever session is active when it is replayed. session_id is NULL for a step that found
+  -- NOTHING to act on (a close with no active session): that outcome is final too, and a session opened afterwards must not be closed by the replay
+  OR (scope = 'flow.step' AND case_id IS NULL AND task_id IS NULL AND external_record_id IS NULL));
 
 -- row guards -------------------------------------------------------------------------------------------------------------------------------
 -- A record: identity immutable; version and clock advanced here; the provider's update time only moves FORWARD (an out-of-order update never rolls the projection

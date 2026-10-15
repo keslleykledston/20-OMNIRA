@@ -45,7 +45,7 @@ Varredura de catálogo (`internal/platform/db/rls_completeness_test.go`): passa 
 
 ## Hub (Fase 5) e IA (Fase 6)
 
-Pendentes; ver `09-workspace-hub.md` e `10-flow-builder-ai.md` quando escritos. Regra já decidida: `service.request_external` **nunca** delegável e **nunca** executável por IA.
+Feitos: ver `09-workspace-hub.md` (delegação, escopo de fila, painel) e `10-flow-builder-ai.md` (nós, ferramentas, métricas). Regra: `service.request_external` **nunca** é delegável e **nunca** é executável por IA (teste de domínio fixa o conjunto de ferramentas; `permission_domains` não a contém).
 
 
 ## Riscos residuais conhecidos (decisão do dono quando for o caso)

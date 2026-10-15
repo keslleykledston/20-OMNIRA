@@ -500,8 +500,12 @@ func (r *PostgresRepository) SaveReceipt(ctx context.Context, scope, key, reques
 	}
 	var sess, cs, task, rec *uuid.UUID
 	switch scope {
-	case ports.ScopeSessionOpen, ports.ScopeFlowStep:
+	case ports.ScopeSessionOpen:
 		sess = &entityID
+	case ports.ScopeFlowStep:
+		if entityID != uuid.Nil { // uuid.Nil = the step found nothing to act on (final too)
+			sess = &entityID
+		}
 	case ports.ScopeCaseOpen:
 		cs = &entityID
 	case ports.ScopeTaskCreate:

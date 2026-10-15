@@ -249,6 +249,30 @@ func TestAReplayedClassifyOrCloseNeverTouchesALaterSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("the same step with another category must be refused")
 	}
+	// a close that found NOTHING to close is final too: close the active one, run a close step (nothing to do), open another session, replay the step
+	do(func(ctx context.Context) (e error) {
+		_, e = real.ServiceClose(ctx, x.conv, run, 6, "information_provided", "")
+		return
+	})
+	do(func(ctx context.Context) (e error) {
+		closed, e = real.ServiceClose(ctx, x.conv, run, 7, "information_provided", "")
+		return
+	})
+	if closed {
+		t.Fatal("nothing was active: nothing to close")
+	}
+	var third string
+	do(func(ctx context.Context) (e error) { third, _, e = real.ServiceStart(ctx, x.conv, run, 8); return })
+	do(func(ctx context.Context) (e error) {
+		closed, e = real.ServiceClose(ctx, x.conv, run, 7, "information_provided", "")
+		return
+	})
+	if closed {
+		t.Fatal("the replay of a close that found nothing must not close a session opened afterwards")
+	}
+	if n := x.q1(`SELECT count(*) FROM service_sessions WHERE conversation_id=$1 AND protocol=$2 AND status IN ('open','in_progress','waiting')`, x.conv, third); n != 1 {
+		t.Fatalf("the third session is still active: %d", n)
+	}
 }
 
 // The facade acts for a run only on the conversation that run attends (a caller inside the system cannot sign work as "flow" on another conversation).
