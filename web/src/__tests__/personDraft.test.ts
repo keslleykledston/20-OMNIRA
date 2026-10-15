@@ -28,9 +28,24 @@ describe('alterações pendentes da ficha', () => {
     expect(describeChange({ kind: 'join', queueId: 'q-fin', available: true, capacity: 0 }, name)).toBe('Entra na fila Financeiro: disponível, sem limite de conversas ao mesmo tempo')
   })
 
-  it('pausar guarda as filas: as edições de fila não são aplicadas junto', () => {
+  it('pausar aplica antes as edições de fila feitas enquanto atendia, e a pausa vem por último', () => {
     const edits: SheetEdits = { attends: false, seats: { 'q-fin': { member: true } } }
-    expect(changesOf(person(), edits)).toEqual([{ kind: 'attend', on: false, fresh: false }])
+    expect(changesOf(person(), edits)).toEqual([
+      { kind: 'join', queueId: 'q-fin', available: true, capacity: 1 },
+      { kind: 'attend', on: false, fresh: false },
+    ])
+    const paused = person({ agent: { profileId: 'p-ana', status: 'disabled', queues: [] } })
+    expect(changesOf(paused, edits)).toEqual([]) // stays paused: the hidden queue edit is not applied
+  })
+
+  it('um atendente novo que escolheu filas fica só com elas (tirando a fila padrão que o servidor pôs), também ao tentar de novo', () => {
+    const retried = person({ agent: { profileId: 'p-ana', status: 'active', queues: [{ memberId: 'qm-def', queueId: 'q-sup', queueName: 'Suporte', available: true, capacity: 5 }] } })
+    const edits: SheetEdits = { attends: true, fresh: true, seats: { 'q-fin': { member: true } } }
+    expect(changesOf(retried, edits)).toEqual([
+      { kind: 'join', queueId: 'q-fin', available: true, capacity: 1 },
+      { kind: 'leave', queueId: 'q-sup', memberId: 'qm-def' },
+    ])
+    expect(changesOf(retried, { attends: true, fresh: true, seats: {} })).toEqual([]) // chose nothing: keeps the default queue
   })
 
   it('quem não atende começa sem filas; ao ligar, as filas escolhidas entram', () => {

@@ -12,31 +12,42 @@ async function login(page: Page, email: string) {
   await page.waitForURL('/inbox', { timeout: 10_000 })
 }
 
-test('admin manages queue participation, availability and capacity from the person sheet', async ({ page }) => {
+test('admin manages queue participation, availability and capacity from the person sheet, saving with a confirmation', async ({ page }) => {
   await login(page, ADMIN)
   await page.goto('/settings/people')
   await expect(page.getByRole('heading', { name: 'Pessoas' })).toBeVisible()
   await page.getByRole('button', { name: `Abrir a ficha de ${AGENT}` }).click()
   const sheet = page.getByRole('dialog', { name: `Ficha de ${AGENT}` })
-  // the checkboxes follow the server (they change after the API answers): click and wait instead of Playwright's check()
+  // changes are pending until "Salvar alterações" and its confirmation; then the bar goes away
+  const save = async () => {
+    await sheet.getByRole('button', { name: 'Salvar alterações' }).click()
+    await sheet.getByRole('alertdialog', { name: /^Aplicar as alterações em/ }).getByRole('button', { name: 'Aplicar alterações' }).click()
+    await expect(sheet.getByText(/alteraç(ão|ões) não salva/)).toHaveCount(0)
+    await expect(sheet.getByText('Alterações salvas.')).toBeVisible()
+  }
   const seat = sheet.getByLabel('Participa da fila Default')
   if (!(await seat.isChecked())) {
     await seat.click()
+    await save()
     await expect(seat).toBeChecked()
   }
   const available = sheet.getByRole('switch', { name: 'Disponível na fila Default' })
   const before = await available.getAttribute('aria-checked')
   await available.click()
-  await expect(available).not.toHaveAttribute('aria-checked', before ?? '')
   await sheet.getByRole('button', { name: 'Aumentar: Capacidade na fila Default' }).click()
+  await save()
+  await expect(available).not.toHaveAttribute('aria-checked', before ?? '')
   await seat.click()
+  await save()
   await expect(seat).not.toBeChecked()
   await seat.click()
+  await save()
   await expect(seat).toBeChecked()
   const attend = sheet.getByRole('switch', { name: 'Recebe conversas' })
   await attend.click()
-  await expect(sheet.getByText('Em pausa. As filas ficaram guardadas.')).toBeVisible()
+  await save()
   await sheet.getByRole('button', { name: 'Voltar a atender' }).click()
+  await save()
   await expect(attend).toHaveAttribute('aria-checked', 'true')
 })
 

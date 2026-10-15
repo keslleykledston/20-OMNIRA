@@ -100,7 +100,20 @@ function serve(w: World) {
       if (f) return f
       if (method === 'post' && url.endsWith('/team/invitations')) return ok(invitation('i-new', body.email, { role_key: body.role_key }))
       if (method === 'post' && url.endsWith('/resend')) return ok(invitation('i1', 'nova@k3g.com'))
-      if (method === 'post' && url.endsWith('/agents')) return ok({ id: 'p-new', status: 'active' })
+      if (method === 'post' && url.endsWith('/agents')) {
+        const id = String(body.membership_id).replace(/^m-/, '')
+        w.agents = [...w.agents, agent(id, [seat('qm-' + id + '-def', 'q-sup', 'Suporte N1', { capacity: 5 })])]
+        return ok({ id: 'p-' + id, status: 'active' })
+      }
+      const queuePath = url.match(/\/agents\/(p-[a-z]+)\/queues(?:\/([^/]+))?$/)
+      if (queuePath) {
+        const a = w.agents.find((x: any) => x.id === queuePath[1])
+        if (a && method === 'post') a.queues = [...a.queues, seat('qm-' + body.queue_id, body.queue_id, body.queue_id, { available: body.available, capacity: body.capacity })]
+        if (a && method === 'patch') a.queues = a.queues.map((q: any) => (q.id === queuePath[2] ? { ...q, ...body } : q))
+        if (a && method === 'delete') a.queues = a.queues.filter((q: any) => q.id !== queuePath[2])
+      }
+      const statusPath = method === 'patch' && body?.status && url.match(/\/agents\/(p-[a-z]+)$/)
+      if (statusPath) w.agents = w.agents.map((x: any) => (x.id === statusPath[1] ? { ...x, status: body.status } : x))
       const roleChange = method === 'patch' && body?.role_key && url.match(/\/team\/(m-[a-z]+)$/)
       if (roleChange) w.members = w.members.map((m: any) => (m.membership_id === roleChange[1] ? { ...m, role_key: body.role_key } : m))
       return ok({})
@@ -413,6 +426,69 @@ describe('Pessoas: a ficha', () => {
     await user.click(within(s).getByLabelText('Participa da fila Suporte N1'))
     await user.click(within(await save(user, s)).getByRole('button', { name: 'Aplicar alterações' }))
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/agents/p-ana/queues/qm-ana'))).toBe(true))
+  })
+
+  it('mexer na fila e pausar no mesmo salvamento aplica a fila antes da pausa', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await rowOf('Ana Souza'))
+    const s = sheet()
+    await user.click(within(s).getByRole('button', { name: 'Aumentar: Capacidade na fila Suporte N1' }))
+    await user.click(within(s).getByRole('switch', { name: 'Recebe conversas' }))
+    const confirm = await save(user, s)
+    expect(within(confirm).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Fila Suporte N1: até 2 → até 3 ao mesmo tempo',
+      'Fica em pausa: não recebe conversas novas (as filas ficam guardadas)',
+    ])
+    await user.click(within(confirm).getByRole('button', { name: 'Aplicar alterações' }))
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH').map((c) => c.url.replace(/^.*\/agents/, ''))).toEqual(['/p-ana/queues/qm-ana', '/p-ana']))
+  })
+
+  it('atendente novo: se a fila escolhida falhar, a nova tentativa entra nela e tira a fila padrão que o servidor pôs', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await rowOf('Dani Prado'))
+    const s = sheet()
+    await user.click(within(s).getByRole('button', { name: 'Passar a atender' }))
+    await user.click(within(s).getByLabelText('Participa da fila Cobrança'))
+    const realPost = vi.mocked(axios.post).getMockImplementation()!
+    vi.mocked(axios.post).mockImplementation(async (url: string, body?: any) => {
+      if (url.endsWith('/agents/p-dani/queues')) {
+        vi.mocked(axios.post).mockImplementation(realPost)
+        calls.push({ method: 'POST', url, body })
+        return Promise.reject({ response: { status: 500, data: 'boom' } })
+      }
+      return realPost(url, body)
+    })
+    await user.click(within(await save(user, s)).getByRole('button', { name: 'Aplicar alterações' }))
+    expect(await within(s).findByText('Não foi possível salvar. Tente de novo.')).toBeInTheDocument()
+    const retry = await save(user, s)
+    expect(within(retry).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Entra na fila Cobrança: disponível, até 1 conversa ao mesmo tempo',
+      'Sai da fila Suporte N1',
+    ])
+    await user.click(within(retry).getByRole('button', { name: 'Aplicar alterações' }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/agents/p-dani/queues/qm-dani-def'))).toBe(true))
+    expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/agents'))).toHaveLength(1) // the attendant is created once
+  })
+
+  it('não deixa fechar a ficha no meio de um salvamento', async () => {
+    const user = userEvent.setup()
+    serve(world())
+    page()
+    await user.click(await rowOf('Ana Souza'))
+    const s = sheet()
+    await user.click(within(s).getByRole('radio', { name: /Agente/ }))
+    let release: (v: unknown) => void = () => {}
+    vi.mocked(axios.patch).mockImplementationOnce(() => new Promise((r) => { release = r }))
+    await user.click(within(await save(user, s)).getByRole('button', { name: 'Aplicar alterações' }))
+    await user.click(within(s).getByRole('button', { name: 'Fechar' }))
+    expect(screen.getByRole('dialog', { name: /Ficha de/ })).toBeInTheDocument()
+    expect(within(s).queryByRole('alertdialog', { name: 'Fechar sem salvar?' })).toBeNull()
+    release({ data: {} })
+    expect(await within(s).findByText('Alterações salvas.')).toBeInTheDocument()
   })
 
   it('aceita 0 = sem limite de conversas ao mesmo tempo', async () => {

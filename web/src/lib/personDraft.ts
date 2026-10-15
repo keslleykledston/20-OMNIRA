@@ -16,6 +16,9 @@ export interface SheetEdits {
   roleKey?: string
   attends?: boolean
   seats: Record<string, Partial<SeatChoice>>
+  /** Attendance was switched on for someone who did not attend: the queues chosen here are ALL their queues (a default queue the server
+   *  adds on its own when the attendant is created is taken out again, also when a first save stopped half way and is tried again). */
+  fresh?: boolean
 }
 
 export const NO_EDITS: SheetEdits = { seats: {} }
@@ -50,24 +53,39 @@ export function roleOf(person: PersonEntry, edits: SheetEdits): string {
   return edits.roleKey ?? person.roleKey
 }
 
-/** Only real differences from the server: an edit that went back to the saved value is no change. */
+/** The queues a fresh attendant chose: the only ones they keep. */
+export function chosenQueues(edits: SheetEdits): string[] {
+  return Object.entries(edits.seats).filter(([, e]) => e.member).map(([id]) => id)
+}
+
+/**
+ * Only real differences from the server: an edit that went back to the saved value is no change. Order = the order they are applied:
+ * function; attendance switched on; the queues; a pause last (queue edits made before pausing are applied while still attending).
+ */
 export function changesOf(person: PersonEntry, edits: SheetEdits): SheetChange[] {
   const out: SheetChange[] = []
   const role = roleOf(person, edits)
   if (role !== person.roleKey) out.push({ kind: 'role', from: person.roleKey, to: role })
   const was = person.agent?.status === 'active'
   const on = attendsOf(person, edits)
-  if (on !== was) out.push({ kind: 'attend', on, fresh: !person.agent })
-  if (!on) return out // a pause keeps the queues as they are: seat edits are not applied
-  for (const queueId of Object.keys(edits.seats)) {
-    const cur = currentSeat(person, queueId)
-    const s = seatOf(person, edits, queueId)
-    if (s.member && !cur) out.push({ kind: 'join', queueId, available: s.available, capacity: s.capacity })
-    else if (!s.member && cur) out.push({ kind: 'leave', queueId, memberId: cur.memberId })
-    else if (s.member && cur && (s.available !== cur.available || s.capacity !== cur.capacity)) {
-      out.push({ kind: 'seat', queueId, memberId: cur.memberId, available: s.available, capacity: s.capacity, before: { available: cur.available, capacity: cur.capacity } })
+  if (on && !was) out.push({ kind: 'attend', on: true, fresh: !person.agent })
+  if (on || was) {
+    for (const queueId of Object.keys(edits.seats)) {
+      const cur = currentSeat(person, queueId)
+      const s = seatOf(person, edits, queueId)
+      if (s.member && !cur) out.push({ kind: 'join', queueId, available: s.available, capacity: s.capacity })
+      else if (!s.member && cur) out.push({ kind: 'leave', queueId, memberId: cur.memberId })
+      else if (s.member && cur && (s.available !== cur.available || s.capacity !== cur.capacity)) {
+        out.push({ kind: 'seat', queueId, memberId: cur.memberId, available: s.available, capacity: s.capacity, before: { available: cur.available, capacity: cur.capacity } })
+      }
+    }
+    if (on && edits.fresh && chosenQueues(edits).length > 0) {
+      for (const cur of person.agent?.queues ?? []) {
+        if (!(cur.queueId in edits.seats)) out.push({ kind: 'leave', queueId: cur.queueId, memberId: cur.memberId })
+      }
     }
   }
+  if (!on && was) out.push({ kind: 'attend', on: false, fresh: false })
   return out
 }
 

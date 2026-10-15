@@ -21,7 +21,7 @@ import {
   type Tone,
 } from '../lib/peopleModel'
 import { presenceAPI } from '../lib/presence'
-import { attendsOf, changesOf, seatOf, type SheetEdits } from '../lib/personDraft'
+import { attendsOf, changesOf, chosenQueues, seatOf, type SheetEdits } from '../lib/personDraft'
 import { queueErrorMessage, queuesAPI } from '../lib/queues'
 import { ROLE_DISPLAY_NAME } from '../lib/roles'
 import { sectorsAPI } from '../lib/sectors'
@@ -240,11 +240,14 @@ export default function PeoplePage() {
       step = 'agent'
       let profileId = p.agent?.profileId
       const attend = changes.find((c) => c.kind === 'attend')
-      if (attend && attend.kind === 'attend') {
-        if (attend.on && !profileId) profileId = (await agentsAPI.create(p.member.membership_id)).id
-        else if (profileId) await agentsAPI.setStatus(profileId, attend.on ? 'active' : 'disabled')
+      const turningOn = attend?.kind === 'attend' && attend.on
+      const pausing = attend?.kind === 'attend' && !attend.on
+      if (turningOn) {
+        if (!profileId) profileId = (await agentsAPI.create(p.member.membership_id)).id
+        else await agentsAPI.setStatus(profileId, 'active')
       }
-      if (attendsOf(p, edits) && profileId && Object.keys(edits.seats).length > 0) {
+      // queue edits are applied while the person still attends: before a pause, after switching on
+      if (profileId && (attendsOf(p, edits) || pausing)) {
         const now = (await agentsAPI.list()).find((a) => a.id === profileId)?.queues ?? []
         const onServer = new Map(now.map((q) => [q.queue_id, q]))
         for (const queueId of Object.keys(edits.seats)) {
@@ -256,11 +259,13 @@ export default function PeoplePage() {
             await agentsAPI.updateQueue(profileId, has.id, want.available, want.capacity)
           }
         }
-        // a new attendant who chose queues does not keep the default queue the server added on its own
-        if (!p.agent && Object.values(edits.seats).some((e) => e.member)) {
+        // a new attendant who chose queues keeps only those (the server may have added its default queue on its own, also in a first
+        // save that stopped half way and is tried again: edits.fresh survives until everything was saved)
+        if ((!p.agent || edits.fresh) && chosenQueues(edits).length > 0) {
           for (const q of now) if (!(q.queue_id in edits.seats)) await agentsAPI.removeQueue(profileId, q.id)
         }
       }
+      if (pausing && profileId) await agentsAPI.setStatus(profileId, 'disabled')
       setSheetNotice('Alterações salvas.')
       return true
     } catch (err) {

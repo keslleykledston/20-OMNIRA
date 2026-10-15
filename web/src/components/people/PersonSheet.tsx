@@ -250,7 +250,7 @@ function AttendSection({ person, sectors, canManage, busy, edits, onEdit }: {
     <Section
       title="Recebe conversas"
       hint="Desligar pausa a pessoa sem perder as filas."
-      aside={<Switch checked={on} onChange={(v) => onEdit({ ...edits, attends: v })} label="Recebe conversas" disabled={!canManage || busy} />}
+      aside={<Switch checked={on} onChange={(v) => onEdit({ ...edits, attends: v, fresh: v && !person.agent ? true : edits.fresh })} label="Recebe conversas" disabled={!canManage || busy} />}
     >
       {!on && agent && agent.queues.length > 0 && (
         <p className="text-sm text-text-secondary">Filas guardadas: {agent.queues.map((q) => q.queueName).join(', ')}.</p>
@@ -332,8 +332,8 @@ function SaveBar({ person, sectors, edits, busy, mode, onMode, onDiscard, onSave
           <p className="text-sm font-semibold text-text-primary">Fechar sem salvar?</p>
           <p className="text-sm text-text-secondary">{changes.length === 1 ? 'A alteração não salva será descartada.' : `As ${changes.length} alterações não salvas serão descartadas.`}</p>
           <div className="flex flex-wrap justify-end gap-2">
-            <Button size="sm" variant="secondary" onClick={() => onMode('idle')}>Continuar editando</Button>
-            <Button size="sm" variant="danger" onClick={onCloseAnyway}>Fechar sem salvar</Button>
+            <Button size="sm" variant="secondary" onClick={() => onMode('idle')} disabled={busy}>Continuar editando</Button>
+            <Button size="sm" variant="danger" onClick={onCloseAnyway} disabled={busy}>Fechar sem salvar</Button>
           </div>
         </div>
       ) : (
@@ -524,7 +524,11 @@ export function PersonSheet(props: PersonSheetProps) {
     if (await props.onSave(edits)) setEdits(NO_EDITS)
     setMode('idle')
   }
-  const requestClose = () => (dirty ? setMode('leave') : onClose())
+  const requestClose = () => {
+    if (saving) return // never leave while a save is half way
+    if (dirty) setMode('leave')
+    else onClose()
+  }
   return (
     <Drawer open title={`Ficha de ${person.name}`} onClose={requestClose} size="lg">
       <div className="px-5">
@@ -554,7 +558,7 @@ export function PersonSheet(props: PersonSheetProps) {
                 canManage={can.manageAgents}
                 busy={saving}
                 pendingOn={edits.attends === true && person.agent?.status !== 'active'}
-                onAttend={(on) => edit({ ...edits, attends: on })}
+                onAttend={(on) => edit({ ...edits, attends: on, fresh: on && !person.agent ? true : edits.fresh })}
               />
             )}
             <div className="mt-4 pb-8">
