@@ -47,6 +47,12 @@ Também corrigido nessa rodada:
 
 **Resíduo aceito:** entre a última leitura e cada escrita no Keycloak sobra uma janela de milissegundos. O Keycloak não tem escrita condicional, e as escritas do próprio OMNIRA para o mesmo e-mail já são serializadas pelo lock.
 
+**Revisão do Codex, rodada 4: 1 HIGH e 2 MEDIUM, todos no script de configuração, corrigidos:**
+- O script confere o que a conta de serviço **alcança**, não só os papéis diretos. Ela não pode pertencer a grupo nenhum. Os papéis de realm efetivos ficam limitados ao papel padrão do realm e ao que ele contém. Os papéis efetivos de `realm-management` ficam limitados a `view-users`, `manage-users` e ao que eles contêm (`query-users`, `query-groups`).
+- O cliente precisa ser OpenID Connect com autenticação `client-secret`.
+- Tudo é conferido **antes** de qualquer papel ser adicionado, e de novo depois.
+- O teste com Keycloak 25 real recusa, antes de usar o segredo: um papel direto a mais, um grupo com `manage-realm`, um papel composto com `manage-clients` e um cliente `client-jwt`.
+
 ## 1. Contexto: o que acontece hoje
 
 - Em produção o login é só pelo Keycloak (`OMNIRA_AUTH_MODE=oidc`, realm `omnira`, `registrationAllowed=false`). O OMNIRA **não** chama a API de administração do Keycloak.

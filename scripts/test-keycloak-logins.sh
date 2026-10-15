@@ -65,6 +65,36 @@ grep -q "STOP: the service account holds more than" "$WORK/widened.log" || { ech
 [ ! -s "$WORK/env3" ] || { echo "FAIL: the secret of a widened client was written"; exit 1; }
 kc remove-roles -r omnira --uusername service-account-omnira-provisioner --cclientid realm-management --rolename view-realm
 echo "widened client refused before its secret was used: ok"
+refused() { # $1 = label, $2 = expected STOP text
+  install -m 600 /dev/null "$WORK/env4"
+  if ENV_FILE="$WORK/env4" KEYCLOAK_ADMIN_PW_FILE="$WORK/admin.pw" KEYCLOAK_CONTAINER="$KC" KEYCLOAK_INTERNAL_URL="http://localhost:$PORT" \
+    KEYCLOAK_BACKUP_DIR="$WORK" scripts/keycloak-provisioner-setup.sh >"$WORK/refused.log" 2>&1; then
+    echo "FAIL: $1 was accepted"; exit 1
+  fi
+  grep -q "$2" "$WORK/refused.log" || { echo "FAIL: $1 not explained:"; cat "$WORK/refused.log"; exit 1; }
+  [ ! -s "$WORK/env4" ] || { echo "FAIL: the secret was written for $1"; exit 1; }
+  echo "$1 refused before its secret was used: ok"
+}
+PCID=$(kc get clients -r omnira -q clientId=omnira-provisioner --fields id | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+SAID=$(kc get "clients/$PCID/service-account-user" -r omnira | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+# admin power inherited through a group
+GID=$(kc create groups -r omnira -s name=wide-admins -i)
+kc add-roles -r omnira --gid "$GID" --cclientid realm-management --rolename manage-realm
+kc update "users/$SAID/groups/$GID" -r omnira -s realm=omnira -s userId="$SAID" -s groupId="$GID" -n
+refused "a service account in an admin group" "belongs to groups"
+kc delete "users/$SAID/groups/$GID" -r omnira
+kc delete "groups/$GID" -r omnira
+# admin power reached through a composite realm role
+kc create roles -r omnira -s name=wide-composite >/dev/null
+kc add-roles -r omnira --rname wide-composite --cclientid realm-management --rolename manage-clients
+kc add-roles -r omnira --uusername service-account-omnira-provisioner --rolename wide-composite
+refused "a composite role with manage-clients" "holds more than view-users"
+kc remove-roles -r omnira --uusername service-account-omnira-provisioner --rolename wide-composite
+kc delete roles/wide-composite -r omnira
+# a client that does not authenticate with its secret
+kc update "clients/$PCID" -r omnira -s clientAuthenticatorType=client-jwt
+refused "a client-jwt client" "clientAuthenticatorType=client-jwt"
+kc update "clients/$PCID" -r omnira -s clientAuthenticatorType=client-secret
 
 echo "== two accounts created by hand: one still waiting for its first password (like sistema2), one in use"
 for u in manual-pending manual-used; do

@@ -51,17 +51,8 @@ if [ -z "$CID" ]; then
 else
   echo "client omnira-provisioner already there: kept"
 fi
-# add-roles only finds roles not assigned yet: ask for the missing ones only
-HAVE=$(kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management | python3 -c 'import json,sys; print(" ".join(r["name"] for r in json.load(sys.stdin)))')
-for role in view-users manage-users; do
-  case " $HAVE " in
-    *" $role "*) ;;
-    *) kc add-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management --rolename "$role" ;;
-  esac
-done
-# The client must be exactly what this script creates - confidential, service account only, enabled - and its service account may
-# hold nothing but the realm's default roles and realm-management view-users + manage-users. An older client someone changed stops here,
-# before its secret is used.
+# 2a. Before anything is added: the client must be exactly what this script creates - OpenID Connect, client-secret authentication,
+#     confidential, service account only, enabled. An older client someone changed stops here.
 kc get "clients/$CID" -r "$REALM" | python3 -c '
 import json, sys
 c = json.load(sys.stdin)
@@ -70,25 +61,68 @@ want = {"enabled": True, "publicClient": False, "bearerOnly": False, "serviceAcc
 bad = [k for k, v in want.items() if bool(c.get(k, False)) != v]
 if c.get("authorizationServicesEnabled"):
     bad.append("authorizationServicesEnabled")
+if c.get("protocol", "openid-connect") != "openid-connect":
+    bad.append("protocol=" + str(c.get("protocol")))
+if c.get("clientAuthenticatorType") != "client-secret":
+    bad.append("clientAuthenticatorType=" + str(c.get("clientAuthenticatorType")))
 if bad:
     print("STOP: client omnira-provisioner differs from the expected setup: " + ", ".join(bad))
     sys.exit(1)'
 SAID=$(kc get "clients/$CID/service-account-user" -r "$REALM" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 # (the full realm: --fields does not reach nested objects; only the default role's name is read out of it)
 DEFAULT_ROLE=$(kc get "realms/$REALM" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("defaultRole") or {}).get("name", ""))')
-kc get "users/$SAID/role-mappings" -r "$REALM" | python3 -c '
+[ -n "$DEFAULT_ROLE" ] || { echo "STOP: the realm's default role is unknown"; exit 1; }
+ALLOWED_REALM="$DEFAULT_ROLE $(kc get "roles/$DEFAULT_ROLE/composites/realm" -r "$REALM" | python3 -c 'import json,sys; print(" ".join(r["name"] for r in json.load(sys.stdin)))')"
+RMID=$(kc get clients -r "$REALM" -q clientId=realm-management --fields id | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+# view-users and manage-users, and what they contain (view-users brings query-users and query-groups)
+ALLOWED_RM=$( { echo view-users; echo manage-users
+  for r in view-users manage-users; do
+    kc get "clients/$RMID/roles/$r/composites" -r "$REALM" | python3 -c 'import json,sys; [print(x["name"]) for x in json.load(sys.stdin)]'
+  done; } | sort -u | tr '\n' ' ')
+
+# 2b. What the service account REACHES - directly, through groups and through composite roles - may not go beyond the realm's default
+#     role and realm-management view-users + manage-users. Checked before any role is added and again after.
+check_reach() { # $1 = before | after
+  local groups
+  groups=$(kc get "users/$SAID/groups" -r "$REALM" | python3 -c 'import json,sys; print(" ".join(g.get("path") or g.get("name", "?") for g in json.load(sys.stdin)))')
+  [ -z "$groups" ] || { echo "STOP: the service account of omnira-provisioner belongs to groups: $groups"; exit 1; }
+  kc get "users/$SAID/role-mappings" -r "$REALM" | python3 -c '
 import json, sys
-default_role = sys.argv[1]
 m = json.load(sys.stdin)
-extra = [r["name"] for r in m.get("realmMappings", []) if not default_role or r["name"] != default_role]
-for client, entry in (m.get("clientMappings") or {}).items():
-    for r in entry.get("mappings", []):
-        if client != "realm-management" or r["name"] not in ("view-users", "manage-users"):
-            extra.append(client + ":" + r["name"])
+extra = [r["name"] for r in m.get("realmMappings", []) if r["name"] != sys.argv[1]]
+extra += [c + ":" + r["name"] for c, e in (m.get("clientMappings") or {}).items() for r in e.get("mappings", [])
+          if not (c == "realm-management" and r["name"] in ("view-users", "manage-users"))]
 if extra:
     print("STOP: the service account holds more than view-users + manage-users: " + ", ".join(sorted(extra)))
     sys.exit(1)' "$DEFAULT_ROLE"
-echo "realm-management roles of the service account: $(kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management | python3 -c 'import json,sys; print(sorted(r["name"] for r in json.load(sys.stdin)))')"
+  kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --effective | python3 -c '
+import json, sys
+extra = sorted({r["name"] for r in json.load(sys.stdin)} - set(sys.argv[1].split()))
+if extra:
+    print("STOP: the service account holds more than view-users + manage-users: realm roles " + ", ".join(extra))
+    sys.exit(1)' "$ALLOWED_REALM"
+  kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management --effective | python3 -c '
+import json, sys
+have = {r["name"] for r in json.load(sys.stdin)}
+extra = sorted(have - set(sys.argv[1].split()))
+if extra:
+    print("STOP: the service account holds more than view-users + manage-users: realm-management " + ", ".join(extra))
+    sys.exit(1)
+if sys.argv[2] == "after" and not {"view-users", "manage-users"} <= have:
+    print("STOP: view-users and manage-users are not both granted")
+    sys.exit(1)' "$ALLOWED_RM" "$1"
+}
+check_reach before
+# add-roles only finds roles not assigned yet: ask for the missing ones only
+HAVE=$(kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management | python3 -c 'import json,sys; print(" ".join(r["name"] for r in json.load(sys.stdin)))')
+for role in view-users manage-users; do
+  case " $HAVE " in
+    *" $role "*) ;;
+    *) kc add-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management --rolename "$role" ;;
+  esac
+done
+check_reach after
+echo "realm-management roles the service account reaches: $(kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management --effective | python3 -c 'import json,sys; print(sorted(r["name"] for r in json.load(sys.stdin)))')"
 
 # 3. .env: 600 BEFORE the secret goes in
 chmod 600 "$ENV_FILE"
