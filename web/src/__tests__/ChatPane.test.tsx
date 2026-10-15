@@ -244,4 +244,15 @@ describe('ChatPane — claim first (channel selector slice)', () => {
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
     expect(String(vi.mocked(axios.post).mock.calls[0][0])).toMatch(/inbox\/conversations\/conv-1\/assign$/);
   });
+  it('says why the claim was refused when the person is not an agent of this instance (422), instead of doing nothing', async () => {
+    assignedTo = undefined;
+    thread = [msg('a', 9)];
+    serve();
+    vi.mocked(axios.post).mockRejectedValue({ response: { status: 422, data: 'assignee is not an eligible agent of this tenant\n' } });
+    renderAt(<ChatPane conversationId={CONV} />);
+    await screen.findByText('Assuma o atendimento para responder.');
+    await userEvent.click(screen.getByRole('button', { name: 'Assumir' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/não é atendente desta instância/i);
+  });
 });

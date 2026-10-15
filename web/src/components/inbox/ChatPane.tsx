@@ -144,7 +144,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       emitInboxNotice(conversationId, 'Atendimento assumido por você.');
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
-      else setSendError(err?.response?.status === 409 ? 'Este atendimento acabou de ser assumido por outro operador.' : 'Não foi possível assumir o atendimento.');
+      else setSendError(claimErrorMessage(err));
     } finally {
       setClaiming(false);
     }
@@ -344,6 +344,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       ) : unassigned && conversation?.contact_kind !== 'spam' ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle bg-surface-muted px-4 py-3 text-xs">
           <span role="status" className="text-text-secondary">Assuma o atendimento para responder.</span>
+          {sendError && <span role="alert" className="basis-full text-status-danger">{sendError}</span>}
           <button type="button" onClick={() => void claim()} disabled={claiming} className="rounded-control bg-accent-primary px-3 py-1.5 font-medium text-white hover:bg-accent-primary-hover disabled:opacity-60">
             {claiming ? 'Assumindo…' : 'Assumir'}
           </button>
@@ -431,4 +432,18 @@ function describeSendError(err: any): string {
   if (status === 403) return 'Você não pode responder — esta conversa não está atribuída a você.';
   if (status === 422) return body || 'Mensagem inválida.';
   return body || 'Erro ao enviar mensagem.';
+}
+
+/** Why a claim was refused, in words the person can act on (a 422 means: not an active agent of this instance; it used to fail without a word). */
+function claimErrorMessage(err: any): string {
+  switch (err?.response?.status) {
+    case 409:
+      return 'Este atendimento acabou de ser assumido por outro operador.'
+    case 422:
+      return 'Você não é atendente desta instância. Peça a um administrador para ativar "Atende" na sua ficha, em Pessoas.'
+    case 403:
+      return 'Você não tem permissão para assumir atendimentos nesta instância.'
+    default:
+      return 'Não foi possível assumir o atendimento.'
+  }
 }

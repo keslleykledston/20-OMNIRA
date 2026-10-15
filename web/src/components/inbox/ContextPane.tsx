@@ -451,7 +451,9 @@ function describeAssignError(err: any, action: 'assign' | 'unassign' | 'transfer
     return 'Conversa ou operador não encontrado.';
   }
   if (status === 422) {
-    return body || 'Operador não elegível para esta ação.';
+    return action === 'assign' && (/not an eligible agent/i.test(body) || !body)
+      ? 'Você não é atendente desta instância. Peça a um administrador para ativar "Atende" na sua ficha, em Pessoas.'
+      : body || 'Operador não elegível para esta ação.';
   }
   const messages = {
     assign: 'Erro ao assumir conversa.',
