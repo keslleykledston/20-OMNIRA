@@ -87,6 +87,9 @@ type Config struct {
 	ServiceContextEnabled bool
 	// ServiceFinalizeHookEnabled makes the attendance finalization (ADR-0020) also close the conversation's service session in the same transaction.
 	ServiceFinalizeHookEnabled bool
+	// ServiceAutoOpenOnClaimEnabled opens the conversation's service session (the protocol) when a person assumes the conversation: a member's self-claim, or a Hub
+	// agent's claim in the workspace. Taking the conversation never depends on it. Needs ServiceContextEnabled.
+	ServiceAutoOpenOnClaimEnabled bool
 	// ServiceExternalOrdersEnabled mounts the routes that ask the ERP/CRM to create a service order and to reconcile one (ADR-0049 phase 4). Off by default; also needs a
 	// gateway adapter for the company's integration, otherwise those routes answer 503 not_configured.
 	ServiceExternalOrdersEnabled bool
@@ -217,6 +220,7 @@ func Load() *Config {
 		MetaEnabled:                   getEnv("OMNIRA_META_ENABLED", "false") == "true",
 		ServiceContextEnabled:         getEnv("OMNIRA_SERVICE_CONTEXT_ENABLED", "false") == "true",
 		ServiceFinalizeHookEnabled:    getEnv("OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED", "false") == "true",
+		ServiceAutoOpenOnClaimEnabled: getEnv("OMNIRA_SERVICE_AUTO_OPEN_ON_CLAIM_ENABLED", "false") == "true",
 		ServiceExternalOrdersEnabled:  getEnv("OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED", "false") == "true",
 		FlowsEnabled:                  getEnv("OMNIRA_FLOWS_ENABLED", "false") == "true",
 		FlowsAIEnabled:                getEnv("OMNIRA_FLOWS_AI_ENABLED", "false") == "true",

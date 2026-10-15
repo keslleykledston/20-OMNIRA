@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
+	"github.com/omnira/omnira/internal/platform/claimhook"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/application"
 	"github.com/omnira/omnira/internal/servicectx/ports"
@@ -45,5 +46,20 @@ func FinalizeHook(pool *pgxpool.Pool, svc *application.Service) attendanceapplic
 			log.Printf("service-context: closing the session of conversation %s on finalize failed: %v", conversationID, err)
 		}
 		return nil
+	}
+}
+
+// ClaimHook opens the service session of a conversation a person just assumed (OMNIRA_SERVICE_AUTO_OPEN_ON_CLAIM_ENABLED). It runs under a SAVEPOINT in the
+// claim's transaction: a failure (a missing key, a bug) is undone and returned for the caller to log; the claim itself stands. A person without service.create
+// simply gets no protocol (not an error).
+func ClaimHook(pool *pgxpool.Pool, svc *application.Service) claimhook.Func {
+	return func(ctx context.Context, conversationID, actor uuid.UUID) (bool, error) {
+		created := false
+		err := platformdb.WithSavepoint(ctx, pool, func(ctx context.Context) error {
+			_, c, err := svc.OpenOnClaim(ctx, conversationID, actor)
+			created = c
+			return err
+		})
+		return created && err == nil, err
 	}
 }

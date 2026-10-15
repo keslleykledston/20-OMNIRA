@@ -371,8 +371,11 @@ func main() {
 		if cfg.ServiceFinalizeHookEnabled {
 			attendanceService.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc)) // ADR-0049: finalizing also closes the service session
 		}
+		if cfg.ServiceAutoOpenOnClaimEnabled {
+			srv.ClaimHook().Set(servicectxadapters.ClaimHook(dbPool, serviceSvc)) // ADR-0049: assuming a conversation opens its protocol
+		}
 		srv.RegisterServiceContextHandlers(dbPool, serviceHandler)
-		log.Printf("Service Context & Operations API enabled (OMNIRA_SERVICE_CONTEXT_ENABLED=true, finalize hook=%v)\n", cfg.ServiceFinalizeHookEnabled)
+		log.Printf("Service Context & Operations API enabled (OMNIRA_SERVICE_CONTEXT_ENABLED=true, finalize hook=%v, auto-open on claim=%v)\n", cfg.ServiceFinalizeHookEnabled, cfg.ServiceAutoOpenOnClaimEnabled)
 	}
 	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
 	if cfg.FlowsEnabled {

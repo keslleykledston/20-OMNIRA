@@ -34,6 +34,7 @@ import (
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
+	"github.com/omnira/omnira/internal/platform/claimhook"
 	"github.com/omnira/omnira/internal/platform/config"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
@@ -77,7 +78,12 @@ type Server struct {
 	sessionChecker authn.SessionChecker
 	natsConn       *nats.Conn
 	valkeyClient   *redis.Client
+	// claimHook tells the optional Service Context module that a person assumed a conversation (ADR-0049); main installs the module's function on it.
+	claimHook claimhook.Hook
 }
+
+// ClaimHook is the hook the claim routes (member self-claim, Hub agent claim in the workspace) run after a conversation was assumed. Empty = nothing happens.
+func (s *Server) ClaimHook() *claimhook.Hook { return &s.claimHook }
 
 // SetupPresence wires the Valkey client used by presence heartbeats
 // (ADR-0010). Optional: when nil, RegisterPresenceHandlers still registers
@@ -684,10 +690,10 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	assignHandler := routingadapters.NewAssignHandler(routingapplication.NewAssigner(
 		routingadapters.NewPostgresConversationAssigner(dbPool),
 		auditRec,
-	))
+	).WithClaimHook(&s.claimHook))
 	// ADR-0040 phase 03: a Hub agent attending the instance claims and answers through the Hub's own write path (delegatedWrites); everybody else
 	// reaches the original handler untouched. Delegable marks the route and names the key it needs in the delegated context.
-	delegatedWrites := hubadapters.NewDelegatedWrites(dbPool)
+	delegatedWrites := hubadapters.NewDelegatedWrites(dbPool).WithClaimHook(&s.claimHook)
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", tenancyadapters.Delegable("conversation.claim", authnMiddleware(tenantSession(delegatedWrites.Claim(http.HandlerFunc(assignHandler.Assign))))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", tenancyadapters.Delegable("conversation.claim", authnMiddleware(tenantSession(delegatedWrites.Release(http.HandlerFunc(assignHandler.Unassign))))))
 
