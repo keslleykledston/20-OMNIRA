@@ -65,6 +65,10 @@ type ServiceOrderGateway interface {
 	CreateServiceOrder(ctx context.Context, req CreateOrderRequest) (*domain.Snapshot, error)
 }
 
+// ExternalTxTimeout bounds the WHOLE duration of each independent transaction of an ERP request (pool wait, locks and work): a transaction that is not done by then
+// is cancelled and rolled back. It is what lets reconciliation know when an in-flight request can no longer be answered by its own call.
+const ExternalTxTimeout = 15 * time.Second
+
 // CorrelationLookup is an OPTIONAL capability: finding again a record created with a correlation key. An ERP without it (K3G offers none, ADR-0013) can only be
 // reconciled by hand.
 type CorrelationLookup interface {

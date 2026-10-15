@@ -4,8 +4,8 @@
 --   * the delegate is NOT a member. Reading is by `delegated_tenants('service','read')`; writing goes through the write policies of 000150-000153, whose
 --     actor_has_permission() answers from the live grant in a delegated context.
 --   * ONE instance at a time, and the visibility of the conversation: a restrictive policy per table pins the request to the instance it acts for and to the
---     conversations the contract's queue scope lets the delegate see (a session without a visible conversation, a case without a visible session, a task, record
---     or link that hangs from nothing visible are all invisible to a delegate). Members are untouched (`acting_hub() IS NULL`).
+--     conversations the contract's queue scope lets the delegate see (a session without a visible conversation, a case without a visible session, a task, an event, a record
+--     or a link that hangs from nothing visible are all invisible to a delegate). Members are untouched (`acting_hub() IS NULL`).
 --   * the requests made to the ERP (external_record_requests) are closed to a delegate altogether.
 SET LOCAL lock_timeout = '5s';
 
@@ -22,9 +22,6 @@ INSERT INTO permission_domains (permission_key, domain, need) VALUES
 -- Visibility helpers. SECURITY INVOKER on purpose: they ask the row-level rules of the CALLER, so a delegate sees exactly what its own policies let it see.
 CREATE FUNCTION service_conversation_visible(p_tenant UUID, p_id UUID) RETURNS BOOLEAN AS $$
   SELECT p_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.conversations c WHERE c.tenant_id = p_tenant AND c.id = p_id);
-$$ LANGUAGE SQL STABLE SET search_path = pg_catalog, public, pg_temp;
-CREATE FUNCTION service_contact_visible(p_tenant UUID, p_id UUID) RETURNS BOOLEAN AS $$
-  SELECT p_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.contacts c WHERE c.tenant_id = p_tenant AND c.id = p_id);
 $$ LANGUAGE SQL STABLE SET search_path = pg_catalog, public, pg_temp;
 CREATE FUNCTION service_session_visible(p_tenant UUID, p_id UUID) RETURNS BOOLEAN AS $$
   SELECT p_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.service_sessions s WHERE s.tenant_id = p_tenant AND s.id = p_id);
@@ -73,12 +70,12 @@ CREATE POLICY service_cases_acting_scope ON service_cases AS RESTRICTIVE
 -- (a link is visible by its SESSION alone: a case is visible BECAUSE a link ties it to a visible session, so checking the case here would make the two policies call each other)
 CREATE POLICY service_case_sessions_acting_scope ON service_case_sessions AS RESTRICTIVE
   USING (acting_hub() IS NULL OR (tenant_id = acting_tenant() AND service_session_visible(tenant_id, session_id)));
+-- (a task or an event tied to a CONTACT alone is deliberately not visible to a delegate: seeing a contact through one conversation of the contract's scope says nothing
+-- about work done in another queue for the same person. What a delegate sees hangs from a session or a case it can see.)
 CREATE POLICY service_tasks_acting_scope ON service_tasks AS RESTRICTIVE
-  USING (acting_hub() IS NULL OR (tenant_id = acting_tenant() AND (
-           service_session_visible(tenant_id, session_id) OR service_case_visible(tenant_id, case_id) OR service_contact_visible(tenant_id, contact_id))));
+  USING (acting_hub() IS NULL OR (tenant_id = acting_tenant() AND (service_session_visible(tenant_id, session_id) OR service_case_visible(tenant_id, case_id))));
 CREATE POLICY context_events_acting_scope ON context_events AS RESTRICTIVE
-  USING (acting_hub() IS NULL OR (tenant_id = acting_tenant() AND (
-           service_session_visible(tenant_id, session_id) OR service_case_visible(tenant_id, case_id) OR service_contact_visible(tenant_id, contact_id))));
+  USING (acting_hub() IS NULL OR (tenant_id = acting_tenant() AND (service_session_visible(tenant_id, session_id) OR service_case_visible(tenant_id, case_id))));
 CREATE POLICY service_external_links_acting_scope ON service_external_links AS RESTRICTIVE
   USING (acting_hub() IS NULL OR (tenant_id = acting_tenant() AND (
            service_session_visible(tenant_id, session_id) OR service_case_visible(tenant_id, case_id) OR service_task_visible(tenant_id, task_id))));

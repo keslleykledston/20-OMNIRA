@@ -86,7 +86,7 @@ func (s *svcWorld) agentWith(keys ...string) uuid.UUID {
 	agent := s.hubAgent("svc-agent-" + uuid.NewString()[:6])
 	g := s.grant(agent, "A")
 	// the contract (shared by every agent of the instance) "delegates" everything, even what must NEVER be delegable; each grant narrows it
-	s.ceiling("A", append([]string{"service.request_external", "tenant.manage"}, serviceKeys...)...)
+	s.ceiling("A", append([]string{"service.request_external", "tenant.manage", "contact.read"}, serviceKeys...)...)
 	s.grantKeys(g, append([]string{"service.request_external", "tenant.manage"}, keys...)...)
 	return agent
 }
@@ -446,5 +446,48 @@ func TestDelegatesOpeningTheSameConversationTogetherMakeOneSession(t *testing.T)
 	}
 	if seq := s.ownerOne(`SELECT last_value::text FROM service_counters WHERE tenant_id = $1 AND kind = 'session'`, s.tenant["A"]); seq != "10000" {
 		t.Fatalf("the numbers the losers took went back with their savepoints: last=%s", seq)
+	}
+}
+
+// Codex phase 5: seeing a contact through one conversation of the contract's scope says nothing about work done for the same person elsewhere. A task (or an
+// event) tied to the contact ALONE is not visible to a delegate; one that hangs from a session of its scope is.
+func TestAContactOnlyTaskIsNotVisibleToADelegate(t *testing.T) {
+	s := newSvcWorld(t)
+	// the delegate may read contacts too: that is exactly what made a contact-only task look reachable
+	agent := s.agentWith(append([]string{"contact.read"}, serviceKeys...)...)
+	member := s.user("svc-member-contact")
+	s.directMember(member, "A")
+	contact := s.ownerOne(`SELECT contact_id::text FROM conversations WHERE id = $1`, s.conv["A"])
+	made := s.call(member, "A", false, "POST", "/service-tasks", fmt.Sprintf(`{"title":"Só do contato","contact_id":"%s"}`, contact))
+	if made.code != http.StatusCreated {
+		t.Fatalf("a member makes a task for the contact: %d %v", made.code, made.body)
+	}
+	id := made.body["id"].(string)
+	// the delegate attends a conversation of this contact and holds contact.read, so it DOES see the contact ...
+	// ... and still does not see the task that hangs from nothing it can see
+	if r := s.call(agent, "A", true, "GET", "/service-tasks/"+id, ""); r.code != http.StatusNotFound {
+		t.Fatalf("a contact-only task by id: %d %v", r.code, r.body)
+	}
+	if r := s.call(agent, "A", true, "GET", "/service-tasks?contact_id="+contact, ""); r.code != http.StatusOK || len(r.body["items"].([]any)) != 0 {
+		t.Fatalf("a contact-only task in a list: %d %v", r.code, r.body)
+	}
+	if r := s.call(member, "A", false, "GET", "/service-tasks?contact_id="+contact, ""); len(r.body["items"].([]any)) != 1 {
+		t.Fatalf("the member still sees it: %v", r.body)
+	}
+	// the same person's task THROUGH a visible session is seen
+	sess := s.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s.conv["A"]))
+	if sess.code != http.StatusCreated {
+		t.Fatalf("session: %d %v", sess.code, sess.body)
+	}
+	task := s.call(agent, "A", true, "POST", "/service-tasks", fmt.Sprintf(`{"title":"Com sessão","session_id":"%s"}`, sess.body["id"]))
+	if task.code != http.StatusCreated {
+		t.Fatalf("task through a visible session: %d %v", task.code, task.body)
+	}
+	if r := s.call(agent, "A", true, "GET", "/service-tasks?contact_id="+contact, ""); len(r.body["items"].([]any)) != 1 {
+		t.Fatalf("only the task that hangs from the session is listed: %v", r.body)
+	}
+	// and the delegate cannot create one tied to the contact alone
+	if r := s.call(agent, "A", true, "POST", "/service-tasks", fmt.Sprintf(`{"title":"Solta","contact_id":"%s"}`, contact)); r.code == http.StatusCreated {
+		t.Fatalf("a delegate cannot create work that hangs from nothing it sees: %d %v", r.code, r.body)
 	}
 }

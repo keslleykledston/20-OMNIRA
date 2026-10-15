@@ -42,8 +42,8 @@ func (s *Service) WithExternalTimings(callTimeout, reconcileMinAge time.Duration
 	}
 	// A request is only declared "not created" after it is old enough that its own call has surely ended: never less than twice the call's time limit, so a late answer
 	// of the original call can never find the request already settled as a failure.
-	if s.reconcileAge < 2*s.gatewayTO {
-		s.reconcileAge = 2 * s.gatewayTO
+	if floor := 2*s.gatewayTO + ports.ExternalTxTimeout; s.reconcileAge < floor {
+		s.reconcileAge = floor
 	}
 	return s
 }
@@ -595,7 +595,7 @@ func (s *Service) RequestServiceOrder(ctx context.Context, raw domain.RequestInp
 		}
 		if gerr == nil && snap != nil {
 			clean, cerr := snap.Clean()
-			if cerr == nil && clean.ExternalType == domain.ExternalTypeServiceOrder {
+			if cerr == nil && clean.ExternalType == domain.ExternalTypeServiceOrder && (clean.CorrelationKey == "" || clean.CorrelationKey == acquired.CorrelationKey) {
 				rec, e := s.settleSuccess(ctx, c, acquired, system, clean, "gateway", at, sess)
 				if e != nil {
 					return e
@@ -757,9 +757,16 @@ func (s *Service) ReconcileExternalRequest(ctx context.Context, id uuid.UUID) (R
 	if !req.State.Blocking() {
 		return ReconcileResult{Request: req}, nil
 	}
-	// a request still in flight may be answered at any moment by its own call: it is not reconciled while that call can still be alive
-	if now, nerr := s.repo.Now(ctx); nerr == nil && req.State == domain.RequestInFlight && now.Sub(req.CreatedAt) < s.gatewayTO+30*time.Second {
-		return ReconcileResult{Request: req, TooEarly: true}, nil
+	// a request still in flight may be answered at any moment by its own call: it is not reconciled while that call (or the transactions around it) can still be
+	// alive. The longest it can live is its first transaction + the call + the transaction that writes the outcome, plus a margin for scheduling.
+	if req.State == domain.RequestInFlight {
+		now, nerr := s.repo.Now(ctx)
+		if nerr != nil {
+			return ReconcileResult{}, nerr
+		}
+		if now.Sub(req.CreatedAt) < 2*ports.ExternalTxTimeout+s.gatewayTO+30*time.Second {
+			return ReconcileResult{Request: req, TooEarly: true}, nil
+		}
 	}
 	gw, err := s.gateways.Resolve(ctx, c.tc.TenantID, req.IntegrationID)
 	if err != nil {
@@ -793,8 +800,8 @@ func (s *Service) ReconcileExternalRequest(ctx context.Context, id uuid.UUID) (R
 	}
 	if gerr == nil && snap != nil {
 		clean, cerr := snap.Clean()
-		if cerr != nil || clean.ExternalType != domain.ExternalTypeServiceOrder {
-			return ReconcileResult{Request: locked}, nil // an answer that is not a service order teaches nothing
+		if cerr != nil || clean.ExternalType != domain.ExternalTypeServiceOrder || (clean.CorrelationKey != "" && clean.CorrelationKey != locked.CorrelationKey) {
+			return ReconcileResult{Request: locked}, nil // an answer that is not a service order, or that carries ANOTHER correlation key, teaches nothing
 		}
 		rec, err := s.settleSuccess(ctx, c, locked, system, clean, "reconcile", at, sess)
 		if err != nil {

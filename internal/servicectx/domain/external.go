@@ -78,6 +78,9 @@ type Snapshot struct {
 	ExternalStatus string
 	StatusClass    StatusClass
 	UpdatedAt      *time.Time
+	// CorrelationKey is the key OMNIRA sent when it asked for the record, when the ERP echoes it back. A snapshot that carries a DIFFERENT key is not the answer to
+	// the request at hand and is never trusted as one; empty = the ERP does not echo it.
+	CorrelationKey string
 }
 
 func (s Snapshot) Clean() (Snapshot, error) {

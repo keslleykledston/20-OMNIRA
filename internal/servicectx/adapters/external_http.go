@@ -35,8 +35,8 @@ func (h *ExternalHandler) Routes(mux Registrar, wrap func(http.HandlerFunc) http
 	}
 	// asking the ERP to do something is never delegable to a Hub (the key is not in the delegable catalogue)
 	mux.Handle("POST "+base+"/service-sessions/{session_id}/external-service-orders", wrap(h.requestOrder))
-	mux.Handle("GET "+base+"/external-requests", route(application.PermRead, h.listRequests))
-	mux.Handle("GET "+base+"/external-requests/{request_id}", route(application.PermRead, h.getRequest))
+	mux.Handle("GET "+base+"/external-requests", wrap(h.listRequests)) // the requests to the ERP are the company's own: never delegable
+	mux.Handle("GET "+base+"/external-requests/{request_id}", wrap(h.getRequest))
 	mux.Handle("POST "+base+"/external-requests/{request_id}/reconcile", wrap(h.reconcile))
 	mux.Handle("POST "+base+"/external-requests/{request_id}/resolve", wrap(h.resolve))
 }
@@ -277,6 +277,7 @@ func (h *ExternalHandler) getRequest(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	w.Header().Set("ETag", etag(x.Version))
 	writeJSON(w, http.StatusOK, toRequestDTO(x))
 }
 

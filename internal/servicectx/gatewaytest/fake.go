@@ -51,6 +51,8 @@ type Fake struct {
 	ResolvedFor [][2]uuid.UUID
 	// WrongAnswer makes Get/Create answer with a record of another type and id than the one asked for (a misbehaving adapter).
 	WrongAnswer bool
+	// WrongCorrelation makes the answers carry the correlation key of ANOTHER request (an adapter that mixes requests up).
+	WrongCorrelation bool
 	// OnCall runs inside CreateServiceOrder before it answers (tests use it to hold a lock or to sabotage the outcome write).
 	OnCall func()
 }
@@ -146,7 +148,7 @@ func (f *Fake) CreateServiceOrder(ctx context.Context, req ports.CreateOrderRequ
 	f.next++
 	id := fmt.Sprintf("%d", 1000+f.next)
 	t := f.Clock().UTC()
-	snap := domain.Snapshot{ExternalType: domain.ExternalTypeServiceOrder, ExternalID: id, DisplayRef: "OS " + id, ExternalStatus: "Aberta", StatusClass: domain.StatusOpen, UpdatedAt: &t}
+	snap := domain.Snapshot{ExternalType: domain.ExternalTypeServiceOrder, ExternalID: id, DisplayRef: "OS " + id, ExternalStatus: "Aberta", StatusClass: domain.StatusOpen, UpdatedAt: &t, CorrelationKey: req.CorrelationKey}
 	f.records[key(snap.ExternalType, id)] = snap
 	f.byCorr[req.CorrelationKey] = key(snap.ExternalType, id)
 	f.mu.Unlock()
@@ -155,6 +157,9 @@ func (f *Fake) CreateServiceOrder(ctx context.Context, req ports.CreateOrderRequ
 	}
 	if f.WrongAnswer {
 		return &domain.Snapshot{ExternalType: "customer", ExternalID: "wrong-" + id, StatusClass: domain.StatusOpen}, nil
+	}
+	if f.WrongCorrelation {
+		snap.CorrelationKey = "another-request-" + req.CorrelationKey
 	}
 	return &snap, nil
 }
@@ -169,6 +174,9 @@ func (l lookupFake) FindByCorrelation(ctx context.Context, corr string) (*domain
 	r := l.records[k]
 	if l.WrongAnswer && ok {
 		r = domain.Snapshot{ExternalType: "customer", ExternalID: "wrong", StatusClass: domain.StatusOpen}
+	}
+	if l.WrongCorrelation && ok {
+		r.CorrelationKey = "another-request-" + corr
 	}
 	l.mu.Unlock()
 	if down {

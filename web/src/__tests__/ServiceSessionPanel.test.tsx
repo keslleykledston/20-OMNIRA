@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axios from 'axios'
 import ServiceSessionPanel from '../components/service/ServiceSessionPanel'
-import { renderAt, setSession } from './testUtils'
+import { renderAt, renderAtWithClient, setSession } from './testUtils'
 
 vi.mock('axios')
 
@@ -133,6 +133,15 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     await user.click(await screen.findByRole('button', { name: /Marcar como aguardando/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/Outra pessoa alterou/)
     await waitFor(() => expect(vi.mocked(axios.get).mock.calls.filter((c) => String(c[0]).endsWith('/service-session')).length).toBeGreaterThan(1))
+  })
+
+  it('every cached answer is keyed by the Hub, so two Hubs serving the same company never share it', async () => {
+    serve({ session: session(), tasks: [task()] })
+    const { queryClient } = renderAtWithClient(<ServiceSessionPanel conversationId={CONV} can={ALL} hub={{ tenantId: 'inst-9', hubId: 'hub-1' }} />)
+    await screen.findByText('Ligar para o cliente')
+    const keys = queryClient.getQueryCache().getAll().map((q) => JSON.stringify(q.queryKey))
+    expect(keys.length).toBeGreaterThanOrEqual(2)
+    for (const k of keys) expect(k).toContain('hub-1')
   })
 
   it('attended through the Hub the call names the Hub and the instance', async () => {

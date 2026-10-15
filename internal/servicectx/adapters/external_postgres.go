@@ -451,7 +451,10 @@ func (r *PostgresRepository) InNewTransaction(ctx context.Context, fn func(ctx c
 	if err != nil || tc.TenantID == uuid.Nil {
 		return errors.New("servicectx: tenant context required")
 	}
-	base := context.WithoutCancel(ctx) // the outcome of a call to the ERP must be written even if the caller went away
+	// the outcome of a call to the ERP must be written even if the caller went away ... but not forever: the whole transaction has a deadline, so a request in flight
+	// can be told apart from an abandoned one
+	base, cancel := context.WithTimeout(context.WithoutCancel(ctx), ports.ExternalTxTimeout)
+	defer cancel()
 	// ... but it must not wait forever on a lock held by someone else: a transaction that cannot get its lock fails, the attempt stays in flight, and reconciliation
 	// settles it (nothing is lost, nothing hangs)
 	bounded := func(sc context.Context) error {

@@ -242,7 +242,8 @@ func TestAReconcilerWaitsForARequestThatMayStillBeAnswered(t *testing.T) {
 		t.Fatal(res, err)
 	}
 	// an in-flight request (its own call may answer at any moment) is left alone while that call can still be alive, even when it is already older than the
-	// minimum age for an unknown outcome: 35 s is past the floor of 30 s (twice the 15 s limit) but inside the lease of 45 s
+	// minimum age for an unknown outcome: 35 s is past the floor of 45 s?? no: the floor is twice the 15 s limit plus the 15 s transaction bound = 45 s, and the lease of an
+	// in-flight request is two transaction bounds + the call limit + 30 s = 75 s; 40 s is inside it
 	lease, _, _ := adapters.Build(s.env.App, adapters.Options{ExternalOrders: true, Gateways: gatewaytest.Resolver{F: s.gw}})
 	lease.WithExternalTimings(15*time.Second, 0)
 	s.forceRequestState(res.Request.ID, "in_flight") // (a state the application never goes back to: crafted with the triggers off)
@@ -257,7 +258,7 @@ func TestAReconcilerWaitsForARequestThatMayStillBeAnswered(t *testing.T) {
 	if !rr.TooEarly || rr.Request.State != domain.RequestInFlight {
 		t.Fatalf("a young in-flight request is left alone: %+v", rr)
 	}
-	s.ageRequest(res.Request.ID, 60*time.Second) // now its call is certainly over
+	s.ageRequest(res.Request.ID, 120*time.Second) // now its call is certainly over
 	if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) (e error) {
 		rr, e = lease.ReconcileExternalRequest(ctx, res.Request.ID)
 		return
@@ -277,9 +278,9 @@ func TestAReconcilerWaitsForARequestThatMayStillBeAnswered(t *testing.T) {
 	}
 	// the minimum age is never shorter than twice the call's time limit
 	tight, _, _ := adapters.Build(s.env.App, adapters.Options{ExternalOrders: true, Gateways: gatewaytest.Resolver{F: s.gw}})
-	tight.WithExternalTimings(10*time.Second, time.Second) // asked for 1 s, the call may last 10 s: the floor is 20 s
+	tight.WithExternalTimings(10*time.Second, time.Second) // asked for 1 s, the call may last 10 s: the floor is 2x10 s + the 15 s transaction bound = 35 s
 	s.forceRequestState(res.Request.ID, "outcome_unknown")
-	s.ageRequest(res.Request.ID, 15*time.Second)
+	s.ageRequest(res.Request.ID, 25*time.Second)
 	if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) (e error) {
 		rr, e = tight.ReconcileExternalRequest(ctx, res.Request.ID)
 		return
@@ -287,7 +288,7 @@ func TestAReconcilerWaitsForARequestThatMayStillBeAnswered(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !rr.TooEarly || rr.Request.State != domain.RequestOutcomeUnknown {
-		t.Fatalf("15 s is under the floor of 20 s: %+v", rr)
+		t.Fatalf("25 s is under the floor of 35 s: %+v", rr)
 	}
 	s.ageRequest(res.Request.ID, 30*time.Second)
 	if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) (e error) {
@@ -398,5 +399,50 @@ func TestTheSameKeyInParallelCallsTheERPOnce(t *testing.T) {
 		if o != application.OutcomeCreated && o != application.OutcomeReplay && o != application.OutcomeUnknown {
 			t.Errorf("unexpected outcome %s", o)
 		}
+	}
+}
+
+// ---- Codex phase 5 ----------------------------------------------------------------------------------------------------------------------------------
+
+// A service_order that carries the correlation key of ANOTHER request is not the answer to this one (create, then reconcile).
+func TestAnAnswerCarryingAnotherRequestsCorrelationIsNeverTrusted(t *testing.T) {
+	s := newStack(t)
+	integ := s.integration(s.env.TenantA)
+	conv, _ := s.conversation()
+	sess := s.mustOpen(s.admin, conv)
+	s.gw.WrongCorrelation = true
+	res, err := s.request(s.admin, orderInput(integ, sess.ID, "corr-"+uuid.NewString()))
+	if err != nil || res.Outcome != application.OutcomeUnknown || res.Record != nil {
+		t.Fatalf("an answer for another request is an unknown outcome, never a success: %+v %v", res, err)
+	}
+	s.ageRequest(res.Request.ID, time.Hour)
+	var rr application.ReconcileResult
+	if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) (e error) {
+		rr, e = s.svc.ReconcileExternalRequest(ctx, res.Request.ID)
+		return
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rr.Record != nil || rr.Request.State != domain.RequestOutcomeUnknown {
+		t.Fatalf("the lookup answered for another request: nothing is learned: %+v", rr)
+	}
+	if n := s.count(`SELECT count(*) FROM external_records WHERE tenant_id=$1`, s.env.TenantA); n != 0 {
+		t.Fatalf("no record was made from a foreign answer: %d", n)
+	}
+}
+
+func TestTheRequestReadsAreNotDelegableAndCarryTheirVersion(t *testing.T) {
+	s := newStack(t)
+	integ := s.integration(s.env.TenantA)
+	conv, _ := s.conversation()
+	sess := s.mustOpen(s.admin, conv)
+	res, err := s.request(s.admin, orderInput(integ, sess.ID, "etag-"+uuid.NewString()))
+	if err != nil || res.Outcome != application.OutcomeCreated {
+		t.Fatal(res, err)
+	}
+	mux := muxFor(s, s.handler.WithExternalOrders(true))
+	r := s.call(mux, s.admin, "GET", "/external-requests/"+res.Request.ID.String(), "")
+	if r.code != 200 || r.header.Get("ETag") == "" {
+		t.Fatalf("a request read carries its version: %d %q", r.code, r.header.Get("ETag"))
 	}
 }

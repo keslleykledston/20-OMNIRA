@@ -28,7 +28,6 @@ DROP FUNCTION IF EXISTS service_integration_system(UUID, UUID);
 DROP FUNCTION IF EXISTS service_task_visible(UUID, UUID);
 DROP FUNCTION IF EXISTS service_case_visible(UUID, UUID);
 DROP FUNCTION IF EXISTS service_session_visible(UUID, UUID);
-DROP FUNCTION IF EXISTS service_contact_visible(UUID, UUID);
 DROP FUNCTION IF EXISTS service_conversation_visible(UUID, UUID);
 DELETE FROM permission_domains WHERE domain = 'service';
 ALTER TABLE permission_domains DROP CONSTRAINT permission_domains_domain_check;
