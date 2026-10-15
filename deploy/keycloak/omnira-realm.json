@@ -3,6 +3,8 @@
   "displayName": "OMNIRA",
   "enabled": true,
   "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 21600,
+  "ssoSessionMaxLifespan": 36000,
   "sslRequired": "external",
   "accountTheme": "keycloak",
   "loginTheme": "keycloak",
