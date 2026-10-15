@@ -25,10 +25,10 @@ Ordem: cada fase termina em **gate** executado (testes em Postgres real, `go bui
 
 ## Decisões que dependem do dono (não bloqueiam a implementação)
 
-1. Prefixo e número inicial do protocolo (padrão `AT-10000`).
-2. Janela de reabertura da sessão (padrão 72 h).
+1. ~~Prefixo e número inicial do protocolo~~ **Decidido (2026-10-15):** prefixo por empresa (3 letras do nome, sem dígitos, editável até o 1º protocolo), início em 1001.
+2. ~~Janela de reabertura~~ **Decidido:** 24 h.
 3. Quais papéis recebem `service.request_external` (padrão: admin e supervisor).
-4. Abertura automática ao assumir conversa (fora da v1; toca roteamento).
+4. ~~Abertura automática ao assumir conversa~~ **Aprovado:** implementado atrás de `OMNIRA_SERVICE_AUTO_OPEN_ON_CLAIM_ENABLED` (ver 14).
 
 ## Dependências externas registradas
 

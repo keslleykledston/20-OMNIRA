@@ -6,7 +6,7 @@ Migrations na faixa reservada **000150–000159** (aplicadas por `tools/migrate-
 
 | Tabela | Papel | Chaves e regras |
 |---|---|---|
-| `service_counters` | contador por empresa e tipo (`session`, `case`) | PK `(tenant_id, kind)`; `prefix ^[A-Z]{2,6}$`; `last_value ≥ 0`. Alocação: `INSERT … ON CONFLICT DO UPDATE SET last_value = last_value + 1 RETURNING` na mesma transação que insere a sessão (trava de linha por empresa; rollback devolve o número). |
+| `service_counters` | contador por empresa e tipo (`session`, `case`) | PK `(tenant_id, kind)`; `prefix ^[A-Z]{2,6}$` (sem dígitos), **único entre empresas para `kind=session`** e imutável depois do 1º protocolo (migration 000155); `last_value ≥ 0` (0 = prefixo só reservado), só avança. Alocação: `INSERT … ON CONFLICT DO UPDATE SET last_value = last_value + 1 RETURNING` na mesma transação que insere a sessão (trava de linha por empresa; rollback devolve o número). |
 | `service_categories` | categorias da empresa | `UNIQUE(tenant_id, code)`, `code ^[a-z0-9][a-z0-9_.-]{0,39}$`, `active`. Não se apaga. |
 | `service_resolution_codes` | resultados próprios que **apontam** a um canônico | `canonical_code ∈ 8 canônicos`; `code` não pode ter nome canônico. Os 8 canônicos são embutidos (não são linhas). |
 | `service_sessions` | o atendimento | ver abaixo |

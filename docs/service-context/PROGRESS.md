@@ -15,5 +15,6 @@ Como rodar testes (banco descartável, nunca `omnira_dev`): scripts no scratchpa
 | 5 Workspace/Hub | feito | 7bf2869, f4859f4, 793c9c1 | Codex: 2 HIGH/3 MEDIUM tratados |
 | 6 Fluxos/IA/métricas | feito | 3e022f4, 1d5a4d8, 735dc1f | Codex: 2 HIGH (1 tratado, 1 = R-AI-1 herdado) |
 | 7 Docs finais | feito | (este commit) | status **READY_FOR_REVIEW** (ver 13) |
+| 8 Decisões do dono 2026-10-15 | feito (ver 14) | (próximo commit) | prefixo por empresa + 1001, janela 24 h, abertura ao assumir |
 
 Retomada: nada a retomar no código; pendências estão em `13-final-report.md`.

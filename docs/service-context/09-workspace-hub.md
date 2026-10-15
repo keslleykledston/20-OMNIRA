@@ -21,7 +21,7 @@ Matriz atualizada em `docs/architecture/HUB-DELEGATION-TABLE-MATRIX.md` (seção
 ## Workspace (web)
 
 - `web/src/lib/serviceContext.ts`: cliente da API (`If-Match` com a versão que a tela viu, `Idempotency-Key` por montagem; 404/501 = módulo desligado).
-- `web/src/components/service/ServiceSessionPanel.tsx`: seção **"Protocolo e tarefas"** em `ContextPane` (membro) e `DelegatedContextPane` (Hub): protocolo AT-n, situação, aguardando/em andamento, encerrar com resultado (a tela diz que **a conversa continua aberta**; "Finalizar atendimento" não mudou), tarefas do atendimento (criar/concluir).
+- `web/src/components/service/ServiceSessionPanel.tsx`: seção **"Protocolo e tarefas"** em `ContextPane` (membro) e `DelegatedContextPane` (Hub): protocolo `<PREFIXO>-n`, situação, aguardando/em andamento, encerrar com resultado (a tela diz que **a conversa continua aberta**; "Finalizar atendimento" não mudou), tarefas do atendimento (criar/concluir).
 - O painel só oferece o que a chave do usuário permite (`useAccess`); o servidor continua sendo a autoridade (um 403/412/409 vira mensagem simples e recarrega).
 - Cache do React Query separado por **membro/delegado e por Hub** (`delegated:<hubId>`), e `me-access` também por Hub.
 - Sem flag no web (padrão do projeto): o painel some quando a API responde 404/501.

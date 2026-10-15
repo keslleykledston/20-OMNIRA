@@ -13,13 +13,14 @@ Estado: **nada implantado, nada empurrado** (sem push, sem tag, sem merge). Bran
 |---|---|---|
 | a | `OMNIRA_SERVICE_CONTEXT_ENABLED=true` (api **e** worker) | rotas REST, painel "Protocolo e tarefas", nós de fluxo, ferramentas de IA, delegação do Hub |
 | b | `OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED=true` | `Finalize` (e o encerramento por fluxo) também fecha/cria a sessão, em savepoint; falha do módulo **nunca** impede finalizar |
+| b2 | `OMNIRA_SERVICE_AUTO_OPEN_ON_CLAIM_ENABLED=true` (api) | quem **assume** a conversa (auto-atribuição do membro; agente do Hub no workspace) recebe o protocolo sem clicar. Em savepoint: assumir nunca depende do módulo; sem `service.create` não abre e não falha. Atribuição feita por gestor a outra pessoa **não** abre |
 | c | `OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED=true` | rotas que pedem algo ao ERP. **Sem adaptador real configurado, respondem 503 `not_configured`** (nunca sucesso falso). Não ligar até existir adaptador validado |
 
 Conceder `service.*` a papéis personalizados é decisão do dono (os papéis de sistema já recebem: admin/supervisor tudo; agente sem `assign`/`request_external`).
 
 ## Pré-requisitos da tela do dono (decisões pendentes, não bloqueiam o código)
 
-Prefixo/número inicial do protocolo (padrão `AT-10000`, ocorrência `OC-…`); janela de reabertura (72 h); papéis com `service.request_external`; abertura automática ao assumir (fora da v1).
+Papéis com `service.request_external`. Prefixo do protocolo: `GET/PUT /service-settings/protocol-prefix` (API; **ainda sem tela**): o administrador escolhe antes do primeiro protocolo, senão o sistema deriva do nome da empresa.
 
 ## Rollback
 

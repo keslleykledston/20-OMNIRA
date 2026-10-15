@@ -7,7 +7,7 @@ Branch `feat/omnira-service-context-operations` (12 commits sobre `main` @ `26e4
 | Fase | Entrega | Onde |
 |---|---|---|
 | 0 | Auditoria, arquitetura, matriz de impacto, plano, ADR-0049 | `docs/service-context/00–03`, `docs/adr/0049-…` |
-| 1–2 | Atendimento (sessão) por conversa com protocolo `AT-n` por empresa; mensagens por **episódios** (sem coluna em `messages`); catálogos (categorias, códigos de resultado); estados no banco; reabertura com motivo; linha do tempo imutável (`context_events`); visão de contexto do cliente; hook opcional no `Finalize` (savepoint: finalizar nunca depende do módulo) | `migrations/000150–151`, `internal/servicectx/*`, `contracts/openapi/service-context-v1.yaml` |
+| 1–2 | Atendimento (sessão) por conversa com protocolo `<PREFIXO>-n` por empresa (início 1001); mensagens por **episódios** (sem coluna em `messages`); catálogos (categorias, códigos de resultado); estados no banco; reabertura com motivo; linha do tempo imutável (`context_events`); visão de contexto do cliente; hook opcional no `Finalize` (savepoint: finalizar nunca depende do módulo) | `migrations/000150–151`, `internal/servicectx/*`, `contracts/openapi/service-context-v1.yaml` |
 | 3 | Ocorrências (`OC-n`), N:M com sessões, tarefas (com ou sem ocorrência), chaves por tipo de mudança no banco, concorrência otimista (`ETag`/`If-Match`) | `migrations/000152` |
 | 4 | Registros externos ERP/CRM, vínculos, **pedido durável** de OS (tentativa gravada antes da chamada; timeout = desconhecido, nunca falha; reconciliação; resolução manual), atualização de entrada idempotente e ordenada, porta `ServiceOrderGateway` + fake; contrato AsyncAPI + JSON Schema do envelope | `migrations/000153`, `docs/service-context/06,08` |
 | 5 | Delegação do Hub (domínio `service`, escopo de fila, uma instância por vez, `request_external` nunca delegável); painel "Protocolo e tarefas" no Workspace e no Hub | `migrations/000154`, `web/src/components/service` |
@@ -31,7 +31,7 @@ Ver `12-deployment-rollback.md`: migrations aditivas antes do binário, flags de
 - Telas de ocorrências, OS externas e linha do tempo no Workspace; escolha do resultado no `FinalizeDialog` (a API existe).
 - **Risco R-AI-1** (Codex HIGH): a rota de ferramentas de IA aceita `proposed_by` do cliente; comportamento herdado do ADR-0017, decisão do dono (ver 07).
 - Não executado: smoke com telefone/ERP/staging, e2e Playwright, ESLint do web, carga, restore de backup.
-- Decisões do dono pendentes (não bloqueiam): prefixo/número inicial do protocolo, janela de reabertura (72 h), papéis com `service.request_external`, abertura automática ao assumir.
+- Decisões do dono (2026-10-15): prefixo por empresa + início 1001, janela de reabertura 24 h e abertura automática ao assumir **implementados** (ver 14). Pendente: papéis com `service.request_external`; tela para o administrador escolher o prefixo.
 
 ## Final Status
 

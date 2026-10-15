@@ -6,7 +6,7 @@ Cinco nós, finos, sobre uma capacidade opcional dos efeitos (`ports.ServiceFlow
 
 | Nó | Efeito | Portas | Observações |
 |---|---|---|---|
-| `start_service_session` | abre a sessão (ou devolve a que existe) | `next`, `error` (opcional) | `variable` recebe o protocolo AT-n |
+| `start_service_session` | abre a sessão (ou devolve a que existe) | `next`, `error` (opcional) | `variable` recebe o protocolo (`<PREFIXO>-n`) |
 | `classify_service_session` | categoria por **código** | idem | código desconhecido/inativo → erro |
 | `create_service_task` | tarefa pendente, origem `flow`, **sem responsável** | idem | título/descrição aceitam `{{variável}}` |
 | `open_service_case` | ocorrência a partir da sessão | idem | `variable` recebe OC-n |
