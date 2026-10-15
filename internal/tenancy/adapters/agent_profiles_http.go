@@ -239,8 +239,8 @@ func (h *AgentProfilesHandler) AddQueue(w http.ResponseWriter, r *http.Request) 
 	if in.Capacity != nil {
 		capacity = *in.Capacity
 	}
-	if capacity < 1 {
-		http.Error(w, "capacity must be positive", 400)
+	if capacity < 0 || capacity > 100 {
+		http.Error(w, "capacity must be 0 (no limit) to 100", 400)
 		return
 	}
 	var id uuid.UUID
@@ -288,8 +288,8 @@ func (h *AgentProfilesHandler) UpdateQueue(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "availability or capacity required", 400)
 		return
 	}
-	if in.Capacity != nil && *in.Capacity < 1 {
-		http.Error(w, "capacity must be positive", 400)
+	if in.Capacity != nil && (*in.Capacity < 0 || *in.Capacity > 100) {
+		http.Error(w, "capacity must be 0 (no limit) to 100", 400)
 		return
 	}
 	tag, e := platformdb.QuerierFromContext(r.Context(), h.pool).Exec(r.Context(), `

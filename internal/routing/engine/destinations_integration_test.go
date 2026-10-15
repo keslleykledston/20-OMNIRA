@@ -203,6 +203,33 @@ func TestAgentDestinationEscalatesToANamedAttendantWithinCapacityAndShift(t *tes
 	}
 }
 
+// A named attendant with no limit (capacity 0) in a queue keeps receiving escalations beyond the default capacity (5).
+func TestAgentDestinationWithNoLimitIsNeverFull(t *testing.T) {
+	e := newEnv(t, nil)
+	a := e.tenant(t)
+	n1 := e.queue(t, a, "N1", "round_robin")
+	e.attendant(t, a, &n1, 1)
+	e.exec(t, `UPDATE conversations SET assigned_to_user_id=(SELECT user_id FROM queue_members WHERE queue_id=$1) WHERE id=$2`, n1, e.conversation(t, a, &n1))
+	vip := e.queue(t, a, "VIP", "manual")
+	boss, _ := e.attendant(t, a, &vip, 0) // no limit in VIP...
+	other := e.queue(t, a, "Outra", "manual")
+	e.exec(t, `INSERT INTO queue_members (tenant_id, queue_id, user_id, active, available, capacity) VALUES ($1,$2,$3,true,true,3)`, a, other, boss) // ...and a limit of 3 elsewhere: no limit in one queue wins
+	for i := 0; i < 6; i++ {
+		x := e.conversation(t, a, &n1)
+		e.exec(t, `UPDATE conversations SET assigned_to_user_id=$2 WHERE id=$1`, x, boss)
+	}
+	e.policy(t, a, n1, 4, overflow.ExhaustedManual, overflow.Step{Triggers: []overflow.Trigger{overflow.CapacityExhausted}, DestKind: overflow.DestAgent, DestID: boss})
+	c := e.conversation(t, a, &n1)
+	if d, err := e.decide(t, a, c, ""); err != nil || d.AssignedUser != boss {
+		t.Fatalf("6 open conversations and no limit: still escalated to the named attendant: %+v %v", d, err)
+	}
+	e.exec(t, `UPDATE queue_members SET capacity=7 WHERE tenant_id=$1 AND queue_id=$2 AND user_id=$3`, a, vip, boss)
+	c2 := e.conversation(t, a, &n1)
+	if d, _ := e.decide(t, a, c2, ""); d.AssignedUser == boss {
+		t.Fatalf("with a limit of 7 and 7 open conversations the named attendant is full: %+v", d)
+	}
+}
+
 func TestSectorDestinationPicksTheFirstQueueWithAnEligibleAgent(t *testing.T) {
 	e := newEnv(t, nil)
 	a := e.tenant(t)

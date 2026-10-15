@@ -32,3 +32,12 @@ func TestRoundRobinSkipsFullAndManualRequiresExplicitClaim(t *testing.T) {
 		t.Fatal("manual queue selected agent")
 	}
 }
+
+func TestRoundRobinCapacityZeroMeansNoLimit(t *testing.T) {
+	queue := domain.Queue{Mode: domain.ModeRoundRobin}
+	busy := uuid.New()
+	got, err := queue.SelectNext([]domain.Agent{{UserID: busy, Active: true, Available: true, Capacity: 0, ActiveWorkload: 40}})
+	if err != nil || got != busy {
+		t.Fatalf("an agent with no limit (capacity 0) is always eligible: %s %v", got, err)
+	}
+}

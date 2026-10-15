@@ -354,7 +354,7 @@ paths:
       summary: Invite a person by e-mail (`membership.manage`; an attendance plan also needs `agent.manage`)
       description: |
         A new invitation replaces a pending one for the same e-mail. ADR-0046: the optional attendance plan (`attends`, `queue_ids` of
-        THIS tenant, `queue_capacity` 1..100) is applied when the invitation is accepted, in the same transaction as the membership
+        THIS tenant, `queue_capacity` 0..100, 0 = no limit of simultaneous conversations) is applied when the invitation is accepted, in the same transaction as the membership
         (profile active; no queue chosen = the default overflow queue, as `POST /agents`). With `OMNIRA_INVITE_PROVISION_LOGIN` the
         invitee's Keycloak account is prepared before the e-mail; the temporary password goes in the e-mail only when that account was
         created, or refreshed because it was never used, for this invitation.
@@ -5525,7 +5525,7 @@ components:
         role_key: { type: string, enum: [tenant_admin, tenant_supervisor, tenant_agent] }
         attends: { type: boolean, description: "ADR-0046: the person starts as an attendant when the invitation is accepted" }
         queue_ids: { type: array, maxItems: 50, items: { type: string, format: uuid }, description: "Queues of this tenant; only with attends=true" }
-        queue_capacity: { type: integer, minimum: 1, maximum: 100, default: 1 }
+        queue_capacity: { type: integer, minimum: 0, maximum: 100, default: 1, description: '0 = no limit of simultaneous conversations' }
     TeamInvitation:
       type: object
       required: [id, email, role_key, role_name, status, created_by_email, expires_at, created_at, attends, queue_ids, queue_capacity]
@@ -5544,7 +5544,7 @@ components:
         invite_url: { type: string, description: "Relative path with the raw token; only with the development sign-in, only on create/resend" }
         attends: { type: boolean }
         queue_ids: { type: array, items: { type: string, format: uuid } }
-        queue_capacity: { type: integer, minimum: 1, maximum: 100 }
+        queue_capacity: { type: integer, minimum: 0, maximum: 100, description: '0 = no limit of simultaneous conversations' }
     SessionProfile:
       type: object
       required: [user, tenant]

@@ -380,3 +380,44 @@ func TestSelfClaimIgnoresQueueCapacityAndAvailabilityButNeedsAnActiveProfile(t *
 	third := e.conversation(e.tenantA)
 	want(t, e.call(e.agent1, e.tenantA, third, "assign", `{}`), 422, "self-claim needs an active profile")
 }
+
+// Capacity 0 = no limit (owner, 2026-10-14): assigning someone else and the round robin respect a limit and never stop at 0.
+func TestQueueCapacityZeroMeansNoLimit(t *testing.T) {
+	e := newAssignEnv(t)
+	queue := uuid.New()
+	e.exec(`INSERT INTO queues(id,tenant_id,name,mode) VALUES($1,$2,'Sem limite','round_robin')`, queue, e.tenantA)
+	e.exec(`INSERT INTO queue_members(tenant_id,queue_id,user_id,available,capacity) VALUES($1,$2,$3,true,1)`, e.tenantA, queue, e.agent1)
+	inQueue := func() uuid.UUID {
+		c := e.conversation(e.tenantA)
+		e.exec(`UPDATE conversations SET queue_id=$1 WHERE id=$2`, queue, c)
+		return c
+	}
+	held := inQueue()
+	e.exec(`UPDATE conversations SET assigned_to_user_id=$1 WHERE id=$2`, e.agent1, held)
+	next := inQueue()
+	assignTo := `{"assignee_user_id":"` + e.agent1.String() + `"}`
+	want(t, e.call(e.admin, e.tenantA, next, "assign", assignTo), 422, "a limit of 1 already holding one")
+
+	e.exec(`UPDATE queue_members SET capacity=0 WHERE tenant_id=$1 AND queue_id=$2 AND user_id=$3`, e.tenantA, queue, e.agent1)
+	want(t, e.call(e.admin, e.tenantA, next, "assign", assignTo), 200, "capacity 0 = no limit")
+
+	svc := routingapplication.NewService(routingadapters.NewPostgresAssignmentRepository(e.app, nil))
+	roundRobin := func(c uuid.UUID) (uuid.UUID, error) {
+		var got uuid.UUID
+		err := platformdb.WithSystemTenantSession(context.Background(), e.app, e.tenantA, func(sc context.Context) error {
+			var err error
+			got, err = svc.AssignRoundRobin(sc, c)
+			return err
+		})
+		return got, err
+	}
+	for i := 0; i < 3; i++ {
+		if got, err := roundRobin(inQueue()); err != nil || got != e.agent1 {
+			t.Fatalf("round robin %d: %s %v; a member with no limit takes every conversation", i+1, got, err)
+		}
+	}
+	e.exec(`UPDATE queue_members SET capacity=5 WHERE tenant_id=$1 AND queue_id=$2 AND user_id=$3`, e.tenantA, queue, e.agent1)
+	if got, err := roundRobin(inQueue()); err == nil || got == e.agent1 {
+		t.Fatalf("with a limit of 5 and 5 open conversations nobody is free: %s %v", got, err)
+	}
+}

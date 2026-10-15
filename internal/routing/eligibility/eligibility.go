@@ -16,7 +16,7 @@ const (
 	OffShift            Reason = "off_shift"            // the agent's own shift calendar is closed now
 	Offline             Reason = "offline"              // presence is required and the agent is not online
 	PresenceUnavailable Reason = "presence_unavailable" // presence is required but cannot be read: fail closed, never assume online
-	NoCapacity          Reason = "no_capacity"          // open conversations >= capacity
+	NoCapacity          Reason = "no_capacity"          // open conversations >= capacity (capacity 0 = no limit)
 )
 
 // Facts are what the adapters learned about one agent for one queue at one instant. A nil pointer means "no such restriction".
@@ -74,7 +74,7 @@ func Evaluate(f Facts, p Policy) Verdict {
 			why = append(why, Offline)
 		}
 	}
-	if f.Workload >= f.Capacity {
+	if f.Capacity > 0 && f.Workload >= f.Capacity { // 0 = no limit of simultaneous conversations
 		why = append(why, NoCapacity)
 	}
 	sort.SliceStable(why, func(i, j int) bool { return order[why[i]] < order[why[j]] })

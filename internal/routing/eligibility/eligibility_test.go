@@ -92,3 +92,16 @@ func TestExplicitPolicyRelaxesOnlyWhatItNames(t *testing.T) {
 		t.Fatal("no policy relaxes activity")
 	}
 }
+
+// Capacity 0 = no limit of simultaneous conversations (owner, 2026-10-14); any other value is a limit.
+func TestCapacityZeroMeansNoLimit(t *testing.T) {
+	f := base()
+	f.Capacity, f.Workload = 0, 250
+	if v := Evaluate(f, Policy{}); !v.Eligible {
+		t.Fatalf("capacity 0 must never refuse for load: %+v", v)
+	}
+	f.Capacity, f.Workload = 2, 2
+	if v := Evaluate(f, Policy{}); v.Eligible || !reflect.DeepEqual(v.Reasons, []Reason{NoCapacity}) {
+		t.Fatalf("a limit of 2 with 2 open conversations is full: %+v", v)
+	}
+}

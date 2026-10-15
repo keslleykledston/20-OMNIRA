@@ -99,7 +99,7 @@ func TestInvitationAttendancePlanIsAppliedWhenAccepted(t *testing.T) {
 	h := newDevInvitationsHandler(app)
 
 	code, inv, body := invite(t, app, h, a, admin, CreateInvitationRequest{
-		Email: email, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support, billing, gone, support}, QueueCapacity: 3,
+		Email: email, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support, billing, gone, support}, QueueCapacity: capacity(3),
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("create = %d %s", code, body)
@@ -184,7 +184,8 @@ func TestInvitationPlanRefusesQueuesOfAnotherInstanceAndInconsistentInput(t *tes
 	}{
 		{"queue of instance B", CreateInvitationRequest{Email: email(), RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{queueA, queueB}}, http.StatusUnprocessableEntity},
 		{"queues without attending", CreateInvitationRequest{Email: email(), RoleKey: "tenant_agent", QueueIDs: []uuid.UUID{queueA}}, http.StatusBadRequest},
-		{"capacity out of range", CreateInvitationRequest{Email: email(), RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{queueA}, QueueCapacity: 101}, http.StatusBadRequest},
+		{"capacity out of range", CreateInvitationRequest{Email: email(), RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{queueA}, QueueCapacity: capacity(101)}, http.StatusBadRequest},
+		{"negative capacity", CreateInvitationRequest{Email: email(), RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{queueA}, QueueCapacity: capacity(-1)}, http.StatusBadRequest},
 	}
 	for _, c := range cases {
 		if code, _, body := invite(t, app, h, a, adminA, c.req); code != c.want {
@@ -409,7 +410,7 @@ func TestAcceptingAPlanBringsBackAnOldInactiveSeat(t *testing.T) {
 		t.Fatalf("old seat: %v", err)
 	}
 	h := newDevInvitationsHandler(app)
-	code, inv, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support}, QueueCapacity: 4})
+	code, inv, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support}, QueueCapacity: capacity(4)})
 	if code != http.StatusCreated {
 		t.Fatalf("create = %d %s", code, body)
 	}
@@ -418,5 +419,33 @@ func TestAcceptingAPlanBringsBackAnOldInactiveSeat(t *testing.T) {
 	}
 	if seats := queueSeats(t, seed, a.tenantID, invitee); seats[support] != 4 {
 		t.Fatalf("the queue chosen in the invitation is active again with the chosen capacity: %v", seats)
+	}
+}
+
+func capacity(n int) *int { return &n }
+
+// queue_capacity 0 = no limit (owner, 2026-10-14): kept in the plan and in the seat; omitted = 1.
+func TestInvitationPlanAcceptsNoLimit(t *testing.T) {
+	seed, app := teamSeedPool(t), teamAppPool(t)
+	a := seedTeamTenant(t, seed)
+	admin := seedTeamMember(t, seed, a.tenantID, "tenant_admin", "active")
+	support := seedQueue(t, seed, a.tenantID, "Suporte "+uuid.NewString()[:6], "manual", false)
+	email := "semlimite-" + uuid.NewString()[:8] + "@empresa.com"
+	invitee := seedUnaffiliatedUser(t, seed, email)
+	h := newDevInvitationsHandler(app)
+	code, inv, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: email, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support}, QueueCapacity: capacity(0)})
+	if code != http.StatusCreated || inv.QueueCapacity != 0 {
+		t.Fatalf("create = %d %s (capacity %d)", code, body, inv.QueueCapacity)
+	}
+	if got := acceptAs(h, invitee, rawTokenFromURL(t, inv.InviteURL)); got != http.StatusOK {
+		t.Fatalf("accept = %d", got)
+	}
+	var stored int
+	if err := seed.QueryRow(context.Background(), `SELECT capacity FROM queue_members WHERE tenant_id=$1 AND queue_id=$2 AND user_id=$3`, a.tenantID, support, invitee).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("the seat keeps no limit: %d %v", stored, err)
+	}
+	other := "padrao1-" + uuid.NewString()[:8] + "@empresa.com"
+	if code, inv, body := invite(t, app, h, a, admin, CreateInvitationRequest{Email: other, RoleKey: "tenant_agent", Attends: true, QueueIDs: []uuid.UUID{support}}); code != http.StatusCreated || inv.QueueCapacity != 1 {
+		t.Fatalf("omitted capacity = 1: %d %s %d", code, body, inv.QueueCapacity)
 	}
 }

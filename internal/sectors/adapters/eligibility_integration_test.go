@@ -413,6 +413,39 @@ func TestCapacityIsEvaluatedInRealTimeAndOtherInstantsAreCalendarOnly(t *testing
 	}
 }
 
+// Capacity 0 = no limit (owner, 2026-10-14): never "capacidade esgotada", and being on call (with a period limit) does not set one.
+func TestCapacityZeroIsNoLimitEvenWhenOnCall(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	q := e.queue(t, a, "Sem limite", false)
+	always := decode[Calendar](t, e.call(t, a, admin, "POST", "/", e.h.CreateCalendar, nil, map[string]any{"name": "24x7", "definition": map[string]any{"kind": "24x7", "timezone": "America/Manaus"}})).ID
+	e.call(t, a, admin, "PUT", "/", e.h.SetQueueCalendar, map[string]string{"queue_id": q.String()}, map[string]any{"calendar_id": always})
+	busy, _ := e.attendant(t, a, &q, 0, true)
+	contact := uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO contacts (id, tenant_id, display_name, phone_e164, status) VALUES ($1,$2,'C','+5511900008003','active')`, contact, a); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := e.seed.Exec(context.Background(), `INSERT INTO conversations (id, tenant_id, contact_id, queue_id, assigned_to_user_id, status) VALUES ($1,$2,$3,$4,$5,'open')`, uuid.New(), a, contact, q, busy); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v := verdictOf(e.snapshot(t, a, admin, q, "", e.h), busy); !v.Eligible || v.Workload != 3 || v.Capacity != 0 {
+		t.Fatalf("3 open conversations and no limit: eligible: %+v", v)
+	}
+	roster := uuid.New()
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO on_call_rosters (id, tenant_id, name, kind) VALUES ($1,$2,'R','contingency')`, roster, a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.seed.Exec(context.Background(), `INSERT INTO on_call_periods (tenant_id, roster_id, user_id, starts_at, ends_at, capacity) VALUES ($1,$2,$3,now()-interval '1 minute',now()+interval '1 hour',1)`, a, roster, busy); err != nil {
+		t.Fatal(err)
+	}
+	if v := verdictOf(e.snapshot(t, a, admin, q, "", e.h), busy); !v.Eligible || !v.OnCall || v.Capacity != 0 {
+		t.Fatalf("an on-call period (limit 1) never lowers a member's no-limit: %+v", v)
+	}
+}
+
 // Owner's default: every attendant is available 24x7 and a member of Suporte, which is the default overflow queue; cases are tuned later.
 func TestSeedDefaultsMakeEveryAttendantAvailableAndMemberOfSupport(t *testing.T) {
 	e := newEnv(t)

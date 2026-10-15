@@ -40,7 +40,7 @@ func (q Queue) SelectNext(agents []Agent) (uuid.UUID, error) {
 	}
 	eligible := make([]Agent, 0, len(agents))
 	for _, agent := range agents {
-		if agent.UserID != uuid.Nil && agent.Active && agent.Available && agent.Capacity > agent.ActiveWorkload {
+		if agent.UserID != uuid.Nil && agent.Active && agent.Available && (agent.Capacity == 0 || agent.Capacity > agent.ActiveWorkload) { // capacity 0 = no limit
 			eligible = append(eligible, agent)
 		}
 	}

@@ -71,6 +71,16 @@ func TestAgentProfilesTenantIsolationAndOperationalMutations(t *testing.T) {
 	if got := call(adminA, a.tenantID, http.MethodPatch, h.UpdateQueue, map[string]string{"agent_profile_id": profileA.String(), "queue_member_id": memberA.String()}, `{"available":false,"capacity":3}`); got != http.StatusNoContent {
 		t.Fatalf("update queue=%d", got)
 	}
+	// capacity 0 = no limit of simultaneous conversations; outside 0..100 is refused (owner, 2026-10-14)
+	for body, want := range map[string]int{`{"capacity":0}`: http.StatusNoContent, `{"capacity":-1}`: http.StatusBadRequest, `{"capacity":101}`: http.StatusBadRequest} {
+		if got := call(adminA, a.tenantID, http.MethodPatch, h.UpdateQueue, map[string]string{"agent_profile_id": profileA.String(), "queue_member_id": memberA.String()}, body); got != want {
+			t.Fatalf("update %s = %d, want %d", body, got, want)
+		}
+	}
+	var stored int
+	if err := seed.QueryRow(context.Background(), `SELECT capacity FROM queue_members WHERE id=$1`, memberA).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("capacity 0 is stored as no limit: %d %v", stored, err)
+	}
 	if got := call(adminA, a.tenantID, http.MethodDelete, h.RemoveQueue, map[string]string{"agent_profile_id": profileB.String(), "queue_member_id": memberA.String()}, ""); got != http.StatusNotFound {
 		t.Fatalf("foreign remove=%d", got)
 	}

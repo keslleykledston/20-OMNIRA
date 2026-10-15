@@ -156,6 +156,9 @@ func SnapshotWith(ctx context.Context, q platformdb.Querier, tenant, queueID uui
 			rows[uid] = r
 		}
 		r.onCall = true
+		if r.member && r.capacity == 0 {
+			continue // no limit as a member of the queue: being on call does not set one
+		}
 		if capacity > r.capacity {
 			r.capacity = capacity
 		}

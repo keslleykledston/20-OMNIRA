@@ -788,7 +788,8 @@ func (e *Engine) chooseSectorQueue(ctx context.Context, q platformdb.Querier, te
 
 const defaultAgentCapacity = 5
 
-// pickAgent assigns to a named attendant (an escalation target). Capacity: the largest capacity the person has in any queue, or
+// pickAgent assigns to a named attendant (an escalation target). Capacity: the largest capacity the person has in any queue (0 = no
+// limit, and no limit in one queue means no limit), or
 // defaultAgentCapacity, counted across the company; shift unless the step allows otherwise; presence when required. The person is
 // re-read under the per-agent lock, like every other assignment.
 func (e *Engine) pickAgent(ctx context.Context, q platformdb.Querier, tenant uuid.UUID, req Request, st *stateRow, s overflow.Step, now time.Time) (uuid.UUID, bool, error) {
@@ -802,7 +803,7 @@ func (e *Engine) pickAgent(ctx context.Context, q platformdb.Querier, tenant uui
 	}
 	var profile uuid.UUID
 	var capacity, load int
-	err := q.QueryRow(ctx, `SELECT ap.id, COALESCE((SELECT max(qm.capacity) FROM queue_members qm WHERE qm.tenant_id=m.tenant_id AND qm.user_id=m.user_id AND qm.active), $3::int),
+	err := q.QueryRow(ctx, `SELECT ap.id, COALESCE((SELECT CASE WHEN bool_or(qm.capacity = 0) THEN 0 ELSE max(qm.capacity) END FROM queue_members qm WHERE qm.tenant_id=m.tenant_id AND qm.user_id=m.user_id AND qm.active), $3::int),
 		(SELECT count(*) FROM conversations c WHERE c.tenant_id=m.tenant_id AND c.assigned_to_user_id=m.user_id AND c.status='open')
 		FROM memberships m JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
 		WHERE m.tenant_id=$1 AND m.user_id=$2 AND m.status='active'`, tenant, user, defaultAgentCapacity).Scan(&profile, &capacity, &load)
@@ -812,7 +813,7 @@ func (e *Engine) pickAgent(ctx context.Context, q platformdb.Querier, tenant uui
 	if err != nil {
 		return uuid.Nil, false, err
 	}
-	if load >= capacity {
+	if capacity > 0 && load >= capacity { // 0 = no limit
 		return uuid.Nil, false, nil
 	}
 	if open, _, err := sectorsadapters.AgentShift(ctx, q, tenant, user, *st.queue, now); err != nil {
@@ -922,7 +923,7 @@ func (e *Engine) pickOnCall(ctx context.Context, q platformdb.Querier, tenant uu
 			}
 			return uuid.Nil, false, err
 		}
-		if load >= capacity {
+		if capacity > 0 && load >= capacity { // 0 = no limit
 			continue
 		}
 		if presenceReq {

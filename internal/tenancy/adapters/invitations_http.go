@@ -145,7 +145,7 @@ type CreateInvitationRequest struct {
 	// Optional attendance plan (ADR-0046), applied when the invitation is accepted.
 	Attends       bool        `json:"attends,omitempty"`
 	QueueIDs      []uuid.UUID `json:"queue_ids,omitempty"`
-	QueueCapacity int         `json:"queue_capacity,omitempty"`
+	QueueCapacity *int        `json:"queue_capacity,omitempty"` // omitted = 1; 0 = no limit
 }
 
 const maxPlannedQueues = 50
@@ -163,11 +163,11 @@ func (h *InvitationsHandler) planFrom(r *http.Request, q platformdb.Querier, ten
 	if _, err := h.authorize(r, "agent.manage"); err != nil {
 		return plan, http.StatusForbidden, "choosing who attends needs agent.manage"
 	}
-	if req.QueueCapacity != 0 {
-		if req.QueueCapacity < 1 || req.QueueCapacity > 100 {
-			return plan, http.StatusBadRequest, "queue_capacity must be between 1 and 100"
+	if req.QueueCapacity != nil {
+		if *req.QueueCapacity < 0 || *req.QueueCapacity > 100 {
+			return plan, http.StatusBadRequest, "queue_capacity must be 0 (no limit) to 100"
 		}
-		plan.QueueCapacity = req.QueueCapacity
+		plan.QueueCapacity = *req.QueueCapacity
 	}
 	seen := map[uuid.UUID]bool{}
 	for _, id := range req.QueueIDs {

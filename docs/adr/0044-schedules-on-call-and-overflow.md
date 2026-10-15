@@ -148,6 +148,24 @@ Motor em `internal/routing/engine`: `Decide` (ASSIGN_AGENT, ENQUEUE, WAIT_UNTIL_
 - API `GET/PUT /queues/{id}/open-notice` (`agent.read` / `agent.manage`, auditada como `queue.open_notice_saved`), independente do aviso de fechado. Tela: **Atendimento → Setores → "Avisos de horário"** (um modal com os dois textos; só o campo alterado é enviado).
 - Evidência: Postgres real (`TestOpenNoticeIsOptInOnlyOnWakeupReleaseOncePerEpisodeAndNeverBreaksTheDecision`, filas manual e `round_robin`; mutante "sem envio" morto) e `TestOpenNoticeAPIIsIndependentFromTheClosedNoticeAndFollowsTheSameRules`; Vitest 980. **Não provado** em WhatsApp real (depende de implantar e de um novo teste com setor fechado).
 
+### 11.11 Capacidade 0 = sem limite (migration 137) — pedido do dono em 2026-10-14
+
+"Na quantidade de atendimento ao mesmo tempo, permita selecionar 0 (sem limite de atendimento simultâneo na fila)."
+
+- **Regra:** `queue_members.capacity` vai de 0 a 100. **0 = sem limite** de conversas ao mesmo tempo naquela fila. Antes ia de 1 a 100.
+- **Onde vale:** em todos os pontos que olham a capacidade:
+  - rodízio legado (`AssignRoundRobin`, candidatos e tentativa);
+  - atribuição a outra pessoa;
+  - regra única de elegibilidade (`eligibility.Evaluate`, que serve o motor e a tela de simulação);
+  - domínio `SelectNext`;
+  - destino `agent` (sem limite em qualquer fila = sem limite);
+  - plantão: o limite de um período de plantão **não** rebaixa quem não tem limite como membro da fila.
+- **Plano do convite (ADR-0046):** aceita 0 (`queue_capacity` omitido = 1).
+- **O que não muda:** assumir a conversa para si continua sem olhar a capacidade, como antes.
+- **Implantação:** a regra está no código do **worker** e da **api**. Os dois sobem junto com a migration e a tela. Um worker antigo trataria 0 como "nunca elegível".
+- **Down:** transforma 0 em 100.
+- **Provas:** Postgres real (rodízio, atribuição, destino `agent`, plantão, rotas, convite), unidade (elegibilidade, domínio) e ida e volta da migration 137.
+
 ## 12. Decisões que precisam do dono (padrão adotado até resposta)
 1. **Feriados:** cadastro manual por tenant (padrão) ou importação de calendário nacional.
 2. **Fuso padrão do tenant:** `America/Manaus`, editável por calendário.

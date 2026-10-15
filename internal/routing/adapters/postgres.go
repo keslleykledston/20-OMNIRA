@@ -100,8 +100,8 @@ func (r *PostgresAssignmentRepository) assignRoundRobinLegacy(ctx context.Contex
 		  JOIN memberships m ON m.tenant_id=qm.tenant_id AND m.user_id=qm.user_id AND m.status='active'
 		  JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
 		  WHERE qm.active AND qm.available
-		    AND (SELECT count(*) FROM conversations active
-		         WHERE active.tenant_id=qm.tenant_id AND active.queue_id=qm.queue_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity
+		    AND (qm.capacity = 0 OR (SELECT count(*) FROM conversations active
+		         WHERE active.tenant_id=qm.tenant_id AND active.queue_id=qm.queue_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity)
 		  ORDER BY qm.last_assigned_at ASC NULLS FIRST, qm.user_id
 		  FOR UPDATE OF qm SKIP LOCKED LIMIT 1
 		), assigned AS (
@@ -239,8 +239,8 @@ func (r *PostgresAssignmentRepository) fetchCandidateChunk(ctx context.Context, 
 		JOIN memberships m ON m.tenant_id=qm.tenant_id AND m.user_id=qm.user_id AND m.status='active'
 		JOIN agent_profiles ap ON ap.tenant_id=m.tenant_id AND ap.membership_id=m.id AND ap.status='active'
 		WHERE qm.tenant_id=$1 AND qm.queue_id=$2 AND qm.active AND qm.available
-		  AND (SELECT count(*) FROM conversations active
-		       WHERE active.tenant_id=qm.tenant_id AND active.queue_id=qm.queue_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity
+		  AND (qm.capacity = 0 OR (SELECT count(*) FROM conversations active
+		       WHERE active.tenant_id=qm.tenant_id AND active.queue_id=qm.queue_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity)
 		  AND ($3::timestamptz IS NULL OR
 		       (COALESCE(qm.last_assigned_at, 'epoch'::timestamptz), qm.user_id) > ($3::timestamptz, $4::uuid))
 		ORDER BY sort_key ASC, qm.user_id ASC
@@ -272,8 +272,8 @@ func (r *PostgresAssignmentRepository) tryAssign(ctx context.Context, q platform
 		  SELECT qm.id,qm.user_id
 		  FROM queue_members qm
 		  WHERE qm.tenant_id=$1 AND qm.queue_id=$2 AND qm.user_id=$5 AND qm.active AND qm.available
-		    AND (SELECT count(*) FROM conversations active
-		         WHERE active.tenant_id=qm.tenant_id AND active.queue_id=qm.queue_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity
+		    AND (qm.capacity = 0 OR (SELECT count(*) FROM conversations active
+		         WHERE active.tenant_id=qm.tenant_id AND active.queue_id=qm.queue_id AND active.assigned_to_user_id=qm.user_id AND active.status='open') < qm.capacity)
 		  FOR UPDATE OF qm SKIP LOCKED
 		), assigned AS (
 		  UPDATE conversations c SET assigned_to_user_id=candidate.user_id,assigned_at=now(),updated_at=now()
