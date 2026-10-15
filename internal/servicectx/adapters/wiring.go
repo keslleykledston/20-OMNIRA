@@ -9,15 +9,24 @@ import (
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/application"
+	"github.com/omnira/omnira/internal/servicectx/ports"
 )
 
 // Build assembles the module on one pool: the service (sessions), the company's catalogs and the HTTP handler.
-func Build(pool *pgxpool.Pool) (*application.Service, *application.Catalog, *Handler) {
+// Options are the deployment choices of the module.
+type Options struct {
+	// ExternalOrders mounts the routes that ask the ERP to do something (OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED).
+	ExternalOrders bool
+	// Gateways resolves the adapter of a company's ERP integration. nil = none is configured (every ERP call answers 503 not_configured, never a fake success).
+	Gateways ports.GatewayResolver
+}
+
+func Build(pool *pgxpool.Pool, opts Options) (*application.Service, *application.Catalog, *Handler) {
 	repo := NewPostgresRepository(pool)
 	authz := NewAuthorizer(pool)
-	svc := application.NewService(repo, authz, NewAuditor(pool)).WithEvents(repo).WithTimeline(repo).WithCases(repo).WithTasks(repo).WithContext(repo).WithLinkCounter(repo)
+	svc := application.NewService(repo, authz, NewAuditor(pool)).WithEvents(repo).WithTimeline(repo).WithCases(repo).WithTasks(repo).WithContext(repo).WithLinkCounter(repo).WithExternal(repo, opts.Gateways)
 	catalog := application.NewCatalog(repo, authz, svc)
-	return svc, catalog, NewHandler(svc, catalog)
+	return svc, catalog, NewHandler(svc, catalog).WithExternalOrders(opts.ExternalOrders)
 }
 
 // FinalizeHook is the attendance finalization's way into the module (ADR-0049 §3). It runs inside the finalize transaction under a SAVEPOINT: if the

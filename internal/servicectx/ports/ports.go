@@ -25,6 +25,7 @@ const (
 	ScopeSessionOpen = "session.open"
 	ScopeCaseOpen    = "case.open"
 	ScopeTaskCreate  = "task.create"
+	ScopeExternalUpd = "external.update"
 )
 
 // Receipt is what an Idempotency-Key points to. Exactly one of the ids is set, by scope.
@@ -33,6 +34,7 @@ type Receipt struct {
 	SessionID   *uuid.UUID
 	CaseID      *uuid.UUID
 	TaskID      *uuid.UUID
+	RecordID    *uuid.UUID
 }
 
 // SessionFilter narrows a listing. Cursor is opaque to callers (keyset on opened_at, id).
@@ -251,8 +253,6 @@ type TaskFilter struct {
 type TaskRepository interface {
 	LockTask(ctx context.Context, id uuid.UUID) (*domain.Task, error)
 	GetTask(ctx context.Context, id uuid.UUID) (*domain.Task, error)
-	// TaskByFlowEffect finds the task a flow step already made (the engine may replay a step).
-	TaskByFlowEffect(ctx context.Context, runID uuid.UUID, seq int) (*domain.Task, error)
 	ListTasks(ctx context.Context, f TaskFilter, now time.Time) ([]domain.Task, string, error)
 	InsertTask(ctx context.Context, t *domain.Task) error
 	UpdateTask(ctx context.Context, t *domain.Task, expectedVersion int) error
@@ -264,4 +264,7 @@ type ContextRepository interface {
 	// needsSelection narrows to what is tied to no customer. A customer's case never appears under a contact that is not tied to that customer.
 	OpenCasesForContext(ctx context.Context, contactID uuid.UUID, customerID *uuid.UUID, needsSelection bool, limit int) ([]domain.Case, error)
 	PendingTasksForContext(ctx context.Context, contactID uuid.UUID, customerID *uuid.UUID, needsSelection bool, limit int) ([]domain.Task, error)
+	// ExternalRecordsForContext are the ERP records linked (and not unlinked) to the sessions of the contact and to the cases those sessions belong to, under the same
+	// customer rule as the open cases.
+	ExternalRecordsForContext(ctx context.Context, contactID uuid.UUID, customerID *uuid.UUID, needsSelection bool, limit int) ([]domain.ExternalRecord, error)
 }

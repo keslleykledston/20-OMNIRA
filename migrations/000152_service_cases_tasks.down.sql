@@ -9,4 +9,7 @@ DROP TABLE IF EXISTS service_tasks;
 DROP TABLE IF EXISTS service_case_sessions;
 DROP TABLE IF EXISTS service_cases;
 DROP FUNCTION IF EXISTS service_tasks_before_update();
+DROP FUNCTION IF EXISTS service_cases_assignee_check();
+DROP FUNCTION IF EXISTS service_tasks_assignee_check();
+DROP FUNCTION IF EXISTS service_active_member(UUID, UUID);
 DROP FUNCTION IF EXISTS service_cases_before_update();

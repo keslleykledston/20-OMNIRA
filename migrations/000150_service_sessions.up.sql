@@ -102,6 +102,7 @@ CREATE TABLE service_sessions (
   first_response_at   TIMESTAMPTZ,
   closed_at           TIMESTAMPTZ,
   reopen_count        INTEGER NOT NULL DEFAULT 0 CHECK (reopen_count >= 0),
+  last_reopen_reason  TEXT CHECK (last_reopen_reason IS NULL OR char_length(btrim(last_reopen_reason)) BETWEEN 3 AND 300),
   version             INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -219,6 +220,9 @@ BEGIN
     IF NEW.reopen_count <> OLD.reopen_count + 1 THEN
       RAISE EXCEPTION 'reopening counts exactly once' USING ERRCODE = '23514';
     END IF;
+    IF NEW.last_reopen_reason IS NULL OR char_length(btrim(NEW.last_reopen_reason)) < 3 THEN
+      RAISE EXCEPTION 'reopening a session needs a reason' USING ERRCODE = '23514';
+    END IF;
     IF NEW.conversation_id IS NOT NULL THEN
       SELECT c.status INTO conv_status FROM public.conversations c WHERE c.tenant_id = NEW.tenant_id AND c.id = NEW.conversation_id;
       IF conv_status IS DISTINCT FROM 'open' THEN
@@ -229,8 +233,8 @@ BEGIN
         RAISE EXCEPTION 'only the latest service session of a conversation can be reopened' USING ERRCODE = '23514';
       END IF;
     END IF;
-  ELSIF NEW.reopen_count <> OLD.reopen_count THEN
-    RAISE EXCEPTION 'reopen_count only moves when a session is reopened' USING ERRCODE = '23514';
+  ELSIF NEW.reopen_count <> OLD.reopen_count OR NEW.last_reopen_reason IS DISTINCT FROM OLD.last_reopen_reason THEN
+    RAISE EXCEPTION 'the reopening count and reason only move when a session is reopened' USING ERRCODE = '23514';
   END IF;
   IF NEW.status IN ('closed', 'abandoned') AND NEW.closed_at > clock_timestamp() + interval '1 minute' THEN
     RAISE EXCEPTION 'a session cannot close in the future' USING ERRCODE = '23514';

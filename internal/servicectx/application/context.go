@@ -64,6 +64,7 @@ type ContactContext struct {
 	RecentEvents       []ports.TimelineItem
 	OpenCases          []domain.Case
 	PendingTasks       []domain.Task
+	ExternalRecords    []domain.ExternalRecord
 }
 
 const contextRecentSessions = 5
@@ -130,6 +131,11 @@ func (s *Service) ContactContext(ctx context.Context, contactID uuid.UUID, custo
 		}
 		if out.PendingTasks, err = s.ctxRepo.PendingTasksForContext(ctx, contactID, out.SelectedCustomerID, out.NeedsSelection, defaultContextPending); err != nil {
 			return nil, err
+		}
+		if s.ext != nil {
+			if out.ExternalRecords, err = s.ctxRepo.ExternalRecordsForContext(ctx, contactID, out.SelectedCustomerID, out.NeedsSelection, defaultContextOpen); err != nil {
+				return nil, err
+			}
 		}
 	}
 	events, _, err := s.timeline.Timeline(ctx, ports.TimelineScope{ContactID: &contactID}, "", contextRecentEvents*3, false)

@@ -242,7 +242,7 @@ paths:
         Recent sessions and their results, the active session and recent events. A contact may be tied to several companies (customer accounts), so the
         context never guesses: without `customer_id` and with more than one link it answers `needs_customer_selection=true` and shows only what is tied to no
         customer; with `customer_id` (which must be one of the contact's own active links, else 400) it narrows to that customer. Open cases and pending tasks follow
-        the same rule (a customer's case or task never appears under another customer's selection); external records join this view in a later phase.
+        the same rule (a customer's case, task or external record never appears under another customer's selection).
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { name: contact_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -626,6 +626,194 @@ paths:
         '412': { $ref: '#/components/responses/Error' }
         '428': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-records:
+    post:
+      operationId: linkExternalRecord
+      tags: [External records]
+      summary: Link a record the ERP/CRM already has to a session, a case or a task
+      description: |
+        Needs `service.link_external`. The ERP is the authority: it is asked to CONFIRM the record (this module never invents one), and the projection (status, class, sync state) is refreshed from what it says. The same ERP record can be linked to several targets and stays ONE record (unique by integration + type + id, per company). Linking twice returns the link that stands (200). An ERP that does not answer is `502 external_unavailable`, never a guess; no adapter for the integration is `503 not_configured`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalRequest' } } }
+      responses:
+        '201': { description: Linked, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalResponse' } } } }
+        '200': { description: The link already stood, content: { application/json: { schema: { $ref: '#/components/schemas/LinkExternalResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: listExternalRecords
+      tags: [External records]
+      summary: List external records, newest first, by keyset cursor
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: integration_id, in: query, schema: { type: string, format: uuid } }
+        - { name: external_type, in: query, schema: { type: string } }
+        - { name: external_id, in: query, schema: { type: string } }
+        - { name: status_class, in: query, schema: { $ref: '#/components/schemas/StatusClass' } }
+        - { name: session_id, in: query, schema: { type: string, format: uuid }, description: Records actively linked to this session. }
+        - { name: case_id, in: query, schema: { type: string, format: uuid } }
+        - { name: task_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRecordPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-records/{record_id}:
+    get:
+      operationId: getExternalRecord
+      tags: [External records]
+      summary: Read an external record (the projection, not the ERP)
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The record, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRecord' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-records/{record_id}/refresh:
+    post:
+      operationId: refreshExternalRecord
+      tags: [External records]
+      summary: Ask the ERP again and update the projection
+      description: |
+        Needs `service.link_external`. A server-side sync, so it takes no `If-Match`. An older snapshot (by the PROVIDER's own update time) never rolls the projection back. An ERP that does not answer leaves the record as it was, marked `stale`; one that no longer knows it marks it `conflict`; nothing is deleted. The status change is told on the timeline of every session, case and task the record is linked to.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: record_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The record, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRecord' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-record-links/{link_id}/unlink:
+    post:
+      operationId: unlinkExternalRecord
+      tags: [External records]
+      summary: End a link (it stays as history)
+      description: |
+        Needs `service.link_external`. Idempotent.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: link_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The link, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalLink' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/service-sessions/{session_id}/external-service-orders:
+    post:
+      operationId: requestExternalServiceOrder
+      tags: [External requests]
+      summary: Ask the ERP to create a service order for the session
+      description: |
+        Available only with `OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED` (otherwise 404) and a gateway adapter for the integration (otherwise 503). Needs `service.request_external` (administrators and supervisors; NEVER delegable to a Hub, NEVER executable by the AI). `Idempotency-Key` is REQUIRED.
+        The attempt is made DURABLE in its own transaction before the ERP is called and its outcome is written in another after, so a crash cannot make a call that may have reached the ERP look as if it never happened.
+        `201` created; `200` + `Idempotent-Replay: true` the same key again (no new call); `422 external_rejected` the ERP definitively refused (nothing was created; the session is free to ask again); `202 outcome_unknown` NO ANSWER — the ERP may have processed it: nothing is repeated, the session is blocked from a new request until it is reconciled; `409 request_blocked` another request of the session is in flight or of unknown outcome.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/SessionId' }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderRequest' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderResponse' } } } }
+        '200': { description: Replay of the same Idempotency-Key, headers: { Idempotent-Replay: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderResponse' } } } }
+        '202': { description: No answer from the ERP - outcome unknown, content: { application/json: { schema: { $ref: '#/components/schemas/ServiceOrderResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests:
+    get:
+      operationId: listExternalRequests
+      tags: [External requests]
+      summary: List the requests made to the ERP
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/RequestState' } }
+        - { name: session_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRequestPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests/{request_id}:
+    get:
+      operationId: getExternalRequest
+      tags: [External requests]
+      summary: Read a request made to the ERP
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: The request, content: { application/json: { schema: { $ref: '#/components/schemas/ExternalRequest' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests/{request_id}/reconcile:
+    post:
+      operationId: reconcileExternalRequest
+      tags: [External requests]
+      summary: Find out whether a request of unknown outcome was processed
+      description: |
+        Needs `service.request_external`. Asks the ERP for the record by the correlation key OMNIRA sent. Found: confirmed (and linked). Not found: believed only when the request is old enough (an ERP may be eventually consistent), then it is a confirmed failure that frees the session. An ERP that does not answer teaches nothing. An ERP that cannot look a record up (`needs_manual`) is settled by `resolve`.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: What the reconciliation found, content: { application/json: { schema: { $ref: '#/components/schemas/ReconcileResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /tenants/{tenant_id}/external-requests/{request_id}/resolve:
+    post:
+      operationId: resolveExternalRequest
+      tags: [External requests]
+      summary: Settle by hand a request whose outcome is unknown
+      description: |
+        Needs `service.request_external`. After somebody checked the ERP: it created the record (give its id; the ERP is asked to confirm it exists) or it created nothing (give the reason, kept in the history). A settled request is final (409).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: request_id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ResolveRequest' } } }
+      responses:
+        '200': { description: Settled, content: { application/json: { schema: { $ref: '#/components/schemas/ReconcileResponse' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /tenants/{tenant_id}/service-categories:
     get:
       operationId: listServiceCategories
@@ -833,6 +1021,7 @@ components:
         recent_events: { type: array, items: { $ref: '#/components/schemas/TimelineItem' } }
         open_cases: { type: array, items: { $ref: '#/components/schemas/Case' } }
         pending_tasks: { type: array, items: { $ref: '#/components/schemas/Task' } }
+        external_records: { type: array, items: { $ref: '#/components/schemas/ExternalRecord' } }
     Priority: { type: string, enum: [low, normal, high, urgent] }
     CaseStatus: { type: string, enum: [open, investigating, waiting, resolved, closed, cancelled] }
     TaskStatus: { type: string, enum: [open, in_progress, done, cancelled] }
@@ -958,6 +1147,113 @@ components:
       properties:
         items: { type: array, items: { $ref: '#/components/schemas/Task' } }
         next_cursor: { type: string }
+    StatusClass: { type: string, enum: [open, in_progress, done, cancelled, unknown], description: The ERP's own status normalized to a few classes. }
+    RequestState: { type: string, enum: [in_flight, confirmed_success, confirmed_failure, outcome_unknown] }
+    LinkExternalRequest:
+      type: object
+      required: [integration_id, external_type, external_id]
+      additionalProperties: false
+      properties:
+        integration_id: { type: string, format: uuid }
+        external_type: { type: string, example: service_order }
+        external_id: { type: string, maxLength: 120 }
+        session_id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+      description: Exactly one of session_id, case_id, task_id.
+    ExternalRecord:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        integration_id: { type: string, format: uuid }
+        external_system: { type: string }
+        external_type: { type: string }
+        external_id: { type: string }
+        display_ref: { type: string, example: OS 1042 }
+        external_status: { type: string }
+        status_class: { $ref: '#/components/schemas/StatusClass' }
+        sync_state: { type: string, enum: [synced, pending, stale, conflict, error] }
+        source_updated_at: { type: string, format: date-time, nullable: true, description: The PROVIDER's update time of the snapshot applied last; it only moves forward. }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ExternalLink:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        external_record_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid, nullable: true }
+        case_id: { type: string, format: uuid, nullable: true }
+        task_id: { type: string, format: uuid, nullable: true }
+        linked_at: { type: string, format: date-time }
+        unlinked_at: { type: string, format: date-time, nullable: true }
+    LinkExternalResponse:
+      type: object
+      properties:
+        record: { $ref: '#/components/schemas/ExternalRecord' }
+        link: { $ref: '#/components/schemas/ExternalLink' }
+        record_created: { type: boolean }
+        link_created: { type: boolean }
+    ExternalRecordPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ExternalRecord' } }
+        next_cursor: { type: string }
+    ServiceOrderRequest:
+      type: object
+      required: [integration_id, title]
+      additionalProperties: false
+      properties:
+        integration_id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid, nullable: true }
+        title: { type: string, maxLength: 120 }
+        description: { type: string, maxLength: 2000, description: What the ERP receives. Only the title is kept here. }
+    ExternalRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        integration_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        case_id: { type: string, format: uuid, nullable: true }
+        operation: { type: string, enum: [create_service_order] }
+        title: { type: string }
+        state: { $ref: '#/components/schemas/RequestState' }
+        external_record_id: { type: string, format: uuid, nullable: true }
+        failure_class: { type: string, nullable: true }
+        resolution_source: { type: string, enum: [gateway, reconcile, manual], nullable: true }
+        requested_by_user_id: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+    ServiceOrderResponse:
+      type: object
+      properties:
+        outcome: { type: string, enum: [created, replay, rejected, outcome_unknown, blocked] }
+        request: { $ref: '#/components/schemas/ExternalRequest' }
+        record: { allOf: [ { $ref: '#/components/schemas/ExternalRecord' } ], nullable: true }
+        error: { type: string }
+        detail: { type: string }
+    ExternalRequestPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ExternalRequest' } }
+        next_cursor: { type: string }
+    ReconcileResponse:
+      type: object
+      properties:
+        request: { $ref: '#/components/schemas/ExternalRequest' }
+        record: { allOf: [ { $ref: '#/components/schemas/ExternalRecord' } ], nullable: true }
+        needs_manual: { type: boolean, description: The ERP offers no way to look the record up; settle it with resolve. }
+        too_early: { type: boolean, description: The ERP does not know it YET; not believed until the request is old enough. }
+    ResolveRequest:
+      type: object
+      required: [created]
+      additionalProperties: false
+      properties:
+        created: { type: boolean }
+        external_id: { type: string, maxLength: 120, description: Required when created. }
+        reason: { type: string, minLength: 3, maxLength: 500, description: Required when nothing was created. }
     Category:
       type: object
       properties: { id: { type: string, format: uuid }, code: { type: string }, label: { type: string }, active: { type: boolean } }

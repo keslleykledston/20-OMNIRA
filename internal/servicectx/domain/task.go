@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,32 +52,33 @@ func ValidOrigin(o string) bool {
 }
 
 type Task struct {
-	ID             uuid.UUID
-	TenantID       uuid.UUID
-	Title          string
-	Description    string
-	Status         TaskStatus
-	Priority       Priority
-	AssignedUserID *uuid.UUID
-	AssignedTeamID *uuid.UUID
-	DueAt          *time.Time
-	CompletedAt    *time.Time
-	CompletedBy    *uuid.UUID
-	CancelledAt    *time.Time
-	CancelReason   *string
-	OriginType     string
-	SessionID      *uuid.UUID
-	CaseID         *uuid.UUID
-	ContactID      *uuid.UUID
-	FlowRunID      *uuid.UUID
-	FlowSeq        *int
-	CreatedBy      *uuid.UUID
-	IdempotencyKey *string
-	RequestHash    *string
-	ReopenCount    int
-	Version        int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID               uuid.UUID
+	TenantID         uuid.UUID
+	Title            string
+	Description      string
+	Status           TaskStatus
+	Priority         Priority
+	AssignedUserID   *uuid.UUID
+	AssignedTeamID   *uuid.UUID
+	DueAt            *time.Time
+	CompletedAt      *time.Time
+	CompletedBy      *uuid.UUID
+	CancelledAt      *time.Time
+	CancelReason     *string
+	OriginType       string
+	SessionID        *uuid.UUID
+	CaseID           *uuid.UUID
+	ContactID        *uuid.UUID
+	FlowRunID        *uuid.UUID
+	FlowSeq          *int
+	CreatedBy        *uuid.UUID
+	IdempotencyKey   *string
+	RequestHash      *string
+	ReopenCount      int
+	LastReopenReason *string
+	Version          int
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // Overdue says whether the task is pending past its due time.
@@ -148,7 +150,11 @@ func (in TaskOpenInput) Hash() string {
 	if in.DueAt != nil {
 		due = in.DueAt.UTC().Format(time.RFC3339Nano)
 	}
-	return fingerprint("task", in.Title, in.Description, string(in.Priority), id(in.AssignedUserID), id(in.AssignedTeamID), due, id(in.SessionID), id(in.CaseID), id(in.ContactID), in.OriginType)
+	flowSeq := "-"
+	if in.FlowSeq != nil {
+		flowSeq = strconv.Itoa(*in.FlowSeq)
+	}
+	return fingerprint("task", in.Title, in.Description, string(in.Priority), id(in.AssignedUserID), id(in.AssignedTeamID), due, id(in.SessionID), id(in.CaseID), id(in.ContactID), in.OriginType, id(in.FlowRunID), flowSeq)
 }
 
 type TaskPatchInput struct {

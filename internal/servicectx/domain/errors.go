@@ -18,4 +18,5 @@ var (
 	ErrUnknownResolution   = errors.New("servicectx: unknown or inactive result code")
 	ErrNotConfigured       = errors.New("servicectx: integration not configured for this company")
 	ErrOutcomeUnknown      = errors.New("servicectx: an earlier request has an unknown outcome and must be reconciled first")
+	ErrExternalUnavailable = errors.New("servicectx: the external system did not answer")
 )

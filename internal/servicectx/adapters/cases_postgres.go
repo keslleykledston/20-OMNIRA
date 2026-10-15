@@ -20,14 +20,14 @@ var (
 )
 
 const caseColumns = `id, tenant_id, case_number, case_sequence, title, description, customer_id, category_id, priority, status, assigned_team_id, assigned_agent_id,
-	origin_session_id, resolution, cancel_reason, created_by_user_id, opened_at, resolved_at, closed_at, cancelled_at, reopen_count,
+	origin_session_id, resolution, cancel_reason, created_by_user_id, opened_at, resolved_at, closed_at, cancelled_at, reopen_count, last_reopen_reason,
 	version, created_at, updated_at`
 
 func scanCase(row pgx.Row) (*domain.Case, error) {
 	c := &domain.Case{}
 	var priority, status string
 	if err := row.Scan(&c.ID, &c.TenantID, &c.CaseNumber, &c.CaseSequence, &c.Title, &c.Description, &c.CustomerID, &c.CategoryID, &priority, &status, &c.AssignedTeamID,
-		&c.AssignedAgentID, &c.OriginSessionID, &c.Resolution, &c.CancelReason, &c.CreatedBy, &c.OpenedAt, &c.ResolvedAt, &c.ClosedAt, &c.CancelledAt, &c.ReopenCount,
+		&c.AssignedAgentID, &c.OriginSessionID, &c.Resolution, &c.CancelReason, &c.CreatedBy, &c.OpenedAt, &c.ResolvedAt, &c.ClosedAt, &c.CancelledAt, &c.ReopenCount, &c.LastReopenReason,
 		&c.Version, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -74,11 +74,11 @@ func (r *PostgresRepository) UpdateCase(ctx context.Context, c *domain.Case, exp
 	}
 	row := r.q(ctx).QueryRow(ctx, `
 		UPDATE service_cases SET title=$3, description=$4, customer_id=$5, category_id=$6, priority=$7, status=$8, assigned_team_id=$9, assigned_agent_id=$10,
-			resolution=$11, cancel_reason=$12, resolved_at=$13, closed_at=$14, cancelled_at=$15, reopen_count=$16
-		WHERE tenant_id=$1 AND id=$2 AND version=$17
+			resolution=$11, cancel_reason=$12, resolved_at=$13, closed_at=$14, cancelled_at=$15, reopen_count=$16, last_reopen_reason=$17
+		WHERE tenant_id=$1 AND id=$2 AND version=$18
 		RETURNING version, updated_at`,
 		tenant, c.ID, c.Title, c.Description, c.CustomerID, c.CategoryID, string(c.Priority), string(c.Status), c.AssignedTeamID, c.AssignedAgentID,
-		c.Resolution, c.CancelReason, c.ResolvedAt, c.ClosedAt, c.CancelledAt, c.ReopenCount, expectedVersion)
+		c.Resolution, c.CancelReason, c.ResolvedAt, c.ClosedAt, c.CancelledAt, c.ReopenCount, c.LastReopenReason, expectedVersion)
 	if err := row.Scan(&c.Version, &c.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			var one int
@@ -220,7 +220,7 @@ func (r *PostgresRepository) ListCases(ctx context.Context, f ports.CaseFilter) 
 // ---- tasks ----
 
 const taskColumns = `id, tenant_id, title, description, status, priority, assigned_user_id, assigned_team_id, due_at, completed_at, completed_by_user_id, cancelled_at,
-	cancel_reason, origin_type, session_id, case_id, contact_id, flow_run_id, flow_seq, created_by_user_id, reopen_count, version,
+	cancel_reason, origin_type, session_id, case_id, contact_id, flow_run_id, flow_seq, created_by_user_id, reopen_count, last_reopen_reason, version,
 	created_at, updated_at`
 
 func scanTask(row pgx.Row) (*domain.Task, error) {
@@ -228,7 +228,7 @@ func scanTask(row pgx.Row) (*domain.Task, error) {
 	var status, priority string
 	if err := row.Scan(&t.ID, &t.TenantID, &t.Title, &t.Description, &status, &priority, &t.AssignedUserID, &t.AssignedTeamID, &t.DueAt, &t.CompletedAt, &t.CompletedBy,
 		&t.CancelledAt, &t.CancelReason, &t.OriginType, &t.SessionID, &t.CaseID, &t.ContactID, &t.FlowRunID, &t.FlowSeq, &t.CreatedBy,
-		&t.ReopenCount, &t.Version, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.ReopenCount, &t.LastReopenReason, &t.Version, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
 	t.Status, t.Priority = domain.TaskStatus(status), domain.Priority(priority)
@@ -257,14 +257,6 @@ func (r *PostgresRepository) GetTask(ctx context.Context, id uuid.UUID) (*domain
 	return t, mapErr(err)
 }
 
-func (r *PostgresRepository) TaskByFlowEffect(ctx context.Context, runID uuid.UUID, seq int) (*domain.Task, error) {
-	t, err := r.oneTask(ctx, `flow_run_id = $2 AND flow_seq = $3`, false, runID, seq)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	return t, err
-}
-
 func (r *PostgresRepository) InsertTask(ctx context.Context, t *domain.Task) error {
 	_, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO service_tasks (id, tenant_id, title, description, status, priority, assigned_user_id, assigned_team_id, due_at, origin_type, session_id, case_id, contact_id,
@@ -282,11 +274,11 @@ func (r *PostgresRepository) UpdateTask(ctx context.Context, t *domain.Task, exp
 	}
 	row := r.q(ctx).QueryRow(ctx, `
 		UPDATE service_tasks SET title=$3, description=$4, status=$5, priority=$6, assigned_user_id=$7, assigned_team_id=$8, due_at=$9, completed_at=$10,
-			completed_by_user_id=$11, cancelled_at=$12, cancel_reason=$13, reopen_count=$14
-		WHERE tenant_id=$1 AND id=$2 AND version=$15
+			completed_by_user_id=$11, cancelled_at=$12, cancel_reason=$13, reopen_count=$14, last_reopen_reason=$15
+		WHERE tenant_id=$1 AND id=$2 AND version=$16
 		RETURNING version, updated_at`,
 		tenant, t.ID, t.Title, t.Description, string(t.Status), string(t.Priority), t.AssignedUserID, t.AssignedTeamID, t.DueAt, t.CompletedAt,
-		t.CompletedBy, t.CancelledAt, t.CancelReason, t.ReopenCount, expectedVersion)
+		t.CompletedBy, t.CancelledAt, t.CancelReason, t.ReopenCount, t.LastReopenReason, expectedVersion)
 	if err := row.Scan(&t.Version, &t.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			var one int
@@ -447,7 +439,9 @@ func (r *PostgresRepository) CountLinks(ctx context.Context, sessionID uuid.UUID
 		return 0, 0, 0, err
 	}
 	err = r.q(ctx).QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM service_external_links l JOIN external_records x ON x.tenant_id = l.tenant_id AND x.id = l.external_record_id
+		   WHERE l.tenant_id = $1 AND l.session_id = $2 AND l.unlinked_at IS NULL AND x.external_type = 'service_order'),
 		(SELECT count(*) FROM service_case_sessions WHERE tenant_id = $1 AND session_id = $2),
-		(SELECT count(*) FROM service_tasks WHERE tenant_id = $1 AND session_id = $2)`, tenant, sessionID).Scan(&cases, &tasks)
-	return 0, cases, tasks, err
+		(SELECT count(*) FROM service_tasks WHERE tenant_id = $1 AND session_id = $2)`, tenant, sessionID).Scan(&externalOrders, &cases, &tasks)
+	return externalOrders, cases, tasks, err
 }

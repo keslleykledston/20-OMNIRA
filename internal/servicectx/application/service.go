@@ -44,6 +44,10 @@ type Service struct {
 	cases        ports.CaseRepository
 	tasks        ports.TaskRepository
 	ctxRepo      ports.ContextRepository
+	ext          ports.ExternalRepository
+	gateways     ports.GatewayResolver
+	gatewayTO    time.Duration
+	reconcileAge time.Duration
 	reopenWindow time.Duration
 	metrics      Metrics
 }
@@ -58,7 +62,7 @@ type noMetrics struct{}
 func (noMetrics) Inc(string, ...string) {}
 
 func NewService(repo ports.Repository, authz ports.Authorizer, audit ports.Auditor) *Service {
-	return &Service{repo: repo, authz: authz, audit: audit, events: ports.NopEvents{}, reopenWindow: domain.DefaultReopenWindow, metrics: noMetrics{}}
+	return &Service{repo: repo, authz: authz, audit: audit, events: ports.NopEvents{}, reopenWindow: domain.DefaultReopenWindow, metrics: noMetrics{}, gateways: ports.NotConfigured{}, gatewayTO: 15 * time.Second, reconcileAge: 10 * time.Minute}
 }
 
 func (s *Service) WithEvents(e ports.Events) *Service {
@@ -90,6 +94,8 @@ type caller struct {
 	system bool
 	// onBehalf names the person a system session acts for (a Hub agent finalizing through the Hub's write path); nil otherwise.
 	onBehalf *uuid.UUID
+	// kind overrides the actor kind of the events a system session writes (an inbound ERP update is "integration", a flow is "flow").
+	kind string
 }
 
 func (c caller) actorID() *uuid.UUID {
@@ -104,6 +110,9 @@ func (c caller) actorID() *uuid.UUID {
 }
 
 func (c caller) actorKind() string {
+	if c.kind != "" && c.actorID() == nil {
+		return c.kind
+	}
 	if c.actorID() == nil {
 		return domain.ActorSystem
 	}
@@ -702,6 +711,8 @@ func (s *Service) Reopen(ctx context.Context, id uuid.UUID, raw domain.ReopenInp
 	sess.ResolutionCode, sess.ResolutionCanonical, sess.ResolutionNote = nil, nil, ""
 	sess.ClosedAt, sess.ClosedBy, sess.ClosedSource = nil, nil, nil
 	sess.ReopenCount++
+	reason := in.Reason
+	sess.LastReopenReason = &reason
 	if err := s.repo.UpdateSession(ctx, sess, expectedVersion); err != nil {
 		return nil, err
 	}

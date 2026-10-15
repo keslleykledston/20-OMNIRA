@@ -361,7 +361,7 @@ func main() {
 	}
 	srv.RegisterGroupHandlers(dbPool, groupsadapters.NewHandler(dbPool, auditadapters.NewPostgresAuditEventRepository(dbPool), groupDirectory))
 	if cfg.ServiceContextEnabled {
-		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool)
+		serviceSvc, _, serviceHandler := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
 		if cfg.ServiceFinalizeHookEnabled {
 			attendanceService.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc)) // ADR-0049: finalizing also closes the service session
 		}

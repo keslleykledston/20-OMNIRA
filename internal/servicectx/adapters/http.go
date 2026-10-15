@@ -23,15 +23,22 @@ type Handler struct {
 	svc     *application.Service
 	catalog *application.Catalog
 	cases   *CasesHandler
+	ext     *ExternalHandler
 }
 
 func NewHandler(svc *application.Service, catalog *application.Catalog) *Handler {
-	return &Handler{svc: svc, catalog: catalog, cases: &CasesHandler{svc: svc}}
+	return &Handler{svc: svc, catalog: catalog, cases: &CasesHandler{svc: svc}, ext: &ExternalHandler{svc: svc}}
 }
 
 // Registrar is the part of http.ServeMux the module needs (a test can record the routes).
 type Registrar interface {
 	Handle(pattern string, handler http.Handler)
+}
+
+// WithExternalOrders turns on the routes that ask the ERP to do something (service orders, reconciliation). Off, they do not exist (404).
+func (h *Handler) WithExternalOrders(on bool) *Handler {
+	h.ext.orders = on
+	return h
 }
 
 // Routes mounts the API. wrap adds authn and the tenant session (see httpserver.RegisterServiceContextHandlers); delegable, when set, wraps a route for a Hub
@@ -66,6 +73,9 @@ func (h *Handler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Handler
 	mux.Handle("PATCH "+base+"/service-result-codes/{code_id}", wrap(h.patchResultCode))
 	if h.cases != nil {
 		h.cases.Routes(mux, wrap, delegable)
+	}
+	if h.ext != nil {
+		h.ext.Routes(mux, wrap, delegable)
 	}
 }
 
@@ -109,6 +119,8 @@ func fail(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusUnprocessableEntity, "not_a_customer_conversation", "only a conversation with a customer has service sessions")
 	case errors.Is(err, domain.ErrUnknownResolution):
 		writeErr(w, http.StatusUnprocessableEntity, "unknown_result", "the result code does not exist or is inactive")
+	case errors.Is(err, domain.ErrExternalUnavailable):
+		writeErr(w, http.StatusBadGateway, "external_unavailable", "the external system did not answer; nothing was changed")
 	case errors.Is(err, domain.ErrNotConfigured):
 		writeErr(w, http.StatusServiceUnavailable, "not_configured", "the integration is not configured for this company")
 	case errors.Is(err, domain.ErrInvalid):
@@ -732,8 +744,12 @@ func (h *Handler) contactContext(w http.ResponseWriter, r *http.Request) {
 	for i := range cc.PendingTasks {
 		tasks = append(tasks, toTaskDTO(&cc.PendingTasks[i], now))
 	}
+	records := make([]recordDTO, 0, len(cc.ExternalRecords))
+	for i := range cc.ExternalRecords {
+		records = append(records, toRecordDTO(&cc.ExternalRecords[i]))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"open_cases": cases, "pending_tasks": tasks,
+		"open_cases": cases, "pending_tasks": tasks, "external_records": records,
 		"contact_id": cc.ContactID, "customers": customers, "needs_customer_selection": cc.NeedsSelection, "selected_customer_id": cc.SelectedCustomerID,
 		"active_session": active, "recent_sessions": recent, "recent_events": events,
 	})

@@ -20,8 +20,9 @@ CREATE TABLE service_cases (
   assigned_team_id   UUID,                                    -- a team is a queue (queues are the sectors, ADR-0043)
   assigned_agent_id  UUID REFERENCES users(id),
   origin_session_id  UUID,
-  resolution         TEXT CHECK (resolution IS NULL OR char_length(resolution) BETWEEN 1 AND 4000),
-  cancel_reason      TEXT CHECK (cancel_reason IS NULL OR char_length(cancel_reason) BETWEEN 3 AND 500),
+  resolution         TEXT CHECK (resolution IS NULL OR char_length(btrim(resolution)) BETWEEN 1 AND 4000),
+  cancel_reason      TEXT CHECK (cancel_reason IS NULL OR char_length(btrim(cancel_reason)) BETWEEN 3 AND 500),
+  last_reopen_reason TEXT CHECK (last_reopen_reason IS NULL OR char_length(btrim(last_reopen_reason)) BETWEEN 3 AND 500),
   created_by_user_id UUID REFERENCES users(id),
   opened_at          TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   resolved_at        TIMESTAMPTZ,
@@ -77,7 +78,8 @@ CREATE TABLE service_tasks (
   completed_at         TIMESTAMPTZ,
   completed_by_user_id UUID REFERENCES users(id),
   cancelled_at         TIMESTAMPTZ,
-  cancel_reason        TEXT CHECK (cancel_reason IS NULL OR char_length(cancel_reason) BETWEEN 3 AND 500),
+  cancel_reason        TEXT CHECK (cancel_reason IS NULL OR char_length(btrim(cancel_reason)) BETWEEN 3 AND 500),
+  last_reopen_reason   TEXT CHECK (last_reopen_reason IS NULL OR char_length(btrim(last_reopen_reason)) BETWEEN 3 AND 500),
   -- WHO or WHAT created it. The context it belongs to is in the real foreign keys below, never in a loose (type, id) pair.
   origin_type          TEXT NOT NULL CHECK (origin_type IN ('human', 'flow', 'ai', 'api')),
   session_id           UUID,
@@ -121,6 +123,35 @@ ALTER TABLE service_command_receipts ADD CONSTRAINT service_command_receipts_tar
 -- the events table can now point at cases
 ALTER TABLE context_events ADD FOREIGN KEY (tenant_id, case_id) REFERENCES service_cases (tenant_id, id);
 
+-- Is this person an active member of THAT company? (SECURITY DEFINER so the answer does not depend on what the caller's own row-level rules let them read.)
+CREATE FUNCTION service_active_member(p_tenant UUID, p_user UUID) RETURNS BOOLEAN AS $$
+  SELECT EXISTS (SELECT 1 FROM public.memberships m WHERE m.tenant_id = p_tenant AND m.user_id = p_user AND m.status = 'active');
+$$ LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
+REVOKE EXECUTE ON FUNCTION service_active_member(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION service_active_member(UUID, UUID) TO omnira_app;
+
+-- Somebody can only be put in charge of a case or a task of a company they belong to: the foreign key to users is global, so the database checks the membership itself
+-- (only when the person in charge CHANGES: a task of somebody who later left stays editable).
+CREATE FUNCTION service_cases_assignee_check() RETURNS trigger AS $$
+BEGIN
+  IF NEW.assigned_agent_id IS NOT NULL AND (TG_OP = 'INSERT' OR NEW.assigned_agent_id IS DISTINCT FROM OLD.assigned_agent_id)
+     AND NOT public.service_active_member(NEW.tenant_id, NEW.assigned_agent_id) THEN
+    RAISE EXCEPTION 'the person in charge is not an active member of this company' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
+
+CREATE FUNCTION service_tasks_assignee_check() RETURNS trigger AS $$
+BEGIN
+  IF NEW.assigned_user_id IS NOT NULL AND (TG_OP = 'INSERT' OR NEW.assigned_user_id IS DISTINCT FROM OLD.assigned_user_id)
+     AND NOT public.service_active_member(NEW.tenant_id, NEW.assigned_user_id) THEN
+    RAISE EXCEPTION 'the person in charge is not an active member of this company' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
+
 -- 4. row guards ----------------------------------------------------------------------------------------------------------------------------
 -- A case: identity immutable; version and clock advanced here; the key asked depends on WHAT changes (and a change can be several kinds at once):
 --   assignment (team/agent)                          -> service.assign
@@ -144,13 +175,7 @@ BEGIN
      OR (OLD.status = 'resolved'      AND NEW.status IN ('closed', 'investigating'))) THEN
     RAISE EXCEPTION 'service case: % -> % is not an allowed transition', OLD.status, NEW.status USING ERRCODE = '23514';
   END IF;
-  IF OLD.status = 'resolved' AND NEW.status = 'investigating' THEN
-    IF NEW.reopen_count <> OLD.reopen_count + 1 THEN
-      RAISE EXCEPTION 'reopening counts exactly once' USING ERRCODE = '23514';
-    END IF;
-  ELSIF NEW.reopen_count <> OLD.reopen_count THEN
-    RAISE EXCEPTION 'reopen_count only moves when a resolved case is reopened' USING ERRCODE = '23514';
-  END IF;
+  -- the KEY of what is being changed comes first, so a person without it is told so before anything else
   IF NOT public.is_system_admin() THEN
     IF (NEW.assigned_team_id IS DISTINCT FROM OLD.assigned_team_id OR NEW.assigned_agent_id IS DISTINCT FROM OLD.assigned_agent_id)
        AND NOT public.actor_has_permission(NEW.tenant_id, public.current_user_id(), 'service.assign') THEN
@@ -167,12 +192,32 @@ BEGIN
       RAISE EXCEPTION 'service case: service.update required' USING ERRCODE = '42501';
     END IF;
   END IF;
+  IF OLD.status = 'resolved' AND NEW.status = 'investigating' THEN
+    IF NEW.reopen_count <> OLD.reopen_count + 1 THEN
+      RAISE EXCEPTION 'reopening counts exactly once' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.last_reopen_reason IS NULL OR char_length(btrim(NEW.last_reopen_reason)) < 3 THEN
+      RAISE EXCEPTION 'reopening a case needs a reason' USING ERRCODE = '23514';
+    END IF;
+  ELSIF NEW.reopen_count <> OLD.reopen_count OR NEW.last_reopen_reason IS DISTINCT FROM OLD.last_reopen_reason THEN
+    RAISE EXCEPTION 'the reopening count and reason only move when a resolved case is reopened' USING ERRCODE = '23514';
+  END IF;
+  -- the facts of a resolution, a closing and a cancellation are written WITH the status change that makes them true, never on their own
+  IF NEW.status = OLD.status AND (NEW.resolution IS DISTINCT FROM OLD.resolution OR NEW.resolved_at IS DISTINCT FROM OLD.resolved_at
+     OR NEW.closed_at IS DISTINCT FROM OLD.closed_at OR NEW.cancel_reason IS DISTINCT FROM OLD.cancel_reason OR NEW.cancelled_at IS DISTINCT FROM OLD.cancelled_at) THEN
+    RAISE EXCEPTION 'resolution, closing and cancellation facts only change with the status' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.status IN ('resolved', 'closed', 'cancelled') AND NEW.status IS DISTINCT FROM OLD.status
+     AND GREATEST(COALESCE(NEW.resolved_at, '-infinity'), COALESCE(NEW.closed_at, '-infinity'), COALESCE(NEW.cancelled_at, '-infinity')) > clock_timestamp() + interval '1 minute' THEN
+    RAISE EXCEPTION 'a case cannot be resolved, closed or cancelled in the future' USING ERRCODE = '23514';
+  END IF;
   NEW.version := OLD.version + 1;
   NEW.updated_at := now();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
 CREATE TRIGGER service_cases_before_update_trg BEFORE UPDATE ON service_cases FOR EACH ROW EXECUTE FUNCTION service_cases_before_update();
+CREATE TRIGGER service_cases_assignee_trg BEFORE INSERT OR UPDATE OF assigned_agent_id ON service_cases FOR EACH ROW EXECUTE FUNCTION service_cases_assignee_check();
 
 -- A task: same discipline. Finishing or cancelling (or reopening a finished one) = service.close; assignment = service.assign; the rest = service.update.
 CREATE FUNCTION service_tasks_before_update() RETURNS trigger AS $$
@@ -192,18 +237,7 @@ BEGIN
      OR (OLD.status = 'done'        AND NEW.status = 'open')) THEN
     RAISE EXCEPTION 'service task: % -> % is not an allowed transition', OLD.status, NEW.status USING ERRCODE = '23514';
   END IF;
-  IF OLD.status = 'done' AND NEW.status = 'done' AND (NEW.title IS DISTINCT FROM OLD.title OR NEW.description IS DISTINCT FROM OLD.description
-     OR NEW.priority IS DISTINCT FROM OLD.priority OR NEW.due_at IS DISTINCT FROM OLD.due_at OR NEW.assigned_user_id IS DISTINCT FROM OLD.assigned_user_id
-     OR NEW.assigned_team_id IS DISTINCT FROM OLD.assigned_team_id) THEN
-    RAISE EXCEPTION 'a completed task is not edited; reopen it first' USING ERRCODE = '23514';
-  END IF;
-  IF OLD.status = 'done' AND NEW.status = 'open' THEN
-    IF NEW.reopen_count <> OLD.reopen_count + 1 THEN
-      RAISE EXCEPTION 'reopening counts exactly once' USING ERRCODE = '23514';
-    END IF;
-  ELSIF NEW.reopen_count <> OLD.reopen_count THEN
-    RAISE EXCEPTION 'reopen_count only moves when a completed task is reopened' USING ERRCODE = '23514';
-  END IF;
+  -- the KEY of what is being changed comes first, so a person without it is told so before anything else
   IF NOT public.is_system_admin() THEN
     IF (NEW.assigned_user_id IS DISTINCT FROM OLD.assigned_user_id OR NEW.assigned_team_id IS DISTINCT FROM OLD.assigned_team_id)
        AND NOT public.actor_has_permission(NEW.tenant_id, public.current_user_id(), 'service.assign') THEN
@@ -220,12 +254,40 @@ BEGIN
       RAISE EXCEPTION 'service task: service.update required' USING ERRCODE = '42501';
     END IF;
   END IF;
+  IF OLD.status = 'done' AND NEW.status = 'done' AND (NEW.title IS DISTINCT FROM OLD.title OR NEW.description IS DISTINCT FROM OLD.description
+     OR NEW.priority IS DISTINCT FROM OLD.priority OR NEW.due_at IS DISTINCT FROM OLD.due_at OR NEW.assigned_user_id IS DISTINCT FROM OLD.assigned_user_id
+     OR NEW.assigned_team_id IS DISTINCT FROM OLD.assigned_team_id) THEN
+    RAISE EXCEPTION 'a completed task is not edited; reopen it first' USING ERRCODE = '23514';
+  END IF;
+  IF OLD.status = 'done' AND NEW.status = 'open' THEN
+    IF NEW.reopen_count <> OLD.reopen_count + 1 THEN
+      RAISE EXCEPTION 'reopening counts exactly once' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.last_reopen_reason IS NULL OR char_length(btrim(NEW.last_reopen_reason)) < 3 THEN
+      RAISE EXCEPTION 'reopening a task needs a reason' USING ERRCODE = '23514';
+    END IF;
+  ELSIF NEW.reopen_count <> OLD.reopen_count OR NEW.last_reopen_reason IS DISTINCT FROM OLD.last_reopen_reason THEN
+    RAISE EXCEPTION 'the reopening count and reason only move when a completed task is reopened' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.status = OLD.status AND (NEW.completed_at IS DISTINCT FROM OLD.completed_at OR NEW.completed_by_user_id IS DISTINCT FROM OLD.completed_by_user_id
+     OR NEW.cancelled_at IS DISTINCT FROM OLD.cancelled_at OR NEW.cancel_reason IS DISTINCT FROM OLD.cancel_reason) THEN
+    RAISE EXCEPTION 'completion and cancellation facts only change with the status' USING ERRCODE = '23514';
+  END IF;
+  -- whoever completes a task signs it with their OWN id (the system session, which is not a person, is the one exception)
+  IF NEW.status = 'done' AND OLD.status <> 'done' AND NOT public.is_system_admin() AND NEW.completed_by_user_id IS DISTINCT FROM public.current_user_id() THEN
+    RAISE EXCEPTION 'a task is completed in the name of whoever completes it' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.status IN ('done', 'cancelled') AND NEW.status IS DISTINCT FROM OLD.status
+     AND GREATEST(COALESCE(NEW.completed_at, '-infinity'), COALESCE(NEW.cancelled_at, '-infinity')) > clock_timestamp() + interval '1 minute' THEN
+    RAISE EXCEPTION 'a task cannot be completed or cancelled in the future' USING ERRCODE = '23514';
+  END IF;
   NEW.version := OLD.version + 1;
   NEW.updated_at := now();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp;
 CREATE TRIGGER service_tasks_before_update_trg BEFORE UPDATE ON service_tasks FOR EACH ROW EXECUTE FUNCTION service_tasks_before_update();
+CREATE TRIGGER service_tasks_assignee_trg BEFORE INSERT OR UPDATE OF assigned_user_id ON service_tasks FOR EACH ROW EXECUTE FUNCTION service_tasks_assignee_check();
 
 -- 5. RLS -----------------------------------------------------------------------------------------------------------------------------------
 -- Creating with an assignee other than yourself (or with a team) needs service.assign; creating unassigned or for yourself needs only service.create.
@@ -253,6 +315,7 @@ CREATE POLICY service_case_sessions_insert_tenant ON service_case_sessions FOR I
 CREATE POLICY service_tasks_insert_tenant ON service_tasks FOR INSERT WITH CHECK (is_system_admin() OR (
   actor_has_permission(tenant_id, current_user_id(), 'service.create')
   AND status = 'open'
+  AND origin_type <> 'flow'                       -- a flow's task is written by the flow engine's system session, never by a person
   AND (assigned_team_id IS NULL OR actor_has_permission(tenant_id, current_user_id(), 'service.assign'))
   AND (assigned_user_id IS NULL OR assigned_user_id = current_user_id() OR actor_has_permission(tenant_id, current_user_id(), 'service.assign'))));
 CREATE POLICY service_tasks_update_tenant ON service_tasks FOR UPDATE

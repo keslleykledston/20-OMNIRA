@@ -29,6 +29,7 @@ CREATE TABLE context_events (
   causation_id    UUID,
   dedup_key       TEXT CHECK (dedup_key IS NULL OR char_length(dedup_key) BETWEEN 8 AND 200),
   UNIQUE (tenant_id, id),
+  CHECK (actor_type <> 'user' OR actor_id IS NOT NULL),                                   -- a person's fact names the person
   FOREIGN KEY (tenant_id, session_id)      REFERENCES service_sessions (tenant_id, id),
   FOREIGN KEY (tenant_id, conversation_id) REFERENCES conversations (tenant_id, id),
   FOREIGN KEY (tenant_id, contact_id)      REFERENCES contacts (tenant_id, id),

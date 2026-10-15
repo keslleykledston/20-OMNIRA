@@ -10,6 +10,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/adapters"
 	"github.com/omnira/omnira/internal/servicectx/application"
+	"github.com/omnira/omnira/internal/servicectx/gatewaytest"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -20,6 +21,7 @@ type stack struct {
 	env               *flowstest.Env
 	svc               *application.Service
 	catalog           *application.Catalog
+	gw                *gatewaytest.Fake
 	handler           *adapters.Handler
 	admin, agent      uuid.UUID
 	observer, limited uuid.UUID
@@ -29,7 +31,8 @@ func newStack(t *testing.T) *stack {
 	t.Helper()
 	env := flowstest.New(t)
 	s := &stack{t: t, env: env, admin: env.UserA, agent: uuid.New(), observer: uuid.New(), limited: uuid.New()}
-	s.svc, s.catalog, s.handler = adapters.Build(env.App)
+	s.gw = gatewaytest.New()
+	s.svc, s.catalog, s.handler = adapters.Build(env.App, adapters.Options{ExternalOrders: true, Gateways: gatewaytest.Resolver{F: s.gw}})
 	ctx := context.Background()
 	var agentRole uuid.UUID
 	if err := env.Seed.QueryRow(ctx, `SELECT id FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL LIMIT 1`).Scan(&agentRole); err != nil {

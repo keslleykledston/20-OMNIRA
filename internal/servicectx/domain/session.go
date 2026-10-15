@@ -164,6 +164,7 @@ type Session struct {
 	FirstResponseAt     *time.Time
 	ClosedAt            *time.Time
 	ReopenCount         int
+	LastReopenReason    *string
 	Version             int
 	CreatedAt           time.Time
 	UpdatedAt           time.Time

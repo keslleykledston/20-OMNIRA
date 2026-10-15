@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/servicectx/domain"
@@ -43,13 +44,17 @@ func (s *Service) CreateTask(ctx context.Context, raw domain.TaskOpenInput) (Tas
 			return TaskResult{}, err
 		}
 	}
-	// a flow step replayed by the engine returns the task it already made
+	// only the flow engine's system session makes a flow task; a person cannot claim to be a flow
+	if in.OriginType == domain.OriginFlow && !c.system {
+		return TaskResult{}, domain.ErrForbidden
+	}
+	// a flow step is idempotent through the same receipt machine as everything else: its key IS the step, so a replayed step (even a concurrent one) returns the task
+	// it already made, and the same step with other content is refused
 	if in.FlowRunID != nil {
-		if prev, err := s.tasks.TaskByFlowEffect(ctx, *in.FlowRunID, *in.FlowSeq); err != nil {
-			return TaskResult{}, err
-		} else if prev != nil {
-			return TaskResult{Task: prev}, nil
+		if in.IdempotencyKey != "" {
+			return TaskResult{}, domain.Invalid("a flow task takes its idempotency from the step, not from a key")
 		}
+		in.IdempotencyKey = fmt.Sprintf("flow:%s:%d", in.FlowRunID, *in.FlowSeq)
 	}
 	hash := in.Hash()
 	rec, err := s.replay(ctx, ports.ScopeTaskCreate, in.IdempotencyKey, hash)
@@ -303,6 +308,8 @@ func (s *Service) ActTask(ctx context.Context, id uuid.UUID, action TaskAction, 
 	case TaskReopen:
 		t.CompletedAt, t.CompletedBy = nil, nil
 		t.ReopenCount++
+		why := note
+		t.LastReopenReason = &why
 	}
 	t.Status = to
 	if err := s.tasks.UpdateTask(ctx, t, expectedVersion); err != nil {

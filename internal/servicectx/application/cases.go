@@ -361,6 +361,8 @@ func (s *Service) SetCaseStatus(ctx context.Context, id uuid.UUID, raw domain.Ca
 	case from == domain.CaseResolved: // reopening
 		cs.Resolution, cs.ResolvedAt = nil, nil
 		cs.ReopenCount++
+		why := in.Reason
+		cs.LastReopenReason = &why
 		note, reopened = in.Reason, true
 	}
 	cs.Status = in.To

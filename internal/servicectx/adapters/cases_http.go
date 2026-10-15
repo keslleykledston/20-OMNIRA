@@ -27,7 +27,8 @@ func (h *CasesHandler) Routes(mux Registrar, wrap func(http.HandlerFunc) http.Ha
 	mux.Handle("GET "+base+"/service-cases", route(application.PermRead, h.listCases))
 	mux.Handle("GET "+base+"/service-cases/{case_id}", route(application.PermRead, h.getCase))
 	mux.Handle("PATCH "+base+"/service-cases/{case_id}", route(application.PermUpdate, h.patchCase))
-	mux.Handle("POST "+base+"/service-cases/{case_id}/status", route(application.PermClose, h.caseStatus))
+	// the route key is the weakest one that can use the route (service.update moves a case between working states); the service and the database ask for the exact key of each move
+	mux.Handle("POST "+base+"/service-cases/{case_id}/status", route(application.PermUpdate, h.caseStatus))
 	mux.Handle("POST "+base+"/service-cases/{case_id}/assign", route(application.PermAssign, h.assignCase))
 	mux.Handle("POST "+base+"/service-cases/{case_id}/sessions", route(application.PermUpdate, h.linkSession))
 	mux.Handle("GET "+base+"/service-cases/{case_id}/sessions", route(application.PermRead, h.caseSessions))
@@ -133,11 +134,25 @@ func limitParam(w http.ResponseWriter, r *http.Request) (int, bool) {
 		return 0, true
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid", "invalid limit")
+	if err != nil || n < 1 || n > 200 {
+		writeErr(w, http.StatusBadRequest, "invalid", "limit must be a number from 1 to 200")
 		return 0, false
 	}
 	return n, true
+}
+
+// boolParam reads an optional true/false query parameter; anything else is a 400, not a silent false.
+func boolParam(w http.ResponseWriter, r *http.Request, key string) (bool, bool) {
+	switch r.URL.Query().Get(key) {
+	case "":
+		return false, true
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	}
+	writeErr(w, http.StatusBadRequest, "invalid", key+" must be true or false")
+	return false, false
 }
 
 // ---- cases ----
@@ -197,9 +212,11 @@ func (h *CasesHandler) listCases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	f := ports.CaseFilter{Status: domain.CaseStatus(q.Get("status")), Priority: domain.Priority(q.Get("priority")), CaseNumber: q.Get("case_number"), Cursor: q.Get("cursor"),
-		OnlyWorking: q.Get("working") == "true"}
+	f := ports.CaseFilter{Status: domain.CaseStatus(q.Get("status")), Priority: domain.Priority(q.Get("priority")), CaseNumber: q.Get("case_number"), Cursor: q.Get("cursor")}
 	var ok bool
+	if f.OnlyWorking, ok = boolParam(w, r, "working"); !ok {
+		return
+	}
 	if f.CustomerID, ok = optUUID(w, r, "customer_id"); !ok {
 		return
 	}
@@ -430,8 +447,14 @@ func (h *CasesHandler) listTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	f := ports.TaskFilter{Status: domain.TaskStatus(q.Get("status")), PendingOnly: q.Get("pending") == "true", OverdueOnly: q.Get("overdue") == "true", Cursor: q.Get("cursor")}
+	f := ports.TaskFilter{Status: domain.TaskStatus(q.Get("status")), Cursor: q.Get("cursor")}
 	var ok bool
+	if f.PendingOnly, ok = boolParam(w, r, "pending"); !ok {
+		return
+	}
+	if f.OverdueOnly, ok = boolParam(w, r, "overdue"); !ok {
+		return
+	}
 	if f.AssignedUserID, ok = optUUID(w, r, "assigned_user_id"); !ok {
 		return
 	}

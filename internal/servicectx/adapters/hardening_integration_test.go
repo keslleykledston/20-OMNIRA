@@ -28,9 +28,9 @@ func TestTheDatabaseHoldsTheSessionStateMachineAgainstRawSQL(t *testing.T) {
 		"closed -> abandoned":      `UPDATE service_sessions SET status='abandoned', resolution_code='abandoned', resolution_canonical='abandoned' WHERE id=$1`,
 		"note of a closed session": `UPDATE service_sessions SET resolution_note='alterada depois' WHERE id=$1`,
 		"category of a closed one": `UPDATE service_sessions SET queue_id=NULL, customer_id=NULL WHERE id=$1`,
-		"reopen to waiting":        `UPDATE service_sessions SET status='waiting', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+1 WHERE id=$1`,
+		"reopen to waiting":        `UPDATE service_sessions SET status='waiting', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+1, last_reopen_reason='o cliente voltou' WHERE id=$1`,
 		"reopen without counting":  `UPDATE service_sessions SET status='in_progress', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL WHERE id=$1`,
-		"reopen counting twice":    `UPDATE service_sessions SET status='in_progress', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+2 WHERE id=$1`,
+		"reopen counting twice":    `UPDATE service_sessions SET status='in_progress', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+2, last_reopen_reason='o cliente voltou' WHERE id=$1`,
 	} {
 		if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) error { return execInSession(ctx, stmt, sess.ID) }); err == nil {
 			t.Errorf("%s: a person with every key must be refused", name)
@@ -41,7 +41,7 @@ func TestTheDatabaseHoldsTheSessionStateMachineAgainstRawSQL(t *testing.T) {
 		}
 	}
 	// a legitimate reopening, by raw SQL, goes through exactly when every condition holds (and counts once)
-	reopen := `UPDATE service_sessions SET status='in_progress', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+1 WHERE id=$1`
+	reopen := `UPDATE service_sessions SET status='in_progress', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+1, last_reopen_reason='o cliente voltou' WHERE id=$1`
 	// ... but not while the conversation is closed
 	s.exec(`UPDATE conversations SET status='closed', closed_at=now() WHERE id=$1`, conv)
 	if err := s.try(s.admin, s.env.TenantA, func(ctx context.Context) error { return execInSession(ctx, reopen, sess.ID) }); err == nil {
@@ -342,7 +342,7 @@ func TestANewEpisodeCannotReachBackIntoTimeAlreadyCounted(t *testing.T) {
 		t.Fatal(err)
 	}
 	// reopen the row by hand but start the new episode BEFORE the first one ended
-	reopen := `UPDATE service_sessions SET status='in_progress', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+1 WHERE id=$1`
+	reopen := `UPDATE service_sessions SET status='in_progress', closed_at=NULL, resolution_code=NULL, resolution_canonical=NULL, closed_source=NULL, closed_by_user_id=NULL, reopen_count=reopen_count+1, last_reopen_reason='o cliente voltou' WHERE id=$1`
 	err = s.try(s.admin, s.env.TenantA, func(ctx context.Context) error {
 		if err := execInSession(ctx, reopen, sess.ID); err != nil {
 			return err

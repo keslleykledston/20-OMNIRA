@@ -13,12 +13,15 @@ import (
 
 	"github.com/google/uuid"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/servicectx/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
-func (s *stack) mux() *http.ServeMux {
+func (s *stack) mux() *http.ServeMux { return muxFor(s, s.handler) }
+
+func muxFor(s *stack, h *adapters.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
-	s.handler.Routes(mux, func(fn http.HandlerFunc) http.Handler {
+	h.Routes(mux, func(fn http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, uerr := uuid.Parse(r.Header.Get("X-Test-User"))
 			tenant, terr := uuid.Parse(r.PathValue("tenant_id"))

@@ -103,7 +103,7 @@ func (r *PostgresRepository) ReadConversation(ctx context.Context, id uuid.UUID)
 
 const sessionColumns = `id, tenant_id, protocol, protocol_sequence, external_protocol, conversation_id, contact_id, customer_id, queue_id, category_id,
 	status, resolution_code, resolution_canonical, resolution_note, origin_channel, opened_source, closed_source, opened_by_user_id, closed_by_user_id,
-	opened_at, first_response_at, closed_at, reopen_count, version, created_at, updated_at`
+	opened_at, first_response_at, closed_at, reopen_count, last_reopen_reason, version, created_at, updated_at`
 
 func scanSession(row pgx.Row) (*domain.Session, error) {
 	s := &domain.Session{}
@@ -111,7 +111,7 @@ func scanSession(row pgx.Row) (*domain.Session, error) {
 	var note *string
 	if err := row.Scan(&s.ID, &s.TenantID, &s.Protocol, &s.ProtocolSequence, &s.ExternalProtocol, &s.ConversationID, &s.ContactID, &s.CustomerID, &s.QueueID,
 		&s.CategoryID, &status, &s.ResolutionCode, &s.ResolutionCanonical, &note, &s.OriginChannel, &s.OpenedSource, &s.ClosedSource, &s.OpenedBy, &s.ClosedBy,
-		&s.OpenedAt, &s.FirstResponseAt, &s.ClosedAt, &s.ReopenCount, &s.Version, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		&s.OpenedAt, &s.FirstResponseAt, &s.ClosedAt, &s.ReopenCount, &s.LastReopenReason, &s.Version, &s.CreatedAt, &s.UpdatedAt); err != nil {
 		return nil, err
 	}
 	s.Status = domain.SessionStatus(status)
@@ -201,11 +201,11 @@ func (r *PostgresRepository) UpdateSession(ctx context.Context, s *domain.Sessio
 	}
 	tag := r.q(ctx).QueryRow(ctx, `
 		UPDATE service_sessions SET customer_id=$3, queue_id=$4, category_id=$5, status=$6, resolution_code=$7, resolution_canonical=$8, resolution_note=$9,
-			closed_source=$10, closed_by_user_id=$11, closed_at=$12, first_response_at=$13, reopen_count=$14
-		WHERE tenant_id=$1 AND id=$2 AND version=$15
+			closed_source=$10, closed_by_user_id=$11, closed_at=$12, first_response_at=$13, reopen_count=$14, last_reopen_reason=$15
+		WHERE tenant_id=$1 AND id=$2 AND version=$16
 		RETURNING version, updated_at`,
 		tenant, s.ID, s.CustomerID, s.QueueID, s.CategoryID, string(s.Status), s.ResolutionCode, s.ResolutionCanonical, note,
-		s.ClosedSource, s.ClosedBy, s.ClosedAt, s.FirstResponseAt, s.ReopenCount, expectedVersion)
+		s.ClosedSource, s.ClosedBy, s.ClosedAt, s.FirstResponseAt, s.ReopenCount, s.LastReopenReason, expectedVersion)
 	if err := tag.Scan(&s.Version, &s.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			var one int
@@ -463,8 +463,8 @@ func (r *PostgresRepository) ReceiptFor(ctx context.Context, scope, key string) 
 		return nil, err
 	}
 	rec := &ports.Receipt{}
-	err = r.q(ctx).QueryRow(ctx, `SELECT request_hash, session_id, case_id, task_id FROM service_command_receipts WHERE tenant_id=$1 AND scope=$2 AND idempotency_key=$3`,
-		tenant, scope, key).Scan(&rec.RequestHash, &rec.SessionID, &rec.CaseID, &rec.TaskID)
+	err = r.q(ctx).QueryRow(ctx, `SELECT request_hash, session_id, case_id, task_id, external_record_id FROM service_command_receipts WHERE tenant_id=$1 AND scope=$2 AND idempotency_key=$3`,
+		tenant, scope, key).Scan(&rec.RequestHash, &rec.SessionID, &rec.CaseID, &rec.TaskID, &rec.RecordID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -476,7 +476,7 @@ func (r *PostgresRepository) SaveReceipt(ctx context.Context, scope, key, reques
 	if err != nil {
 		return err
 	}
-	var sess, cs, task *uuid.UUID
+	var sess, cs, task, rec *uuid.UUID
 	switch scope {
 	case ports.ScopeSessionOpen:
 		sess = &entityID
@@ -484,10 +484,12 @@ func (r *PostgresRepository) SaveReceipt(ctx context.Context, scope, key, reques
 		cs = &entityID
 	case ports.ScopeTaskCreate:
 		task = &entityID
+	case ports.ScopeExternalUpd:
+		rec = &entityID
 	default:
 		return fmt.Errorf("servicectx: unknown receipt scope %q", scope)
 	}
-	_, err = r.q(ctx).Exec(ctx, `INSERT INTO service_command_receipts (tenant_id, scope, idempotency_key, request_hash, session_id, case_id, task_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		tenant, scope, key, requestHash, sess, cs, task)
+	_, err = r.q(ctx).Exec(ctx, `INSERT INTO service_command_receipts (tenant_id, scope, idempotency_key, request_hash, session_id, case_id, task_id, external_record_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		tenant, scope, key, requestHash, sess, cs, task, rec)
 	return mapErr(err)
 }

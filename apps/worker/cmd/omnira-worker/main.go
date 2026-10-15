@@ -512,7 +512,7 @@ func main() {
 			attendanceadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))
 		if cfg.ServiceContextEnabled && cfg.ServiceFinalizeHookEnabled {
 			// ADR-0049: a flow that ends the attendance also closes its service session (source "flow"), in the same transaction
-			serviceSvc, _, _ := servicectxadapters.Build(dbPool)
+			serviceSvc, _, _ := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
 			attendanceForFlows.WithSessionCloser(servicectxadapters.FinalizeHook(dbPool, serviceSvc))
 		}
 		flowEffects := flowsadapters.NewPostgresEffects(dbPool, messagesapplication.NewSystemSender(messagesadapters.NewPostgresOutboundStore(dbPool))).WithCloser(attendanceForFlows).WithEngineRouting(cfg.RoutingEngineEnabled)

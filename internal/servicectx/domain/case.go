@@ -76,30 +76,31 @@ const (
 )
 
 type Case struct {
-	ID              uuid.UUID
-	TenantID        uuid.UUID
-	CaseNumber      string
-	CaseSequence    int64
-	Title           string
-	Description     string
-	CustomerID      *uuid.UUID
-	CategoryID      *uuid.UUID
-	Priority        Priority
-	Status          CaseStatus
-	AssignedTeamID  *uuid.UUID
-	AssignedAgentID *uuid.UUID
-	OriginSessionID *uuid.UUID
-	Resolution      *string
-	CancelReason    *string
-	CreatedBy       *uuid.UUID
-	OpenedAt        time.Time
-	ResolvedAt      *time.Time
-	ClosedAt        *time.Time
-	CancelledAt     *time.Time
-	ReopenCount     int
-	Version         int
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID               uuid.UUID
+	TenantID         uuid.UUID
+	CaseNumber       string
+	CaseSequence     int64
+	Title            string
+	Description      string
+	CustomerID       *uuid.UUID
+	CategoryID       *uuid.UUID
+	Priority         Priority
+	Status           CaseStatus
+	AssignedTeamID   *uuid.UUID
+	AssignedAgentID  *uuid.UUID
+	OriginSessionID  *uuid.UUID
+	Resolution       *string
+	CancelReason     *string
+	CreatedBy        *uuid.UUID
+	OpenedAt         time.Time
+	ResolvedAt       *time.Time
+	ClosedAt         *time.Time
+	CancelledAt      *time.Time
+	ReopenCount      int
+	LastReopenReason *string
+	Version          int
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // CaseOpenInput starts a case. A case is NEVER created for a conversation by itself: a person, the API or a flow decides it is worth one.

@@ -80,6 +80,7 @@ x-omnira-runtime: &omnira-runtime
   OMNIRA_FLOWS_ENABLED: ${OMNIRA_FLOWS_ENABLED-false}
   OMNIRA_SERVICE_CONTEXT_ENABLED: ${OMNIRA_SERVICE_CONTEXT_ENABLED-false}
   OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED: ${OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED-false}
+  OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED: ${OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED-false}
   # Flow AI nodes (classify/extract/summarize) also need OMNIRA_AI_ENABLED + a model; off by default (nodes take their error port).
   OMNIRA_FLOWS_AI_ENABLED: ${OMNIRA_FLOWS_AI_ENABLED-false}
   # ADR-0020: the copilot also sees the contact's earlier attendances and open follow-ups. Off by default (also needs OMNIRA_COPILOT_ENABLED).

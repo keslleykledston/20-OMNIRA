@@ -49,14 +49,19 @@ func (r *PostgresRepository) Record(ctx context.Context, e domain.ContextEvent) 
 	}
 	if tag.RowsAffected() == 0 && dedup != nil {
 		// the fact was already recorded under this key: fine if it is the same fact, a conflict if the key was reused for another one
-		var sameType string
-		var sameEntity uuid.UUID
-		var samePayload bool
-		if err := r.q(ctx).QueryRow(ctx, `SELECT event_type, entity_id, payload = $3::jsonb FROM context_events WHERE tenant_id=$1 AND dedup_key=$2`,
-			e.TenantID, *dedup, payload).Scan(&sameType, &sameEntity, &samePayload); err != nil {
+		var same bool
+		if err := r.q(ctx).QueryRow(ctx, `
+			SELECT event_type = $3 AND entity_type = $4 AND entity_id = $5
+			   AND session_id IS NOT DISTINCT FROM $6 AND case_id IS NOT DISTINCT FROM $7 AND conversation_id IS NOT DISTINCT FROM $8
+			   AND contact_id IS NOT DISTINCT FROM $9 AND customer_id IS NOT DISTINCT FROM $10
+			   AND actor_type = $11 AND actor_id IS NOT DISTINCT FROM $12 AND note = $13
+			   AND correlation_id IS NOT DISTINCT FROM $14 AND causation_id IS NOT DISTINCT FROM $15 AND payload = $16::jsonb
+			FROM context_events WHERE tenant_id=$1 AND dedup_key=$2`,
+			e.TenantID, *dedup, e.EventType, e.EntityType, e.EntityID, e.SessionID, e.CaseID, e.ConversationID, e.ContactID, e.CustomerID,
+			e.ActorType, e.ActorID, e.Note, e.CorrelationID, e.CausationID, payload).Scan(&same); err != nil {
 			return err
 		}
-		if sameType != e.EventType || sameEntity != e.EntityID || !samePayload {
+		if !same {
 			return domain.ErrIdempotencyMismatch
 		}
 	}

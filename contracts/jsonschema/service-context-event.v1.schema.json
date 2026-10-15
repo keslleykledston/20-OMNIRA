@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnira.k3gsolutions.com.br/schemas/service-context-event.v1.json",
+  "title": "OMNIRA Service Context event envelope (v1)",
+  "description": "The shape every Service Context event is delivered in. It carries ids, enums and counts. It never carries a message, a customer's text or the note a person typed. Delivery (signature, retries, dead letter, ordering by cursor) is the headless webhook engine's job.",
+  "type": "object",
+  "required": ["event_id", "event_type", "tenant_id", "schema_version", "occurred_at", "recorded_at", "entity", "links", "actor", "source_system", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid", "description": "Unique and stable: a consumer deduplicates on it." },
+    "event_type": { "type": "string", "pattern": "^[a-z_]+\\.[a-z_]+\\.v1$" },
+    "tenant_id": { "type": "string", "format": "uuid", "description": "The company the event belongs to. A consumer only ever receives its own company's events." },
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "entity": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": { "type": { "type": "string" }, "id": { "type": "string", "format": "uuid" } }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "type": "string", "format": "uuid" },
+        "case_id": { "type": "string", "format": "uuid" },
+        "conversation_id": { "type": "string", "format": "uuid" },
+        "contact_id": { "type": "string", "format": "uuid" },
+        "customer_id": { "type": "string", "format": "uuid" }
+      }
+    },
+    "actor": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": { "type": { "enum": ["user", "system", "flow", "ai", "integration"] }, "id": { "type": "string", "format": "uuid" } }
+    },
+    "source_system": { "type": "string" },
+    "correlation_id": { "type": "string", "format": "uuid" },
+    "causation_id": { "type": "string", "format": "uuid" },
+    "payload": {
+      "type": "object",
+      "description": "Ids, enums and counts only; at most 2 KB.",
+      "additionalProperties": { "type": ["string", "number", "boolean", "null"], "maxLength": 64 }
+    }
+  }
+}

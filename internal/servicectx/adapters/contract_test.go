@@ -46,7 +46,7 @@ func TestOpenAPIAndRoutesAgree(t *testing.T) {
 		}
 	}
 	rec := &recorder{}
-	adapters.NewHandler(nil, nil).Routes(rec, func(fn http.HandlerFunc) http.Handler { return fn }, nil)
+	adapters.NewHandler(nil, nil).WithExternalOrders(true).Routes(rec, func(fn http.HandlerFunc) http.Handler { return fn }, nil)
 	routed := map[string]bool{}
 	for _, p := range rec.patterns {
 		routed[paramRE.ReplaceAllString(p, "{}")] = true
@@ -70,7 +70,7 @@ func TestOpenAPIAndRoutesAgree(t *testing.T) {
 		t.Error(p)
 	}
 	mux := http.NewServeMux()
-	adapters.NewHandler(nil, nil).Routes(mux, func(fn http.HandlerFunc) http.Handler { return fn }, nil)
+	adapters.NewHandler(nil, nil).WithExternalOrders(true).Routes(mux, func(fn http.HandlerFunc) http.Handler { return fn }, nil)
 	for d := range documented {
 		parts := strings.SplitN(d, " ", 2)
 		concrete := paramRE.ReplaceAllString(parts[1], "3f9c1b2e-0000-4000-8000-000000000001")
@@ -119,7 +119,7 @@ func TestOpenAPIDeclaresTheConcurrencyContract(t *testing.T) {
 	if len(ops) < 25 {
 		t.Fatalf("parsed only %d operations", len(ops))
 	}
-	record := regexp.MustCompile(`'(200|201)': \{[^\n]*schema: \{ \$ref: '#/components/schemas/(Session|Case|Task)' \}`)
+	record := regexp.MustCompile(`'(200|201)': \{[^\n]*schema: \{ \$ref: '#/components/schemas/(Session|Case|Task|ExternalRecord)' \}`)
 	for _, op := range ops {
 		if strings.Contains(op.text, "parameters/IfMatch") {
 			for _, code := range []string{"'412'", "'428'"} {
