@@ -6,7 +6,8 @@ import { Avatar, Badge, Button, Drawer, Skeleton } from '../primitives'
 import { calendarsAPI, shiftsAPI } from '../../lib/sectors'
 import type { MembershipStatus, RoleOption } from '../../lib/team'
 import type { QueueMode } from '../../lib/queues'
-import type { PersonEntry, PersonQueue, Readiness } from '../../lib/peopleModel'
+import type { PersonEntry, Readiness } from '../../lib/peopleModel'
+import { attendsOf, changesOf, currentSeat, describeChange, NO_EDITS, roleOf, seatOf, type SeatChoice, type SheetEdits } from '../../lib/personDraft'
 import { ROLE_DISPLAY_NAME, ROLE_SUMMARY } from '../../lib/roles'
 import { getTenantId } from '../../lib/session'
 import { MODE_LABEL } from '../queues/queueText'
@@ -28,12 +29,9 @@ export interface SheetSector {
 }
 
 export interface PersonSheetActions {
-  onChangeRole: (roleKey: string) => void
+  /** Applies function, attendance and queue changes together; true when everything was saved. */
+  onSave: (edits: SheetEdits) => Promise<boolean>
   onSetStatus: (status: MembershipStatus) => void
-  onAttend: (on: boolean) => void
-  onJoinQueue: (queueId: string) => void
-  onLeaveQueue: (memberId: string) => void
-  onUpdateQueue: (memberId: string, values: { available: boolean; capacity: number }) => void
   onResend: () => void
   onRevoke: () => void
 }
@@ -129,9 +127,9 @@ export function RoleOptions({ roles, name, value, onChange, disabled }: {
   )
 }
 
-function RoleSection({ person, roles, canChange, busy, onSave }: { person: PersonEntry; roles: RoleOption[]; canChange: boolean; busy: boolean; onSave: (key: string) => void }) {
-  const [draft, setDraft] = useState(person.roleKey)
-  useEffect(() => setDraft(person.roleKey), [person.roleKey])
+function RoleSection({ person, roles, canChange, busy, value, onChange }: {
+  person: PersonEntry; roles: RoleOption[]; canChange: boolean; busy: boolean; value: string; onChange: (key: string) => void
+}) {
   if (!canChange || roles.length === 0) {
     return (
       <Section title="Função">
@@ -141,33 +139,33 @@ function RoleSection({ person, roles, canChange, busy, onSave }: { person: Perso
   }
   return (
     <Section title="Função" hint="Define o que a pessoa pode ver e mudar nesta instância.">
-      <RoleOptions roles={roles} name={`funcao-${person.key}`} value={draft} onChange={setDraft} disabled={busy} />
-      {draft !== person.roleKey && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => onSave(draft)} isLoading={busy}>Salvar função</Button>
-          <Button size="sm" variant="tertiary" onClick={() => setDraft(person.roleKey)} disabled={busy}>Cancelar</Button>
-        </div>
-      )}
+      <RoleOptions roles={roles} name={`funcao-${person.key}`} value={value} onChange={onChange} disabled={busy} />
     </Section>
   )
 }
 
-function ReadinessBox({ person, readiness, canManage, busy, onAttend }: { person: PersonEntry; readiness: Readiness; canManage: boolean; busy: boolean; onAttend: (on: boolean) => void }) {
+function ReadinessBox({ person, readiness, canManage, busy, pendingOn, onAttend }: {
+  person: PersonEntry; readiness: Readiness; canManage: boolean; busy: boolean; pendingOn: boolean; onAttend: (on: boolean) => void
+}) {
   const who = firstName(person.name)
   const agent = person.agent
   if (!agent) {
+    const text = pendingOn
+      ? 'Escolha as filas abaixo e salve as alterações.'
+      : canManage ? 'Para receber conversas, a pessoa precisa atender e estar em ao menos uma fila.' : 'Quem decide é um administrador ou supervisor.'
     return (
       <Box tone="neutral" title={`${who} não atende conversas`}>
-        <p className="text-sm text-text-secondary">{canManage ? 'Para receber conversas, a pessoa precisa atender e estar em ao menos uma fila.' : 'Quem decide é um administrador ou supervisor.'}</p>
-        {canManage && <Button size="sm" onClick={() => onAttend(true)} isLoading={busy}>Passar a atender</Button>}
+        <p className="text-sm text-text-secondary">{text}</p>
+        {canManage && !pendingOn && <Button size="sm" onClick={() => onAttend(true)} disabled={busy}>Passar a atender</Button>}
       </Box>
     )
   }
   if (agent.status === 'disabled') {
+    const text = pendingOn ? 'Volta a atender quando você salvar as alterações.' : 'Não recebe conversas novas. As filas escolhidas ficam guardadas para quando voltar.'
     return (
       <Box tone="neutral" title={`${who} está em pausa`}>
-        <p className="text-sm text-text-secondary">Não recebe conversas novas. As filas escolhidas ficam guardadas para quando voltar.</p>
-        {canManage && <Button size="sm" onClick={() => onAttend(true)} isLoading={busy}>Voltar a atender</Button>}
+        <p className="text-sm text-text-secondary">{text}</p>
+        {canManage && !pendingOn && <Button size="sm" onClick={() => onAttend(true)} disabled={busy}>Voltar a atender</Button>}
       </Box>
     )
   }
@@ -192,80 +190,69 @@ function ReadinessBox({ person, readiness, canManage, busy, onAttend }: { person
   )
 }
 
-function QueueChoice({ queue, membership, canManage, busy, onJoin, onLeave, onUpdate }: {
+function QueueRow({ queue, seat, changed, canManage, busy, onChange }: {
   queue: SheetQueue
-  membership?: PersonQueue
+  seat: SeatChoice
+  changed: boolean
   canManage: boolean
   busy: boolean
-  onJoin: () => void
-  onLeave: () => void
-  onUpdate: (values: { available: boolean; capacity: number }) => void
+  onChange: (values: Partial<SeatChoice>) => void
 }) {
   const disabled = !canManage || busy
   return (
-    <li className={clsx('rounded-control border p-3', membership ? 'border-accent-primary bg-accent-primary-soft' : 'border-border-subtle')}>
-      <label className={clsx('flex items-start gap-3', disabled ? 'cursor-default' : 'cursor-pointer')}>
+    <li className={clsx('flex flex-wrap items-center gap-x-4 gap-y-1.5 px-3 py-2', changed ? 'bg-status-warning-soft' : seat.member && 'bg-accent-primary-soft')}>
+      <label className={clsx('flex max-w-full shrink-0 grow items-center gap-2.5', disabled ? 'cursor-default' : 'cursor-pointer')}>
         <input
           type="checkbox"
-          checked={!!membership}
+          checked={seat.member}
           disabled={disabled}
-          onChange={(e) => (e.target.checked ? onJoin() : onLeave())}
+          onChange={(e) => onChange({ member: e.target.checked })}
           aria-label={`Participa da fila ${queue.name}`}
-          className="mt-0.5 h-4 w-4 accent-[var(--color-accent-primary)]"
+          className="h-4 w-4 shrink-0 accent-[var(--color-accent-primary)]"
         />
-        <span className="min-w-0">
-          <span className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-text-primary">
-            {queue.name}
-            {queue.isDefault && <Badge size="sm" variant="info">Padrão</Badge>}
-          </span>
-          <span className="block text-xs text-text-tertiary">{MODE_LABEL[queue.mode]}</span>
-        </span>
+        <span className="truncate text-sm font-medium text-text-primary">{queue.name}</span>
+        {queue.isDefault && <Badge size="sm" variant="info">Padrão</Badge>}
+        <span className="shrink-0 text-xs text-text-tertiary">{MODE_LABEL[queue.mode]}</span>
+        {changed && <span className="sr-only">(alteração não salva)</span>}
       </label>
-      {membership && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border-subtle pl-7 pt-3 text-sm text-text-secondary">
-          <span className="inline-flex items-center gap-2">
-            <Switch
-              checked={membership.available}
-              onChange={(available) => onUpdate({ available, capacity: membership.capacity })}
-              label={`Disponível na fila ${queue.name}`}
-              disabled={disabled}
-            />
-            {membership.available ? 'Disponível' : 'Indisponível'}
+      {seat.member && (
+        <span className="flex items-center gap-3 text-xs text-text-secondary">
+          <span className="inline-flex items-center gap-1.5">
+            <Switch size="sm" checked={seat.available} onChange={(available) => onChange({ available })} label={`Disponível na fila ${queue.name}`} disabled={disabled} />
+            {seat.available ? 'Disponível' : 'Indisponível'}
           </span>
-          <span className="inline-flex items-center gap-2">
-            Até
-            <CapacityStepper
-              value={membership.capacity}
-              onChange={(capacity) => onUpdate({ available: membership.available, capacity })}
-              label={`Capacidade na fila ${queue.name}`}
-              disabled={disabled}
-            />
-            ao mesmo tempo
+          <span className="inline-flex items-center gap-1.5">
+            <span title="Conversas ao mesmo tempo nesta fila (0 = sem limite)">Simultâneas</span>
+            <CapacityStepper size="sm" value={seat.capacity} onChange={(capacity) => onChange({ capacity })} label={`Capacidade na fila ${queue.name}`} disabled={disabled} />
           </span>
-        </div>
+        </span>
       )}
     </li>
   )
 }
 
-function AttendSection({ person, sectors, canManage, busy, actions }: {
+function AttendSection({ person, sectors, canManage, busy, edits, onEdit }: {
   person: PersonEntry
   sectors: SheetSector[]
   canManage: boolean
-  busy: string | null
-  actions: PersonSheetActions
+  busy: boolean
+  edits: SheetEdits
+  onEdit: (next: SheetEdits) => void
 }) {
   const agent = person.agent
-  const on = agent?.status === 'active'
-  const mine = new Map((agent?.queues ?? []).map((q) => [q.queueId, q]))
+  const on = attendsOf(person, edits)
   const anyQueue = sectors.some((s) => s.queues.length > 0)
+  const changed = new Set(changesOf(person, edits).flatMap((c) => ('queueId' in c ? [c.queueId] : [])))
+  const setSeat = (queueId: string, values: Partial<SeatChoice>) =>
+    onEdit({ ...edits, seats: { ...edits.seats, [queueId]: { ...edits.seats[queueId], ...values } } })
+  const chosen = sectors.flatMap((s) => s.queues).filter((q) => seatOf(person, edits, q.id).member).length
   return (
     <Section
       title="Recebe conversas"
       hint="Desligar pausa a pessoa sem perder as filas."
-      aside={<Switch checked={on} onChange={actions.onAttend} label="Recebe conversas" disabled={!canManage || busy === 'attend'} />}
+      aside={<Switch checked={on} onChange={(v) => onEdit({ ...edits, attends: v })} label="Recebe conversas" disabled={!canManage || busy} />}
     >
-      {agent?.status === 'disabled' && agent.queues.length > 0 && (
+      {!on && agent && agent.queues.length > 0 && (
         <p className="text-sm text-text-secondary">Filas guardadas: {agent.queues.map((q) => q.queueName).join(', ')}.</p>
       )}
       {on && !anyQueue && (
@@ -274,34 +261,91 @@ function AttendSection({ person, sectors, canManage, busy, actions }: {
         </p>
       )}
       {on && anyQueue && (
-        <div className="space-y-4">
+        <div className="space-y-3">
+          {!agent && chosen === 0 && (
+            <p className="text-xs text-text-tertiary">Sem fila escolhida, a pessoa entra na fila padrão de transbordo da empresa, se houver uma.</p>
+          )}
           {sectors.filter((s) => s.queues.length > 0).map((s) => (
             <div key={s.id ?? 'sem-setor'}>
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-tertiary">
                 {s.name}{!s.active && ' · setor inativo'}
               </h4>
-              <ul className="space-y-2">
-                {s.queues.map((q) => {
-                  const m = mine.get(q.id)
-                  return (
-                    <QueueChoice
-                      key={q.id}
-                      queue={q}
-                      membership={m}
-                      canManage={canManage}
-                      busy={busy === `join:${q.id}` || (m !== undefined && busy === `q:${m.memberId}`)}
-                      onJoin={() => actions.onJoinQueue(q.id)}
-                      onLeave={() => m && actions.onLeaveQueue(m.memberId)}
-                      onUpdate={(v) => m && actions.onUpdateQueue(m.memberId, v)}
-                    />
-                  )
-                })}
+              <ul aria-label={`Filas de ${s.name}`} className="divide-y divide-border-subtle overflow-hidden rounded-control border border-border-subtle">
+                {s.queues.map((q) => (
+                  <QueueRow
+                    key={q.id}
+                    queue={q}
+                    seat={seatOf(person, edits, q.id)}
+                    changed={changed.has(q.id)}
+                    canManage={canManage}
+                    busy={busy}
+                    onChange={(v) => setSeat(q.id, v)}
+                  />
+                ))}
               </ul>
             </div>
           ))}
+          <p className="text-xs text-text-tertiary">Simultâneas = conversas ao mesmo tempo em cada fila; 0 = sem limite.</p>
         </div>
       )}
     </Section>
+  )
+}
+
+type SaveMode = 'idle' | 'confirm' | 'leave'
+
+// Pending changes stay in the sheet until "Salvar alterações" and its confirmation; closing with changes asks first.
+function SaveBar({ person, sectors, edits, busy, mode, onMode, onDiscard, onSave, onCloseAnyway }: {
+  person: PersonEntry
+  sectors: SheetSector[] | null
+  edits: SheetEdits
+  busy: boolean
+  mode: SaveMode
+  onMode: (m: SaveMode) => void
+  onDiscard: () => void
+  onSave: () => void
+  onCloseAnyway: () => void
+}) {
+  const changes = changesOf(person, edits)
+  if (changes.length === 0) return null
+  const names = new Map((sectors ?? []).flatMap((s) => s.queues).map((q) => [q.id, q.name]))
+  const queueName = (id: string) => names.get(id) ?? currentSeat(person, id)?.queueName ?? 'sem nome'
+  const lines = changes.map((c) => describeChange(c, queueName))
+  const freshWithoutQueue = changes.some((c) => c.kind === 'attend' && c.on && c.fresh) && !changes.some((c) => c.kind === 'join')
+  const count = `${changes.length} ${changes.length === 1 ? 'alteração não salva' : 'alterações não salvas'}`
+  return (
+    <div className="sticky bottom-0 z-10 -mx-5 border-t border-border-subtle bg-surface px-5 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+      {mode === 'confirm' ? (
+        <div role="alertdialog" aria-label={`Aplicar as alterações em ${person.name}?`} className="space-y-3">
+          <p className="text-sm font-semibold text-text-primary">Aplicar as alterações em {person.name}?</p>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-text-secondary">
+            {lines.map((l) => <li key={l}>{l}</li>)}
+            {freshWithoutQueue && <li>Sem fila escolhida: entra na fila padrão de transbordo da empresa, se houver uma.</li>}
+          </ul>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={() => onMode('idle')} disabled={busy}>Voltar</Button>
+            <Button size="sm" onClick={onSave} isLoading={busy}>Aplicar alterações</Button>
+          </div>
+        </div>
+      ) : mode === 'leave' ? (
+        <div role="alertdialog" aria-label="Fechar sem salvar?" className="space-y-3">
+          <p className="text-sm font-semibold text-text-primary">Fechar sem salvar?</p>
+          <p className="text-sm text-text-secondary">{changes.length === 1 ? 'A alteração não salva será descartada.' : `As ${changes.length} alterações não salvas serão descartadas.`}</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={() => onMode('idle')}>Continuar editando</Button>
+            <Button size="sm" variant="danger" onClick={onCloseAnyway}>Fechar sem salvar</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span role="status" className="text-sm font-medium text-text-primary">{count}</span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="tertiary" onClick={onDiscard} disabled={busy}>Descartar</Button>
+            <Button size="sm" onClick={() => onMode('confirm')} disabled={busy}>Salvar alterações</Button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -400,7 +444,8 @@ function planSentence(inv: NonNullable<PersonEntry['invitation']>, sectors: Shee
   if (chosen.length === 0) return 'Ao aceitar, a pessoa já passa a atender, pela fila padrão de transbordo da empresa.'
   const list = chosen.length === 1 ? chosen[0] : `${chosen.slice(0, -1).join(', ')} e ${chosen[chosen.length - 1]}`
   const cap = inv.queue_capacity ?? 1
-  return `Ao aceitar, a pessoa já recebe conversas de ${list}, até ${cap} ${cap === 1 ? 'conversa' : 'conversas'} ao mesmo tempo em cada fila.`
+  const limit = cap === 0 ? 'sem limite de conversas ao mesmo tempo' : `até ${cap} ${cap === 1 ? 'conversa' : 'conversas'} ao mesmo tempo`
+  return `Ao aceitar, a pessoa já recebe conversas de ${list}, ${limit} em cada fila.`
 }
 
 function InvitationBody({ person, readiness, sectors, can, busy, actions }: {
@@ -463,9 +508,26 @@ function InvitationBody({ person, readiness, sectors, can, busy, actions }: {
 export function PersonSheet(props: PersonSheetProps) {
   const { person, readiness, sectors, roles, can, busy, error, notice, onClose } = props
   const member = person.member
+  const [edits, setEdits] = useState<SheetEdits>(NO_EDITS)
+  const [mode, setMode] = useState<SaveMode>('idle')
+  useEffect(() => {
+    setEdits(NO_EDITS)
+    setMode('idle')
+  }, [person.key])
+  const dirty = changesOf(person, edits).length > 0
+  const saving = busy === 'save'
+  const edit = (next: SheetEdits) => {
+    setEdits(next)
+    setMode('idle')
+  }
+  const save = async () => {
+    if (await props.onSave(edits)) setEdits(NO_EDITS)
+    setMode('idle')
+  }
+  const requestClose = () => (dirty ? setMode('leave') : onClose())
   return (
-    <Drawer open title={`Ficha de ${person.name}`} onClose={onClose} size="lg">
-      <div className="px-5 pb-8">
+    <Drawer open title={`Ficha de ${person.name}`} onClose={requestClose} size="lg">
+      <div className="px-5">
         <header className="flex items-start gap-3 pb-4 pr-10 pt-5">
           <Avatar alt={person.name} initials={initialsOf(person.name)} size="lg" />
           <div className="min-w-0 flex-1 space-y-1">
@@ -480,20 +542,53 @@ export function PersonSheet(props: PersonSheetProps) {
         {notice && <p role="status" className="rounded-control border border-status-success-border bg-status-success-soft px-3 py-2 text-sm text-status-success">{notice}</p>}
         {error && <p role="alert" className="mt-2 rounded-control border border-status-danger-border bg-status-danger-soft px-3 py-2 text-sm text-status-danger">{error}</p>}
         {person.invitation ? (
-          <InvitationBody person={person} readiness={readiness} sectors={sectors} can={can} busy={busy} actions={props} />
+          <div className="pb-8">
+            <InvitationBody person={person} readiness={readiness} sectors={sectors} can={can} busy={busy} actions={props} />
+          </div>
         ) : (
           <>
             {person.state === 'active' && sectors && (
-              <ReadinessBox person={person} readiness={readiness} canManage={can.manageAgents} busy={busy === 'attend'} onAttend={props.onAttend} />
+              <ReadinessBox
+                person={person}
+                readiness={readiness}
+                canManage={can.manageAgents}
+                busy={saving}
+                pendingOn={edits.attends === true && person.agent?.status !== 'active'}
+                onAttend={(on) => edit({ ...edits, attends: on })}
+              />
             )}
-            <div className="mt-4">
-              <RoleSection person={person} roles={roles} canChange={can.manageMembers && person.state !== 'revoked'} busy={busy === 'role'} onSave={props.onChangeRole} />
+            <div className="mt-4 pb-8">
+              <RoleSection
+                person={person}
+                roles={roles}
+                canChange={can.manageMembers && person.state !== 'revoked'}
+                busy={saving}
+                value={roleOf(person, edits)}
+                onChange={(roleKey) => edit({ ...edits, roleKey })}
+              />
               {person.state === 'active' && sectors && (
-                <AttendSection person={person} sectors={sectors} canManage={can.manageAgents} busy={busy} actions={props} />
+                <AttendSection person={person} sectors={sectors} canManage={can.manageAgents} busy={saving} edits={edits} onEdit={edit} />
               )}
               {person.state === 'active' && sectors && person.agent && member && <ShiftSection userId={member.user_id} sectors={sectors} />}
               {can.manageMembers && <AccessSection person={person} busy={busy === 'status'} onSetStatus={props.onSetStatus} />}
             </div>
+            {(dirty || mode === 'leave') && (
+              <SaveBar
+                person={person}
+                sectors={sectors}
+                edits={edits}
+                busy={saving}
+                mode={mode}
+                onMode={setMode}
+                onDiscard={() => edit(NO_EDITS)}
+                onSave={() => void save()}
+                onCloseAnyway={() => {
+                  setEdits(NO_EDITS)
+                  setMode('idle')
+                  onClose()
+                }}
+              />
+            )}
           </>
         )}
       </div>

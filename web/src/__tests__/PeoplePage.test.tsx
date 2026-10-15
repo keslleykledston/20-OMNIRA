@@ -101,6 +101,8 @@ function serve(w: World) {
       if (method === 'post' && url.endsWith('/team/invitations')) return ok(invitation('i-new', body.email, { role_key: body.role_key }))
       if (method === 'post' && url.endsWith('/resend')) return ok(invitation('i1', 'nova@k3g.com'))
       if (method === 'post' && url.endsWith('/agents')) return ok({ id: 'p-new', status: 'active' })
+      const roleChange = method === 'patch' && body?.role_key && url.match(/\/team\/(m-[a-z]+)$/)
+      if (roleChange) w.members = w.members.map((m: any) => (m.membership_id === roleChange[1] ? { ...m, role_key: body.role_key } : m))
       return ok({})
     })
   }
@@ -305,6 +307,26 @@ describe('Pessoas: convite com plano de atendimento (ADR-0046)', () => {
     expect(within(sheet()).getByText('Ao aceitar, a pessoa já recebe conversas de 2 filas escolhidas no convite.')).toBeInTheDocument()
   })
 
+  it('o convite aceita 0 = sem limite, e a ficha do convite diz isso', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world({ invitations: [invitation('i10', 'livre@k3g.com', { attends: true, queue_ids: ['q-fin'], queue_capacity: 0 })] }))
+    page()
+    await user.click(await rowOf('livre@k3g.com'))
+    expect(within(sheet()).getByText('Ao aceitar, a pessoa já recebe conversas de Cobrança, sem limite de conversas ao mesmo tempo em cada fila.')).toBeInTheDocument()
+    await user.click(within(sheet()).getByRole('button', { name: 'Fechar' }))
+
+    await user.click(screen.getByRole('button', { name: /Adicionar pessoa/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Adicionar pessoa' })
+    await user.type(within(dialog).getByLabelText('E-mail'), 'outro@k3g.com')
+    await user.click(within(dialog).getByLabelText('Recebe conversas da fila Cobrança'))
+    await user.click(within(dialog).getByRole('button', { name: 'Diminuir: Conversas ao mesmo tempo em cada fila' }))
+    expect(within(dialog).getByRole('group', { name: 'Conversas ao mesmo tempo em cada fila' })).toHaveTextContent('sem limite')
+    await user.click(within(dialog).getByRole('button', { name: 'Enviar convite' }))
+    await waitFor(() => expect(calls.find((c) => c.url.endsWith('/team/invitations'))?.body).toEqual({
+      email: 'outro@k3g.com', role_key: 'tenant_agent', attends: true, queue_ids: ['q-fin'], queue_capacity: 0,
+    }))
+  })
+
   it('explica quando a conta de login não pôde ser preparada (502) e aponta o reenvio', async () => {
     const user = userEvent.setup()
     const w = world()
@@ -319,7 +341,12 @@ describe('Pessoas: convite com plano de atendimento (ADR-0046)', () => {
 })
 
 describe('Pessoas: a ficha', () => {
-  it('muda a função só depois de salvar e explica o conflito do último administrador', async () => {
+  const save = async (user: ReturnType<typeof userEvent.setup>, s: HTMLElement) => {
+    await user.click(within(s).getByRole('button', { name: 'Salvar alterações' }))
+    return within(s).getByRole('alertdialog', { name: /^Aplicar as alterações em/ })
+  }
+
+  it('muda a função só depois de salvar e confirmar, e explica o conflito do último administrador', async () => {
     const user = userEvent.setup()
     const w = world()
     const calls = serve(w)
@@ -327,44 +354,128 @@ describe('Pessoas: a ficha', () => {
     await user.click(await rowOf('Ana Souza'))
     const s = sheet()
     await user.click(within(s).getByRole('radio', { name: /Agente/ }))
+    expect(within(s).getByText('1 alteração não salva')).toBeInTheDocument()
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false)
+    const confirm = await save(user, s)
+    expect(within(confirm).getByText('Função: Administrador → Agente')).toBeInTheDocument()
     expect(calls.some((c) => c.method === 'PATCH')).toBe(false)
     w.failNext = { status: 409 }
-    await user.click(within(s).getByRole('button', { name: 'Salvar função' }))
+    await user.click(within(confirm).getByRole('button', { name: 'Aplicar alterações' }))
     expect(await within(s).findByText('A instância ficaria sem nenhum administrador ativo.')).toBeInTheDocument()
     expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ role_key: 'tenant_agent' })
+    expect(within(s).getByText('1 alteração não salva')).toBeInTheDocument() // nothing was saved: the change is still pending
   })
 
-  it('liga o atendimento de quem não atende (POST /agents) e pausa quem atende (PATCH)', async () => {
+  it('liga o atendimento de quem não atende (POST /agents) e pausa quem atende (PATCH), só ao aplicar', async () => {
     const user = userEvent.setup()
     const calls = serve(world())
     page()
     await user.click(await rowOf('Dani Prado'))
     await user.click(within(sheet()).getByRole('button', { name: 'Passar a atender' }))
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    const first = await save(user, sheet())
+    expect(within(first).getByText('Passa a receber conversas')).toBeInTheDocument()
+    expect(within(first).getByText(/Sem fila escolhida: entra na fila padrão de transbordo/)).toBeInTheDocument()
+    await user.click(within(first).getByRole('button', { name: 'Aplicar alterações' }))
     await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/agents'))?.body).toEqual({ membership_id: 'm-dani' }))
+    expect(await within(sheet()).findByText('Alterações salvas.')).toBeInTheDocument()
     await user.click(within(sheet()).getByRole('button', { name: 'Fechar' }))
 
     await user.click(await rowOf('Ana Souza'))
     await user.click(within(sheet()).getByRole('switch', { name: 'Recebe conversas' }))
+    const second = await save(user, sheet())
+    expect(within(second).getByText('Fica em pausa: não recebe conversas novas (as filas ficam guardadas)')).toBeInTheDocument()
+    await user.click(within(second).getByRole('button', { name: 'Aplicar alterações' }))
     await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/agents/p-ana'))?.body).toEqual({ status: 'disabled' }))
-    expect(await within(sheet()).findByText('Em pausa. As filas ficaram guardadas.')).toBeInTheDocument()
   })
 
-  it('escolhe as filas por setor: entra, muda disponibilidade e capacidade, e sai', async () => {
+  it('escolhe as filas por setor numa lista compacta e aplica tudo de uma vez: entra, disponibilidade e capacidade; depois sai', async () => {
     const user = userEvent.setup()
     const calls = serve(world())
     page()
     await user.click(await rowOf('Ana Souza'))
     const s = sheet()
-    expect(within(s).getByText('Suporte')).toBeInTheDocument()
-    expect(within(s).getByText('Financeiro')).toBeInTheDocument()
+    expect(within(s).getByRole('list', { name: 'Filas de Suporte' })).toBeInTheDocument()
+    expect(within(s).getByRole('list', { name: 'Filas de Financeiro' })).toBeInTheDocument()
     await user.click(within(s).getByLabelText('Participa da fila Cobrança'))
-    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/agents/p-ana/queues'))?.body).toEqual({ queue_id: 'q-fin', available: true, capacity: 1 }))
     await user.click(within(s).getByRole('switch', { name: 'Disponível na fila Suporte N1' }))
-    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/queues/qm-ana'))?.body).toEqual({ available: false, capacity: 2 }))
     await user.click(within(s).getByRole('button', { name: 'Aumentar: Capacidade na fila Suporte N1' }))
-    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH' && c.url.endsWith('/queues/qm-ana')).map((c) => c.body)).toContainEqual({ available: true, capacity: 3 }))
+    expect(calls.some((c) => c.method !== 'GET')).toBe(false)
+    expect(within(s).getByText('2 alterações não salvas')).toBeInTheDocument()
+    const confirm = await save(user, s)
+    expect(within(confirm).getByText('Entra na fila Cobrança: disponível, até 1 conversa ao mesmo tempo')).toBeInTheDocument()
+    expect(within(confirm).getByText('Fila Suporte N1: fica indisponível; até 2 → até 3 ao mesmo tempo')).toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: 'Aplicar alterações' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/agents/p-ana/queues'))?.body).toEqual({ queue_id: 'q-fin', available: true, capacity: 1 }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/queues/qm-ana'))?.body).toEqual({ available: false, capacity: 3 }))
+    expect(await within(s).findByText('Alterações salvas.')).toBeInTheDocument()
+
     await user.click(within(s).getByLabelText('Participa da fila Suporte N1'))
+    await user.click(within(await save(user, s)).getByRole('button', { name: 'Aplicar alterações' }))
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/agents/p-ana/queues/qm-ana'))).toBe(true))
+  })
+
+  it('aceita 0 = sem limite de conversas ao mesmo tempo', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await rowOf('Ana Souza'))
+    const s = sheet()
+    const less = within(s).getByRole('button', { name: 'Diminuir: Capacidade na fila Suporte N1' })
+    await user.click(less)
+    await user.click(less)
+    expect(within(s).getByRole('group', { name: 'Capacidade na fila Suporte N1' })).toHaveTextContent('sem limite')
+    expect(less).toBeDisabled()
+    const confirm = await save(user, s)
+    expect(within(confirm).getByText('Fila Suporte N1: até 2 → sem limite ao mesmo tempo')).toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: 'Aplicar alterações' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/queues/qm-ana'))?.body).toEqual({ available: true, capacity: 0 }))
+  })
+
+  it('descarta, volta da confirmação sem gravar e pergunta antes de fechar com alterações', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await rowOf('Ana Souza'))
+    const s = sheet()
+    await user.click(within(s).getByRole('radio', { name: /Agente/ }))
+    await user.click(within(s).getByRole('button', { name: 'Descartar' }))
+    expect(within(s).queryByText('1 alteração não salva')).toBeNull()
+    expect(within(s).getByRole('radio', { name: /Administrador/ })).toBeChecked()
+
+    await user.click(within(s).getByRole('radio', { name: /Agente/ }))
+    await user.click(within(await save(user, s)).getByRole('button', { name: 'Voltar' }))
+    expect(within(s).getByText('1 alteração não salva')).toBeInTheDocument()
+
+    await user.click(within(s).getByRole('button', { name: 'Fechar' }))
+    const leave = within(s).getByRole('alertdialog', { name: 'Fechar sem salvar?' })
+    await user.click(within(leave).getByRole('button', { name: 'Continuar editando' }))
+    expect(screen.getByRole('dialog', { name: /Ficha de/ })).toBeInTheDocument()
+    await user.click(within(s).getByRole('button', { name: 'Fechar' }))
+    await user.click(within(within(s).getByRole('alertdialog', { name: 'Fechar sem salvar?' })).getByRole('button', { name: 'Fechar sem salvar' }))
+    expect(screen.queryByRole('dialog', { name: /Ficha de/ })).toBeNull()
+    expect(calls.some((c) => c.method !== 'GET')).toBe(false)
+  })
+
+  it('se parte falhar, o que foi salvo sai da lista e o resto continua pendente', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await rowOf('Ana Souza'))
+    const s = sheet()
+    await user.click(within(s).getByRole('radio', { name: /Supervisor/ }))
+    await user.click(within(s).getByLabelText('Participa da fila Cobrança'))
+    vi.mocked(axios.post).mockImplementationOnce(async (url: string, body?: any) => {
+      calls.push({ method: 'POST', url, body })
+      return Promise.reject({ response: { status: 500, data: 'boom' } })
+    })
+    await user.click(within(await save(user, s)).getByRole('button', { name: 'Aplicar alterações' }))
+    expect(await within(s).findByText('Não foi possível salvar. Tente de novo.')).toBeInTheDocument()
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ role_key: 'tenant_supervisor' })
+    await waitFor(() => expect(within(s).getByText('1 alteração não salva')).toBeInTheDocument())
+    const again = await save(user, s)
+    expect(within(again).queryByText(/^Função:/)).toBeNull()
+    expect(within(again).getByText(/^Entra na fila Cobrança/)).toBeInTheDocument()
   })
 
   it('mostra o que falta para receber conversas', async () => {

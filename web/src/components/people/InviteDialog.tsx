@@ -125,9 +125,9 @@ export function InviteDialog({ roles, people, sectors, canPlan, isSaving, onCanc
                   <p className="text-xs text-text-tertiary">Sem fila escolhida, a pessoa entra na fila padrão de transbordo da empresa, se houver uma.</p>
                 )}
                 <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
-                  Até
+                  Conversas ao mesmo tempo em cada fila
                   <CapacityStepper value={capacity} onChange={setCapacity} label="Conversas ao mesmo tempo em cada fila" disabled={isSaving} />
-                  conversas ao mesmo tempo em cada fila
+                  <span className="text-xs text-text-tertiary">0 = sem limite</span>
                 </div>
               </>
             )}

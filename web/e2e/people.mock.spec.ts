@@ -134,24 +134,44 @@ test('Pessoas: lista, ficha, filas e convite num navegador real', async ({ page 
   // the overlay covers the whole screen (a parent's space-y-* margin used to push it 20px down)
   expect(await page.evaluate(() => document.querySelector('[role="dialog"]')!.parentElement!.getBoundingClientRect().top)).toBe(0);
   if (SHOTS) await page.screenshot({ animations: 'disabled', path: `${SHOTS}/pessoas-ficha-sem-fila.png` });
-  // the checkbox follows the server (it turns on after the API answers), so click and wait instead of Playwright's check()
+  // choices are pending until "Salvar alterações" and its confirmation (owner, 2026-10-14)
   await sheet.getByLabel('Participa da fila Suporte N1').click();
   await expect(sheet.getByLabel('Participa da fila Suporte N1')).toBeChecked();
-  await expect(sheet.getByText('Carla recebe conversas')).toBeVisible();
-  expect(api.state.calls).toContainEqual({ method: 'POST', path: '/agents/p-carla/queues', body: { queue_id: 'q-n1', available: true, capacity: 1 } });
   await sheet.getByRole('button', { name: 'Aumentar: Capacidade na fila Suporte N1' }).click();
   await expect(sheet.getByRole('group', { name: 'Capacidade na fila Suporte N1' })).toContainText('2');
-  if (SHOTS) await page.screenshot({ animations: 'disabled', path: `${SHOTS}/pessoas-ficha-com-fila.png` });
+  await expect(sheet.getByText('1 alteração não salva')).toBeVisible();
+  expect(api.state.calls.filter((c) => c.path.startsWith('/agents/p-carla'))).toEqual([]);
+  if (SHOTS) await page.screenshot({ animations: 'disabled', path: `${SHOTS}/pessoas-ficha-pendente.png` });
+  await sheet.getByRole('button', { name: 'Salvar alterações' }).click();
+  const confirm = sheet.getByRole('alertdialog', { name: 'Aplicar as alterações em Carla Mendes?' });
+  await expect(confirm).toContainText('Entra na fila Suporte N1: disponível, até 2 conversas ao mesmo tempo');
+  if (SHOTS) await page.screenshot({ animations: 'disabled', path: `${SHOTS}/pessoas-ficha-confirmar.png` });
+  await confirm.getByRole('button', { name: 'Aplicar alterações' }).click();
+  await expect(sheet.getByText('Alterações salvas.')).toBeVisible();
+  await expect(sheet.getByText('Carla recebe conversas')).toBeVisible();
+  expect(api.state.calls).toContainEqual({ method: 'POST', path: '/agents/p-carla/queues', body: { queue_id: 'q-n1', available: true, capacity: 2 } });
+  // no limit: 0 shows "sem limite"
+  const less = sheet.getByRole('button', { name: 'Diminuir: Capacidade na fila Suporte N1' });
+  await less.click();
+  await less.click();
+  await expect(sheet.getByRole('group', { name: 'Capacidade na fila Suporte N1' })).toContainText('sem limite');
+  if (SHOTS) await page.screenshot({ animations: 'disabled', path: `${SHOTS}/pessoas-ficha-sem-limite.png` });
+  // closing with a pending change asks first
   await page.keyboard.press('Escape');
+  await sheet.getByRole('alertdialog', { name: 'Fechar sem salvar?' }).getByRole('button', { name: 'Fechar sem salvar' }).click();
+  await expect(sheet).toBeHidden();
   await expect(carla).toContainText('Recebe conversas');
   await expect(carla).toContainText('Suporte N1');
 
-  // Diego (supervisor) does not attend: turn attendance on from his sheet
+  // Diego (supervisor) does not attend: turn attendance on from his sheet, choose a queue, save
   await page.getByRole('button', { name: 'Abrir a ficha de Diego Alves' }).click();
   const diego = page.getByRole('dialog', { name: 'Ficha de Diego Alves' });
   await diego.getByRole('button', { name: 'Passar a atender' }).click();
-  await expect(diego.getByText('Agora recebe conversas. Confira as filas abaixo.')).toBeVisible();
-  await expect(diego.getByLabel('Participa da fila Comercial')).toBeVisible();
+  await diego.getByLabel('Participa da fila Comercial').click();
+  await diego.getByRole('button', { name: 'Salvar alterações' }).click();
+  await diego.getByRole('alertdialog', { name: /^Aplicar as alterações/ }).getByRole('button', { name: 'Aplicar alterações' }).click();
+  await expect(diego.getByText('Alterações salvas.')).toBeVisible();
+  await expect(diego.getByLabel('Participa da fila Comercial')).toBeChecked();
   await page.keyboard.press('Escape');
 
   // invite a new person as supervisor

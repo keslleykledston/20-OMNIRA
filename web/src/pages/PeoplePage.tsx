@@ -21,6 +21,7 @@ import {
   type Tone,
 } from '../lib/peopleModel'
 import { presenceAPI } from '../lib/presence'
+import { attendsOf, changesOf, seatOf, type SheetEdits } from '../lib/personDraft'
 import { queueErrorMessage, queuesAPI } from '../lib/queues'
 import { ROLE_DISPLAY_NAME } from '../lib/roles'
 import { sectorsAPI } from '../lib/sectors'
@@ -223,6 +224,54 @@ export default function PeoplePage() {
     }
   }
 
+  // "Salvar alterações" in the sheet: function first, then attendance, then the queues, each step only when it changed. The queue seats are
+  // made to match the sheet against what the server has NOW (creating an attendant may already have placed them in the default overflow
+  // queue). Whatever fails is said in a sentence; the list is read again either way, and what was not saved stays pending in the sheet.
+  const saveSheet = async (p: PersonEntry, edits: SheetEdits): Promise<boolean> => {
+    const changes = changesOf(p, edits)
+    if (changes.length === 0 || !p.member) return true
+    setBusy('save')
+    setSheetError(null)
+    setSheetNotice(null)
+    let step: 'role' | 'agent' = 'role'
+    try {
+      const role = changes.find((c) => c.kind === 'role')
+      if (role && role.kind === 'role') await teamAPI.updateRole(p.member.membership_id, role.to)
+      step = 'agent'
+      let profileId = p.agent?.profileId
+      const attend = changes.find((c) => c.kind === 'attend')
+      if (attend && attend.kind === 'attend') {
+        if (attend.on && !profileId) profileId = (await agentsAPI.create(p.member.membership_id)).id
+        else if (profileId) await agentsAPI.setStatus(profileId, attend.on ? 'active' : 'disabled')
+      }
+      if (attendsOf(p, edits) && profileId && Object.keys(edits.seats).length > 0) {
+        const now = (await agentsAPI.list()).find((a) => a.id === profileId)?.queues ?? []
+        const onServer = new Map(now.map((q) => [q.queue_id, q]))
+        for (const queueId of Object.keys(edits.seats)) {
+          const want = seatOf(p, edits, queueId)
+          const has = onServer.get(queueId)
+          if (want.member && !has) await agentsAPI.addQueue(profileId, queueId, want.available, want.capacity)
+          else if (!want.member && has) await agentsAPI.removeQueue(profileId, has.id)
+          else if (want.member && has && (has.available !== want.available || has.capacity !== want.capacity)) {
+            await agentsAPI.updateQueue(profileId, has.id, want.available, want.capacity)
+          }
+        }
+        // a new attendant who chose queues does not keep the default queue the server added on its own
+        if (!p.agent && Object.values(edits.seats).some((e) => e.member)) {
+          for (const q of now) if (!(q.queue_id in edits.seats)) await agentsAPI.removeQueue(profileId, q.id)
+        }
+      }
+      setSheetNotice('Alterações salvas.')
+      return true
+    } catch (err) {
+      setSheetError(step === 'role' ? teamErrorMessage(err, 'Não foi possível alterar a função.') : agentActionError(err))
+      return false
+    } finally {
+      await refreshAll()
+      setBusy(null)
+    }
+  }
+
   const openPerson = (key: string) => {
     setSheetError(null)
     setSheetNotice(null)
@@ -289,25 +338,11 @@ export default function PeoplePage() {
       error={sheetError}
       notice={sheetNotice}
       onClose={closeSheet}
-      onChangeRole={(roleKey) =>
-        p.member && void run('role', () => teamAPI.updateRole(p.member!.membership_id, roleKey), `Função alterada para ${ROLE_DISPLAY_NAME[roleKey] ?? roleKey}.`,
-          (e) => teamErrorMessage(e, 'Não foi possível alterar a função.'))
-      }
+      onSave={(edits) => saveSheet(p, edits)}
       onSetStatus={(status) =>
         p.member && void run('status', () => teamAPI.updateStatus(p.member!.membership_id, status), STATUS_NOTICE[status],
           (e) => teamErrorMessage(e, 'Não foi possível concluir a operação.'))
       }
-      onAttend={(on) => {
-        if (!p.member) return
-        if (!p.agent) {
-          void run('attend', () => agentsAPI.create(p.member!.membership_id), 'Agora recebe conversas. Confira as filas abaixo.', agentActionError)
-        } else {
-          void run('attend', () => agentsAPI.setStatus(p.agent!.profileId, on ? 'active' : 'disabled'), on ? 'Voltou a receber conversas.' : 'Em pausa. As filas ficaram guardadas.', agentActionError)
-        }
-      }}
-      onJoinQueue={(queueId) => p.agent && void run(`join:${queueId}`, () => agentsAPI.addQueue(p.agent!.profileId, queueId, true, 1), null, agentActionError)}
-      onLeaveQueue={(memberId) => p.agent && void run(`q:${memberId}`, () => agentsAPI.removeQueue(p.agent!.profileId, memberId), null, agentActionError)}
-      onUpdateQueue={(memberId, v) => p.agent && void run(`q:${memberId}`, () => agentsAPI.updateQueue(p.agent!.profileId, memberId, v.available, v.capacity), null, agentActionError)}
       onResend={() => p.invitation && void run('resend', () => invitationsAPI.resend(p.invitation!.id), 'Convite reenviado.', (e) => invitationErrorMessage(e, 'Não foi possível reenviar o convite.'))}
       onRevoke={() => p.invitation && void run('revoke', () => invitationsAPI.revoke(p.invitation!.id), 'Convite cancelado.', (e) => invitationErrorMessage(e, 'Não foi possível cancelar o convite.'))}
     />

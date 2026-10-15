@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { capacityText } from '../lib/personDraft'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Input, Modal, Skeleton, StatusBadge } from '../components/primitives'
 import { AttendanceFrame, Field, Notice, selectClass } from '../components/attendance/AttendanceFrame'
@@ -191,7 +192,7 @@ function Situation({ queueId }: { queueId: string }) {
         {s.agents.map((a) => (
           <li key={a.user_id} className="flex flex-wrap justify-between gap-2 py-1">
             <span>{a.name || 'Atendente'}</span>
-            <span className={a.eligible ? 'text-status-success' : 'text-text-secondary'}>{a.eligible ? `elegível${a.on_call ? ' (de plantão)' : ''} · ${a.workload}/${a.capacity}` : `${a.reasons.map(reasonLabel).join(', ')} · ${a.workload}/${a.capacity}`}</span>
+            <span className={a.eligible ? 'text-status-success' : 'text-text-secondary'}>{a.eligible ? `elegível${a.on_call ? ' (de plantão)' : ''} · ${a.workload}/${capacityText(a.capacity)}` : `${a.reasons.map(reasonLabel).join(', ')} · ${a.workload}/${capacityText(a.capacity)}`}</span>
           </li>
         ))}
         {s.agents.length === 0 && <li className="py-1 text-text-secondary">Nenhum atendente nesta fila.</li>}

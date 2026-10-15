@@ -2,17 +2,18 @@ import clsx from 'clsx'
 import type { ReactNode } from 'react'
 import type { Tone } from '../../lib/peopleModel'
 
-export const CAPACITY_MIN = 1
+// 0 = no limit of simultaneous conversations in the queue (owner, 2026-10-14).
+export const CAPACITY_MIN = 0
 export const CAPACITY_MAX = 100
 
-// "" or garbage -> 1; anything above the limit -> 100; fractions are rounded.
+// garbage or below 0 -> 0 (no limit); anything above the limit -> 100; fractions are rounded.
 export function clampCapacity(raw: string | number): number {
   const n = Math.round(Number(raw))
   if (!Number.isFinite(n) || n < CAPACITY_MIN) return CAPACITY_MIN
   return Math.min(CAPACITY_MAX, n)
 }
 
-export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+export function Switch({ checked, onChange, label, disabled, size = 'md' }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean; size?: 'sm' | 'md' }) {
   return (
     <button
       type="button"
@@ -22,24 +23,41 @@ export function Switch({ checked, onChange, label, disabled }: { checked: boolea
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={clsx(
-        'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors',
+        'relative inline-flex shrink-0 items-center rounded-full border transition-colors',
+        size === 'sm' ? 'h-5 w-9' : 'h-6 w-11',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2',
         'disabled:cursor-not-allowed disabled:opacity-50',
         checked ? 'border-accent-primary bg-accent-primary' : 'border-border-light bg-surface-muted',
       )}
     >
-      <span className={clsx('inline-block h-4 w-4 rounded-full bg-white shadow transition-transform motion-reduce:transition-none', checked ? 'translate-x-6' : 'translate-x-1')} />
+      <span
+        className={clsx(
+          'inline-block rounded-full bg-white shadow transition-transform motion-reduce:transition-none',
+          size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4',
+          checked ? (size === 'sm' ? 'translate-x-[1.125rem]' : 'translate-x-6') : 'translate-x-1',
+        )}
+      />
     </button>
   )
 }
 
-export function CapacityStepper({ value, onChange, label, disabled }: { value: number; onChange: (v: number) => void; label: string; disabled?: boolean }) {
+/** Conversations at the same time in a queue; 0 shows "sem limite". */
+export function CapacityStepper({ value, onChange, label, disabled, size = 'md' }: { value: number; onChange: (v: number) => void; label: string; disabled?: boolean; size?: 'sm' | 'md' }) {
   const step = (d: number) => onChange(clampCapacity(value + d))
-  const btn = 'flex h-8 w-8 items-center justify-center text-base font-semibold text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-primary'
+  const btn = clsx(
+    'flex items-center justify-center font-semibold text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-primary',
+    size === 'sm' ? 'h-7 w-7 text-sm' : 'h-8 w-8 text-base',
+  )
   return (
     <span role="group" aria-label={label} className="inline-flex items-center overflow-hidden rounded-control border border-border-light bg-surface">
       <button type="button" className={btn} aria-label={`Diminuir: ${label}`} disabled={disabled || value <= CAPACITY_MIN} onClick={() => step(-1)}>−</button>
-      <output aria-live="polite" className="min-w-[2.25rem] text-center text-sm font-semibold tabular-nums text-text-primary">{value}</output>
+      <output
+        aria-live="polite"
+        title={value === 0 ? 'Sem limite de conversas ao mesmo tempo' : undefined}
+        className={clsx('text-center font-semibold tabular-nums text-text-primary', value === 0 ? 'min-w-[4.5rem] px-1 text-xs' : 'min-w-[2.25rem] text-sm')}
+      >
+        {value === 0 ? 'sem limite' : value}
+      </output>
       <button type="button" className={btn} aria-label={`Aumentar: ${label}`} disabled={disabled || value >= CAPACITY_MAX} onClick={() => step(1)}>+</button>
     </span>
   )
