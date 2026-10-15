@@ -19,7 +19,7 @@ mkdir -p "$LAB"
 
 gen() {
   python3 - "$REPO" "$LAB" <<'PY'
-import sys, re, secrets, yaml, os
+import sys, re, secrets, yaml, os, base64
 repo, lab = sys.argv[1:3]
 src = yaml.safe_load(open(os.path.join(repo, "docker-compose.yml")))
 def remap(p):
@@ -39,7 +39,7 @@ with open(os.path.join(lab, "docker-compose.yml"), "w") as f:
     yaml.safe_dump(src, f, sort_keys=False)
 env_path = os.path.join(lab, ".env")
 if not os.path.exists(env_path):   # secrets are generated once, kept only in this file (mode 600), never printed
-    key = secrets.token_hex(32)
+    key = base64.b64encode(secrets.token_bytes(32)).decode()   # the platform wants base64 of 32 bytes
     with open(env_path, "w") as f:
         f.write(f"""COMPOSE_PROJECT_NAME=omnira-hl
 OMNIRA_ENV=development
