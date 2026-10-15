@@ -5,6 +5,7 @@ package application
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -788,12 +789,14 @@ func (s *Service) OpenOnClaim(ctx context.Context, conversationID, actor uuid.UU
 	}
 	if err := s.allow(ctx, c, PermCreate); err != nil {
 		if errors.Is(err, domain.ErrForbidden) {
+			log.Printf("service-context: no protocol on claim of conversation %s: the person lacks service.create here", conversationID)
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
 	res, err := s.open(ctx, c, in)
 	if errors.Is(err, domain.ErrConversationClosed) || errors.Is(err, domain.ErrNotACustomerChat) {
+		log.Printf("service-context: no protocol on claim of conversation %s: %v", conversationID, err)
 		return nil, false, nil // nothing to attend: not a customer chat, or already ended
 	}
 	if err != nil {

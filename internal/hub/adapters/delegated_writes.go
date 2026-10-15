@@ -128,6 +128,8 @@ func (d *DelegatedWrites) afterClaim(ctx context.Context, tc *tenancydomain.Tena
 	if err := platformdb.QuerierFromContext(ctx, d.pool).QueryRow(ctx, `SELECT actor_has_permission($1, $2, 'service.create')`, tc.TenantID, tc.ActorID).Scan(&may); err != nil || !may {
 		if err != nil {
 			log.Printf("hub: claim hook permission check of conversation %s failed: %v", t.Item.ConversationID, err)
+		} else {
+			log.Printf("hub: claim of conversation %s opened no protocol: the delegated grant of the agent lacks service.create", t.Item.ConversationID)
 		}
 		return
 	}
@@ -137,6 +139,9 @@ func (d *DelegatedWrites) afterClaim(ctx context.Context, tc *tenancydomain.Tena
 		}
 		created, err := d.onClaim.Run(c, t.Item.ConversationID, tc.ActorID)
 		if err != nil || !created {
+			if err == nil {
+				log.Printf("hub: claim of conversation %s opened no protocol (the module declined: no key, not a customer chat, or already ended)", t.Item.ConversationID)
+			}
 			return nil, err
 		}
 		return map[string]any{"conversation_id": t.Item.ConversationID.String()}, nil
