@@ -91,6 +91,11 @@ kc add-roles -r omnira --uusername service-account-omnira-provisioner --rolename
 refused "a composite role with manage-clients" "holds more than view-users"
 kc remove-roles -r omnira --uusername service-account-omnira-provisioner --rolename wide-composite
 kc delete roles/wide-composite -r omnira
+# admin power that comes with the realm's default role (every account would have it; the provisioner is refused all the same)
+DR=$(kc get realms/omnira | python3 -c 'import json,sys; print(json.load(sys.stdin)["defaultRole"]["name"])')
+kc add-roles -r omnira --rname "$DR" --cclientid realm-management --rolename manage-clients
+refused "a default role widened with manage-clients" "realm-management:manage-clients"
+kc remove-roles -r omnira --rname "$DR" --cclientid realm-management --rolename manage-clients
 # a client that does not authenticate with its secret
 kc update "clients/$PCID" -r omnira -s clientAuthenticatorType=client-jwt
 refused "a client-jwt client" "clientAuthenticatorType=client-jwt"

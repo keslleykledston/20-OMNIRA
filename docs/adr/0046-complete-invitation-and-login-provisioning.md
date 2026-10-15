@@ -53,6 +53,12 @@ Também corrigido nessa rodada:
 - Tudo é conferido **antes** de qualquer papel ser adicionado, e de novo depois.
 - O teste com Keycloak 25 real recusa, antes de usar o segredo: um papel direto a mais, um grupo com `manage-realm`, um papel composto com `manage-clients` e um cliente `client-jwt`.
 
+**Revisão do Codex, rodada 5: 1 HIGH e 3 MEDIUM/LOW, no mesmo script, corrigidos:**
+- A checagem virou um validador único, que compara os papéis **pelo id** (nunca pelo nome: um papel de outro contêiner pode ter o mesmo nome).
+- Ele percorre os compostos em qualquer profundidade e para em qualquer falha de leitura.
+- Os papéis de `realm-management` alcançáveis precisam caber no fecho de `view-users` + `manage-users`, **qualquer que seja a origem**: um papel padrão do realm alargado com poderes de admin também é recusado.
+- O teste real cobre esse caso.
+
 ## 1. Contexto: o que acontece hoje
 
 - Em produção o login é só pelo Keycloak (`OMNIRA_AUTH_MODE=oidc`, realm `omnira`, `registrationAllowed=false`). O OMNIRA **não** chama a API de administração do Keycloak.

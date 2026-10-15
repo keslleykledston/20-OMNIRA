@@ -69,48 +69,67 @@ if bad:
     print("STOP: client omnira-provisioner differs from the expected setup: " + ", ".join(bad))
     sys.exit(1)'
 SAID=$(kc get "clients/$CID/service-account-user" -r "$REALM" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-# (the full realm: --fields does not reach nested objects; only the default role's name is read out of it)
-DEFAULT_ROLE=$(kc get "realms/$REALM" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("defaultRole") or {}).get("name", ""))')
-[ -n "$DEFAULT_ROLE" ] || { echo "STOP: the realm's default role is unknown"; exit 1; }
-ALLOWED_REALM="$DEFAULT_ROLE $(kc get "roles/$DEFAULT_ROLE/composites/realm" -r "$REALM" | python3 -c 'import json,sys; print(" ".join(r["name"] for r in json.load(sys.stdin)))')"
 RMID=$(kc get clients -r "$REALM" -q clientId=realm-management --fields id | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
-# view-users and manage-users, and what they contain (view-users brings query-users and query-groups)
-ALLOWED_RM=$( { echo view-users; echo manage-users
-  for r in view-users manage-users; do
-    kc get "clients/$RMID/roles/$r/composites" -r "$REALM" | python3 -c 'import json,sys; [print(x["name"]) for x in json.load(sys.stdin)]'
-  done; } | sort -u | tr '\n' ' ')
 
-# 2b. What the service account REACHES - directly, through groups and through composite roles - may not go beyond the realm's default
-#     role and realm-management view-users + manage-users. Checked before any role is added and again after.
+# 2b. What the service account REACHES - directly, through groups and through composite roles at any depth - may not go beyond the
+#     realm's default role and realm-management view-users + manage-users (and what those contain). Roles are compared by id (never by
+#     name: a role of another container may share a name). Any failed read stops the script. Checked before any role is added and after.
 check_reach() { # $1 = before | after
-  local groups
-  groups=$(kc get "users/$SAID/groups" -r "$REALM" | python3 -c 'import json,sys; print(" ".join(g.get("path") or g.get("name", "?") for g in json.load(sys.stdin)))')
-  [ -z "$groups" ] || { echo "STOP: the service account of omnira-provisioner belongs to groups: $groups"; exit 1; }
-  kc get "users/$SAID/role-mappings" -r "$REALM" | python3 -c '
-import json, sys
-m = json.load(sys.stdin)
-extra = [r["name"] for r in m.get("realmMappings", []) if r["name"] != sys.argv[1]]
-extra += [c + ":" + r["name"] for c, e in (m.get("clientMappings") or {}).items() for r in e.get("mappings", [])
-          if not (c == "realm-management" and r["name"] in ("view-users", "manage-users"))]
-if extra:
-    print("STOP: the service account holds more than view-users + manage-users: " + ", ".join(sorted(extra)))
-    sys.exit(1)' "$DEFAULT_ROLE"
-  kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --effective | python3 -c '
-import json, sys
-extra = sorted({r["name"] for r in json.load(sys.stdin)} - set(sys.argv[1].split()))
-if extra:
-    print("STOP: the service account holds more than view-users + manage-users: realm roles " + ", ".join(extra))
-    sys.exit(1)' "$ALLOWED_REALM"
-  kc get-roles -r "$REALM" --uusername service-account-omnira-provisioner --cclientid realm-management --effective | python3 -c '
-import json, sys
-have = {r["name"] for r in json.load(sys.stdin)}
-extra = sorted(have - set(sys.argv[1].split()))
-if extra:
-    print("STOP: the service account holds more than view-users + manage-users: realm-management " + ", ".join(extra))
+  python3 - "$KC" "$CFG" "$REALM" "$SAID" "$RMID" "$1" <<'PYCHECK'
+import json, subprocess, sys
+
+container, cfg, realm, said, rmid, phase = sys.argv[1:7]
+
+
+def kc(path):
+    out = subprocess.run(["docker", "exec", container, "/opt/keycloak/bin/kcadm.sh", "get", path, "-r", realm, "--config", cfg],
+                         check=True, capture_output=True, text=True).stdout
+    return json.loads(out)
+
+
+def stop(message):
+    print("STOP: " + message)
     sys.exit(1)
-if sys.argv[2] == "after" and not {"view-users", "manage-users"} <= have:
-    print("STOP: view-users and manage-users are not both granted")
-    sys.exit(1)' "$ALLOWED_RM" "$1"
+
+
+def closure(start):  # ids of the roles reachable through composites, the start included
+    seen, todo = set(), list(start)
+    while todo:
+        role = todo.pop()
+        if role in seen:
+            continue
+        seen.add(role)
+        if len(seen) > 2000:
+            stop("composite roles too deep to check")
+        todo += [r["id"] for r in kc(f"roles-by-id/{role}/composites")]
+    return seen
+
+
+groups = kc(f"users/{said}/groups")
+if groups:
+    stop("the service account of omnira-provisioner belongs to groups: " + ", ".join(g.get("path") or g.get("name", "?") for g in groups))
+default = kc(f"realms/{realm}").get("defaultRole") or {}
+if not default.get("id"):
+    stop("the realm's default role is unknown")
+wanted = {name: kc(f"clients/{rmid}/roles/{name}")["id"] for name in ("view-users", "manage-users")}
+direct = kc(f"users/{said}/role-mappings")
+extra = [r["name"] for r in direct.get("realmMappings", []) if r["id"] != default["id"]]
+extra += [client + ":" + r["name"] for client, entry in (direct.get("clientMappings") or {}).items() for r in entry.get("mappings", [])
+          if r["id"] not in wanted.values()]
+if extra:
+    stop("the service account holds more than view-users + manage-users: " + ", ".join(sorted(extra)))
+# realm roles: only the default role and what it contains; realm-management (the admin powers): only view-users, manage-users and
+# what THEY contain - whatever the source, the default role included (a default role widened with admin roles is refused too)
+reach_realm = kc(f"users/{said}/role-mappings/realm/composite")
+reach_admin = kc(f"users/{said}/role-mappings/clients/{rmid}/composite")
+allowed_realm, allowed_admin = closure([default["id"]]), closure(list(wanted.values()))
+extra = sorted({r["name"] for r in reach_realm if r["id"] not in allowed_realm})
+extra += sorted({"realm-management:" + r["name"] for r in reach_admin if r["id"] not in allowed_admin})
+if extra:
+    stop("the service account holds more than view-users + manage-users: " + ", ".join(extra))
+if phase == "after" and not set(wanted.values()) <= {r["id"] for r in reach_admin}:
+    stop("view-users and manage-users are not both granted")
+PYCHECK
 }
 check_reach before
 # add-roles only finds roles not assigned yet: ask for the missing ones only
