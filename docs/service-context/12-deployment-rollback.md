@@ -1,6 +1,6 @@
 # 12 — Deploy e rollback
 
-Estado: **nada implantado, nada empurrado** (sem push, sem tag, sem merge). Branch `feat/omnira-service-context-operations` (9 commits sobre `main` @ `26e4f01`). Este documento é o plano para quando o dono mandar.
+Estado: **nada implantado, nada empurrado** (sem push, sem tag, sem merge). Branch `feat/omnira-service-context-operations` (12 commits sobre `main` @ `26e4f01`). Este documento é o plano para quando o dono mandar.
 
 ## Ordem
 
