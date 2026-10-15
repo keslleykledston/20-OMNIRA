@@ -1,5 +1,7 @@
 # 12 — Deploy e rollback
 
+Plano de merge/implantação passo a passo: `15-merge-deploy-plan.md`.
+
 Estado: **nada implantado, nada empurrado** (sem push, sem tag, sem merge). Branch `feat/omnira-service-context-operations` (commits sobre `main` @ `26e4f01`). Este documento é o plano para quando o dono mandar.
 
 ## Ordem
