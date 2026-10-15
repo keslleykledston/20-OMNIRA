@@ -2,7 +2,7 @@
 
 ## Implementation Summary
 
-Branch `feat/omnira-service-context-operations` (12 commits sobre `main` @ `26e4f01`; 117 arquivos; **sem push, sem tag, sem merge**). Worktree `/data/cafegpt/tmp/wt-svcctx`.
+Branch `feat/omnira-service-context-operations` (18 commits sobre `main` @ `26e4f01`; 128 arquivos; **sem push, sem tag, sem merge**). Worktree `/data/cafegpt/tmp/wt-svcctx`.
 
 | Fase | Entrega | Onde |
 |---|---|---|

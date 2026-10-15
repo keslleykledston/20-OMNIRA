@@ -28,7 +28,7 @@ Papéis com `service.request_external`. Prefixo do protocolo: `GET/PUT /service-
 |---|---|
 | Comportamento inesperado | desligar a flag (efeito imediato após reinício; dados ficam) |
 | Binário | voltar o binário anterior: as migrations são aditivas e o binário antigo as ignora |
-| Migration | **roll-forward preferido**. `down` existe (154 → 150, um por vez com `migrate-sql.sh down`) e **apaga os dados novos** (sessões, eventos, tarefas…); só em ambiente sem dados que importem. Round-trip 150–154 verificado |
+| Migration | **roll-forward preferido**. `down` existe (155 → 150, um por vez com `migrate-sql.sh down`) e **apaga os dados novos** (sessões, eventos, tarefas…); só em ambiente sem dados que importem. Round-trip 150–154 verificado |
 
 ## Colisão com o headless
 

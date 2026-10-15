@@ -13,7 +13,7 @@ Tudo abaixo foi **executado** nesta sessão (2026-10-15) em Postgres 16 descart�
 | Suíte inteira, em série | `go test -count=1 -p 1 ./...` (HEAD de fase 6, 02:41) | **90 pacotes ok**, 4 pacotes falham (ver abaixo) |
 | Linha de base (`main` @ `26e4f01`, mesmo comando, banco próprio) | idem | **88 ok**, **os mesmos 4 pacotes falham, com os mesmos testes** |
 | Web | `vitest run` | 96 arquivos / **1012 testes** ok; `tsc --noEmit` ok; `vite build` ok |
-| Migrations 000150–000154 | `down` (154→150) e `up` (150→154) em banco já migrado | ok, nas duas direções, depois da última alteração (000153 com `flow.step`) |
+| Migrations 000150–000155 | `down` (155→150) e `up` (150→155) em banco já migrado | ok, nas duas direções, depois da última alteração (000155: prefixo do protocolo). A 000155 também foi aplicada num banco descartável **populado**: com dois tenants no prefixo `AT` o pré-voo recusa com mensagem clara; com um prefixo para cada, aplica; `down`/`up` ok |
 | `go build ./...`, `go vet` (servicectx, flows, intelligence, hub, apps) | — | ok |
 
 ### Os 4 pacotes que falham na suíte inteira (e na linha de base)

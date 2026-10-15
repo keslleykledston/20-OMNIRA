@@ -306,9 +306,11 @@ func TestTwoCompaniesWithTheSameNameGetDifferentPrefixesEvenAtTheSameInstant(t *
 	var wg sync.WaitGroup
 	var a, b *domain.Session
 	var ea, eb error
+	start := make(chan struct{}) // both leave the gate together
 	wg.Add(2)
-	go func() { defer wg.Done(); a, ea = s.openIn(s.env.TenantA, s.agent, convA) }()
-	go func() { defer wg.Done(); b, eb = s.openIn(s.env.TenantB, s.env.UserB, convB) }()
+	go func() { defer wg.Done(); <-start; a, ea = s.openIn(s.env.TenantA, s.agent, convA) }()
+	go func() { defer wg.Done(); <-start; b, eb = s.openIn(s.env.TenantB, s.env.UserB, convB) }()
+	close(start)
 	wg.Wait()
 	if ea != nil || eb != nil {
 		t.Fatalf("both open: %v %v", ea, eb)
