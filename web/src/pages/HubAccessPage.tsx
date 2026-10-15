@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -11,6 +11,7 @@ import { Button, ConfirmDialog, EmptyState, ErrorState, Input, LoadingState, Sta
 import CompaniesPanel from '../components/hub/CompaniesPanel';
 import PoolsPanel from '../components/hub/PoolsPanel';
 import AuditPanel from '../components/hub/AuditPanel';
+import HubPersonSheet from '../components/hub/HubPersonSheet';
 
 // Management panel of the Hub (ADR-0038/0039): the companies, who administers each one, which agents exist and what each one may do where.
 // One screen with two tabs (Agentes e permissões / Instâncias); the old /hub/instâncias address redirects here.
@@ -40,6 +41,8 @@ export default function HubAccessPage() {
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [removeAgent, setRemoveAgent] = useState<AccessAgent | null>(null);
   const [removeAdmin, setRemoveAdmin] = useState<{ instance: AccessInstance; person: AccessPerson } | null>(null);
+  const [personId, setPersonId] = useState<string | null>(null);
+  const closePerson = useCallback(() => setPersonId(null), []);
 
   const overview = useQuery({ queryKey: ['hub-access', hubId], enabled: !!hubId, queryFn: () => hubAccessAPI.overview(hubId), retry: false });
   useEffect(() => {
@@ -135,8 +138,19 @@ export default function HubAccessPage() {
             onManage={(user, tenant, can) => setManage.mutate({ user, tenant, can })}
             onInvite={(email, access) => invite.mutate({ email, access })}
             onCancelInvite={(id) => revokeInvite.mutate(id)}
-            onRemove={(a) => setRemoveAgent(a)} />
+            onRemove={(a) => setRemoveAgent(a)}
+            onOpen={setPersonId} />
         )}
+        {data && personId && (() => {
+          const person = data.agents.find((a) => a.user_id === personId);
+          return person ? (
+            <HubPersonSheet hubId={hubId} agent={person} instances={data.instances} busy={setAccess.isPending || setManage.isPending}
+              onSetAccess={(user, tenant, mode) => setAccess.mutate({ user, tenant, mode })}
+              onSetManage={(user, tenant, can) => setManage.mutate({ user, tenant, can })}
+              onRemove={(a) => { setPersonId(null); setRemoveAgent(a); }}
+              onClose={closePerson} />
+          ) : null;
+        })()}
         {data && tab === 'audit' && <AuditPanel hubId={hubId} instances={data.instances} />}
         {data && tab === 'pools' && <PoolsPanel hubId={hubId} agents={data.agents} instances={data.instances} />}
         {tab === 'companies' && hub.can_manage_companies && (
@@ -238,13 +252,14 @@ function PendingInvitations({ items, nameOf, onCancel }: { items: AccessInvitati
   );
 }
 
-function AgentsTab({ data, busy, adding, onSet, onManage, onInvite, onCancelInvite, onRemove }: {
+function AgentsTab({ data, busy, adding, onSet, onManage, onInvite, onCancelInvite, onRemove, onOpen }: {
   data: AccessOverview; busy: boolean; adding: boolean;
   onSet: (user: string, tenant: string, mode: AccessMode) => void;
   onManage: (user: string, tenant: string, can: boolean) => void;
   onInvite: (email: string, access: { tenant_id: string; mode: 'read' | 'reply' }[]) => void;
   onCancelInvite: (id: string) => void;
   onRemove: (a: AccessAgent) => void;
+  onOpen: (userId: string) => void;
 }) {
   const instances = data.instances;
   const nameOf = new Map(instances.map((i) => [i.tenant_id, i.name]));
@@ -277,7 +292,10 @@ function AgentsTab({ data, busy, adding, onSet, onManage, onInvite, onCancelInvi
                 return (
                   <tr key={a.user_id} className="border-b border-border-subtle last:border-0 align-top">
                     <th scope="row" className="px-3 py-2 text-left font-normal">
-                      <div className="font-medium text-text-primary">{a.name || a.email || 'Sem nome'}</div>
+                      <button type="button" onClick={() => onOpen(a.user_id)} title="Abrir a ficha: instâncias e equipes"
+                        className="text-left font-medium text-text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary">
+                        {a.name || a.email || 'Sem nome'}
+                      </button>
                       {a.name && <div className="text-text-secondary">{a.email}</div>}
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         {a.hub_role === 'hub_admin' && <StatusBadge status="info">Admin do Hub</StatusBadge>}

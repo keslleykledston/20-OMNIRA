@@ -17,7 +17,7 @@ function setup(n: FlowNode) {
 }
 
 describe('NodeInspector — nós de roteamento', () => {
-  it('consultar horário escolhe setor OU grupo, nunca os dois, e marca setor inativo', () => {
+  it('consultar horário escolhe setor OU fila, nunca os dois, e marca setor inativo', () => {
     const onConfig = setup(node('check_schedule', { queue: 'q1' }))
     const select = screen.getByLabelText('Consultar o horário de') as HTMLSelectElement
     expect(select.value).toBe('queue:q1')

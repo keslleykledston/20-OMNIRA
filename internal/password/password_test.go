@@ -62,6 +62,19 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
+// The Keycloak realm policy is upperCase(1) lowerCase(1) digits(1) length(8): a temporary password that misses a class is refused there.
+func TestGenerateAlwaysMeetsTheRealmPolicy(t *testing.T) {
+	for i := 0; i < 2000; i++ {
+		pwd, err := Generate()
+		if err != nil {
+			t.Fatalf("Generate() error = %v", err)
+		}
+		if !hasUpperLowerDigit([]byte(pwd)) || len(pwd) < 8 {
+			t.Fatalf("Generate() = %q misses an upper case letter, a lower case letter or a digit", pwd)
+		}
+	}
+}
+
 func TestExpiresAt(t *testing.T) {
 	expiry := ExpiresAt()
 	now := time.Now()

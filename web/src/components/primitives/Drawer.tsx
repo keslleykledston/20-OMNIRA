@@ -9,6 +9,7 @@ interface DrawerProps {
   title: string
   onClose: () => void
   children: ReactNode
+  size?: 'sm' | 'lg'
 }
 
 /**
@@ -16,7 +17,7 @@ interface DrawerProps {
  * contract as Modal: overlay, close by X / Escape / click outside, focus trapped inside, focus returned to the trigger.
  * It is mounted only while open, so the page never has two interactive copies of the same panel.
  */
-export function Drawer({ open, title, onClose, children }: DrawerProps) {
+export function Drawer({ open, title, onClose, children, size = 'sm' }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   const restoreTo = useRef<HTMLElement | null>(null)
 
@@ -55,10 +56,11 @@ export function Drawer({ open, title, onClose, children }: DrawerProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end"
-      style={{ backgroundColor: 'var(--color-surface-overlay)' }}
+      // margin 0 inline: rendered in place, a parent's space-y-* margin would push the fixed overlay down and uncover the top
+      style={{ backgroundColor: 'var(--color-surface-overlay)', margin: 0 }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={title} className="relative flex h-dvh w-full max-w-[360px] flex-col bg-surface shadow-lg">
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={title} className={`relative flex h-dvh w-full ${size === 'lg' ? 'max-w-[540px]' : 'max-w-[360px]'} flex-col bg-surface shadow-lg`}>
         <button
           type="button"
           onClick={onClose}

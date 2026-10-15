@@ -88,9 +88,9 @@ function PolicyEditor({ queueId, manage }: { queueId: string; manage: boolean })
 
   return (
     <div className="space-y-4">
-      {!policy.data && <Notice>Este grupo não tem transbordo: a conversa espera aqui até alguém atender, como sempre foi. Monte uma cadeia de etapas para movê-la quando o grupo estiver fechado, sem atendente, lotado ou com SLA em risco.</Notice>}
+      {!policy.data && <Notice>Esta fila não tem transbordo: a conversa espera aqui até alguém atender, como sempre foi. Monte uma cadeia de etapas para movê-la quando a fila estiver fechada, sem atendente, lotado ou com SLA em risco.</Notice>}
       {error && <ErrorState title="Não foi possível salvar" message={error} isDismissible onDismiss={() => setError(null)} />}
-      {saved && <Notice>Política salva. As conversas que estavam esperando neste grupo foram reavaliadas com a nova política.</Notice>}
+      {saved && <Notice>Política salva. As conversas que estavam esperando nesta fila foram reavaliadas com a nova política.</Notice>}
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.active} disabled={ro} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} /> Política ativa</label>
         <Input label="Limite de etapas por conversa" type="number" min={1} max={8} value={String(draft.max_steps)} disabled={ro} onChange={(e) => setDraft({ ...draft, max_steps: Number(e.target.value) || 1 })} />
@@ -137,10 +137,10 @@ function PolicyEditor({ queueId, manage }: { queueId: string; manage: boolean })
                   </select>
                 </Field>
                 {s.destination_kind === 'flow' && (
-                  <p className="text-xs text-text-tertiary sm:col-span-2">O fluxo é iniciado na própria conversa, que continua no grupo. Só inicia se nenhum fluxo estiver em execução nela; caso contrário a etapa é pulada e a cadeia segue. O fluxo escolhe o que fazer em seguida (por exemplo, “Aplicar transbordo” ou “Transferir para humano”).</p>
+                  <p className="text-xs text-text-tertiary sm:col-span-2">O fluxo é iniciado na própria conversa, que continua na fila. Só inicia se nenhum fluxo estiver em execução nela; caso contrário a etapa é pulada e a cadeia segue. O fluxo escolhe o que fazer em seguida (por exemplo, “Aplicar transbordo” ou “Transferir para humano”).</p>
                 )}
                 {s.destination_kind === 'hub' && (
-                  <Field label="Grupo da empresa que o Hub atende" hint="A conversa continua dentro da sua empresa; o Hub só a atende por este grupo, com as permissões do contrato.">
+                  <Field label="Fila da empresa que o Hub atende" hint="A conversa continua dentro da sua empresa; o Hub só a atende por esta fila, com as permissões do contrato.">
                     <select className={selectClass} value={s.destination_queue_id ?? ''} disabled={ro} onChange={(e) => patch(i, { destination_queue_id: e.target.value || undefined })}>
                       <option value="">Escolha…</option>
                       {(queues.data ?? []).map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
@@ -167,7 +167,7 @@ function PolicyEditor({ queueId, manage }: { queueId: string; manage: boolean })
           <Button disabled={problems.length > 0 || save.isPending} onClick={() => save.mutate()}>Salvar política</Button>
         </div>
       )}
-      <ConfirmDialog open={removing} title="Remover a política de transbordo?" message="As conversas deste grupo deixam de ser movidas automaticamente. As que já foram movidas continuam onde estão e o histórico é mantido."
+      <ConfirmDialog open={removing} title="Remover a política de transbordo?" message="As conversas desta fila deixam de ser movidas automaticamente. As que já foram movidas continuam onde estão e o histórico é mantido."
         confirmLabel="Remover" destructive isPending={remove.isPending} onCancel={() => setRemoving(false)} onConfirm={() => { remove.mutate(); setRemoving(false) }} />
     </div>
   )
@@ -194,7 +194,7 @@ function Situation({ queueId }: { queueId: string }) {
             <span className={a.eligible ? 'text-status-success' : 'text-text-secondary'}>{a.eligible ? `elegível${a.on_call ? ' (de plantão)' : ''} · ${a.workload}/${a.capacity}` : `${a.reasons.map(reasonLabel).join(', ')} · ${a.workload}/${a.capacity}`}</span>
           </li>
         ))}
-        {s.agents.length === 0 && <li className="py-1 text-text-secondary">Nenhum atendente neste grupo.</li>}
+        {s.agents.length === 0 && <li className="py-1 text-text-secondary">Nenhum atendente nesta fila.</li>}
       </ul>
     </div>
   )
@@ -202,7 +202,7 @@ function Situation({ queueId }: { queueId: string }) {
 
 const REASONS: Record<string, string> = {
   queue_closed: 'setor fechado', off_shift: 'fora da escala', offline: 'offline', presence_unavailable: 'presença indisponível', no_capacity: 'capacidade esgotada',
-  unavailable: 'marcou-se indisponível', inactive: 'inativo', not_member: 'fora do grupo',
+  unavailable: 'marcou-se indisponível', inactive: 'inativo', not_member: 'fora da fila',
 }
 const reasonLabel = (r: string) => REASONS[r] ?? r.replace(/_/g, ' ')
 
@@ -215,7 +215,7 @@ function SLASection({ manage, queueId }: { manage: boolean; queueId: string }) {
   const monitor = useQuery({ queryKey: ['att-sla-monitor', tenantId, queueId], queryFn: () => slaAPI.monitor(queueId), retry: false })
   const sectors = useQuery({ queryKey: ['att-sectors', tenantId], queryFn: sectorsAPI.list, retry: false })
   const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false })
-  const scopeName = (p: SLAPolicy) => (p.scope_kind === 'tenant' ? 'Toda a empresa' : p.scope_kind === 'sector' ? `Setor ${sectors.data?.find((s) => s.id === p.scope_id)?.name ?? '?'}` : `Grupo ${queues.data?.find((q) => q.id === p.scope_id)?.name ?? '?'}`)
+  const scopeName = (p: SLAPolicy) => (p.scope_kind === 'tenant' ? 'Toda a empresa' : p.scope_kind === 'sector' ? `Setor ${sectors.data?.find((s) => s.id === p.scope_id)?.name ?? '?'}` : `Fila ${queues.data?.find((q) => q.id === p.scope_id)?.name ?? '?'}`)
   const save = useMutation({
     mutationFn: (p: SLAPolicy) => slaAPI.put(p, p.revision),
     onSuccess: async () => { setEditing(null); await qc.invalidateQueries({ queryKey: ['att-sla', tenantId] }) },
@@ -243,7 +243,7 @@ function SLASection({ manage, queueId }: { manage: boolean; queueId: string }) {
         <h2 className="text-lg font-semibold text-text-primary">Metas de SLA</h2>
         {manage && <Button size="sm" onClick={() => setEditing({ scope_kind: 'tenant', risk_percent: 80, counting: 'wall', active: true })}>+ Nova meta</Button>}
       </div>
-      <Notice>A meta mais específica vence: grupo, depois setor, depois empresa. Ao mudar de grupo ou setor o tempo já vivido é mantido (o relógio nunca reinicia). Passar do prazo avisa e escala, mas nunca tira a conversa de quem já a atende.</Notice>
+      <Notice>A meta mais específica vence: fila, depois setor, depois empresa. Ao mudar de fila ou setor o tempo já vivido é mantido (o relógio nunca reinicia). Passar do prazo avisa e escala, mas nunca tira a conversa de quem já a atende.</Notice>
       {error && <ErrorState title="Não foi possível concluir" message={error} isDismissible onDismiss={() => setError(null)} />}
       {policies.data?.length === 0 && <EmptyState title="Nenhuma meta de SLA" description="Sem meta, nada é cronometrado." />}
       {policies.data?.map((p) => (
@@ -258,8 +258,8 @@ function SLASection({ manage, queueId }: { manage: boolean; queueId: string }) {
         </Card>
       ))}
       {monitor.data && (
-        <Card padding="compact" aria-label="Monitor de SLA do grupo">
-          <h3 className="text-sm font-semibold text-text-primary">Relógios do grupo selecionado</h3>
+        <Card padding="compact" aria-label="Monitor de SLA da fila">
+          <h3 className="text-sm font-semibold text-text-primary">Relógios da fila selecionada</h3>
           <p className="text-sm text-text-secondary">
             {Object.keys(monitor.data.counts).length === 0 ? 'Nenhum relógio de SLA em andamento.' : Object.entries(monitor.data.counts).map(([k, v]) => `${k === 'at_risk' ? 'em risco' : k === 'breached' ? 'violados' : k === 'running' ? 'no prazo' : k}: ${v}`).join(' · ')}
           </p>
@@ -271,11 +271,11 @@ function SLASection({ manage, queueId }: { manage: boolean; queueId: string }) {
           <div className="space-y-3">
             <Field label="Vale para">
               <select className={selectClass} value={editing.scope_kind} disabled={editing.revision !== undefined} onChange={(e) => setEditing({ ...editing, scope_kind: e.target.value as SLAScope, scope_id: undefined })}>
-                <option value="tenant">Toda a empresa</option><option value="sector">Um setor</option><option value="queue">Um grupo</option>
+                <option value="tenant">Toda a empresa</option><option value="sector">Um setor</option><option value="queue">Uma fila</option>
               </select>
             </Field>
             {editing.scope_kind !== 'tenant' && (
-              <Field label={editing.scope_kind === 'sector' ? 'Setor' : 'Grupo'}>
+              <Field label={editing.scope_kind === 'sector' ? 'Setor' : 'Fila'}>
                 <select className={selectClass} value={editing.scope_id ?? ''} disabled={editing.revision !== undefined} onChange={(e) => setEditing({ ...editing, scope_id: e.target.value || undefined })}>
                   <option value="">Escolha…</option>
                   {(editing.scope_kind === 'sector' ? sectors.data ?? [] : queues.data ?? []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
@@ -307,14 +307,14 @@ export default function AttendanceOverflowPage() {
   const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false, enabled: canRead })
   useEffect(() => { if (!queueId && queues.data?.length) setQueueId(queues.data[0].id) }, [queues.data, queueId])
   return (
-    <AttendanceFrame title="Transbordo e SLA" description="O que acontece com a conversa quando o grupo está fechado, sem atendente ou lotado, e quanto tempo cada etapa pode levar.">
+    <AttendanceFrame title="Transbordo e SLA" description="O que acontece com a conversa quando a fila está fechada, sem atendente ou lotada, e quanto tempo cada etapa pode levar.">
       {({ manage }) => (
         <div className="space-y-8">
           {queues.isLoading && <Skeleton className="h-16" />}
-          {queues.data?.length === 0 && <EmptyState title="Nenhum grupo" description="Crie grupos em Pessoas › Grupos para configurar o transbordo." />}
+          {queues.data?.length === 0 && <EmptyState title="Nenhuma fila" description="Crie filas em Atendimento › Filas e setores para configurar o transbordo." />}
           {queues.data && queues.data.length > 0 && (
             <>
-              <Field label="Grupo de atendimento">
+              <Field label="Fila de atendimento">
                 <select className={`${selectClass} max-w-sm`} value={queueId} onChange={(e) => setQueueId(e.target.value)}>
                   {queues.data.map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
                 </select>

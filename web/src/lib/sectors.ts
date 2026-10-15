@@ -3,7 +3,7 @@ import { API_BASE } from './config'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session'
 
 // Cliente da API de setores, horários, escalas, plantões, transbordo e SLA (ADR-0044). Espelha internal/sectors/adapters. A interface chama
-// os grupos (filas) de "grupos" e as agendas de "horários". Nenhuma regra de horário é decidida aqui: o servidor valida e executa.
+// as agendas de "horários". Nenhuma regra de horário é decidida aqui: o servidor valida e executa.
 
 export interface Sector {
   id: string

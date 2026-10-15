@@ -392,7 +392,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
         <TopicsPanel conversationId={conversationId} />
       </CollapsibleSection>
 
-      {/* ADR-0044: setor, grupo, espera, SLA e histórico de roteamento */}
+      {/* ADR-0044: setor, fila, espera, SLA e histórico de roteamento */}
       {!internal && (
         <CollapsibleSection id="routing" title="Roteamento e SLA" icon="clock">
           <RoutingPanel conversationId={conversationId} />

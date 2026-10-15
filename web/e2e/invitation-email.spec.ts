@@ -43,10 +43,10 @@ async function tokenState(page: Page, link: string): Promise<string> {
 
 test('admin invites by e-mail, sees the delivery, resends, and the old link stops working', async ({ page }) => {
   await login(page, ADMIN);
-  await page.goto('/settings/team');
+  await page.goto('/settings/people');
 
-  await page.getByRole('button', { name: /Convidar usuário/ }).click();
-  const dialog = page.getByRole('dialog');
+  await page.getByRole('button', { name: /Adicionar pessoa/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Adicionar pessoa' });
   await dialog.getByLabel('E-mail').fill(INVITEE);
   await dialog.getByRole('button', { name: 'Enviar convite' }).click();
   await expect(page.getByText(`Convite enviado para ${INVITEE}.`)).toBeVisible();
@@ -58,14 +58,14 @@ test('admin invites by e-mail, sees the delivery, resends, and the old link stop
   expect(link1.startsWith(`${WEB}/invite/`)).toBe(true);
   expect(await tokenState(page, link1)).toBe('wrong_identity'); // alive, addressed to someone else
 
-  await page.getByRole('tab', { name: 'Convites' }).click();
-  const row = page.getByRole('row').filter({ hasText: INVITEE });
-  await expect(row).toContainText('Pendente');
-  await expect(row).not.toContainText('Não entregue');
+  const row = page.getByRole('button', { name: `Abrir a ficha de ${INVITEE}` });
+  await expect(row).toContainText('Convite enviado');
+  await expect(row).not.toContainText('não entregue');
 
-  await row.getByRole('button', { name: 'Ações' }).click();
-  await page.getByRole('menuitem', { name: 'Reenviar convite' }).click();
-  await expect(page.getByText(`Convite reenviado para ${INVITEE}.`)).toBeVisible();
+  await row.click();
+  const sheet = page.getByRole('dialog', { name: `Ficha de ${INVITEE}` });
+  await sheet.getByRole('button', { name: 'Reenviar convite' }).click();
+  await expect(sheet.getByText('Convite reenviado.')).toBeVisible();
 
   const mails = await sink.waitForCount(2);
   const link2 = linkOf(mails[1].raw);

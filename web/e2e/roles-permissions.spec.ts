@@ -11,9 +11,9 @@ async function login(page: Page, email: string) {
   await page.waitForURL('/inbox', { timeout: 10_000 });
 }
 
-test('admin reaches the read-only role matrix from Equipe e acesso', async ({ page }) => {
+test('admin reaches the read-only role matrix from Pessoas', async ({ page }) => {
   await login(page, ADMIN);
-  await page.goto('/settings/team');
+  await page.goto('/settings/people');
   await page.getByRole('link', { name: 'Funções e permissões' }).click();
   await expect(page).toHaveURL(/\/settings\/roles$/);
 

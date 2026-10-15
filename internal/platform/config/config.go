@@ -109,13 +109,21 @@ type Config struct {
 	// wins; unset means ON whenever real sign-in (OIDC) is configured, because that is when there are real people whose identity a forged setting would let anyone take.
 	SessionCtxRequireEnforce bool
 
-	SMTPHost           string
-	SMTPPort           int
-	SMTPUsername       string
-	SMTPPassword       string
-	SMTPFrom           string
-	SMTPReplyTo        string
-	SMTPTLS            string // starttls (padrão) | implicit | none (só dev)
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPReplyTo  string
+	SMTPTLS      string // starttls (padrão) | implicit | none (só dev)
+
+	// ADR-0046: with real sign-in (OIDC/Keycloak), invitations prepare the invitee's sign-in account through a client that may only
+	// view and manage users of the realm. Off unless InviteProvisionLogin and a secret are set.
+	InviteProvisionLogin        bool
+	KeycloakAdminURL            string
+	KeycloakProvisionerClientID string
+	KeycloakProvisionerSecret   string
+
 	AllowPrivilegedDB  bool
 	GracefulShutdown   int // segundos
 	SessionIdleTimeout int // segundos (padrão 7200 = 2h)
@@ -224,6 +232,10 @@ func Load() *Config {
 		SMTPFrom:                      os.Getenv("OMNIRA_SMTP_FROM"),
 		SMTPReplyTo:                   os.Getenv("OMNIRA_SMTP_REPLY_TO"),
 		SMTPTLS:                       getEnv("OMNIRA_SMTP_TLS", "starttls"),
+		InviteProvisionLogin:          getEnv("OMNIRA_INVITE_PROVISION_LOGIN", "false") == "true",
+		KeycloakAdminURL:              getEnv("OMNIRA_KEYCLOAK_ADMIN_URL", "http://keycloak:8888"),
+		KeycloakProvisionerClientID:   getEnv("OMNIRA_KEYCLOAK_PROVISIONER_CLIENT_ID", "omnira-provisioner"),
+		KeycloakProvisionerSecret:     os.Getenv("OMNIRA_KEYCLOAK_PROVISIONER_SECRET"),
 		AllowPrivilegedDB:             getEnv("OMNIRA_ALLOW_PRIVILEGED_DB", "false") == "true",
 		GracefulShutdown:              getEnvInt("OMNIRA_GRACEFUL_SHUTDOWN", 30),
 		SessionIdleTimeout:            getEnvInt("OMNIRA_SESSION_IDLE_TIMEOUT", 7200), // padrão: 2h

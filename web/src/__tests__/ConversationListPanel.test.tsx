@@ -147,7 +147,7 @@ describe('ConversationListPanel — Spam inbox', () => {
     renderPanel([conv('a')]);
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Em andamento', 'Encerradas', 'Todas', 'Aguardando', 'Minhas']);
     const more = screen.getByLabelText('Mais filtros') as HTMLSelectElement;
-    expect(Array.from(more.options).map((o) => o.textContent)).toEqual(['Mais…', 'Meus grupos', 'Não classif.', 'Internas', 'Spam']);
+    expect(Array.from(more.options).map((o) => o.textContent)).toEqual(['Mais…', 'Minhas filas', 'Não classif.', 'Internas', 'Spam']);
   });
 
   it('in Spam nobody is "waiting" and nothing is "unassigned": those signals are for conversations to attend', () => {

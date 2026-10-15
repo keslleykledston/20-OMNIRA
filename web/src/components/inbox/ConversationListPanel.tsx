@@ -32,7 +32,7 @@ const SEGMENTS: { id: InboxSegment; label: string }[] = [
   { id: 'all', label: 'Todas' },
   { id: 'waiting', label: 'Aguardando' },
   { id: 'mine', label: 'Minhas' },
-  { id: 'my_groups', label: 'Meus grupos' },
+  { id: 'my_groups', label: 'Minhas filas' },
   { id: 'unclassified', label: 'Não classif.' },
   { id: 'internal', label: 'Internas' },
   { id: 'closed', label: 'Encerradas' },

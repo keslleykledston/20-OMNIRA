@@ -92,6 +92,7 @@ function serve(w: World) {
     calls.push({ method: 'POST', url, body })
     const f = fail(); if (f) return f
     if (url.endsWith('/sectors')) { const s = { id: 's-new', name: body.name, active: true, queues: [] }; w.sectors.push(s); return ok(s) }
+    if (url.endsWith('/queues')) { const q = { ...queue('q-new', body.name), mode: body.mode, is_default: body.is_default }; w.queues.push(q); return ok(q) }
     if (url.endsWith('/calendars')) return ok({ id: 'c-new', name: body.name, revision: 1, definition: body.definition, suspensions: [], updated_at: '' })
     if (url.endsWith('/suspensions')) return ok({ id: 'sus1', from: body.from, to: body.to, reason: body.reason })
     if (url.endsWith('/on-call/rosters')) { const r = { id: 'r-new', ...body, active: true, on_now: 0 }; w.rosters.push(r); return ok(r) }
@@ -127,21 +128,21 @@ beforeEach(() => {
 describe('Atendimento › Setores', () => {
   const page = () => renderAt(<AttendanceSectorsPage />, '/settings/attendance/sectors', '/settings/attendance/sectors')
 
-  it('mostra cada setor com seus grupos, se estão abertos agora e o que ainda não tem setor', async () => {
+  it('mostra cada setor com suas filas, se estão abertas agora e o que ainda não tem setor', async () => {
     serve(world())
     page()
     expect(await screen.findByRole('heading', { name: /Financeiro/ })).toBeInTheDocument()
-    const list = await screen.findByRole('list', { name: 'Grupos de Financeiro' })
+    const list = await screen.findByRole('list', { name: 'Filas de Financeiro' })
     expect(within(list).getByText('Cobrança')).toBeInTheDocument()
     await waitFor(() => expect(within(list).getByText(/Aberto agora/)).toBeInTheDocument())
-    expect(screen.getByText(/Nenhum grupo neste setor/)).toBeInTheDocument()
-    const loose = await screen.findByText('Grupos sem setor')
+    expect(screen.getByText(/Nenhuma fila neste setor/)).toBeInTheDocument()
+    const loose = await screen.findByText('Filas sem setor')
     expect(loose).toBeInTheDocument()
     expect(screen.getAllByText('Avulso').length).toBeGreaterThan(0)
     await waitFor(() => expect(screen.getAllByText(/Fechado · abre/).length).toBeGreaterThan(0))
   })
 
-  it('cria setor, coloca um grupo avulso em um setor e desativa com confirmação', async () => {
+  it('cria setor, coloca uma fila avulsa em um setor e desativa com confirmação', async () => {
     const user = userEvent.setup()
     const calls = serve(world())
     page()
@@ -160,14 +161,14 @@ describe('Atendimento › Setores', () => {
     await waitFor(() => expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ active: false }))
   })
 
-  it('salva os avisos de horário por grupo (fechado e ao abrir), só o que mudou, e explica o placeholder', async () => {
+  it('salva os avisos de horário por fila (fechada e ao abrir), só o que mudou, e explica o placeholder', async () => {
     const user = userEvent.setup()
     const calls = serve(world({ notices: { 'q-fin': 'Voltamos já.' }, openNotices: { 'q-fin': 'Abrimos.' } }))
     page()
-    const list = await screen.findByRole('list', { name: 'Grupos de Financeiro' })
+    const list = await screen.findByRole('list', { name: 'Filas de Financeiro' })
     await user.click(within(list).getByRole('button', { name: 'Avisos de horário' }))
-    const closed = await screen.findByLabelText('Quando o grupo está fechado')
-    const opened = await screen.findByLabelText('Quando o grupo abrir')
+    const closed = await screen.findByLabelText('Quando a fila está fechada')
+    const opened = await screen.findByLabelText('Quando a fila abrir')
     await waitFor(() => { expect(closed).toHaveValue('Voltamos já.'); expect(opened).toHaveValue('Abrimos.') })
     expect(screen.getByText(/\{\{proxima_abertura\}\}/)).toBeInTheDocument()
     fireEvent.change(opened, { target: { value: 'Já estamos atendendo. Um atendente responderá em instantes.' } })
@@ -181,9 +182,9 @@ describe('Atendimento › Setores', () => {
     const user = userEvent.setup()
     const calls = serve(world({ notices: { 'q-fin': 'Voltamos já.' } }))
     page()
-    const list = await screen.findByRole('list', { name: 'Grupos de Financeiro' })
+    const list = await screen.findByRole('list', { name: 'Filas de Financeiro' })
     await user.click(within(list).getByRole('button', { name: 'Avisos de horário' }))
-    const box = await screen.findByLabelText('Quando o grupo está fechado')
+    const box = await screen.findByLabelText('Quando a fila está fechada')
     await waitFor(() => expect(box).toHaveValue('Voltamos já.'))
     fireEvent.change(box, { target: { value: 'Fechado. Voltamos {{proxima_abertura}}.' } })
     await user.click(screen.getByRole('button', { name: 'Salvar' }))
@@ -217,6 +218,120 @@ describe('Atendimento › Setores', () => {
     // no read is even attempted for the configuration (the only request is the permission list itself)
     const urls = vi.mocked(axios.get).mock.calls.map((c) => String(c[0]))
     expect(urls.filter((u) => !u.endsWith('/me/access'))).toEqual([])
+  })
+})
+
+describe('Atendimento › Filas (dentro de Filas e setores)', () => {
+  const page = () => renderAt(<AttendanceSectorsPage />, '/settings/attendance/sectors', '/settings/attendance/sectors')
+  const withCounts = (q: any, over: any) => ({ ...q, ...over })
+  const menu = async (user: ReturnType<typeof userEvent.setup>, queueName: string, item: string) => {
+    await user.click(await screen.findByRole('button', { name: `Mais ações da fila ${queueName}` }))
+    await user.click(screen.getByRole('menuitem', { name: item }))
+  }
+
+  it('mostra a estratégia, a fila padrão e as contagens reais, e avisa quando ninguém está na fila', async () => {
+    serve(world({ queues: [withCounts(queue('q-fin', 'Cobrança'), { mode: 'round_robin', is_default: true, member_count: 3, available_count: 2, open_conversation_count: 4 }), queue('q-sup', 'Suporte N1'), queue('q-loose', 'Avulso')] }))
+    page()
+    const list = await screen.findByRole('list', { name: 'Filas de Financeiro' })
+    await waitFor(() => expect(within(list).getByText('3 pessoas · 2 disponíveis · 4 conversas abertas')).toBeInTheDocument())
+    expect(within(list).getByText('Padrão')).toBeInTheDocument()
+    expect(within(list).getByText('Rodízio')).toBeInTheDocument()
+    expect(screen.getAllByText('Ninguém nesta fila: as conversas dela vão esperar.').length).toBeGreaterThan(0)
+  })
+
+  it('cria uma fila já como padrão e dentro de um setor', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await user.click(await screen.findByRole('button', { name: '+ Nova fila' }))
+    const dialog = screen.getByRole('dialog')
+    await user.type(within(dialog).getByLabelText('Nome da fila'), 'Retenção')
+    await user.click(within(dialog).getByLabelText('Rodízio'))
+    await user.selectOptions(within(dialog).getByLabelText('Setor'), 's-sup')
+    await user.click(within(dialog).getByLabelText(/Usar como fila padrão/))
+    await user.click(within(dialog).getByRole('button', { name: 'Criar fila' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/queues'))?.body).toEqual({ name: 'Retenção', mode: 'round_robin', is_default: true }))
+    await waitFor(() => expect(calls.find((c) => c.url.endsWith('/queues/q-new/sector'))?.body).toEqual({ sector_id: 's-sup' }))
+  })
+
+  it('renomeia, troca a estratégia e define a fila padrão pelo menu da fila', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world())
+    page()
+    await menu(user, 'Cobrança', 'Renomear')
+    const name = screen.getByLabelText('Nome da fila')
+    await user.clear(name)
+    await user.type(name, 'Cobrança PJ')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/queues/q-fin'))?.body).toEqual({ name: 'Cobrança PJ' }))
+
+    await menu(user, 'Cobrança', 'Estratégia: Rodízio')
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH' && c.url.endsWith('/queues/q-fin')).map((c) => c.body)).toContainEqual({ mode: 'round_robin' }))
+
+    await menu(user, 'Cobrança', 'Definir como fila padrão')
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH' && c.url.endsWith('/queues/q-fin')).map((c) => c.body)).toContainEqual({ is_default: true }))
+  })
+
+  it('pergunta antes de excluir e não oferece excluir a fila padrão', async () => {
+    const user = userEvent.setup()
+    const calls = serve(world({ queues: [withCounts(queue('q-fin', 'Cobrança'), { is_default: true }), queue('q-sup', 'Suporte N1'), queue('q-loose', 'Avulso')] }))
+    page()
+    await user.click(await screen.findByRole('button', { name: 'Mais ações da fila Cobrança' }))
+    expect(screen.getByRole('menuitem', { name: 'Excluir (troque a padrão antes)' })).toBeDisabled()
+    await user.keyboard('{Escape}')
+
+    await menu(user, 'Avulso', 'Excluir')
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Excluir' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'DELETE')?.url).toMatch(/\/queues\/q-loose$/))
+  })
+
+  it('avisa quando nenhuma fila é a padrão', async () => {
+    serve(world())
+    page()
+    expect(await screen.findByText(/Nenhuma fila é a padrão/)).toBeInTheDocument()
+  })
+
+  it('transforma a recusa do servidor numa frase e explica a estratégia Menor carga sem o motor', async () => {
+    const user = userEvent.setup()
+    const w = world()
+    serve(w)
+    page()
+    w.failNext = { status: 409, data: 'least_loaded requires the routing engine' }
+    await menu(user, 'Cobrança', 'Estratégia: Menor carga')
+    expect(await screen.findByText(/Menor carga exige o motor de roteamento/)).toBeInTheDocument()
+  })
+
+  it('pessoas da fila: entra, sai e muda a disponibilidade de quem já atende', async () => {
+    const user = userEvent.setup()
+    const w = world({ agents: [
+      { ...agent('u-ana', 'Ana Souza'), queues: [{ id: 'qm-ana', queue_id: 'q-fin', queue_name: 'Cobrança', available: true, capacity: 2 }] },
+      agent('u-bia', 'Bia Lima'),
+      { ...agent('u-caio', 'Caio Reis'), status: 'disabled' },
+    ] })
+    const calls = serve(w)
+    page()
+    await user.click(await screen.findByRole('button', { name: 'Pessoas da fila Cobrança' }))
+    const dialog = await screen.findByRole('dialog', { name: /Pessoas da fila Cobrança/ })
+    await user.click(await within(dialog).findByLabelText('Bia Lima participa da fila Cobrança'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/agents/p-u-bia/queues'))?.body).toEqual({ queue_id: 'q-fin', available: true, capacity: 1 }))
+    await user.click(within(dialog).getByRole('switch', { name: 'Ana Souza disponível na fila Cobrança' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/agents/p-u-ana/queues/qm-ana'))?.body).toEqual({ available: false, capacity: 2 }))
+    await user.click(within(dialog).getByLabelText('Ana Souza participa da fila Cobrança'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url.endsWith('/agents/p-u-ana/queues/qm-ana'))).toBe(true))
+    expect(within(dialog).getByLabelText('Caio Reis participa da fila Cobrança')).toBeDisabled()
+    expect(within(dialog).getByText(/Em pausa: reative em Pessoas/)).toBeInTheDocument()
+  })
+
+  it('quem só lê vê as filas e as pessoas, mas nenhuma ação', async () => {
+    const user = userEvent.setup()
+    serve(world({ permissions: READ_ONLY, agents: [{ ...agent('u-ana', 'Ana Souza'), queues: [{ id: 'qm-ana', queue_id: 'q-fin', queue_name: 'Cobrança', available: true, capacity: 2 }] }] }))
+    page()
+    await screen.findByRole('list', { name: 'Filas de Financeiro' })
+    expect(screen.queryByRole('button', { name: '+ Nova fila' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Mais ações da fila/ })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Pessoas da fila Cobrança' }))
+    expect(await screen.findByLabelText('Ana Souza participa da fila Cobrança')).toBeDisabled()
   })
 })
 
@@ -332,10 +447,10 @@ describe('Atendimento › Transbordo e SLA', () => {
     const user = userEvent.setup()
     const calls = serve(world())
     page()
-    await screen.findByText(/Este grupo não tem transbordo/)
+    await screen.findByText(/Esta fila não tem transbordo/)
     await user.click(screen.getByRole('button', { name: '+ Etapa' }))
     expect(screen.getByLabelText('Etapa 1')).toBeInTheDocument()
-    // o primeiro destino sugerido nunca é o próprio grupo de origem (Cobrança)
+    // o primeiro destino sugerido nunca é a própria fila de origem (Cobrança)
     await user.selectOptions(screen.getByLabelText('Escolha o destino da etapa 1'), 'q-sup')
     await user.click(screen.getByRole('button', { name: 'Salvar política' }))
     await waitFor(() => {
@@ -344,7 +459,7 @@ describe('Atendimento › Transbordo e SLA', () => {
       expect(put?.body.steps[0]).toMatchObject({ position: 1, destination_kind: 'queue', destination_id: 'q-sup', triggers: ['after_hours', 'no_eligible_agent'] })
     })
     expect(await screen.findByText(/reavaliadas com a nova política/)).toBeInTheDocument()
-    // o grupo de origem não é oferecido como destino
+    // a fila de origem não é oferecida como destino
     expect(within(screen.getByLabelText('Escolha o destino da etapa 1')).queryByRole('option', { name: 'Cobrança' })).toBeNull()
   })
 
@@ -362,11 +477,11 @@ describe('Atendimento › Transbordo e SLA', () => {
     void user
   })
 
-  it('destino Hub lista só contratos (nunca operadores) e exige o grupo que o Hub atende', async () => {
+  it('destino Hub lista só contratos (nunca operadores) e exige a fila que o Hub atende', async () => {
     const user = userEvent.setup()
     serve(world())
     page()
-    await screen.findByText(/Este grupo não tem transbordo/)
+    await screen.findByText(/Esta fila não tem transbordo/)
     await user.click(screen.getByRole('button', { name: '+ Etapa' }))
     await user.selectOptions(screen.getByLabelText('Destino da etapa 1'), 'hub')
     const dest = screen.getByLabelText('Escolha o destino da etapa 1')
@@ -379,7 +494,7 @@ describe('Atendimento › Transbordo e SLA', () => {
     const user = userEvent.setup()
     const calls = serve(world())
     page()
-    await screen.findByText(/Este grupo não tem transbordo/)
+    await screen.findByText(/Esta fila não tem transbordo/)
     await user.click(screen.getByRole('button', { name: '+ Etapa' }))
     await user.selectOptions(screen.getByLabelText('Destino da etapa 1'), 'flow')
     const dest = screen.getByLabelText('Escolha o destino da etapa 1')

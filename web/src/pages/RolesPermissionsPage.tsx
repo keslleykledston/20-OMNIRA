@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 import clsx from 'clsx'
-import { Badge, Card, EmptyState, ErrorState, Icon, PageHeader, Skeleton, Tabs, type TabItem } from '../components/primitives'
+import { Badge, Card, EmptyState, ErrorState, Icon, Skeleton, Tabs, type TabItem } from '../components/primitives'
+import { SettingsShell, SETTINGS_SECTIONS } from '../components/SettingsShell'
 import { getTenantId } from '../lib/session'
 import { teamAPI } from '../lib/team'
 import { useAccess } from '../lib/useAccess'
-import { ROLE_DISPLAY_NAME } from '../lib/roles'
+import { ROLE_DISPLAY_NAME, ROLE_SUMMARY } from '../lib/roles'
 import { PERMISSION_GROUPS, unlistedPermissions } from '../lib/permissions'
 
 const ROLE_ORDER = ['tenant_admin', 'tenant_supervisor', 'tenant_agent']
@@ -39,36 +39,29 @@ export function RolesPermissionsPage() {
     label: ROLE_DISPLAY_NAME[r.key] ?? r.name,
   }))
 
-  const header = (
-    <PageHeader
+  const peopleSection = SETTINGS_SECTIONS.find((s) => s.key === 'people')
+  const frame = (children: ReactNode) => (
+    <SettingsShell
+      sections={SETTINGS_SECTIONS}
+      subsections={peopleSection?.subsections}
       title="Funções e permissões"
-      breadcrumbs={[{ label: 'Equipe e acesso', href: '/settings/team' }, { label: 'Funções e permissões', current: true }]}
-    />
+      description="O que cada função pode fazer nesta instância. A função de cada pessoa é escolhida na ficha dela, em Pessoas."
+    >
+      <div className="space-y-6">{children}</div>
+    </SettingsShell>
   )
 
   if (roles.isLoading) {
-    return (
-      <div className="space-y-6">
-        {header}
-        <Skeleton count={4} height="h-10" />
-      </div>
-    )
+    return frame(<Skeleton count={4} height="h-10" />)
   }
 
   if (!roles.isError && ordered.length === 0) {
-    return (
-      <div className="space-y-6">
-        {header}
-        <EmptyState title="Nenhuma função disponível" description="Não há funções configuradas nesta organização ainda." />
-      </div>
-    )
+    return frame(<EmptyState title="Nenhuma função disponível" description="Não há funções configuradas nesta organização ainda." />)
   }
 
   if (roles.isError || !active) {
     const forbidden = (roles.error as { response?: { status?: number } } | null)?.response?.status === 403
-    return (
-      <div className="space-y-6">
-        {header}
+    return frame(
         <ErrorState
           title={forbidden ? 'Sem acesso' : 'Erro ao carregar'}
           message={
@@ -76,20 +69,18 @@ export function RolesPermissionsPage() {
               ? 'Você não tem permissão para ver as funções e permissões.'
               : 'Não foi possível carregar as funções e permissões.'
           }
-        />
-      </div>
+        />,
     )
   }
 
   const granted = new Set(active.permissions)
   const others = unlistedPermissions(active.permissions)
 
-  return (
-    <div className="space-y-6">
-      {header}
-
+  return frame(
+    <>
       <div className="space-y-3">
         <Tabs aria-label="Funções" items={tabs} value={active.key} onChange={setSelected} />
+        {ROLE_SUMMARY[active.key] && <p className="text-body-sm font-medium text-text-primary">{ROLE_SUMMARY[active.key]}</p>}
         <div className="flex flex-wrap items-center gap-2 text-body-sm text-text-secondary">
           <p>As permissões deste papel são definidas pela plataforma.</p>
           {active.key === currentKey && <Badge variant="info" size="sm">Seu papel</Badge>}
@@ -113,11 +104,7 @@ export function RolesPermissionsPage() {
           <MatrixSection title="Outras" rows={others.map((k) => ({ key: k, label: k, allowed: true }))} />
         )}
       </div>
-
-      <p className="text-body-sm text-text-tertiary">
-        <Link to="/settings/team" className="text-accent-primary hover:underline">← Equipe e acesso</Link>
-      </p>
-    </div>
+    </>,
   )
 }
 

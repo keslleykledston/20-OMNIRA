@@ -83,6 +83,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterOIDCAuthHandlers(s.authenticator, nil, contractOIDCHandler{})
 	s.RegisterMobileAuthHandlers(contractMobileHandler{})
 	s.RegisterTenancyHandlers(nil, false)
+	s.RegisterInvitationHandlers(nil, false, "", nil, nil)
 	s.RegisterDeviceAdminHandlers(nil, contractDeviceAdminHandler{})
 	s.RegisterInboxHandlers(nil, &config.Config{MediaDir: t.TempDir(), OutboundMediaEnabled: true, ClamAVAddr: "clamav:3310"})
 	s.RegisterChannelManagementHandlers(nil, channeladapters.NewManagementHandler(nil), true)
