@@ -48,3 +48,7 @@ Gatilho que descartaria escritas legítimas (`RETURN NULL`) → falha ruidosa; c
 3. **Implantação** (somente com ordem expressa): backup; `migrate` aplica 137–141; build de api/worker/web a partir de worktree limpo; **flags continuam OFF**; ligar `OMNIRA_HEADLESS_ENABLED` e só depois `…_WRITE_ENABLED` no piloto de uma empresa/um CRM/uma linha, com os critérios de abortar do runbook §3.
 4. **Reversão**: desligar as flags (WRITE, suspender aplicações, ENABLED) sem perder dados; `down` das migrations só com backup e aprovação (perde as tabelas novas; a 137 recusa com instalação viva).
 5. Push/merge: decisão do dono.
+
+## Renumeração e revalidação sobre a `main` de 2026-10-15
+
+A `main` passou a usar migrations 135/136 e ADR-0046/0047 (redesign de Pessoas). Esta branch recebeu o merge da `main` (`466a519`) e foi renumerada (`a2f7982`): migrations 135–139 → **137–141**, ADR-0046 → **ADR-0048**. Revalidado sobre a árvore mesclada: `go build`/`go vet` limpos; `up` de todas as migrations em Postgres novo e `down` encadeado 141→137 + `up` com schema idêntico (PASS); suíte de integração completa **41 pacotes ok, EXIT=0**; web `tsc` limpo, 988 testes (a `main` removeu/reescreveu testes de Pessoas), build OK. Mutantes e benchmark não foram reexecutados (nenhum código mudou além de números/comentários e do merge). A `main` não foi alterada.
