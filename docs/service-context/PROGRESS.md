@@ -8,10 +8,12 @@ Como rodar testes (banco descartável, nunca `omnira_dev`): scripts no scratchpa
 | Fase | Estado | Commit | Observação |
 |---|---|---|---|
 | 0 Auditoria | feito | d9cdfd4 | Codex: 4 HIGH/6 MEDIUM tratados |
-| 1 Sessões/protocolo | feito | 78cf5e8 + endurecimento | Codex: 4 HIGH/5 MEDIUM tratados (recibos, máquina de estados no banco, ator, leitura por chave) |
-| 2 Timeline/contexto | feito | 78cf5e8 + endurecimento | sem outbox (decisão); entrega = headless |
-| 3 Ocorrências/tarefas | feito | 80209d1 + endurecimento | Gate 3: 5 cenários; Codex: 5 HIGH tratados (recibo de passo de fluxo, fatos de conclusão, motivo de reabertura no banco, responsável da empresa) |
-| 4 ERP/headless/eventos | feito (adaptador real e entrega de webhook = BLOCKED, ver 06/08) | pendente | porta + fake, tentativa durável, reconciliação, atualização de entrada; envelope + AsyncAPI |
-| 5 Workspace/Hub | não iniciada | | |
-| 6 Fluxos/IA/métricas | não iniciada | | |
-| 7 Docs finais | não iniciada | | |
+| 1 Sessões/protocolo | feito | 78cf5e8 | Codex: 4 HIGH/5 MEDIUM tratados |
+| 2 Timeline/contexto | feito | 78cf5e8 | sem outbox (decisão); entrega = headless |
+| 3 Ocorrências/tarefas | feito | 80209d1 | Gate 3: 5 cenários; Codex: 5 HIGH tratados |
+| 4 ERP/eventos | feito (adaptador real e webhook = BLOCKED) | f01d13b | Codex: 5 HIGH tratados |
+| 5 Workspace/Hub | feito | 7bf2869, f4859f4, 793c9c1 | Codex: 2 HIGH/3 MEDIUM tratados |
+| 6 Fluxos/IA/métricas | feito | 3e022f4, 1d5a4d8, 735dc1f | Codex: 2 HIGH (1 tratado, 1 = R-AI-1 herdado) |
+| 7 Docs finais | feito | (este commit) | status **READY_FOR_REVIEW** (ver 13) |
+
+Retomada: nada a retomar no código; pendências estão em `13-final-report.md`.
