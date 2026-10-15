@@ -26,5 +26,5 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0036 - Estratégia de evolução do frontend: o OMNIRA é a aplicação, protótipos gerados são só referência de UX — aceita
 - 0043 - Setores: a fila é o setor; entrada por canal (S0–S2 implementadas, S3/S4 propostas)
 - 0045 - Menu sem resposta: lembretes e encerramento por inatividade (nó close_conversation) — implementada em LAB na branch feat/menu-idle-reminders
-- 0046 - Convite completo: função e filas no convite, e conta de login criada pelo OMNIRA — proposta (Fase 2 de Pessoas)
-- 0047 - Ficha da pessoa no console do Hub: instâncias e filas de cada uma — proposta (Fase 3 de Pessoas)
+- 0046 - Convite completo: função e filas no convite, e conta de login criada pelo OMNIRA — implementada (Fase 2 de Pessoas)
+- 0047 - Ficha da pessoa no console do Hub: instâncias e filas de cada uma — implementada, versão mínima só no frontend (Fase 3 de Pessoas)

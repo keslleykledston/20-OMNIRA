@@ -5,6 +5,7 @@ import { test, expect, Page, Route } from '@playwright/test';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const HUB = '99999999-0000-0000-0000-000000000001';
+const SHOTS = process.env.PEOPLE_SHOTS;
 
 const person = (id: string, email: string, name = '') => ({ user_id: id, email, name });
 const overview = () => ({
@@ -23,6 +24,7 @@ async function install(page: Page, opts: { admin: boolean; companies: { id: stri
   const ov = { ...overview(), invitations: [] as { id: string; email: string; access: { tenant_id: string; mode: string }[]; created_at: string; expires_at: string }[] };
   const writes: { method: string; path: string; body: any }[] = [];
   const inboxQueries: string[] = [];
+  const pools = [{ id: 'p1', name: 'Suporte N1', description: '', distribution: 'round_robin', members: [] as any[], instances: [{ tenant_id: 'A', name: 'ISP Roraima' }, { tenant_id: 'B', name: 'NorteNet' }] }];
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   await page.addInitScript(([t]) => {
     localStorage.setItem('token', 'mock-token');
@@ -74,6 +76,15 @@ async function install(page: Page, opts: { admin: boolean; companies: { id: stri
       agent.grants = agent.grants.filter((g) => g.tenant_id !== cell[2]);
       if (body.mode !== 'none') agent.grants.push({ tenant_id: cell[2], mode: body.mode } as never);
       agent.instances = agent.grants.length;
+      return route.fulfill({ status: 204 });
+    }
+    if (p === `/hubs/${HUB}/pools` && method === 'GET') return json(route, { items: pools });
+    const poolMembers = p.match(new RegExp(`^/hubs/${HUB}/pools/([^/]+)/members$`));
+    if (poolMembers && method === 'PUT') {
+      const body = route.request().postDataJSON();
+      writes.push({ method, path: p, body });
+      const pool = pools.find((x) => x.id === poolMembers[1]);
+      if (pool) pool.members = body.members.map((m: any) => ({ ...m, email: `${m.user_id}@k3g.com`, name: '', load: 0 }));
       return route.fulfill({ status: 204 });
     }
     if (p === '/tenants') return json(route, [{ id: TENANT, legal_name: 'K3G' }]);
@@ -156,4 +167,25 @@ test('Conversas unificadas: quem atende duas instâncias vê tudo e filtra por i
 
   await page.getByLabel('Todas as instâncias').check();
   await expect(page.getByText('Cliente Alfa')).toBeVisible();
+});
+
+test('ficha da pessoa (ADR-0047): abre pelo nome, libera uma instância e coloca a pessoa numa equipe', async ({ page }) => {
+  const { writes } = await install(page, { admin: true, companies: [] });
+  await page.goto('/inbox');
+  await page.getByRole('link', { name: 'Administração' }).first().click();
+  await expect(page).toHaveURL(/\/admin\/acessos$/);
+  await page.getByRole('button', { name: 'Xavier' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Ficha de Xavier' });
+  const access = sheet.getByLabel('Acesso de Xavier em ISP Roraima');
+  await expect(access).toHaveValue('read');
+  await expect(sheet.getByText(/Só com “Ler e responder”/).first()).toBeVisible();
+  await access.selectOption('reply');
+  await expect(access).toHaveValue('reply');
+  const team = sheet.getByLabel('Xavier na equipe Suporte N1').first();
+  // the checkbox follows the server: click and wait instead of Playwright's check()
+  await team.click();
+  await expect(team).toBeChecked();
+  expect(writes.some((w) => w.method === 'PUT' && w.path.endsWith('/pools/p1/members') && w.body.members.some((m: any) => m.user_id === 'x'))).toBe(true);
+  expect(await page.evaluate(() => document.querySelector('[role="dialog"]')!.parentElement!.getBoundingClientRect().top)).toBe(0);
+  if (SHOTS) await page.screenshot({ animations: 'disabled', path: `${SHOTS}/console-ficha-pessoa.png` });
 });

@@ -1,6 +1,6 @@
 # ADR-0047 — Ficha da pessoa no console do Hub: instâncias e filas de cada uma
 
-Status: **PROPOSTA** (2026-10-14), aguarda o dono. Fase 3 do redesenho de Pessoas (Fase 1 = `a206b91`; Fase 2 = ADR-0046). Nada desta proposta está construído.
+Status: **IMPLEMENTADA, versão mínima** (2026-10-14). O dono pediu "implante as melhorias propostas" e "ampliando as features, não criando algo novo": a ficha da pessoa entrou no painel Acessos existente, **só no frontend**, com as APIs que já existem (acesso por instância, gestão de canais, Equipes). Não foram criados os endpoints nem a função do §2.2/§2.3: a lista da Equipe é relida logo antes de gravar (o `PUT` de membros substitui a lista inteira, como na aba Equipes); a função e as filas de um membro direto aparecem só como aviso ("membro direto desta instância"), sem detalhe; a Pessoas da instância **não** mostra quem atende pelo Hub (decisão §4.1 em aberto). Decisão §4.2 adotada: o admin do Hub não edita filas de membros diretos.
 
 ## 1. Contexto
 

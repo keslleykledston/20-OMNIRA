@@ -69,7 +69,7 @@ describe('HubAccessPage', () => {
     const rowX = within(table).getByText('Xavier').closest('tr')!;
     expect(within(rowX).getByText('2 instâncias')).toBeInTheDocument();
     // direct membership counts and is named: nobody hides a second instance
-    const rowY = within(table).getByText('y@k3g.com', { selector: 'div' }).closest('tr')!;
+    const rowY = within(table).getByText('y@k3g.com', { selector: 'button' }).closest('tr')!; // the name opens the person's sheet
     expect(within(rowY).getByText(/Também é membro direto de: Beta/)).toBeInTheDocument();
     expect(within(table).getByText('Admin do Hub').closest('tr')).toBe(within(table).getByText('Chefe').closest('tr'));
     // a suspended instance cannot receive access
@@ -216,6 +216,71 @@ describe('HubAccessPage', () => {
     expect(instanceLabel(0)).toBe('Nenhuma instância');
     expect(instanceLabel(1)).toBe('Uma instância');
     expect(instanceLabel(3)).toBe('3 instâncias');
+  });
+});
+
+describe('HubAccessPage: ficha da pessoa (ADR-0047)', () => {
+  const pool = (id: string, name: string, tenants: { tenant_id: string; queue_id?: string }[], members: string[]) => ({
+    id, name, description: '', distribution: 'manual',
+    members: members.map((u) => ({ user_id: u, email: u + '@k3g.com', name: '', max_open: 7, load: 0 })),
+    instances: tenants.map((t) => ({ ...t, name: t.tenant_id })),
+  });
+  let pools: any[] = [];
+  beforeEach(() => {
+    pools = [pool('p1', 'Suporte', [{ tenant_id: 'A' }, { tenant_id: 'C', queue_id: 'q9' }], ['u-y'])];
+    const base = vi.mocked(axios.get).getMockImplementation()!;
+    vi.mocked(axios.get).mockImplementation(async (url: string, ...rest: any[]) => {
+      if (String(url).endsWith('/pools')) return { data: { items: pools } };
+      return base(url, ...rest);
+    });
+    vi.mocked(axios.put).mockResolvedValue({ data: {} });
+  });
+
+  it('abre pelo nome e mostra cada instância com o acesso e as equipes que a atendem', async () => {
+    const user = userEvent.setup();
+    renderAt(<HubAccessPage />);
+    await user.click(await screen.findByRole('button', { name: 'Xavier' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Ficha de Xavier' });
+    expect(within(sheet).getByLabelText('Acesso de Xavier em Alfa')).toHaveValue('reply');
+    expect(within(sheet).getByLabelText('Acesso de Xavier em Gama')).toHaveValue('read');
+    expect(within(sheet).getByLabelText('Acesso de Xavier em Beta')).toBeDisabled();
+    const alfa = within(sheet).getByRole('listitem', { name: 'Alfa — Xavier' });
+    expect(await within(alfa).findByLabelText('Xavier na equipe Suporte')).not.toBeChecked();
+    expect(within(alfa).getByText(/todas as filas desta instância · também atende Gama/)).toBeInTheDocument();
+    const gama = within(sheet).getByRole('listitem', { name: 'Gama — Xavier' });
+    expect(within(gama).getByText(/Só com “Ler e responder”/)).toBeInTheDocument();
+  });
+
+  it('mudar o acesso numa instância manda exatamente aquela pessoa, aquela instância e aquele modo', async () => {
+    const user = userEvent.setup();
+    renderAt(<HubAccessPage />);
+    await user.click(await screen.findByRole('button', { name: 'Xavier' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Ficha de Xavier' });
+    await user.selectOptions(within(sheet).getByLabelText('Acesso de Xavier em Gama'), 'reply');
+    await waitFor(() => expect(vi.mocked(axios.put)).toHaveBeenCalledWith(
+      expect.stringMatching(/\/hubs\/hub-1\/access\/agents\/u-x\/instances\/C$/), expect.objectContaining({ mode: 'reply' }), expect.anything()));
+  });
+
+  it('entrar numa equipe relê a equipe e grava a lista com quem já estava, mais a pessoa', async () => {
+    const user = userEvent.setup();
+    renderAt(<HubAccessPage />);
+    await user.click(await screen.findByRole('button', { name: 'Xavier' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Ficha de Xavier' });
+    pools = [pool('p1', 'Suporte', [{ tenant_id: 'A' }], ['u-y', 'u-z'])]; // someone joined meanwhile
+    await user.click(await within(sheet).findByLabelText('Xavier na equipe Suporte'));
+    await waitFor(() => expect(vi.mocked(axios.put)).toHaveBeenCalledWith(
+      expect.stringMatching(/\/hubs\/hub-1\/pools\/p1\/members$/),
+      { members: [{ user_id: 'u-y', max_open: 7 }, { user_id: 'u-z', max_open: 7 }, { user_id: 'u-x', max_open: 10 }] },
+      expect.anything()));
+  });
+
+  it('avisa quando a pessoa também é membro direta de uma instância', async () => {
+    const user = userEvent.setup();
+    renderAt(<HubAccessPage />);
+    await user.click(await screen.findByRole('button', { name: 'y@k3g.com' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Ficha de y@k3g.com' });
+    const beta = within(sheet).getByRole('listitem', { name: 'Beta — y@k3g.com' });
+    expect(within(beta).getByText(/Também é membro direto desta instância/)).toBeInTheDocument();
   });
 });
 
