@@ -72,6 +72,12 @@ func (s *Service) FlowClassify(ctx context.Context, conversationID uuid.UUID, ca
 	if err != nil {
 		return err
 	}
+	return s.ClassifyByCode(ctx, conversationID, categoryCode)
+}
+
+// ClassifyByCode puts the ACTIVE session of the conversation in the category with that code, with the caller's own authority (Patch asks for service.update when
+// the caller is a person). Already there = nothing changes, so a replay is harmless.
+func (s *Service) ClassifyByCode(ctx context.Context, conversationID uuid.UUID, categoryCode string) error {
 	if s.catalog == nil {
 		return errors.New("servicectx: catalog not configured")
 	}
@@ -95,7 +101,7 @@ func (s *Service) FlowClassify(ctx context.Context, conversationID uuid.UUID, ca
 		return err
 	}
 	if sess.CategoryID != nil && *sess.CategoryID == *cat {
-		return nil // already there: a replayed step changes nothing
+		return nil
 	}
 	_, err = s.Patch(ctx, sess.ID, domain.PatchInput{CategoryID: cat}, sess.Version)
 	return err

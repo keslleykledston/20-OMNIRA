@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -116,6 +117,18 @@ type searchArgs struct {
 	Limit int    `json:"limit,omitempty"`
 }
 
+type proposeTaskArgs struct {
+	Title    string `json:"title"`
+	Priority string `json:"priority,omitempty"`
+}
+
+type proposeClassificationArgs struct {
+	Category string `json:"category"`
+}
+
+// serviceCategoryCode is the shape the service module enforces on a category code.
+var serviceCategoryCode = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,39}$`)
+
 const (
 	MaxMemoryLimit      = 20
 	minSearchQueryRunes = 2
@@ -155,7 +168,40 @@ func ToolRegistry() map[string]ToolSpec {
 		}
 		return normalise(a)
 	}
+	proposeTask := func(raw json.RawMessage) (json.RawMessage, error) {
+		var a proposeTaskArgs
+		if err := strictArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		a.Title = strings.TrimSpace(a.Title)
+		if n := utf8.RuneCountInString(a.Title); n < 1 || n > 200 || strings.ContainsAny(a.Title, "\r\n") || untrusted.ContainsCredential(a.Title) {
+			return nil, fmt.Errorf("%w: title must have 1 to 200 characters on one line and no credential", ErrInvalidArgs)
+		}
+		switch a.Priority {
+		case "", "low", "normal", "high", "urgent":
+		default:
+			return nil, fmt.Errorf("%w: unknown priority", ErrInvalidArgs)
+		}
+		return normalise(a)
+	}
+	proposeClassification := func(raw json.RawMessage) (json.RawMessage, error) {
+		var a proposeClassificationArgs
+		if err := strictArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !serviceCategoryCode.MatchString(a.Category) {
+			return nil, fmt.Errorf("%w: category must be the code of one of the company's categories", ErrInvalidArgs)
+		}
+		return normalise(a)
+	}
 	specs := []ToolSpec{
+		// ADR-0049: the service session of the topic's conversation. The conversation is derived from the topic on the server (no argument can point these at another
+		// one). The AI READS freely and only PROPOSES: a task or a classification it asks for waits for a person, who approves it with their own permissions. Nothing
+		// that asks an ERP for something, closes a session or touches a case is offered to the AI at all (service.request_external is never a tool).
+		{Name: "service.current_session", Description: "The service session (protocol, state, category, result) of this topic's conversation", Risk: RiskRead, Permission: "service.read", Args: none},
+		{Name: "service.open_tasks", Description: "Pending tasks of the service session of this topic's conversation", Risk: RiskRead, Permission: "service.read", Args: limited},
+		{Name: "service.propose_task", Description: "Propose a pending task for the service session (a person approves it)", Risk: RiskLowWrite, Permission: "service.create", Args: proposeTask},
+		{Name: "service.propose_classification", Description: "Propose the category of the service session (a person approves it)", Risk: RiskLowWrite, Permission: "service.update", Args: proposeClassification},
 		// ADR-0020: memory of the topic's contact. Read only; the contact is derived from the topic on the server, so there is
 		// no argument that can point these at another contact or tenant.
 		{Name: "contact.recent_attendances", Description: "Summaries of the contact's earlier finalized attendances", Risk: RiskRead, Permission: "topic.read", Args: limited},

@@ -350,6 +350,12 @@ func main() {
 		for name, run := range intelligenceapp.NewContactMemoryExecutors(contactMemory) { // ADR-0020: read-only memory of the topic's contact
 			toolExecutors[name] = run
 		}
+		if cfg.ServiceContextEnabled { // ADR-0049: the AI reads the service session and only PROPOSES a task / a classification (a person approves it)
+			bridgeSvc, _, _ := servicectxadapters.Build(dbPool, servicectxadapters.Options{ExternalOrders: cfg.ServiceExternalOrdersEnabled})
+			for name, run := range intelligenceapp.NewServiceExecutors(topicRepo, servicectxadapters.NewAIBridge(bridgeSvc)) {
+				toolExecutors[name] = run
+			}
+		}
 		topicHandler.WithTools(intelligenceapp.NewToolGateway(intelligenceadapters.NewPostgresToolCallRepository(dbPool), topicRepo, topicHandler.ToolAuthorizer(),
 			toolExecutors, intelligenceFlags))
 		srv.RegisterIntelligenceHandlers(dbPool, topicHandler)
