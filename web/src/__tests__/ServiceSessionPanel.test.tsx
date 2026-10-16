@@ -101,7 +101,7 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     serve({ session: session({ status: 'closed', closed_at: '2026-10-15T13:00:00Z', resolution_canonical: 'information_provided' }) })
     renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
     await screen.findByTestId('service-protocol')
-    expect(screen.getByText('Informação prestada')).toBeInTheDocument()
+    expect(screen.getByText(/Informação prestada/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Encerrar atendimento/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /aguardando/ })).toBeNull()
   })
@@ -112,7 +112,7 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     const user = userEvent.setup()
     renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
     await user.type(await screen.findByLabelText('Nova tarefa'), 'Enviar segunda via')
-    await user.click(screen.getByRole('button', { name: 'Adicionar' }))
+    await user.click(screen.getByRole('button', { name: 'Adicionar tarefa' }))
     await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1))
     let [url, body, cfg] = vi.mocked(axios.post).mock.calls[0] as [string, any, any]
     expect(url).toMatch(/\/service-tasks$/)

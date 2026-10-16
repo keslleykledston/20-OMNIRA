@@ -19,7 +19,7 @@ describe('ChannelSwitcher', () => {
     mocked.get.mockResolvedValue({ data: { items: lines } })
   })
 
-  it('shows the current line and opens the person on another one without sending anything', async () => {
+  it('offers only the OTHER lines (the current one is already in the chat) and opens the person on one without sending anything', async () => {
     mocked.post.mockResolvedValue({ data: { conversation_id: 'conv-meta', created: true } })
     const onOpen = vi.fn()
     render(
@@ -27,8 +27,8 @@ describe('ChannelSwitcher', () => {
         <ChannelSwitcher contactId="c1" currentChannelId="l-waha" onOpenConversation={onOpen} />
       </QueryClientProvider>,
     )
-    expect(await screen.findByText('WhatsApp · +559291882864')).toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: /WhatsApp oficial/ }))
+    expect(screen.queryByText('WhatsApp · +559291882864')).not.toBeInTheDocument()
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith('conv-meta'))
     expect(mocked.post).toHaveBeenCalledTimes(1)
     expect(String(mocked.post.mock.calls[0][0])).toMatch(/inbox\/conversations\/open$/)

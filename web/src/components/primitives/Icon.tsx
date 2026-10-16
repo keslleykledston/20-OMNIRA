@@ -29,8 +29,24 @@ export type IconName =
   | 'paperclip'
   | 'key'
   | 'building'
+  | 'user-plus'
+  | 'user-minus'
+  | 'transfer'
+  | 'check-circle'
+  | 'pause'
+  | 'play'
+  | 'flag'
+  | 'shield-alert'
 
 const paths: Record<IconName, string> = {
+  'user-plus': 'M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19 8v6m3-3h-6',
+  'user-minus': 'M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM22 11h-6',
+  transfer: 'M7 7h13m0 0-3-3m3 3-3 3M17 17H4m0 0 3-3m-3 3 3 3',
+  'check-circle': 'm8.5 12 2.5 2.5 4.5-5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+  pause: 'M9 5v14m6-14v14',
+  play: 'M7 4.5v15l12.5-7.5Z',
+  flag: 'M5 21V4m0 0h11l-2 4 2 4H5',
+  'shield-alert': 'M12 3 4 7v5c0 4.4 3.4 8.4 8 9 4.6-.6 8-4.6 8-9V7l-8-4Zm0 6v4m0 3h.01',
   building: 'M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Zm-2 0h16M10 6h4m-4 4h4m-4 4h4m-4 4h4',
   key: 'M15.5 7.5 19 4m2-2-2 2m0 0 2 2-3.5 3.5-2-2m-2.1 2.1a5 5 0 1 1-7.07 7.07 5 5 0 0 1 7.07-7.07Zm0 0L15.5 7.5',
   paperclip: 'm21.4 11-9.2 9.2a6 6 0 0 1-8.5-8.5l8.6-8.6a4 4 0 1 1 5.7 5.7l-8.6 8.5a2 2 0 0 1-2.8-2.8l8.5-8.5',

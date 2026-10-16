@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Input } from '../primitives'
+import { ActionIcon, Button, Input } from '../primitives'
 import {
   BUILTIN_RESULTS,
   SESSION_STATUS_LABEL,
@@ -80,10 +80,12 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
   if (!session) {
     if (!can('service.create') || conversationClosed) return null
     return (
-      <section aria-label="Atendimento com protocolo" className="px-4 pb-4 text-sm">
-        <p className="mb-2 text-text-secondary">Esta conversa ainda não tem um atendimento com protocolo.</p>
-        <Button variant="secondary" size="sm" disabled={busy} onClick={() => open.mutate()}>Abrir atendimento com protocolo</Button>
-        {error && <p role="alert" className="mt-2 rounded-control bg-status-danger-soft p-2 text-xs text-status-danger">{error}</p>}
+      <section aria-label="Atendimento com protocolo" className="px-4 pb-3 text-sm">
+        <div className="flex items-center justify-between gap-2">
+          <p className="m-0 text-xs text-text-secondary">Esta conversa ainda não tem um atendimento com protocolo.</p>
+          <ActionIcon icon="plus" label="Abrir atendimento com protocolo" disabled={busy} onClick={() => open.mutate()} />
+        </div>
+        {error && <p role="alert" className="rounded-control bg-status-danger-soft p-2 text-xs text-status-danger">{error}</p>}
       </section>
     )
   }
@@ -93,28 +95,27 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
   const finished = (tasks.data ?? []).filter((t) => t.status === 'done' || t.status === 'cancelled')
 
   return (
-    <section aria-label="Atendimento com protocolo" className="space-y-3 px-4 pb-4 text-sm">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
-        <dt className="text-text-secondary">Protocolo</dt>
-        <dd className="text-right font-semibold text-text-primary" data-testid="service-protocol">{session.protocol}</dd>
-        <dt className="text-text-secondary">Situação</dt>
-        <dd className="text-right text-text-primary">{SESSION_STATUS_LABEL[session.status]}</dd>
-        <dt className="text-text-secondary">Aberto em</dt>
-        <dd className="text-right text-text-primary">{when(session.opened_at)}</dd>
-        {session.closed_at && (<><dt className="text-text-secondary">Encerrado em</dt><dd className="text-right text-text-primary">{when(session.closed_at)}</dd></>)}
-        {session.resolution_canonical && (<><dt className="text-text-secondary">Resultado</dt><dd className="text-right text-text-primary">{BUILTIN_RESULTS.find((r) => r.code === session.resolution_canonical)?.label ?? 'Abandonado'}</dd></>)}
-      </dl>
+    <section aria-label="Atendimento com protocolo" className="space-y-2 px-4 pb-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <p className="m-0 flex min-w-0 items-center gap-2">
+          <span className="font-semibold text-text-primary" data-testid="service-protocol">{session.protocol}</span>
+          <span className="rounded-pill bg-surface px-2 py-0.5 text-xs font-medium text-text-secondary">{SESSION_STATUS_LABEL[session.status]}</span>
+        </p>
+        {/* the actions are icons: the label is the tooltip and the accessible name */}
+        {isActive && !closing && (
+          <div className="flex flex-shrink-0 items-center gap-1.5">
+            {can('service.update') && session.status !== 'waiting' && <ActionIcon icon="pause" label="Marcar como aguardando" disabled={busy} onClick={() => setStatus.mutate('waiting')} />}
+            {can('service.update') && session.status !== 'in_progress' && <ActionIcon icon="play" label="Marcar em andamento" disabled={busy} onClick={() => setStatus.mutate('in_progress')} />}
+            {can('service.close') && <ActionIcon icon="flag" label="Encerrar atendimento com protocolo" disabled={busy} onClick={() => setClosing(true)} />}
+          </div>
+        )}
+      </div>
+      <p className="m-0 text-[11px] text-text-tertiary">
+        Aberto {when(session.opened_at)}
+        {session.closed_at && ` · encerrado ${when(session.closed_at)}`}
+        {session.resolution_canonical && ` · ${BUILTIN_RESULTS.find((r) => r.code === session.resolution_canonical)?.label ?? 'Abandonado'}`}
+      </p>
 
-      {isActive && can('service.update') && (
-        <div className="flex flex-wrap gap-2">
-          {session.status !== 'waiting' && <Button variant="secondary" size="sm" disabled={busy} onClick={() => setStatus.mutate('waiting')}>Marcar como aguardando</Button>}
-          {session.status !== 'in_progress' && <Button variant="secondary" size="sm" disabled={busy} onClick={() => setStatus.mutate('in_progress')}>Marcar em andamento</Button>}
-        </div>
-      )}
-
-      {isActive && can('service.close') && !closing && (
-        <Button variant="secondary" size="sm" disabled={busy} onClick={() => setClosing(true)}>Encerrar atendimento com protocolo</Button>
-      )}
       {isActive && closing && (
         <div className="space-y-2 rounded-control border border-border-subtle bg-surface p-3">
           <label className="block text-xs text-text-secondary" htmlFor="svc-result">Resultado</label>
@@ -132,23 +133,23 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
       )}
 
       <div>
-        <h4 className="mb-1 text-xs font-semibold uppercase text-text-tertiary">Tarefas do atendimento</h4>
+        <h4 className="mb-1 text-[11px] font-semibold uppercase text-text-tertiary">Tarefas</h4>
         {(tasks.data ?? []).length === 0 && <p className="m-0 text-xs text-text-tertiary">Nenhuma tarefa.</p>}
         <ul className="m-0 list-none space-y-1 p-0">
           {pending.map((t) => (
-            <li key={t.id} className="flex items-center justify-between gap-2 rounded-control border border-border-subtle bg-surface p-2 text-xs">
+            <li key={t.id} className="flex items-center justify-between gap-2 rounded-control border border-border-subtle bg-surface py-1 pl-2 pr-1 text-xs">
               <span className={t.overdue ? 'text-status-danger' : 'text-text-primary'}>{t.title}{t.overdue ? ' (atrasada)' : ''}</span>
-              {can('service.close') && <button type="button" className="text-accent-primary" disabled={busy} aria-label={`Concluir tarefa: ${t.title}`} onClick={() => complete.mutate(t)}>Concluir</button>}
+              {can('service.close') && <ActionIcon icon="check" label={`Concluir tarefa: ${t.title}`} className="h-6 w-6" disabled={busy} onClick={() => complete.mutate(t)} />}
             </li>
           ))}
           {finished.map((t) => (
-            <li key={t.id} className="rounded-control border border-border-subtle p-2 text-xs text-text-tertiary">{t.title} · {TASK_STATUS_LABEL[t.status]}</li>
+            <li key={t.id} className="rounded-control border border-border-subtle px-2 py-1 text-xs text-text-tertiary">{t.title} · {TASK_STATUS_LABEL[t.status]}</li>
           ))}
         </ul>
         {can('service.create') && (
-          <form className="mt-2 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (title.trim()) addTask.mutate() }}>
+          <form className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (title.trim()) addTask.mutate() }}>
             <Input aria-label="Nova tarefa" placeholder="Nova tarefa" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />
-            <Button type="submit" size="sm" variant="secondary" disabled={busy || !title.trim()}>Adicionar</Button>
+            <ActionIcon type="submit" icon="plus" label="Adicionar tarefa" disabled={busy || !title.trim()} />
           </form>
         )}
       </div>

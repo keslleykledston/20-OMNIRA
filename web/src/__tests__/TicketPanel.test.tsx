@@ -1365,3 +1365,46 @@ describe('TicketPanel — PRODUCT.7B1B CRM activity (security correction: contai
     expect(screen.queryByText(/indisponível/i)).not.toBeInTheDocument();
   });
 });
+
+// The ticket form offers the companies the CONTACT belongs to (matched by name against the ERP directory), the main one preselected; with none matched, the whole directory as before.
+describe('TicketPanel — the contact\'s own companies', () => {
+  const ACME = { id: 'erp-1', name: 'ACME TESTE LTDA.', cnpj: '1' };
+  const BETA = { id: 'erp-2', name: 'Beta Telecom', cnpj: '2' };
+  const OTHER = { id: 'erp-3', name: 'Outra Empresa', cnpj: '3' };
+  beforeEach(() => {
+    vi.resetAllMocks();
+    localStorage.clear();
+    setSession();
+  });
+
+  it('a contact with ONE company in the directory has nothing to choose: that company, already selected, is what is sent', async () => {
+    mockCompanies([ACME, BETA, OTHER]);
+    vi.mocked(axios.post).mockResolvedValue({ data: { local_ticket_id: 'lt-1', linked: true, provider: 'k3g', external_ticket_id: '9' } });
+    renderAt(<TicketPanel conversationId={CONV} crmContactId="crm-1" contactCompanyNames={['Acme Teste']} />);
+    expect(await screen.findByText('ACME TESTE LTDA.')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Empresa' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Outra Empresa')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Assunto do chamado'), { target: { value: 'Sem internet' } });
+    fireEvent.change(screen.getByLabelText('Descrição do chamado'), { target: { value: 'Caiu de manhã' } });
+    fireEvent.click(screen.getByRole('button', { name: /Abrir chamado/ }));
+    await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalled());
+    expect((vi.mocked(axios.post).mock.calls[0][1] as any).selected_customer_external_id).toBe('erp-1');
+  });
+
+  it('a contact with several companies sees only those, the main one first and preselected', async () => {
+    mockCompanies([ACME, BETA, OTHER]);
+    renderAt(<TicketPanel conversationId={CONV} crmContactId="crm-1" contactCompanyNames={['Beta Telecom', 'Acme Teste']} />);
+    const select = (await screen.findByRole('combobox', { name: 'Empresa' })) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe('erp-2'));
+    const labels = Array.from(select.options).map((o) => o.textContent);
+    expect(labels).toEqual(['Selecionar empresa', 'Beta Telecom (2)', 'ACME TESTE LTDA. (1)']);
+  });
+
+  it('when the directory cannot tell which are the contact\'s, the whole directory is offered as before', async () => {
+    mockCompanies([ACME, BETA]);
+    renderAt(<TicketPanel conversationId={CONV} crmContactId="crm-1" contactCompanyNames={['Empresa Que Nao Existe']} />);
+    const select = (await screen.findByRole('combobox', { name: 'Empresa' })) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(3));
+    expect(select.value).toBe('');
+  });
+});

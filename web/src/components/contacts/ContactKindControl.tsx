@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
-import { Button, ConfirmDialog } from '../primitives'
+import { ActionIcon, Button, ConfirmDialog } from '../primitives'
 import {
   CONTACT_KIND_LABEL,
   INTERNAL_ROLES,
@@ -149,7 +149,7 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
         </div>
       ) : (
         <>
-          <div className="flex gap-1.5">
+          <div className="flex items-center gap-1.5">
             {(delegated ? (['customer', 'other'] as const) : (['customer', 'internal', 'other'] as const)).map((k) => (
               <button
                 key={k}
@@ -165,6 +165,10 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
                 {CONTACT_KIND_LABEL[k]}
               </button>
             ))}
+            {/* Already classified: the red "spam" text is noise; the action stays one click away, as an icon. */}
+            {kind !== 'unclassified' && (
+              <ActionIcon icon="shield-alert" label="Marcar como spam ou golpe" tone="danger" className="ml-auto" disabled={pending} onClick={() => setConfirmSpam(true)} />
+            )}
           </div>
           {kind === 'unclassified' && (
             <p className="mt-2 text-xs text-text-tertiary">
@@ -196,14 +200,16 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
               <p className="mt-2 text-xs text-text-tertiary">{INTERNAL_NOTICE}</p>
             </div>
           )}
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => setConfirmSpam(true)}
-            className="mt-3 text-xs font-medium text-status-danger hover:underline disabled:opacity-60"
-          >
-            Marcar como spam ou golpe
-          </button>
+          {kind === 'unclassified' && (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => setConfirmSpam(true)}
+              className="mt-3 text-xs font-medium text-status-danger hover:underline disabled:opacity-60"
+            >
+              Marcar como spam ou golpe
+            </button>
+          )}
         </>
       )}
 

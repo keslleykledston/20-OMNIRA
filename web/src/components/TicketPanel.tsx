@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../lib/config';
 import { authHeaders, getTenantId } from '../lib/session';
@@ -30,6 +30,32 @@ interface TicketPanelProps {
    * the ERP status are not part of the delegated context yet, so those two controls are not offered (the server would answer 404 to them).
    */
   delegated?: boolean;
+  /**
+   * The companies the contact already belongs to, main one first. When the ERP directory has them (matched by name: the accounts do not keep the ERP id), the form
+   * offers only those, with the first preselected; when none matches, the whole directory is offered as before. The id sent is always one of the directory.
+   */
+  contactCompanyNames?: string[];
+}
+
+// "K3G Solutions" and "K3G SOLUTIONS LTDA." are the same company for this purpose: compare without case, accents, punctuation and legal suffix.
+const normalizeCompany = (name: string) =>
+  name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\b(ltda|me|epp|eireli|sa|s a)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** The directory companies that are the contact's own, in the order of `names` (main first). Empty when the directory cannot tell. */
+export function companiesOfContact<T extends { name: string }>(directory: T[], names: string[]): T[] {
+  const out: T[] = [];
+  for (const wanted of names.map(normalizeCompany).filter((n) => n.length >= 3)) {
+    const hit = directory.find((c) => !out.includes(c) && normalizeCompany(c.name) === wanted);
+    if (hit) out.push(hit);
+  }
+  return out;
 }
 
 const FIELD =
@@ -166,7 +192,7 @@ function saveStatusIntent(conversationId: string, intent: PendingStatusIntent | 
   }
 }
 
-export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated = false }: TicketPanelProps) {
+export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated = false, contactCompanyNames = [] }: TicketPanelProps) {
   const tenantId = getTenantId();
 
   const [state, setState] = useState<PersistedState>(() => loadState(conversationId));
@@ -667,6 +693,14 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
   };
 
   const noCompanies = !loadingCompanies && companies.length === 0;
+  const namesKey = contactCompanyNames.join('|');
+  const ownCompanies = useMemo(() => companiesOfContact(companies, contactCompanyNames), [companies, namesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const offered = ownCompanies.length > 0 ? ownCompanies : companies;
+  // preselect the first (the main one) unless the person already chose one that is still offered
+  const chosenOk = offered.some((c) => c.id === state.selectedCompanyId);
+  useEffect(() => {
+    if (ownCompanies.length > 0 && !chosenOk && state.phase !== 'submitting') patch({ selectedCompanyId: ownCompanies[0].id });
+  }, [ownCompanies, chosenOk]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="border-b border-border-subtle px-4">
@@ -950,21 +984,29 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
               void submitTicket();
             }}
           >
-            <select
-              className={FIELD}
-              aria-label="Empresa"
-              value={state.selectedCompanyId}
-              onChange={(e) => patch({ selectedCompanyId: e.target.value })}
-              disabled={submitting || loadingCompanies || companies.length === 0}
-            >
-              <option value="">Selecionar empresa</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {c.cnpj ? ` (${c.cnpj})` : ''}
-                </option>
-              ))}
-            </select>
+            {ownCompanies.length === 1 ? (
+              // the contact belongs to one company of the directory: nothing to choose
+              <p className="m-0 flex items-center gap-1.5 text-xs text-text-primary" aria-label="Empresa">
+                <span className="text-text-tertiary">Empresa</span>
+                <span className="min-w-0 truncate font-medium">{ownCompanies[0].name}</span>
+              </p>
+            ) : (
+              <select
+                className={FIELD}
+                aria-label="Empresa"
+                value={chosenOk ? state.selectedCompanyId : ''}
+                onChange={(e) => patch({ selectedCompanyId: e.target.value })}
+                disabled={submitting || loadingCompanies || companies.length === 0}
+              >
+                <option value="">Selecionar empresa</option>
+                {offered.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.cnpj ? ` (${c.cnpj})` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
             {noCompanies && <p className="m-0 text-[10px] text-text-tertiary">Nenhuma empresa disponível</p>}
             <input
               className={FIELD}

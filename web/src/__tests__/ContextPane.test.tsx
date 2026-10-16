@@ -122,18 +122,18 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
 
 describe('ContextPane — honest counters and unassigned hint', () => {
   // The API never used to send message_count, so the pane showed a permanent false "0".
-  it('shows the message count from the API and a dash (never a false 0) when it is absent', async () => {
+  it('shows the message count from the API and nothing (never a false 0) when it is absent', async () => {
     mockConversation({ message_count: 11 });
     const { unmount } = renderAt(<ContextPane conversationId={CONV} />);
     await screen.findByText('Maria Silva');
-    expect(screen.getByText('11')).toBeInTheDocument();
+    expect(screen.getByText(/11 mensagens/)).toBeInTheDocument();
     unmount();
 
     mockConversation({ message_count: undefined });
     renderAt(<ContextPane conversationId={CONV} />);
     await screen.findByText('Maria Silva');
-    expect(screen.queryByText('0')).not.toBeInTheDocument();
-    expect(screen.getByText('Mensagens').nextElementSibling).toHaveTextContent('—');
+    expect(screen.queryByText(/\b0 mensagens/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/mensage(m|ns)/)).not.toBeInTheDocument();
   });
 
   // The chamado is shown to whoever holds the conversation; "no permission" for a
@@ -223,5 +223,30 @@ describe('ContextPane — spam contact has nothing to attend (ADR-0014)', () => 
     renderAt(<ContextPane conversationId={CONV} />);
     expect(await screen.findByRole('button', { name: /Assumir/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Transferir/ })).toBeInTheDocument();
+  });
+});
+
+describe('ContextPane — compact status and icon actions', () => {
+  it('the three actions are icons named by what they do, the state is one line, and the channel data is not repeated', async () => {
+    mockConversation({ assigned_to_user_id: 'u-1', assigned_to_name: 'Operador Teste', message_count: 1 });
+    renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Maria Silva');
+    for (const name of ['Soltar', 'Transferir', 'Finalizar atendimento']) {
+      const b = screen.getByRole('button', { name });
+      expect(b).toHaveAttribute('title', name);
+      expect(b).toHaveTextContent('');
+    }
+    expect(screen.getByText(/· 1 mensagem$/)).toBeInTheDocument();
+    expect(screen.queryByText('Canal')).not.toBeInTheDocument();
+    expect(screen.queryByText('Estado')).not.toBeInTheDocument();
+    expect(screen.queryByText('Responsável')).not.toBeInTheDocument();
+  });
+
+  it('an unassigned conversation offers Assumir (icon) instead of Soltar', async () => {
+    mockConversation({ assigned_to_user_id: undefined });
+    renderAt(<ContextPane conversationId={CONV} />);
+    await screen.findByText('Maria Silva');
+    expect(screen.getByRole('button', { name: 'Assumir' })).toHaveTextContent('');
+    expect(screen.queryByRole('button', { name: 'Soltar' })).not.toBeInTheDocument();
   });
 });

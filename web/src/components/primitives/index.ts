@@ -2,6 +2,7 @@
 
 export { Button, IconButton } from './Button';
 export { Icon } from './Icon';
+export { ActionIcon } from './ActionIcon';
 export { PageHeader } from './PageHeader';
 export { Tabs } from './Tabs';
 export type { TabItem } from './Tabs';

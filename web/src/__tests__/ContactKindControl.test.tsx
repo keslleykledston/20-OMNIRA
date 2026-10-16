@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axios from 'axios'
 import { ContactKindControl } from '../components/contacts/ContactKindControl'
@@ -282,6 +282,20 @@ describe('ContactKindControl — spam', () => {
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
     expect(axios.put).not.toHaveBeenCalled()
     expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it('shows the red spam text only while the contact is unclassified; once classified it is a quiet icon (same action, same name)', () => {
+    setup('unclassified')
+    const text = screen.getByRole('button', { name: 'Marcar como spam ou golpe' })
+    expect(text).toHaveTextContent('Marcar como spam ou golpe')
+    cleanup()
+    for (const kind of ['customer', 'internal', 'other'] as const) {
+      setup(kind)
+      const icon = screen.getByRole('button', { name: 'Marcar como spam ou golpe' })
+      expect(icon).toHaveTextContent('')
+      expect(icon).toHaveAttribute('title', 'Marcar como spam ou golpe')
+      cleanup()
+    }
   })
 
   it('marks spam only after the confirmation', async () => {

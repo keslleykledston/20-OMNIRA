@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import { ConversationItem } from '../../types/api';
 import { API_BASE } from '../../lib/config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
-import { Icon } from '../primitives';
+import { ActionIcon, Icon } from '../primitives';
 import { TicketPanel } from '../TicketPanel';
 import { TechnicianSelectModal } from '../TechnicianSelectModal';
 import ConversationSummary from './ConversationSummary';
@@ -23,6 +23,7 @@ import { finalizedNotice } from '../../lib/attendance';
 import { emitInboxNotice } from '../../lib/inboxNotice';
 import { CollapsibleSection } from './CollapsibleSection';
 import { useChannelLines } from '../../lib/channelLines';
+import { classificationAPI } from '../../lib/contacts';
 import { currentUserId } from '../../lib/session';
 import { useAccess } from '../../lib/useAccess';
 import ServiceSessionPanel from '../service/ServiceSessionPanel';
@@ -132,8 +133,20 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
     enabled: !!tenantId && !!conversationId,
   });
 
+  // The companies the contact belongs to (primary first): the ticket form offers only those when it can tell which ones they are.
+  const links = useQuery({
+    queryKey: ['contact-classification', tenantId, conversation?.contact_id],
+    queryFn: () => classificationAPI.get(conversation!.contact_id!),
+    enabled: !!tenantId && !!conversation?.contact_id,
+    retry: false,
+  });
+  const contactCompanyNames = [...(links.data?.accounts ?? [])]
+    .filter((l) => l.status === 'active')
+    .sort((a, b) => Number(b.primary) - Number(a.primary))
+    .map((l) => l.account_name);
   const channelLines = useChannelLines();
-  const line = (channelLines.data ?? []).find((l) => l.id === conversation?.channel_connection_id);
+  // The line this conversation runs on is already in the list and the chat; the section only exists to reach the person through ANOTHER line.
+  const otherLines = (channelLines.data ?? []).filter((l) => l.id !== conversation?.channel_connection_id && l.can_send_text);
   const mine = !!conversation?.assigned_to_user_id && conversation.assigned_to_user_id === currentUserId();
   const closed = conversation?.status === 'closed';
   const ownerLabel = !conversation?.assigned_to_user_id
@@ -157,13 +170,13 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
     void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
     void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
     void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+    void queryClient.invalidateQueries({ queryKey: ['contact-classification', tenantId] });
   };
 
   return (
     <div className="flex flex-col h-full bg-surface-muted overflow-y-auto">
       <header className="shrink-0 border-b border-border-subtle bg-surface px-4 py-3">
         <h2 className="text-sm font-semibold text-text-primary">Detalhes do atendimento</h2>
-        <p className="mt-0.5 text-[11px] text-text-tertiary">Contato e contexto em um só lugar</p>
       </header>
 
       <div role="tablist" aria-label="Contexto do atendimento" className="grid h-10 flex-shrink-0 grid-cols-2 border-b border-border-subtle bg-surface px-4">
@@ -230,106 +243,45 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
       )}
 
       <div role="tabpanel" id={`${tabsId}-panel-details`} aria-labelledby={`${tabsId}-tab-details`} hidden={tab !== 'details'} className={clsx(tab === 'details' && 'min-h-0 flex-1')}>
-      <CollapsibleSection id="attendance" title="Atendimento" icon="conversations" defaultOpen>
-        <div className="space-y-2 px-4 pb-4 text-sm">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-text-secondary">Estado</span>
+      {/* The state of the attendance in two lines (who holds it, since when) and the three things you do to it as icons: the labels are the tooltips and the accessible names. */}
+      <section aria-label="Atendimento" className="space-y-1.5 border-b border-border-subtle px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex min-w-0 items-center gap-2 text-sm">
             <span
-              className={clsx(
-                'rounded-pill px-2 py-0.5 text-xs font-medium',
-                closed ? 'bg-status-muted text-text-secondary' : 'bg-status-success-soft text-status-success',
-              )}
+              className={clsx('inline-flex flex-shrink-0 items-center gap-1.5 rounded-pill px-2 py-0.5 text-xs font-medium', closed ? 'bg-status-muted text-text-secondary' : 'bg-status-success-soft text-status-success')}
             >
+              <span aria-hidden="true" className={clsx('h-1.5 w-1.5 rounded-full', closed ? 'bg-text-tertiary' : 'bg-status-success')} />
               {closed ? 'Finalizado' : 'Em atendimento'}
             </span>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-text-secondary">Responsável</span>
-            <span className="text-right font-medium text-text-primary">
-              {ownerLabel}
-            </span>
-          </div>
-          {line && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-text-secondary">Canal</span>
-              <span className="min-w-0 truncate text-right font-medium text-text-primary">{line.label}</span>
-            </div>
-          )}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-text-secondary">Mensagens</span>
-            <span className="font-medium text-text-primary">{conversation?.message_count ?? '—'}</span>
-          </div>
-          {conversation?.created_at && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-text-secondary">Iniciado em</span>
-              <span className="font-medium text-text-primary">
-                {new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-              </span>
-            </div>
-          )}
-          {closed && (
-            <p role="status" className="pt-1 text-xs text-text-secondary">
-              Atendimento finalizado.
-            </p>
-          )}
-          {assignError && (
-            <div role="alert" className="rounded-control bg-status-danger-soft p-2 text-xs text-status-danger">
-              {assignError}
-            </div>
-          )}
+            <span className="min-w-0 truncate font-medium text-text-primary" title={`Responsável: ${ownerLabel}`}>{ownerLabel}</span>
+          </p>
           {/* A spam contact's conversation is not for attending: restore it first (ADR-0014). */}
           {canAct && (
-            <div className="grid grid-cols-2 gap-2 pt-1">
+            <div className="flex flex-shrink-0 items-center gap-1.5">
               {conversation?.assigned_to_user_id ? (
-                <button
-                  onClick={handleUnassign}
-                  disabled={assignLoading}
-                  className={clsx(
-                    'rounded-control border border-border-subtle bg-status-danger-soft px-3 py-2 text-sm font-medium text-status-danger hover:bg-status-danger-border',
-                    assignLoading && 'cursor-not-allowed opacity-50',
-                  )}
-                >
-                  Soltar
-                </button>
+                <ActionIcon icon="user-minus" label="Soltar" tone="danger" onClick={handleUnassign} disabled={assignLoading} />
               ) : (
-                <button
-                  onClick={handleAssign}
-                  disabled={assignLoading}
-                  className={clsx(
-                    'rounded-control border border-border-subtle bg-accent-primary px-3 py-2 text-sm font-medium text-white hover:bg-accent-primary-hover',
-                    assignLoading && 'cursor-not-allowed opacity-50',
-                  )}
-                >
-                  Assumir
-                </button>
+                <ActionIcon icon="user-plus" label="Assumir" tone="primary" onClick={handleAssign} disabled={assignLoading} />
               )}
-              <button
-                onClick={handleTransfer}
-                disabled={assignLoading || !conversation?.assigned_to_user_id}
-                className={clsx(
-                  'rounded-control border border-border-subtle px-3 py-2 text-sm font-medium',
-                  conversation?.assigned_to_user_id ? 'bg-surface text-text-primary hover:bg-surface-muted' : 'cursor-not-allowed bg-surface-muted text-text-tertiary',
-                  assignLoading && 'opacity-50',
-                )}
-              >
-                Transferir
-              </button>
-              {!internal && (
-                <button
-                  onClick={() => setShowFinalize(true)}
-                  disabled={assignLoading}
-                  className={clsx(
-                    'col-span-2 rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm font-medium text-text-primary hover:bg-surface-muted',
-                    assignLoading && 'cursor-not-allowed opacity-50',
-                  )}
-                >
-                  Finalizar atendimento
-                </button>
-              )}
+              <ActionIcon icon="transfer" label="Transferir" onClick={handleTransfer} disabled={assignLoading || !conversation?.assigned_to_user_id} />
+              {!internal && <ActionIcon icon="check-circle" label="Finalizar atendimento" onClick={() => setShowFinalize(true)} disabled={assignLoading} />}
             </div>
           )}
         </div>
-      </CollapsibleSection>
+        {closed ? (
+          <p role="status" className="text-[11px] text-text-tertiary">Atendimento finalizado.</p>
+        ) : (
+          <p className="text-[11px] text-text-tertiary">
+            {conversation?.created_at ? `Desde ${new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}
+            {conversation?.message_count != null && ` · ${conversation.message_count} ${conversation.message_count === 1 ? 'mensagem' : 'mensagens'}`}
+          </p>
+        )}
+        {assignError && (
+          <div role="alert" className="rounded-control bg-status-danger-soft p-2 text-xs text-status-danger">
+            {assignError}
+          </div>
+        )}
+      </section>
 
       {!internal && (
         <CollapsibleSection id="service-session" title="Protocolo e tarefas" icon="tickets" defaultOpen>
@@ -379,8 +331,8 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
         )}
       </CollapsibleSection>
 
-      {conversation?.contact_id && onOpenConversation && (
-        <CollapsibleSection id="channel" title="Canal" icon="channels" defaultOpen>
+      {conversation?.contact_id && onOpenConversation && otherLines.length > 0 && (
+        <CollapsibleSection id="channel" title="Outros canais" icon="channels">
           <ChannelSwitcher
             contactId={conversation.contact_id}
             currentChannelId={conversation.channel_connection_id}
@@ -417,6 +369,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
           conversationId={conversationId}
           crmContactId={conversation?.crm_contact_id}
           conversationUnassigned={Boolean(conversation) && !conversation?.assigned_to_user_id}
+          contactCompanyNames={contactCompanyNames}
         />
       </CollapsibleSection>
       </div>

@@ -3,7 +3,6 @@ import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { getTenantId } from '../../lib/session'
 import { openConversationOnChannel, openErrorMessage, useChannelLines, type ChannelLine } from '../../lib/channelLines'
-import { ChannelBadge } from './ChannelBadge'
 
 interface Props {
   contactId: string
@@ -14,8 +13,8 @@ interface Props {
 }
 
 /**
- * "Canal" section of the context pane: which line this conversation runs on, and the other lines this person can be
- * reached through. Choosing one opens (or finds) the person's separate conversation on that line; it sends nothing.
+ * "Outros canais" section of the context pane: the other lines this person can be reached through (the line the conversation runs on is already
+ * shown by the list and the chat). Choosing one opens (or finds) the person's separate conversation on that line; it sends nothing.
  * A conversation never moves between lines: its history stays where it happened.
  */
 export function ChannelSwitcher({ contactId, currentChannelId, onOpenConversation }: Props) {
@@ -25,7 +24,6 @@ export function ChannelSwitcher({ contactId, currentChannelId, onOpenConversatio
   const [error, setError] = useState<string | null>(null)
   const all = lines.data ?? []
   if (all.length === 0) return null
-  const current = all.find((l) => l.id === currentChannelId)
   const others = all.filter((l) => l.id !== currentChannelId && l.can_send_text)
 
   const open = async (line: ChannelLine) => {
@@ -44,11 +42,7 @@ export function ChannelSwitcher({ contactId, currentChannelId, onOpenConversatio
 
   return (
     <div className="p-4 border-b border-border-subtle">
-      <h4 className="text-xs font-semibold text-text-tertiary mb-2 uppercase">Canal</h4>
-      <p className="mb-2 flex items-center gap-2 text-sm text-text-primary">
-        <span className="min-w-0 truncate">{current?.label ?? 'Canal desconhecido'}</span>
-        <ChannelBadge line={current} />
-      </p>
+      <h4 className="text-xs font-semibold text-text-tertiary mb-2 uppercase">Outros canais</h4>
       {others.length > 0 && (
         <>
           <p className="mb-1.5 text-xs text-text-secondary">Falar com esta pessoa por outro canal:</p>
