@@ -141,6 +141,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
       await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
       void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+      void queryClient.invalidateQueries({ queryKey: ['service-session'] }); // the claim may have opened the protocol
       emitInboxNotice(conversationId, 'Atendimento assumido por você.');
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();

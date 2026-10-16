@@ -77,6 +77,7 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
   const kind = card?.kind || c?.contact_kind || ''
   const refreshAll = () => {
     void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] })
+    void queryClient.invalidateQueries({ queryKey: ['service-session'] })
     void queryClient.invalidateQueries({ queryKey: ['delegated-contact', tenantId, contactId] })
     void queryClient.invalidateQueries({ queryKey: ['contact', tenantId, contactId] })
     void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] })

@@ -3,7 +3,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import ChatPane from '../components/inbox/ChatPane';
-import { renderAt, setSession } from './testUtils';
+import { renderAt, renderAtWithClient, setSession } from './testUtils';
 import type { MessageItem } from '../types/api';
 
 // The realtime hook is stubbed but its callback is kept, so a test can fire "something changed".
@@ -243,6 +243,18 @@ describe('ChatPane — claim first (channel selector slice)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Assumir' }));
     await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
     expect(String(vi.mocked(axios.post).mock.calls[0][0])).toMatch(/inbox\/conversations\/conv-1\/assign$/);
+  });
+  it('after assuming, the protocol panel reloads (the claim may have opened it): a cached "no protocol" must not stay on screen', async () => {
+    assignedTo = undefined;
+    thread = [msg('a', 9)];
+    serve();
+    vi.mocked(axios.post).mockResolvedValue({ data: {} });
+    const { queryClient } = renderAtWithClient(<ChatPane conversationId={CONV} />);
+    queryClient.setQueryData(['service-session', 'member', 'tenant-1', CONV], null);
+    await screen.findByText('Assuma o atendimento para responder.');
+    await userEvent.click(screen.getByRole('button', { name: 'Assumir' }));
+    await waitFor(() => expect(axios.post).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(queryClient.getQueryState(['service-session', 'member', 'tenant-1', CONV])?.isInvalidated).toBe(true));
   });
   it('says why the claim was refused when the person is not an agent of this instance (422), instead of doing nothing', async () => {
     assignedTo = undefined;

@@ -55,6 +55,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
       );
       await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['service-session'] }); // assigning or finishing may open/close the protocol
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
       else setAssignError(describeAssignError(err, 'assign'));
@@ -74,6 +75,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
       );
       await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['service-session'] }); // assigning or finishing may open/close the protocol
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
       else setAssignError(describeAssignError(err, 'unassign'));
@@ -101,6 +103,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
       );
       await queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
       await queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['service-session'] }); // assigning or finishing may open/close the protocol
       setShowTransferModal(false);
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();

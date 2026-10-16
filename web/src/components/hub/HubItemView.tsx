@@ -75,6 +75,7 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
       await refresh();
       // it leaves the pending queue and is now in "Minhas": the tabs and the counters must say so without waiting for the next poll
       void queryClient.invalidateQueries({ queryKey: ['hub-inbox', hubId] });
+      void queryClient.invalidateQueries({ queryKey: ['service-session'] });
     } catch (err) {
       fail(err);
     } finally {
