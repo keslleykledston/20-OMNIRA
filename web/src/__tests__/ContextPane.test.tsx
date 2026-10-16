@@ -233,7 +233,8 @@ describe('ContextPane — compact status and icon actions', () => {
     await screen.findByText('Maria Silva');
     for (const name of ['Soltar', 'Transferir', 'Finalizar atendimento']) {
       const b = screen.getByRole('button', { name });
-      expect(b).toHaveAttribute('title', name);
+      // the caption that shows on hover/focus: the same words as the accessible name
+      expect(b.parentElement?.querySelector('[data-tooltip]')).toHaveTextContent(name);
       expect(b).toHaveTextContent('');
     }
     expect(screen.getByText(/· 1 mensagem$/)).toBeInTheDocument();

@@ -293,7 +293,7 @@ describe('ContactKindControl — spam', () => {
       setup(kind)
       const icon = screen.getByRole('button', { name: 'Marcar como spam ou golpe' })
       expect(icon).toHaveTextContent('')
-      expect(icon).toHaveAttribute('title', 'Marcar como spam ou golpe')
+      expect(icon.parentElement?.querySelector('[data-tooltip]')).toHaveTextContent('Marcar como spam ou golpe')
       cleanup()
     }
   })
