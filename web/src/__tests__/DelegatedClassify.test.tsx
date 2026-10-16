@@ -104,7 +104,7 @@ describe('classifying the contact while attending through the Hub', () => {
 })
 
 describe('the ERP ticket while attending through the Hub (phase 04b)', () => {
-  it('offers the ticket panel, without refresh or status change, to a person who holds ticket.create', async () => {
+  it('offers the ticket panel with the refresh (the key ticket.create) but never the ERP status change, to a person who holds ticket.create', async () => {
     serve(['conversation.read', 'contact.read', 'ticket.create', 'ticket.read'])
     const base = get.getMockImplementation()!
     get.mockImplementation(async (url: string, ...rest: unknown[]) => {
@@ -117,8 +117,22 @@ describe('the ERP ticket while attending through the Hub (phase 04b)', () => {
     show()
     expect(await screen.findByText('Chamado vinculado')).toBeInTheDocument()
     expect(screen.getByText('28180')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Atualizar' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Alterar status' })).not.toBeInTheDocument()
+  })
+
+  it('a person who holds only ticket.read sees the ticket and cannot refresh it', async () => {
+    serve(['conversation.read', 'contact.read', 'ticket.read'])
+    const base = get.getMockImplementation()!
+    get.mockImplementation(async (url: string, ...rest: unknown[]) => {
+      if (String(url).endsWith('/conversations/c1/ticket')) {
+        return { data: { local_ticket_id: 't1', linked: true, provider: 'k3g', external_ticket_id: '28180', external_status_label: 'Novo', sync_status: 'synced' } }
+      }
+      return (base as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest)
+    })
+    show()
+    expect(await screen.findByText('Chamado vinculado')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument()
   })
 
   it('shows no ticket panel without a ticket key', async () => {

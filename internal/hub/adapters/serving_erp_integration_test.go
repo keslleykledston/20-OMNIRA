@@ -51,9 +51,9 @@ type fakeERP struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 	// what reached it
-	listCalls, createCalls int
-	auths                  []string
-	lastCreate             map[string]any
+	listCalls, createCalls, getCalls int
+	auths                            []string
+	lastCreate                       map[string]any
 }
 
 func newFakeERP(t *testing.T) *fakeERP {
@@ -76,6 +76,10 @@ func newFakeERP(t *testing.T) *fakeERP {
 			_ = json.NewDecoder(r.Body).Decode(&f.lastCreate)
 			rw.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "source": "crm", "ticket": map[string]any{"id": 28179 + f.createCalls, "statusId": 1, "status": "1", "statusLabel": "Novo"}})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/support/tickets/"):
+			f.getCalls++
+			id := strings.TrimPrefix(r.URL.Path, "/api/support/tickets/")
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ticket": map[string]any{"id": id, "statusId": 2, "status": "2", "statusLabel": "Em andamento"}})
 		default:
 			rw.WriteHeader(http.StatusNotFound)
 		}
@@ -128,6 +132,7 @@ func (w *world) erpAPI(t *testing.T) *erpAPI {
 	crm.SetExternalTicketService(ticketsapplication.NewService(perms, authorizer, ticketsadapters.NewAttemptStore(w.app), localTickets, resolver).
 		WithAccounts(accountsadapters.NewTicketAccountResolver(w.app)))
 	crm.SetReadTicketService(ticketsapplication.NewReadConversationTicketService(perms, authorizer, localTickets))
+	crm.SetRefreshTicketService(ticketsapplication.NewRefreshTicketProjectionService(perms, authorizer, localTickets, resolver))
 	crm.SetConversationContactReader(inboxadapters.NewPostgresConversationContacts(w.app))
 	crm.SetEvidenceStore(crmevidenceadapters.NewPostgresEvidenceStore(w.app))
 	crm.SetDelegatedTicketOpenNotifier(hubadapters.NewDelegatedWrites(w.app).TicketOpenedNotice(messagesadapters.NewPostgresOutboundStore(w.app)))
@@ -151,8 +156,9 @@ func (w *world) erpAPI(t *testing.T) *erpAPI {
 	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket", tenancyadapters.Delegable("ticket.create", who(session(http.HandlerFunc(crm.CreateTicket)))))
 	mux.Handle("GET "+t0+"/contacts/{contact_id}/company-suggestions", tenancyadapters.Delegable("account.read", who(session(http.HandlerFunc(classification.ListCompanySuggestions)))))
 	mux.Handle("PUT "+t0+"/contacts/{contact_id}/classification", tenancyadapters.Delegable("contact.classify", who(session(http.HandlerFunc(classification.PutClassification)))))
-	// not marked delegable: refreshing / changing the ERP status is a later step
-	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket/refresh", who(session(http.HandlerFunc(crm.RefreshTicket))))
+	// refreshing the projection is delegable (the same key as opening the ticket); changing the ERP status is deliberately NOT marked: it stays out of the delegated context
+	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket/refresh", tenancyadapters.Delegable("ticket.create", who(session(http.HandlerFunc(crm.RefreshTicket)))))
+	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket/status", who(session(http.HandlerFunc(crm.UpdateTicketStatus))))
 	return &erpAPI{w: w, h: mux}
 }
 
@@ -484,9 +490,47 @@ func TestDelegatedTicketCreationThroughTheRealHandlers(t *testing.T) {
 		}
 	})
 
-	t.Run("an unmarked ticket route stays closed in the delegated context", func(t *testing.T) {
-		if code, _ := api.do("POST", ticketURL+"/refresh", "", agent, hub); code != 404 {
-			t.Errorf("refresh: %d, want 404", code)
+	t.Run("the holder refreshes the ticket from the ERP: ONE ERP read with the instance's token, only the provider-owned projection changes; others are refused", func(t *testing.T) {
+		assign(&agent)
+		getsBefore := func() int { erp.mu.Lock(); defer erp.mu.Unlock(); return erp.getCalls }
+		before := getsBefore()
+		code, b := api.do("POST", ticketURL+"/refresh", "", agent, hub)
+		if code != 200 || !strings.Contains(b, "Em andamento") {
+			t.Fatalf("refresh: %d %s", code, b)
+		}
+		if getsBefore() != before+1 {
+			t.Errorf("ERP reads: %d, want exactly one", getsBefore()-before)
+		}
+		if got := w.ownerOne(`SELECT provider || ':' || external_ticket_id || ':' || COALESCE(external_status_label, '') FROM tickets WHERE conversation_id = $1 AND external_ticket_id IS NOT NULL`, conv); got != "k3g:28180:Em andamento" {
+			t.Errorf("local projection = %q", got)
+		}
+		if strings.Contains(b, erpToken) || strings.Contains(b, erp.srv.URL) {
+			t.Errorf("the answer leaks the ERP credential or address: %s", b)
+		}
+		// not the holder: refused before the ERP is touched
+		before = getsBefore()
+		if code, _ := api.do("POST", ticketURL+"/refresh", "", other, hub); code != 403 {
+			t.Errorf("refresh by an agent who does not hold the conversation: %d, want 403", code)
+		}
+		// without the key ticket.create: refused by the route
+		plain := w.ticketAgent(t, "plain-refresh", "A", provisioning.ServingPresets["classificacao"]...)
+		assign(&plain)
+		if code, _ := api.do("POST", ticketURL+"/refresh", "", plain, hub); code != 403 {
+			t.Errorf("refresh without ticket.create: %d, want 403", code)
+		}
+		assign(&agent)
+		// another instance: not there
+		if code, _ := api.do("POST", "/api/v1/tenants/"+w.tenant["B"].String()+"/conversations/"+w.conv["B"].String()+"/ticket/refresh", "", agent, hub); code != 404 {
+			t.Errorf("refresh on an instance with no grant: %d, want 404", code)
+		}
+		if getsBefore() != before {
+			t.Errorf("the ERP was read %d times for refused requests", getsBefore()-before)
+		}
+	})
+
+	t.Run("changing the ERP status stays closed in the delegated context", func(t *testing.T) {
+		if code, _ := api.do("POST", ticketURL+"/status", `{"target_status":"2"}`, agent, hub, "Idempotency-Key", "key-status-0001"); code != 404 {
+			t.Errorf("status: %d, want 404", code)
 		}
 	})
 }

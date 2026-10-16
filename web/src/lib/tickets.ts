@@ -311,12 +311,12 @@ export type ConversationTicketRefreshResult =
   | { kind: 'unavailable' }
   | { kind: 'network_error' };
 
-export async function refreshConversationTicket(conversationId: string): Promise<ConversationTicketRefreshResult> {
+export async function refreshConversationTicket(conversationId: string, target?: DelegatedTarget): Promise<ConversationTicketRefreshResult> {
   try {
     const res = await axios.post(
-      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket/refresh`,
+      `${tenantBase(target)}/conversations/${conversationId}/ticket/refresh`,
       undefined,
-      { headers: authHeaders() },
+      { headers: scopedHeaders(target) },
     );
     return { kind: 'ok', data: res.data };
   } catch (err: any) {

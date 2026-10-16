@@ -3,20 +3,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { API_BASE } from '../../lib/config'
 import { authHeaders, currentUserId, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session'
-import { getActingName } from '../../lib/acting'
+import { getActingHub, getActingName } from '../../lib/acting'
 import { useAccess } from '../../lib/useAccess'
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor'
 import { ContactKindControl } from '../contacts/ContactKindControl'
-import { ContactNotes } from '../contacts/ContactNotes'
-import AttendanceMemoryPanel from './AttendanceMemoryPanel'
-import RoutingPanel from './RoutingPanel'
-import HistorySearch from './HistorySearch'
 import { Button } from '../primitives'
 import DelegatedTransferDialog from './DelegatedTransferDialog'
-import ConversationSummary from './ConversationSummary'
-import { TicketPanel } from '../TicketPanel'
 import { CollapsibleSection } from './CollapsibleSection'
-import ServiceSessionPanel from '../service/ServiceSessionPanel'
+import DelegatedSections from './DelegatedSections'
 import type { ConversationItem } from '../../types/api'
 
 interface ContactCard {
@@ -41,6 +35,9 @@ const KIND: Record<string, string> = { customer: 'Cliente', internal: 'Interno',
 // query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
 export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void }) {
   const tenantId = getTenantId()
+  // the instance this workspace acts for and the Hub it is served through, named explicitly for the shared panels (same thing the global interceptor does for the session's tenant)
+  const hubId = getActingHub()
+  const target = tenantId && hubId ? { tenantId, hubId } : undefined
   const queryClient = useQueryClient()
   const { can } = useAccess()
   const [transferOpen, setTransferOpen] = useState(false)
@@ -126,11 +123,6 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
           )}
         </section>
       </CollapsibleSection>
-      {can('service.read') && (
-        <CollapsibleSection id="d-service-session" title="Protocolo e tarefas" icon="tickets" defaultOpen>
-          <ServiceSessionPanel conversationId={conversationId} can={can} delegated conversationClosed={c?.status === 'closed'} />
-        </CollapsibleSection>
-      )}
       {contactId && can('contact.classify') && (
         <CollapsibleSection id="d-classify" title="Classificar o contato" icon="contacts" defaultOpen>
           <section aria-label="Classificar o contato">
@@ -146,40 +138,10 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
           </section>
         </CollapsibleSection>
       )}
-      {(can('ticket.create') || can('ticket.read')) && (
-        <CollapsibleSection id="d-ticket" title="Chamado" icon="tickets" defaultOpen>
-          <section aria-label="Chamado no ERP">
-            <TicketPanel conversationId={conversationId} delegated conversationUnassigned={!c?.assigned_to_user_id} />
-          </section>
-        </CollapsibleSection>
+      {target && (
+        <DelegatedSections target={target} conversationId={conversationId} contactId={contactId} can={can} closed={c?.status === 'closed'} unassigned={!c?.assigned_to_user_id} idPrefix="d" />
       )}
-      {can('ai.assist') && (
-        <CollapsibleSection id="d-summary" title="Resumo com IA" icon="sparkles" defaultOpen>
-          <section aria-label="Resumo por IA">
-            <ConversationSummary conversationId={conversationId} />
-          </section>
-        </CollapsibleSection>
-      )}
-      {can('conversation.read') && (
-        <CollapsibleSection id="d-routing" title="Roteamento e SLA" icon="clock" defaultOpen>
-          <RoutingPanel conversationId={conversationId} />
-        </CollapsibleSection>
-      )}
-      {contactId && can('contact.note') && (
-        <CollapsibleSection id="d-notes" title="Anotações internas" icon="tickets" defaultOpen>
-          <section aria-label="Anotações">
-            <ContactNotes contactId={contactId} />
-          </section>
-        </CollapsibleSection>
-      )}
-      {can('attendance.history') ? (
-        <CollapsibleSection id="d-history" title="Histórico do contato" icon="conversations" defaultOpen>
-          <div>
-            {can('conversation.read') && <HistorySearch conversationId={conversationId} />}
-            <AttendanceMemoryPanel conversationId={conversationId} delegated canResolve={can('followup.resolve')} />
-          </div>
-        </CollapsibleSection>
-      ) : (
+      {!can('attendance.history') && (
         <p role="note" className="m-4 rounded-control bg-surface-muted px-3 py-2 text-[12px] text-text-secondary">
           O histórico dos atendimentos anteriores não está liberado para você nesta empresa.
         </p>

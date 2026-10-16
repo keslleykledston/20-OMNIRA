@@ -1408,3 +1408,34 @@ describe('TicketPanel — the contact\'s own companies', () => {
     expect(select.value).toBe('');
   });
 });
+
+// A Hub agent working the instance from the unified inbox may refresh the ticket from the ERP (key ticket.create); changing the ERP status stays out of the delegated context.
+describe('TicketPanel — through the Hub', () => {
+  const target = { tenantId: 'company-k3g', hubId: 'hub-1' };
+  beforeEach(() => {
+    vi.resetAllMocks();
+    localStorage.clear();
+    setSession();
+    mockRead({ status: 200, data: LINKED });
+  });
+
+  it('refreshes through the Hub: the request names the item\'s company and the Hub', async () => {
+    mockRefresh({ status: 200, data: { ...LINKED, external_status_label: 'Em andamento' } });
+    renderAt(<TicketPanel conversationId={CONV} target={target} canRefresh />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Atualizar' }));
+    await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalled());
+    const [url, , config] = vi.mocked(axios.post).mock.calls[0] as [string, unknown, any];
+    expect(url).toContain(`/tenants/company-k3g/conversations/${CONV}/ticket/refresh`);
+    expect(config.headers['X-Omnira-Acting-As']).toBe('hub:hub-1');
+    const read = vi.mocked(axios.get).mock.calls.find(([u]) => String(u).endsWith('/ticket'))!;
+    expect(String(read[0])).toContain('/tenants/company-k3g/');
+    expect((read[1] as any).headers['X-Omnira-Acting-As']).toBe('hub:hub-1');
+  });
+
+  it('without the key the agent sees the ticket but no refresh; the ERP status controls never show in the delegated context', async () => {
+    renderAt(<TicketPanel conversationId={CONV} target={target} />);
+    await screen.findByText('Chamado vinculado');
+    expect(screen.queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Alterar status/i)).not.toBeInTheDocument();
+  });
+});

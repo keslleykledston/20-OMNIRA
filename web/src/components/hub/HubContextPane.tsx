@@ -2,18 +2,11 @@ import { useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { CollapsibleSection } from '../inbox/CollapsibleSection';
-import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 import { TenantBadge } from '../primitives/TenantBadge';
 import { Button } from '../primitives';
-import ServiceSessionPanel from '../service/ServiceSessionPanel';
-import { TicketPanel } from '../TicketPanel';
 import { ContactKindControl } from '../contacts/ContactKindControl';
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor';
-import { ContactNotes } from '../contacts/ContactNotes';
-import ConversationSummary from '../inbox/ConversationSummary';
-import RoutingPanel from '../inbox/RoutingPanel';
-import HistorySearch from '../inbox/HistorySearch';
-import AttendanceMemoryPanel from '../inbox/AttendanceMemoryPanel';
+import DelegatedSections from '../inbox/DelegatedSections';
 import { classificationAPI, contactsAPI, CONTACT_KIND_LABEL, type ContactKind } from '../../lib/contacts';
 import { scopedHeaders, tenantBase, type DelegatedTarget } from '../../lib/acting';
 import type { ConversationItem } from '../../types/api';
@@ -91,38 +84,24 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
         <p className="text-[12px] text-text-secondary">Atendendo {tenantName} pelo Hub</p>
       </header>
 
-      <CollapsibleSection id="hub-attendance" title="Atendimento" icon="conversations" defaultOpen>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 px-4 pb-4 text-[13px]">
-          <dt className="text-text-secondary">Empresa</dt>
-          <dd className="flex min-w-0 justify-end"><TenantBadge name={tenantName} /></dd>
-          <dt className="text-text-secondary">Canal</dt>
-          <dd className="flex items-center justify-end gap-1.5 text-text-primary"><ChannelOrigin source={item.channel} />{channelLabel(item.channel)}</dd>
-          <dt className="text-text-secondary">Estado</dt>
-          <dd className="text-right text-text-primary">{closed ? 'Finalizado' : 'Em atendimento'}</dd>
-          <dt className="text-text-secondary">Responsável</dt>
-          <dd className="text-right text-text-primary">{owner}</dd>
-          <dt className="text-text-secondary">Prioridade</dt>
-          <dd className="text-right text-text-primary">{PRIORITY[item.priority] ?? item.priority}</dd>
-          {item.unread_count > 0 && (
-            <>
-              <dt className="text-text-secondary">Sem resposta</dt>
-              <dd className="text-right text-text-primary">{item.unread_count}</dd>
-            </>
-          )}
-          <dt className="text-text-secondary">Iniciada</dt>
-          <dd className="text-right text-text-primary">{when(conversation.created_at)}</dd>
-          <dt className="text-text-secondary">Última atividade</dt>
-          <dd className="text-right text-text-primary">{when(item.last_activity_at)}</dd>
-        </dl>
-      </CollapsibleSection>
-
-      {can('service.read') && target && (
-        // ADR-0049: the protocol and its tasks, served through the Hub (the instance named in the URL, the Hub in the acting header; the server proves
-        // hub -> contract -> grant -> key on every request, the keys only keep the screen from offering what it would refuse)
-        <CollapsibleSection id="hub-service-session" title="Protocolo e tarefas" icon="tickets" defaultOpen>
-          <ServiceSessionPanel conversationId={conversation.id} can={can} hub={target} conversationClosed={closed} />
-        </CollapsibleSection>
-      )}
+      {/* The state of the attendance in two lines: the company, who holds it, since when (the channel is already in the list and the chat). */}
+      <section aria-label="Atendimento" className="space-y-1.5 border-b border-border-subtle px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex min-w-0 items-center gap-2 text-sm">
+            <span className={closed ? 'inline-flex flex-shrink-0 items-center gap-1.5 rounded-pill bg-status-muted px-2 py-0.5 text-xs font-medium text-text-secondary' : 'inline-flex flex-shrink-0 items-center gap-1.5 rounded-pill bg-status-success-soft px-2 py-0.5 text-xs font-medium text-status-success'}>
+              <span aria-hidden="true" className={closed ? 'h-1.5 w-1.5 rounded-full bg-text-tertiary' : 'h-1.5 w-1.5 rounded-full bg-status-success'} />
+              {closed ? 'Finalizado' : 'Em atendimento'}
+            </span>
+            <span className="min-w-0 truncate font-medium text-text-primary">{owner}</span>
+          </p>
+          <TenantBadge name={tenantName} />
+        </div>
+        <p className="text-[11px] text-text-tertiary">
+          Desde {when(conversation.created_at)}
+          {item.priority && item.priority !== 'normal' ? ` · prioridade ${(PRIORITY[item.priority] ?? item.priority).toLowerCase()}` : ''}
+          {item.unread_count > 0 ? ` · ${item.unread_count} sem resposta` : ''}
+        </p>
+      </section>
 
       <CollapsibleSection id="hub-customer" title="Contato" icon="contacts" defaultOpen>
         <div className="px-4 pb-4">
@@ -149,43 +128,8 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
         )}
       </CollapsibleSection>
 
-      {target && (can('ticket.create') || can('ticket.read')) && (
-        <CollapsibleSection id="hub-ticket" title="Chamado" icon="tickets" defaultOpen>
-          <section aria-label="Chamado no ERP">
-            <TicketPanel conversationId={conversation.id} target={target} contactCompanyNames={companyNames} conversationUnassigned={conversation.assignment === 'none'} />
-          </section>
-        </CollapsibleSection>
-      )}
-
-      {target && can('ai.assist') && (
-        <CollapsibleSection id="hub-summary" title="Resumo com IA" icon="sparkles" defaultOpen>
-          <section aria-label="Resumo por IA">
-            <ConversationSummary conversationId={conversation.id} target={target} />
-          </section>
-        </CollapsibleSection>
-      )}
-
-      {target && can('conversation.read') && (
-        <CollapsibleSection id="hub-routing" title="Roteamento e SLA" icon="clock" defaultOpen>
-          <RoutingPanel conversationId={conversation.id} target={target} />
-        </CollapsibleSection>
-      )}
-
-      {target && contactId && can('contact.note') && (
-        <CollapsibleSection id="hub-notes" title="Anotações internas" icon="tickets" defaultOpen>
-          <section aria-label="Anotações">
-            <ContactNotes contactId={contactId} target={target} />
-          </section>
-        </CollapsibleSection>
-      )}
-
-      {target && can('attendance.history') && (
-        <CollapsibleSection id="hub-history" title="Histórico do contato" icon="conversations" defaultOpen>
-          <div>
-            {can('conversation.read') && <HistorySearch conversationId={conversation.id} target={target} />}
-            <AttendanceMemoryPanel conversationId={conversation.id} target={target} canResolve={can('followup.resolve')} />
-          </div>
-        </CollapsibleSection>
+      {target && (
+        <DelegatedSections target={target} conversationId={conversation.id} contactId={contactId} can={can} closed={closed} unassigned={conversation.assignment === 'none'} companyNames={companyNames} idPrefix="hub" />
       )}
 
       <CollapsibleSection id="hub-timeline" title="Linha do tempo" icon="tickets" defaultOpen>

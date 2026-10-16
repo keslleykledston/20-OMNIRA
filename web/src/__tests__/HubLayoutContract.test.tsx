@@ -200,8 +200,10 @@ describe('Hub layout contract — queue | conversation | collapsible details', (
     serve();
     await openA();
     const aside = await screen.findByRole('complementary', { name: 'Detalhes do atendimento' });
-    expect(within(aside).getAllByText(/^(Atendimento|Contato|Linha do tempo|Ações)$/).map((e) => e.textContent)).toEqual(['Atendimento', 'Contato', 'Linha do tempo', 'Ações']);
-    expect(aside.querySelectorAll('details')).toHaveLength(4);
+    // the state of the attendance is a two-line strip (always visible); the rest folds
+    expect(within(aside).getAllByText(/^(Contato|Linha do tempo|Ações)$/).map((e) => e.textContent)).toEqual(['Contato', 'Linha do tempo', 'Ações']);
+    expect(within(aside).getByLabelText('Atendimento')).toHaveTextContent('Em atendimento');
+    expect(aside.querySelectorAll('details')).toHaveLength(3);
     expect(aside).toHaveTextContent('Instância a'); // the company, in full
     expect(aside).toHaveTextContent('Sem responsável');
     // the three regions are siblings of one grid, in this order

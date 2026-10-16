@@ -69,6 +69,9 @@ func NewRefreshTicketProjectionService(perms ports.PermissionChecker, conversati
 	return &RefreshTicketProjectionService{perms: perms, conversation: conversation, localTickets: localTickets, runtime: runtime}
 }
 
+// A Hub agent attending the instance (ADR-0040) may refresh the projection too: servesTickets admits the delegated context, the key ticket.create is asked of the
+// database for the person of the context, and the data layer lets the delegate update only the tickets of the instance it acts for.
+//
 // RefreshTicketProjection implements PRODUCT.6-O1R sections 2-7 in order:
 // authorize (conversation ownership + ticket.create, the same capability
 // CreateExternalTicket requires to interact with the provider on this
@@ -81,7 +84,7 @@ func NewRefreshTicketProjectionService(perms ports.PermissionChecker, conversati
 // projection metadata.
 func (s *RefreshTicketProjectionService) RefreshTicketProjection(ctx context.Context, cmd RefreshTicketProjectionCommand) (*TicketReadResult, error) {
 	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || tc.Source != tenancydomain.AccessSourceDirect {
+	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || !servesTickets(tc) {
 		return nil, ErrForbidden
 	}
 

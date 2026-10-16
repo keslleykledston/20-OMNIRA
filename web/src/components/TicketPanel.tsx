@@ -38,6 +38,8 @@ interface TicketPanelProps {
   contactCompanyNames?: string[];
   /** The instance a Hub agent works on from the unified inbox (company + Hub); every request names it. Implies `delegated`. */
   target?: DelegatedTarget;
+  /** A Hub agent may refresh the ticket from the ERP with the key ticket.create (changing the ERP status stays out of the delegated context). Members always can. */
+  canRefresh?: boolean;
 }
 
 // "K3G Solutions" and "K3G SOLUTIONS LTDA." are the same company for this purpose: compare without case, accents, punctuation and legal suffix.
@@ -195,7 +197,7 @@ function saveStatusIntent(conversationId: string, intent: PendingStatusIntent | 
   }
 }
 
-export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated: delegatedProp = false, contactCompanyNames = [], target }: TicketPanelProps) {
+export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated: delegatedProp = false, contactCompanyNames = [], target, canRefresh = false }: TicketPanelProps) {
   const tenantId = target?.tenantId ?? getTenantId();
   const delegated = delegatedProp || !!target;
 
@@ -270,7 +272,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
     refreshInFlightRef.current = true;
     const requestId = (refreshRequestIdRef.current += 1);
     setRefreshState('pending');
-    const result = await refreshConversationTicket(conversationId);
+    const result = await refreshConversationTicket(conversationId, target);
     refreshInFlightRef.current = false;
     if (requestId !== refreshRequestIdRef.current) return; // superseded by a conversation switch or a newer click
 
@@ -803,7 +805,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
           <div className="rounded-control border border-border-subtle bg-surface p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="font-semibold text-text-primary">Chamado vinculado</p>
-              {!delegated && (
+              {(!delegated || canRefresh) && (
                 <Button
                   type="button"
                   size="sm"
