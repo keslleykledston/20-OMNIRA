@@ -413,3 +413,12 @@ describe('ContactKindControl — Interno (team, partner, supplier)', () => {
     expect(onChanged).not.toHaveBeenCalled()
   })
 })
+
+describe('ContactKindControl — what "Interno" does to the Hub', () => {
+  it('says that people attending through the Hub stop seeing the conversation, before the person decides', async () => {
+    const user = userEvent.setup()
+    setup('unclassified')
+    await user.click(screen.getByRole('button', { name: 'Interno' }))
+    expect(await screen.findByText(/Quem atende pelo Hub deixa de ver esta conversa/)).toBeInTheDocument()
+  })
+})

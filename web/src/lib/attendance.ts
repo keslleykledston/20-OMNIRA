@@ -139,10 +139,13 @@ export const attendanceAPI = {
 }
 
 // Mensagem para o operador a partir da resposta de erro do backend (nunca expõe detalhes internos).
-export function attendanceErrorMessage(err: unknown): string {
+// `delegated`: a person attending through the Hub. Their copy of a conversation (the Hub inbox item) disappears when the contact is declared internal or the access ends,
+// so a 404 there is not "does not exist": it left the Hub.
+export function attendanceErrorMessage(err: unknown, delegated = false): string {
   const status = (err as { response?: { status?: number; data?: { detail?: string; error?: string } } })?.response?.status
   const data = (err as { response?: { data?: { detail?: string; error?: string } } })?.response?.data
   if (status === 403) return 'Só o responsável pela conversa (ou um supervisor) pode finalizar o atendimento.'
+  if (status === 404 && delegated) return 'Esta conversa saiu do Hub (por exemplo, o contato foi classificado como interno) ou o seu acesso terminou. Abra-a na caixa da empresa para continuar.'
   if (status === 404) return 'Conversa não encontrada.'
   if (status === 409 && data?.error === 'already_resolved') return 'Esta pendência já foi resolvida.'
   if (status === 422 && data?.error === 'nothing_to_suggest') return 'Não há mensagens de texto para resumir.'

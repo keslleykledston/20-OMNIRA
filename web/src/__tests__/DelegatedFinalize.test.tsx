@@ -88,4 +88,16 @@ describe('finalizing the attendance through the Hub (phase 05b)', () => {
     expect(within(dialog).getByText(/Sugerido pela IA: confira antes de finalizar/)).toBeInTheDocument()
     expect(post.mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(false) // a draft never finalizes
   })
+
+  it('a 404 for a Hub agent says the conversation LEFT the Hub (e.g. the contact became internal), not that it does not exist', async () => {
+    show(['conversation.read', 'conversation.reply', 'conversation.finalize'])
+    post.mockRejectedValue({ response: { status: 404, data: 'not found\n' } })
+    const user = userEvent.setup()
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert).toHaveTextContent(/saiu do Hub/)
+    expect(alert).toHaveTextContent(/caixa da empresa/)
+    expect(alert).not.toHaveTextContent('Conversa não encontrada.')
+  })
 })

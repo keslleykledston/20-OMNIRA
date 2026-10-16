@@ -225,7 +225,7 @@ export function describeHubWriteError(err: unknown): string {
     case 403:
       return 'Seu acesso a esta instância é somente leitura.'
     case 404:
-      return 'Esta conversa não está mais disponível para você: o acesso pode ter sido encerrado.'
+      return 'Esta conversa não está mais disponível para você no Hub: o acesso pode ter sido encerrado ou o contato foi classificado como interno (nesse caso ela fica só na caixa da empresa).'
     case 409:
       if (body.includes('another agent')) return 'Esta conversa já está com outro operador.'
       if (body.includes('not available')) return 'Essa pessoa não pode receber esta conversa agora (sem acesso para responder nesta instância).'

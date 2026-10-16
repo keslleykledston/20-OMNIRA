@@ -105,7 +105,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       onFinalized?.(out.asked && out.changed ? out.farewell ?? 'unavailable' : undefined)
       onClose()
     },
-    onError: (err) => setError(attendanceErrorMessage(err)),
+    onError: (err) => setError(attendanceErrorMessage(err, delegated)),
   })
 
   const suggest = useMutation({
@@ -120,7 +120,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
         return [...cur, ...s.follow_ups.map((f) => ({ key: ++k, kind: f.kind, text: f.text, due: '', ai: true }))].slice(0, 20)
       })
     },
-    onError: (err) => { setAiNote(null); setError(attendanceErrorMessage(err)) },
+    onError: (err) => { setAiNote(null); setError(attendanceErrorMessage(err, delegated)) },
   })
 
   let seq = items.reduce((m, i) => Math.max(m, i.key), 0)
