@@ -593,6 +593,8 @@ type claimRequest struct {
 type replyRequest struct {
 	ExpectedTenantID uuid.UUID `json:"expected_tenant_id"`
 	Text             string    `json:"text"`
+	// AttachmentID: a file uploaded through UploadAttachment; Text is then its caption (ADR-0024).
+	AttachmentID *uuid.UUID `json:"attachment_id,omitempty"`
 }
 
 // decodeWrite reads the small JSON body of a write. The only tenant-ish field a write carries is expected_tenant_id:
@@ -773,6 +775,15 @@ func (h *HTTPHandler) ReplyItem(w http.ResponseWriter, r *http.Request) {
 	t, err := h.reply.Authorize(r.Context(), sc.actor, sc.hub, sc.item, req.ExpectedTenantID, correlationOf(r))
 	if err != nil {
 		writeReplyError(w, err)
+		return
+	}
+	if req.AttachmentID != nil {
+		res, err := h.reply.SendMedia(r.Context(), sc.actor, t, *req.AttachmentID, req.Text, r.Header.Get("Idempotency-Key"))
+		if err != nil {
+			writeMediaError(w, err)
+			return
+		}
+		writeMediaMessage(w, res, map[string]any{"tenant": map[string]any{"id": t.Item.TenantID, "name": t.TenantName}})
 		return
 	}
 	res, err := h.reply.Send(r.Context(), sc.actor, t, req.Text, r.Header.Get("Idempotency-Key"))

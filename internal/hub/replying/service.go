@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -52,6 +53,13 @@ type Service struct {
 	authz  *application.HubAuthorizationService
 	items  ItemLoader
 	sender *messagesapp.DelegatedSender
+	attach *messagesapp.Attachments // optional: files for a Hub agent (ADR-0024 x ADR-0040); nil = the Hub cannot send files
+}
+
+// WithAttachments gives the write path the outbound attachments service (already built with the delegated sender). nil keeps the Hub text-only.
+func (s *Service) WithAttachments(a *messagesapp.Attachments) *Service {
+	s.attach = a
+	return s
 }
 
 func New(pool *pgxpool.Pool, authz *application.HubAuthorizationService, items ItemLoader, store messagesports.OutboundStore) *Service {
@@ -337,4 +345,105 @@ func (s *Service) Transfer(ctx context.Context, actor uuid.UUID, t *Target, to *
 		}
 		return s.audit(c, t, actor, action, "conversation", t.Item.ConversationID, meta)
 	})
+}
+
+// guard is the check a delegated media write runs inside its transaction, after the conversation is loaded: the delegation still holds (FOR SHARE pins the
+// authorization rows) and the attendance was not finalized meanwhile.
+func (s *Service) guard(t *Target, actor uuid.UUID) func(context.Context, *messagesports.SendContext) error {
+	return func(gc context.Context, _ *messagesports.SendContext) error {
+		_, closed, err := s.delegationHolds(gc, t, actor, "FOR SHARE")
+		if err == nil && closed {
+			return ErrClosed
+		}
+		return err
+	}
+}
+
+// UploadAttachment validates, cleans, scans and stores one file for the agent (the same pipeline as a member's upload). The conversation must be theirs.
+func (s *Service) UploadAttachment(ctx context.Context, actor uuid.UUID, t *Target, name, mime string, data []byte) (*messagesports.OutboundAttachment, error) {
+	if s.attach == nil {
+		return nil, messagesapp.ErrMediaUnsupported
+	}
+	var att *messagesports.OutboundAttachment
+	err := platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
+		a, err := s.attach.UploadAs(c, actor, t.Item.ConversationID, name, mime, data, s.guard(t, actor))
+		if err != nil {
+			return err
+		}
+		att = a
+		return s.audit(c, t, actor, "hub.attachment.uploaded", "attachment", a.ID, map[string]any{"kind": a.Kind, "size_bytes": a.SizeBytes})
+	})
+	return att, err
+}
+
+// RemoveAttachment drops an unsent upload of the agent.
+func (s *Service) RemoveAttachment(ctx context.Context, actor uuid.UUID, t *Target, attachmentID uuid.UUID) error {
+	if s.attach == nil {
+		return messagesapp.ErrMediaUnsupported
+	}
+	return platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
+		if _, _, err := s.delegationHolds(c, t, actor, "FOR SHARE"); err != nil {
+			return err
+		}
+		return s.attach.RemoveAs(c, actor, t.Item.ConversationID, attachmentID)
+	})
+}
+
+// SendMedia queues the agent's message carrying a previously uploaded file. The conversation must already be theirs.
+func (s *Service) SendMedia(ctx context.Context, actor uuid.UUID, t *Target, attachmentID uuid.UUID, caption, key string) (messagesapp.SendResult, error) {
+	if s.attach == nil {
+		return messagesapp.SendResult{}, messagesapp.ErrMediaUnsupported
+	}
+	var res messagesapp.SendResult
+	err := platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
+		r, err := s.attach.SendMediaAs(c, actor, t.Item.ConversationID, attachmentID, caption, key, s.guard(t, actor))
+		if err != nil {
+			return err
+		}
+		res = r
+		if r.Replayed {
+			return nil
+		}
+		return s.audit(c, t, actor, "hub.message.sent", "message", r.Message.ID, map[string]any{"message_id": r.Message.ID, "attachment_id": attachmentID})
+	})
+	return res, err
+}
+
+// ChannelInfo is what the composer needs to know about the line of an item: whether free text and files may be offered and the state of the provider's 24 h
+// window. A Hub agent cannot read channel_connections, so it is read here, in a system tenant session of the item's company (never of the request's).
+type ChannelInfo struct {
+	Provider        string  `json:"provider,omitempty"`
+	CanSendText     bool    `json:"can_send_text"`
+	CanSendMedia    bool    `json:"can_send_media"`
+	WindowRequired  bool    `json:"window_required"`
+	WindowOpen      bool    `json:"window_open"`
+	LastInboundAt   *string `json:"last_inbound_at,omitempty"`
+	WindowExpiresAt *string `json:"window_expires_at,omitempty"`
+}
+
+func (s *Service) ChannelInfo(ctx context.Context, t *Target) (ChannelInfo, error) {
+	var out ChannelInfo
+	err := platformdb.WithSystemTenantSession(ctx, s.pool, t.Item.TenantID, func(c context.Context) error {
+		sc, err := s.sender.LoadSendContext(c, t.Item.ConversationID)
+		if err != nil {
+			return err
+		}
+		if sc == nil {
+			return application.ErrAccessDenied
+		}
+		out.Provider = sc.Provider
+		out.CanSendText = sc.ConnectionID != nil && sc.ConnectionReady && sc.ToE164 != ""
+		out.CanSendMedia = out.CanSendText && s.attach.CanSendMedia(c, t.Item.TenantID, sc)
+		out.WindowRequired, out.WindowOpen = messagesapp.SessionWindow(sc.Provider, sc.LastInboundAt, time.Now())
+		if sc.LastInboundAt != nil {
+			l := sc.LastInboundAt.UTC().Format(time.RFC3339)
+			out.LastInboundAt = &l
+			if out.WindowRequired && out.WindowOpen {
+				e := sc.LastInboundAt.Add(messagesapp.SessionWindowDuration).UTC().Format(time.RFC3339)
+				out.WindowExpiresAt = &e
+			}
+		}
+		return nil
+	})
+	return out, err
 }

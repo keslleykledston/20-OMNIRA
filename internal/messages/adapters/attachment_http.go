@@ -137,6 +137,16 @@ func (h *SendHandler) BufferUpload(next http.Handler) http.Handler {
 	})
 }
 
+// UploadedFileFromContext returns the file BufferUpload read for this request (name and content type as the client declared them, the bytes already size-limited).
+// Other write paths (the Hub's, for an agent) mount BufferUpload in front of their own handler and read the file through here.
+func UploadedFileFromContext(ctx context.Context) (name, mime string, data []byte, ok bool) {
+	f, found := ctx.Value(uploadedFileKey{}).(uploadedFile)
+	if !found {
+		return "", "", nil, false
+	}
+	return f.name, f.mime, f.data, true
+}
+
 const uploadReadTimeout = 60 * time.Second
 
 // Upload serves POST /inbox/conversations/{id}/attachments for a body already read by BufferUpload.

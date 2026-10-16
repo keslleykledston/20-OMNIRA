@@ -57,11 +57,12 @@ func (e *AttachmentRejected) Error() string { return "messages: attachment rejec
 
 // Attachments uploads files for outbound messages.
 type Attachments struct {
-	sender  *Sender
-	store   ports.AttachmentStore
-	files   ports.AttachmentFiles
-	scanner ports.VirusScanner
-	now     func() time.Time
+	sender    *Sender
+	delegated *DelegatedSender // optional: files for a Hub agent (ADR-0040), see delegated_attachment.go
+	store     ports.AttachmentStore
+	files     ports.AttachmentFiles
+	scanner   ports.VirusScanner
+	now       func() time.Time
 }
 
 func NewAttachments(sender *Sender, store ports.AttachmentStore, files ports.AttachmentFiles, scanner ports.VirusScanner) *Attachments {
@@ -107,6 +108,12 @@ func (a *Attachments) Upload(ctx context.Context, conversationID uuid.UUID, decl
 	if err != nil {
 		return nil, err
 	}
+	return a.ingest(ctx, target, conversationID, declaredName, declaredMime, data)
+}
+
+// ingest is everything an upload does AFTER it was authorized: quotas, kind and size, metadata stripping, structure, antivirus, storage. A member and a Hub agent
+// (UploadAs) differ only in who authorized it; the file goes through exactly the same checks.
+func (a *Attachments) ingest(ctx context.Context, target *AttachmentTarget, conversationID uuid.UUID, declaredName, declaredMime string, data []byte) (*ports.OutboundAttachment, error) {
 	usage, err := a.store.AttachmentUsage(ctx, conversationID, target.ActorID)
 	if err != nil {
 		return nil, err

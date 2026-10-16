@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders } from './session'
+import { MAX_ATTACHMENT_BYTES, type UploadedAttachment } from './attachments'
 
 // Mirrors the Hub schemas in contracts/openapi/omnira-v1.yaml (GET /hubs, /hubs/{id}/inbox, /hubs/{id}/inbox/{item}, POST .../claim and .../messages).
 // The Hub API is feature-flagged on the server: when it is off the routes do not exist and /hubs answers 404.
@@ -172,14 +173,47 @@ export const hubWriteAPI = {
     axios
       .post<HubTransferResult>(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/transfer`, { expected_tenant_id: expectedTenantId, to_user_id: toUserId }, { headers: authHeaders() })
       .then((r) => r.data),
-  reply: (hubId: string, itemId: string, expectedTenantId: string, text: string, idempotencyKey: string): Promise<HubReplyResult> =>
+  // `attachmentId`: a file uploaded through uploadAttachment (ADR-0024); `text` is then its caption.
+  reply: (hubId: string, itemId: string, expectedTenantId: string, text: string, idempotencyKey: string, attachmentId?: string): Promise<HubReplyResult> =>
     axios
       .post<HubReplyResult>(
         `${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/messages`,
-        { expected_tenant_id: expectedTenantId, text },
+        { expected_tenant_id: expectedTenantId, text, ...(attachmentId ? { attachment_id: attachmentId } : {}) },
         { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey } },
       )
       .then((r) => r.data),
+  // What the composer may offer on the item's line (a Hub agent cannot read the company's channel settings: the server answers).
+  channel: (hubId: string, itemId: string, expectedTenantId: string): Promise<HubChannel> =>
+    axios
+      .get<HubChannel>(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/channel`, { headers: authHeaders(), params: { expected_tenant_id: expectedTenantId } })
+      .then((r) => r.data),
+  // ADR-0024 x ADR-0040: a Hub agent's files. The server validates, cleans and scans them like a member's.
+  uploadAttachment: (hubId: string, itemId: string, expectedTenantId: string, file: File): Promise<UploadedAttachment> => {
+    if (file.size > MAX_ATTACHMENT_BYTES) return Promise.reject(Object.assign(new Error('too large'), { response: { status: 413, data: '' } }));
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return axios
+      .post<UploadedAttachment>(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/attachments`, form, { headers: authHeaders(), params: { expected_tenant_id: expectedTenantId } })
+      .then((r) => r.data);
+  },
+  /** Best effort: the server also expires unsent uploads on its own. */
+  removeAttachment: async (hubId: string, itemId: string, expectedTenantId: string, attachmentId: string): Promise<void> => {
+    try {
+      await axios.delete(`${API_BASE}/hubs/${enc(hubId)}/inbox/${enc(itemId)}/attachments/${enc(attachmentId)}`, { headers: authHeaders(), params: { expected_tenant_id: expectedTenantId } });
+    } catch {
+      /* expires on its own */
+    }
+  },
+}
+
+/** The line of an item as the composer needs it (same shape the member's /channel answers). */
+export interface HubChannel {
+  provider?: string
+  can_send_text: boolean
+  can_send_media: boolean
+  window_required: boolean
+  window_open: boolean
+  window_expires_at?: string
 }
 
 // The write routes answer with plain text. One sentence per case, in the operator's words.

@@ -100,3 +100,8 @@ func (d *DelegatedSender) clock() time.Time {
 	}
 	return d.now()
 }
+
+// LoadSendContext reads the line and the state of a conversation for a caller that already runs in a system tenant session of its company (the Hub's write path).
+func (d *DelegatedSender) LoadSendContext(ctx context.Context, conversationID uuid.UUID) (*ports.SendContext, error) {
+	return d.store.LoadSendContext(ctx, conversationID)
+}

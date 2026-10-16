@@ -80,6 +80,9 @@ type Server struct {
 	valkeyClient   *redis.Client
 	// claimHook tells the optional Service Context module that a person assumed a conversation (ADR-0049); main installs the module's function on it.
 	claimHook claimhook.Hook
+	// outboundAttachments / uploadBuffer are set by RegisterInboxHandlers when outbound media is on (ADR-0024); the Hub's routes (registered after) reuse them for a Hub agent's files.
+	outboundAttachments *messagesapplication.Attachments
+	uploadBuffer        func(http.Handler) http.Handler
 }
 
 // ClaimHook is the hook the claim routes (member self-claim, Hub agent claim in the workspace) run after a conversation was assumed. Empty = nothing happens.
@@ -512,6 +515,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
 	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI).WithAccessAPI(accessAPI).WithClaimHook(&s.claimHook)
+	h = h.WithAttachments(s.outboundAttachments) // nil unless outbound media is on: the Hub's composer then offers no files
 	if s.natsConn != nil {
 		// the change signal of the aggregated tab (no content; see hub/adapters/events.go). Authentication only: a stream never sits behind the request transaction.
 		h = h.WithEvents(s.natsConn, hubadapters.EventsOptions{SessionRecheck: s.streamCredentialRecheck()})
@@ -522,6 +526,12 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}", authnMiddleware(userSession(http.HandlerFunc(h.OpenInboxItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/claim", authnMiddleware(userSession(http.HandlerFunc(h.ClaimItem))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/messages", authnMiddleware(userSession(http.HandlerFunc(h.ReplyItem))))
+	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}/channel", authnMiddleware(userSession(http.HandlerFunc(h.ChannelItem))))
+	if s.outboundAttachments != nil && s.uploadBuffer != nil {
+		// ADR-0024 x ADR-0040: a Hub agent's files. The body is read before the session, like a member's upload.
+		s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/attachments", authnMiddleware(s.uploadBuffer(userSession(http.HandlerFunc(h.UploadAttachment)))))
+		s.mux.Handle("DELETE /api/v1/hubs/{hub_id}/inbox/{item_id}/attachments/{attachment_id}", authnMiddleware(userSession(http.HandlerFunc(h.RemoveAttachment))))
+	}
 	s.mux.Handle("GET /api/v1/hubs/{hub_id}/inbox/{item_id}/transfer-candidates", authnMiddleware(userSession(http.HandlerFunc(h.TransferCandidates))))
 	s.mux.Handle("POST /api/v1/hubs/{hub_id}/inbox/{item_id}/transfer", authnMiddleware(userSession(http.HandlerFunc(h.TransferItem))))
 	if adminAPI {
@@ -726,15 +736,18 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 			store := messagesadapters.NewPostgresOutboundStore(dbPool)
 			sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(dbPool)).WithMediaProviders(mediaProviderReady).
 				WithEntitlements(entitlements.NewChecker(dbPool).Gate)
-			attachments := messagesapplication.NewAttachments(sender, store, files, mediaadapters.NewVirusScanner(cfg.ClamAVAddr))
+			// a Hub agent's files go through the same pipeline, in the Hub's write path (ADR-0040): the delegated sender is the one the Hub's routes use
+			attachments := messagesapplication.NewAttachments(sender, store, files, mediaadapters.NewVirusScanner(cfg.ClamAVAddr)).WithDelegated(messagesapplication.NewDelegatedSender(store))
 			sendHandler.WithAttachments(attachments, store)
-			attachmentsOn := entitlements.NewChecker(dbPool).Require(entitlements.OutboundAttachments) // ADR-0038: per-company switch
-			s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments", authnMiddleware(sendHandler.BufferUpload(tenantSession(attachmentsOn(http.HandlerFunc(sendHandler.Upload))))))
-			s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments/{attachment_id}", authnMiddleware(tenantSession(attachmentsOn(http.HandlerFunc(sendHandler.RemoveAttachment)))))
+			delegatedWrites.WithAttachments(attachments)
+			s.outboundAttachments, s.uploadBuffer = attachments, sendHandler.BufferUpload
+			attachmentsOn := entitlements.NewChecker(dbPool).Require(entitlements.OutboundAttachments) // ADR-0038: per-company switch (the Hub's write path re-asks it in a system session, which can read every company's switch)
+			s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments", tenancyadapters.Delegable("conversation.reply", authnMiddleware(sendHandler.BufferUpload(tenantSession(attachmentsOn(delegatedWrites.Upload(http.HandlerFunc(sendHandler.Upload))))))))
+			s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/attachments/{attachment_id}", tenancyadapters.Delegable("conversation.reply", authnMiddleware(tenantSession(attachmentsOn(delegatedWrites.RemoveAttachment(http.HandlerFunc(sendHandler.RemoveAttachment)))))))
 		}
 	}
 	linesHandler := inboxadapters.NewChannelLinesHandler(dbPool, channeladapters.NewPostgresPermissionChecker(dbPool)).WithOutboundMedia(cfg.OutboundMediaEnabled, mediaProviderReady)
-	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/channel", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Channel))))
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/channel", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(delegatedWrites.Channel(http.HandlerFunc(linesHandler.Channel))))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/open", authnMiddleware(tenantSession(http.HandlerFunc(linesHandler.Open))))
 
 	// CRM ticket handlers

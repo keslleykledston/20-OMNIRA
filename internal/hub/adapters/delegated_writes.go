@@ -298,7 +298,7 @@ type delegatedReplyRequest struct {
 	AttachmentID *uuid.UUID `json:"attachment_id,omitempty"`
 }
 
-// Reply wraps POST /tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages. Text only: an attachment is refused here (a later phase).
+// Reply wraps POST /tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages: text, or a file previously uploaded through Upload (text is then its caption).
 func (d *DelegatedWrites) Reply(original http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tc, delegated := delegatedContext(r)
@@ -312,7 +312,16 @@ func (d *DelegatedWrites) Reply(original http.Handler) http.Handler {
 			return
 		}
 		if req.AttachmentID != nil {
-			httpError(w, "attachments are not available when attending through a Hub yet", http.StatusUnprocessableEntity)
+			t, ok := d.target(w, r, tc)
+			if !ok {
+				return
+			}
+			res, err := d.reply.SendMedia(r.Context(), tc.ActorID, t, *req.AttachmentID, req.Text, r.Header.Get("Idempotency-Key"))
+			if err != nil {
+				writeMediaError(w, err)
+				return
+			}
+			writeMediaMessage(w, res, nil)
 			return
 		}
 		t, ok := d.target(w, r, tc)

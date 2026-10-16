@@ -84,6 +84,11 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		"GET " + tn + "/contacts/{contact_id}/company-suggestions": "account.read",
 		"GET " + tn + "/conversations/{conversation_id}/ticket":    "ticket.create|ticket.read",
 		"POST " + tn + "/conversations/{conversation_id}/ticket":   "ticket.create",
+		// files for a Hub agent (ADR-0024 x ADR-0040): upload and remove need the reply key; the wrapper sends a delegated request to the Hub's write path, never to the member's handler
+		"POST " + tn + "/inbox/conversations/{conversation_id}/attachments":                   "conversation.reply",
+		"DELETE " + tn + "/inbox/conversations/{conversation_id}/attachments/{attachment_id}": "conversation.reply",
+		// what the composer may offer on the line (a delegate cannot read channel_connections: the Hub's write path answers)
+		"GET " + tn + "/inbox/conversations/{conversation_id}/channel": "conversation.read",
 		// refreshing the ERP projection of the ticket: the same key as opening it (the service asks the database for the person of the context). Changing the ERP status is NOT here on purpose.
 		"POST " + tn + "/conversations/{conversation_id}/ticket/refresh": "ticket.create",
 		// phase 05: the realtime streams (admitted in a short transaction, rechecked every 15 s)

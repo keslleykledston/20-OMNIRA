@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { describeHubWriteError, hubWriteAPI, type HubItemDetail, type HubMessage } from '../../lib/hub';
 import { handleUnauthorized, isUnauthorized } from '../../lib/session';
+import { describeAttachmentError } from '../../lib/attachments';
 import { TenantBadge } from '../primitives/TenantBadge';
 import MessageComposer from '../inbox/MessageComposer';
 import TransferDialog from './TransferDialog';
@@ -53,9 +54,17 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
   const [transferring, setTransferring] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   // A retry of the SAME text keeps its key (no double send); a different text is a new attempt.
-  const pending = useRef<{ text: string; key: string } | null>(null);
+  const pending = useRef<{ text: string; attachmentId?: string; key: string } | null>(null);
   const tenantName = detail.tenant.name || detail.item.tenant_name || 'Instância não identificada';
   const mode = composerMode(detail);
+  // what the composer may offer on this item's line (files): the server answers, a Hub agent cannot read the company's channel settings
+  const channel = useQuery({
+    queryKey: ['hub-channel', hubId, detail.tenant.id, detail.item.id],
+    enabled: mode === 'reply',
+    retry: false,
+    staleTime: 60_000,
+    queryFn: () => hubWriteAPI.channel(hubId, detail.item.id, detail.tenant.id),
+  });
   useEffect(() => {
     setError(null);
     pending.current = null;
@@ -83,18 +92,23 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
       setBusy(false);
     }
   };
-  const send = async (text: string): Promise<boolean> => {
-    if (!text.trim()) return false;
+  const send = async (text: string, attachmentId?: string): Promise<boolean> => {
+    if (!text.trim() && !attachmentId) return false;
     setBusy(true);
     setError(null);
-    if (pending.current?.text !== text) pending.current = { text, key: crypto.randomUUID() };
+    if (pending.current?.text !== text || pending.current?.attachmentId !== attachmentId) pending.current = { text, attachmentId, key: crypto.randomUUID() };
     try {
-      await hubWriteAPI.reply(hubId, detail.item.id, detail.tenant.id, text, pending.current.key);
+      await hubWriteAPI.reply(hubId, detail.item.id, detail.tenant.id, text, pending.current.key, attachmentId);
       pending.current = null;
       await refresh();
       return true;
     } catch (err) {
-      fail(err);
+      if (attachmentId && !isUnauthorized(err)) {
+        setError(describeAttachmentError(err));
+        void refresh();
+      } else {
+        fail(err);
+      }
       return false;
     } finally {
       setBusy(false);
@@ -169,6 +183,9 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
             disabled={busy}
             label={`Respondendo como ${tenantName}`}
             labelRight={detail.item.channel || undefined}
+            onAttach={channel.data?.can_send_media ? (file) => hubWriteAPI.uploadAttachment(hubId, detail.item.id, detail.tenant.id, file) : undefined}
+            onRemoveAttachment={(id) => void hubWriteAPI.removeAttachment(hubId, detail.item.id, detail.tenant.id, id)}
+            describeError={describeAttachmentError}
           />
         )}
       </footer>
