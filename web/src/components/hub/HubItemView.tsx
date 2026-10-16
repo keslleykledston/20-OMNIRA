@@ -60,7 +60,8 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
     setError(null);
     pending.current = null;
   }, [detail.item.id]);
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['hub-item', hubId, detail.item.id] });
+  // the claim, a transfer or the finalization may open or close the protocol shown in the context pane
+  const refresh = () => { void queryClient.invalidateQueries({ queryKey: ['service-session'] }); return queryClient.invalidateQueries({ queryKey: ['hub-item', hubId, detail.item.id] }); };
   const fail = (err: unknown) => {
     if (isUnauthorized(err)) handleUnauthorized();
     else setError(describeHubWriteError(err));

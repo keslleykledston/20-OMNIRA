@@ -3,6 +3,7 @@ import { CollapsibleSection } from '../inbox/CollapsibleSection';
 import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 import { TenantBadge } from '../primitives/TenantBadge';
 import { Button } from '../primitives';
+import ServiceSessionPanel from '../service/ServiceSessionPanel';
 import type { HubItemDetail } from '../../lib/hub';
 
 const PRIORITY: Record<string, string> = { low: 'Baixa', normal: 'Normal', high: 'Alta', urgent: 'Urgente' };
@@ -29,6 +30,7 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
   const { item, conversation, messages } = detail;
   const tenantName = detail.tenant.name || item.tenant_name || 'Instância não identificada';
   const closed = conversation.status === 'closed';
+  const serviceKeys = detail.access.service_keys ?? [];
   const owner = OWNER[conversation.assignment ?? 'none'] ?? OWNER.none;
   // times only: the text of the messages is already on screen in the conversation (and is not repeated here)
   const lastInbound = useMemo(() => [...messages].reverse().find((m) => m.direction === 'inbound'), [messages]);
@@ -64,6 +66,19 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
           <dd className="text-right text-text-primary">{when(item.last_activity_at)}</dd>
         </dl>
       </CollapsibleSection>
+
+      {serviceKeys.includes('service.read') && detail.access.hub_id && (
+        // ADR-0049: the protocol and its tasks, served through the Hub (the instance named in the URL, the Hub in the acting header; the server proves
+        // hub -> contract -> grant -> key on every request, the keys below only keep the screen from offering what it would refuse)
+        <CollapsibleSection id="hub-service-session" title="Protocolo e tarefas" icon="tickets" defaultOpen>
+          <ServiceSessionPanel
+            conversationId={conversation.id}
+            can={(k) => serviceKeys.includes(k)}
+            hub={{ hubId: detail.access.hub_id, tenantId: detail.tenant.id }}
+            conversationClosed={closed}
+          />
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection id="hub-customer" title="Cliente" icon="contacts" defaultOpen>
         <div className="px-4 pb-4">

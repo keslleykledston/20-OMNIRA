@@ -565,3 +565,44 @@ func TestHubItem_AccessSaysWhetherFinalizeMayBeOffered(t *testing.T) {
 		t.Fatal("key withdrawn from the grant: finalize is no longer offered")
 	}
 }
+
+// The item lists the service keys the caller holds in the company (grant AND the contract's ceiling), so the Hub pane offers the protocol panel only for them.
+func TestHubItem_AccessListsTheServiceKeysTheCallerHolds(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	w.connect("A")
+	alice := w.hubAgent("alice")
+	grant := w.grantReply(alice, "A")
+	keys := func() []string {
+		t.Helper()
+		code, body, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox/%s", w.hub, w.itemID("A")), alice, nil)
+		if code != 200 {
+			t.Fatalf("open %d %s", code, body)
+		}
+		var got struct {
+			Access struct {
+				ServiceKeys []string `json:"service_keys"`
+			} `json:"access"`
+		}
+		w.must(json.Unmarshal([]byte(body), &got))
+		if got.Access.ServiceKeys == nil {
+			t.Fatal("service_keys must be an array, never null")
+		}
+		return got.Access.ServiceKeys
+	}
+	if got := keys(); len(got) != 0 {
+		t.Fatalf("no keys at all: %v", got)
+	}
+	w.grantKeys(grant, "conversation.read", "service.read", "service.create")
+	if got := keys(); len(got) != 0 {
+		t.Fatalf("the ceiling does not delegate them: %v", got)
+	}
+	w.ceiling("A", "conversation.read", "service.read")
+	if got := keys(); len(got) != 1 || got[0] != "service.read" {
+		t.Fatalf("only the key inside both the grant and the ceiling: %v", got)
+	}
+	w.ceiling("A", "conversation.read", "service.read", "service.create")
+	if got := keys(); len(got) != 2 || got[0] != "service.create" || got[1] != "service.read" {
+		t.Fatalf("both keys, sorted: %v", got)
+	}
+}
