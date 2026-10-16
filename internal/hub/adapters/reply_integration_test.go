@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -582,11 +583,21 @@ func TestHubItem_AccessListsTheServiceKeysTheCallerHolds(t *testing.T) {
 		var got struct {
 			Access struct {
 				ServiceKeys []string `json:"service_keys"`
+				Keys        []string `json:"keys"`
 			} `json:"access"`
 		}
 		w.must(json.Unmarshal([]byte(body), &got))
-		if got.Access.ServiceKeys == nil {
-			t.Fatal("service_keys must be an array, never null")
+		if got.Access.ServiceKeys == nil || got.Access.Keys == nil {
+			t.Fatal("service_keys and keys must be arrays, never null")
+		}
+		for _, k := range got.Access.ServiceKeys {
+			found := false
+			for _, all := range got.Access.Keys {
+				found = found || all == k
+			}
+			if !found {
+				t.Fatalf("every service key is also in keys: %s not in %v", k, got.Access.Keys)
+			}
 		}
 		return got.Access.ServiceKeys
 	}
@@ -604,5 +615,39 @@ func TestHubItem_AccessListsTheServiceKeysTheCallerHolds(t *testing.T) {
 	w.ceiling("A", "conversation.read", "service.read", "service.create")
 	if got := keys(); len(got) != 2 || got[0] != "service.create" || got[1] != "service.read" {
 		t.Fatalf("both keys, sorted: %v", got)
+	}
+}
+
+// The item lists EVERY delegated key the caller holds in the company (grant AND ceiling), so the Hub pane offers each panel of the full workspace only for what the server accepts.
+func TestHubItem_AccessListsEveryDelegatedKey(t *testing.T) {
+	w := newWorld(t)
+	api := newHubAPI(t, w)
+	w.connect("A")
+	alice := w.hubAgent("alice")
+	grant := w.grantReply(alice, "A")
+	get := func() []string {
+		t.Helper()
+		code, body, _ := api.do("GET", fmt.Sprintf("/api/v1/hubs/%s/inbox/%s", w.hub, w.itemID("A")), alice, nil)
+		if code != 200 {
+			t.Fatalf("open %d %s", code, body)
+		}
+		var got struct {
+			Access struct {
+				Keys []string `json:"keys"`
+			} `json:"access"`
+		}
+		w.must(json.Unmarshal([]byte(body), &got))
+		if got.Access.Keys == nil {
+			t.Fatal("keys must be an array, never null")
+		}
+		return got.Access.Keys
+	}
+	if got := get(); len(got) != 0 {
+		t.Fatalf("no keys at all: %v", got)
+	}
+	w.grantKeys(grant, "conversation.read", "contact.classify", "ticket.create", "ticket.read", "contact.note")
+	w.ceiling("A", "conversation.read", "contact.classify", "ticket.read")
+	if got := get(); strings.Join(got, ",") != "contact.classify,conversation.read,ticket.read" {
+		t.Fatalf("only what is in BOTH the grant and the ceiling, sorted: %v", got)
 	}
 }

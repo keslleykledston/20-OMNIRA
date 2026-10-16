@@ -421,16 +421,23 @@ func (h *HTTPHandler) OpenInboxItem(w http.ResponseWriter, r *http.Request) {
 	if err := q.QueryRow(ctx, `SELECT 'conversation.finalize' = ANY(delegated_permissions($1, $2, $3))`, tc.TenantID, actor, hubID).Scan(&canFinalize); err != nil {
 		canFinalize = false
 	}
-	// The service keys (ADR-0049) the caller holds in this company, so the pane offers the protocol panel only for what the server will accept. Display only:
-	// every request of the panel is decided again by the database. A failed lookup just hides the panel.
+	// Every delegated key the caller holds in this company (the grant AND the contract's ceiling; delegated_permissions answers for the caller only), so the Hub pane
+	// offers each panel of the full workspace only when the server will accept it. Display only: every request of a panel is decided again by the database. A failed
+	// lookup just hides the panels.
+	keys := []string{}
+	if err := q.QueryRow(ctx, `SELECT COALESCE(array_agg(k ORDER BY k), '{}'::text[]) FROM unnest(delegated_permissions($1, $2, $3)) k`, tc.TenantID, actor, hubID).Scan(&keys); err != nil || keys == nil {
+		keys = []string{}
+	}
 	serviceKeys := []string{}
-	if err := q.QueryRow(ctx, `SELECT COALESCE(array_agg(k ORDER BY k), '{}'::text[]) FROM unnest(delegated_permissions($1, $2, $3)) k WHERE k LIKE 'service.%'`, tc.TenantID, actor, hubID).Scan(&serviceKeys); err != nil || serviceKeys == nil {
-		serviceKeys = []string{}
+	for _, k := range keys {
+		if strings.HasPrefix(k, "service.") {
+			serviceKeys = append(serviceKeys, k)
+		}
 	}
 	writeJSON(w, map[string]any{
 		"item":         dto,
 		"tenant":       map[string]any{"id": tc.TenantID, "name": tenantName},
-		"access":       map[string]any{"source": tc.Source, "hub_id": tc.HubID, "grant_id": tc.EffectiveGrantID, "can_reply": tc.CanReply, "can_finalize": canFinalize, "service_keys": serviceKeys},
+		"access":       map[string]any{"source": tc.Source, "hub_id": tc.HubID, "grant_id": tc.EffectiveGrantID, "can_reply": tc.CanReply, "can_finalize": canFinalize, "keys": keys, "service_keys": serviceKeys},
 		"conversation": map[string]any{"id": item.ConversationID, "status": convStatus, "title": convTitle, "created_at": convCreated, "assignment": assignment},
 		"messages":     msgs,
 	})

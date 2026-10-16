@@ -79,7 +79,7 @@ export interface HubMessage {
 export interface HubItemDetail {
   item: HubInboxItem
   tenant: { id: string; name: string }
-  access: { source: string; hub_id?: string; grant_id?: string; can_reply?: boolean; can_finalize?: boolean; service_keys?: string[] }
+  access: { source: string; hub_id?: string; grant_id?: string; can_reply?: boolean; can_finalize?: boolean; keys?: string[]; service_keys?: string[] }
   // assignment is relative to the caller: the server never names another operator
   conversation: { id: string; status: string; title?: string; created_at: string; assignment?: 'none' | 'me' | 'other' }
   messages: HubMessage[]

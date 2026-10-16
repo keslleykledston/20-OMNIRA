@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { API_BASE } from './config'
-import { ACTING_HEADER } from './acting'
+import { ACTING_HEADER, type DelegatedTarget } from './acting'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session'
 
 // Espelha contracts/openapi/attendance-v1.yaml (ADR-0020). A autoridade é sempre o backend: a UI só evita oferecer ações que ele
@@ -114,11 +114,7 @@ const base = (target?: DelegatedTarget) => `${API_BASE}/tenants/${target?.tenant
 // acting header itself (the global interceptor only adds it for the session's tenant). The header grants nothing: the server proves hub -> contract -> grant.
 const h = (target?: DelegatedTarget) => ({ headers: { ...authHeaders(), ...(target ? { [ACTING_HEADER]: `hub:${target.hubId}` } : {}) } })
 
-/** The instance a conversation of the Hub's unified inbox belongs to, and the Hub it is served through. */
-export interface DelegatedTarget {
-  tenantId: string
-  hubId: string
-}
+export type { DelegatedTarget }
 
 async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
   try {

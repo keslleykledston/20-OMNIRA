@@ -5152,6 +5152,7 @@ components:
             grant_id: { type: string, format: uuid }
             can_reply: { type: boolean, description: Whether this grant lets the caller claim and answer here (otherwise read-only). }
             can_finalize: { type: boolean, description: "Whether the grant (inside the contract's ceiling) holds the key conversation.finalize, so the screen may offer 'Finalizar atendimento'. Display only: the finalize route asks again." }
+            keys: { type: array, items: { type: string }, description: "Every delegated permission key the grant holds inside the contract's ceiling, so the screen offers each panel of the full workspace only for what the server accepts. Display only: every request asks again." }
             service_keys: { type: array, items: { type: string }, description: "The service.* keys (ADR-0049) the grant holds inside the contract's ceiling, so the screen offers the protocol panel only for what the server accepts. Display only: every request asks again." }
         conversation:
           type: object

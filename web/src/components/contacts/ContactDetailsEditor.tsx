@@ -3,17 +3,19 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../primitives'
 import { contactEditAPI, contactEditErrorMessage, contactsAPI } from '../../lib/contacts'
 import { getTenantId } from '../../lib/session'
+import type { DelegatedTarget } from '../../lib/acting'
 
 const FIELD =
   'w-full rounded-control border border-border-subtle bg-surface px-2 py-1.5 text-xs text-text-primary ' +
   'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary'
 
 // Edit who this person is: name and e-mail (the phone is their identity and stays). Anyone who attends can do it.
-export function ContactDetailsEditor({ contactId, onChanged }: { contactId: string; onChanged?: () => void }) {
-  const tenantId = getTenantId()
+export function ContactDetailsEditor({ contactId, onChanged, target }: { contactId: string; onChanged?: () => void; target?: DelegatedTarget }) {
+  // the cache is per instance AND per Hub: what was loaded for one company must never answer for another
+  const tenantId = target ? `${target.hubId}:${target.tenantId}` : getTenantId()
   const qc = useQueryClient()
   const key = ['contact', tenantId, contactId]
-  const contact = useQuery({ queryKey: key, queryFn: () => contactsAPI.get(contactId), retry: false })
+  const contact = useQuery({ queryKey: key, queryFn: () => contactsAPI.get(contactId, target), retry: false })
   const [editing, setEditing] = useState(false)
   const [alias, setAlias] = useState('')
   const [email, setEmail] = useState('')
@@ -26,7 +28,7 @@ export function ContactDetailsEditor({ contactId, onChanged }: { contactId: stri
 
   const save = useMutation({
     // an empty alias CLEARS it: the name declared on WhatsApp is shown again on its own
-    mutationFn: () => contactEditAPI.update(contactId, { alias: alias.trim(), email: email.trim() }),
+    mutationFn: () => contactEditAPI.update(contactId, { alias: alias.trim(), email: email.trim() }, target),
     onSuccess: (c) => {
       qc.setQueryData(key, c)
       setEditing(false)

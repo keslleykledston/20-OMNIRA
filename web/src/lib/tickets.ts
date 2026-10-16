@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { API_BASE } from './config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session';
+import { scopedHeaders, tenantBase, type DelegatedTarget } from './acting';
 
 // Mirrors TicketItem in internal/tickets/adapters/http.go. tenant_id is
 // omitted — the session already establishes it. Fields match the canonical
@@ -168,12 +169,13 @@ export async function createExternalTicket(
   conversationId: string,
   idempotencyKey: string,
   req: ExternalTicketCreateRequest,
+  target?: DelegatedTarget,
 ): Promise<ExternalTicketCreateResult> {
   try {
     const res = await axios.post(
-      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket`,
+      `${tenantBase(target)}/conversations/${conversationId}/ticket`,
       req,
-      { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey, 'Content-Type': 'application/json' } },
+      { headers: scopedHeaders(target, { 'Idempotency-Key': idempotencyKey, 'Content-Type': 'application/json' }) },
     );
     return res.status === 201 ? { kind: 'created', data: res.data } : { kind: 'replayed', data: res.data };
   } catch (err: any) {
@@ -250,11 +252,11 @@ export type ConversationTicketReadResult =
   | { kind: 'unavailable' }
   | { kind: 'network_error' };
 
-export async function readConversationTicket(conversationId: string): Promise<ConversationTicketReadResult> {
+export async function readConversationTicket(conversationId: string, target?: DelegatedTarget): Promise<ConversationTicketReadResult> {
   try {
     const res = await axios.get(
-      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket`,
-      { headers: authHeaders() },
+      `${tenantBase(target)}/conversations/${conversationId}/ticket`,
+      { headers: scopedHeaders(target) },
     );
     return { kind: 'ok', data: res.data };
   } catch (err: any) {

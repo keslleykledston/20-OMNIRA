@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_BASE } from '../lib/config';
-import { authHeaders, getTenantId } from '../lib/session';
+import { getTenantId } from '../lib/session';
+import { scopedHeaders, tenantBase, type DelegatedTarget } from '../lib/acting';
 import {
   createExternalTicket,
   readConversationTicket,
@@ -35,6 +36,8 @@ interface TicketPanelProps {
    * offers only those, with the first preselected; when none matches, the whole directory is offered as before. The id sent is always one of the directory.
    */
   contactCompanyNames?: string[];
+  /** The instance a Hub agent works on from the unified inbox (company + Hub); every request names it. Implies `delegated`. */
+  target?: DelegatedTarget;
 }
 
 // "K3G Solutions" and "K3G SOLUTIONS LTDA." are the same company for this purpose: compare without case, accents, punctuation and legal suffix.
@@ -192,8 +195,9 @@ function saveStatusIntent(conversationId: string, intent: PendingStatusIntent | 
   }
 }
 
-export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated = false, contactCompanyNames = [] }: TicketPanelProps) {
-  const tenantId = getTenantId();
+export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated: delegatedProp = false, contactCompanyNames = [], target }: TicketPanelProps) {
+  const tenantId = target?.tenantId ?? getTenantId();
+  const delegated = delegatedProp || !!target;
 
   const [state, setState] = useState<PersistedState>(() => loadState(conversationId));
 
@@ -208,7 +212,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
     setReadPhase('loading');
     setLinkedTicket(null);
     void (async () => {
-      const result = await readConversationTicket(conversationId);
+      const result = await readConversationTicket(conversationId, target);
       if (!active) return;
       switch (result.kind) {
         case 'ok':
@@ -570,7 +574,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
         // PRODUCT.7B1A: tenant-scoped company directory (was
         // /integrations/companies, authn-only, a confirmed P0 cross-tenant
         // leak — every tenant resolved through one global K3G client).
-        const res = await axios.get(`${API_BASE}/tenants/${tenantId}/crm/companies`, { headers: authHeaders() });
+        const res = await axios.get(`${tenantBase(target)}/crm/companies`, { headers: scopedHeaders(target) });
         const items: Company[] = res.data.items || [];
         setCompanies(items);
       } catch (err) {
@@ -624,7 +628,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
         selected_customer_external_id: state.selectedCompanyId,
         subject: state.subject.trim(),
         description: state.description.trim(),
-      });
+      }, target);
     } finally {
       inFlightRef.current = false;
     }

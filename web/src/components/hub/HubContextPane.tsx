@@ -1,9 +1,17 @@
 import { useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 import { CollapsibleSection } from '../inbox/CollapsibleSection';
 import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 import { TenantBadge } from '../primitives/TenantBadge';
 import { Button } from '../primitives';
 import ServiceSessionPanel from '../service/ServiceSessionPanel';
+import { TicketPanel } from '../TicketPanel';
+import { ContactKindControl } from '../contacts/ContactKindControl';
+import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor';
+import { classificationAPI, contactsAPI, CONTACT_KIND_LABEL, type ContactKind } from '../../lib/contacts';
+import { scopedHeaders, tenantBase, type DelegatedTarget } from '../../lib/acting';
+import type { ConversationItem } from '../../types/api';
 import type { HubItemDetail } from '../../lib/hub';
 
 const PRIORITY: Record<string, string> = { low: 'Baixa', normal: 'Normal', high: 'Alta', urgent: 'Urgente' };
@@ -30,7 +38,43 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
   const { item, conversation, messages } = detail;
   const tenantName = detail.tenant.name || item.tenant_name || 'Instância não identificada';
   const closed = conversation.status === 'closed';
-  const serviceKeys = detail.access.service_keys ?? [];
+  // Every delegated key the grant holds inside the contract's ceiling (the server says which; it still decides every request). The panels below are the SAME
+  // components the full workspace uses, asked to work on this item's company and Hub explicitly.
+  const keys = detail.access.keys ?? detail.access.service_keys ?? [];
+  const can = (k: string) => keys.includes(k);
+  const hubId = detail.access.hub_id;
+  const target: DelegatedTarget | undefined = hubId ? { hubId, tenantId: detail.tenant.id } : undefined;
+  const qc = useQueryClient();
+  // the cache is per Hub AND per company: what was loaded for one company must never answer for another
+  const scope = [hubId, detail.tenant.id, conversation.id] as const;
+  const conv = useQuery({
+    queryKey: ['hub-conv-detail', ...scope],
+    enabled: !!target && can('conversation.read'),
+    retry: false,
+    queryFn: async () => (await axios.get(`${tenantBase(target)}/inbox/conversations/${conversation.id}`, { headers: scopedHeaders(target) })).data as ConversationItem,
+  });
+  const contactId = conv.data?.contact_id;
+  const card = useQuery({
+    queryKey: ['hub-contact', hubId, detail.tenant.id, contactId],
+    enabled: !!target && !!contactId && can('contact.read'),
+    retry: false,
+    queryFn: () => contactsAPI.get(contactId!, target),
+  });
+  const links = useQuery({
+    queryKey: ['hub-contact-links', hubId, detail.tenant.id, contactId],
+    enabled: !!target && !!contactId && can('contact.classify'),
+    retry: false,
+    queryFn: () => classificationAPI.get(contactId!, target),
+  });
+  const companyNames = [...(links.data?.accounts ?? [])].filter((l) => l.status === 'active').sort((a, b) => Number(b.primary) - Number(a.primary)).map((l) => l.account_name);
+  const refreshContact = () => {
+    void qc.invalidateQueries({ queryKey: ['hub-conv-detail', ...scope] });
+    void qc.invalidateQueries({ queryKey: ['hub-contact', hubId, detail.tenant.id, contactId] });
+    void qc.invalidateQueries({ queryKey: ['hub-contact-links', hubId, detail.tenant.id, contactId] });
+    void qc.invalidateQueries({ queryKey: ['hub-item', hubId, item.id] });
+    void qc.invalidateQueries({ queryKey: ['hub-inbox', hubId] });
+  };
+  const kind = (card.data?.kind || conv.data?.contact_kind || 'unclassified') as ContactKind;
   const owner = OWNER[conversation.assignment ?? 'none'] ?? OWNER.none;
   // times only: the text of the messages is already on screen in the conversation (and is not repeated here)
   const lastInbound = useMemo(() => [...messages].reverse().find((m) => m.direction === 'inbound'), [messages]);
@@ -67,29 +111,46 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
         </dl>
       </CollapsibleSection>
 
-      {serviceKeys.includes('service.read') && detail.access.hub_id && (
+      {can('service.read') && target && (
         // ADR-0049: the protocol and its tasks, served through the Hub (the instance named in the URL, the Hub in the acting header; the server proves
-        // hub -> contract -> grant -> key on every request, the keys below only keep the screen from offering what it would refuse)
+        // hub -> contract -> grant -> key on every request, the keys only keep the screen from offering what it would refuse)
         <CollapsibleSection id="hub-service-session" title="Protocolo e tarefas" icon="tickets" defaultOpen>
-          <ServiceSessionPanel
-            conversationId={conversation.id}
-            can={(k) => serviceKeys.includes(k)}
-            hub={{ hubId: detail.access.hub_id, tenantId: detail.tenant.id }}
-            conversationClosed={closed}
-          />
+          <ServiceSessionPanel conversationId={conversation.id} can={can} hub={target} conversationClosed={closed} />
         </CollapsibleSection>
       )}
 
-      <CollapsibleSection id="hub-customer" title="Cliente" icon="contacts" defaultOpen>
+      <CollapsibleSection id="hub-customer" title="Contato" icon="contacts" defaultOpen>
         <div className="px-4 pb-4">
-          <p className="text-[15px] font-semibold text-text-primary">{item.customer_name || 'Sem nome'}</p>
-          <p className="mt-1 text-[12px] text-text-secondary">
-            {fullContext
-              ? 'Telefone, classificação, anotações e chamado no ERP ficam na caixa completa desta empresa.'
-              : 'Os dados completos do contato não estão liberados para o seu acesso nesta empresa.'}
-          </p>
+          <p className="text-[15px] font-semibold text-text-primary">{card.data?.alias || card.data?.display_name || item.customer_name || 'Sem nome'}</p>
+          {(card.data?.phone_e164 || conv.data?.contact_phone) && <p className="text-[13px] text-text-secondary">{card.data?.phone_e164 || conv.data?.contact_phone}</p>}
+          {card.data?.email && <p className="text-[13px] text-text-secondary">{card.data.email}</p>}
+          {conv.data && <p className="mt-1 text-[12px] text-text-secondary">{CONTACT_KIND_LABEL[kind] ?? kind}</p>}
+          {!can('contact.read') && !can('contact.classify') && (
+            <p className="mt-1 text-[12px] text-text-secondary">Os dados completos do contato não estão liberados para o seu acesso nesta empresa.</p>
+          )}
         </div>
+        {target && contactId && can('contact.classify') && (
+          <section aria-label="Classificar o contato">
+            <ContactDetailsEditor contactId={contactId} target={target} onChanged={refreshContact} />
+            <ContactKindControl
+              contactId={contactId}
+              kind={kind}
+              internalRole={conv.data?.contact_internal_role}
+              contactName={conv.data?.contact_name}
+              target={target}
+              onChanged={refreshContact}
+            />
+          </section>
+        )}
       </CollapsibleSection>
+
+      {target && (can('ticket.create') || can('ticket.read')) && (
+        <CollapsibleSection id="hub-ticket" title="Chamado" icon="tickets" defaultOpen>
+          <section aria-label="Chamado no ERP">
+            <TicketPanel conversationId={conversation.id} target={target} contactCompanyNames={companyNames} conversationUnassigned={conversation.assignment === 'none'} />
+          </section>
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection id="hub-timeline" title="Linha do tempo" icon="tickets" defaultOpen>
         <ol className="space-y-2.5 px-4 pb-4" aria-label="Linha do tempo da conversa">
@@ -105,7 +166,7 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
           {fullContext ? (
             <Button variant="secondary" size="sm" onClick={onOpenFull}>Abrir na caixa completa de {tenantName}</Button>
           ) : (
-            <p className="text-[12px] text-text-secondary">A caixa completa desta empresa não está liberada para você: aqui há conversa e resposta por texto.</p>
+            <p className="text-[12px] text-text-secondary">A caixa completa desta empresa não está liberada para você: aqui há conversa, resposta por texto e o que a sua concessão permite.</p>
           )}
         </div>
       </CollapsibleSection>

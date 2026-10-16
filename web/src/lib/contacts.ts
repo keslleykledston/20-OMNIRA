@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { API_BASE } from './config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session';
+import { scopedHeaders, tenantBase, type DelegatedTarget } from './acting';
 
 // Mirrors ContactItem in internal/contacts/adapters/http.go. The API
 // deliberately omits tenant_id: the session already establishes the tenant.
@@ -227,7 +228,8 @@ export interface ContactPage {
   limit: number;
 }
 
-const contactsBase = () => `${API_BASE}/tenants/${getTenantId()}/contacts`;
+// `target` is the instance a Hub agent works on from the unified inbox (see lib/acting.ts); without it the session's own company.
+const contactsBase = (target?: DelegatedTarget) => `${tenantBase(target)}/contacts`;
 
 async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
   try {
@@ -255,8 +257,8 @@ export const contactsAPI = {
   // Any attending role may classify (conversation.claim); spam is never deleted, it has its own Inbox.
   setKind: (id: string, kind: ContactKind) =>
     call<Contact>(() => axios.patch(`${contactsBase()}/${id}`, { kind }, { headers: authHeaders() })),
-  get: (id: string) =>
-    call<Contact>(() => axios.get(`${contactsBase()}/${id}`, { headers: authHeaders() })),
+  get: (id: string, target?: DelegatedTarget) =>
+    call<Contact>(() => axios.get(`${contactsBase(target)}/${id}`, { headers: scopedHeaders(target) })),
   conversations: (id: string, cursor?: string, limit?: number) =>
     call<Page<ContactConversation>>(() =>
       axios.get(`${contactsBase()}/${id}/conversations`, {
@@ -286,14 +288,14 @@ export interface ContactNote {
 
 export const contactEditAPI = {
   // Alias (the team's name for the contact; empty clears it) and e-mail. The phone is the identity and is never edited.
-  update: (id: string, body: { alias?: string; email?: string }) =>
-    call<Contact>(() => axios.put(`${contactsBase()}/${id}/details`, body, { headers: authHeaders() })),
-  notes: (id: string) =>
-    call<{ items: ContactNote[] }>(() => axios.get(`${contactsBase()}/${id}/notes`, { headers: authHeaders() })).then((d) => d.items ?? []),
-  addNote: (id: string, body: string) => call<ContactNote>(() => axios.post(`${contactsBase()}/${id}/notes`, { body }, { headers: authHeaders() })),
-  editNote: (id: string, noteId: string, body: string) =>
-    call<ContactNote>(() => axios.put(`${contactsBase()}/${id}/notes/${noteId}`, { body }, { headers: authHeaders() })),
-  deleteNote: (id: string, noteId: string) => call<unknown>(() => axios.delete(`${contactsBase()}/${id}/notes/${noteId}`, { headers: authHeaders() })),
+  update: (id: string, body: { alias?: string; email?: string }, target?: DelegatedTarget) =>
+    call<Contact>(() => axios.put(`${contactsBase(target)}/${id}/details`, body, { headers: scopedHeaders(target) })),
+  notes: (id: string, target?: DelegatedTarget) =>
+    call<{ items: ContactNote[] }>(() => axios.get(`${contactsBase(target)}/${id}/notes`, { headers: scopedHeaders(target) })).then((d) => d.items ?? []),
+  addNote: (id: string, body: string, target?: DelegatedTarget) => call<ContactNote>(() => axios.post(`${contactsBase(target)}/${id}/notes`, { body }, { headers: scopedHeaders(target) })),
+  editNote: (id: string, noteId: string, body: string, target?: DelegatedTarget) =>
+    call<ContactNote>(() => axios.put(`${contactsBase(target)}/${id}/notes/${noteId}`, { body }, { headers: scopedHeaders(target) })),
+  deleteNote: (id: string, noteId: string, target?: DelegatedTarget) => call<unknown>(() => axios.delete(`${contactsBase(target)}/${id}/notes/${noteId}`, { headers: scopedHeaders(target) })),
 };
 
 export function contactEditErrorMessage(err: any): string {
@@ -326,32 +328,32 @@ export const peopleAPI = {
 };
 
 export const classificationAPI = {
-  suggestions: (id: string) =>
-    call<{ items: CompanySuggestion[] }>(() => axios.get(`${contactsBase()}/${id}/company-suggestions`, { headers: authHeaders() })),
-  get: (id: string) =>
-    call<ContactClassification>(() => axios.get(`${contactsBase()}/${id}/classification`, { headers: authHeaders() })),
+  suggestions: (id: string, target?: DelegatedTarget) =>
+    call<{ items: CompanySuggestion[] }>(() => axios.get(`${contactsBase(target)}/${id}/company-suggestions`, { headers: scopedHeaders(target) })),
+  get: (id: string, target?: DelegatedTarget) =>
+    call<ContactClassification>(() => axios.get(`${contactsBase(target)}/${id}/classification`, { headers: scopedHeaders(target) })),
   // Kind and companies change in ONE transaction on the server. `customer` needs at least one company and `internal` needs
   // its `internal_role`.
-  put: (id: string, body: { kind: ContactKind; accounts?: AccountRef[]; end_links?: boolean; internal_role?: InternalRole }) =>
-    call<ContactClassification>(() => axios.put(`${contactsBase()}/${id}/classification`, body, { headers: authHeaders() })),
-  linkAccount: (id: string, ref: AccountRef) =>
-    call<ContactAccountLink>(() => axios.post(`${contactsBase()}/${id}/accounts`, ref, { headers: authHeaders() })),
+  put: (id: string, body: { kind: ContactKind; accounts?: AccountRef[]; end_links?: boolean; internal_role?: InternalRole }, target?: DelegatedTarget) =>
+    call<ContactClassification>(() => axios.put(`${contactsBase(target)}/${id}/classification`, body, { headers: scopedHeaders(target) })),
+  linkAccount: (id: string, ref: AccountRef, target?: DelegatedTarget) =>
+    call<ContactAccountLink>(() => axios.post(`${contactsBase(target)}/${id}/accounts`, ref, { headers: scopedHeaders(target) })),
   // Soft end. The last company of a customer needs `reclassify_to` (other | unclassified).
-  endLink: (id: string, linkId: string, reclassifyTo?: 'other' | 'unclassified') =>
+  endLink: (id: string, linkId: string, reclassifyTo?: 'other' | 'unclassified', target?: DelegatedTarget) =>
     call<ContactClassification>(() =>
-      axios.post(`${contactsBase()}/${id}/accounts/${linkId}/end`, reclassifyTo ? { reclassify_to: reclassifyTo } : {}, { headers: authHeaders() }),
+      axios.post(`${contactsBase(target)}/${id}/accounts/${linkId}/end`, reclassifyTo ? { reclassify_to: reclassifyTo } : {}, { headers: scopedHeaders(target) }),
     ),
-  setPrimary: (id: string, linkId: string) =>
-    call<ContactClassification>(() => axios.post(`${contactsBase()}/${id}/accounts/${linkId}/primary`, {}, { headers: authHeaders() })),
+  setPrimary: (id: string, linkId: string, target?: DelegatedTarget) =>
+    call<ContactClassification>(() => axios.post(`${contactsBase(target)}/${id}/accounts/${linkId}/primary`, {}, { headers: scopedHeaders(target) })),
 };
 
 export const accountDirectoryAPI = {
   // The tenant's provider company directory (active companies only).
-  directory: () =>
-    call<{ items: DirectoryCompany[] }>(() => axios.get(`${API_BASE}/tenants/${getTenantId()}/crm/companies`, { headers: authHeaders() })),
-  localAccounts: (q?: string) =>
+  directory: (target?: DelegatedTarget) =>
+    call<{ items: DirectoryCompany[] }>(() => axios.get(`${tenantBase(target)}/crm/companies`, { headers: scopedHeaders(target) })),
+  localAccounts: (q?: string, target?: DelegatedTarget) =>
     call<{ items: CustomerAccount[] }>(() =>
-      axios.get(`${API_BASE}/tenants/${getTenantId()}/accounts`, { headers: authHeaders(), params: { status: 'active', ...(q ? { q } : {}) } }),
+      axios.get(`${tenantBase(target)}/accounts`, { headers: scopedHeaders(target), params: { status: 'active', ...(q ? { q } : {}) } }),
     ),
 };
 

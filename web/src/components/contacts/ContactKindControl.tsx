@@ -18,6 +18,7 @@ import {
   type InternalRole,
   type RelationshipType,
 } from '../../lib/contacts'
+import type { DelegatedTarget } from '../../lib/acting'
 
 interface Props {
   contactId: string
@@ -27,6 +28,8 @@ interface Props {
   contactName?: string
   /** A Hub agent attending the instance (ADR-0040): no "Interno" (the instance's own call), and companies only from the accounts that already exist (the ERP directory is phase 04b). */
   delegated?: boolean
+  /** The instance a Hub agent works on from the unified inbox (company + Hub). Implies `delegated`. */
+  target?: DelegatedTarget
   /** Called after the API accepted the change, so the parent can refresh what depends on it. */
   onChanged: (kind: ContactKind) => void
 }
@@ -45,7 +48,8 @@ const FIELD =
 // Lets whoever attends say who this contact is (ADR-0018). "Cliente" needs at least one company: it is chosen from the
 // tenant's company directory (the server revalidates it) or from existing accounts, and the contact may belong to several.
 // Spam asks first; it is never deleted, it has its own Inbox, and "Não é spam" there undoes a false positive.
-export function ContactKindControl({ contactId, kind, internalRole, contactName, delegated = false, onChanged }: Props) {
+export function ContactKindControl({ contactId, kind, internalRole, contactName, delegated: delegatedProp = false, target, onChanged }: Props) {
+  const delegated = delegatedProp || !!target
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmSpam, setConfirmSpam] = useState(false)
@@ -59,13 +63,13 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
 
   const loadLinks = useCallback(async () => {
     try {
-      const c = await classificationAPI.get(contactId)
+      const c = await classificationAPI.get(contactId, target)
       setLinks(c.accounts ?? [])
       setRole(c.kind === 'internal' ? (c.internal_role ?? null) : null)
     } catch {
       setLinks([])
     }
-  }, [contactId])
+  }, [contactId, target?.tenantId, target?.hubId])
 
   useEffect(() => {
     if (kind === 'customer' || kind === 'other' || kind === 'internal') void loadLinks()
@@ -112,21 +116,21 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
       setPickingInternal(true)
       return
     }
-    void run(() => classificationAPI.put(contactId, { kind: next }), next)
+    void run(() => classificationAPI.put(contactId, { kind: next }, target), next)
   }
 
   const becomeCustomer = (ref: AccountRef) =>
-    run(() => classificationAPI.put(contactId, { kind: 'customer', accounts: [ref] }), 'customer')
+    run(() => classificationAPI.put(contactId, { kind: 'customer', accounts: [ref] }, target), 'customer')
   // Same kind, other role (or first time internal): one request, the server audits who decided and when.
   const saveInternal = (next: InternalRole) =>
     run(async () => {
-      await classificationAPI.put(contactId, { kind: 'internal', internal_role: next })
+      await classificationAPI.put(contactId, { kind: 'internal', internal_role: next }, target)
       setRole(next)
     }, 'internal')
-  const addCompany = (ref: AccountRef) => run(() => classificationAPI.linkAccount(contactId, ref))
+  const addCompany = (ref: AccountRef) => run(() => classificationAPI.linkAccount(contactId, ref, target))
 
   const remove = (link: ContactAccountLink, reclassifyTo?: 'other' | 'unclassified') =>
-    run(() => classificationAPI.endLink(contactId, link.id, reclassifyTo), reclassifyTo)
+    run(() => classificationAPI.endLink(contactId, link.id, reclassifyTo, target), reclassifyTo)
 
   return (
     <div className="p-4 border-b border-border-subtle" role="group" aria-label="Tipo de contato">
@@ -218,7 +222,7 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
           links={links}
           pending={pending}
           onAdd={() => setPicking('add')}
-          onPrimary={(l) => void run(() => classificationAPI.setPrimary(contactId, l.id))}
+          onPrimary={(l) => void run(() => classificationAPI.setPrimary(contactId, l.id, target))}
           onRemove={(l) => setRemoving(l)}
         />
       )}
@@ -236,6 +240,7 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
       {picking && (
         <CompanyPicker
           contactId={contactId}
+          target={target}
           title={picking === 'add' ? 'Adicionar empresa' : 'Empresa do cliente'}
           hasCompanies={links.length > 0}
           pending={pending}
@@ -345,6 +350,7 @@ function CompanyList({
 // Picks ONE company. Directory companies are sent by id only: the server re-reads name, CNPJ and status itself.
 function CompanyPicker({
   contactId,
+  target,
   title,
   hasCompanies,
   pending,
@@ -352,6 +358,7 @@ function CompanyPicker({
   onConfirm,
 }: {
   contactId: string
+  target?: DelegatedTarget
   title: string
   hasCompanies: boolean
   pending: boolean
@@ -374,9 +381,9 @@ function CompanyPicker({
       // the same three sources through the Hub (phase 04b): the instance's ERP directory is read by the server with the instance's own credential, and a
       // source the person's keys or the instance's setup do not offer simply comes back empty
       const [d, a, s] = await Promise.allSettled([
-        accountDirectoryAPI.directory(),
-        accountDirectoryAPI.localAccounts(),
-        classificationAPI.suggestions(contactId),
+        accountDirectoryAPI.directory(target),
+        accountDirectoryAPI.localAccounts(undefined, target),
+        classificationAPI.suggestions(contactId, target),
       ])
       if (!alive) return
       if (s.status === 'fulfilled') setSuggestions((s.value.items ?? []).filter((x) => !x.already_linked))
@@ -388,7 +395,7 @@ function CompanyPicker({
     return () => {
       alive = false
     }
-  }, [contactId])
+  }, [contactId, target?.tenantId, target?.hubId])
 
   const options = useMemo<Option[]>(() => {
     const seen = new Set(directory.map((c) => c.name.trim().toLowerCase()))

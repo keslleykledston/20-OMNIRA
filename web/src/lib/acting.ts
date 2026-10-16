@@ -1,5 +1,6 @@
 import axios from 'axios'
-import { getTenantId } from './session'
+import { API_BASE } from './config'
+import { authHeaders, getTenantId } from './session'
 
 // Delegated serving (ADR-0040). A person who attends an instance only through the Hub works in the SAME workspace as its members, but
 // every request for that instance declares the context it acts in: `X-Omnira-Acting-As: hub:<id>`. The header grants nothing; the server proves
@@ -45,6 +46,26 @@ export function messageMediaUrl(tenantId: string, messageId: string): string {
     ? `/api/v1/hubs/${hub}/serve/${tenantId}/messages/${messageId}/media`
     : `/api/v1/tenants/${tenantId}/messages/${messageId}/media`
 }
+
+/** The instance a conversation of the Hub's unified inbox belongs to, and the Hub it is served through. */
+export interface DelegatedTarget {
+  tenantId: string
+  hubId: string
+}
+
+/** `/tenants/{id}` of the instance a panel works on: the target's company when given (the Hub's unified inbox), otherwise the session's own. */
+export const tenantBase = (target?: DelegatedTarget): string => `${API_BASE}/tenants/${target?.tenantId ?? getTenantId()}`
+
+/**
+ * Headers of a request for the instance a panel works on. In the Hub's unified inbox the session's own tenant is another one, so the request names the instance in
+ * its URL and the Hub in the acting header itself (the global interceptor only adds it for the session's tenant). The header grants nothing: the server proves
+ * hub -> contract -> grant -> key on every request.
+ */
+export const scopedHeaders = (target?: DelegatedTarget, extra: Record<string, string> = {}): Record<string, string> => ({
+  ...authHeaders(),
+  ...(target ? { [ACTING_HEADER]: `hub:${target.hubId}` } : {}),
+  ...extra,
+})
 
 let installed = false
 

@@ -200,7 +200,7 @@ describe('Hub layout contract — queue | conversation | collapsible details', (
     serve();
     await openA();
     const aside = await screen.findByRole('complementary', { name: 'Detalhes do atendimento' });
-    expect(within(aside).getAllByText(/^(Atendimento|Cliente|Linha do tempo|Ações)$/).map((e) => e.textContent)).toEqual(['Atendimento', 'Cliente', 'Linha do tempo', 'Ações']);
+    expect(within(aside).getAllByText(/^(Atendimento|Contato|Linha do tempo|Ações)$/).map((e) => e.textContent)).toEqual(['Atendimento', 'Contato', 'Linha do tempo', 'Ações']);
     expect(aside.querySelectorAll('details')).toHaveLength(4);
     expect(aside).toHaveTextContent('Instância a'); // the company, in full
     expect(aside).toHaveTextContent('Sem responsável');
