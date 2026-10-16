@@ -26,7 +26,7 @@ func (s *svcWorld) claimRoute(withHook bool) http.Handler {
 	if withHook {
 		svc, _, _ := servicectxadapters.Build(s.app, servicectxadapters.Options{})
 		if s.announce {
-			svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+			svc.WithAnnouncer(servicectxadapters.NewNotice(s.app))
 		}
 		hook.Set(servicectxadapters.ClaimHook(s.app, svc))
 	}
@@ -125,7 +125,7 @@ func (s *svcWorld) hubClaimRoute(withHook bool) http.Handler {
 	if withHook {
 		svc, _, _ := servicectxadapters.Build(s.app, servicectxadapters.Options{})
 		if s.announce {
-			svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+			svc.WithAnnouncer(servicectxadapters.NewNotice(s.app))
 		}
 		hook.Set(servicectxadapters.ClaimHook(s.app, svc))
 	}
@@ -208,6 +208,7 @@ func TestTheHubsOwnClaimRouteWithoutTheKeyOrTheHookJustClaims(t *testing.T) {
 // noticeAgent is a Hub agent who may reply and hold the module's keys: the grant AND the contract's ceiling hold them all.
 func (s *svcWorld) noticeAgent(keys ...string) uuid.UUID {
 	s.t.Helper()
+	s.exec(`INSERT INTO tenant_entitlements(tenant_id, capability, enabled) VALUES($1,'service_protocol_notice',true) ON CONFLICT (tenant_id, capability) DO UPDATE SET enabled = true`, s.tenant["A"]) // the company's switch (starts off)
 	s.connect("A")
 	agent := s.hubAgent("notice-agent-" + uuid.NewString()[:6])
 	g := s.grantReply(agent, "A")
@@ -265,7 +266,7 @@ func TestAHubAgentWhoAssumesAConversationTellsTheCustomerItsProtocol(t *testing.
 
 func TestAHubAgentOpeningAndClosingAProtocolInTheDelegatedPaneTellsTheCustomer(t *testing.T) {
 	s := newSvcWorld(t)
-	s.svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+	s.svc.WithAnnouncer(servicectxadapters.NewNotice(s.app))
 	agent := s.noticeAgent(noticeKeys...)
 	s.exec(`UPDATE conversations SET assigned_to_user_id = $2 WHERE id = $1`, s.conv["A"], agent) // the agent holds it
 	r := s.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s.conv["A"]))
@@ -287,7 +288,7 @@ func TestAHubAgentOpeningAndClosingAProtocolInTheDelegatedPaneTellsTheCustomer(t
 
 func TestAHubAgentWithoutTheReplyKeyOrNotHoldingTheConversationOpensButTellsNobody(t *testing.T) {
 	s := newSvcWorld(t)
-	s.svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+	s.svc.WithAnnouncer(servicectxadapters.NewNotice(s.app))
 	noReply := s.noticeAgent("conversation.read", "service.read", "service.create") // no conversation.reply in the grant
 	s.exec(`UPDATE conversations SET assigned_to_user_id = $2 WHERE id = $1`, s.conv["A"], noReply)
 	if r := s.call(noReply, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s.conv["A"])); r.code != http.StatusCreated {
@@ -297,7 +298,7 @@ func TestAHubAgentWithoutTheReplyKeyOrNotHoldingTheConversationOpensButTellsNobo
 		t.Fatalf("no reply key: nothing is sent in the agent's name: %q", got)
 	}
 	s2 := newSvcWorld(t)
-	s2.svc.WithAnnouncer(servicectxadapters.NewNotice(s2.app, nil))
+	s2.svc.WithAnnouncer(servicectxadapters.NewNotice(s2.app))
 	agent := s2.noticeAgent(noticeKeys...) // may reply, but the conversation is nobody's
 	if r := s2.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s2.conv["A"])); r.code != http.StatusCreated {
 		t.Fatalf("open: %d %v", r.code, r.body)

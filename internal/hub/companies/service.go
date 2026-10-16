@@ -145,7 +145,7 @@ func scanCompany(row pgx.Row) (Company, error) {
 	return co, err
 }
 
-// withCapabilities fills the EFFECTIVE value of every known switch (default on).
+// withCapabilities fills the EFFECTIVE value of every known switch (default on, except the ones that start off).
 func withCapabilities(ctx context.Context, q platformdb.Querier, cos []Company) error {
 	if len(cos) == 0 {
 		return nil
@@ -157,7 +157,7 @@ func withCapabilities(ctx context.Context, q platformdb.Querier, cos []Company) 
 		idx[cos[i].ID] = i
 		cos[i].Capabilities = map[string]bool{}
 		for _, c := range entitlements.Registry {
-			cos[i].Capabilities[c.Key] = true
+			cos[i].Capabilities[c.Key] = !c.DefaultOff
 		}
 	}
 	rows, err := q.Query(ctx, `SELECT tenant_id, capability, enabled FROM tenant_entitlements WHERE tenant_id = ANY($1::uuid[])`, ids)
@@ -405,7 +405,10 @@ func (s *Service) Update(ctx context.Context, operator, hub, tenant uuid.UUID, i
 			if err := q.QueryRow(c, `SELECT (SELECT enabled FROM tenant_entitlements WHERE tenant_id = $1 AND capability = $2 FOR UPDATE)`, tenant, cap.Key).Scan(&prev); err != nil {
 				return err
 			}
-			effective := prev == nil || *prev
+			effective := entitlements.DefaultEnabled(cap.Key)
+			if prev != nil {
+				effective = *prev
+			}
 			if _, err := q.Exec(c, `INSERT INTO tenant_entitlements (tenant_id, capability, enabled, updated_by) VALUES ($1, $2, $3, $4)
 			                        ON CONFLICT (tenant_id, capability) DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = now()`,
 				tenant, cap.Key, want, operator); err != nil {

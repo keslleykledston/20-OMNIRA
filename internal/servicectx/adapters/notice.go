@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
+	"github.com/omnira/omnira/internal/entitlements"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	messagesports "github.com/omnira/omnira/internal/messages/ports"
@@ -26,21 +27,18 @@ type Notice struct {
 	store     *messagesadapters.PostgresOutboundStore
 	operator  *messagesapplication.Sender
 	delegated *messagesapplication.DelegatedSender
-	tenants   map[uuid.UUID]bool // empty = every company
+	checker   *entitlements.Checker // the company's own switch (ADR-0038 entitlement service_protocol_notice, off until an operator turns it on)
 }
 
-// NewNotice builds the notice. tenants limits it to those companies (staged roll-out); empty means every company.
-func NewNotice(pool *pgxpool.Pool, tenants []uuid.UUID) *Notice {
+// NewNotice builds the notice. Whether a company gets it is that company's switch (Hub > Instâncias > Capacidades): off by default.
+func NewNotice(pool *pgxpool.Pool) *Notice {
 	store := messagesadapters.NewPostgresOutboundStore(pool)
 	n := &Notice{
 		pool:      pool,
 		store:     store,
 		operator:  messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(pool)),
 		delegated: messagesapplication.NewDelegatedSender(store),
-		tenants:   map[uuid.UUID]bool{},
-	}
-	for _, t := range tenants {
-		n.tenants[t] = true
+		checker:   entitlements.NewChecker(pool),
 	}
 	return n
 }
@@ -53,7 +51,21 @@ func (n *Notice) Closed(ctx context.Context, a ports.Announcement) error {
 	return n.send(ctx, a, "closed", application.RenderProtocolClosed)
 }
 
-func (n *Notice) enabledFor(tenant uuid.UUID) bool { return len(n.tenants) == 0 || n.tenants[tenant] }
+// enabledFor reads the company's switch in a system session of that company: a Hub agent's own session cannot read another company's switches, and a failed read
+// fails closed (nobody is messaged on a guess).
+func (n *Notice) enabledFor(ctx context.Context, tenant uuid.UUID) bool {
+	on := false
+	err := platformdb.WithSystemTenantSession(ctx, n.pool, tenant, func(c context.Context) error {
+		var e error
+		on, e = n.checker.Enabled(c, tenant, entitlements.ServiceProtocolNotice)
+		return e
+	})
+	if err != nil {
+		log.Printf("service-context: the protocol notice switch of company %s could not be read: %v", tenant, err)
+		return false
+	}
+	return on
+}
 
 // notSent are the refusals that only mean "the customer is not told now": a closed window, no text channel, a conversation that is not the person's.
 func notSent(err error) bool {
@@ -69,7 +81,7 @@ func notSent(err error) bool {
 }
 
 func (n *Notice) send(ctx context.Context, a ports.Announcement, kind string, render func(name, protocol string) string) error {
-	if !n.enabledFor(a.TenantID) || a.ConversationID == uuid.Nil || a.SessionID == uuid.Nil {
+	if !n.enabledFor(ctx, a.TenantID) || a.ConversationID == uuid.Nil || a.SessionID == uuid.Nil {
 		return nil
 	}
 	key := "service-" + kind + "-" + a.SessionID.String()
@@ -118,7 +130,7 @@ func FinalizeNotice(pool *pgxpool.Pool, notice *Notice) attendanceapplication.Se
 	repo := NewPostgresRepository(pool)
 	return func(ctx context.Context, conversationID, actor uuid.UUID, delegated bool) {
 		tc, err := tenancydomain.FromContext(ctx)
-		if err != nil || notice == nil || !notice.enabledFor(tc.TenantID) {
+		if err != nil || notice == nil || !notice.enabledFor(ctx, tc.TenantID) {
 			return
 		}
 		err = platformdb.WithSavepoint(ctx, pool, func(ctx context.Context) error {

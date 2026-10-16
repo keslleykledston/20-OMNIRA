@@ -41,15 +41,24 @@ func (s *stack) told(conv uuid.UUID) (out []string) {
 	return out
 }
 
-func (s *stack) announceTo(tenants ...uuid.UUID) *adapters.Notice {
-	n := adapters.NewNotice(s.env.App, tenants)
+// switchNotice records the company's own decision on the capability (what the Hub's "Capacidades" does).
+func (s *stack) switchNotice(tenant uuid.UUID, on bool) {
+	s.t.Helper()
+	s.exec(`INSERT INTO tenant_entitlements(tenant_id, capability, enabled) VALUES($1,'service_protocol_notice',$2)
+	        ON CONFLICT (tenant_id, capability) DO UPDATE SET enabled = EXCLUDED.enabled`, tenant, on)
+}
+
+// announce installs the notice and turns the company's switch ON (it starts off).
+func (s *stack) announce() *adapters.Notice {
+	n := adapters.NewNotice(s.env.App)
 	s.svc.WithAnnouncer(n)
+	s.switchNotice(s.env.TenantA, true)
 	return n
 }
 
 func TestTheCustomerIsToldWhenTheProtocolOpensAndEnds(t *testing.T) {
 	s := newStack(t)
-	s.announceTo()
+	s.announce()
 	conv, _ := s.conversation()
 	s.withLine(conv, "waha", "unofficial")
 	s.assign(conv, s.agent)
@@ -77,39 +86,39 @@ func TestTheCustomerIsToldWhenTheProtocolOpensAndEnds(t *testing.T) {
 	}
 }
 
-func TestNothingIsSentWhenTheNoticeIsOffOrNotForThisCompany(t *testing.T) {
+func TestNothingIsSentUntilTheCompanyTurnsItsSwitchOn(t *testing.T) {
 	s := newStack(t)
-	conv, _ := s.conversation()
-	s.withLine(conv, "waha", "unofficial")
-	s.assign(conv, s.agent)
-	sess := s.mustOpen(s.agent, conv) // no announcer installed
-	if _, err := s.closeSession(s.agent, sess.ID, domain.CloseInput{ResolutionCode: domain.ResInformationProvided}, sess.Version); err != nil {
-		t.Fatal(err)
+	talk := func() uuid.UUID {
+		conv, _ := s.conversation()
+		s.withLine(conv, "waha", "unofficial")
+		s.assign(conv, s.agent)
+		s.mustOpen(s.agent, conv)
+		return conv
 	}
-	if got := s.told(conv); len(got) != 0 {
-		t.Fatalf("off: %q", got)
+	talk() // no announcer installed at all
+	s.svc.WithAnnouncer(adapters.NewNotice(s.env.App))
+	if got := s.told(talk()); len(got) != 0 {
+		t.Fatalf("the switch starts OFF: %q", got)
 	}
-	s.announceTo(uuid.New()) // another company only
-	conv2, _ := s.conversation()
-	s.withLine(conv2, "waha", "unofficial")
-	s.assign(conv2, s.agent)
-	s.mustOpen(s.agent, conv2)
-	if got := s.told(conv2); len(got) != 0 {
-		t.Fatalf("not listed: %q", got)
+	s.switchNotice(s.env.TenantA, false)
+	if got := s.told(talk()); len(got) != 0 {
+		t.Fatalf("switched off: %q", got)
 	}
-	s.announceTo(s.env.TenantA)
-	conv3, _ := s.conversation()
-	s.withLine(conv3, "waha", "unofficial")
-	s.assign(conv3, s.agent)
-	s.mustOpen(s.agent, conv3)
-	if got := s.told(conv3); len(got) != 1 {
-		t.Fatalf("listed: %q", got)
+	s.switchNotice(s.env.TenantA, true)
+	if got := s.told(talk()); len(got) != 1 {
+		t.Fatalf("switched on: %q", got)
+	}
+	// another company's decision is not this one's
+	s.switchNotice(s.env.TenantA, false)
+	s.switchNotice(s.env.TenantB, true)
+	if got := s.told(talk()); len(got) != 0 {
+		t.Fatalf("only the company that turned it on is messaging: %q", got)
 	}
 }
 
 func TestTheProtocolOpensEvenWhenTheCustomerCannotBeTold(t *testing.T) {
 	s := newStack(t)
-	s.announceTo()
+	s.announce()
 	// no line at all
 	noLine, _ := s.conversation()
 	s.assign(noLine, s.agent)
@@ -138,7 +147,7 @@ func TestTheProtocolOpensEvenWhenTheCustomerCannotBeTold(t *testing.T) {
 
 func TestAssumingAConversationTellsTheCustomerItsProtocol(t *testing.T) {
 	s := newStack(t)
-	s.announceTo()
+	s.announce()
 	s.agentProfile(s.agent)
 	conv, _ := s.conversation()
 	s.withLine(conv, "waha", "unofficial")
@@ -154,7 +163,7 @@ func TestAssumingAConversationTellsTheCustomerItsProtocol(t *testing.T) {
 
 func TestFinalizingTellsTheCustomerTheProtocolEndsBeforeTheConversationCloses(t *testing.T) {
 	s := newStack(t)
-	notice := s.announceTo()
+	notice := s.announce()
 	conv, _ := s.conversation()
 	s.withLine(conv, "waha", "unofficial")
 	s.assign(conv, s.agent)
@@ -184,7 +193,7 @@ func TestFinalizingTellsTheCustomerTheProtocolEndsBeforeTheConversationCloses(t 
 
 func TestFinalizingAConversationWithoutAProtocolTellsNobody(t *testing.T) {
 	s := newStack(t)
-	notice := s.announceTo()
+	notice := s.announce()
 	conv, _ := s.conversation()
 	s.withLine(conv, "waha", "unofficial")
 	s.assign(conv, s.agent)

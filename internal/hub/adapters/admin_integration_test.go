@@ -207,8 +207,8 @@ func TestHubAdmin_CreateCompany(t *testing.T) {
 			t.Fatalf("%+v", co)
 		}
 		for _, c := range entitlements.Registry {
-			if !co.Capabilities[c.Key] {
-				t.Errorf("a new company starts with every capability on, %s is off", c.Key)
+			if co.Capabilities[c.Key] == c.DefaultOff {
+				t.Errorf("a new company starts with every capability on (except the ones that start off), %s is %v", c.Key, co.Capabilities[c.Key])
 			}
 		}
 		if w.count(`SELECT count(*) FROM queues WHERE tenant_id = $1 AND is_default AND mode = 'manual'`, co.ID) != 1 {
@@ -521,5 +521,55 @@ func TestHubAdmin_TheServiceRefusesOnItsOwn(t *testing.T) {
 	}
 	if _, _, err := svc.Create(w.ctx, op, w.hub, companies.CreateInput{LegalName: "Valid Name"}, "short"); !errors.Is(err, companies.ErrInvalid) {
 		t.Errorf("short key: %v", err)
+	}
+}
+
+// The notice of the service protocol messages customers, so it is the one switch that starts OFF: a company gets it only when an operator turns it on.
+func TestHubAdmin_TheProtocolNoticeStartsOffAndTheOperatorTurnsItOnPerCompany(t *testing.T) {
+	w := newWorld(t)
+	api := newAdminAPI(t, w)
+	op := w.operator("op", true, true)
+	base := "/api/v1/hubs/" + w.hub.String() + "/companies/"
+	checker := entitlements.NewChecker(w.app)
+	member := w.user("member-of-A")
+	w.directMember(member, "A")
+	enabled := func(tenantKey string) bool {
+		var ok bool
+		w.must(platformdb.WithSystemTenantSession(w.ctx, w.app, w.tenant[tenantKey], func(c context.Context) error {
+			var err error
+			ok, err = checker.Enabled(c, w.tenant[tenantKey], entitlements.ServiceProtocolNotice)
+			return err
+		}))
+		return ok
+	}
+	_, items := api.list(op, w.hub)
+	for _, it := range items {
+		if it.Capabilities[entitlements.ServiceProtocolNotice] {
+			t.Fatalf("%s: the notice starts OFF while every other switch starts on: %+v", it.DisplayName, it.Capabilities)
+		}
+		if !it.Capabilities[entitlements.ERPCRM] {
+			t.Fatalf("%s: the other switches are unchanged: %+v", it.DisplayName, it.Capabilities)
+		}
+	}
+	if enabled("A") {
+		t.Fatal("no decision yet: the notice is off")
+	}
+	code, body, _ := api.call("PATCH", base+w.tenant["A"].String(), op, map[string]any{"capabilities": map[string]bool{entitlements.ServiceProtocolNotice: true}}, nil)
+	if code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	var co companyJSON
+	w.must(json.Unmarshal([]byte(body), &co))
+	if !co.Capabilities[entitlements.ServiceProtocolNotice] || !co.Capabilities[entitlements.WhatsAppChannel] {
+		t.Fatalf("effective switches: %+v", co.Capabilities)
+	}
+	if !enabled("A") || enabled("B") {
+		t.Fatal("turned on for A only")
+	}
+	if w.count(`SELECT count(*) FROM audit_events WHERE tenant_id = $1 AND action = 'platform.company.capability_changed' AND metadata->>'capability' = 'service_protocol_notice' AND metadata->>'from' = 'false' AND metadata->>'to' = 'true'`, w.tenant["A"]) != 1 {
+		t.Error("the change is audited as off -> on")
+	}
+	if code, _, _ := api.call("PATCH", base+w.tenant["A"].String(), op, map[string]any{"capabilities": map[string]bool{entitlements.ServiceProtocolNotice: false}}, nil); code != 200 || enabled("A") {
+		t.Error("and it can be turned off again")
 	}
 }

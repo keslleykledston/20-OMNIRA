@@ -22,6 +22,9 @@ const (
 	WhatsAppChannel     = "whatsapp_channel"
 	ERPCRM              = "erp_crm"
 	OutboundAttachments = "outbound_attachments"
+	// ServiceProtocolNotice tells the customer, in the conversation, when the service protocol opens and ends (ADR-0049 addendum). It messages customers, so it is
+	// the one switch that starts OFF: a company gets it only when an operator turns it on.
+	ServiceProtocolNotice = "service_protocol_notice"
 )
 
 // ErrDisabled: the company's operator has switched this capability off.
@@ -33,16 +36,20 @@ type Capability struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
 	Gates       string `json:"gates"`
+	// DefaultOff marks a switch that starts OFF (no row = disabled). Every other switch starts on, so existing companies keep everything they have.
+	DefaultOff bool `json:"default_off,omitempty"`
 }
 
 // Registry is the closed list of switches. Adding one means adding a gate in the code that enforces it.
 var Registry = []Capability{
 	{WhatsAppChannel, "Canal WhatsApp", "Conectar linhas de WhatsApp (WAHA e Meta).",
-		"Criar nova conexão de WhatsApp. Conexões e sessões já existentes continuam."},
+		"Criar nova conexão de WhatsApp. Conexões e sessões já existentes continuam.", false},
 	{ERPCRM, "ERP / CRM", "Integrar um sistema de retaguarda (CRM/ERP).",
-		"Criar nova integração de ERP/CRM. Integrações já existentes continuam."},
+		"Criar nova integração de ERP/CRM. Integrações já existentes continuam.", false},
 	{OutboundAttachments, "Anexos de saída", "Enviar arquivos pelo atendimento.",
-		"Enviar e remover anexos no atendimento. Mensagens de texto continuam."},
+		"Enviar e remover anexos no atendimento. Mensagens de texto continuam.", false},
+	{ServiceProtocolNotice, "Aviso de protocolo ao cliente", "Avisar o cliente, na conversa, quando o protocolo de atendimento abre e quando encerra.",
+		"O aviso de início e de fim do protocolo (as mensagens ao cliente). O protocolo em si continua abrindo e encerrando.", true},
 }
 
 func Known(key string) bool {
@@ -54,12 +61,22 @@ func Known(key string) bool {
 	return false
 }
 
+// DefaultEnabled is the value of a switch while no decision exists: on, except the ones marked DefaultOff.
+func DefaultEnabled(key string) bool {
+	for _, c := range Registry {
+		if c.Key == key {
+			return !c.DefaultOff
+		}
+	}
+	return false
+}
+
 // Checker reads the switches with the CALLER's own database session (RLS decides what it may read).
 type Checker struct{ pool *pgxpool.Pool }
 
 func NewChecker(pool *pgxpool.Pool) *Checker { return &Checker{pool: pool} }
 
-// Enabled is true when no decision exists (default on) or the decision is "enabled". An unknown key is never enabled.
+// Enabled is the company's decision, or the switch's default when none exists (on, except the DefaultOff ones). An unknown key is never enabled.
 func (c *Checker) Enabled(ctx context.Context, tenant uuid.UUID, capability string) (bool, error) {
 	if !Known(capability) {
 		return false, nil
@@ -68,7 +85,7 @@ func (c *Checker) Enabled(ctx context.Context, tenant uuid.UUID, capability stri
 	err := platformdb.QuerierFromContext(ctx, c.pool).QueryRow(ctx,
 		`SELECT enabled FROM tenant_entitlements WHERE tenant_id = $1 AND capability = $2`, tenant, capability).Scan(&enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return true, nil
+		return DefaultEnabled(capability), nil
 	}
 	return enabled, err
 }
