@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import clsx from 'clsx';
-import { API_BASE } from '../../lib/config';
-import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
+import { handleUnauthorized, isUnauthorized } from '../../lib/session';
+import { scopedHeaders, tenantBase, type DelegatedTarget } from '../../lib/acting';
 import { Icon } from '../primitives';
 
 interface ConversationSummaryProps {
   conversationId: string;
+  /** The instance a Hub agent works on from the unified inbox (company + Hub); the request names both. */
+  target?: DelegatedTarget;
 }
 
 // PRODUCT.7C1: human-triggered only — never auto-generated on open/change.
@@ -15,7 +17,7 @@ interface ConversationSummaryProps {
 // summary as if it belonged to the new one.
 type Phase = 'idle' | 'loading' | 'success' | 'unavailable' | 'rate_limited';
 
-export default function ConversationSummary({ conversationId }: ConversationSummaryProps) {
+export default function ConversationSummary({ conversationId, target }: ConversationSummaryProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [summary, setSummary] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -30,11 +32,10 @@ export default function ConversationSummary({ conversationId }: ConversationSumm
     setPhase('loading');
     setErrorMessage('');
     try {
-      const tenantId = getTenantId();
       const res = await axios.post(
-        `${API_BASE}/tenants/${tenantId}/conversations/${conversationId}/ai/summary`,
+        `${tenantBase(target)}/conversations/${conversationId}/ai/summary`,
         {},
-        { headers: authHeaders() }
+        { headers: scopedHeaders(target) }
       );
       setSummary(typeof res.data?.summary === 'string' ? res.data.summary : '');
       setPhase('success');

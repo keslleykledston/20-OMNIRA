@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../primitives'
 import { contactEditAPI, contactEditErrorMessage } from '../../lib/contacts'
 import { getTenantId } from '../../lib/session'
+import type { DelegatedTarget } from '../../lib/acting'
 
 const FIELD =
   'w-full rounded-control border border-border-subtle bg-surface px-2 py-1.5 text-xs text-text-primary ' +
@@ -15,11 +16,12 @@ function when(iso: string): string {
 
 // Notes that document the context of this contact for whoever attends next. Internal only: never sent to the contact. Each
 // has its author and time; only the author edits or removes it.
-export function ContactNotes({ contactId }: { contactId: string }) {
-  const tenantId = getTenantId()
+export function ContactNotes({ contactId, target }: { contactId: string; target?: DelegatedTarget }) {
+  // the cache is per instance AND per Hub: what was loaded for one company must never answer for another
+  const tenantId = target ? `${target.hubId}:${target.tenantId}` : getTenantId()
   const qc = useQueryClient()
   const key = ['contact-notes', tenantId, contactId]
-  const notes = useQuery({ queryKey: key, queryFn: () => contactEditAPI.notes(contactId), retry: false })
+  const notes = useQuery({ queryKey: key, queryFn: () => contactEditAPI.notes(contactId, target), retry: false })
   const [draft, setDraft] = useState('')
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null)
   const [error, setError] = useState('')
@@ -28,9 +30,9 @@ export function ContactNotes({ contactId }: { contactId: string }) {
     void qc.invalidateQueries({ queryKey: key })
   }
   const fail = (e: unknown) => setError(contactEditErrorMessage(e))
-  const add = useMutation({ mutationFn: () => contactEditAPI.addNote(contactId, draft.trim()), onSuccess: () => { setDraft(''); refresh() }, onError: fail })
-  const edit = useMutation({ mutationFn: (v: { id: string; body: string }) => contactEditAPI.editNote(contactId, v.id, v.body.trim()), onSuccess: () => { setEditing(null); refresh() }, onError: fail })
-  const remove = useMutation({ mutationFn: (id: string) => contactEditAPI.deleteNote(contactId, id), onSuccess: refresh, onError: fail })
+  const add = useMutation({ mutationFn: () => contactEditAPI.addNote(contactId, draft.trim(), target), onSuccess: () => { setDraft(''); refresh() }, onError: fail })
+  const edit = useMutation({ mutationFn: (v: { id: string; body: string }) => contactEditAPI.editNote(contactId, v.id, v.body.trim(), target), onSuccess: () => { setEditing(null); refresh() }, onError: fail })
+  const remove = useMutation({ mutationFn: (id: string) => contactEditAPI.deleteNote(contactId, id, target), onSuccess: refresh, onError: fail })
 
   // no permission to read notes: the section does not exist
   if (notes.isError) return null

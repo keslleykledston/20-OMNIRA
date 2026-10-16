@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Badge, Skeleton, StatusBadge } from '../primitives'
 import { routingAPI } from '../../lib/sectors'
+import type { DelegatedTarget } from '../../lib/acting'
 import { DECISION_LABELS, ENGINE_STATE_LABELS, METRIC_LABELS, humanDuration, reasonLabel, slaStatus } from '../../lib/attendanceModel'
 
 function when(iso?: string, tz?: string): string {
@@ -14,8 +15,8 @@ function when(iso?: string, tz?: string): string {
 
 // ADR-0044: onde a conversa está (setor, fila, responsável), por que espera, quando pode mudar, as metas de SLA e o histórico de decisões.
 // Só leitura. Sem permissão ou sem motor ligado, mostra o que houver (setor/fila/horário) e some o resto.
-export default function RoutingPanel({ conversationId }: { conversationId: string }) {
-  const q = useQuery({ queryKey: ['conv-routing', conversationId], queryFn: () => routingAPI.conversation(conversationId), retry: false, refetchInterval: 30_000 })
+export default function RoutingPanel({ conversationId, target }: { conversationId: string; target?: DelegatedTarget }) {
+  const q = useQuery({ queryKey: ['conv-routing', target?.hubId, target?.tenantId, conversationId], queryFn: () => routingAPI.conversation(conversationId, target), retry: false, refetchInterval: 30_000 })
   if (q.isLoading) return <Skeleton className="m-4 h-20" />
   if (q.isError || !q.data) return <p className="px-4 pb-4 text-xs text-text-tertiary">O roteamento desta conversa não está disponível agora.</p>
   const r = q.data

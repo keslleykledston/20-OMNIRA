@@ -9,6 +9,11 @@ import ServiceSessionPanel from '../service/ServiceSessionPanel';
 import { TicketPanel } from '../TicketPanel';
 import { ContactKindControl } from '../contacts/ContactKindControl';
 import { ContactDetailsEditor } from '../contacts/ContactDetailsEditor';
+import { ContactNotes } from '../contacts/ContactNotes';
+import ConversationSummary from '../inbox/ConversationSummary';
+import RoutingPanel from '../inbox/RoutingPanel';
+import HistorySearch from '../inbox/HistorySearch';
+import AttendanceMemoryPanel from '../inbox/AttendanceMemoryPanel';
 import { classificationAPI, contactsAPI, CONTACT_KIND_LABEL, type ContactKind } from '../../lib/contacts';
 import { scopedHeaders, tenantBase, type DelegatedTarget } from '../../lib/acting';
 import type { ConversationItem } from '../../types/api';
@@ -149,6 +154,37 @@ export default function HubContextPane({ detail, fullContext, onOpenFull }: Prop
           <section aria-label="Chamado no ERP">
             <TicketPanel conversationId={conversation.id} target={target} contactCompanyNames={companyNames} conversationUnassigned={conversation.assignment === 'none'} />
           </section>
+        </CollapsibleSection>
+      )}
+
+      {target && can('ai.assist') && (
+        <CollapsibleSection id="hub-summary" title="Resumo com IA" icon="sparkles" defaultOpen>
+          <section aria-label="Resumo por IA">
+            <ConversationSummary conversationId={conversation.id} target={target} />
+          </section>
+        </CollapsibleSection>
+      )}
+
+      {target && can('conversation.read') && (
+        <CollapsibleSection id="hub-routing" title="Roteamento e SLA" icon="clock" defaultOpen>
+          <RoutingPanel conversationId={conversation.id} target={target} />
+        </CollapsibleSection>
+      )}
+
+      {target && contactId && can('contact.note') && (
+        <CollapsibleSection id="hub-notes" title="Anotações internas" icon="tickets" defaultOpen>
+          <section aria-label="Anotações">
+            <ContactNotes contactId={contactId} target={target} />
+          </section>
+        </CollapsibleSection>
+      )}
+
+      {target && can('attendance.history') && (
+        <CollapsibleSection id="hub-history" title="Histórico do contato" icon="conversations" defaultOpen>
+          <div>
+            {can('conversation.read') && <HistorySearch conversationId={conversation.id} target={target} />}
+            <AttendanceMemoryPanel conversationId={conversation.id} target={target} canResolve={can('followup.resolve')} />
+          </div>
         </CollapsibleSection>
       )}
 

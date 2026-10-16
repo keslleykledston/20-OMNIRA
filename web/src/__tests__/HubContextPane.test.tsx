@@ -129,4 +129,81 @@ describe('HubContextPane — protocol and tasks through the Hub (ADR-0049)', () 
     expect(await screen.findByText('Contato da empresa B')).toBeInTheDocument()
     expect(screen.queryByText('Contato da empresa A')).not.toBeInTheDocument()
   })
+
+  // ---- slice 2: notes, history and memory, AI summary and routing, for the item's company
+  const SLICE2 = ['conversation.read', 'contact.read', 'contact.note', 'attendance.history', 'followup.resolve', 'ai.assist']
+
+  function serveSlice2() {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith(`/inbox/conversations/${CONV}`)) return { data: conversationOf('customer', 'Matheus') }
+      if (url.endsWith('/contacts/ct-1')) return { data: { id: 'ct-1', display_name: 'Matheus', kind: 'customer' } }
+      if (url.endsWith('/contacts/ct-1/notes')) return { data: { items: [{ id: 'n1', body: 'Prefere ligação', author_name: 'Ana', author_user_id: 'u-9', created_at: '2026-10-15T12:00:00Z', updated_at: '2026-10-15T12:00:00Z', mine: false }] } }
+      if (url.endsWith(`/inbox/conversations/${CONV}/routing`)) return { data: { conversation_id: CONV, status: 'open', sector: { id: 's1', name: 'Financeiro' }, queue: { id: 'q1', name: 'Fila Financeiro' }, sla: [], history: [] } }
+      if (url.endsWith(`/inbox/conversations/${CONV}/attendance-context`)) return { data: { attendances: [], open_follow_ups: [{ id: 'f1', kind: 'promise', text: 'Enviar segunda via', status: 'open', created_at: '2026-10-15T12:00:00Z' }] } }
+      return Promise.reject({ response: { status: 404 } })
+    })
+  }
+
+  it('shows notes, memory and routing of the item\'s company, each request naming that company and the Hub', async () => {
+    serveSlice2()
+    renderAt(<HubContextPane detail={detail(SLICE2)} fullContext={false} onOpenFull={() => {}} />)
+    expect(await screen.findByText('Prefere ligação')).toBeInTheDocument()
+    expect(await screen.findByText('Financeiro')).toBeInTheDocument()
+    expect(await screen.findByText('Enviar segunda via')).toBeInTheDocument()
+    for (const suffix of ['/contacts/ct-1/notes', `/inbox/conversations/${CONV}/routing`, `/inbox/conversations/${CONV}/attendance-context`]) {
+      const call = vi.mocked(axios.get).mock.calls.find(([u]) => String(u).endsWith(suffix))!
+      expect(String(call[0])).toContain(`/tenants/${COMPANY}/`)
+      expect((call[1] as any).headers['X-Omnira-Acting-As']).toBe(`hub:${HUB}`)
+    }
+  })
+
+  it('generates the AI summary through the Hub, and resolves an open item through the Hub', async () => {
+    serveSlice2()
+    vi.mocked(axios.post).mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/ai/summary')) return { data: { summary: 'Cliente pediu segunda via.' } }
+      return { data: {} }
+    })
+    renderAt(<HubContextPane detail={detail(SLICE2)} fullContext={false} onOpenFull={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Gerar resumo/ }))
+    expect(await screen.findByText('Cliente pediu segunda via.')).toBeInTheDocument()
+    const sum = vi.mocked(axios.post).mock.calls.find(([u]) => String(u).endsWith('/ai/summary'))!
+    expect(String(sum[0])).toContain(`/tenants/${COMPANY}/conversations/${CONV}/ai/summary`)
+    expect((sum[2] as any).headers['X-Omnira-Acting-As']).toBe(`hub:${HUB}`)
+  })
+
+  it('offers each of these panels only with its key (and asks nothing without it)', async () => {
+    serveSlice2()
+    renderAt(<HubContextPane detail={detail(['conversation.read', 'contact.read'])} fullContext={false} onOpenFull={() => {}} />)
+    await screen.findByText('Financeiro') // routing needs only conversation.read
+    expect(screen.queryByText('Anotações internas')).not.toBeInTheDocument()
+    expect(screen.queryByText('Resumo com IA')).not.toBeInTheDocument()
+    expect(screen.queryByText('Histórico do contato')).not.toBeInTheDocument()
+    const asked = vi.mocked(axios.get).mock.calls.map(([u]) => String(u))
+    expect(asked.some((u) => u.endsWith('/notes'))).toBe(false)
+    expect(asked.some((u) => u.endsWith('/attendance-context'))).toBe(false)
+  })
+
+  it('the notes of one company never answer for another (Tenant A / Tenant B)', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const ui = (d: HubItemDetail) => (
+      <QueryClientProvider client={client}>
+        <MemoryRouter><HubContextPane detail={d} fullContext={false} onOpenFull={() => {}} /></MemoryRouter>
+      </QueryClientProvider>
+    )
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      const company = String(url).includes('/tenants/company-b/') ? 'B' : 'A'
+      if (url.endsWith('/inbox/conversations/conv-1')) return { data: conversationOf('customer', 'X') }
+      if (url.endsWith('/contacts/ct-1/notes')) {
+        if (company === 'B') return new Promise(() => {}) // B's answer is still on its way: what is on screen meanwhile must not be A's
+        return { data: { items: [{ id: 'nA', body: 'Nota da empresa A', author_name: 'Ana', author_user_id: 'u', created_at: '2026-10-15T12:00:00Z', updated_at: '2026-10-15T12:00:00Z', mine: false }] } }
+      }
+      return Promise.reject({ response: { status: 404 } })
+    })
+    const keys = ['conversation.read', 'contact.note']
+    const view = render(ui(detail(keys, 'company-a')))
+    expect(await screen.findByText('Nota da empresa A')).toBeInTheDocument()
+    view.rerender(ui(detail(keys, 'company-b')))
+    await waitFor(() => expect(vi.mocked(axios.get).mock.calls.some(([u]) => String(u).includes('/tenants/company-b/') && String(u).endsWith('/notes'))).toBe(true))
+    expect(screen.queryByText('Nota da empresa A')).not.toBeInTheDocument()
+  })
 })

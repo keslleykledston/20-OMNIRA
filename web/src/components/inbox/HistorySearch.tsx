@@ -1,17 +1,18 @@
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { attendanceAPI, attendanceErrorMessage, type HistoryHit } from '../../lib/attendance'
+import type { DelegatedTarget } from '../../lib/acting'
 
 const when = (iso: string) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
 
 // Busca por trecho nas mensagens ANTERIORES do mesmo contato (ADR-0020): "o que ele disse da fatura?". Só dispara quando a pessoa
 // pede; nada é carregado ao abrir a conversa. O contato é o da conversa: não há como buscar outro.
-export default function HistorySearch({ conversationId }: { conversationId: string }) {
+export default function HistorySearch({ conversationId, target }: { conversationId: string; target?: DelegatedTarget }) {
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<HistoryHit[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const search = useMutation({
-    mutationFn: (text: string) => attendanceAPI.searchHistory(conversationId, text),
+    mutationFn: (text: string) => attendanceAPI.searchHistory(conversationId, text, 5, target),
     onSuccess: (items) => { setHits(items); setError(null) },
     onError: (err) => { setHits(null); setError(attendanceErrorMessage(err)) },
   })

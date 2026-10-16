@@ -130,12 +130,12 @@ export const attendanceAPI = {
     call<{ changed: boolean; closure?: Closure; farewell?: FarewellState }>(() => axios.post(`${base(target)}/inbox/conversations/${conversationId}/finalize`, body, h(target))),
   suggestClosing: (conversationId: string, target?: DelegatedTarget) =>
     call<ClosingSuggestion>(() => axios.post(`${base(target)}/inbox/conversations/${conversationId}/finalize/suggest`, {}, h(target))),
-  contextOf: (conversationId: string, limit = 5) =>
-    call<AttendanceHistory>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/attendance-context`, { ...h(), params: { limit } })),
-  searchHistory: (conversationId: string, q: string, limit = 5) =>
-    call<{ items: HistoryHit[] }>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/history-search`, { ...h(), params: { q, limit } })).then((r) => r.items),
-  resolveFollowUp: (id: string, body: { status: 'done' | 'dropped'; note?: string }) =>
-    call<FollowUp>(() => axios.post(`${base()}/follow-ups/${id}/resolve`, body, h())),
+  contextOf: (conversationId: string, limit = 5, target?: DelegatedTarget) =>
+    call<AttendanceHistory>(() => axios.get(`${base(target)}/inbox/conversations/${conversationId}/attendance-context`, { ...h(target), params: { limit } })),
+  searchHistory: (conversationId: string, q: string, limit = 5, target?: DelegatedTarget) =>
+    call<{ items: HistoryHit[] }>(() => axios.get(`${base(target)}/inbox/conversations/${conversationId}/history-search`, { ...h(target), params: { q, limit } })).then((r) => r.items),
+  resolveFollowUp: (id: string, body: { status: 'done' | 'dropped'; note?: string }, target?: DelegatedTarget) =>
+    call<FollowUp>(() => axios.post(`${base(target)}/follow-ups/${id}/resolve`, body, h(target))),
 }
 
 // Mensagem para o operador a partir da resposta de erro do backend (nunca expõe detalhes internos).

@@ -9,6 +9,7 @@ import {
   type FollowUp,
 } from '../../lib/attendance'
 import { getTenantId } from '../../lib/session'
+import type { DelegatedTarget } from '../../lib/acting'
 
 const when = (iso: string) => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
 const overdue = (f: FollowUp) => !!f.due_at && new Date(f.due_at).getTime() < Date.now()
@@ -16,18 +17,20 @@ const overdue = (f: FollowUp) => !!f.due_at && new Date(f.due_at).getTime() < Da
 // O que aconteceu antes com o contato desta conversa (ADR-0020): atendimentos anteriores com resumo e o que ficou pendente ou
 // foi prometido. Só leitura, exceto concluir/descartar uma pendência. `canResolve` esconde os botões para quem atende pelo Hub sem a chave
 // followup.resolve (o servidor recusaria); `delegated` separa o cache do contexto de membro (ADR-0040, fase 06).
-export default function AttendanceMemoryPanel({ conversationId, canResolve = true, delegated = false }: { conversationId: string; canResolve?: boolean; delegated?: boolean }) {
-  const tenantId = getTenantId()
+export default function AttendanceMemoryPanel({ conversationId, canResolve = true, delegated: delegatedProp = false, target }: { conversationId: string; canResolve?: boolean; delegated?: boolean; target?: DelegatedTarget }) {
+  const delegated = delegatedProp || !!target
+  // per Hub AND per company in the Hub's unified inbox: what was loaded for one company never answers for another
+  const tenantId = target ? `${target.hubId}:${target.tenantId}` : getTenantId()
   const qc = useQueryClient()
   const [error, setError] = useState<string | null>(null)
   const q = useQuery({
     queryKey: [delegated ? 'attendance-context-delegated' : 'attendance-context', tenantId, conversationId],
-    queryFn: () => attendanceAPI.contextOf(conversationId),
+    queryFn: () => attendanceAPI.contextOf(conversationId, 5, target),
     enabled: !!tenantId && !!conversationId,
     retry: false,
   })
   const resolve = useMutation({
-    mutationFn: (v: { id: string; status: 'done' | 'dropped' }) => attendanceAPI.resolveFollowUp(v.id, { status: v.status }),
+    mutationFn: (v: { id: string; status: 'done' | 'dropped' }) => attendanceAPI.resolveFollowUp(v.id, { status: v.status }, target),
     onSuccess: () => { setError(null); void qc.invalidateQueries({ queryKey: [delegated ? 'attendance-context-delegated' : 'attendance-context', tenantId] }) },
     onError: (err) => setError(attendanceErrorMessage(err)),
   })

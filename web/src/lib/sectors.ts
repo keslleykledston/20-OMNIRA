@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { API_BASE } from './config'
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from './session'
+import { scopedHeaders, tenantBase, type DelegatedTarget } from './acting'
 
 // Cliente da API de setores, horários, escalas, plantões, transbordo e SLA (ADR-0044). Espelha internal/sectors/adapters. A interface chama
 // as agendas de "horários". Nenhuma regra de horário é decidida aqui: o servidor valida e executa.
@@ -215,6 +216,6 @@ export interface ConversationRouting {
 }
 
 export const routingAPI = {
-  conversation: (conversationId: string) =>
-    call<ConversationRouting>(() => axios.get(`${base()}/inbox/conversations/${conversationId}/routing`, h())),
+  conversation: (conversationId: string, target?: DelegatedTarget) =>
+    call<ConversationRouting>(() => axios.get(`${tenantBase(target)}/inbox/conversations/${conversationId}/routing`, { headers: scopedHeaders(target) })),
 }
