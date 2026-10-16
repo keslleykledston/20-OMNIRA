@@ -52,6 +52,7 @@ type Service struct {
 	reconcileAge time.Duration
 	reopenWindow time.Duration
 	metrics      Metrics
+	announcer    ports.Announcer // optional: tells the customer the protocol opened / ended
 }
 
 // Metrics is the counter surface of the module (closed label sets only; never an id or a text). Optional.
@@ -62,6 +63,46 @@ type Metrics interface {
 type noMetrics struct{}
 
 func (noMetrics) Inc(string, ...string) {}
+
+// WithAnnouncer installs how the customer is told that the protocol opened or ended. nil (the default) tells nobody.
+func (s *Service) WithAnnouncer(a ports.Announcer) *Service {
+	s.announcer = a
+	return s
+}
+
+// announceMode maps who is acting to how a customer notice may be queued (ok=false: this caller sends nothing, e.g. a flow or an integration).
+func (c caller) announceMode() (mode ports.AnnounceMode, actor uuid.UUID, ok bool) {
+	switch {
+	case c.system && c.onBehalf != nil:
+		return ports.AnnounceDelegatedSystem, *c.onBehalf, true
+	case !c.system && c.tc.Source == tenancydomain.AccessSourceDirect && c.tc.ActorID != uuid.Nil:
+		return ports.AnnounceMember, c.tc.ActorID, true
+	case !c.system && c.tc.Source == tenancydomain.AccessSourceHubServe && c.tc.ActorID != uuid.Nil:
+		return ports.AnnounceDelegatedServe, c.tc.ActorID, true
+	}
+	return "", uuid.Nil, false
+}
+
+// announce tells the customer about the session, inside a savepoint: the notice is a courtesy, so whatever goes wrong in it leaves the session as it was.
+func (s *Service) announce(ctx context.Context, c caller, sess *domain.Session, closed bool) {
+	if s.announcer == nil || sess == nil || sess.ConversationID == nil {
+		return
+	}
+	mode, actor, ok := c.announceMode()
+	if !ok {
+		return
+	}
+	a := ports.Announcement{TenantID: sess.TenantID, ConversationID: *sess.ConversationID, SessionID: sess.ID, Protocol: sess.Protocol, Actor: actor, Mode: mode}
+	err := s.repo.InSavepoint(ctx, func(ctx context.Context) error {
+		if closed {
+			return s.announcer.Closed(ctx, a)
+		}
+		return s.announcer.Opened(ctx, a)
+	})
+	if err != nil {
+		log.Printf("service-context: telling the customer about protocol %s (closed=%v) failed: %v", sess.Protocol, closed, err) // ids only: no name, no text
+	}
+}
 
 func NewService(repo ports.Repository, authz ports.Authorizer, audit ports.Auditor) *Service {
 	return &Service{repo: repo, authz: authz, audit: audit, events: ports.NopEvents{}, reopenWindow: domain.DefaultReopenWindow, metrics: noMetrics{}, gateways: ports.NotConfigured{}, gatewayTO: 15 * time.Second, reconcileAge: 10 * time.Minute}
@@ -281,6 +322,7 @@ func (s *Service) open(ctx context.Context, c caller, in domain.OpenInput) (Open
 	if err := s.remember(ctx, ports.ScopeSessionOpen, in.IdempotencyKey, hash, sess.ID); err != nil {
 		return OpenResult{}, err
 	}
+	s.announce(ctx, c, sess, false)
 	return OpenResult{Session: sess, Created: true}, nil
 }
 
@@ -642,7 +684,12 @@ func (s *Service) Close(ctx context.Context, id uuid.UUID, raw domain.CloseInput
 	if err := checkVersion(sess, expectedVersion); err != nil {
 		return nil, err
 	}
-	return s.finish(ctx, c, sess, in, domain.SourceOperator, expectedVersion)
+	closed, err := s.finish(ctx, c, sess, in, domain.SourceOperator, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	s.announce(ctx, c, closed, true)
+	return closed, nil
 }
 
 // finish writes the closing of an already locked, version-checked session.

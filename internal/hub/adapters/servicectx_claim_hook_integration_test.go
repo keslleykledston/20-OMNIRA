@@ -4,6 +4,7 @@ package adapters_test
 // the hook on and the agent's grant holds service.create. Claiming never depends on it.
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +25,9 @@ func (s *svcWorld) claimRoute(withHook bool) http.Handler {
 	hook := &claimhook.Hook{}
 	if withHook {
 		svc, _, _ := servicectxadapters.Build(s.app, servicectxadapters.Options{})
+		if s.announce {
+			svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+		}
 		hook.Set(servicectxadapters.ClaimHook(s.app, svc))
 	}
 	dw := adapters.NewDelegatedWrites(s.app).WithClaimHook(hook)
@@ -120,6 +124,9 @@ func (s *svcWorld) hubClaimRoute(withHook bool) http.Handler {
 	hook := &claimhook.Hook{}
 	if withHook {
 		svc, _, _ := servicectxadapters.Build(s.app, servicectxadapters.Options{})
+		if s.announce {
+			svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+		}
 		hook.Set(servicectxadapters.ClaimHook(s.app, svc))
 	}
 	h := adapters.NewHTTPHandler(s.app).WithClaimHook(hook)
@@ -193,5 +200,109 @@ func TestTheHubsOwnClaimRouteWithoutTheKeyOrTheHookJustClaims(t *testing.T) {
 	}
 	if n := s2.count(`SELECT count(*) FROM service_sessions WHERE conversation_id = $1`, s2.conv["A"]); n != 0 {
 		t.Fatalf("hook off: %d", n)
+	}
+}
+
+// ---- the customer is told about the protocol (ADR-0049 addendum) through the Hub too
+
+// noticeAgent is a Hub agent who may reply and hold the module's keys: the grant AND the contract's ceiling hold them all.
+func (s *svcWorld) noticeAgent(keys ...string) uuid.UUID {
+	s.t.Helper()
+	s.connect("A")
+	agent := s.hubAgent("notice-agent-" + uuid.NewString()[:6])
+	g := s.grantReply(agent, "A")
+	s.ceiling("A", keys...)
+	s.grantKeys(g, keys...)
+	return agent
+}
+
+func (s *svcWorld) told(convKey string) (out []string) {
+	s.t.Helper()
+	rows, err := s.owner.Query(s.ctx, `SELECT body FROM messages WHERE conversation_id = $1 AND direction = 'outbound' ORDER BY created_at, id`, s.conv[convKey])
+	s.must(err)
+	defer rows.Close()
+	for rows.Next() {
+		var b string
+		s.must(rows.Scan(&b))
+		out = append(out, b)
+	}
+	return out
+}
+
+var noticeKeys = []string{"conversation.read", "conversation.claim", "conversation.reply", "service.read", "service.create", "service.update", "service.close"}
+
+func TestAHubAgentWhoAssumesAConversationTellsTheCustomerItsProtocol(t *testing.T) {
+	for name, route := range map[string]func(*svcWorld) (http.Handler, func(http.Handler, uuid.UUID) int){
+		"the instance's assign route": func(s *svcWorld) (http.Handler, func(http.Handler, uuid.UUID) int) {
+			return s.claimRoute(true), s.claim
+		},
+		"the Hub's own claim route": func(s *svcWorld) (http.Handler, func(http.Handler, uuid.UUID) int) {
+			return s.hubClaimRoute(true), s.hubClaim
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newSvcWorld(t)
+			s.announce = true
+			agent := s.noticeAgent(noticeKeys...)
+			h, do := route(s)
+			if code := do(h, agent); code != http.StatusOK {
+				t.Fatalf("claim: %d", code)
+			}
+			var protocol string
+			s.must(s.owner.QueryRow(t.Context(), `SELECT protocol FROM service_sessions WHERE conversation_id = $1`, s.conv["A"]).Scan(&protocol))
+			got := s.told("A")
+			if len(got) != 1 || !strings.Contains(got[0], "Protocolo de atendimento: "+protocol) {
+				t.Fatalf("the customer is told the protocol: %q", got)
+			}
+			var by uuid.UUID
+			s.must(s.owner.QueryRow(t.Context(), `SELECT sent_by_user_id FROM messages WHERE conversation_id = $1 AND direction = 'outbound'`, s.conv["A"]).Scan(&by))
+			if by != agent {
+				t.Fatalf("the notice is attributed to the agent who assumed it: %s", by)
+			}
+		})
+	}
+}
+
+func TestAHubAgentOpeningAndClosingAProtocolInTheDelegatedPaneTellsTheCustomer(t *testing.T) {
+	s := newSvcWorld(t)
+	s.svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+	agent := s.noticeAgent(noticeKeys...)
+	s.exec(`UPDATE conversations SET assigned_to_user_id = $2 WHERE id = $1`, s.conv["A"], agent) // the agent holds it
+	r := s.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s.conv["A"]))
+	if r.code != http.StatusCreated {
+		t.Fatalf("open: %d %v", r.code, r.body)
+	}
+	protocol, id := fmt.Sprint(r.body["protocol"]), r.body["id"].(string)
+	if got := s.told("A"); len(got) != 1 || !strings.Contains(got[0], "Seu atendimento foi registrado") || !strings.Contains(got[0], protocol) {
+		t.Fatalf("opening notice through the delegated session: %q", got)
+	}
+	version := fmt.Sprint(r.body["version"])
+	if c := s.call(agent, "A", true, "POST", "/service-sessions/"+id+"/close", `{"resolution_code":"information_provided"}`, "If-Match", `"`+version+`"`); c.code != http.StatusOK {
+		t.Fatalf("close: %d %v", c.code, c.body)
+	}
+	if got := s.told("A"); len(got) != 2 || !strings.Contains(got[1], "Seu atendimento foi encerrado") || !strings.Contains(got[1], protocol) {
+		t.Fatalf("closing notice: %q", got)
+	}
+}
+
+func TestAHubAgentWithoutTheReplyKeyOrNotHoldingTheConversationOpensButTellsNobody(t *testing.T) {
+	s := newSvcWorld(t)
+	s.svc.WithAnnouncer(servicectxadapters.NewNotice(s.app, nil))
+	noReply := s.noticeAgent("conversation.read", "service.read", "service.create") // no conversation.reply in the grant
+	s.exec(`UPDATE conversations SET assigned_to_user_id = $2 WHERE id = $1`, s.conv["A"], noReply)
+	if r := s.call(noReply, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s.conv["A"])); r.code != http.StatusCreated {
+		t.Fatalf("open without the reply key: %d %v", r.code, r.body)
+	}
+	if got := s.told("A"); len(got) != 0 {
+		t.Fatalf("no reply key: nothing is sent in the agent's name: %q", got)
+	}
+	s2 := newSvcWorld(t)
+	s2.svc.WithAnnouncer(servicectxadapters.NewNotice(s2.app, nil))
+	agent := s2.noticeAgent(noticeKeys...) // may reply, but the conversation is nobody's
+	if r := s2.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s2.conv["A"])); r.code != http.StatusCreated {
+		t.Fatalf("open: %d %v", r.code, r.body)
+	}
+	if got := s2.told("A"); len(got) != 0 {
+		t.Fatalf("not the holder: %q", got)
 	}
 }

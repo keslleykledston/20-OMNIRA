@@ -283,3 +283,31 @@ type ContextRepository interface {
 	// customer rule as the open cases.
 	ExternalRecordsForContext(ctx context.Context, contactID uuid.UUID, customerID *uuid.UUID, needsSelection bool, limit int) ([]domain.ExternalRecord, error)
 }
+
+// AnnounceMode says how the customer's notice may be queued, which depends on who acts: a member (the ordinary operator sender, in the member's own session), a
+// Hub agent inside the Hub's write path (a system session already scoped to the company, acting for the agent), or a Hub agent in the delegated request session
+// (which cannot write messages: the notice is queued in its own system session after the key conversation.reply is proven).
+type AnnounceMode string
+
+const (
+	AnnounceMember          AnnounceMode = "member"
+	AnnounceDelegatedSystem AnnounceMode = "delegated_system"
+	AnnounceDelegatedServe  AnnounceMode = "delegated_serve"
+)
+
+// Announcement is what the customer is told about a protocol.
+type Announcement struct {
+	TenantID       uuid.UUID
+	ConversationID uuid.UUID
+	SessionID      uuid.UUID
+	Protocol       string
+	Actor          uuid.UUID
+	Mode           AnnounceMode
+}
+
+// Announcer tells the customer, in the conversation, that the protocol opened or ended (ADR-0049 addendum). It is optional and best-effort: a refusal (closed
+// window, no channel, not the holder) is not an error, and the Service never lets a failure undo the session.
+type Announcer interface {
+	Opened(ctx context.Context, a Announcement) error
+	Closed(ctx context.Context, a Announcement) error
+}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -373,6 +374,24 @@ func main() {
 		}
 		if cfg.ServiceAutoOpenOnClaimEnabled {
 			srv.ClaimHook().Set(servicectxadapters.ClaimHook(dbPool, serviceSvc)) // ADR-0049: assuming a conversation opens its protocol
+		}
+		if cfg.ServiceProtocolNoticeEnabled {
+			// ADR-0049 addendum: the customer is told, in the conversation, when the protocol opens and when it ends (a company list limits the roll-out)
+			var noticeTenants []uuid.UUID
+			for _, raw := range strings.Split(cfg.ServiceProtocolNoticeTenants, ",") {
+				if raw = strings.TrimSpace(raw); raw == "" {
+					continue
+				}
+				id, err := uuid.Parse(raw)
+				if err != nil {
+					log.Fatalf("OMNIRA_SERVICE_PROTOCOL_NOTICE_TENANTS: %q is not a company id", raw)
+				}
+				noticeTenants = append(noticeTenants, id)
+			}
+			notice := servicectxadapters.NewNotice(dbPool, noticeTenants)
+			serviceSvc.WithAnnouncer(notice)
+			attendanceService.WithSessionNotice(servicectxadapters.FinalizeNotice(dbPool, notice))
+			log.Printf("Service protocol notice enabled (companies: %d listed; 0 = all)\n", len(noticeTenants))
 		}
 		srv.RegisterServiceContextHandlers(dbPool, serviceHandler)
 		log.Printf("Service Context & Operations API enabled (OMNIRA_SERVICE_CONTEXT_ENABLED=true, finalize hook=%v, auto-open on claim=%v)\n", cfg.ServiceFinalizeHookEnabled, cfg.ServiceAutoOpenOnClaimEnabled)

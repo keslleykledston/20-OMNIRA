@@ -90,6 +90,11 @@ type Config struct {
 	// ServiceAutoOpenOnClaimEnabled opens the conversation's service session (the protocol) when a person assumes the conversation: a member's self-claim, or a Hub
 	// agent's claim in the workspace. Taking the conversation never depends on it. Needs ServiceContextEnabled.
 	ServiceAutoOpenOnClaimEnabled bool
+	// ServiceProtocolNoticeEnabled tells the customer, in the conversation, when the protocol opens and when it ends (ADR-0049 addendum). Off by default: it sends
+	// messages to customers. Needs ServiceContextEnabled.
+	ServiceProtocolNoticeEnabled bool
+	// ServiceProtocolNoticeTenants limits the notice to these companies (comma-separated ids); empty = every company.
+	ServiceProtocolNoticeTenants string
 	// ServiceExternalOrdersEnabled mounts the routes that ask the ERP/CRM to create a service order and to reconcile one (ADR-0049 phase 4). Off by default; also needs a
 	// gateway adapter for the company's integration, otherwise those routes answer 503 not_configured.
 	ServiceExternalOrdersEnabled bool
@@ -221,6 +226,8 @@ func Load() *Config {
 		ServiceContextEnabled:         getEnv("OMNIRA_SERVICE_CONTEXT_ENABLED", "false") == "true",
 		ServiceFinalizeHookEnabled:    getEnv("OMNIRA_SERVICE_FINALIZE_HOOK_ENABLED", "false") == "true",
 		ServiceAutoOpenOnClaimEnabled: getEnv("OMNIRA_SERVICE_AUTO_OPEN_ON_CLAIM_ENABLED", "false") == "true",
+		ServiceProtocolNoticeEnabled:  getEnv("OMNIRA_SERVICE_PROTOCOL_NOTICE_ENABLED", "false") == "true",
+		ServiceProtocolNoticeTenants:  getEnv("OMNIRA_SERVICE_PROTOCOL_NOTICE_TENANTS", ""),
 		ServiceExternalOrdersEnabled:  getEnv("OMNIRA_SERVICE_EXTERNAL_ORDERS_ENABLED", "false") == "true",
 		FlowsEnabled:                  getEnv("OMNIRA_FLOWS_ENABLED", "false") == "true",
 		FlowsAIEnabled:                getEnv("OMNIRA_FLOWS_AI_ENABLED", "false") == "true",

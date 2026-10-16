@@ -40,6 +40,8 @@ type Service struct {
 	// nil = this deployment cannot send it (the state says so, finalizing still works).
 	memberNotice func(ctx context.Context, conversationID uuid.UUID, text, key string) (domain.FarewellState, error)
 	agentNotice  func(ctx context.Context, agent, conversationID uuid.UUID, text, key string) (domain.FarewellState, error)
+	// sessionNotice, when set, tells the customer that the attendance's protocol ends (ADR-0049 addendum). nil = nobody is told.
+	sessionNotice SessionNotice
 	// sessionCloser, when set, closes the conversation's service session in the finalize transaction (ADR-0049). nil = the service-context module is not on.
 	sessionCloser SessionCloser
 }
@@ -49,6 +51,17 @@ type Service struct {
 // locked and closed; the installer is responsible for making its failure harmless to the finalization (a savepoint), because ending the attendance never waits
 // on the optional module.
 type SessionCloser func(ctx context.Context, conversationID uuid.UUID, reason string, source string, actor uuid.UUID) error
+
+// SessionNotice tells the customer, in the conversation, that the attendance's protocol ends. It is called INSIDE the finalize transaction BEFORE the conversation
+// is marked closed (a closed conversation refuses outbound text), by a person (delegated=false: a member; true: a Hub agent in the Hub's write path). The installer
+// makes its failure harmless (a savepoint): ending the attendance never waits on a courtesy.
+type SessionNotice func(ctx context.Context, conversationID, actor uuid.UUID, delegated bool)
+
+// WithSessionNotice installs the hook that tells the customer the protocol ends. nil keeps finalizing exactly as before.
+func (s *Service) WithSessionNotice(n SessionNotice) *Service {
+	s.sessionNotice = n
+	return s
+}
 
 // WithSessionCloser installs the service-context hook (ADR-0049). nil keeps finalizing exactly as before.
 func (s *Service) WithSessionCloser(c SessionCloser) *Service {
@@ -250,6 +263,10 @@ func (s *Service) Finalize(ctx context.Context, raw domain.FinalizeInput) (Final
 			return FinalizeResult{}, errors.Join(domain.ErrInvalid, errors.New("a follow-up owner is not an active member of this tenant"))
 		}
 	}
+	// the protocol notice goes first: the farewell the person wrote is the last word the customer reads
+	if s.sessionNotice != nil {
+		s.sessionNotice(ctx, in.ConversationID, tc.ActorID, false)
+	}
 	farewell := domain.FarewellNotRequested
 	if in.Farewell != "" {
 		farewell = domain.FarewellUnavailable
@@ -349,6 +366,10 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 		if !ok {
 			return FinalizeResult{}, errors.Join(domain.ErrInvalid, errors.New("a follow-up owner is not an active member of this tenant"))
 		}
+	}
+	// the protocol notice goes first (the farewell is the last word); for a Hub agent only when the key conversation.reply was proven by the caller
+	if s.sessionNotice != nil && mayNotify {
+		s.sessionNotice(ctx, in.ConversationID, agent, true)
 	}
 	farewell := domain.FarewellNotRequested
 	if in.Farewell != "" {

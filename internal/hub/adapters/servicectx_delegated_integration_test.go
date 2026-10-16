@@ -19,6 +19,7 @@ import (
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	servicectxadapters "github.com/omnira/omnira/internal/servicectx/adapters"
+	servicectxapplication "github.com/omnira/omnira/internal/servicectx/application"
 	"github.com/omnira/omnira/internal/servicectx/domain"
 	"github.com/omnira/omnira/internal/servicectx/gatewaytest"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
@@ -30,6 +31,9 @@ type svcWorld struct {
 	*world
 	gw  *gatewaytest.Fake
 	mux http.Handler
+	svc *servicectxapplication.Service // the service behind mux (a test may give it an announcer)
+	// announce makes the claim routes of the tests build their service with the customer notice (ADR-0049 addendum)
+	announce bool
 }
 
 func newSvcWorld(t *testing.T) *svcWorld {
@@ -38,12 +42,12 @@ func newSvcWorld(t *testing.T) *svcWorld {
 	tenancyadapters.EnableDelegatedServing(true)
 	t.Cleanup(func() { tenancyadapters.EnableDelegatedServing(false) })
 	gw := gatewaytest.New()
-	_, _, h := servicectxadapters.Build(w.app, servicectxadapters.Options{ExternalOrders: true, Gateways: gatewaytest.Resolver{F: gw}})
+	svc, _, h := servicectxadapters.Build(w.app, servicectxadapters.Options{ExternalOrders: true, Gateways: gatewaytest.Resolver{F: gw}})
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(w.app), tenancyadapters.NewPostgresTenantRepository(w.app))
 	mw := tenancyadapters.AuthorizationMiddleware(w.app, authz)
 	inner := http.NewServeMux()
 	h.Routes(inner, func(fn http.HandlerFunc) http.Handler { return mw(fn) }, tenancyadapters.Delegable)
-	sw := &svcWorld{world: w, gw: gw}
+	sw := &svcWorld{world: w, gw: gw, svc: svc}
 	sw.mux = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if u := r.Header.Get("X-Test-User"); u != "" {
 			id, _ := uuid.Parse(u)
