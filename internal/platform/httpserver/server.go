@@ -511,7 +511,7 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 	}
 	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
 	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
-	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI).WithAccessAPI(accessAPI)
+	h := hubadapters.NewHTTPHandler(dbPool).WithAdminAPI(adminAPI).WithAccessAPI(accessAPI).WithClaimHook(&s.claimHook)
 	if s.natsConn != nil {
 		// the change signal of the aggregated tab (no content; see hub/adapters/events.go). Authentication only: a stream never sits behind the request transaction.
 		h = h.WithEvents(s.natsConn, hubadapters.EventsOptions{SessionRecheck: s.streamCredentialRecheck()})

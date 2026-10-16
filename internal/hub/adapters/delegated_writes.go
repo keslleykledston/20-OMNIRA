@@ -133,11 +133,18 @@ func (d *DelegatedWrites) afterClaim(ctx context.Context, tc *tenancydomain.Tena
 		}
 		return
 	}
-	err := d.reply.Act(ctx, tc.ActorID, t, "hub.service.session_opened_on_claim", func(c context.Context, _ *uuid.UUID, closed bool) (map[string]any, error) {
+	openProtocolOnClaim(ctx, d.reply, d.onClaim, t, tc.ActorID)
+}
+
+// openProtocolOnClaim runs the claim hook in the Hub's write path, with the delegation re-proven under the conversation lock, and audits what it did naming
+// the hub, grant and contract. Both doors a Hub agent takes to assume a conversation (the instance's assign route and the Hub's own claim route) end here.
+// Nothing here can fail the claim, which already stands. The caller has proven the key service.create.
+func openProtocolOnClaim(ctx context.Context, reply *replying.Service, hook *claimhook.Hook, t *replying.Target, actor uuid.UUID) {
+	err := reply.Act(ctx, actor, t, "hub.service.session_opened_on_claim", func(c context.Context, _ *uuid.UUID, closed bool) (map[string]any, error) {
 		if closed {
 			return nil, nil
 		}
-		created, err := d.onClaim.Run(c, t.Item.ConversationID, tc.ActorID)
+		created, err := hook.Run(c, t.Item.ConversationID, actor)
 		if err != nil || !created {
 			if err == nil {
 				log.Printf("hub: claim of conversation %s opened no protocol (the module declined: no key, not a customer chat, or already ended)", t.Item.ConversationID)

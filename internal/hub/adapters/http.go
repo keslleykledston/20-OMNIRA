@@ -23,6 +23,7 @@ import (
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapp "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
+	"github.com/omnira/omnira/internal/platform/claimhook"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
@@ -54,7 +55,12 @@ type HTTPHandler struct {
 	accessEnabled bool
 	// events is the change signal of the aggregated tab (events.go); nil until WithEvents.
 	events *eventsConfig
+	// onClaim lets an optional module learn that the agent assumed the conversation (ADR-0049); nil: nobody.
+	onClaim *claimhook.Hook
 }
+
+// WithClaimHook installs the hook that runs after an agent claimed a conversation through the Hub's own claim route (the same one the instance's assign route runs).
+func (h *HTTPHandler) WithClaimHook(hook *claimhook.Hook) *HTTPHandler { h.onClaim = hook; return h }
 
 // WithAdminAPI marks the company-management API as mounted (see ListMyHubs).
 func (h *HTTPHandler) WithAdminAPI(enabled bool) *HTTPHandler { h.adminEnabled = enabled; return h }
@@ -669,6 +675,19 @@ func (h *HTTPHandler) ClaimItem(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeReplyError(w, err)
 		return
+	}
+	if changed && h.onClaim.Installed() {
+		// the key is proven here, in the agent's own session, from the grant AND the contract's ceiling (the system session of the write cannot see them)
+		var may bool
+		qerr := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(), `SELECT 'service.create' = ANY (delegated_permissions($1, $2, $3))`, t.Item.TenantID, sc.actor, sc.hub).Scan(&may)
+		switch {
+		case qerr != nil:
+			log.Printf("hub: claim hook permission check of conversation %s failed: %v", t.Item.ConversationID, qerr)
+		case !may:
+			log.Printf("hub: claim of conversation %s opened no protocol: the agent's grant lacks service.create", t.Item.ConversationID)
+		default:
+			openProtocolOnClaim(r.Context(), h.reply, h.onClaim, t, sc.actor)
+		}
 	}
 	writeJSON(w, map[string]any{"item_id": t.Item.ID, "conversation_id": t.Item.ConversationID, "changed": changed,
 		"tenant": map[string]any{"id": t.Item.TenantID, "name": t.TenantName}})
