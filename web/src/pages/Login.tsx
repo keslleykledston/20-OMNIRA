@@ -4,7 +4,7 @@ import { useAuthStore } from '../lib/store'
 import { authAPI, type AuthMode } from '../lib/api'
 import { saveSession } from '../lib/session'
 import { resolveSessionTenant } from '../lib/tenants'
-import { Button, Icon, Input } from '../components/primitives'
+import { Button, Icon, Input, LoadingState } from '../components/primitives'
 import { BrandMark } from '../components/BrandMark'
 import { takeAfterLogin } from '../lib/afterLogin'
 
@@ -25,6 +25,37 @@ const OIDC_ERROR = 'Não foi possível concluir o login. Tente novamente ou cont
 // próprio backend OIDC antes de a página chegar aqui.
 const DEFAULT_AUTHENTICATED_ROUTE = '/inbox'
 
+// Em produção esta página não é um passo a mais: quem já tem sessão cai direto na tela de trabalho e quem não tem vai direto ao login do
+// provedor. Ela só fica na tela quando há algo a dizer: um erro, uma saída que a pessoa acabou de fazer (?reason=signed_out) ou um
+// vaivém (foi ao provedor há instantes e voltou sem entrar): nesses casos mostra o botão em vez de insistir.
+const AUTO_SSO_KEY = 'omnira.sso-auto'
+const AUTO_SSO_RETRY_MS = 30_000
+
+function autoSignInBlocked(): boolean {
+  try {
+    const at = Number(sessionStorage.getItem(AUTO_SSO_KEY))
+    return at > 0 && Date.now() - at < AUTO_SSO_RETRY_MS
+  } catch {
+    return false
+  }
+}
+
+function markAutoSignIn(): void {
+  try {
+    sessionStorage.setItem(AUTO_SSO_KEY, String(Date.now()))
+  } catch {
+    /* storage blocked: only the loop guard is lost */
+  }
+}
+
+function forgetAutoSignIn(): void {
+  try {
+    sessionStorage.removeItem(AUTO_SSO_KEY)
+  } catch {
+    /* nothing was kept */
+  }
+}
+
 export default function Login() {
   const navigate = useNavigate()
   const { setUser, setToken } = useAuthStore()
@@ -32,12 +63,65 @@ export default function Login() {
   const [auth, setAuth] = useState<AuthMode | null>(null)
   const [status, setStatus] = useState<Status>({ kind: 'loading' })
   const [sessionExpired, setSessionExpired] = useState(false)
+  const [signedOut, setSignedOut] = useState(false)
 
   useEffect(() => {
     let active = true
     const params = new URLSearchParams(window.location.search)
-    setSessionExpired(params.get('reason') === 'session_expired')
+    const reason = params.get('reason')
+    setSessionExpired(reason === 'session_expired')
+    setSignedOut(reason === 'signed_out')
     const completeOIDC = params.get('oidc') === 'complete'
+
+    // Whoever has a live session enters (back from the provider, or just opening this address); returns true once this page has handed the
+    // person on (or is going to the provider) and must show nothing else.
+    const enter = async (returning: boolean): Promise<boolean> => {
+      try {
+        const session = await authAPI.session()
+        const { user, tenant } = session.data
+        setUser({ ...user, roles: user.roles ?? [] })
+        // The server proposes the oldest membership; someone in several tenants
+        // gets the one they last chose, if it is still theirs.
+        const tenantId = await resolveSessionTenant(tenant?.id)
+        saveSession('', tenantId, user)
+        forgetAutoSignIn()
+        // Se password_expires_at existe, força troca de senha antes de entrar
+        if (user.password_expires_at) {
+          navigate('/settings/password', { replace: true })
+          return true
+        }
+        // The console (ADR-0041) sent them here to sign in: take them back to the address they wanted (a console address only).
+        const back = takeAfterLogin()
+        if (back && (tenantId || session.data.hub_only)) {
+          window.location.replace(back)
+          return true
+        }
+        // A person who belongs to no company of their own but to a Service Hub signs in too: their place is "Conversas" (the instances the Hub delegated to them).
+        navigate(tenantId || session.data.hub_only ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
+        return true
+      } catch (err: any) {
+        if (!active) return true
+        const code = err.response?.status
+        if (code === 403) {
+          navigate('/no-access', { replace: true })
+          return true
+        }
+        if (returning) {
+          console.error('OIDC session error:', err)
+          setStatus({ kind: 'error', message: OIDC_ERROR })
+          return true
+        }
+        // No session: straight to the provider's sign-in, unless that was just tried (then the button is shown).
+        if (code === 401 && !autoSignInBlocked()) {
+          markAutoSignIn()
+          setStatus({ kind: 'redirecting' })
+          authAPI.startOIDC()
+          return true
+        }
+        // Could not tell (network, server): say nothing wrong, offer the button.
+        return false
+      }
+    }
 
     authAPI
       .mode()
@@ -45,39 +129,10 @@ export default function Login() {
         if (!active) return
         setAuth(data)
 
-        if (data.mode === 'oidc' && completeOIDC) {
-          try {
-            const session = await authAPI.session()
-            const { user, tenant } = session.data
-            setUser({ ...user, roles: user.roles ?? [] })
-            // The server proposes the oldest membership; someone in several tenants
-            // gets the one they last chose, if it is still theirs.
-            const tenantId = await resolveSessionTenant(tenant?.id)
-            saveSession('', tenantId, user)
-            // Se password_expires_at existe, força troca de senha antes de entrar
-            if (user.password_expires_at) {
-              navigate('/settings/password', { replace: true })
-              return
-            }
-            // The console (ADR-0041) sent them here to sign in: take them back to the address they wanted (a console address only).
-            const back = takeAfterLogin()
-            if (back && (tenantId || session.data.hub_only)) {
-              window.location.replace(back)
-              return
-            }
-            // A person who belongs to no company of their own but to a Service Hub signs in too: their place is "Conversas" (the instances the Hub delegated to them).
-            navigate(tenantId || session.data.hub_only ? DEFAULT_AUTHENTICATED_ROUTE : '/no-access', { replace: true })
-            return
-          } catch (err: any) {
-            if (!active) return
-            if (err.response?.status === 403) {
-              navigate('/no-access', { replace: true })
-              return
-            }
-            console.error('OIDC session error:', err)
-            setStatus({ kind: 'error', message: OIDC_ERROR })
-            return
-          }
+        // 'signed_out' = the person just left on purpose (and the provider could not end its own session): do not take them straight back in.
+        if (data.mode === 'oidc' && (completeOIDC || reason !== 'signed_out')) {
+          if (await enter(completeOIDC)) return
+          if (!active) return
         }
         setStatus({ kind: 'ready' })
       })
@@ -108,12 +163,21 @@ export default function Login() {
             <p className="text-text-secondary mt-2">Entre na sua conta</p>
           </div>
 
-          {sessionExpired && (
+          {!busy && sessionExpired && (
             <div
               role="status"
               className="mb-6 rounded-control border border-border-subtle bg-surface-muted px-4 py-3 text-sm text-text-secondary"
             >
               Sua sessão expirou. Entre novamente para continuar.
+            </div>
+          )}
+
+          {!busy && signedOut && (
+            <div
+              role="status"
+              className="mb-6 rounded-control border border-border-subtle bg-surface-muted px-4 py-3 text-sm text-text-secondary"
+            >
+              Você saiu do OMNIRA.
             </div>
           )}
 
@@ -135,16 +199,13 @@ export default function Login() {
             </div>
           )}
 
-          {auth?.mode === 'oidc' && (
+          {/* Verificando a sessão ou a caminho do provedor: nada para clicar (um botão apagado piscando só confunde). */}
+          {busy && <LoadingState message={status.kind === 'redirecting' ? 'Indo para o login…' : 'Verificando sessão…'} />}
+
+          {!busy && auth?.mode === 'oidc' && (
             <>
-              <Button
-                variant="primary"
-                size="lg"
-                className="w-full"
-                onClick={startSSO}
-                disabled={busy}
-              >
-                {status.kind === 'redirecting' ? 'Redirecionando…' : 'Continuar com SSO'}
+              <Button variant="primary" size="lg" className="w-full" onClick={startSSO}>
+                Continuar com SSO
               </Button>
               <p className="mt-4 text-center text-sm text-text-secondary">
                 Use sua conta corporativa para acessar o OMNIRA.

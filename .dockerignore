@@ -6,4 +6,10 @@ logs
 omnira-api
 omnira-worker
 certs
+backups
+.reference-external
+.backup-test
+web/test-results
+web/playwright-report
+web/.e2e-local-dist
 *.md

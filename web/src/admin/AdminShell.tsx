@@ -48,7 +48,7 @@ export default function AdminShell() {
     const res = await authAPI.logout()
     logout()
     if (res.data?.endSessionUrl) window.location.assign(res.data.endSessionUrl)
-    else window.location.assign('/login')
+    else window.location.assign('/login?reason=signed_out')
   }
 
   if (!signedIn || acting) {

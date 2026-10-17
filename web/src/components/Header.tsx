@@ -31,7 +31,7 @@ export default function Header() {
     logout()
     // Ending the identity provider's session too is what lets someone switch accounts.
     if (data.endSessionUrl) window.location.assign(data.endSessionUrl)
-    else navigate('/login')
+    else navigate('/login?reason=signed_out')
   }
 
   return (

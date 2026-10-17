@@ -25,12 +25,25 @@ function mode(body: object) {
   vi.mocked(authAPI.mode).mockResolvedValue({ data: body } as any);
 }
 
+// What the server says about the session cookie: signed in, or refused with a status (undefined = the request itself failed).
+const signedIn = () =>
+  vi.mocked(authAPI.session).mockResolvedValue({ data: { user: { id: 'u', email: 'a@b.c', name: 'A' }, tenant: { id: 'tenant-a-uuid' } } } as any);
+const sessionRefused = (status?: number) =>
+  vi.mocked(authAPI.session).mockRejectedValue(status === undefined ? new Error('network') : Object.assign(new Error('http'), { response: { status } }));
+
+function reset(url = '/login') {
+  vi.clearAllMocks();
+  vi.mocked(authAPI.session).mockReset();
+  localStorage.clear();
+  sessionStorage.clear();
+  window.history.replaceState({}, '', url);
+}
+
+// The page that stays on screen: someone who has just signed out is not taken straight back in.
+const STAY = '/login?reason=signed_out';
+
 describe('Login — produção (OIDC)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    localStorage.clear();
-    window.history.replaceState({}, '', '/login');
-  });
+  beforeEach(() => reset(STAY));
 
   // Não existe autenticação local por senha; oferecer o campo seria prometer
   // uma proteção que nada implementa.
@@ -59,6 +72,14 @@ describe('Login — produção (OIDC)', () => {
     expect(sso).toBeEnabled();
   });
 
+  it('o botão leva ao login do provedor', async () => {
+    mode({ mode: 'oidc' });
+    page();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Continuar com SSO' }));
+    expect(authAPI.startOIDC).toHaveBeenCalledTimes(1);
+  });
+
   it('não mostra o bloco de desenvolvimento', async () => {
     mode({ mode: 'oidc', dev_auth: false });
     page();
@@ -68,12 +89,113 @@ describe('Login — produção (OIDC)', () => {
   });
 });
 
-describe('Login — modo de desenvolvimento', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    localStorage.clear();
-    window.history.replaceState({}, '', '/login');
+// A tela de entrada não é um passo a mais: com sessão cai direto no trabalho, sem sessão vai direto ao login do provedor.
+describe('Login — entrada automática (OIDC)', () => {
+  beforeEach(() => reset());
+
+  it('sem sessão: vai direto ao login do provedor, sem pedir clique', async () => {
+    mode({ mode: 'oidc' });
+    sessionRefused(401);
+    page();
+
+    await waitFor(() => expect(authAPI.startOIDC).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'Continuar com SSO' })).toBeNull();
+    expect(screen.getByText('Indo para o login…')).toBeInTheDocument();
   });
+
+  it('com sessão: entra direto na tela de trabalho, sem mostrar a tela de entrada', async () => {
+    mode({ mode: 'oidc' });
+    signedIn();
+    page();
+
+    await screen.findByTestId('elsewhere');
+    expect(authAPI.startOIDC).not.toHaveBeenCalled();
+    expect(localStorage.getItem('sessionActive')).toBe('true');
+    expect(localStorage.getItem('tenantId')).toBe('tenant-a-uuid');
+  });
+
+  it('acabou de sair: não refaz a entrada sozinha e avisa', async () => {
+    reset(STAY);
+    mode({ mode: 'oidc' });
+    page();
+
+    expect(await screen.findByRole('button', { name: 'Continuar com SSO' })).toBeEnabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Você saiu do OMNIRA.');
+    expect(authAPI.session).not.toHaveBeenCalled();
+    expect(authAPI.startOIDC).not.toHaveBeenCalled();
+  });
+
+  it('foi ao provedor há instantes e voltou sem entrar: mostra o botão em vez de repetir (vaivém)', async () => {
+    mode({ mode: 'oidc' });
+    sessionRefused(401);
+    sessionStorage.setItem('omnira.sso-auto', String(Date.now() - 2_000));
+    page();
+
+    expect(await screen.findByRole('button', { name: 'Continuar com SSO' })).toBeEnabled();
+    expect(authAPI.startOIDC).not.toHaveBeenCalled();
+  });
+
+  it('a tentativa antiga não bloqueia: passados 30 s volta a seguir sozinha', async () => {
+    mode({ mode: 'oidc' });
+    sessionRefused(401);
+    sessionStorage.setItem('omnira.sso-auto', String(Date.now() - 31_000));
+    page();
+
+    await waitFor(() => expect(authAPI.startOIDC).toHaveBeenCalledTimes(1));
+  });
+
+  it('entrar com sucesso apaga a marca da tentativa (a próxima saída não cai no vaivém)', async () => {
+    mode({ mode: 'oidc' });
+    signedIn();
+    sessionStorage.setItem('omnira.sso-auto', String(Date.now()));
+    page();
+
+    await screen.findByTestId('elsewhere');
+    expect(sessionStorage.getItem('omnira.sso-auto')).toBeNull();
+  });
+
+  it('conta sem acesso a nenhuma organização vai para /no-access', async () => {
+    mode({ mode: 'oidc' });
+    sessionRefused(403);
+    page();
+
+    await screen.findByTestId('elsewhere');
+    expect(authAPI.startOIDC).not.toHaveBeenCalled();
+  });
+
+  it('não conseguir consultar a sessão (rede/servidor) não manda ao provedor nem acusa erro: oferece o botão', async () => {
+    mode({ mode: 'oidc' });
+    sessionRefused(undefined);
+    page();
+
+    expect(await screen.findByRole('button', { name: 'Continuar com SSO' })).toBeEnabled();
+    expect(authAPI.startOIDC).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('voltando do provedor sem sessão: mostra o erro e NÃO volta ao provedor (sem laço)', async () => {
+    mode({ mode: 'oidc' });
+    sessionRefused(401);
+    window.history.replaceState({}, '', '/login?oidc=complete');
+    page();
+
+    expect(
+      await screen.findByText('Não foi possível concluir o login. Tente novamente ou contate o administrador.'),
+    ).toBeInTheDocument();
+    expect(authAPI.startOIDC).not.toHaveBeenCalled();
+  });
+
+  it('modo de desenvolvimento e sem método configurado não consultam a sessão nem redirecionam', async () => {
+    mode({ mode: 'dev', dev_auth: true });
+    page();
+    await screen.findByText('Modo de desenvolvimento');
+    expect(authAPI.session).not.toHaveBeenCalled();
+    expect(authAPI.startOIDC).not.toHaveBeenCalled();
+  });
+});
+
+describe('Login — modo de desenvolvimento', () => {
+  beforeEach(() => reset());
 
   it('mostra o bloco rotulado, com e-mail e sem senha', async () => {
     mode({ mode: 'dev', dev_auth: true });
@@ -116,11 +238,7 @@ describe('Login — modo de desenvolvimento', () => {
 });
 
 describe('Login — estados', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    localStorage.clear();
-    window.history.replaceState({}, '', '/login');
-  });
+  beforeEach(() => reset());
 
   it('erro de OIDC não expõe a mensagem crua do provedor', async () => {
     mode({ mode: 'oidc' });
@@ -136,8 +254,9 @@ describe('Login — estados', () => {
     expect(screen.queryByText(/PKCE/)).toBeNull();
   });
 
+  // Em produção a sessão expirada já segue sozinha ao provedor; o aviso existe para quando a tela fica (aqui, sem SSO).
   it('sessão expirada é informativa, não erro', async () => {
-    mode({ mode: 'oidc' });
+    mode({ mode: 'dev' });
     window.history.replaceState({}, '', '/login?reason=session_expired');
     page();
 
@@ -156,11 +275,7 @@ describe('Login — estados', () => {
 });
 
 describe('Login — teclado', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    localStorage.clear();
-    window.history.replaceState({}, '', '/login');
-  });
+  beforeEach(() => reset(STAY));
 
   it('a ação de SSO é alcançável por Tab', async () => {
     mode({ mode: 'oidc' });
@@ -189,10 +304,7 @@ describe('Login — retorno ao console (ADR-0041)', () => {
   const realLocation = window.location;
   const replace = vi.fn();
   beforeEach(() => {
-    vi.clearAllMocks();
-    localStorage.clear();
-    sessionStorage.clear();
-    window.history.replaceState({}, '', '/login?oidc=complete');
+    reset('/login?oidc=complete');
     Object.defineProperty(window, 'location', { configurable: true, value: { ...realLocation, search: '?oidc=complete', pathname: '/login', replace } });
   });
   afterEach(() => {
@@ -201,7 +313,7 @@ describe('Login — retorno ao console (ADR-0041)', () => {
 
   it('volta ao endereço do console que mandou a pessoa entrar', async () => {
     mode({ mode: 'oidc' });
-    vi.mocked(authAPI.session).mockResolvedValue({ data: { user: { id: 'u', email: 'a@b.c', name: 'A' }, tenant: { id: 'tenant-a-uuid' } } } as any);
+    signedIn();
     rememberAfterLogin('/admin/acessos?aba=equipes');
     page();
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/admin/acessos?aba=equipes'));
@@ -209,7 +321,7 @@ describe('Login — retorno ao console (ADR-0041)', () => {
 
   it('sem endereço lembrado segue o destino padrão (nada de /admin/)', async () => {
     mode({ mode: 'oidc' });
-    vi.mocked(authAPI.session).mockResolvedValue({ data: { user: { id: 'u', email: 'a@b.c', name: 'A' }, tenant: { id: 'tenant-a-uuid' } } } as any);
+    signedIn();
     page();
     await screen.findByTestId('elsewhere');
     expect(replace).not.toHaveBeenCalled();

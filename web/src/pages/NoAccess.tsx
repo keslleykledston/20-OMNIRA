@@ -11,7 +11,7 @@ export default function NoAccess() {
     } finally {
       // Same as the header: end the identity provider's session so another account can sign in.
       if (endSessionUrl) window.location.assign(endSessionUrl)
-      else navigate('/login', { replace: true })
+      else navigate('/login?reason=signed_out', { replace: true })
     }
   }
 
