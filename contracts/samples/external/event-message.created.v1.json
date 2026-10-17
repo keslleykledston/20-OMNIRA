@@ -1,0 +1,21 @@
+{
+  "event_id": "7d1e0c00-0000-4000-8000-000000000004",
+  "seq": 4,
+  "type": "message.created.v1",
+  "version": 1,
+  "occurred_at": "2026-10-14T20:00:00Z",
+  "tenant_id": "0b2a6a4e-8f0d-4a6f-9d9a-5a1f00000001",
+  "aggregate": {
+    "type": "message",
+    "id": "5a5a0000-0000-4000-8000-0000000000a1"
+  },
+  "conversation_id": "3f9c1b2e-0000-4000-8000-0000000000c1",
+  "origin": {
+    "kind": "channel"
+  },
+  "data": {
+    "direction": "inbound",
+    "type": "text",
+    "status": "received"
+  }
+}

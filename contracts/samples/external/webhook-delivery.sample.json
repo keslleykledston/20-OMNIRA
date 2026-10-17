@@ -1,0 +1,16 @@
+{
+  "description": "A webhook call as OMNIRA sends it. Signature = 'v1=' + hex(HMAC-SHA256(secret, '<X-Omnira-Timestamp>.' + RAW_BODY)); verify the RAW bytes of the body, not a re-serialization. During a secret rotation the header carries two values separated by a comma; accept if either matches. Reject a timestamp more than 5 minutes from your clock. Deduplicate by X-Omnira-Event-ID (delivery is at least once).",
+  "secret": "omnira-sample-secret-do-not-use-in-production",
+  "request": {
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Omnira-Timestamp": "1792008000",
+      "X-Omnira-Signature": "v1=ba29bcae4c7101a52658c2ef2eb1a7b26f55a4547c84909da224acb26bc51eda",
+      "X-Omnira-Event-ID": "7d1e0c00-0000-4000-8000-000000000004",
+      "X-Omnira-Delivery-ID": "d1e11000-0000-4000-8000-000000000001",
+      "X-Omnira-Key-ID": "whk_sample000001"
+    },
+    "body": "{\"event_id\":\"7d1e0c00-0000-4000-8000-000000000004\",\"seq\":4,\"type\":\"message.created.v1\",\"version\":1,\"occurred_at\":\"2026-10-14T20:00:00Z\",\"tenant_id\":\"0b2a6a4e-8f0d-4a6f-9d9a-5a1f00000001\",\"aggregate\":{\"type\":\"message\",\"id\":\"5a5a0000-0000-4000-8000-0000000000a1\"},\"conversation_id\":\"3f9c1b2e-0000-4000-8000-0000000000c1\",\"origin\":{\"kind\":\"channel\"},\"data\":{\"direction\":\"inbound\",\"type\":\"text\",\"status\":\"received\"}}"
+  }
+}

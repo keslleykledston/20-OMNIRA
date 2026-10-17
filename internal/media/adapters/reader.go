@@ -40,7 +40,7 @@ func (r *Reader) Open(ctx context.Context, tenantID, messageID uuid.UUID) (*port
 	if err != nil {
 		return nil, err
 	}
-	out := &ports.ServedMedia{Status: status, Mime: mime, Size: size, SHA256: sha}
+	out := &ports.ServedMedia{ID: id, Status: status, Mime: mime, Size: size, SHA256: sha}
 	if purged {
 		out.Status = "purged"
 		return out, nil
@@ -76,7 +76,7 @@ func (r *Reader) openOutbound(ctx context.Context, tenantID, messageID uuid.UUID
 	if err != nil {
 		return nil, err
 	}
-	out := &ports.ServedMedia{Status: string(ports.StatusClean), Mime: mime, Size: size, SHA256: sha}
+	out := &ports.ServedMedia{ID: id, Status: string(ports.StatusClean), Mime: mime, Size: size, SHA256: sha}
 	if purged {
 		out.Status = "purged"
 		return out, nil

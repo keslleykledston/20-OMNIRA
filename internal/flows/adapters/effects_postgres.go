@@ -312,6 +312,7 @@ const assignQueueSQL = `
 	  FROM q
 	  WHERE c.tenant_id = $1 AND c.id = $2 AND ($3::uuid IS NOT NULL OR c.queue_id IS NULL)
 	    AND c.internal_user_id IS NULL
+	    AND c.control_kind IS NULL -- an external application's hold is not requeued by a flow (ADR-0048)
 	  RETURNING c.id, q.mode
 	), job AS (
 	  INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
@@ -330,7 +331,14 @@ func (e *PostgresEffects) AssignQueue(ctx context.Context, conversationID uuid.U
 		return err
 	}
 	if n == 0 && queueID != nil {
-		return fmt.Errorf("queue %s does not exist in this tenant", *queueID)
+		var exists bool
+		if err := e.q(ctx).QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM queues WHERE tenant_id = $1 AND id = $2)`, tenantID, *queueID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("queue %s does not exist in this tenant", *queueID)
+		}
+		return nil // the queue exists: the conversation is held by an external application, which a flow does not requeue
 	}
 	return nil // no default queue configured / queue already set: nothing to route, exactly like RouteNew
 }
@@ -343,6 +351,6 @@ func (e *PostgresEffects) Handoff(ctx context.Context, conversationID uuid.UUID,
 	if err != nil {
 		return err
 	}
-	_, err = e.q(ctx).Exec(ctx, `UPDATE conversations SET automation_mode='waiting_human', updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenantID, conversationID)
+	_, err = e.q(ctx).Exec(ctx, `UPDATE conversations SET automation_mode='waiting_human', updated_at=now() WHERE tenant_id=$1 AND id=$2 AND control_kind IS NULL`, tenantID, conversationID)
 	return err
 }

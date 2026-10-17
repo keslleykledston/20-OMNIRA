@@ -83,6 +83,8 @@ func respond(w http.ResponseWriter, id uuid.UUID, res application.AssignResult, 
 		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, application.ErrNotFound):
 		http.Error(w, "conversation not found", http.StatusNotFound)
+	case errors.Is(err, application.ErrHeldByExternal):
+		http.Error(w, "conversation is held by an external application", http.StatusConflict)
 	case errors.Is(err, application.ErrConflict):
 		http.Error(w, "conversation already assigned to another agent", http.StatusConflict)
 	case errors.Is(err, application.ErrInvalidAssignee):

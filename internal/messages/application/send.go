@@ -27,6 +27,7 @@ var (
 	ErrNotFound            = errors.New("messages: conversation not found")
 	ErrNotAssignedToYou    = errors.New("messages: conversation is assigned to another agent")
 	ErrUnassigned          = errors.New("messages: conversation must be assigned before replying")
+	ErrHeldByExternal      = errors.New("messages: conversation is held by an external application")
 	ErrConversationClosed  = errors.New("messages: the conversation was finalized; the contact's next message starts a new attendance")
 	ErrChannelUnavailable  = errors.New("messages: conversation has no active text channel")
 	ErrTemplateUnsupported = errors.New("messages: this channel does not use message templates")
@@ -141,6 +142,8 @@ func (s *Sender) authorizeConversation(ctx context.Context, conversationID uuid.
 		return nil, err
 	}
 	switch {
+	case sc.HeldExternally:
+		return nil, ErrHeldByExternal
 	case sc.AssignedTo == nil:
 		return nil, ErrUnassigned
 	case *sc.AssignedTo != tc.ActorID && !manage:

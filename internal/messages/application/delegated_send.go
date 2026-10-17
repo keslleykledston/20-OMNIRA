@@ -68,6 +68,8 @@ func (d *DelegatedSender) Send(ctx context.Context, actor, conversationID uuid.U
 		return SendResult{}, ErrConversationClosed
 	}
 	switch {
+	case sc.HeldExternally:
+		return SendResult{}, ErrHeldByExternal
 	case sc.AssignedTo == nil:
 		return SendResult{}, ErrUnassigned
 	case *sc.AssignedTo != actor:

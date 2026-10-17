@@ -61,7 +61,9 @@ func (s *ParticipantService) Invite(
 	}
 
 	// Verificar se conversation existe
-	if _, found, err := s.conv.LockAssignee(ctx, conversationID); err != nil || !found {
+	if _, found, err := s.conv.LockAssignee(ctx, conversationID); errors.Is(err, ports.ErrHeldByExternal) {
+		return InviteResult{}, err
+	} else if err != nil || !found {
 		return InviteResult{}, errors.New("participant: conversation not found")
 	}
 
@@ -144,6 +146,9 @@ func (s *ParticipantService) Transfer(
 
 	// Encontrar assignee atual
 	current, found, err := s.conv.LockAssignee(ctx, conversationID)
+	if errors.Is(err, ports.ErrHeldByExternal) {
+		return TransferResult{}, err
+	}
 	if err != nil || !found {
 		return TransferResult{}, errors.New("participant: conversation not found")
 	}

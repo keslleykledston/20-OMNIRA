@@ -114,15 +114,16 @@ func (s *Service) Distribute(ctx context.Context, hub, item uuid.UUID) (assigned
 		}
 		var queue, holder *uuid.UUID
 		var status string
-		err = q.QueryRow(c, `SELECT queue_id, status, assigned_to_user_id FROM conversations WHERE tenant_id = $1 AND id = $2 FOR UPDATE SKIP LOCKED`,
-			tenant, conversation).Scan(&queue, &status, &holder)
+		var held bool // an external application holds it (ADR-0048): the pool never distributes it
+		err = q.QueryRow(c, `SELECT queue_id, status, assigned_to_user_id, COALESCE(control_kind IN ('crm_application','crm_agent_verified'), false) FROM conversations WHERE tenant_id = $1 AND id = $2 FOR UPDATE SKIP LOCKED`,
+			tenant, conversation).Scan(&queue, &status, &holder, &held)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil // somebody else holds the row right now: they decide, we try again later
 		}
 		if err != nil {
 			return err
 		}
-		if status == "closed" || holder != nil {
+		if status == "closed" || holder != nil || held {
 			return nil
 		}
 		// The per-hub lock comes BEFORE the pool is chosen (Codex review): an edit of the pool's instances or mode that committed first is then
@@ -179,7 +180,9 @@ func (s *Service) Distribute(ctx context.Context, hub, item uuid.UUID) (assigned
 			if !ok {
 				continue
 			}
-			if _, err := q.Exec(c, `UPDATE conversations SET assigned_to_user_id = $3, assigned_at = now(), updated_at = now() WHERE tenant_id = $1 AND id = $2`,
+			if _, err := q.Exec(c, `UPDATE conversations SET assigned_to_user_id = $3, assigned_at = now(), updated_at = now(),
+			                               control_kind = 'hub_user', control_holder_id = $3, control_version = control_version + 1, control_since = now(), control_origin = 'hub'
+			                        WHERE tenant_id = $1 AND id = $2`,
 				tenant, conversation, person); err != nil {
 				return fmt.Errorf("assign: %w", err)
 			}

@@ -70,7 +70,7 @@ func (r *PostgresLivenessRepository) Retrigger(ctx context.Context, tenantID *uu
 			  FROM conversations c
 			  JOIN queues q ON q.tenant_id = c.tenant_id AND q.id = c.queue_id
 			  JOIN tenants t ON t.id = c.tenant_id AND t.status = 'active'
-			  WHERE c.assigned_to_user_id IS NULL
+			  WHERE c.assigned_to_user_id IS NULL AND c.control_kind IS NULL
 			    AND c.status = 'open'
 			    AND c.queue_id IS NOT NULL
 			    AND (q.mode IN ('round_robin','least_loaded')

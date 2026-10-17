@@ -26,6 +26,9 @@ type SendContext struct {
 	// Closed: the attendance was finalized (ADR-0020). A reply would be stored in a closed conversation while the contact's next
 	// message starts a NEW one, splitting the context, so sending is refused.
 	Closed bool
+	// HeldExternally: an external application holds the conversation (ADR-0048). assigned_to_user_id is NULL for it, which a person's reply would
+	// read as "unassigned"; the reply is refused with its own error instead.
+	HeldExternally bool
 }
 
 // QueuedMessage is the persisted outbound message returned to the caller.
@@ -74,6 +77,10 @@ type TemplateSend struct {
 	Name     string
 	Language string
 	Params   []string
+	// ID and ConnectionID identify the approved template that was loaded; the external write path re-proves, in the statement that queues the message, that it is
+	// still approved and sendable for that line (it may have changed since it was read).
+	ID           uuid.UUID
+	ConnectionID uuid.UUID
 }
 
 // PermissionChecker resolves role permissions of a user in the TenantContext tenant.

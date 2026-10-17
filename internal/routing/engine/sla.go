@@ -336,7 +336,7 @@ func appendUnique(in []overflow.Trigger, t overflow.Trigger) []overflow.Trigger 
 func (e *Engine) slaMetAt(ctx context.Context, q platformdb.Querier, tenant, conv uuid.UUID, metric string, c convRow, started, now time.Time) (*time.Time, error) {
 	switch metric {
 	case metricAssignment, metricQueueWait:
-		if c.assigned != nil {
+		if c.assigned != nil || c.held {
 			t := now
 			if c.assignedAt != nil {
 				t = *c.assignedAt
@@ -345,7 +345,7 @@ func (e *Engine) slaMetAt(ctx context.Context, q platformdb.Querier, tenant, con
 		}
 	case metricFirstResponse: // the first message a PERSON sent after the clock started (automatic messages do not count)
 		var at *time.Time
-		if err := q.QueryRow(ctx, `SELECT min(created_at) FROM messages WHERE tenant_id=$1 AND conversation_id=$2 AND direction='outbound' AND sent_by_user_id IS NOT NULL AND status IN ('sent','delivered','read') AND created_at >= $3`,
+		if err := q.QueryRow(ctx, `SELECT min(created_at) FROM messages WHERE tenant_id=$1 AND conversation_id=$2 AND direction='outbound' AND (sent_by_user_id IS NOT NULL OR sent_by_installation_id IS NOT NULL) AND status IN ('sent','delivered','read') AND created_at >= $3`,
 			tenant, conv, started).Scan(&at); err != nil {
 			return nil, err
 		}

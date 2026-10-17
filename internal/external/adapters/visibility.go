@@ -1,0 +1,53 @@
+package adapters
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
+	"github.com/omnira/omnira/internal/external/domain"
+)
+
+// Visibility is THE definition of which conversations an installation may see (ADR-0048 §2.4, Codex H0 HIGH): the company of the installation, never a
+// conversation with staff (internal_user_id set, or conversation_kind internal), never a contact classified internal or spam (the derivation of
+// conversation_kind files spam under external_other, so the contact's own classification has to be asked), and, when the administrator limited the
+// installation, only its queues and its lines. Every read of the external API — lists, one conversation, messages, contacts, media, snapshot and events —
+// builds its WHERE clause here, so the rule cannot be forgotten in one endpoint.
+type Visibility struct {
+	TenantID   uuid.UUID
+	QueueIDs   []uuid.UUID
+	ChannelIDs []uuid.UUID
+}
+
+// NewVisibility reads the tenant from the authenticated installation, never from the request.
+func NewVisibility(p *domain.Principal, a Allowlists) Visibility {
+	return Visibility{TenantID: p.TenantID, QueueIDs: a.QueueIDs, ChannelIDs: a.ChannelIDs}
+}
+
+// Args collects positional parameters while a query is built.
+type Args struct{ vals []any }
+
+func (a *Args) Add(v any) string {
+	a.vals = append(a.vals, v)
+	return fmt.Sprintf("$%d", len(a.vals))
+}
+
+func (a *Args) Values() []any { return a.vals }
+
+// Conversation returns the predicate for conversations aliased `alias`, adding its parameters to args.
+func (v Visibility) Conversation(alias string, args *Args) string {
+	t := args.Add(v.TenantID)
+	parts := []string{
+		alias + ".tenant_id = " + t,
+		alias + ".internal_user_id IS NULL",
+		alias + ".conversation_kind <> 'internal'",
+		"EXISTS (SELECT 1 FROM contacts vc WHERE vc.tenant_id = " + alias + ".tenant_id AND vc.id = " + alias + ".contact_id AND vc.kind NOT IN ('internal', 'spam'))",
+	}
+	if len(v.QueueIDs) > 0 {
+		parts = append(parts, alias+".queue_id = ANY("+args.Add(v.QueueIDs)+"::uuid[])")
+	}
+	if len(v.ChannelIDs) > 0 {
+		parts = append(parts, alias+".channel_connection_id = ANY("+args.Add(v.ChannelIDs)+"::uuid[])")
+	}
+	return strings.Join(parts, " AND ")
+}

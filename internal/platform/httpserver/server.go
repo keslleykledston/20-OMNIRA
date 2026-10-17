@@ -19,10 +19,15 @@ import (
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	auditapplication "github.com/omnira/omnira/internal/audit/application"
+	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
+	"github.com/omnira/omnira/internal/conversationcontrol"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
 	"github.com/omnira/omnira/internal/entitlements"
+	externaladapters "github.com/omnira/omnira/internal/external/adapters"
+	externaldelivery "github.com/omnira/omnira/internal/external/delivery"
+	externaldomain "github.com/omnira/omnira/internal/external/domain"
 	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
@@ -31,6 +36,7 @@ import (
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
 	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
+	mediaports "github.com/omnira/omnira/internal/media/ports"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
 	messagesapplication "github.com/omnira/omnira/internal/messages/application"
 	"github.com/omnira/omnira/internal/platform/authn"
@@ -573,6 +579,104 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 		s.mux.Handle("POST /api/v1/hubs/{hub_id}/companies", authnMiddleware(userSession(http.HandlerFunc(a.CreateCompany))))
 		s.mux.Handle("PATCH /api/v1/hubs/{hub_id}/companies/{tenant_id}", authnMiddleware(userSession(http.HandlerFunc(a.UpdateCompany))))
 	}
+}
+
+// RegisterExternalHandlers mounts the Headless integration (ADR-0048) when OMNIRA_HEADLESS_ENABLED is on:
+//   - the administration of external applications, for a PERSON (cookie session, same-origin, tenant authorization, integration.read/manage,
+//     not delegable to the Hub);
+//   - the external API itself, for an APPLICATION (bearer integration token; no cookie, no session, the tenant comes from the credential).
+//
+// With the flag off nothing here exists (404), so the platform is byte-for-byte what it was.
+// ExternalOptions are the parts of the external API that depend on how the process is configured.
+type ExternalOptions struct {
+	Features      externaladapters.Features
+	Media         mediaports.MediaReader  // cleared-files reader; nil: the media route answers 404
+	Sealer        externaladapters.Sealer // encrypts webhook signing secrets; nil: the webhook administration is not mounted
+	RetentionDays int                     // how long the journal is kept (reported by the checkpoint)
+}
+
+func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o ExternalOptions) {
+	if !enabled {
+		return
+	}
+	// the external API: authenticated by the integration token only
+	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
+	s.mux.Handle("GET /api/v1/external/me", ext.Authenticated(externaladapters.NewMeHandler(dbPool, o.Features)))
+	// the read side (H3): one visibility rule for all of it (externaladapters.Visibility)
+	read := externaladapters.NewReadHandler(dbPool, o.Media)
+	events := externaladapters.NewEventsHandler(dbPool, o.RetentionDays)
+	s.mux.Handle("GET /api/v1/external/conversations", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.ListConversations))))
+	s.mux.Handle("GET /api/v1/external/conversations/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.GetConversation))))
+	s.mux.Handle("GET /api/v1/external/conversations/{id}/messages", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMessageRead, http.HandlerFunc(read.ListMessages))))
+	s.mux.Handle("GET /api/v1/external/contacts/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactRead, http.HandlerFunc(read.GetContact))))
+	s.mux.Handle("GET /api/v1/external/media/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMediaRead, http.HandlerFunc(read.GetMedia))))
+	// the durable journal (H4): the checkpoint to bootstrap from and the facts after a sequence number
+	s.mux.Handle("GET /api/v1/external/sync/checkpoint", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.Checkpoint))))
+	s.mux.Handle("GET /api/v1/external/events", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.ListEvents))))
+
+	if s.authenticator == nil {
+		return // administration needs a working sign-in
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	memberRepo := tenancyadapters.NewPostgresMembershipRepository(dbPool)
+	tenantRepo := tenancyadapters.NewPostgresTenantRepository(dbPool)
+	authzSvc := tenancyapplication.NewAuthorizationService(memberRepo, tenantRepo)
+	tenantSession := tenancyadapters.AuthorizationMiddleware(dbPool, authzSvc)
+	auditRepo := auditadapters.NewPostgresAuditEventRepository(dbPool)
+	// suspending or revoking an installation frees, in the same transaction, every conversation it holds (ADR-0048 §6)
+	admin := externaladapters.NewAdminHandler(dbPool, auditRepo).WithDrainer(conversationcontrol.Service{}.DrainInstallation).WithScopeDrainer(conversationcontrol.Service{}.DrainOutOfScope)
+	takeover := conversationcontrol.NewTakeoverHandler(dbPool, auditRepo)
+	appsPath := "/api/v1/tenants/{tenant_id}/integrations/apps"
+	route := func(pattern string, h http.HandlerFunc) {
+		s.mux.Handle(pattern, authnMiddleware(tenantSession(h)))
+	}
+	route("GET "+appsPath, admin.List)
+	route("POST "+appsPath, admin.Create)
+	route("GET "+appsPath+"/{app_id}", admin.Get)
+	route("PATCH "+appsPath+"/{app_id}", admin.Update)
+	route("POST "+appsPath+"/{app_id}/suspend", admin.Transition(externaladapters.Suspend, auditdomain.ActionExternalAppSuspended))
+	route("POST "+appsPath+"/{app_id}/reactivate", admin.Transition(externaladapters.Reactivate, auditdomain.ActionExternalAppReactivated))
+	route("POST "+appsPath+"/{app_id}/revoke", admin.Transition(externaladapters.Revoke, auditdomain.ActionExternalAppRevoked))
+	route("POST "+appsPath+"/{app_id}/credentials", admin.IssueCredential)
+	route("DELETE "+appsPath+"/{app_id}/credentials/{credential_id}", admin.RevokeCredential)
+	if o.Sealer != nil { // the webhook subscriptions of an installation (needs the platform key to seal the signing secrets)
+		hooks := externaladapters.NewWebhookHandler(admin, o.Sealer, externaldelivery.NewSecret)
+		route("GET "+appsPath+"/{app_id}/webhooks", hooks.List)
+		route("POST "+appsPath+"/{app_id}/webhooks", hooks.Create)
+		route("PATCH "+appsPath+"/{app_id}/webhooks/{hook_id}", hooks.Update)
+		route("DELETE "+appsPath+"/{app_id}/webhooks/{hook_id}", hooks.Delete)
+		route("POST "+appsPath+"/{app_id}/webhooks/{hook_id}/rotate-secret", hooks.Rotate)
+		route("GET "+appsPath+"/{app_id}/webhooks/{hook_id}/deliveries", hooks.Deliveries)
+		route("POST "+appsPath+"/{app_id}/webhooks/{hook_id}/deliveries/{delivery_id}/retry", hooks.Retry)
+	}
+	// the supervisor's explicit takeover of a conversation an application holds (conversation.takeover_external, reason, confirmation)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/takeover", authnMiddleware(tenantSession(http.HandlerFunc(takeover.Takeover))))
+}
+
+// RegisterExternalWriteHandlers mounts the coordinated write commands of the external API (ADR-0048 H5) when both OMNIRA_HEADLESS_ENABLED and
+// OMNIRA_HEADLESS_WRITE_ENABLED are on. Every command reuses the application the Workspace and the Hub use: the control service, the message sender
+// (same 24 h window and templates, same delivery job), the attendance finalization and the sectors' eligibility and calendar.
+func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled bool, finalize externaladapters.Finalizer) {
+	if !enabled {
+		return
+	}
+	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
+	deps := externaladapters.WriteDeps{
+		Sender:    messagesapplication.NewExternalSender(messagesadapters.NewPostgresOutboundStore(dbPool)),
+		Finalize:  finalize,
+		Eligible:  externaladapters.SectorsEligible,
+		QueueOpen: externaladapters.SectorsQueueOpen,
+	}
+	w := externaladapters.NewWriteHandler(dbPool, deps)
+	post := func(path string, scope externaldomain.Scope, h http.Handler) {
+		s.mux.Handle("POST /api/v1/external/conversations/{id}/"+path, ext.Authenticated(externaladapters.RequireScope(scope, h)))
+	}
+	post("claim", externaldomain.ScopeConversationClaim, w.Claim())
+	post("release", externaldomain.ScopeConversationClaim, w.Release())
+	post("transfer", externaldomain.ScopeConversationTransfer, w.Transfer())
+	post("messages", externaldomain.ScopeMessageSend, w.Message())
+	post("finalize", externaldomain.ScopeConversationFinalize, w.Finalize())
+	post("heartbeat", externaldomain.ScopeConversationClaim, w.Heartbeat())
 }
 
 // logins (ADR-0046) is nil unless invitations should prepare the invitee's sign-in account at Keycloak.

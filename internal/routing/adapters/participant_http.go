@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/omnira/omnira/internal/routing/ports"
 	"net/http"
 	"strings"
 
@@ -185,6 +186,10 @@ func respondParticipantError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	if errors.Is(err, ports.ErrHeldByExternal) {
+		http.Error(w, "conversation is held by an external application", http.StatusConflict)
+		return
+	}
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "forbidden"):

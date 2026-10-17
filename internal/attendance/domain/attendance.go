@@ -40,6 +40,8 @@ const (
 	SourceAgent      CloseSource = "agent"
 	SourceSupervisor CloseSource = "supervisor"
 	SourceSystem     CloseSource = "system"
+	// SourceExternalApp: an external application (ADR-0048) closed it; the closure names the installation, never a person.
+	SourceExternalApp CloseSource = "external_app"
 )
 
 // Truth is the ADR-0017 scale reduced to what attendance text can be: confirmed by a person, or inferred by a model.
@@ -201,19 +203,21 @@ func (in FinalizeInput) Normalize() (FinalizeInput, error) {
 
 // Closure is the immutable record of a finalized conversation.
 type Closure struct {
-	ID                 uuid.UUID   `json:"id"`
-	TenantID           uuid.UUID   `json:"-"`
-	ConversationID     uuid.UUID   `json:"conversation_id"`
-	ContactID          uuid.UUID   `json:"contact_id"`
-	ClosedBy           *uuid.UUID  `json:"closed_by_user_id"`
-	Source             CloseSource `json:"source"`
-	Reason             CloseReason `json:"reason"`
-	Note               string      `json:"note"`
-	Summary            string      `json:"summary"`
-	SummaryTruth       Truth       `json:"summary_truth"`
-	LocalTicketsClosed int         `json:"local_tickets_closed"`
-	TicketsKept        int         `json:"tickets_kept"`
-	CreatedAt          time.Time   `json:"created_at"`
+	ID             uuid.UUID  `json:"id"`
+	TenantID       uuid.UUID  `json:"-"`
+	ConversationID uuid.UUID  `json:"conversation_id"`
+	ContactID      uuid.UUID  `json:"contact_id"`
+	ClosedBy       *uuid.UUID `json:"closed_by_user_id"`
+	// ClosedByInstallation is set only when Source is external_app.
+	ClosedByInstallation *uuid.UUID  `json:"-"`
+	Source               CloseSource `json:"source"`
+	Reason               CloseReason `json:"reason"`
+	Note                 string      `json:"note"`
+	Summary              string      `json:"summary"`
+	SummaryTruth         Truth       `json:"summary_truth"`
+	LocalTicketsClosed   int         `json:"local_tickets_closed"`
+	TicketsKept          int         `json:"tickets_kept"`
+	CreatedAt            time.Time   `json:"created_at"`
 }
 
 // FollowUp is something to remember about a contact beyond the conversation it came from.

@@ -32,7 +32,7 @@ func (s *PostgresOutboundStore) InsertQueuedSystem(ctx context.Context, in ports
 		       AND cc.status = 'active' AND cc.capabilities ? 'text'
 		  WHERE c.tenant_id = $2 AND c.id = $3
 		    AND c.channel_connection_id IS NOT DISTINCT FROM $4::uuid
-		    AND c.assigned_to_user_id IS NULL      -- the bot never talks over an operator
+		    AND c.assigned_to_user_id IS NULL AND c.control_kind IS NULL      -- the bot never talks over an operator
 		  FOR SHARE OF c
 		), ins AS (
 		  INSERT INTO messages
