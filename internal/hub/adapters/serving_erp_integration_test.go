@@ -728,20 +728,21 @@ func TestDelegatedTicketTablesFollowTheirDomainTheScopeAndTheInstance(t *testing
 		})
 	})
 
-	t.Run("a delegate reads the switches of the instance it acts for, never another's, and writes none", func(t *testing.T) {
-		w.exec(`INSERT INTO tenant_entitlements(tenant_id, capability, enabled) VALUES ($1,'hub_ticket_status',false), ($2,'hub_ticket_status',false) ON CONFLICT (tenant_id, capability) DO UPDATE SET enabled = false`, w.tenant["A"], w.tenant["B"])
+	t.Run("a delegate reads ONE switch of the instance it acts for (the Hub's right to change the ERP status), never another switch, never another instance's, and writes none", func(t *testing.T) {
+		w.exec(`INSERT INTO tenant_entitlements(tenant_id, capability, enabled) VALUES ($1,'hub_ticket_status',false), ($2,'hub_ticket_status',false), ($1,'whatsapp_channel',false) ON CONFLICT (tenant_id, capability) DO UPDATE SET enabled = false`, w.tenant["A"], w.tenant["B"])
 		w.attend(reader, "A", func(ctx context.Context, q platformdb.Querier) {
-			var own, other int
-			w.must(q.QueryRow(ctx, `SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1`, w.tenant["A"]).Scan(&own))
-			w.must(q.QueryRow(ctx, `SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1`, w.tenant["B"]).Scan(&other))
-			if own != 1 || other != 0 {
-				t.Errorf("switches seen: own %d (want 1), other instance %d (want 0)", own, other)
+			var own, otherInstance, otherSwitch int
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1 AND capability = 'hub_ticket_status'`, w.tenant["A"]).Scan(&own))
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1`, w.tenant["B"]).Scan(&otherInstance))
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1 AND capability = 'whatsapp_channel'`, w.tenant["A"]).Scan(&otherSwitch))
+			if own != 1 || otherInstance != 0 || otherSwitch != 0 {
+				t.Errorf("switches seen: the status switch %d (want 1), other instance %d (want 0), another switch of this instance %d (want 0)", own, otherInstance, otherSwitch)
 			}
 			if err := w.try(ctx, q, `UPDATE tenant_entitlements SET enabled = true WHERE tenant_id = $1`, w.tenant["A"]); err != nil {
 				t.Logf("update refused: %v", err)
 			}
 		})
-		if w.count(`SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1 AND capability = 'hub_ticket_status' AND enabled`, w.tenant["A"]) != 0 {
+		if w.count(`SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1 AND enabled`, w.tenant["A"]) != 0 {
 			t.Error("a delegate switched a capability on")
 		}
 	})

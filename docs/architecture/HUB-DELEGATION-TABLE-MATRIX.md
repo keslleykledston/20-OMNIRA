@@ -57,7 +57,7 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 | `message_template_sends` | T | member | member | — | — | — | operacional | mídia/mensagem | message_media_analysis é de sistema |
 | `audit_events` | T | hub_manage+member | self | — | — | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão |
 | `channel_connections` | T | hub_manage+member | admin+hub_manage | admin+hub_manage | admin+hub_manage | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão |
-| `tenant_entitlements` | T | hub_manage+member (+ delegado só da instância atuante, migration 157) | sysadmin | sysadmin | sysadmin | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão. O atendente do Hub LÊ as chaves da instância que atende (para `hub_ticket_status`); nunca escreve |
+| `tenant_entitlements` | T | hub_manage+member (+ delegado só da instância atuante, migration 157) | sysadmin | sysadmin | sysadmin | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão. O atendente do Hub LÊ só a chave `hub_ticket_status` da instância que atende (migration 158); nunca escreve |
 | `ai_usage` | T | admin | sysadmin | — | — | — | administrativa | equipe/governança | nunca por delegação (tenants: leitura do nome já existe via hub_read) |
 | `membership_invitations` | T | sysadmin | member_inline | sysadmin | — | — | administrativa | equipe/governança | nunca por delegação (tenants: leitura do nome já existe via hub_read) |
 | `memberships` | T | member | admin | admin | — | — | administrativa | equipe/governança | nunca por delegação (tenants: leitura do nome já existe via hub_read) |
