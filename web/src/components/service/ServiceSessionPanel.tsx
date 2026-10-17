@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ActionIcon, Button, Input } from '../primitives'
+import { ActionIcon, Input } from '../primitives'
 import {
   BUILTIN_RESULTS,
   SESSION_STATUS_LABEL,
@@ -16,7 +16,6 @@ import { getTenantId } from '../../lib/session'
 import { serviceSessionKey } from './ProtocolTag'
 import SessionExtras from './SessionExtras'
 
-const selectClass = 'w-full rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary'
 const active = (s: ServiceSession) => s.status === 'open' || s.status === 'in_progress' || s.status === 'waiting'
 const when = (iso: string) => new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 
@@ -33,22 +32,18 @@ interface Props {
 }
 
 // Atendimento com protocolo (ADR-0049). Mostra o protocolo AT-n, o estado, o resultado do encerramento e as tarefas do atendimento.
-// Encerrar o ATENDIMENTO não finaliza a conversa (isso continua sendo "Finalizar atendimento"). Se o módulo está desligado (404/501), o painel some.
+// O protocolo encerra JUNTO com o atendimento, em "Finalizar" (uma ação só, decisão do dono em 2026-10-17): este painel não tem botão de encerrar. Se o módulo está desligado (404/501), o painel some.
 export default function ServiceSessionPanel({ conversationId, can, hub, delegated = false, conversationClosed = false }: Props) {
   const tenantId = hub?.tenantId ?? getTenantId()
   const qc = useQueryClient()
   const sessionKey = [...serviceSessionKey(conversationId, hub, delegated)]
   const kind = sessionKey[1] as string // the codes and tasks caches are keyed the same way (per viewer's capacity and per Hub)
   const [error, setError] = useState<string | null>(null)
-  const [closing, setClosing] = useState(false)
-  const [code, setCode] = useState('information_provided')
-  const [note, setNote] = useState('')
   const [title, setTitle] = useState('')
   const openKey = useRef(newKey()) // one key per mount: a double click or a retry returns the same session
 
   const q = useQuery({ queryKey: sessionKey, queryFn: () => serviceAPI.ofConversation(conversationId, hub), enabled: !!tenantId && !!conversationId, retry: false })
   const session = q.data
-  const codes = useQuery({ queryKey: ['service-codes', kind, tenantId], queryFn: () => serviceAPI.resultCodes(hub), enabled: closing && !!tenantId, retry: false })
   const tasksKey = ['service-tasks', kind, tenantId, session?.id]
   const tasks = useQuery({ queryKey: tasksKey, queryFn: () => serviceAPI.tasksOfSession(session!.id, hub), enabled: !!session?.id, retry: false })
 
@@ -58,11 +53,6 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
 
   const open = useMutation({ mutationFn: () => serviceAPI.open(conversationId, openKey.current, hub), onSuccess: () => { openKey.current = newKey(); done() }, onError: fail })
   const setStatus = useMutation({ mutationFn: (s: 'in_progress' | 'waiting') => serviceAPI.setStatus(session!, s, hub), onSuccess: done, onError: fail })
-  const close = useMutation({
-    mutationFn: () => serviceAPI.close(session!, { resolution_code: code, note: note.trim() || undefined }, hub),
-    onSuccess: () => { setClosing(false); setNote(''); done() },
-    onError: fail,
-  })
   const addTask = useMutation({
     mutationFn: () => serviceAPI.createTask({ title: title.trim(), session_id: session!.id }, newKey(), hub),
     onSuccess: () => { setTitle(''); done() },
@@ -75,7 +65,7 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
   if (q.isLoading) return null
   if (q.isError && !isModuleAbsent(q.error)) return null
 
-  const busy = open.isPending || setStatus.isPending || close.isPending || addTask.isPending || complete.isPending
+  const busy = open.isPending || setStatus.isPending || addTask.isPending || complete.isPending
 
   if (!session) {
     if (!can('service.create') || conversationClosed) return null
@@ -102,11 +92,10 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
           <span className="rounded-pill bg-surface px-2 py-0.5 text-xs font-medium text-text-secondary">{SESSION_STATUS_LABEL[session.status]}</span>
         </p>
         {/* the actions are icons: the label is the tooltip and the accessible name */}
-        {isActive && !closing && (
+        {isActive && (
           <div className="flex flex-shrink-0 items-center gap-1.5">
             {can('service.update') && session.status !== 'waiting' && <ActionIcon icon="pause" label="Marcar como aguardando" disabled={busy} onClick={() => setStatus.mutate('waiting')} />}
             {can('service.update') && session.status !== 'in_progress' && <ActionIcon icon="play" label="Marcar em andamento" disabled={busy} onClick={() => setStatus.mutate('in_progress')} />}
-            {can('service.close') && <ActionIcon icon="flag" label="Encerrar atendimento com protocolo" disabled={busy} onClick={() => setClosing(true)} />}
           </div>
         )}
       </div>
@@ -116,21 +105,7 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
         {session.resolution_canonical && ` · ${BUILTIN_RESULTS.find((r) => r.code === session.resolution_canonical)?.label ?? 'Abandonado'}`}
       </p>
 
-      {isActive && closing && (
-        <div className="space-y-2 rounded-control border border-border-subtle bg-surface p-3">
-          <label className="block text-xs text-text-secondary" htmlFor="svc-result">Resultado</label>
-          <select id="svc-result" className={selectClass} value={code} onChange={(e) => setCode(e.target.value)}>
-            {BUILTIN_RESULTS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
-            {(codes.data ?? []).filter((c) => !BUILTIN_RESULTS.some((b) => b.code === c.code)).map((c) => <option key={c.id} value={c.code}>{c.label}</option>)}
-          </select>
-          <Input label="Observação (opcional)" value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)} />
-          <p className="m-0 text-xs text-text-tertiary">A conversa continua aberta. Para encerrá-la, use “Finalizar atendimento”.</p>
-          <div className="flex gap-2">
-            <Button size="sm" disabled={busy} onClick={() => close.mutate()}>Confirmar encerramento</Button>
-            <Button variant="secondary" size="sm" disabled={busy} onClick={() => setClosing(false)}>Cancelar</Button>
-          </div>
-        </div>
-      )}
+      {isActive && <p className="m-0 text-[11px] text-text-tertiary">O protocolo encerra junto com o atendimento, em “Finalizar”.</p>}
 
       <div>
         <h4 className="mb-1 text-[11px] font-semibold uppercase text-text-tertiary">Tarefas</h4>

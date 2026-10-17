@@ -22,3 +22,12 @@ O OMNIRA modela a comunicação (conversas/mensagens), o assunto lógico (ADR-00
 
 ## Alternativas descartadas
 Reusar `tickets`, `topic_threads` ou `follow_up_items`; coluna `messages.session_id`; sessão por mensagem; OS própria no OMNIRA; novo motor de webhooks. Motivos em `docs/service-context/01-architecture.md` §9.
+
+
+## Addendum 2026-10-17 — uma ação só: Finalizar encerra o protocolo (decisão do dono)
+Depois do teste ao vivo do aviso na K3G_Solutions (KTG-1006) o dono decidiu: **"Finalizar" é a única ação de encerramento e já fornece o protocolo; não há duas funções distintas. Todo atendimento gera protocolo (rastreabilidade); só é opcional informar o número ao cliente em texto.**
+- A tela do protocolo (painel "Protocolo e tarefas") **perdeu o botão "Encerrar atendimento com protocolo"** e diz "O protocolo encerra junto com o atendimento, em Finalizar". A API de encerrar só o protocolo (`POST /service-sessions/{id}/close`) e o nó `close_service_session` dos fluxos continuam existindo para integrações; a tela não os oferece.
+- **Finalizar** (membro ou agente do Hub): encerra a conversa **e** o protocolo (resultado escolhido, ou o automático); um atendimento que ninguém assumiu **ganha o protocolo ao terminar** e o cliente é informado desse número (a abertura não foi avisada porque não houve).
+- Novo campo opcional `notify_protocol` (padrão `true`) no corpo de finalizar: na tela, a caixa "Informar o número do protocolo ao cliente" (ligada). Desligada → o protocolo é criado/encerrado do mesmo jeito e **nada** é enviado sobre o número. O aviso continua dependendo da capacidade da empresa (`service_protocol_notice`) e de poder enviar texto; **spam e duplicado nunca recebem aviso** (o protocolo fica, para rastrear). O texto de despedida (`farewell`) é outra mensagem, independente.
+- Código: `EnsureForFinalize` (cria o protocolo antes do aviso, sem permissão extra e sem anunciar), `FinalizeNotice(pool, notice, svc)`, `SessionNotice` recebe o motivo. Testes: `TestFinalizingAnAttendanceNobodyAssumed…`, `TestTheProtocolIsNotOptionalButTellingTheNumberIs` (4 cenários) com mutação nos três pontos.
+- Fora de escopo, por decisão: fechamento por fluxo (`source=flow`) e por IA não enviam aviso (não há pessoa para enviá-lo); o protocolo é criado e encerrado do mesmo jeito.

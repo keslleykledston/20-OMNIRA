@@ -117,6 +117,15 @@ type FinalizeInput struct {
 	// ADR-0049). Optional: without it the protocol takes the result that matches the reason. The service module decides whether it is usable; an unknown code never
 	// stops the attendance from ending (the automatic result is used).
 	ServiceResult string `json:"service_result"`
+	// NotifyProtocol says whether the customer is told the protocol number in the conversation when the attendance ends (a notice separate from Farewell). Absent = yes:
+	// the notice only goes out when the company's own switch (capability service_protocol_notice) is on and a text can be sent. The protocol itself is NOT optional: every
+	// finalized attendance ends with one (a never-assumed attendance gets its protocol when it ends).
+	NotifyProtocol *bool `json:"notify_protocol"`
+}
+
+// WantsProtocolNotice is true unless the person said not to tell the customer the protocol.
+func (in FinalizeInput) WantsProtocolNotice() bool {
+	return in.NotifyProtocol == nil || *in.NotifyProtocol
 }
 
 // FarewellState is what became of the closing notice a finalize asked for (never the text).

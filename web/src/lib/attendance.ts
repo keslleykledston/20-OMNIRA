@@ -109,6 +109,8 @@ export interface FinalizeBody {
   farewell?: string
   // the result chosen for the service protocol that ends with the attendance (a built-in or company code); absent = the automatic one
   service_result?: string
+  /** false = não informar o número do protocolo ao cliente. Ausente = informar (se a empresa ativou o aviso). O protocolo em si nunca é opcional. */
+  notify_protocol?: boolean
 }
 
 const base = (target?: DelegatedTarget) => `${API_BASE}/tenants/${target?.tenantId ?? getTenantId()}`

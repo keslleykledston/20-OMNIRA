@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
 	attendancedomain "github.com/omnira/omnira/internal/attendance/domain"
 	"github.com/omnira/omnira/internal/servicectx/adapters"
 	"github.com/omnira/omnira/internal/servicectx/domain"
@@ -169,7 +170,7 @@ func TestFinalizingTellsTheCustomerTheProtocolEndsBeforeTheConversationCloses(t 
 	s.withLine(conv, "waha", "unofficial")
 	s.assign(conv, s.agent)
 	sess := s.mustOpen(s.agent, conv)
-	att := s.attendance(true).WithSessionNotice(adapters.FinalizeNotice(s.env.App, notice))
+	att := s.attendance(true).WithSessionNotice(adapters.FinalizeNotice(s.env.App, notice, s.svc))
 	if err := s.finalize(att, s.agent, conv, attendancedomain.ReasonResolved); err != nil {
 		t.Fatal(err)
 	}
@@ -192,18 +193,110 @@ func TestFinalizingTellsTheCustomerTheProtocolEndsBeforeTheConversationCloses(t 
 	}
 }
 
-func TestFinalizingAConversationWithoutAProtocolTellsNobody(t *testing.T) {
+// Owner decision 2026-10-17: every attendance ends with a protocol (it is how it is traced); only telling the customer the NUMBER is optional.
+func (s *stack) finalizeNotify(att *attendanceapplication.Service, user, conv uuid.UUID, reason attendancedomain.CloseReason, notify *bool) error {
+	return s.try(user, s.env.TenantA, func(ctx context.Context) error {
+		_, err := att.Finalize(ctx, attendancedomain.FinalizeInput{ConversationID: conv, Reason: reason, Summary: "Cliente tinha o link fora; voltou.", Note: "ok", NotifyProtocol: notify})
+		return err
+	})
+}
+
+func TestFinalizingAnAttendanceNobodyAssumedGivesItAProtocolAndTellsTheCustomerOnce(t *testing.T) {
 	s := newStack(t)
 	notice := s.announce()
 	conv, _ := s.conversation()
 	s.withLine(conv, "waha", "unofficial")
-	s.assign(conv, s.agent)
-	att := s.attendance(true).WithSessionNotice(adapters.FinalizeNotice(s.env.App, notice))
-	if err := s.finalize(att, s.agent, conv, attendancedomain.ReasonResolved); err != nil {
+	s.assign(conv, s.agent) // held, but never opened a protocol (e.g. assigned by a rule)
+	att := s.attendance(true).WithSessionNotice(adapters.FinalizeNotice(s.env.App, notice, s.svc))
+	if err := s.finalizeNotify(att, s.agent, conv, attendancedomain.ReasonResolved, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.told(conv); len(got) != 0 {
-		t.Fatalf("no active protocol was shown to the customer: %q", got)
+	rows := s.sessionsOf(conv)
+	if len(rows) != 1 || rows[0].status != "closed" || rows[0].closedSource != "finalize" {
+		t.Fatalf("an attendance that never had a protocol gets one when it ends, and it is closed: %+v", rows)
+	}
+	got := s.told(conv)
+	if len(got) != 1 || !strings.Contains(got[0], "Seu atendimento foi encerrado") || !strings.Contains(got[0], rows[0].protocol) {
+		t.Fatalf("the customer is told the number that was closed, once: %q (protocol %s)", got, rows[0].protocol)
+	}
+	// a replay opens no second protocol and tells nobody again
+	if err := s.finalizeNotify(att, s.agent, conv, attendancedomain.ReasonResolved, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rows := s.sessionsOf(conv); len(rows) != 1 || len(s.told(conv)) != 1 {
+		t.Fatalf("a replay: %+v %q", rows, s.told(conv))
+	}
+}
+
+func TestTheProtocolIsNotOptionalButTellingTheNumberIs(t *testing.T) {
+	s := newStack(t)
+	notice := s.announce()
+	att := s.attendance(true).WithSessionNotice(adapters.FinalizeNotice(s.env.App, notice, s.svc))
+	no := false
+	// (a) opened at the claim, finalized with notify_protocol=false: the protocol closes, the customer is told only the opening
+	conv, _ := s.conversation()
+	s.withLine(conv, "waha", "unofficial")
+	s.assign(conv, s.agent)
+	sess := s.mustOpen(s.agent, conv)
+	if err := s.finalizeNotify(att, s.agent, conv, attendancedomain.ReasonResolved, &no); err != nil {
+		t.Fatal(err)
+	}
+	if rows := s.sessionsOf(conv); len(rows) != 1 || rows[0].status != "closed" || rows[0].protocol != sess.Protocol {
+		t.Fatalf("(a) the protocol is not optional: %+v", rows)
+	}
+	if got := s.told(conv); len(got) != 1 || strings.Contains(got[0], "foi encerrado") {
+		t.Fatalf("(a) only the opening was told: %q", got)
+	}
+	// (b) never assumed, notify_protocol=false: the protocol is still created and closed, the customer is told nothing
+	conv2, _ := s.conversation()
+	s.withLine(conv2, "waha", "unofficial")
+	s.assign(conv2, s.agent)
+	if err := s.finalizeNotify(att, s.agent, conv2, attendancedomain.ReasonResolved, &no); err != nil {
+		t.Fatal(err)
+	}
+	if rows := s.sessionsOf(conv2); len(rows) != 1 || rows[0].status != "closed" {
+		t.Fatalf("(b) every attendance ends with a protocol, told or not: %+v", rows)
+	}
+	if got := s.told(conv2); len(got) != 0 {
+		t.Fatalf("(b) not told: %q", got)
+	}
+	// (c) spam: the protocol is kept for tracing, but nobody is told an "attendance" ended
+	conv3, _ := s.conversation()
+	s.withLine(conv3, "waha", "unofficial")
+	s.assign(conv3, s.agent)
+	if err := s.finalizeNotify(att, s.agent, conv3, attendancedomain.ReasonSpam, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rows := s.sessionsOf(conv3); len(rows) != 1 || rows[0].status == "open" {
+		t.Fatalf("(c) spam still ends with a protocol: %+v", rows)
+	}
+	if got := s.told(conv3); len(got) != 0 {
+		t.Fatalf("(c) a spam contact is told nothing: %q", got)
+	}
+	// (c2) spam on an attendance that DID open a protocol: the opening was told, the ending is not
+	conv3b, _ := s.conversation()
+	s.withLine(conv3b, "waha", "unofficial")
+	s.assign(conv3b, s.agent)
+	s.mustOpen(s.agent, conv3b)
+	if err := s.finalizeNotify(att, s.agent, conv3b, attendancedomain.ReasonDuplicate, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.told(conv3b); len(got) != 1 || strings.Contains(got[0], "foi encerrado") {
+		t.Fatalf("(c2) a duplicate with an active protocol is told no ending: %q", got)
+	}
+	if rows := s.sessionsOf(conv3b); len(rows) != 1 || rows[0].status == "open" {
+		t.Fatalf("(c2) the protocol still ends: %+v", rows)
+	}
+	// (d) the company's own switch OFF beats the person's wish: nothing is sent, the protocol still ends
+	s.switchNotice(s.env.TenantA, false)
+	conv4, _ := s.conversation()
+	s.withLine(conv4, "waha", "unofficial")
+	s.assign(conv4, s.agent)
+	if err := s.finalizeNotify(att, s.agent, conv4, attendancedomain.ReasonResolved, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rows := s.sessionsOf(conv4); len(rows) != 1 || rows[0].status != "closed" || len(s.told(conv4)) != 0 {
+		t.Fatalf("(d) switch off: %+v %q", rows, s.told(conv4))
 	}
 }
 

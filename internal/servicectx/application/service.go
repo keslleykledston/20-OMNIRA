@@ -859,6 +859,40 @@ func (s *Service) OpenOnClaim(ctx context.Context, conversationID, actor uuid.UU
 	return res.Session, res.Created, nil
 }
 
+// EnsureForFinalize gives an attendance that is being finalized its protocol BEFORE the customer is told about it: an attendance nobody assumed has none yet, and the
+// protocol is not optional (every attendance is traceable). It opens nothing when the conversation already has a protocol (active, or one the operator closed by hand), is
+// not a customer chat or has no contact, and it never announces (the caller does, once). CloseForFinalize then closes the protocol this opened. Needs no permission: finalizing was
+// authorized by its own rules. Returns whether it created one.
+func (s *Service) EnsureForFinalize(ctx context.Context, conversationID uuid.UUID, actor uuid.UUID, source string) (bool, error) {
+	c, err := s.who(ctx)
+	if err != nil {
+		return false, err
+	}
+	if actor != uuid.Nil {
+		c.onBehalf = &actor
+	}
+	facts, err := s.repo.LockConversation(ctx, conversationID)
+	if err != nil {
+		return false, err
+	}
+	if facts.ContactID == nil || facts.Kind == "internal" {
+		return false, nil
+	}
+	if prev, err := s.repo.LatestByConversation(ctx, conversationID); err != nil {
+		return false, err
+	} else if prev != nil {
+		return false, nil
+	}
+	in := domain.OpenInput{ConversationID: &conversationID, Source: source, OriginChannel: "other"}
+	if in, err = in.Normalize(); err != nil {
+		return false, err
+	}
+	if _, err = s.create(ctx, c, in, facts, ""); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // CloseForFinalize is called by the attendance finalization (ADR-0020), in ITS transaction and after it locked the conversation: the session of the
 // conversation is closed with the result the person chose or, without a choice, the one that matches the finalization, or created and closed in one go when the attendance never had one (an
 // informational attendance gets its protocol when it ends); a conversation whose session the operator already closed gets nothing more. It does not ask for permissions: finalizing was authorized by its own rules. Idempotent.

@@ -71,20 +71,14 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     expect(screen.queryByRole('button', { name: /Abrir atendimento/ })).toBeNull()
   })
 
-  it('closes with the chosen result, sends If-Match with the version it saw, and says the conversation stays open', async () => {
+  it('has NO separate way to end the protocol: it ends with "Finalizar" (one action), and says so', async () => {
     serve({ session: session() })
-    vi.mocked(axios.post).mockResolvedValue({ data: session({ status: 'closed' }) })
-    const user = userEvent.setup()
     renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
-    await user.click(await screen.findByRole('button', { name: /Encerrar atendimento com protocolo/ }))
-    expect(screen.getByText(/A conversa continua aberta/)).toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Resultado'), 'resolved_first_contact')
-    await user.click(screen.getByRole('button', { name: 'Confirmar encerramento' }))
-    await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalled())
-    const [url, body, cfg] = vi.mocked(axios.post).mock.calls[0] as [string, any, any]
-    expect(url).toMatch(/\/service-sessions\/s-1\/close$/)
-    expect(body).toMatchObject({ resolution_code: 'resolved_first_contact' })
-    expect(cfg.headers['If-Match']).toBe('"3"')
+    await screen.findByTestId('service-protocol')
+    expect(screen.queryByRole('button', { name: /Encerrar atendimento/ })).toBeNull()
+    expect(screen.queryByLabelText('Resultado')).toBeNull()
+    expect(screen.getByText(/O protocolo encerra junto com o atendimento, em “Finalizar”/)).toBeInTheDocument()
+    expect(vi.mocked(axios.post)).not.toHaveBeenCalled()
   })
 
   it('without service.close there is no way to close or complete', async () => {

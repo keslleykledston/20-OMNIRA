@@ -283,6 +283,35 @@ describe('Finalize — closing message to the customer', () => {
     expect((fin[1] as any).farewell).toMatch(/atendimento foi encerrado/)
   })
 
+  it('the protocol number notice is on by default (nothing extra is sent) and unticking it sends notify_protocol=false, never skipping the protocol', async () => {
+    const user = userEvent.setup()
+    serve()
+    renderAt(<ContextPane conversationId={CONV} />)
+    vi.mocked(axios.post).mockImplementation(async () => ({ data: { changed: true } }))
+    const finBody = () => (vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize'))![1] as any)
+    await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    const box = within(dialog).getByRole('checkbox', { name: /Informar o número do protocolo ao cliente/ })
+    expect(box).toBeChecked()
+    expect(within(dialog).getByText(/O protocolo encerra junto com o atendimento, sempre/)).toBeInTheDocument()
+    await user.click(box)
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
+    expect(finBody().notify_protocol).toBe(false)
+  })
+
+  it('left ticked it sends no notify_protocol at all (the server default is to tell)', async () => {
+    const user = userEvent.setup()
+    serve()
+    renderAt(<ContextPane conversationId={CONV} />)
+    vi.mocked(axios.post).mockImplementation(async () => ({ data: { changed: true } }))
+    await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/finalize'))).toBe(true))
+    expect((vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/finalize'))![1] as any)).not.toHaveProperty('notify_protocol')
+  })
+
   it('asks for no notice when the person unticks it', async () => {
     const user = userEvent.setup()
     serve()

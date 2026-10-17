@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
+	attendancedomain "github.com/omnira/omnira/internal/attendance/domain"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	"github.com/omnira/omnira/internal/entitlements"
 	messagesadapters "github.com/omnira/omnira/internal/messages/adapters"
@@ -15,6 +16,7 @@ import (
 	messagesports "github.com/omnira/omnira/internal/messages/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/servicectx/application"
+	"github.com/omnira/omnira/internal/servicectx/domain"
 	"github.com/omnira/omnira/internal/servicectx/ports"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
@@ -134,19 +136,36 @@ func (n *Notice) send(ctx context.Context, a ports.Announcement, kind string, re
 }
 
 // FinalizeNotice is the attendance finalization's way to tell the customer that the protocol ends. It runs INSIDE the finalize transaction BEFORE the conversation is
-// marked closed (a closed conversation refuses outbound text), under a savepoint: ending the attendance never waits on a courtesy. A conversation without an active
-// protocol gets nothing.
-func FinalizeNotice(pool *pgxpool.Pool, notice *Notice) attendanceapplication.SessionNotice {
+// marked closed (a closed conversation refuses outbound text), under a savepoint: ending the attendance never waits on a courtesy. An attendance nobody assumed has no
+// protocol yet: it gets one here first (not for spam or duplicates, which are not an attendance to tell anyone about), so that the number the customer is told is the number
+// that ends up closed. A conversation whose protocol the operator already closed by hand gets nothing more.
+func FinalizeNotice(pool *pgxpool.Pool, notice *Notice, svc *application.Service) attendanceapplication.SessionNotice {
 	repo := NewPostgresRepository(pool)
-	return func(ctx context.Context, conversationID, actor uuid.UUID, delegated bool) {
+	return func(ctx context.Context, conversationID, actor uuid.UUID, delegated bool, reason attendancedomain.CloseReason) {
+		if reason == attendancedomain.ReasonSpam || reason == attendancedomain.ReasonDuplicate {
+			return // not an attendance to tell anyone about, whether or not it already had a protocol (the protocol still ends, for tracing)
+		}
 		tc, err := tenancydomain.FromContext(ctx)
 		if err != nil || notice == nil || !notice.enabledFor(ctx, tc.TenantID) {
 			return
 		}
 		err = platformdb.WithSavepoint(ctx, pool, func(ctx context.Context) error {
 			sess, err := repo.ActiveByConversation(ctx, conversationID)
-			if err != nil || sess == nil {
+			if err != nil {
 				return err
+			}
+			if sess == nil && svc != nil {
+				if created, err := svc.EnsureForFinalize(ctx, conversationID, actor, domain.SourceFinalize); err != nil {
+					return err
+				} else if created {
+					sess, err = repo.ActiveByConversation(ctx, conversationID)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			if sess == nil {
+				return nil
 			}
 			mode := ports.AnnounceMember
 			if delegated {

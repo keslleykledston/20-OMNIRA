@@ -55,7 +55,7 @@ type SessionCloser func(ctx context.Context, conversationID uuid.UUID, reason st
 // SessionNotice tells the customer, in the conversation, that the attendance's protocol ends. It is called INSIDE the finalize transaction BEFORE the conversation
 // is marked closed (a closed conversation refuses outbound text), by a person (delegated=false: a member; true: a Hub agent in the Hub's write path). The installer
 // makes its failure harmless (a savepoint): ending the attendance never waits on a courtesy.
-type SessionNotice func(ctx context.Context, conversationID, actor uuid.UUID, delegated bool)
+type SessionNotice func(ctx context.Context, conversationID, actor uuid.UUID, delegated bool, reason domain.CloseReason)
 
 // WithSessionNotice installs the hook that tells the customer the protocol ends. nil keeps finalizing exactly as before.
 func (s *Service) WithSessionNotice(n SessionNotice) *Service {
@@ -264,8 +264,8 @@ func (s *Service) Finalize(ctx context.Context, raw domain.FinalizeInput) (Final
 		}
 	}
 	// the protocol notice goes first: the farewell the person wrote is the last word the customer reads
-	if s.sessionNotice != nil {
-		s.sessionNotice(ctx, in.ConversationID, tc.ActorID, false)
+	if s.sessionNotice != nil && in.WantsProtocolNotice() {
+		s.sessionNotice(ctx, in.ConversationID, tc.ActorID, false, in.Reason)
 	}
 	farewell := domain.FarewellNotRequested
 	if in.Farewell != "" {
@@ -368,8 +368,8 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 		}
 	}
 	// the protocol notice goes first (the farewell is the last word); for a Hub agent only when the key conversation.reply was proven by the caller
-	if s.sessionNotice != nil && mayNotify {
-		s.sessionNotice(ctx, in.ConversationID, agent, true)
+	if s.sessionNotice != nil && mayNotify && in.WantsProtocolNotice() {
+		s.sessionNotice(ctx, in.ConversationID, agent, true, in.Reason)
 	}
 	farewell := domain.FarewellNotRequested
 	if in.Farewell != "" {

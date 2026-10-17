@@ -72,6 +72,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   const windowClosed = !delegated && !!channel.data && channel.data.window_required && !channel.data.window_open
   const canNotify = hasOwner && !windowClosed && (delegated ? (hub ? hub.canReply : can('conversation.reply')) : channel.data?.can_send_text !== false)
   const [notify, setNotify] = useState(true)
+  const [notifyProtocol, setNotifyProtocol] = useState(true) // só o AVISO do número é opcional: todo atendimento termina com protocolo
   const [farewell, setFarewell] = useState(DEFAULT_FAREWELL)
   // The closing notice travels WITH the finalize request: the server queues it in the same transaction that closes the conversation, so it never goes out for an
   // attendance that was not finalized, and a refusal (closed 24 h window, no line) does not stop the finalize; the answer says what happened.
@@ -88,6 +89,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       const res = await attendanceAPI.finalize(conversationId, {
         reason, note: note.trim(), summary: summary.trim(), summary_truth, follow_ups, ...(asked ? { farewell: farewell.trim() } : {}),
         ...(serviceResult && reason !== 'no_response' ? { service_result: serviceResult } : {}),
+        ...(canNotify && !notifyProtocol ? { notify_protocol: false } : {}),
       }, target)
       return { asked, changed: res.changed, farewell: res.farewell }
     },
@@ -203,6 +205,13 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
         </fieldset>
         {canNotify ? (
           <fieldset className="space-y-2 rounded-control border border-border-subtle p-3">
+            <label className="flex items-start gap-2 text-sm font-medium text-text-primary">
+              <input className="mt-1" type="checkbox" checked={notifyProtocol} onChange={(e) => setNotifyProtocol(e.target.checked)} />
+              <span>
+                Informar o número do protocolo ao cliente
+                <span className="block text-xs font-normal text-text-tertiary">O protocolo encerra junto com o atendimento, sempre. Aqui você escolhe só se o cliente recebe o número por mensagem (depende do aviso de protocolo da empresa).</span>
+              </span>
+            </label>
             <label className="flex items-center gap-2 text-sm font-medium text-text-primary">
               <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
               Avisar o cliente que o atendimento foi encerrado

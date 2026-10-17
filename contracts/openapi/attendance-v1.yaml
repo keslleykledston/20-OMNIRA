@@ -152,6 +152,7 @@ components:
           items: { $ref: '#/components/schemas/FollowUpInput' }
         farewell: { type: string, maxLength: 1000, description: 'Closing notice for the customer. Queued by the server in the same transaction that closes the conversation (never sent for an attendance that was not finalized); the answer says what became of it. Needs the same permission to message the customer as a reply.' }
         service_result: { type: string, maxLength: 64, pattern: '^\S+$', description: 'Optional. The result the person chose for the service protocol (ADR-0049) that ends with the attendance: a built-in code or one of the company''s own. Absent = the automatic result for the reason. An unknown code never stops the attendance from ending (the automatic result is used); an attendance ending as no_response always ends its protocol as abandoned.' }
+        notify_protocol: { type: boolean, description: 'Optional (default true). false = do not tell the customer the protocol number in the conversation when the attendance ends. The protocol itself is never optional: every finalized attendance ends with one (an attendance nobody assumed gets its protocol when it ends). The notice also depends on the company capability service_protocol_notice and on a text being sendable; spam and duplicate finalizations send none.' }
     FollowUpInput:
       type: object
       required: [kind, text]

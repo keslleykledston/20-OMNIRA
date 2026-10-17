@@ -401,7 +401,7 @@ func main() {
 			// (Hub > Instâncias > Capacidades > "Aviso de protocolo ao cliente", off by default)
 			notice := servicectxadapters.NewNotice(dbPool)
 			serviceSvc.WithAnnouncer(notice)
-			attendanceService.WithSessionNotice(servicectxadapters.FinalizeNotice(dbPool, notice))
+			attendanceService.WithSessionNotice(servicectxadapters.FinalizeNotice(dbPool, notice, serviceSvc))
 			log.Printf("Service protocol notice installed (each company's own switch decides; off by default)\n")
 		}
 		srv.RegisterServiceContextHandlers(dbPool, serviceHandler)
