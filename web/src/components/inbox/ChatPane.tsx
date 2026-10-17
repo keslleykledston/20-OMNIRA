@@ -23,6 +23,7 @@ import { finalizedNotice } from '../../lib/attendance';
 import { emitInboxNotice, useInboxNotice } from '../../lib/inboxNotice';
 import { useAccess } from '../../lib/useAccess';
 import TenantContextBar from './TenantContextBar';
+import ProtocolTag from '../service/ProtocolTag';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -292,6 +293,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
               <p className="mb-1 flex items-center justify-center gap-1.5 text-[10px] text-text-tertiary">
                 <Icon name="clock" size={12} />
                 Início do atendimento · {new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                <ProtocolTag conversationId={conversationId} />
               </p>
             )}
             {messages.length === 0 ? (

@@ -82,3 +82,31 @@ describe('HubItemView — files from the Hub\'s composer (ADR-0024 x ADR-0040)',
     expect(vi.mocked(axios.get)).not.toHaveBeenCalled()
   })
 })
+
+describe('HubItemView — the protocol beside the customer name', () => {
+  const withKeys = (keys: string[]): HubItemDetail => ({ ...detail(), access: { source: 'hub', hub_id: HUB, can_reply: true, keys } as any })
+  const answer = () =>
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/channel')) return { data: channel(false) }
+      if (url.endsWith('/service-session')) return { data: { id: 's1', protocol: 'KTG-1005', status: 'in_progress', version: 1 } }
+      return Promise.reject({ response: { status: 404 } })
+    })
+
+  it('shows it when the grant reads the service context, asking the item\'s company as that Hub', async () => {
+    answer()
+    renderAt(<HubItemView hubId={HUB} detail={withKeys(['service.read'])} />)
+    expect(await screen.findByTestId('chat-protocol')).toHaveTextContent('KTG-1005')
+    const call = vi.mocked(axios.get).mock.calls.find(([u]) => String(u).endsWith('/service-session')) as [string, any]
+    expect(call[0]).toContain(`/tenants/${COMPANY}/conversations/conv-1/service-session`)
+    expect(call[1].headers['X-Omnira-Acting-As']).toBe(`hub:${HUB}`)
+  })
+
+  it('without service.read in the grant it does not even ask', async () => {
+    answer()
+    renderAt(<HubItemView hubId={HUB} detail={withKeys(['conversation.reply'])} />)
+    await screen.findByPlaceholderText('Escreva uma mensagem...')
+    await waitFor(() => expect(vi.mocked(axios.get)).toHaveBeenCalled())
+    expect(vi.mocked(axios.get).mock.calls.some(([u]) => String(u).endsWith('/service-session'))).toBe(false)
+    expect(screen.queryByTestId('chat-protocol')).not.toBeInTheDocument()
+  })
+})

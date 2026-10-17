@@ -75,7 +75,8 @@ describe('ContextPane — PRODUCT.7B1C removal of misleading CRM context UI', ()
   it('still renders ticket context', async () => {
     mockConversation();
     renderAt(<ContextPane conversationId={CONV} />);
-    await screen.findByLabelText('Empresa');
+    // this fixture has no CRM/ERP directory: the ticket panel is there and says so
+    await screen.findByText(/não tem CRM\/ERP ligado/);
   });
 
   // F. the CRM activity containment message (PRODUCT.7B1B) still renders

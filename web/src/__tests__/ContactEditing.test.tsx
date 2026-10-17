@@ -146,6 +146,24 @@ describe('ContactNotes — comments that document the context', () => {
     expect(String(vi.mocked(axios.delete).mock.calls[0][0])).toMatch(/\/notes\/n1$/)
   })
 
+  it('through the Hub, listing, editing and removing a note all go to the item\'s company, acting as that Hub', async () => {
+    vi.mocked(axios.put).mockResolvedValue({ data: note() })
+    vi.mocked(axios.delete).mockResolvedValue({ data: {} })
+    const user = userEvent.setup()
+    wrap(<ContactNotes contactId={ID} target={{ hubId: 'hub-9', tenantId: 'tenant-z' }} />)
+    await user.click(await screen.findByRole('button', { name: 'Editar' }))
+    await user.click(screen.getByRole('button', { name: 'Salvar anotação' }))
+    await waitFor(() => expect(axios.put).toHaveBeenCalled())
+    await user.click(await screen.findByRole('button', { name: 'Remover anotação' }))
+    await waitFor(() => expect(axios.delete).toHaveBeenCalled())
+    const calls = [vi.mocked(axios.get).mock.calls[0], vi.mocked(axios.put).mock.calls[0], vi.mocked(axios.delete).mock.calls[0]] as unknown as [string, any, any?][]
+    for (const call of calls) {
+      expect(String(call[0])).toContain('/tenants/tenant-z/contacts/')
+      const headers = (call[2] ?? call[1])?.headers
+      expect(headers?.['X-Omnira-Acting-As']).toBe('hub:hub-9')
+    }
+  })
+
   it('does not exist for a role that cannot read notes', async () => {
     vi.mocked(axios.get).mockImplementation(() => err(403))
     wrap(<ContactNotes contactId={ID} />)

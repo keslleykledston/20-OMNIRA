@@ -1407,6 +1407,25 @@ describe('TicketPanel — the contact\'s own companies', () => {
     await waitFor(() => expect(select.options.length).toBe(3));
     expect(select.value).toBe('');
   });
+
+  it('a company with no CRM/ERP directory gets an explanation, not a form that cannot be filled', async () => {
+    mockCompanies([]);
+    renderAt(<TicketPanel conversationId={CONV} crmContactId="crm-1" />);
+    expect(await screen.findByText(/não tem CRM\/ERP ligado/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Assunto do chamado')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Abrir chamado/ })).not.toBeInTheDocument();
+  });
+
+  it('a directory that failed to load is not presented as a company without CRM/ERP', async () => {
+    vi.mocked(axios.get).mockImplementation(async (url: string) => {
+      if (url.endsWith('/crm/companies')) return Promise.reject({ message: 'Network Error' });
+      if (url.endsWith('/ticket')) return { data: { local_ticket_id: 'lt-1', linked: false } };
+      return Promise.reject({ response: { status: 404 } });
+    });
+    renderAt(<TicketPanel conversationId={CONV} crmContactId="crm-1" />);
+    expect(await screen.findByText(/Não foi possível ler as empresas do CRM\/ERP/)).toBeInTheDocument();
+    expect(screen.queryByText(/não tem CRM\/ERP ligado/)).not.toBeInTheDocument();
+  });
 });
 
 // A Hub agent working the instance from the unified inbox may refresh the ticket from the ERP (key ticket.create); changing the ERP status stays out of the delegated context.

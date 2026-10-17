@@ -13,7 +13,7 @@ import {
 } from '../../lib/serviceContext'
 import type { DelegatedTarget } from '../../lib/attendance'
 import { getTenantId } from '../../lib/session'
-import { getActingHub } from '../../lib/acting'
+import { serviceSessionKey } from './ProtocolTag'
 
 const selectClass = 'w-full rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary'
 const active = (s: ServiceSession) => s.status === 'open' || s.status === 'in_progress' || s.status === 'waiting'
@@ -36,9 +36,8 @@ interface Props {
 export default function ServiceSessionPanel({ conversationId, can, hub, delegated = false, conversationClosed = false }: Props) {
   const tenantId = hub?.tenantId ?? getTenantId()
   const qc = useQueryClient()
-  // the cache is per viewer's capacity AND per Hub: two Hubs serving the same company must never share what was loaded for the other
-  const kind = hub || delegated ? `delegated:${hub?.hubId ?? getActingHub()}` : 'member'
-  const sessionKey = ['service-session', kind, tenantId, conversationId]
+  const sessionKey = [...serviceSessionKey(conversationId, hub, delegated)]
+  const kind = sessionKey[1] as string // the codes and tasks caches are keyed the same way (per viewer's capacity and per Hub)
   const [error, setError] = useState<string | null>(null)
   const [closing, setClosing] = useState(false)
   const [code, setCode] = useState('information_provided')

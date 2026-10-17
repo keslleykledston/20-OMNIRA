@@ -10,6 +10,7 @@ import TransferDialog from './TransferDialog';
 import FinalizeDialog from '../inbox/FinalizeDialog';
 import { ChannelOrigin, channelLabel } from '../inbox/ChannelOrigin';
 import { Icon } from '../primitives';
+import ProtocolTag from '../service/ProtocolTag';
 
 const TYPE_LABEL: Record<string, string> = { image: 'Imagem', video: 'Vídeo', audio: 'Áudio', document: 'Documento', sticker: 'Figurinha' };
 
@@ -133,6 +134,9 @@ export default function HubItemView({ hubId, detail, onBack, onToggleContext }: 
               <ChannelOrigin source={detail.item.channel} />
               <span>{channelLabel(detail.item.channel)}</span>
               {detail.conversation.status === 'closed' && <span>· Finalizado</span>}
+              {(detail.access.keys ?? detail.access.service_keys ?? []).includes('service.read') && (
+                <ProtocolTag conversationId={detail.conversation.id} hub={{ hubId, tenantId: detail.tenant.id }} />
+              )}
             </p>
           </div>
           {onToggleContext && (

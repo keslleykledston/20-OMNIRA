@@ -76,6 +76,7 @@ export interface ServiceTask {
 }
 
 export interface ResultCode { id: string; code: string; canonical_code: CanonicalResult; label: string; active: boolean }
+export interface ProtocolPrefix { prefix: string; configured: boolean; locked: boolean; next_protocol: string }
 export interface Category { id: string; code: string; label: string; active: boolean }
 
 // O servidor fecha o atendimento com um dos oito códigos internos ou um código ativo da empresa. A lista da empresa vem do catálogo; os internos vêm daqui.
@@ -115,6 +116,10 @@ export const serviceAPI = {
     call<ServiceTask>(() => axios.post(`${base(target)}/service-tasks`, body, h(target, { 'Idempotency-Key': key }))),
   completeTask: (t: ServiceTask, target?: DelegatedTarget) =>
     call<ServiceTask>(() => axios.post(`${base(target)}/service-tasks/${t.id}/complete`, {}, h(target, { 'If-Match': ifMatch(t.version) }))),
+  // Members only (never delegable): the company's prefix and the next protocol number.
+  protocolPrefix: () => call<ProtocolPrefix>(() => axios.get(`${base()}/service-settings/protocol-prefix`, h())),
+  setProtocolPrefix: (prefix: string) =>
+    call<ProtocolPrefix>(() => axios.put(`${base()}/service-settings/protocol-prefix`, { prefix }, h())),
   resultCodes: (target?: DelegatedTarget) =>
     call<{ items: ResultCode[] }>(() => axios.get(`${base(target)}/service-result-codes`, h(target))).then((r) => r.items.filter((c) => c.active)),
 }
@@ -137,4 +142,15 @@ export function serviceErrorMessage(err: unknown): string {
   if (status === 412 || status === 428) return 'Outra pessoa alterou este atendimento. Recarregamos os dados; confira e tente de novo.'
   if (status === 422) return 'Não foi possível: confira os dados informados.'
   return 'Não foi possível concluir. Tente novamente.'
+}
+
+export const PREFIX_PATTERN = /^[A-Za-z]{2,6}$/
+
+export function prefixErrorMessage(err: unknown): string {
+  const r = (err as { response?: { status?: number; data?: { error?: string } } })?.response
+  if (r?.status === 403) return 'Somente administradores podem escolher o prefixo.'
+  if (r?.status === 409 && r.data?.error === 'prefix_locked') return 'O prefixo não muda depois que o primeiro protocolo é emitido.'
+  if (r?.status === 409) return 'Outra empresa já usa este prefixo. Escolha outro.'
+  if (r?.status === 400) return 'Use de 2 a 6 letras, sem números nem espaços.'
+  return 'Não foi possível salvar o prefixo. Tente novamente.'
 }

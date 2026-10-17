@@ -568,6 +568,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
   // submitted through this UI.
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loadingCompanies, setLoadingCompanies] = useState(false);
+  const [companiesFailed, setCompaniesFailed] = useState(false);
 
   useEffect(() => {
     const loadCompanies = async () => {
@@ -581,7 +582,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
         setCompanies(items);
       } catch (err) {
         console.error('Erro ao carregar empresas:', err);
-        // Not critical: the panels show "Nenhuma empresa disponível".
+        setCompaniesFailed(true); // not critical: the form says the directory could not be read
       } finally {
         setLoadingCompanies(false);
       }
@@ -982,6 +983,13 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
           <div className="rounded-control border border-status-danger-border bg-status-danger-soft p-3 text-xs text-status-danger">
             Falha ao carregar o chamado desta conversa. Tente novamente mais tarde.
           </div>
+        ) : noCompanies ? (
+          // A small company with no CRM/ERP has nobody to open an external ticket for: say so instead of a form that cannot be filled.
+          <div className="rounded-control border border-border-subtle bg-surface-muted p-3 text-xs text-text-secondary">
+            {companiesFailed
+              ? 'Não foi possível ler as empresas do CRM/ERP agora. Tente novamente mais tarde.'
+              : 'Esta empresa não tem CRM/ERP ligado, então não há chamado externo a abrir. O atendimento fica registrado no protocolo e nas tarefas.'}
+          </div>
         ) : (
           <form
             className="grid gap-2"
@@ -1013,7 +1021,6 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                 ))}
               </select>
             )}
-            {noCompanies && <p className="m-0 text-[10px] text-text-tertiary">Nenhuma empresa disponível</p>}
             <input
               className={FIELD}
               value={state.subject}

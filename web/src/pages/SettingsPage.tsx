@@ -11,6 +11,7 @@ import {
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
 import AIIntegrationCard from '../components/settings/AIIntegrationCard'
+import ProtocolPrefixCard from '../components/settings/ProtocolPrefixCard'
 
 // "30 min", "2 h", "3 d": the same compact units the conversation list uses.
 export function formatMinutes(m: number): string {
@@ -187,6 +188,11 @@ export default function SettingsPage() {
             )}
           </CardBody>
         </Card>
+        {accessReady && canManage && (
+          <div className="mt-6">
+            <ProtocolPrefixCard />
+          </div>
+        )}
         {accessReady && canManage && (
           <div className="mt-6">
             <AIIntegrationCard />
