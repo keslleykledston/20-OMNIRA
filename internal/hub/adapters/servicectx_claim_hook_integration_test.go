@@ -307,3 +307,29 @@ func TestAHubAgentWithoutTheReplyKeyOrNotHoldingTheConversationOpensButTellsNobo
 		t.Fatalf("not the holder: %q", got)
 	}
 }
+
+// R-7 (Codex 2026-10-16): the notice of the delegated route is queued in its own transaction, so it must wait for the request's commit. A request that dies after
+// opening the protocol rolls the protocol back; the customer must not hear about it.
+func TestTheCustomerIsNotToldAboutAProtocolTheRequestRolledBack(t *testing.T) {
+	s := newSvcWorld(t)
+	s.svc.WithAnnouncer(servicectxadapters.NewNotice(s.app))
+	agent := s.noticeAgent(noticeKeys...)
+	s.exec(`UPDATE conversations SET assigned_to_user_id = $2 WHERE id = $1`, s.conv["A"], agent)
+	r := s.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s.conv["A"]), "X-Test-Die", "1")
+	if r.code != 599 {
+		t.Fatalf("the request was meant to die after the handler: %d %v", r.code, r.body)
+	}
+	if n := s.count(`SELECT count(*) FROM service_sessions WHERE conversation_id = $1`, s.conv["A"]); n != 0 {
+		t.Fatalf("the protocol survived a rolled-back request: %d", n)
+	}
+	if got := s.told("A"); len(got) != 0 {
+		t.Fatalf("the customer was told about a protocol that does not exist: %q", got)
+	}
+	// the same request that commits does tell (the other test proves the wording)
+	if r := s.call(agent, "A", true, "POST", "/service-sessions", fmt.Sprintf(`{"conversation_id":"%s"}`, s.conv["A"])); r.code != http.StatusCreated {
+		t.Fatalf("open: %d %v", r.code, r.body)
+	}
+	if got := s.told("A"); len(got) != 1 {
+		t.Fatalf("a committed request tells once: %q", got)
+	}
+}

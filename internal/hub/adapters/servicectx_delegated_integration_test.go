@@ -46,7 +46,14 @@ func newSvcWorld(t *testing.T) *svcWorld {
 	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(w.app), tenancyadapters.NewPostgresTenantRepository(w.app))
 	mw := tenancyadapters.AuthorizationMiddleware(w.app, authz)
 	inner := http.NewServeMux()
-	h.Routes(inner, func(fn http.HandlerFunc) http.Handler { return mw(fn) }, tenancyadapters.Delegable)
+	h.Routes(inner, func(fn http.HandlerFunc) http.Handler {
+		return mw(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			fn(rw, r)
+			if r.Header.Get("X-Test-Die") != "" {
+				panic("the request dies after the handler: its transaction never commits") // a test-only way to make the request session roll back
+			}
+		}))
+	}, tenancyadapters.Delegable)
 	sw := &svcWorld{world: w, gw: gw, svc: svc}
 	sw.mux = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if u := r.Header.Get("X-Test-User"); u != "" {
@@ -76,7 +83,14 @@ func (s *svcWorld) call(user uuid.UUID, tenantKey string, acting bool, method, p
 		req.Header.Set(headers[i], headers[i+1])
 	}
 	rec := httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, req)
+	func() {
+		defer func() {
+			if recover() != nil {
+				rec.Code = 599
+			}
+		}()
+		s.mux.ServeHTTP(rec, req)
+	}()
 	var out map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	return svcReply{rec.Code, out}

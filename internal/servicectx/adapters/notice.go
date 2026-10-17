@@ -118,7 +118,17 @@ func (n *Notice) send(ctx context.Context, a ports.Announcement, kind string, re
 			log.Printf("service-context: protocol %s notice (%s) not sent: the agent's grant lacks conversation.reply", a.Protocol, kind)
 			return nil
 		}
-		return platformdb.WithSystemTenantSession(ctx, n.pool, a.TenantID, do)
+		queue := func(c context.Context) error { return platformdb.WithSystemTenantSession(c, n.pool, a.TenantID, do) }
+		// The notice goes out only if the request that opened or closed the protocol COMMITS: the system session is a separate transaction, so queuing it now would tell
+		// the customer about a protocol a failed commit then rolled back (Codex 2026-10-16, R-7).
+		if platformdb.AfterCommit(ctx, func(c context.Context) {
+			if err := queue(c); err != nil {
+				log.Printf("service-context: protocol %s notice (%s) failed after the commit: %v", a.Protocol, kind, err)
+			}
+		}) {
+			return nil
+		}
+		return queue(ctx)
 	}
 	return do(ctx)
 }

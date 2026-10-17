@@ -19,8 +19,16 @@ func WithSavepoint(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.
 	if err != nil {
 		return err
 	}
+	var q *afterCommitQueue
+	mark := 0
+	if q, _ = ctx.Value(afterCommitKey{}).(*afterCommitQueue); q != nil {
+		mark = q.mark()
+	}
 	if err := fn(WithQuerier(ctx, sp)); err != nil {
 		_ = sp.Rollback(ctx)
+		if q != nil {
+			q.dropAfter(mark) // what the rolled-back work asked to run after the commit goes with it
+		}
 		return err
 	}
 	return sp.Commit(ctx)

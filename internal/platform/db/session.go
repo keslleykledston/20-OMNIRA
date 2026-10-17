@@ -75,11 +75,17 @@ func WithTenantSession(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID
 		return err
 	}
 
-	if err := fn(WithQuerier(ctx, tx)); err != nil {
+	// the callbacks of AfterCommit belong to THIS session's transaction (a nested session has its own)
+	q := &afterCommitQueue{}
+	if err := fn(WithQuerier(context.WithValue(ctx, afterCommitKey{}, q), tx)); err != nil {
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	q.run(ctx)
+	return nil
 }
 
 // WithSystemTenantSession is the only entry point for non-human tenant work.
