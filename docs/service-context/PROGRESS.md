@@ -17,5 +17,6 @@ Como rodar testes (banco descartável, nunca `omnira_dev`): scripts no scratchpa
 | 7 Docs finais | feito | (este commit) | status **READY_FOR_REVIEW** (ver 13) |
 | 8 Decisões do dono 2026-10-15 | feito (ver 14) | (próximo commit) | prefixo por empresa + 1001, janela 24 h, abertura ao assumir |
 | 9 Pós-merge (2026-10-15/17) | feito, implantado | `5f970b1` … `b79094f` | aviso do protocolo por empresa; paridade do painel do Hub; anexos no Hub; status do chamado ERP pelo Hub (chave por empresa); prefixo, protocolo na conversa, ocorrências/OS/histórico, resultado ao finalizar; R-7 fechado; e2e, restore e carga; contrato do adaptador de ERP; Codex sem BLOCKER/HIGH |
+| 10 Noite 2026-10-17 | feito, implantado (`bb96ea2`, sem migração, sem push) | `8de7bf5`, `edde0ad`, `19fae68`, `bb96ea2` | enviar conversa a outra fila/setor (`route-queue`, só membros); "Cliente sem empresa" (`standalone:true`); P0/P1 do headless registrados e roteiro do P2 (`docs/ops/HEADLESS-P2-CHECKLIST.md`); Codex: 1 HIGH + 4 MEDIUM, os aplicáveis tratados |
 
 Retomada: nada a retomar no código; pendências estão em `13-final-report.md`.
