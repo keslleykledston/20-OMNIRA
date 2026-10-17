@@ -34,6 +34,7 @@ DECLARE
   origin TEXT;
   links JSONB;
   body JSONB;
+  safe JSONB;
 BEGIN
   public_type := CASE NEW.event_type
     WHEN 'service_case.opened' THEN 'service_case.created.v1'
@@ -54,11 +55,23 @@ BEGIN
     WHEN 'integration' THEN 'crm'
     ELSE 'system' END;
   links := jsonb_strip_nulls(jsonb_build_object('session_id', NEW.session_id, 'case_id', NEW.case_id, 'contact_id', NEW.contact_id, 'customer_id', NEW.customer_id));
-  body := jsonb_build_object('links', links, 'actor_type', NEW.actor_type, 'data', NEW.payload);
+  -- the module's payload is ids, enums and counts, but the database does not take that on trust (Codex 2026-10-17, HIGH): only booleans, numbers, uuids and short
+  -- lower-case tokens survive; any other string (a sentence, a name, a number with spaces), an object or an array is dropped
+  safe := COALESCE((SELECT jsonb_object_agg(k, v) FROM jsonb_each(NEW.payload) AS e(k, v)
+                     WHERE k ~ '^[a-z][a-z0-9_]{0,39}$'
+                       AND (jsonb_typeof(v) IN ('boolean', 'number')
+                            OR (jsonb_typeof(v) = 'string' AND (v #>> '{}') ~ '^([a-z0-9][a-z0-9_.:-]{0,63}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$'))), '{}'::jsonb);
+  body := jsonb_build_object('links', links, 'actor_type', NEW.actor_type, 'data', safe);
   IF octet_length(body::text) > 2000 THEN   -- the column caps the payload at 2048 bytes: the links and the actor always fit, the module's own payload goes when it does not
     body := jsonb_build_object('links', links, 'actor_type', NEW.actor_type);
   END IF;
-  PERFORM emit_domain_event(NEW.tenant_id, public_type, NEW.entity_type, NEW.entity_id, NEW.conversation_id, NULL, origin, NULL, body);
+  -- the aggregate is what the public name says it is (never a free column of the source row); and a courtesy to external applications never breaks the write of
+  -- the module's own journal: a failure here is a warning, not an aborted attendance
+  BEGIN
+    PERFORM emit_domain_event(NEW.tenant_id, public_type, split_part(public_type, '.', 1), NEW.entity_id, NEW.conversation_id, NULL, origin, NULL, body);
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'service fact % not journaled for external applications (sqlstate %)', public_type, SQLSTATE;
+  END;
   RETURN NULL;
 END $$;
 CREATE TRIGGER domain_events_service_context_trg AFTER INSERT ON context_events FOR EACH ROW EXECUTE FUNCTION domain_events_service_context();

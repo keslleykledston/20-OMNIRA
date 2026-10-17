@@ -270,3 +270,60 @@ func TestAServiceFactIsDeliveredSignedAndStopsWhenTheScopeIsWithdrawn(t *testing
 		t.Errorf("the delivery of the withdrawn scope is cancelled as not_visible: %d", cancelled)
 	}
 }
+
+// Codex 2026-10-17 (HIGH): the database does not take it on trust that the module's payload is ids and enums. Only booleans, numbers, uuids and short lower-case tokens
+// leave; a sentence, an object or an array is dropped. And the aggregate is what the public name says, so a source row with a mismatched entity type can neither abort the
+// module's own write nor file the fact under a wrong aggregate.
+func TestTheDatabaseLetsOnlyIdsEnumsAndCountsOut(t *testing.T) {
+	e := newEnv(t)
+	e.eventsAPI()
+	a := e.tenant()
+	admin := e.member(a, "tenant_admin")
+	app := e.install(admin, a, "CRM", serviceJournalScopes...)
+
+	id := uuid.New().String()
+	e.ctxEvent(a, "service_case.status_changed", "service_case", nil, map[string]any{
+		"to": "resolved", "count": 3, "flag": true, "ref": id,
+		"texto":   "Meu cartão final 4242 1111 e a senha é 123",
+		"nome":    "Maria da Silva",
+		"nested":  map[string]any{"a": "b"},
+		"list":    []string{"x"},
+		"Bad-Key": "ok",
+	})
+	// a mismatched pair: a task fact filed by the source row under another entity type
+	e.ctxEvent(a, "service_task.created", "service_session", nil, map[string]any{})
+	e.sequence()
+	var resolved, task *journalEvent
+	for _, ev := range e.allEvents(app.Credential.Token, 0) {
+		ev := ev
+		switch ev.Type {
+		case "service_case.resolved.v1":
+			resolved = &ev
+		case "service_task.created.v1":
+			task = &ev
+		}
+	}
+	if resolved == nil || task == nil {
+		t.Fatalf("both facts must be journaled: resolved=%v task=%v", resolved != nil, task != nil)
+	}
+	data, _ := resolved.Data["data"].(map[string]any)
+	for _, k := range []string{"to", "count", "flag", "ref"} {
+		if _, ok := data[k]; !ok {
+			t.Errorf("the safe key %q was dropped: %v", k, data)
+		}
+	}
+	for _, k := range []string{"texto", "nome", "nested", "list", "Bad-Key"} {
+		if _, ok := data[k]; ok {
+			t.Errorf("the unsafe key %q left the database: %v", k, data)
+		}
+	}
+	raw, _ := json.Marshal(resolved.Data)
+	for _, leak := range []string{"4242", "senha", "Maria"} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("the envelope carries %q: %s", leak, raw)
+		}
+	}
+	if task.Aggregate.Type != "service_task" {
+		t.Errorf("the aggregate must follow the public name, got %q", task.Aggregate.Type)
+	}
+}

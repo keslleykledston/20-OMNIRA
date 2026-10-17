@@ -8,8 +8,12 @@ DELETE FROM domain_events WHERE event_type IN ('service_session.opened.v1', 'ser
 UPDATE webhook_subscriptions SET event_types = ARRAY(SELECT t FROM unnest(event_types) t WHERE t IN ('conversation.created.v1', 'conversation.control_changed.v1', 'conversation.closed.v1', 'message.created.v1', 'message.status_changed.v1', 'contact.updated.v1', 'ticket.linked.v1'))
  WHERE NOT event_types <@ ARRAY['conversation.created.v1', 'conversation.control_changed.v1', 'conversation.closed.v1', 'message.created.v1', 'message.status_changed.v1', 'contact.updated.v1', 'ticket.linked.v1']::TEXT[];
 DELETE FROM webhook_subscriptions WHERE cardinality(event_types) = 0;
+-- an installation never disappears with this rollback: the scope is taken away; one whose ONLY scope it was keeps events.read and is suspended (it can do nothing
+-- until an administrator reviews it)
 UPDATE external_app_installations SET scopes = array_remove(scopes, 'service.read') WHERE 'service.read' = ANY (scopes) AND cardinality(scopes) > 1;
-DELETE FROM external_app_installations WHERE 'service.read' = ANY (scopes);
+UPDATE external_app_installations SET scopes = ARRAY['events.read'], status = CASE WHEN status = 'revoked' THEN status ELSE 'suspended' END,
+       suspended_at = CASE WHEN status = 'revoked' THEN suspended_at ELSE COALESCE(suspended_at, now()) END
+ WHERE 'service.read' = ANY (scopes);
 ALTER TABLE webhook_subscriptions DROP CONSTRAINT webhook_subscriptions_event_types_check;
 ALTER TABLE webhook_subscriptions ADD CONSTRAINT webhook_subscriptions_event_types_check
   CHECK (cardinality(event_types) BETWEEN 1 AND 7 AND event_types <@ ARRAY['conversation.created.v1', 'conversation.control_changed.v1', 'conversation.closed.v1', 'message.created.v1', 'message.status_changed.v1', 'contact.updated.v1', 'ticket.linked.v1']::TEXT[]);
