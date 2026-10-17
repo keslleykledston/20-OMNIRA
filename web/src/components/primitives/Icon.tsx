@@ -37,8 +37,18 @@ export type IconName =
   | 'play'
   | 'flag'
   | 'shield-alert'
+  | 'shield-check'
+  | 'users'
+  | 'id-card'
+  | 'plug'
+  | 'reconcile'
 
 const paths: Record<IconName, string> = {
+  'shield-check': 'M12 3 4 7v5c0 4.4 3.4 8.4 8 9 4.6-.6 8-4.6 8-9V7l-8-4Zm-3.5 9 2.5 2.5 4.5-5',
+  users: 'M17 20v-1a4 4 0 0 0-3-3.9M3 20v-1a4 4 0 0 1 4-4h3a4 4 0 0 1 4 4v1M12.5 7.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0ZM16 4.2a3.5 3.5 0 0 1 0 6.6',
+  'id-card': 'M16 10h2m-2 4h2M6.2 15a3 3 0 0 1 5.6 0M7 11a2 2 0 1 0 4 0 2 2 0 0 0-4 0ZM4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z',
+  plug: 'M12 22v-5M9 8V2m6 6V2m3 6v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z',
+  reconcile: 'M8 3 4 7l4 4M4 7h16m-4 14 4-4-4-4m4 4H4',
   'user-plus': 'M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19 8v6m3-3h-6',
   'user-minus': 'M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM22 11h-6',
   transfer: 'M7 7h13m0 0-3-3m3 3-3 3M17 17H4m0 0 3-3m-3 3 3 3',

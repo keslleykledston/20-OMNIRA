@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
+  ActiveFilters,
   Avatar,
   EmptyState,
   ErrorState,
@@ -65,6 +66,9 @@ const STAFF_STATUS: Record<PersonInternalUser['status'], { label: string; tone: 
   active: { label: 'Ativo', tone: 'success' },
   inactive: { label: 'Inativo', tone: 'default' },
 }
+
+// what the person reads in the chip for each value of the Situação filter
+const STATUS_FILTER_LABEL: Record<string, string> = { active: 'Ativos', blocked: 'Bloqueados', archived: 'Arquivados', inactive: 'Inativos (equipe)' }
 
 const SELECT =
   'rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary ' +
@@ -162,6 +166,21 @@ export default function ContactsPage() {
           </select>
         </label>
       </div>
+
+      <ActiveFilters
+        filters={[
+          ...(view !== 'all' ? [{ key: 'view', label: 'Tipo', value: VIEWS.find((v) => v.id === view)?.label ?? view }] : []),
+          ...(search.trim() ? [{ key: 'search', label: 'Busca', value: search.trim() }] : []),
+          ...(status ? [{ key: 'status', label: 'Situação', value: STATUS_FILTER_LABEL[status] ?? status }] : []),
+        ]}
+        onRemove={(key) => {
+          if (key === 'view') setView('all')
+          if (key === 'search') setSearch('')
+          if (key === 'status') setStatus('')
+          resetPaging()
+        }}
+        onClear={() => { setSearch(''); setStatus(''); setView('all'); resetPaging() }}
+      />
 
       <div role="tablist" aria-label="Tipo de pessoa" className="flex flex-wrap gap-1.5">
         {VIEWS.map((v) => (

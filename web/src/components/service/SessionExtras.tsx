@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ActionIcon, Input } from '../primitives'
+import { ActionIcon, Button, Icon, Input } from '../primitives'
 import {
   ACTOR_LABEL,
   CASE_STATUS_LABEL,
@@ -29,6 +29,7 @@ interface Props {
 export default function SessionExtras({ session, can, hub, scope }: Props) {
   const qc = useQueryClient()
   const [title, setTitle] = useState('')
+  const [adding, setAdding] = useState(false) // the occurrence field is opened on demand
   const [error, setError] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const openKey = useRef(newKey())
@@ -40,6 +41,7 @@ export default function SessionExtras({ session, can, hub, scope }: Props) {
     onSuccess: () => {
       openKey.current = newKey()
       setTitle('')
+      setAdding(false)
       setError(null)
       void qc.invalidateQueries({ queryKey: casesKey })
       void qc.invalidateQueries({ queryKey: ['service-timeline', scope, session.id] })
@@ -68,12 +70,18 @@ export default function SessionExtras({ session, can, hub, scope }: Props) {
               </li>
             ))}
           </ul>
-          {can('service.create') && (
+          {can('service.create') && (adding ? (
             <form className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (title.trim()) addCase.mutate() }}>
-              <Input aria-label="Nova ocorrência" placeholder="Nova ocorrência" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />
+              <Input aria-label="Nova ocorrência" placeholder="Nova ocorrência" value={title} maxLength={200} autoFocus onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setAdding(false); setTitle('') } }} />
               <ActionIcon type="submit" icon="plus" label="Abrir ocorrência" disabled={addCase.isPending || !title.trim()} />
+              <ActionIcon icon="close" label="Cancelar ocorrência" onClick={() => { setAdding(false); setTitle('') }} />
             </form>
-          )}
+          ) : (
+            <Button size="sm" variant="tertiary" className="mt-1" onClick={() => setAdding(true)} disabled={addCase.isPending}>
+              <Icon name="plus" size={16} />
+              Adicionar ocorrência
+            </Button>
+          ))}
         </div>
       )}
 

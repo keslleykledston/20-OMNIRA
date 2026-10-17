@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import { ConversationItem } from '../../types/api';
 import { API_BASE } from '../../lib/config';
 import { authHeaders, getTenantId, handleUnauthorized, isUnauthorized } from '../../lib/session';
-import { ActionIcon, Icon } from '../primitives';
+import { Button, DropdownMenu, Icon } from '../primitives';
 import { TicketPanel } from '../TicketPanel';
 import { TechnicianSelectModal } from '../TechnicianSelectModal';
 import ConversationSummary from './ConversationSummary';
@@ -270,32 +270,49 @@ export default function ContextPane({ conversationId, onOpenConversation, onSent
       )}
 
       <div role="tabpanel" id={`${tabsId}-panel-details`} aria-labelledby={`${tabsId}-tab-details`} hidden={tab !== 'details'} className={clsx(tab === 'details' && 'min-h-0 flex-1')}>
-      {/* The state of the attendance in two lines (who holds it, since when) and the three things you do to it as icons: the labels are the tooltips and the accessible names. */}
+      {/* The state of the attendance (who holds it, since when) and what you do to it. */}
       <section aria-label="Atendimento" className="space-y-1.5 border-b border-border-subtle px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="flex min-w-0 items-center gap-2 text-sm">
-            <span
-              className={clsx('inline-flex flex-shrink-0 items-center gap-1.5 rounded-pill px-2 py-0.5 text-xs font-medium', closed ? 'bg-status-muted text-text-secondary' : 'bg-status-success-soft text-status-success')}
-            >
-              <span aria-hidden="true" className={clsx('h-1.5 w-1.5 rounded-full', closed ? 'bg-text-tertiary' : 'bg-status-success')} />
-              {closed ? 'Finalizado' : 'Em atendimento'}
-            </span>
-            <span className="min-w-0 truncate font-medium text-text-primary" title={`Responsável: ${ownerLabel}`}>{ownerLabel}</span>
-          </p>
-          {/* A spam contact's conversation is not for attending: restore it first (ADR-0014). */}
-          {canAct && (
-            <div className="flex flex-shrink-0 items-center gap-1.5">
-              {conversation?.assigned_to_user_id ? (
-                <ActionIcon icon="user-minus" label="Soltar" tone="danger" onClick={handleUnassign} disabled={assignLoading} />
-              ) : (
-                <ActionIcon icon="user-plus" label="Assumir" tone="primary" onClick={handleAssign} disabled={assignLoading} />
-              )}
-              <ActionIcon icon="transfer" label="Transferir" onClick={handleTransfer} disabled={assignLoading || !conversation?.assigned_to_user_id} />
-              {!internal && conversation?.status !== 'closed' && <ActionIcon icon="building" label="Enviar para uma fila" onClick={() => { setQueueError(null); setShowQueueDialog(true) }} disabled={assignLoading} />}
-              {!internal && <ActionIcon icon="check-circle" label="Finalizar atendimento" onClick={() => setShowFinalize(true)} disabled={assignLoading} />}
-            </div>
-          )}
-        </div>
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span
+            className={clsx('inline-flex flex-shrink-0 items-center gap-1.5 rounded-pill px-2 py-0.5 text-xs font-medium', closed ? 'bg-status-muted text-text-secondary' : 'bg-status-success-soft text-status-success')}
+          >
+            <span aria-hidden="true" className={clsx('h-1.5 w-1.5 rounded-full', closed ? 'bg-text-tertiary' : 'bg-status-success')} />
+            {closed ? 'Finalizado' : 'Em atendimento'}
+          </span>
+          {/* the name is never cut: a long name wraps (UX audit A2) */}
+          <span className="min-w-0 break-words font-medium text-text-primary" title={`Responsável: ${ownerLabel}`}>{ownerLabel}</span>
+        </p>
+        {/* A spam contact's conversation is not for attending: restore it first (ADR-0014). The two main actions carry their words; the rare ones
+            (let go, send to a queue) sit in the menu (UX audit A2). */}
+        {canAct && (
+          <div className="flex items-center gap-2 pt-1">
+            {!conversation?.assigned_to_user_id && (
+              <Button size="sm" variant="primary" className="flex-1" onClick={handleAssign} disabled={assignLoading}>
+                <Icon name="user-plus" size={16} />
+                Assumir
+              </Button>
+            )}
+            <Button size="sm" variant="secondary" className="flex-1" onClick={handleTransfer} disabled={assignLoading || !conversation?.assigned_to_user_id}>
+              <Icon name="transfer" size={16} />
+              Transferir
+            </Button>
+            {!internal && (
+              <Button size="sm" variant={conversation?.assigned_to_user_id ? 'primary' : 'secondary'} className="flex-1" aria-label="Finalizar atendimento" onClick={() => setShowFinalize(true)} disabled={assignLoading}>
+                <Icon name="check-circle" size={16} />
+                Finalizar
+              </Button>
+            )}
+            {(conversation?.assigned_to_user_id || (!internal && conversation?.status !== 'closed')) && (
+              <DropdownMenu
+                label="Mais ações do atendimento"
+                actions={[
+                  ...(conversation?.assigned_to_user_id ? [{ label: 'Soltar', destructive: true, disabled: assignLoading, onSelect: handleUnassign }] : []),
+                  ...(!internal && conversation?.status !== 'closed' ? [{ label: 'Enviar para uma fila', disabled: assignLoading, onSelect: () => { setQueueError(null); setShowQueueDialog(true) } }] : []),
+                ]}
+              />
+            )}
+          </div>
+        )}
         {closed ? (
           <p role="status" className="text-xs text-text-tertiary">Atendimento finalizado.</p>
         ) : (

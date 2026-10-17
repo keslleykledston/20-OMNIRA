@@ -21,29 +21,35 @@ import { useHubWaiting } from '../hooks/useHubWaiting'
 // capability; the route itself still exists (see UnavailableSurface).
 // Supervisor became real in PRODUCT.1, Tickets in PRODUCT.2-B, Dashboard in
 // PRODUCT.3-B — none of the three is contained anymore.
-const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: string; mockBacked?: boolean; external?: boolean }[] = [
-  { label: 'Dashboard', path: '/', icon: 'dashboard' },
-  { label: 'Conversas', path: '/inbox', icon: 'conversations' },
-  { label: 'Tickets', path: '/tickets', icon: 'tickets' },
+type NavItem = { label: string; path: string; icon: IconName; group: NavGroup; alsoActiveOn?: string; mockBacked?: boolean; external?: boolean }
+// UX audit M1: three groups with a small title, every item with its own icon (no repeats).
+type NavGroup = 'operacao' | 'automacao' | 'configuracao'
+const GROUP_TITLE: Record<NavGroup, string> = { operacao: 'Operação', automacao: 'Automação e canais', configuracao: 'Configuração' }
+const GROUP_ORDER: NavGroup[] = ['operacao', 'automacao', 'configuracao']
+
+const navItems: NavItem[] = [
+  { label: 'Dashboard', path: '/', icon: 'dashboard', group: 'operacao' },
+  { label: 'Conversas', path: '/inbox', icon: 'conversations', group: 'operacao' },
+  { label: 'Tickets', path: '/tickets', icon: 'tickets', group: 'operacao' },
   // PRODUCT.7A2: always visible in the sidebar, same convention as
   // Supervisor — access itself is gated inside the page
   // (useAccess().can('ticket.reconcile') + PermissionState), never by
   // hiding the nav entry.
-  { label: 'Reconciliação', path: '/ticket-reconciliation', icon: 'clock' },
-  // ADR-0015: always visible, like Supervisor; access is gated inside the page (group.read).
-  { label: 'Grupos', path: '/groups', icon: 'whatsapp' },
+  { label: 'Reconciliação', path: '/ticket-reconciliation', icon: 'reconcile', group: 'operacao' },
+  { label: 'Contatos', path: '/contacts', icon: 'contacts', group: 'operacao' },
+  { label: 'Relatórios', path: '/reports', icon: 'reports', group: 'operacao', mockBacked: true },
+  { label: 'Supervisor', path: '/supervisor', icon: 'supervisor', group: 'operacao' },
   // ADR-0019: always visible like Supervisor; each area is gated inside the page by flow.view / flow_template.view / flow_run.view.
-  { label: 'Automação', path: '/flows', icon: 'sparkles' },
-  { label: 'Contatos', path: '/contacts', icon: 'contacts' },
-  { label: 'Canais', path: '/channels', icon: 'channels' },
-  { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
-  { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
-  { label: 'Pessoas', path: '/settings/people', icon: 'contacts', alsoActiveOn: '/settings/roles' },
-  { label: 'Setores e horários', path: '/settings/attendance', icon: 'clock', alsoActiveOn: '/settings/attendance/sectors,/settings/attendance/calendars,/settings/attendance/shifts,/settings/attendance/overflow' },
+  { label: 'Automação', path: '/flows', icon: 'sparkles', group: 'automacao' },
+  { label: 'Canais', path: '/channels', icon: 'channels', group: 'automacao' },
+  // ADR-0015: always visible, like Supervisor; access is gated inside the page (group.read).
+  { label: 'Grupos', path: '/groups', icon: 'users', group: 'automacao' },
+  { label: 'Pessoas', path: '/settings/people', icon: 'id-card', group: 'configuracao', alsoActiveOn: '/settings/roles' },
+  { label: 'Setores e horários', path: '/settings/attendance', icon: 'clock', group: 'configuracao', alsoActiveOn: '/settings/attendance/sectors,/settings/attendance/calendars,/settings/attendance/shifts,/settings/attendance/overflow' },
   // ADR-0048: aplicações externas (CRMs) que usam a API headless. Sempre visível como as outras entradas de administração; o acesso é conferido dentro da página
   // (integration.read / integration.manage) e a própria página explica quando o recurso não está ligado neste ambiente.
-  { label: 'Integrações', path: '/settings/integrations/apps', icon: 'key', alsoActiveOn: '/settings/integrations' },
-  { label: 'Configurações', path: '/settings/general', icon: 'settings' },
+  { label: 'Integrações', path: '/settings/integrations/apps', icon: 'plug', group: 'configuracao', alsoActiveOn: '/settings/integrations' },
+  { label: 'Configurações', path: '/settings/general', icon: 'settings', group: 'configuracao' },
 ]
 
 // The menu can be folded to icons on wide screens too (below xl it is always icons): the choice is a per-viewer convenience, remembered locally.
@@ -77,7 +83,7 @@ export default function Sidebar() {
   const base = navItems.filter((item) => !item.mockBacked || isDevSurface())
   // ADR-0041: administration (Hub access, instances and their channels) lives in the console (/admin/, another entry of the build). The agent menu only
   // points to it, for the people the server says may use it (display only; the console and the API check again).
-  const consoleItem: (typeof navItems)[number] = { label: 'Administração', path: '/admin/', icon: 'key', external: true }
+  const consoleItem: NavItem = { label: 'Administração', path: '/admin/', icon: 'shield-check', group: 'configuracao', external: true }
   const canAdmin = (hubs.data ?? []).some((h) => h.can_manage_access || h.can_manage_instances)
   // There is no separate "Hub" entry: "Conversas" is the one inbox, and it widens to every authorized company by itself (ADR-0039 revisão).
   const allItems = canAdmin ? [...base, consoleItem] : base
@@ -127,65 +133,76 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        {visibleNavItems.map(item => {
-          const alsoActivePaths = item.alsoActiveOn?.split(',').map(p => p.trim()) || []
-          const active = isActive(item.path) || alsoActivePaths.some(p => isActive(p))
-          // `external`: another entry of the build (the console), so a plain link with a full page load, not the router's.
-          const NavTag: ElementType = item.external ? 'a' : Link
+      <nav className="flex-1 overflow-y-auto px-3 py-4">
+        {GROUP_ORDER.map((group, gi) => {
+          const items = visibleNavItems.filter((i) => i.group === group)
+          if (items.length === 0) return null
           return (
-            <NavTag
-              key={item.path}
-              {...(item.external ? { href: item.path } : { to: item.path })}
-              className={clsx(
-                'flex',
-                'items-center',
-                'gap-3',
-                'justify-center',
-                wide('xl:justify-start'),
-                'px-3',
-                'py-2.5',
-                'rounded-control',
-                'transition-colors',
-                'text-sm',
-                'no-underline',
-                active
-                  ? clsx(
-                    'bg-accent-primary-soft',
-                    'text-accent-primary',
-                    'font-semibold'
-                  )
-                  : clsx(
-                    'text-text-secondary',
-                    'hover:bg-surface-muted',
-                    'hover:text-text-primary'
-                  ),
-                'focus-visible:ring-2',
-                'focus-visible:ring-accent-primary',
-                'focus-visible:ring-offset-0'
-              )}
-              aria-current={active ? 'page' : undefined}
-              aria-label={item.path === '/inbox' && waiting > 0 ? `${item.label}, ${waiting} aguardando resposta` : undefined}
-              title={item.path === '/inbox' && waiting > 0 ? `${item.label} — ${waiting} aguardando resposta` : item.label}
-            >
-              <span className="relative inline-flex">
-                <Icon name={item.icon} />
-                {item.path === '/inbox' && waiting > 0 && (
-                  <span
-                    aria-hidden="true"
-                    className={clsx('absolute -right-2 -top-2 min-w-[16px] rounded-full bg-accent-primary px-1 text-center text-[11px] font-semibold leading-4 text-white', wide('xl:hidden'))}
+            <div key={group} role="group" aria-label={GROUP_TITLE[group]} className={clsx('space-y-1', gi > 0 && 'mt-4')}>
+              {/* Title only when the menu is wide; folded to icons, a thin line separates the groups. */}
+              <p className={clsx('hidden px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary', wide('xl:block'))}>{GROUP_TITLE[group]}</p>
+              <div aria-hidden="true" className={clsx('mx-3 mb-2 h-px bg-border-subtle', gi === 0 && 'hidden', wide('xl:hidden'))} />
+              {items.map(item => {
+                const alsoActivePaths = item.alsoActiveOn?.split(',').map(p => p.trim()) || []
+                const active = isActive(item.path) || alsoActivePaths.some(p => isActive(p))
+                // `external`: another entry of the build (the console), so a plain link with a full page load, not the router's.
+                const NavTag: ElementType = item.external ? 'a' : Link
+                return (
+                  <NavTag
+                    key={item.path}
+                    {...(item.external ? { href: item.path } : { to: item.path })}
+                    className={clsx(
+                      'flex',
+                      'items-center',
+                      'gap-3',
+                      'justify-center',
+                      wide('xl:justify-start'),
+                      'px-3',
+                      'py-2.5',
+                      'rounded-control',
+                      'transition-colors',
+                      'text-sm',
+                      'no-underline',
+                      active
+                        ? clsx(
+                          'bg-accent-primary-soft',
+                          'text-accent-primary',
+                          'font-semibold'
+                        )
+                        : clsx(
+                          'text-text-secondary',
+                          'hover:bg-surface-muted',
+                          'hover:text-text-primary'
+                        ),
+                      'focus-visible:ring-2',
+                      'focus-visible:ring-accent-primary',
+                      'focus-visible:ring-offset-0'
+                    )}
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={item.path === '/inbox' && waiting > 0 ? `${item.label}, ${waiting} aguardando resposta` : undefined}
+                    title={item.path === '/inbox' && waiting > 0 ? `${item.label} — ${waiting} aguardando resposta` : item.label}
                   >
-                    {waiting > 99 ? '99+' : waiting}
-                  </span>
-                )}
-              </span>
-              <span className={clsx('hidden', wide('xl:inline'))}>{item.label}</span>
-              {item.path === '/inbox' && waiting > 0 && (
-                <span aria-hidden="true" className={clsx('ml-auto hidden rounded-full bg-accent-primary px-1.5 text-[11px] font-semibold leading-5 text-white', wide('xl:inline'))}>
-                  {waiting > 99 ? '99+' : waiting}
-                </span>
-              )}
-            </NavTag>
+                    <span className="relative inline-flex">
+                      <Icon name={item.icon} />
+                      {item.path === '/inbox' && waiting > 0 && (
+                        <span
+                          aria-hidden="true"
+                          className={clsx('absolute -right-2 -top-2 min-w-[16px] rounded-full bg-accent-primary px-1 text-center text-[11px] font-semibold leading-4 text-white', wide('xl:hidden'))}
+                        >
+                          {waiting > 99 ? '99+' : waiting}
+                        </span>
+                      )}
+                    </span>
+                    <span className={clsx('hidden', wide('xl:inline'))}>{item.label}</span>
+                    {item.path === '/inbox' && waiting > 0 && (
+                      <span aria-hidden="true" className={clsx('ml-auto hidden rounded-full bg-accent-primary px-1.5 text-[11px] font-semibold leading-5 text-white', wide('xl:inline'))}>
+                        {waiting > 99 ? '99+' : waiting}
+                      </span>
+                    )}
+                  </NavTag>
+                )
+                    })}
+            </div>
           )
         })}
       </nav>

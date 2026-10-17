@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
+  ActiveFilters,
   Button,
   EmptyState,
   ErrorState,
@@ -201,6 +202,19 @@ export default function TicketsPage() {
         </select>
       </FilterBar>
 
+      <ActiveFilters
+        filters={[
+          ...(filters.externalTicketId ? [{ key: 'externalTicketId', label: 'Chamado externo', value: `#${filters.externalTicketId}` }] : []),
+          ...(filters.status ? [{ key: 'status', label: 'Situação', value: STATUS_LABELS[filters.status]?.label ?? filters.status }] : []),
+          ...(filters.priority ? [{ key: 'priority', label: 'Prioridade', value: PRIORITY_LABELS[filters.priority] ?? filters.priority }] : []),
+        ]}
+        onRemove={(key) => {
+          if (key === 'externalTicketId') setExternalIdInput('')
+          updateFilter({ [key]: undefined } as Partial<TicketFilters>)
+        }}
+        onClear={() => { setExternalIdInput(''); setCursorStack([]); setFilters({}) }}
+      />
+
       {tickets.isError && (
         <ErrorState
           message={ticketErrorMessage(tickets.error)}
@@ -218,19 +232,25 @@ export default function TicketsPage() {
               ? 'Nada nesta página'
               : filters.externalTicketId
                 ? 'Nenhum chamado com esse ID externo'
-                : 'Nenhum ticket encontrado'
+                : filters.status || filters.priority
+                  ? 'Nenhum resultado com estes filtros'
+                  : 'Nenhum ticket encontrado'
           }
           description={
             cursorStack.length > 0
               ? 'Volte para a página anterior.'
               : filters.externalTicketId
                 ? `Nenhum ticket local está vinculado ao ID externo "${filters.externalTicketId}".`
-                : 'Tickets aparecem aqui conforme surgem a partir das conversas do Inbox.'
+                : filters.status || filters.priority
+                  ? 'Ajuste ou remova os filtros para ver mais tickets.'
+                  : 'Tickets aparecem aqui conforme surgem a partir das conversas do Inbox.'
           }
           action={
             cursorStack.length > 0
               ? { label: 'Voltar', onClick: () => setCursorStack((s) => s.slice(0, -1)) }
-              : undefined
+              : filters.status || filters.priority || filters.externalTicketId
+                ? { label: 'Limpar filtros', onClick: () => { setExternalIdInput(''); setCursorStack([]); setFilters({}) } }
+                : undefined
           }
         />
       )}

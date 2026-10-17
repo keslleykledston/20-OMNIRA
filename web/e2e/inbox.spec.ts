@@ -97,7 +97,10 @@ test('workspace: claim, reply through the UI hit the real API and persist', asyn
   // Backend requires assignment before replying (ErrUnassigned -> 409); claim
   // via ContextPane's wired POST /assign before sending.
   await page.getByRole('button', { name: 'Assumir' }).click();
-  await expect(page.getByRole('button', { name: 'Soltar' })).toBeVisible({ timeout: 5_000 });
+  // "Soltar" is a rare action: it sits in the "Mais ações do atendimento" menu (UX audit A2)
+  await page.getByRole('button', { name: 'Mais ações do atendimento' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Soltar' })).toBeVisible({ timeout: 5_000 });
+  await page.keyboard.press('Escape');
   expect(sql(`SELECT assigned_to_user_id FROM conversations WHERE id='${CONV}'`)).toBe(AGENT.id);
 
   await page.getByPlaceholder('Escreva uma resposta...').fill('Olá Maria, já estou verificando');

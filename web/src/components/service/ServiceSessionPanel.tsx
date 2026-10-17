@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ActionIcon, Input } from '../primitives'
+import { ActionIcon, Button, Icon, Input } from '../primitives'
 import {
   BUILTIN_RESULTS,
   SESSION_STATUS_LABEL,
@@ -40,6 +40,7 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
   const kind = sessionKey[1] as string // the codes and tasks caches are keyed the same way (per viewer's capacity and per Hub)
   const [error, setError] = useState<string | null>(null)
   const [title, setTitle] = useState('')
+  const [adding, setAdding] = useState(false) // the task field is opened on demand, not always on screen
   const openKey = useRef(newKey()) // one key per mount: a double click or a retry returns the same session
 
   const q = useQuery({ queryKey: sessionKey, queryFn: () => serviceAPI.ofConversation(conversationId, hub), enabled: !!tenantId && !!conversationId, retry: false })
@@ -55,7 +56,7 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
   const setStatus = useMutation({ mutationFn: (s: 'in_progress' | 'waiting') => serviceAPI.setStatus(session!, s, hub), onSuccess: done, onError: fail })
   const addTask = useMutation({
     mutationFn: () => serviceAPI.createTask({ title: title.trim(), session_id: session!.id }, newKey(), hub),
-    onSuccess: () => { setTitle(''); done() },
+    onSuccess: () => { setTitle(''); setAdding(false); done() },
     onError: fail,
   })
   const complete = useMutation({ mutationFn: (t: Parameters<typeof serviceAPI.completeTask>[0]) => serviceAPI.completeTask(t, hub), onSuccess: done, onError: fail })
@@ -88,15 +89,22 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
     <section aria-label="Atendimento com protocolo" className="space-y-2 px-4 pb-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <p className="m-0 flex min-w-0 items-center gap-2">
-          <span className="font-semibold text-text-primary" data-testid="service-protocol">{session.protocol}</span>
-          <span className="rounded-pill bg-surface px-2 py-0.5 text-xs font-medium text-text-secondary">{SESSION_STATUS_LABEL[session.status]}</span>
+          <span className="rounded-control bg-accent-primary-soft px-2 py-0.5 font-mono text-sm font-semibold text-accent-primary" data-testid="service-protocol">{session.protocol}</span>
+          {!(isActive && can('service.update')) && <span className="rounded-pill bg-surface px-2 py-0.5 text-xs font-medium text-text-secondary">{SESSION_STATUS_LABEL[session.status]}</span>}
         </p>
-        {/* the actions are icons: the label is the tooltip and the accessible name */}
-        {isActive && (
-          <div className="flex flex-shrink-0 items-center gap-1.5">
-            {can('service.update') && session.status !== 'waiting' && <ActionIcon icon="pause" label="Marcar como aguardando" disabled={busy} onClick={() => setStatus.mutate('waiting')} />}
-            {can('service.update') && session.status !== 'in_progress' && <ActionIcon icon="play" label="Marcar em andamento" disabled={busy} onClick={() => setStatus.mutate('in_progress')} />}
-          </div>
+        {/* one small selector instead of two bare icons: it says the current situation and what it can become (UX audit A2) */}
+        {isActive && can('service.update') && (
+          <select
+            aria-label="Situação do protocolo"
+            disabled={busy}
+            value={session.status}
+            onChange={(e) => { const v = e.target.value; if (v === 'in_progress' || v === 'waiting') setStatus.mutate(v) }}
+            className="h-8 min-w-0 flex-shrink rounded-control border border-border-subtle bg-surface px-2 text-xs text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-60"
+          >
+            {session.status === 'open' && <option value="open" disabled>{SESSION_STATUS_LABEL.open}</option>}
+            <option value="in_progress">{SESSION_STATUS_LABEL.in_progress}</option>
+            <option value="waiting">{SESSION_STATUS_LABEL.waiting}</option>
+          </select>
         )}
       </div>
       <p className="m-0 text-xs text-text-tertiary">
@@ -108,7 +116,7 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
       {isActive && <p className="m-0 text-xs text-text-tertiary">O protocolo encerra junto com o atendimento, em “Finalizar”.</p>}
 
       <div>
-        <h4 className="mb-1 text-xs font-semibold uppercase text-text-tertiary">Tarefas</h4>
+        <h4 className="mb-1 text-xs font-semibold uppercase text-text-tertiary">Tarefas{(tasks.data ?? []).length > 0 ? ` · ${pending.length} pendente${pending.length === 1 ? '' : 's'}` : ''}</h4>
         {(tasks.data ?? []).length === 0 && <p className="m-0 text-xs text-text-tertiary">Nenhuma tarefa.</p>}
         <ul className="m-0 list-none space-y-1 p-0">
           {pending.map((t) => (
@@ -121,12 +129,18 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
             <li key={t.id} className="rounded-control border border-border-subtle px-2 py-1 text-xs text-text-tertiary">{t.title} · {TASK_STATUS_LABEL[t.status]}</li>
           ))}
         </ul>
-        {can('service.create') && (
+        {can('service.create') && (adding ? (
           <form className="mt-2 flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (title.trim()) addTask.mutate() }}>
-            <Input aria-label="Nova tarefa" placeholder="Nova tarefa" value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} />
-            <ActionIcon type="submit" icon="plus" label="Adicionar tarefa" disabled={busy || !title.trim()} />
+            <Input aria-label="Nova tarefa" placeholder="Nova tarefa" value={title} maxLength={200} autoFocus onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setAdding(false); setTitle('') } }} />
+            <ActionIcon type="submit" icon="plus" label="Salvar tarefa" disabled={busy || !title.trim()} />
+            <ActionIcon icon="close" label="Cancelar tarefa" onClick={() => { setAdding(false); setTitle('') }} />
           </form>
-        )}
+        ) : (
+          <Button size="sm" variant="tertiary" className="mt-1" onClick={() => setAdding(true)} disabled={busy}>
+            <Icon name="plus" size={16} />
+            Adicionar tarefa
+          </Button>
+        ))}
       </div>
       <SessionExtras session={session} can={can} hub={hub} scope={`${kind}:${tenantId}`} />
       {error && <p role="alert" className="rounded-control bg-status-danger-soft p-2 text-xs text-status-danger">{error}</p>}

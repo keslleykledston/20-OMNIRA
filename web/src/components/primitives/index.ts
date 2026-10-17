@@ -21,6 +21,8 @@ export { Input, SearchField, TextArea } from './Input';
 export { Avatar, AvatarGroup } from './Avatar';
 export { Table, TableHead, TableBody, TableRow, TableHeaderCell, TableCell } from './Table';
 export { FilterBar } from './FilterBar';
+export { ActiveFilters } from './ActiveFilters';
+export type { ActiveFilter } from './ActiveFilters';
 export { Pagination } from './Pagination';
 export {
   Skeleton,

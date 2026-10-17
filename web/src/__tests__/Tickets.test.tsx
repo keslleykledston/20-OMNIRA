@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import TicketsPage from '../pages/Tickets';
 import { renderAt, setSession, mockGets } from './testUtils';
@@ -89,6 +89,44 @@ describe('TicketsPage', () => {
     await screen.findAllByText('Preciso de ajuda com meu pedido');
     const call = [...vi.mocked(axios.get).mock.calls].reverse().find(([url]) => (url as string).endsWith('/tickets'));
     expect(call?.[1]).toMatchObject({ params: expect.objectContaining({ status: 'closed' }) });
+  });
+
+  it('shows each active filter as a removable chip, and clearing it or all of them goes back to the unfiltered list (UX audit M4)', async () => {
+    setSession();
+    mockGets({ '/tickets': { items: [ticket()], has_more: false, count: 1, limit: 20 } });
+    renderAt(<TicketsPage />);
+    await screen.findAllByText('Preciso de ajuda com meu pedido');
+    expect(screen.queryByRole('group', { name: 'Filtros ativos' })).not.toBeInTheDocument();
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(screen.getByLabelText('Filtrar por status'), { target: { value: 'closed' } });
+    fireEvent.change(screen.getByLabelText('Filtrar por prioridade'), { target: { value: 'high' } });
+    const chips = await screen.findByRole('group', { name: 'Filtros ativos' });
+    expect(chips).toHaveTextContent('Situação: Fechado');
+    expect(chips).toHaveTextContent('Prioridade:');
+
+    const lastParams = () => ([...vi.mocked(axios.get).mock.calls].reverse().find(([url]) => (url as string).endsWith('/tickets'))?.[1] as { params: Record<string, unknown> }).params;
+    fireEvent.click(screen.getByRole('button', { name: 'Remover filtro Situação: Fechado' }));
+    await waitFor(() => expect(lastParams().status).toBeUndefined());
+    expect(lastParams().priority).toBe('high');
+    expect(screen.getByLabelText('Filtrar por status')).toHaveValue('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Limpar tudo' }));
+    await waitFor(() => expect(lastParams().priority).toBeUndefined());
+    expect(screen.queryByRole('group', { name: 'Filtros ativos' })).not.toBeInTheDocument();
+  });
+
+  it('an empty list under filters says so and offers to clear them, unlike the empty list of a company with no tickets', async () => {
+    setSession();
+    mockGets({ '/tickets': { items: [], has_more: false, count: 0, limit: 20 } });
+    renderAt(<TicketsPage />);
+    expect(await screen.findByText('Nenhum ticket encontrado')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Limpar filtros' })).not.toBeInTheDocument();
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(screen.getByLabelText('Filtrar por status'), { target: { value: 'closed' } });
+    expect(await screen.findByText('Nenhum resultado com estes filtros')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Limpar filtros' })).toBeInTheDocument(); // the empty state's own action, distinct from the chips' "Limpar tudo"
   });
 
   it('renders real data outside development (no UnavailableSurface)', async () => {

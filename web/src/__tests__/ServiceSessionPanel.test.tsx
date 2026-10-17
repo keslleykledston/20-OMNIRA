@@ -41,7 +41,7 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     serve({ session: session({ status: 'in_progress' }) })
     renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
     expect(await screen.findByTestId('service-protocol')).toHaveTextContent('AT-10482')
-    expect(screen.getByText('Em andamento')).toBeInTheDocument()
+    expect(screen.getByLabelText('Situação do protocolo')).toHaveValue('in_progress')
   })
 
   it('hides itself when the module is off (404) and the person could not open a session anyway', async () => {
@@ -89,6 +89,9 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     expect(screen.queryByRole('button', { name: /Encerrar atendimento/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /Concluir tarefa/ })).toBeNull()
     expect(screen.queryByLabelText('Nova tarefa')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Adicionar tarefa' })).toBeNull()
+    expect(screen.queryByLabelText('Situação do protocolo')).toBeNull() // read-only: the situation is only a chip
+    expect(screen.getByText('Aberto')).toBeInTheDocument()
   })
 
   it('a closed session offers no more actions and shows its result', async () => {
@@ -98,6 +101,7 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     expect(screen.getByText(/Informação prestada/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Encerrar atendimento/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /aguardando/ })).toBeNull()
+    expect(screen.queryByLabelText('Situação do protocolo')).toBeNull()
   })
 
   it('creates and completes tasks of the session', async () => {
@@ -105,9 +109,14 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     vi.mocked(axios.post).mockResolvedValue({ data: task() })
     const user = userEvent.setup()
     renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
-    await user.type(await screen.findByLabelText('Nova tarefa'), 'Enviar segunda via')
-    await user.click(screen.getByRole('button', { name: 'Adicionar tarefa' }))
+    expect(screen.queryByLabelText('Nova tarefa')).toBeNull() // the field is opened on demand
+    await user.click(await screen.findByRole('button', { name: 'Adicionar tarefa' }))
+    await user.type(screen.getByLabelText('Nova tarefa'), 'Enviar segunda via')
+    await user.click(screen.getByRole('button', { name: 'Salvar tarefa' }))
     await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(1))
+    // saved: the field closes again and the button returns
+    expect(await screen.findByRole('button', { name: 'Adicionar tarefa' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Nova tarefa')).toBeNull()
     let [url, body, cfg] = vi.mocked(axios.post).mock.calls[0] as [string, any, any]
     expect(url).toMatch(/\/service-tasks$/)
     expect(body).toEqual({ title: 'Enviar segunda via', session_id: 's-1' })
@@ -124,7 +133,7 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     vi.mocked(axios.post).mockRejectedValue({ response: { status: 412 } })
     const user = userEvent.setup()
     renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
-    await user.click(await screen.findByRole('button', { name: /Marcar como aguardando/ }))
+    await user.selectOptions(await screen.findByLabelText('Situação do protocolo'), 'waiting')
     expect(await screen.findByRole('alert')).toHaveTextContent(/Outra pessoa alterou/)
     await waitFor(() => expect(vi.mocked(axios.get).mock.calls.filter((c) => String(c[0]).endsWith('/service-session')).length).toBeGreaterThan(1))
   })
@@ -145,5 +154,20 @@ describe('Painel de atendimento com protocolo (ADR-0049)', () => {
     const [url, cfg] = vi.mocked(axios.get).mock.calls[0] as [string, any]
     expect(url).toContain('/tenants/inst-9/')
     expect(Object.values(cfg.headers)).toContain('hub:hub-1')
+  })
+
+  it('the task field closes and forgets what was typed on Escape and on the cancel button', async () => {
+    serve({ session: session() })
+    const user = userEvent.setup()
+    renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
+    await user.click(await screen.findByRole('button', { name: 'Adicionar tarefa' }))
+    await user.type(screen.getByLabelText('Nova tarefa'), 'rascunho{Escape}')
+    expect(screen.queryByLabelText('Nova tarefa')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Adicionar tarefa' }))
+    expect(screen.getByLabelText('Nova tarefa')).toHaveValue('')
+    await user.type(screen.getByLabelText('Nova tarefa'), 'outro')
+    await user.click(screen.getByRole('button', { name: 'Cancelar tarefa' }))
+    expect(screen.queryByLabelText('Nova tarefa')).toBeNull()
+    expect(vi.mocked(axios.post)).not.toHaveBeenCalled()
   })
 })

@@ -227,28 +227,32 @@ describe('ContextPane — spam contact has nothing to attend (ADR-0014)', () => 
   });
 });
 
-describe('ContextPane — compact status and icon actions', () => {
-  it('the three actions are icons named by what they do, the state is one line, and the channel data is not repeated', async () => {
+describe('ContextPane — compact status and labelled actions (UX audit A2)', () => {
+  it('Transferir and Finalizar carry their words, the rare ones sit in the menu, the long name is never cut, and the channel data is not repeated', async () => {
     mockConversation({ assigned_to_user_id: 'u-1', assigned_to_name: 'Operador Teste', message_count: 1 });
     renderAt(<ContextPane conversationId={CONV} />);
     await screen.findByText('Maria Silva');
-    for (const name of ['Soltar', 'Transferir', 'Finalizar atendimento']) {
-      const b = screen.getByRole('button', { name });
-      // the caption that shows on hover/focus: the same words as the accessible name
-      expect(b.parentElement?.querySelector('[data-tooltip]')).toHaveTextContent(name);
-      expect(b).toHaveTextContent('');
-    }
+    expect(screen.getByRole('button', { name: 'Transferir' })).toHaveTextContent('Transferir');
+    expect(screen.getByRole('button', { name: 'Finalizar atendimento' })).toHaveTextContent('Finalizar');
+    // the rare actions are not loose icons: they are inside the menu
+    expect(screen.queryByRole('button', { name: 'Soltar' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Mais ações do atendimento' }));
+    expect(screen.getByRole('menuitem', { name: 'Soltar' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Enviar para uma fila' })).toBeInTheDocument();
+    expect(screen.getByText('Operador Teste (você)')).not.toHaveClass('truncate');
     expect(screen.getByText(/· 1 mensagem$/)).toBeInTheDocument();
     expect(screen.queryByText('Canal')).not.toBeInTheDocument();
     expect(screen.queryByText('Estado')).not.toBeInTheDocument();
     expect(screen.queryByText('Responsável')).not.toBeInTheDocument();
   });
 
-  it('an unassigned conversation offers Assumir (icon) instead of Soltar', async () => {
+  it('an unassigned conversation offers Assumir (with its word) and no Soltar in the menu', async () => {
     mockConversation({ assigned_to_user_id: undefined });
     renderAt(<ContextPane conversationId={CONV} />);
     await screen.findByText('Maria Silva');
-    expect(screen.getByRole('button', { name: 'Assumir' })).toHaveTextContent('');
-    expect(screen.queryByRole('button', { name: 'Soltar' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Assumir' })).toHaveTextContent('Assumir');
+    await userEvent.click(screen.getByRole('button', { name: 'Mais ações do atendimento' }));
+    expect(screen.queryByRole('menuitem', { name: 'Soltar' })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Enviar para uma fila' })).toBeInTheDocument();
   });
 });

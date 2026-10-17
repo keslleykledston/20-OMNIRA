@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import QueuesAttention from '../components/dashboard/QueuesAttention'
 import { ErrorState, MetricCard, MetricCardSkeleton, PageHeader } from '../components/primitives'
 import type { IconName, MetricTone } from '../components/primitives'
 import { dashboardAPI, dashboardErrorMessage } from '../lib/dashboard'
@@ -26,6 +27,7 @@ interface StatCard {
   icon: IconName
   tone: MetricTone
   helperText: string
+  to: string
 }
 
 export default function Dashboard() {
@@ -72,11 +74,11 @@ export default function Dashboard() {
   // agents online is reassuring when non-zero (success), the rest are
   // neutral operational counts.
   const cards: StatCard[] = [
-    { label: 'Conversas abertas', value: snapshot.data?.open_conversations, icon: 'conversations', tone: 'neutral', helperText: 'Em andamento agora' },
-    { label: 'Tickets abertos', value: snapshot.data?.open_tickets, icon: 'tickets', tone: 'warning', helperText: 'Aguardando resolução' },
-    { label: 'Contatos', value: snapshot.data?.total_contacts, icon: 'contacts', tone: 'info', helperText: 'Cadastrados no tenant' },
-    { label: 'Não classificados', value: snapshot.data?.unclassified_contacts, icon: 'contacts', tone: 'warning', helperText: 'Contatos sem tipo (cliente ou outros)' },
-    { label: 'Agentes online', value: canViewPresence ? onlineIds.size : undefined, icon: 'supervisor', tone: 'success', helperText: 'Disponíveis agora' },
+    { label: 'Conversas abertas', value: snapshot.data?.open_conversations, icon: 'conversations', tone: 'neutral', helperText: 'Em andamento agora', to: '/inbox' },
+    { label: 'Tickets abertos', value: snapshot.data?.open_tickets, icon: 'tickets', tone: 'warning', helperText: 'Aguardando resolução', to: '/tickets' },
+    { label: 'Contatos', value: snapshot.data?.total_contacts, icon: 'contacts', tone: 'info', helperText: 'Cadastrados no tenant', to: '/contacts' },
+    { label: 'Não classificados', value: snapshot.data?.unclassified_contacts, icon: 'contacts', tone: 'warning', helperText: 'Contatos sem tipo (cliente ou outros)', to: '/contacts' },
+    { label: 'Agentes online', value: canViewPresence ? onlineIds.size : undefined, icon: 'supervisor', tone: 'success', helperText: 'Disponíveis agora', to: '/supervisor' },
   ]
 
   return (
@@ -108,11 +110,13 @@ export default function Dashboard() {
             {snapshot.isLoading
               ? Array.from({ length: 5 }).map((_, i) => <MetricCardSkeleton key={i} />)
               : cards.map((c) => (
-                  <MetricCard key={c.label} label={c.label} value={c.value} icon={c.icon} tone={c.tone} helperText={c.helperText} />
+                  <MetricCard key={c.label} label={c.label} value={c.value} icon={c.icon} tone={c.tone} helperText={c.helperText} to={c.to} />
                 ))}
           </div>
         </section>
       )}
+
+      {canViewDashboard && canViewPresence && <QueuesAttention />}
     </div>
   )
 }

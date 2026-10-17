@@ -40,6 +40,12 @@ export function DropdownMenu({ actions, label = 'Ações', align = 'right' }: Pr
     }
   }, [open])
 
+  // Opened by the keyboard (or the mouse), the first usable item takes the focus, so the arrow keys work right away.
+  useEffect(() => {
+    if (!open) return
+    itemRefs.current.find((el) => el && !el.disabled)?.focus()
+  }, [open])
+
   const onMenuKeyDown = (e: React.KeyboardEvent, index: number) => {
     const usable = actions.map((a, i) => (a.disabled ? -1 : i)).filter((i) => i >= 0)
     const pos = usable.indexOf(index)

@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { Link } from 'react-router-dom';
 import { Icon } from './Icon';
 import type { IconName } from './Icon';
 import { Skeleton } from './States';
@@ -11,6 +12,8 @@ interface MetricCardProps {
   icon: IconName;
   tone?: MetricTone;
   helperText?: string;
+  /** Makes the whole card a link to the list the number counts (UX audit M5). */
+  to?: string;
 }
 
 const TONE_ICON_CLASS: Record<MetricTone, string> = {
@@ -25,9 +28,9 @@ const TONE_ICON_CLASS: Record<MetricTone, string> = {
 // future page with real tenant-wide counts can reuse it). Value-only by
 // design: no trend/change prop until a real historical/delta source exists
 // (DESIGN.6-B gate — no fabricated trends).
-export function MetricCard({ label, value, icon, tone = 'neutral', helperText }: MetricCardProps) {
-  return (
-    <div className="min-w-0 rounded-card border border-border-subtle bg-surface p-5 shadow-sm">
+export function MetricCard({ label, value, icon, tone = 'neutral', helperText, to }: MetricCardProps) {
+  const card = (
+    <div className={clsx('min-w-0 rounded-card border border-border-subtle bg-surface p-5 shadow-sm', to && 'transition-colors hover:border-accent-primary hover:bg-surface-muted')}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-body-sm text-text-secondary truncate">{label}</p>
@@ -41,6 +44,12 @@ export function MetricCard({ label, value, icon, tone = 'neutral', helperText }:
         </span>
       </div>
     </div>
+  );
+  if (!to) return card;
+  return (
+    <Link to={to} aria-label={`${label}: ${value ?? 'indisponível'}. Abrir a lista`} className="block min-w-0 rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary">
+      {card}
+    </Link>
   );
 }
 

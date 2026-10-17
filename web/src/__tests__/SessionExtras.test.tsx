@@ -46,13 +46,29 @@ describe('Atendimento com protocolo — ocorrências, ordens de serviço e hist�
     vi.mocked(axios.post).mockResolvedValue({ data: kase() })
     const user = userEvent.setup()
     renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
-    await user.type(await screen.findByLabelText('Nova ocorrência'), '  Cabo rompido  ')
+    expect(screen.queryByLabelText('Nova ocorrência')).toBeNull() // opened on demand
+    await user.click(await screen.findByRole('button', { name: 'Adicionar ocorrência' }))
+    await user.type(screen.getByLabelText('Nova ocorrência'), '  Cabo rompido  ')
     await user.click(screen.getByRole('button', { name: 'Abrir ocorrência' }))
     await waitFor(() => expect(vi.mocked(axios.post)).toHaveBeenCalled())
+    expect(await screen.findByRole('button', { name: 'Adicionar ocorrência' })).toBeInTheDocument() // saved: the field closes
+    expect(screen.queryByLabelText('Nova ocorrência')).toBeNull()
     const [url, body, cfg] = vi.mocked(axios.post).mock.calls[0] as [string, any, any]
     expect(url).toMatch(/\/service-cases$/)
     expect(body).toEqual({ title: 'Cabo rompido', session_id: 's-1' })
     expect(cfg.headers['Idempotency-Key']).toMatch(/.{8,}/)
+  })
+
+  it('the occurrence field closes and forgets what was typed on Escape', async () => {
+    serve()
+    const user = userEvent.setup()
+    renderAt(<ServiceSessionPanel conversationId={CONV} can={ALL} />)
+    await user.click(await screen.findByRole('button', { name: 'Adicionar ocorrência' }))
+    await user.type(screen.getByLabelText('Nova ocorrência'), 'rascunho{Escape}')
+    expect(screen.queryByLabelText('Nova ocorrência')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Adicionar ocorrência' }))
+    expect(screen.getByLabelText('Nova ocorrência')).toHaveValue('')
+    expect(vi.mocked(axios.post)).not.toHaveBeenCalled()
   })
 
   it('without service.create there is no form to open an occurrence', async () => {

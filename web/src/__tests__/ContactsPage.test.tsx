@@ -436,6 +436,45 @@ describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
     await waitFor(() => expect(listCalls().some((p) => p.q === 'maria' && p.view === 'spam' && p.status === 'blocked')).toBe(true));
   });
 
+  it('shows the narrowing filters as chips that can be removed one by one or all together (UX audit M4)', async () => {
+    const user = userEvent.setup();
+    mockGets({ [PEOPLE]: page([contact()]) });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    expect(screen.queryByRole('group', { name: 'Filtros ativos' })).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Situação'), 'blocked');
+    await user.type(screen.getByLabelText('Buscar contato'), 'maria');
+    const chips = await screen.findByRole('group', { name: 'Filtros ativos' });
+    expect(chips).toHaveTextContent('Situação: Bloqueados');
+    expect(chips).toHaveTextContent('Busca: maria');
+
+    await user.click(screen.getByRole('button', { name: 'Remover filtro Situação: Bloqueados' }));
+    expect(screen.getByLabelText('Situação')).toHaveValue('');
+    expect(screen.getByLabelText('Buscar contato')).toHaveValue('maria');
+
+    await user.selectOptions(screen.getByLabelText('Situação'), 'archived');
+    await user.click(screen.getByRole('tab', { name: 'Spam' }));
+    expect(screen.getByRole('group', { name: 'Filtros ativos' })).toHaveTextContent('Tipo: Spam'); // the tab narrows the list too: it is a chip as well
+    await user.click(screen.getByRole('button', { name: 'Limpar tudo' }));
+    expect(screen.getByRole('tab', { name: 'Todos' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Buscar contato')).toHaveValue('');
+    expect(screen.getByLabelText('Situação')).toHaveValue('');
+    expect(screen.queryByRole('group', { name: 'Filtros ativos' })).not.toBeInTheDocument();
+  });
+
+  it('removing the type chip goes back to everyone, and the others stay', async () => {
+    const user = userEvent.setup();
+    mockGets({ [PEOPLE]: page([contact()]) });
+    renderAt(<ContactsPage />, '/contacts');
+    await screen.findAllByText('Ana Souza');
+    await user.click(screen.getByRole('tab', { name: 'Internos' }));
+    await user.selectOptions(screen.getByLabelText('Situação'), 'blocked');
+    await user.click(await screen.findByRole('button', { name: 'Remover filtro Tipo: Internos' }));
+    expect(screen.getByRole('tab', { name: 'Todos' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Situação')).toHaveValue('blocked');
+  });
+
   it('goes back to the first page when a filter changes (a cursor only fits the filters that made it)', async () => {
     const user = userEvent.setup();
     vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
