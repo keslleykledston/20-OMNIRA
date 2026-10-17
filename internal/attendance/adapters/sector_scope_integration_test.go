@@ -2,6 +2,7 @@ package adapters_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -59,6 +60,19 @@ func TestContactHistoryHidesWhatTheSectorScopeHides(t *testing.T) {
 	if sr := search(); strings.Contains(sr, "oculto") || !strings.Contains(sr, "visivel") {
 		t.Errorf("scope on: the message search crosses queues: %s", sr)
 	}
+	// a follow-up is reached by its own id: outside the reach it is a 404 and stays open; inside the reach it still resolves
+	var hiddenFU, visibleFU uuid.UUID
+	s.queryRow(`SELECT id FROM follow_up_items WHERE conversation_id=$1`, &hiddenFU, hidden)
+	s.queryRow(`SELECT id FROM follow_up_items WHERE conversation_id=$1`, &visibleFU, visible)
+	if code, _ := s.callRaw(mux, s.agent, http.MethodPost, "/follow-ups/"+hiddenFU.String()+"/resolve", `{"status":"done"}`); code != http.StatusNotFound {
+		t.Errorf("resolving a follow-up outside the reach = %d, want 404", code)
+	}
+	if s.count(`SELECT count(*) FROM follow_up_items WHERE id=$1 AND status='open'`, hiddenFU) != 1 {
+		t.Error("a refused resolve changed the follow-up")
+	}
+	if code, body := s.callRaw(mux, s.agent, http.MethodPost, "/follow-ups/"+visibleFU.String()+"/resolve", `{"status":"done"}`); code != http.StatusOK {
+		t.Errorf("resolving a follow-up inside the reach = %d %s", code, body)
+	}
 	// the attendance-context of the current conversation is the same memory
 	code, ctxBody := s.callRaw(mux, s.agent, http.MethodGet, "/inbox/conversations/"+current.String()+"/attendance-context", "")
 	if code != 200 || strings.Contains(ctxBody, "oculto") {
@@ -75,4 +89,11 @@ func (s *stack) callRaw(mux *http.ServeMux, user uuid.UUID, method, path, raw st
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.String()
+}
+
+func (s *stack) queryRow(sql string, dest *uuid.UUID, args ...any) {
+	s.t.Helper()
+	if err := s.env.Seed.QueryRow(context.Background(), sql, args...).Scan(dest); err != nil {
+		s.t.Fatal(err)
+	}
 }

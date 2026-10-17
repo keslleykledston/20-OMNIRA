@@ -289,7 +289,13 @@ func (r *PostgresRepository) LockFollowUp(ctx context.Context, id uuid.UUID) (*d
 	if err != nil {
 		return nil, err
 	}
-	f, err := scanFollowUp(r.q(ctx).QueryRow(ctx, `SELECT `+followUpColumns+` FROM follow_up_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenant, id))
+	// ADR-0043 S3: a follow-up of a conversation outside the person's reach is as good as missing (404), also here where the id comes from the URL
+	args := []any{tenant, id}
+	scope, args, err := r.sectorScope(ctx, args, "tenant_id", "conversation_id")
+	if err != nil {
+		return nil, err
+	}
+	f, err := scanFollowUp(r.q(ctx).QueryRow(ctx, `SELECT `+followUpColumns+` FROM follow_up_items WHERE tenant_id=$1 AND id=$2`+scope+` FOR UPDATE`, args...))
 	if err != nil {
 		return nil, notFound(err)
 	}
