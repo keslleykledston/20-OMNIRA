@@ -644,3 +644,122 @@ func TestSectorScopeCoversFlowRunHistoryAndTheQueueSLAMonitor(t *testing.T) {
 		t.Errorf("another company's admin on the SLA monitor = %d", code)
 	}
 }
+
+// Contact notes belong to the contact, not to a conversation: a person limited to their queues reads them only when one of the contact's conversations is in their reach
+// (their own notes stay theirs). The flow analytics are measured over the runs the person may see, never the company-wide totals.
+func TestSectorScopeCoversContactNotesAndFlowAnalytics(t *testing.T) {
+	e := newScopeEnv(t)
+	e.exec(`INSERT INTO role_permissions(role_id,permission_key) SELECT id,k FROM roles, unnest(ARRAY['flow_run.view','agent.read','contact.classify']) k WHERE tenant_id=$1 AND key='reader_dash'`, e.tenant)
+	repo := flowsadapters.NewPostgresFlowRepository(e.app)
+	fh := flowsadapters.NewHandler(e.app, flowsapplication.NewControlPlane(repo, repo, nil)).WithRuns(repo)
+	ch := contactsadapters.NewContactsAPIHandler(e.app)
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(e.app), tenancyadapters.NewPostgresTenantRepository(e.app))
+	mw := tenancyadapters.AuthorizationMiddleware(e.app, authz)
+	base := "/api/v1/tenants/{tenant_id}"
+	e.mux.Handle("GET "+base+"/flows/{flow_id}/analytics", mw(http.HandlerFunc(fh.FlowAnalytics)))
+	e.mux.Handle("GET "+base+"/contacts/{contact_id}/notes", mw(http.HandlerFunc(ch.ListNotes)))
+
+	flowID, versionID := uuid.New(), uuid.New()
+	e.exec(`INSERT INTO flows(id, tenant_id, slug, name) VALUES($1,$2,'scope-flow','Fluxo')`, flowID, e.tenant)
+	e.exec(`INSERT INTO flow_versions(id, tenant_id, flow_id, version, definition, definition_hash) VALUES($1,$2,$3,1,'{}','h')`, versionID, e.tenant, flowID)
+	for name, status := range map[string]string{"q1": "completed", "q2": "failed", "free": "completed"} {
+		id := uuid.New()
+		e.exec(`INSERT INTO flow_runs(id, tenant_id, flow_id, flow_version_id, conversation_id, status, trigger_event_id, completed_at, current_node_id) VALUES($1,$2,$3,$4,$5,$6,$7, CASE WHEN $6='completed' THEN now() END, $8)`,
+			id, e.tenant, flowID, versionID, e.c[name], status, uuid.NewString(), "stop_"+name)
+		if status == "completed" {
+			e.exec(`UPDATE flow_runs SET started_at = completed_at - make_interval(secs => $2) WHERE id = $1`, id, map[string]float64{"q1": 60, "free": 2}[name])
+		}
+		// every run hands over to a person once; the runs of q1 and q2 also have a failed step, each at its own node
+		e.exec(`INSERT INTO flow_node_executions(tenant_id, flow_run_id, seq, flow_version_id, node_id, node_type, status) VALUES($1,$2,1,$3,'handoff','human_handoff','completed')`, e.tenant, id, versionID)
+		if name != "free" {
+			e.exec(`INSERT INTO flow_node_executions(tenant_id, flow_run_id, seq, flow_version_id, node_id, node_type, status) VALUES($1,$2,2,$3,$4,'send_message','failed')`, e.tenant, id, versionID, "err_"+name)
+		}
+	}
+	for name, who := range map[string]uuid.UUID{"q1": e.super, "q2": e.super, "free": e.super} {
+		e.exec(`INSERT INTO contact_notes(tenant_id, contact_id, body, created_by_user_id) VALUES($1,$2,$3,$4)`, e.tenant, e.contacts[name], "nota de "+name, who)
+	}
+	e.exec(`INSERT INTO contact_notes(tenant_id, contact_id, body, created_by_user_id) VALUES($1,$2,'nota propria de q1',$3)`, e.tenant, e.contacts["q1"], e.reader)
+
+	noteBodies := func(user uuid.UUID, contact string) string {
+		code, body := e.get(user, e.tenant, "/contacts/"+e.contacts[contact].String()+"/notes")
+		if code != 200 {
+			t.Fatalf("notes of %s = %d %s", contact, code, body)
+		}
+		var out struct {
+			Items []struct {
+				Body string `json:"body"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal([]byte(body), &out)
+		var got []string
+		for _, it := range out.Items {
+			got = append(got, it.Body)
+		}
+		return strings.Join(sortedStrings(got), "|")
+	}
+	// runs summarises every figure the analytics expose: runs/completed/failed, handoffs, failed steps and where the failed runs stopped
+	runs := func(user uuid.UUID) string {
+		code, body := e.get(user, e.tenant, "/flows/"+flowID.String()+"/analytics")
+		if code != 200 {
+			t.Fatalf("analytics = %d %s", code, body)
+		}
+		var out struct {
+			Runs         int    `json:"runs"`
+			Completed    int    `json:"completed"`
+			Failed       int    `json:"failed"`
+			HumanHandoff int    `json:"human_handoffs"`
+			AvgMs        *int64 `json:"avg_duration_ms"`
+			NodeErrors   []struct {
+				NodeID string `json:"node_id"`
+			} `json:"node_errors"`
+			DropOff []struct {
+				NodeID string `json:"node_id"`
+			} `json:"drop_off_by_node"`
+		}
+		_ = json.Unmarshal([]byte(body), &out)
+		var errs, drops []string
+		for _, n := range out.NodeErrors {
+			errs = append(errs, n.NodeID)
+		}
+		for _, n := range out.DropOff {
+			drops = append(drops, n.NodeID)
+		}
+		return fmt.Sprintf("runs=%d completed=%d failed=%d handoffs=%d avgslow=%t errors=[%s] dropoff=[%s]", out.Runs, out.Completed, out.Failed, out.HumanHandoff, out.AvgMs != nil && *out.AvgMs >= 10000, strings.Join(sortedStrings(errs), ","), strings.Join(sortedStrings(drops), ","))
+	}
+
+	const all = "runs=3 completed=2 failed=1 handoffs=3 avgslow=true errors=[err_q1,err_q2] dropoff=[stop_q2]"
+	const onlyFree = "runs=1 completed=1 failed=0 handoffs=1 avgslow=false errors=[] dropoff=[]"
+	// scope OFF: nothing changes
+	if got := noteBodies(e.reader, "q1"); got != "nota de q1|nota propria de q1" {
+		t.Errorf("scope off: notes of q1 = %q", got)
+	}
+	if got := runs(e.reader); got != all {
+		t.Errorf("scope off: analytics = %s, want %s", got, all)
+	}
+
+	e.scope(true)
+	if got := noteBodies(e.reader, "free"); got != "nota de free" {
+		t.Errorf("notes of a contact in reach = %q", got)
+	}
+	if got := noteBodies(e.reader, "q1"); got != "nota propria de q1" {
+		t.Errorf("notes of a contact out of reach = %q, want only the reader's own", got)
+	}
+	if got := noteBodies(e.reader, "q2"); got != "" {
+		t.Errorf("notes of another queue's contact = %q, want none", got)
+	}
+	if got := noteBodies(e.super, "q2"); got != "nota de q2" {
+		t.Errorf("supervisor notes of q2 = %q, want all", got)
+	}
+	if got := runs(e.reader); got != onlyFree {
+		t.Errorf("reader analytics = %s, want %s", got, onlyFree)
+	}
+	if got := runs(e.super); got != all {
+		t.Errorf("supervisor analytics = %s, want %s", got, all)
+	}
+	if code, _ := e.get(e.outsider, e.tenant, "/flows/"+flowID.String()+"/analytics"); code != 403 && code != 404 {
+		t.Errorf("another company's admin on the analytics = %d", code)
+	}
+	if code, _ := e.get(e.outsider, e.tenant, "/contacts/"+e.contacts["q1"].String()+"/notes"); code != 403 && code != 404 {
+		t.Errorf("another company's admin on the notes = %d", code)
+	}
+}

@@ -155,8 +155,13 @@ func (r *PostgresFlowRepository) FlowAnalytics(ctx context.Context, flowID uuid.
 		return nil, domain.ErrNotFound
 	}
 	since := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	// a person limited to their queues gets the numbers of the runs they may see, never the company-wide totals (ADR-0043 S3)
+	scope, scopeArgs, err := r.sectorScope(ctx, []any{tenantID, flowID, since})
+	if err != nil {
+		return nil, err
+	}
 	a := &ports.FlowAnalytics{Since: since, Days: days, ByStatus: map[string]int{}, NodeErrors: []ports.NodeCount{}, DropOff: []ports.NodeCount{}}
-	rows, err := r.q(ctx).Query(ctx, `SELECT status, count(*) FROM flow_runs WHERE tenant_id=$1 AND flow_id=$2 AND started_at >= $3 GROUP BY status`, tenantID, flowID, since)
+	rows, err := r.q(ctx).Query(ctx, `SELECT r.status, count(*) FROM flow_runs r WHERE r.tenant_id=$1 AND r.flow_id=$2 AND r.started_at >= $3`+scope+` GROUP BY r.status`, scopeArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -173,12 +178,12 @@ func (r *PostgresFlowRepository) FlowAnalytics(ctx context.Context, flowID uuid.
 	rows.Close()
 	a.Completed, a.Failed = a.ByStatus["completed"], a.ByStatus["failed"]
 	if err := r.q(ctx).QueryRow(ctx, `SELECT count(DISTINCT r.id) FROM flow_runs r JOIN flow_node_executions e ON e.tenant_id=r.tenant_id AND e.flow_run_id=r.id AND e.node_type='human_handoff'
-		WHERE r.tenant_id=$1 AND r.flow_id=$2 AND r.started_at >= $3`, tenantID, flowID, since).Scan(&a.HumanHandoff); err != nil {
+		WHERE r.tenant_id=$1 AND r.flow_id=$2 AND r.started_at >= $3`+scope, scopeArgs...).Scan(&a.HumanHandoff); err != nil {
 		return nil, err
 	}
 	var avg *float64
-	if err := r.q(ctx).QueryRow(ctx, `SELECT avg(extract(epoch FROM (completed_at - started_at)) * 1000) FROM flow_runs
-		WHERE tenant_id=$1 AND flow_id=$2 AND started_at >= $3 AND status='completed' AND completed_at IS NOT NULL`, tenantID, flowID, since).Scan(&avg); err != nil {
+	if err := r.q(ctx).QueryRow(ctx, `SELECT avg(extract(epoch FROM (r.completed_at - r.started_at)) * 1000) FROM flow_runs r
+		WHERE r.tenant_id=$1 AND r.flow_id=$2 AND r.started_at >= $3 AND r.status='completed' AND r.completed_at IS NOT NULL`+scope, scopeArgs...).Scan(&avg); err != nil {
 		return nil, err
 	}
 	if avg != nil {
@@ -186,7 +191,7 @@ func (r *PostgresFlowRepository) FlowAnalytics(ctx context.Context, flowID uuid.
 		a.AvgDuration = &v
 	}
 	if rows, err = r.q(ctx).Query(ctx, `SELECT e.node_id, e.node_type, count(*) FROM flow_node_executions e JOIN flow_runs r ON r.tenant_id=e.tenant_id AND r.id=e.flow_run_id
-		WHERE r.tenant_id=$1 AND r.flow_id=$2 AND r.started_at >= $3 AND e.status='failed' GROUP BY e.node_id, e.node_type ORDER BY count(*) DESC, e.node_id LIMIT 10`, tenantID, flowID, since); err != nil {
+		WHERE r.tenant_id=$1 AND r.flow_id=$2 AND r.started_at >= $3 AND e.status='failed'`+scope+` GROUP BY e.node_id, e.node_type ORDER BY count(*) DESC, e.node_id LIMIT 10`, scopeArgs...); err != nil {
 		return nil, err
 	}
 	for rows.Next() {
@@ -198,8 +203,8 @@ func (r *PostgresFlowRepository) FlowAnalytics(ctx context.Context, flowID uuid.
 		a.NodeErrors = append(a.NodeErrors, c)
 	}
 	rows.Close()
-	if rows, err = r.q(ctx).Query(ctx, `SELECT COALESCE(current_node_id, '(start)'), count(*) FROM flow_runs
-		WHERE tenant_id=$1 AND flow_id=$2 AND started_at >= $3 AND status IN ('failed','cancelled','expired') GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 10`, tenantID, flowID, since); err != nil {
+	if rows, err = r.q(ctx).Query(ctx, `SELECT COALESCE(r.current_node_id, '(start)'), count(*) FROM flow_runs r
+		WHERE r.tenant_id=$1 AND r.flow_id=$2 AND r.started_at >= $3 AND r.status IN ('failed','cancelled','expired')`+scope+` GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 10`, scopeArgs...); err != nil {
 		return nil, err
 	}
 	defer rows.Close()

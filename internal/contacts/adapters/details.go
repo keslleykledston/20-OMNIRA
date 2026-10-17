@@ -12,6 +12,7 @@ import (
 
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -173,7 +174,17 @@ func (h *ContactsAPIHandler) ListNotes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "contact not found", http.StatusNotFound)
 		return
 	}
-	rows, err := q.Query(r.Context(), noteSelect+` WHERE n.tenant_id=$1 AND n.contact_id=$2 ORDER BY n.created_at DESC, n.id DESC LIMIT 200`, tc.TenantID, id)
+	// A note belongs to the contact, not to one conversation, so it cannot be judged queue by queue. A person limited to their queues (ADR-0043 S3) reads the notes
+	// of a contact only when one of that contact's conversations is in their reach (a contact with none is out of reach, fail closed); their own notes stay theirs.
+	reach, args := "", []any{tc.TenantID, id}
+	if restricted, err := tenancyadapters.SectorScopeRestricts(r.Context(), q, tc); err != nil {
+		http.Error(w, "failed to read notes", http.StatusInternalServerError)
+		return
+	} else if restricted {
+		args = append(args, tc.ActorID)
+		reach = ` AND (n.created_by_user_id = $3 OR EXISTS (SELECT 1 FROM conversations cv WHERE cv.tenant_id = n.tenant_id AND cv.contact_id = n.contact_id AND conversation_in_sector_scope(cv.tenant_id, $3, cv.id)))`
+	}
+	rows, err := q.Query(r.Context(), noteSelect+` WHERE n.tenant_id=$1 AND n.contact_id=$2`+reach+` ORDER BY n.created_at DESC, n.id DESC LIMIT 200`, args...)
 	if err != nil {
 		http.Error(w, "failed to read notes", http.StatusInternalServerError)
 		return
