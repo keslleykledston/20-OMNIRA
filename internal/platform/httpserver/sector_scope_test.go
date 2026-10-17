@@ -16,11 +16,14 @@ import (
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	dashboardadapters "github.com/omnira/omnira/internal/dashboard/adapters"
+	flowsadapters "github.com/omnira/omnira/internal/flows/adapters"
+	flowsapplication "github.com/omnira/omnira/internal/flows/application"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	"github.com/omnira/omnira/internal/platform/authn"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
 	routingapplication "github.com/omnira/omnira/internal/routing/application"
+	sectorsadapters "github.com/omnira/omnira/internal/sectors/adapters"
 	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancyapplication "github.com/omnira/omnira/internal/tenancy/application"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
@@ -535,5 +538,109 @@ func TestQueueOptionsAreOpenToAnAgentAndShowNamesOnly(t *testing.T) {
 	// the other company's admin cannot read this company's queues
 	if code, _ := e.get(e.outsider, e.tenant, "/inbox/queue-options"); code != http.StatusForbidden && code != http.StatusNotFound {
 		t.Errorf("outsider = %d", code)
+	}
+}
+
+// Codex round 1 left two accepted gaps; with the scope ON in the pilot company they are closed: the flow-run history (variables and a step-by-step timeline of a conversation)
+// and the queue SLA monitor (conversation ids and timings) obey the same single decision as everything else.
+func TestSectorScopeCoversFlowRunHistoryAndTheQueueSLAMonitor(t *testing.T) {
+	e := newScopeEnv(t)
+	e.exec(`INSERT INTO role_permissions(role_id,permission_key) SELECT id,k FROM roles, unnest(ARRAY['flow_run.view','agent.read']) k WHERE tenant_id=$1 AND key='reader_dash'`, e.tenant)
+	repo := flowsadapters.NewPostgresFlowRepository(e.app)
+	fh := flowsadapters.NewHandler(e.app, flowsapplication.NewControlPlane(repo, repo, nil)).WithRuns(repo)
+	sh := sectorsadapters.NewHandler(e.app, auditadapters.NewPostgresAuditEventRepository(e.app))
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(e.app), tenancyadapters.NewPostgresTenantRepository(e.app))
+	mw := tenancyadapters.AuthorizationMiddleware(e.app, authz)
+	base := "/api/v1/tenants/{tenant_id}"
+	e.mux.Handle("GET "+base+"/flow-runs", mw(http.HandlerFunc(fh.ListRuns)))
+	e.mux.Handle("GET "+base+"/flow-runs/{run_id}", mw(http.HandlerFunc(fh.GetRun)))
+	e.mux.Handle("GET "+base+"/queues/{queue_id}/sla", mw(http.HandlerFunc(sh.QueueSLA)))
+
+	flowID, versionID := uuid.New(), uuid.New()
+	e.exec(`INSERT INTO flows(id, tenant_id, slug, name) VALUES($1,$2,'scope-flow','Fluxo')`, flowID, e.tenant)
+	e.exec(`INSERT INTO flow_versions(id, tenant_id, flow_id, version, definition, definition_hash) VALUES($1,$2,$3,1,'{}','h')`, versionID, e.tenant, flowID)
+	runs := map[string]uuid.UUID{}
+	for _, name := range []string{"q1", "q2", "free"} {
+		id := uuid.New()
+		e.exec(`INSERT INTO flow_runs(id, tenant_id, flow_id, flow_version_id, conversation_id, status, trigger_event_id) VALUES($1,$2,$3,$4,$5,'running',$6)`, id, e.tenant, flowID, versionID, e.c[name], uuid.NewString())
+		runs[name] = id
+	}
+	for _, name := range []string{"q2", "held", "invited"} { // the three open conversations of Q2, each with a running clock
+		e.exec(`INSERT INTO conversation_sla (tenant_id, conversation_id, metric, started_at, anchor_at, budget_seconds, risk_percent, counting, calendar_queue_id, deadline_at, risk_at, state)
+			VALUES ($1,$2,'assignment', now(), now(), 600, 80, 'wall', $3, now()+interval '10 minutes', now()+interval '8 minutes', 'running')`, e.tenant, e.c[name], e.q2)
+	}
+	runIDs := func(user uuid.UUID) string {
+		code, body := e.get(user, e.tenant, "/flow-runs")
+		if code != 200 {
+			t.Fatalf("flow-runs = %d %s", code, body)
+		}
+		var out struct {
+			Items []struct {
+				ID uuid.UUID `json:"id"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal([]byte(body), &out)
+		var got []string
+		for name, id := range runs {
+			for _, it := range out.Items {
+				if it.ID == id {
+					got = append(got, name)
+				}
+			}
+		}
+		return strings.Join(sortedStrings(got), ",")
+	}
+	slaItems := func(user uuid.UUID) int {
+		code, body := e.get(user, e.tenant, "/queues/"+e.q2.String()+"/sla")
+		if code != 200 {
+			t.Fatalf("sla = %d %s", code, body)
+		}
+		var out struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		_ = json.Unmarshal([]byte(body), &out)
+		return len(out.Items)
+	}
+
+	// scope OFF: nothing changes
+	if got := runIDs(e.reader); got != "free,q1,q2" {
+		t.Errorf("scope off: reader runs = %q, want everything", got)
+	}
+	if n := slaItems(e.reader); n != 3 {
+		t.Errorf("scope off: reader SLA items = %d, want 3", n)
+	}
+
+	e.scope(true)
+	if got := runIDs(e.reader); got != "free" {
+		t.Errorf("reader runs = %q, want only the unqueued conversation's", got)
+	}
+	if got := runIDs(e.super); got != "free,q1,q2" {
+		t.Errorf("supervisor runs = %q, want all", got)
+	}
+	if code, _ := e.get(e.reader, e.tenant, "/flow-runs/"+runs["q1"].String()); code != 404 {
+		t.Errorf("a run of a conversation out of reach by id = %d, want 404 (as if it did not exist)", code)
+	}
+	if code, _ := e.get(e.reader, e.tenant, "/flow-runs/"+runs["free"].String()); code != 200 {
+		t.Errorf("a run of a reachable conversation = %d, want 200", code)
+	}
+	if code, _ := e.get(e.super, e.tenant, "/flow-runs/"+runs["q1"].String()); code != 200 {
+		t.Errorf("supervisor on any run = %d, want 200", code)
+	}
+	// filtering by an out-of-reach conversation is no way around it
+	if code, body := e.get(e.reader, e.tenant, "/flow-runs?conversation_id="+e.c["q1"].String()); code != 200 || strings.Contains(body, runs["q1"].String()) {
+		t.Errorf("filter by an out-of-reach conversation: %d %s", code, body)
+	}
+	if n := slaItems(e.reader); n != 0 {
+		t.Errorf("reader SLA items for Q2 = %d, want 0 (none of Q2's conversations is in reach)", n)
+	}
+	if n := slaItems(e.super); n != 3 {
+		t.Errorf("supervisor SLA items = %d, want 3", n)
+	}
+	// the other company's administrator reaches neither
+	if code, _ := e.get(e.outsider, e.tenant, "/flow-runs"); code != 403 && code != 404 {
+		t.Errorf("another company's admin on the run history = %d", code)
+	}
+	if code, _ := e.get(e.outsider, e.tenant, "/queues/"+e.q2.String()+"/sla"); code != 403 && code != 404 {
+		t.Errorf("another company's admin on the SLA monitor = %d", code)
 	}
 }

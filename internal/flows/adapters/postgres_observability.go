@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/omnira/omnira/internal/flows/domain"
 	"github.com/omnira/omnira/internal/flows/ports"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
+	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
 var _ ports.RunReader = (*PostgresFlowRepository)(nil)
@@ -28,6 +31,21 @@ func scanSummary(row pgx.Row) (*ports.RunSummary, error) {
 	return &s, err
 }
 
+// sectorScope keeps run history to the conversations the actor may see when the company's sector scope is on (ADR-0043 S3): a run carries the contact's variables and a
+// step-by-step timeline of a conversation. It returns the predicate over r.conversation_id with the actor appended to args; empty when the scope does not narrow this actor.
+func (r *PostgresFlowRepository) sectorScope(ctx context.Context, args []any) (string, []any, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil {
+		return "", args, err
+	}
+	restricted, err := tenancyadapters.SectorScopeRestricts(ctx, r.q(ctx), tc)
+	if err != nil || !restricted {
+		return "", args, err
+	}
+	args = append(args, tc.ActorID)
+	return ` AND conversation_in_sector_scope(r.tenant_id, $` + strconv.Itoa(len(args)) + `, r.conversation_id)`, args, nil
+}
+
 func (r *PostgresFlowRepository) ListRuns(ctx context.Context, f ports.RunFilter) ([]ports.RunSummary, error) {
 	tenantID, err := tenantOf(ctx)
 	if err != nil {
@@ -39,9 +57,14 @@ func (r *PostgresFlowRepository) ListRuns(ctx context.Context, f ports.RunFilter
 	if f.Offset < 0 {
 		f.Offset = 0
 	}
+	args := []any{tenantID, f.FlowID, f.ConversationID, f.Status, f.Limit, f.Offset}
+	scope, args, err := r.sectorScope(ctx, args)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.q(ctx).Query(ctx, runSummarySQL+`
-		WHERE r.tenant_id = $1 AND ($2::uuid IS NULL OR r.flow_id = $2) AND ($3::uuid IS NULL OR r.conversation_id = $3) AND ($4 = '' OR r.status = $4)
-		ORDER BY r.started_at DESC, r.id DESC LIMIT $5 OFFSET $6`, tenantID, f.FlowID, f.ConversationID, f.Status, f.Limit, f.Offset)
+		WHERE r.tenant_id = $1 AND ($2::uuid IS NULL OR r.flow_id = $2) AND ($3::uuid IS NULL OR r.conversation_id = $3) AND ($4 = '' OR r.status = $4)`+scope+`
+		ORDER BY r.started_at DESC, r.id DESC LIMIT $5 OFFSET $6`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +85,13 @@ func (r *PostgresFlowRepository) GetRunDetail(ctx context.Context, id uuid.UUID)
 	if err != nil {
 		return nil, err
 	}
-	s, err := scanSummary(r.q(ctx).QueryRow(ctx, runSummarySQL+` WHERE r.tenant_id = $1 AND r.id = $2`, tenantID, id))
+	args := []any{tenantID, id}
+	scope, args, err := r.sectorScope(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	// a run of a conversation out of reach answers as a run that does not exist
+	s, err := scanSummary(r.q(ctx).QueryRow(ctx, runSummarySQL+` WHERE r.tenant_id = $1 AND r.id = $2`+scope, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}

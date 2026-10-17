@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	auditdomain "github.com/omnira/omnira/internal/audit/domain"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
 // SLAPolicy is one policy of one scope. Budgets are in seconds; absent = that metric is not measured by this policy.
@@ -234,11 +235,18 @@ func (h *Handler) QueueSLA(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "queue not found", http.StatusNotFound)
 		return
 	}
+	// ADR-0043 S3: with the company's sector scope on, a person who does not see every queue gets only the clocks of the conversations they may see
+	restricted, err := tenancyadapters.SectorScopeRestricts(r.Context(), q, tc)
+	if err != nil {
+		http.Error(w, "failed to read the SLA", http.StatusInternalServerError)
+		return
+	}
 	rows, err := q.Query(r.Context(), `SELECT s.conversation_id, s.metric,
 		CASE WHEN s.state='breached' THEN 'breached' WHEN now() >= s.risk_at THEN 'at_risk' ELSE 'running' END, s.started_at, s.risk_at, s.deadline_at, s.counting
 		FROM conversation_sla s JOIN conversations c ON c.tenant_id=s.tenant_id AND c.id=s.conversation_id
 		WHERE s.tenant_id=$1 AND c.queue_id=$2 AND c.status='open' AND s.state IN ('running','breached')
-		ORDER BY s.deadline_at, s.conversation_id LIMIT 200`, tc.TenantID, queueID)
+		  AND (NOT $3::boolean OR conversation_in_sector_scope(c.tenant_id, $4, c.id))
+		ORDER BY s.deadline_at, s.conversation_id LIMIT 200`, tc.TenantID, queueID, restricted, tc.ActorID)
 	if err != nil {
 		http.Error(w, "failed to read the SLA", http.StatusInternalServerError)
 		return
