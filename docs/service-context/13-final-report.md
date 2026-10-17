@@ -24,17 +24,22 @@ Ver `11-test-evidence.md`. Em resumo: módulo, Hub, fluxos, IA, atendimento e we
 
 Ver `12-deployment-rollback.md`: migrations aditivas antes do binário, flags desligadas, ligar por etapas, rollback por flag/binário (migration `down` apaga dados novos). **Nada foi implantado.** Colisão de numeração com `feat/headless-crm-dual-operation` documentada (este trabalho usa 150–159).
 
-## O que NÃO está pronto (honesto)
+## O que NÃO está pronto (honesto) — atualizado em 2026-10-17
 
-- **Adaptador real de ERP**: não existe contrato validado do provedor (o K3G não tem idempotência/correlação). Pedir OS ao ERP responde `503 not_configured` até haver adaptador; o fake nunca é instalado no runtime. `BLOCKED`.
-- **Entrega de webhooks a terceiros / autenticação de aplicação externa**: depende da branch headless (ADR-0048). O módulo guarda os eventos (`context_events`) e documenta o envelope; **não emite ao outbox** (decisão registrada). `BLOCKED` por dependência.
-- Telas de ocorrências, OS externas e linha do tempo no Workspace; escolha do resultado no `FinalizeDialog` (a API existe).
-- **Risco R-AI-1** (Codex HIGH): a rota de ferramentas de IA aceita `proposed_by` do cliente; comportamento herdado do ADR-0017, decisão do dono (ver 07).
-- Não executado: smoke com telefone/ERP/staging, e2e Playwright, ESLint do web, carga, restore de backup.
-- Decisões do dono (2026-10-15): prefixo por empresa + início 1001, janela de reabertura 24 h e abertura automática ao assumir **implementados** (ver 14). Pendente: papéis com `service.request_external`; tela para o administrador escolher o prefixo.
+Entregue desde a primeira versão deste relatório (ver `11`, adendo): telas de ocorrências, ordens de serviço no ERP (lista) e histórico; resultado escolhido no Finalizar; tela do prefixo; protocolo visível na conversa; aviso ao cliente (chave por empresa); status do chamado ERP pelo Hub (chave por empresa); e2e com o binário real; restauração de backup; carga leve; contrato do adaptador de ERP; R-7 fechado.
+
+Ainda aberto:
+
+- **Adaptador real de ERP**: o K3G não oferece o contrato (idempotência/correlação, OS). `docs/service-context/16` diz exatamente o que o provedor precisa fornecer e o teste de contrato (`gatewaytest.Check`) é o aceite. Pedir OS responde `503 not_configured` até lá; flag (c) desligada. `BLOCKED` por terceiro.
+- **Entrega de webhooks a terceiros / aplicação externa**: depende da branch headless. Merge **preparado e testado** em `prep/headless-on-main` (migrations renumeradas 159–163), **não mesclado** — espera ordem do dono; depois, os 20 nomes `service_*` nos CHECKs (gate 4 de `06`).
+- **Pedido de OS pela tela**: a tela lista os pedidos; o botão de pedir não existe porque a flag (c) está desligada e a chave `service.request_external` não é concedida a papel algum (decisão do dono).
+- **R-AI-1** (Codex HIGH herdado do ADR-0017): a rota de ferramentas de IA aceita `proposed_by` do cliente. Decisão do dono; recomendação: proveniência do lado do servidor.
+- **Riscos aceitos** (07): R-8 (tentativas de status partilhadas entre atendentes do mesmo escopo), R-9 (aviso que falha depois do commit só vai ao log).
+- **Não executado**: smoke com telefone real (aviso ao cliente, anexos), canal oficial Meta, staging, Playwright de navegador. ESLint do web **não existe** no projeto.
+- **Decisões do dono pendentes**: papéis personalizados com `service.*` e `service.request_external`; aprovação do conjunto para staging.
 
 ## Final Status
 
 **READY_FOR_REVIEW.**
 
-Não é `READY_FOR_STAGING`: falta aprovação humana do conjunto, decidir R-AI-1, e o smoke em staging. Não é `READY_FOR_PILOT`: não há evidência de gate de segurança + integração em ambiente real (nem adaptador de ERP), e o conjunto final dos riscos R-5/R-6 (000156) teve a rodada 10 do Codex, com os achados tratados (ver 14). Nenhuma alegação de `PRODUCTION_READY`.
+Operando em produção, sob supervisão do dono, na K3G_Solutions e nas empresas internas (flags a, b, b2 ligadas; aviso só na K3G_Solutions). Não é `READY_FOR_STAGING`: falta aprovação humana do conjunto, decidir R-AI-1 e o smoke com telefone real. Não é `READY_FOR_PILOT` para o ERP: não há adaptador nem contrato do provedor. Nenhuma alegação de `PRODUCTION_READY`.
