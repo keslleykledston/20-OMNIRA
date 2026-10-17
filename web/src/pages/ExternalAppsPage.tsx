@@ -79,6 +79,16 @@ function CreateForm({ onCreated, onClose }: { onCreated: (app: ExternalApp, cred
   )
 }
 
+// The Drawer is a bare right-anchored panel: its content brings its own padding and its visible title (the close button sits in the top right corner).
+function DrawerBody({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="px-6 pb-8 pt-5">
+      <h2 className="mb-5 pr-10 text-lg font-semibold text-text-primary">{title}</h2>
+      {children}
+    </div>
+  )
+}
+
 function Detail({ appId, canManage, onChanged }: { appId: string; canManage: boolean; onChanged: () => void }) {
   const tenantId = getTenantId()
   const qc = useQueryClient()
@@ -178,11 +188,19 @@ export default function ExternalAppsPage() {
               </Card>
             ))}
           </div>
-          <Drawer open={creating} title="Nova aplicação externa" onClose={() => setCreating(false)}>
-            {creating && <CreateForm onClose={() => setCreating(false)} onCreated={(app, cred) => { setCreating(false); setCreated({ app, cred }) }} />}
+          <Drawer open={creating} title="Nova aplicação externa" onClose={() => setCreating(false)} size="lg">
+            {creating && (
+              <DrawerBody title="Nova aplicação externa">
+                <CreateForm onClose={() => setCreating(false)} onCreated={(app, cred) => { setCreating(false); setCreated({ app, cred }) }} />
+              </DrawerBody>
+            )}
           </Drawer>
-          <Drawer open={!!selected} title="Aplicação externa" onClose={() => setSelected(null)}>
-            {selected && <Detail key={selected} appId={selected} canManage={manage} onChanged={() => void list.refetch()} />}
+          <Drawer open={!!selected} title="Aplicação externa" onClose={() => setSelected(null)} size="lg">
+            {selected && (
+              <DrawerBody title="Aplicação externa">
+                <Detail key={selected} appId={selected} canManage={manage} onChanged={() => void list.refetch()} />
+              </DrawerBody>
+            )}
           </Drawer>
         </div>
       )}
