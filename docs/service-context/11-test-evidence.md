@@ -54,3 +54,25 @@ Saídas completas na pasta de trabalho da sessão (`svc-codex-p*-out.md`). **Nã
 ## Não executado
 
 Playwright/e2e; ESLint do web (binário ausente neste ambiente); carga/desempenho além dos testes de concorrência; smoke com telefone, ERP ou staging reais; restore de backup com estas migrations.
+
+## Adendo 2026-10-17 — rodada de fechamento (commits `573d94e` … esta)
+
+Banco descartável recriado do zero antes de cada porta (`omnira_test_svc`), `-p 1`. Resultado nos pacotes tocados: **todos ok**, exceto `TestPlatformOperator_GrantRevokeAndVisibility` (falha idêntica em `main`; assume banco virgem). `go build ./...` e `go vet` limpos. Web: `tsc` limpo, **vitest 1070/1070**.
+
+| O que | Prova | Mutação verificada |
+|---|---|---|
+| Hub altera status do chamado ERP (`da6f764`, migrations 157/158) | handlers reais + ERP falso: 1 PUT, replay não repete, não-titular/sem chave/interruptor desligado/outra instância recusados; políticas por escopo e instância; leitura de `tenant_entitlements` estreitada a UMA chave | gate do interruptor removido ⇒ teste falha |
+| Aviso só depois do commit (R-7 fechado) | `TestAfterCommitRunsOnlyWhenTheSessionCommits` (6 casos, PostgreSQL real); `TestTheCustomerIsNotToldAboutAProtocolTheRequestRolledBack` | `AfterCommit` desligado ⇒ cliente é avisado de protocolo desfeito |
+| Pânico no aviso não derruba o pedido | `TestAPanicInTheNoticeCostsTheNoticeNotTheProtocol` | `recover` removido ⇒ teste falha |
+| Resultado escolhido ao finalizar | 3 testes Go (escolha vence, código da empresa gravado, desconhecido cai no automático, abandono fixo, não-código recusado) + 4 de diálogo | lógica de escolha removida ⇒ falha |
+| Telas: prefixo, protocolo na conversa, ocorrências/OS/histórico, empresa sem CRM/ERP | 6 + 4 + 7 + 2 testes web | — |
+| **E2E com o binário real** (`scripts/e2e-service-context.sh`) | assumir ⇒ protocolo 1001 ⇒ aviso ao cliente ⇒ tarefa + ocorrência ⇒ histórico ⇒ finalizar com resultado ⇒ aviso de encerramento ⇒ estranho sem acesso ⇒ flags desligadas = 404; 13 asserções + efeitos no banco | — |
+| **Restauração de backup** (`scripts/backup-restore-check.sh`, estendido) | as tabelas do módulo (protocolo, contador, eventos) restauram idênticas no mesmo cluster e num cluster novo, com RLS provada depois | — |
+| **Carga leve** (`load_integration_test.go`) | 150 protocolos abertos por 12 trabalhadores: 153/s, p95 de abertura 256 ms, **sequência 1001…1150 sem lacuna nem duplicata**; leituras (protocolo da conversa, histórico) p95 ≈ 2 ms | — |
+| Contrato do adaptador de ERP (`gatewaytest.Check`) | passa no fake fiel (com e sem busca por correlação); reprova 8 defeitos distintos | — |
+
+Revisão independente (Codex, somente leitura): rodadas sobre aviso/gancho/interruptor, paridade do Hub, anexos do Hub (2026-10-16) e sobre status do ERP/pós-commit/resultado (2026-10-17): **nenhum BLOCKER/HIGH**. Corrigidos: guarda do upload do Hub (titular lido sob a trava), pânico no aviso, leitura de interruptores estreitada. Falso positivo comprovado por teste: "editar nota perde o alvo do Hub". Aceitos e registrados (`07`): R-8 (tentativas de status compartilhadas entre atendentes do mesmo escopo), R-9 (aviso que falha depois do commit só vai ao log).
+
+**ESLint do web**: não existe — o script `lint` aponta para um binário e uma configuração que o projeto nunca teve. A porta estática do web é `tsc --noEmit`.
+
+Ainda não executado: smoke com telefone real (aviso e anexos), canal oficial (Meta), staging, ERP real.

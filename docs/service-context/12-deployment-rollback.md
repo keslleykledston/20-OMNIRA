@@ -47,3 +47,11 @@ Papéis com `service.request_external`. Prefixo do protocolo: `GET/PUT /service-
 ## Observabilidade
 
 `omnira_service_sessions_opened_total{source}`, `…_closed_total{result}`, `…_reopened_total`, `omnira_service_cases_opened_total`, `omnira_service_tasks_created_total{origin}`, `omnira_service_external_requests_total{state}` (alerta sugerido: `outcome_unknown` parado), `omnira_service_external_updates_total{outcome}`. Logs sem PII; ids só em logs/traces.
+
+## Adendo 2026-10-17 — migrations 157 e 158 e o que mudou na ordem de implantação
+
+- `000157_hub_delegated_ticket_status` (políticas delegadas em `ticket_external_status_attempts` e leitura delegada de `tenant_entitlements`) e `000158_hub_delegated_entitlement_narrow` (essa leitura restrita à capacidade `hub_ticket_status`): aditivas, `lock_timeout` 5 s, **migrar antes do binário**. Rollback = `down` de 158 e depois 157 (só remove políticas); o binário antigo as ignora.
+- A assinatura do gancho de finalização mudou (`SessionCloser` ganhou o resultado escolhido): **api e worker sobem juntos** (o worker usa o gancho nos fluxos).
+- Nova chave por empresa `hub_ticket_status` (Hub > Instâncias > Capacidades), **ligada por padrão**; desligar = o Hub recebe 403 ao mudar o status, membros não são afetados. A chave de permissão `ticket.update` precisa estar no teto do contrato e na concessão da pessoa (nenhum preset a inclui).
+- Aviso do protocolo: chave por empresa `service_protocol_notice` (desligada por padrão); `OMNIRA_SERVICE_PROTOCOL_NOTICE_ENABLED` só instala o aviso.
+- Verificação: `scripts/e2e-service-context.sh` (binário real, banco e NATS descartáveis) e `scripts/backup-restore-check.sh` (inclui as tabelas do módulo).

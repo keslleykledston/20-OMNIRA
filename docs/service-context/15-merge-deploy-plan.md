@@ -133,3 +133,7 @@ Sem tag. Registrar o deploy em `docs/operations` somente se o dono pedir.
 - Quem recebe `service.*` nos papéis personalizados; `service.request_external`.
 - Tela para o administrador escolher o prefixo; a rota antiga `/hubs/{hub}/inbox/{item}/claim` não dispara a abertura automática.
 - Smoke em número de teste (WhatsApp) e e2e: não executados.
+
+## 9. Estado em 2026-10-17
+
+Executado e implantado em `main` (origin `1f3713a` + commits locais posteriores): merge do módulo, flags (a), (b) e (b2) ligadas, migrations 150–158. **Branch do headless preparada, não mesclada:** `prep/headless-on-main` (worktree `/data/cafegpt/tmp/wt-headless-prep`) é o merge de `feat/headless-crm-dual-operation` sobre `main` com 4 conflitos de texto resolvidos por união e as migrations 137–141 renumeradas para **159–163**; `go build`/`vet` limpos, pacotes tocados ok, web 1080/1080. A branch original está intacta. Falta, **depois** de o dono mandar mesclar: os 20 nomes públicos `service_*` nos CHECKs do diário e dos webhooks (gate 4 de `06`).

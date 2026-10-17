@@ -16,5 +16,6 @@ Como rodar testes (banco descartável, nunca `omnira_dev`): scripts no scratchpa
 | 6 Fluxos/IA/métricas | feito | 3e022f4, 1d5a4d8, 735dc1f | Codex: 2 HIGH (1 tratado, 1 = R-AI-1 herdado) |
 | 7 Docs finais | feito | (este commit) | status **READY_FOR_REVIEW** (ver 13) |
 | 8 Decisões do dono 2026-10-15 | feito (ver 14) | (próximo commit) | prefixo por empresa + 1001, janela 24 h, abertura ao assumir |
+| 9 Pós-merge (2026-10-15/17) | feito, implantado | `5f970b1` … `b79094f` | aviso do protocolo por empresa; paridade do painel do Hub; anexos no Hub; status do chamado ERP pelo Hub (chave por empresa); prefixo, protocolo na conversa, ocorrências/OS/histórico, resultado ao finalizar; R-7 fechado; e2e, restore e carga; contrato do adaptador de ERP; Codex sem BLOCKER/HIGH |
 
 Retomada: nada a retomar no código; pendências estão em `13-final-report.md`.
