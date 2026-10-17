@@ -9,6 +9,7 @@ import (
 	attendancedomain "github.com/omnira/omnira/internal/attendance/domain"
 	"github.com/omnira/omnira/internal/servicectx/adapters"
 	"github.com/omnira/omnira/internal/servicectx/domain"
+	"github.com/omnira/omnira/internal/servicectx/ports"
 )
 
 // ADR-0049 addendum on a real PostgreSQL: the customer is told, in the conversation, when the protocol opens and when it ends. It is a courtesy: the session never
@@ -203,5 +204,54 @@ func TestFinalizingAConversationWithoutAProtocolTellsNobody(t *testing.T) {
 	}
 	if got := s.told(conv); len(got) != 0 {
 		t.Fatalf("no active protocol was shown to the customer: %q", got)
+	}
+}
+
+// panickingAnnouncer stands for a bug in the courtesy: it must cost the customer a notice, never the protocol.
+type panickingAnnouncer struct{}
+
+func (panickingAnnouncer) Opened(context.Context, ports.Announcement) error { panic("boom") }
+func (panickingAnnouncer) Closed(context.Context, ports.Announcement) error { panic("boom") }
+
+func TestAPanicInTheNoticeCostsTheNoticeNotTheProtocol(t *testing.T) {
+	s := newStack(t)
+	s.svc.WithAnnouncer(panickingAnnouncer{})
+	conv, _ := s.conversation()
+	s.assign(conv, s.agent)
+	sess := s.mustOpen(s.agent, conv) // does not panic, does not roll back
+	if rows := s.sessionsOf(conv); len(rows) != 1 || rows[0].status != "open" {
+		t.Fatalf("the protocol stands after a panic in the notice: %+v", rows)
+	}
+	if _, err := s.closeSession(s.agent, sess.ID, domain.CloseInput{ResolutionCode: domain.ResInformationProvided}, sess.Version); err != nil {
+		t.Fatalf("closing after a panic in the notice: %v", err)
+	}
+	if rows := s.sessionsOf(conv); len(rows) != 1 || rows[0].status != "closed" {
+		t.Fatalf("the protocol closed: %+v", rows)
+	}
+}
+
+func TestReopeningAndClosingAgainRepeatsNoNotice(t *testing.T) {
+	s := newStack(t)
+	s.announce()
+	conv, _ := s.conversation()
+	s.withLine(conv, "waha", "unofficial")
+	s.assign(conv, s.agent)
+	sess := s.mustOpen(s.agent, conv)
+	closed, err := s.closeSession(s.agent, sess.ID, domain.CloseInput{ResolutionCode: domain.ResInformationProvided}, sess.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.told(conv); len(got) != 2 {
+		t.Fatalf("opened and closed once each: %q", got)
+	}
+	reopened, err := s.reopen(s.svc, s.agent, sess.ID, closed.Version)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, err := s.closeSession(s.agent, sess.ID, domain.CloseInput{ResolutionCode: domain.ResInformationProvided}, reopened.Version); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.told(conv); len(got) != 2 {
+		t.Fatalf("the same protocol closing twice is told once: %q", got)
 	}
 }

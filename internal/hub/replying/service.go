@@ -348,14 +348,21 @@ func (s *Service) Transfer(ctx context.Context, actor uuid.UUID, t *Target, to *
 }
 
 // guard is the check a delegated media write runs inside its transaction, after the conversation is loaded: the delegation still holds (FOR SHARE pins the
-// authorization rows) and the attendance was not finalized meanwhile.
+// authorization rows), the attendance was not finalized meanwhile and the holder is the one read under the lock.
 func (s *Service) guard(t *Target, actor uuid.UUID) func(context.Context, *messagesports.SendContext) error {
-	return func(gc context.Context, _ *messagesports.SendContext) error {
-		_, closed, err := s.delegationHolds(gc, t, actor, "FOR SHARE")
-		if err == nil && closed {
+	return func(gc context.Context, sc *messagesports.SendContext) error {
+		assigned, closed, err := s.delegationHolds(gc, t, actor, "FOR SHARE")
+		if err != nil {
+			return err
+		}
+		if closed {
 			return ErrClosed
 		}
-		return err
+		// the send context was read before the lock: from here on the holder is the one read under it, so a reassignment in between is seen
+		if sc != nil {
+			sc.AssignedTo = assigned
+		}
+		return nil
 	}
 }
 

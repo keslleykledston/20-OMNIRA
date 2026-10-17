@@ -5,6 +5,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -93,7 +94,13 @@ func (s *Service) announce(ctx context.Context, c caller, sess *domain.Session, 
 		return
 	}
 	a := ports.Announcement{TenantID: sess.TenantID, ConversationID: *sess.ConversationID, SessionID: sess.ID, Protocol: sess.Protocol, Actor: actor, Mode: mode}
-	err := s.repo.InSavepoint(ctx, func(ctx context.Context) error {
+	err := s.repo.InSavepoint(ctx, func(ctx context.Context) (err error) {
+		// a courtesy never takes the request down: a panic becomes an error, which rolls the savepoint back like any other failure
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("announcer panicked: %v", r)
+			}
+		}()
 		if closed {
 			return s.announcer.Closed(ctx, a)
 		}

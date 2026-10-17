@@ -227,6 +227,39 @@ func TestAHubAgentSendsAFileThroughTheHubsOwnRoutes(t *testing.T) {
 		hold(&agent)
 	})
 
+	t.Run("a file uploaded for company A is never sent into company B's conversation, even by an agent who holds both", func(t *testing.T) {
+		w.connect("B")
+		w.grantReply(agent, "B")
+		convB, itemB, tenantB := w.conv["B"], w.itemID("B"), w.tenant["B"]
+		w.exec(`UPDATE conversations SET assigned_to_user_id = $2 WHERE id = $1`, convB, agent)
+		code, b := api.do(uploadReq(t, base+"/attachments"+q, "a-only.png", "image/png", smallPNG(t)), agent, "")
+		if code != 201 {
+			t.Fatalf("upload in A: %d %s", code, b)
+		}
+		attID := idOf(t, b)
+		baseB := "/api/v1/hubs/" + w.hub.String() + "/inbox/" + itemB.String()
+		if code, b := api.do(jsonReq("POST", baseB+"/messages", `{"expected_tenant_id":"`+tenantB.String()+`","text":"","attachment_id":"`+attID+`"}`, "Idempotency-Key", "media-key-cross-b"), agent, ""); code != 422 {
+			t.Errorf("A's file sent into B: %d %s, want 422", code, b)
+		}
+		if w.count(`SELECT count(*) FROM messages WHERE conversation_id = $1 AND direction = 'outbound'`, convB) != 0 {
+			t.Error("a message was queued in company B")
+		}
+		if w.count(`SELECT count(*) FROM message_outbound_media WHERE id = $1 AND message_id IS NOT NULL`, attID) != 0 {
+			t.Error("A's file got attached to a message")
+		}
+	})
+
+	t.Run("a hostile file name is reduced to a safe label, never a path", func(t *testing.T) {
+		code, b := api.do(uploadReq(t, base+"/attachments"+q, "../../etc/passwd.png", "image/png", smallPNG(t)), agent, "")
+		if code != 201 {
+			t.Fatalf("upload: %d %s", code, b)
+		}
+		attID := idOf(t, b)
+		if w.count(`SELECT count(*) FROM message_outbound_media WHERE id = $1 AND file_name <> '' AND file_name !~ '[/\\\\]' AND file_name NOT LIKE '%..%'`, attID) != 1 {
+			t.Error("the stored label is empty or still carries path pieces")
+		}
+	})
+
 	t.Run("an infected file, an antivirus that is down and a file that is not a file are refused and store nothing", func(t *testing.T) {
 		before := files()
 		eicar := []byte(`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`)
