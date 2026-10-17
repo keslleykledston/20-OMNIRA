@@ -1,6 +1,6 @@
 # Piloto da API headless (ADR-0048) — plano para ligar, observar e desfazer
 
-Estado em 2026-10-17: código **implantado em produção com as flags desligadas** (`sha-5e06f4c`, migrations até a 164). Nenhuma instalação externa existe. Nada abaixo foi executado em produção: este é o plano, com o ensaio já feito num ambiente descartável. Complementa o `HEADLESS-RUNBOOK.md` (como operar) — aqui está **a ordem do piloto**.
+Estado em 2026-10-17 (madrugada): código implantado (`sha-5e06f4c`, migrations até a 164). **P0 ligado em produção**: `OMNIRA_HEADLESS_ENABLED=true`, `OMNIRA_HEADLESS_WRITE_ENABLED=false` (api e worker recriados; `/api/v1/external/me` sem token responde 401; o worker do diário e dos webhooks está de pé; backup antes, `.env` anterior guardado). **Nenhuma aplicação externa existe ainda** — quem a cria é o administrador, pela tela (não se cria sessão nem se insere token por SQL em produção). Complementa o `HEADLESS-RUNBOOK.md` (como operar) — aqui está **a ordem do piloto**.
 
 ## 1. O que já está provado (e o que não está)
 
@@ -16,7 +16,7 @@ Estado em 2026-10-17: código **implantado em produção com as flags desligadas
 
 | # | Decisão | Opções | Recomendação |
 |---|---|---|---|
-| 1 | **Empresa do piloto** | K3G_Solutions (produção real) · Keslley_Pessoal · Test Company | **Começar na Test Company** (P0/P1), só depois uma empresa real (P2) |
+| 1 | **Empresa do piloto** | K3G_Solutions (produção real) · Keslley_Pessoal · Test Company | **Keslley_Pessoal** para P0/P1 (é a única empresa de teste com **linha de WhatsApp ativa**: a Test Company não tem linha nem fila padrão, então não teria o que ler); uma empresa real só em P2 |
 | 2 | **Qual "CRM"** | o simulador (`crm-sim`) · um CRM real (qual? quem integra?) | **simulador em P0/P1**; CRM real só em P2, com o integrador identificado |
 | 3 | **Fila e linha do piloto** | uma fila e uma linha de WhatsApp | **uma fila nova "Piloto CRM"** e **o número de teste que você já usa** — nunca a fila de clientes reais em P0/P1 |
 | 4 | **Escrita** | só leitura primeiro · leitura+escrita | **leitura primeiro (P0), escrita em P1** com o número de teste |
@@ -26,11 +26,10 @@ Estado em 2026-10-17: código **implantado em produção com as flags desligadas
 
 ## 3. Etapas
 
-**P0 — leitura (Test Company, simulador, sem escrita)**
-1. Backup (`scripts/backup-omnira-db.sh`) e `scripts/headless-pilot-check.sh` (tudo zerado).
-2. `.env`: `OMNIRA_HEADLESS_ENABLED=true` (a de escrita continua `false`). `docker compose up -d --no-deps --force-recreate api worker` (≈10 s de 502 na api; fazer em horário calmo).
-3. Na tela: Configurações → Integrações → Aplicações externas → **Nova aplicação** na Test Company, escopos `conversation.read`, `message.read`, `contact.read`, `events.read`, filtrada pela fila "Piloto CRM" e pela linha de teste. O token aparece **uma vez**.
-4. `OMNIRA_EXTERNAL_URL=https://omnira.devops.k3gsolutions.com.br/api/v1/external OMNIRA_EXTERNAL_TOKEN=… crm-sim bootstrap` (binário: `go build ./apps/crm-sim`). Deve listar só as conversas da fila.
+**P0 — leitura (Keslley_Pessoal, simulador, sem escrita) — flags já ligadas**
+1. ~~Backup e flags~~ — feito (ver o estado acima).
+2. Na tela, como administrador da Keslley_Pessoal: Configurações → Integrações → Aplicações externas → **Nova aplicação** (`/settings/integrations/apps`), escopos `conversation.read`, `message.read`, `contact.read`, `events.read`, filtrada por UMA fila (por exemplo Suporte) e pela linha WAHA. O token aparece **uma vez** (copie na hora).
+3. Neste servidor: `OMNIRA_EXTERNAL_URL=https://omnira.devops.k3gsolutions.com.br/api/v1/external OMNIRA_EXTERNAL_TOKEN=… /data/cafegpt/tmp/pilot/crm-sim bootstrap` (binário já compilado do `main`). Deve listar só as conversas da fila. Use `! ` no prompt do Claude Code para rodar com o token sem ele aparecer em arquivo.
 5. Mandar uma mensagem de teste para o número; `crm-sim list` e `GET /external/events` mostram o fato. `scripts/headless-pilot-check.sh` após cada passo.
 6. Critério de saída: 48 h sem nenhum item dos critérios de abortar.
 
