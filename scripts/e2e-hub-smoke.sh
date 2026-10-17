@@ -10,7 +10,7 @@ RUN=hubsmoke-$$
 PG=omnira-$RUN-pg; NATS=omnira-$RUN-nats
 WORK=$(mktemp -d); chmod 777 "$WORK"
 cleanup() { docker ps -aq --filter "name=$RUN" | xargs -r docker rm -fvv >/dev/null 2>&1 || true; rm -rf "$WORK" 2>/dev/null || true; }
-APIPORT=$((18000 + $$ % 900))  # unique per run: the containers share the host network and a stale API must never answer for us
+APIPORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')  # a free port: a fixed range collides with other services on a shared host
 trap cleanup EXIT
 LBL=(--label com.omnira.integration-test=true --label "com.omnira.integration-test.run=$RUN")
 

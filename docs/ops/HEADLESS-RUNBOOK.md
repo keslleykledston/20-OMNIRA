@@ -1,6 +1,8 @@
 # Runbook — API headless para CRM externo (ADR-0048)
 
-Estado: **LAB**. Nada disto vai para produção sem o gate formal e o aceite do dono. Este documento descreve como operar, não autoriza deploy.
+Estado: **implantado em produção com as flags DESLIGADAS** (2026-10-17, migrations 159–163; a 164 acrescenta o escopo `service.read` e os eventos de serviço — ver `docs/service-context/06`). Nenhuma aplicação externa existe ainda. Ligar é o piloto: `docs/ops/HEADLESS-PILOT-PLAN.md`. Este documento descreve como operar; não declara produção pronta.
+
+> **Numeração**: este texto foi escrito quando as migrations eram 137–141; ao entrar no `main` elas foram renumeradas para **159–163** (a 137 de `main` já era outra). Onde o texto abaixo diz 137–141, leia 159–163.
 Quem lê: o responsável pela plataforma (liga/desliga) e o administrador da empresa (instala aplicações).
 
 ## 1. O que existe
@@ -12,7 +14,7 @@ Quem lê: o responsável pela plataforma (liga/desliga) e o administrador da emp
 | API externa de escrita | `POST …/conversations/{id}/{claim,release,transfer,messages,finalize,heartbeat}` | `OMNIRA_HEADLESS_WRITE_ENABLED=true` (exige a anterior) |
 | Administração | Configurações → Integrações → Aplicações externas (instalar, escopos, filas/linhas, tokens, endpoints, entregas, fila de erros) | junto com a primeira flag; permissão `integration.read` / `integration.manage` |
 
-Com as flags desligadas (padrão) as rotas **não existem** (404) e o worker não roda sequenciador/entrega/lease. **O banco, porém, já tem as mudanças das migrations 137–141**: o gatilho-guarda de `conversations` (deriva o controle tipado de toda atribuição legada e incrementa `control_version`) e os produtores do journal (que, sem nenhuma instalação viva, só fazem uma consulta de existência e retornam). Ou seja: a *funcionalidade* fica inerte, mas a plataforma **não** é byte a byte a de antes — há um custo pequeno por escrita e a coluna `control_version` passa a existir/mudar. Medir no ambiente alvo antes de aplicar as migrations (o benchmark mostra a ordem de grandeza).
+Com as flags desligadas (padrão) as rotas **não existem** (404) e o worker não roda sequenciador/entrega/lease. **O banco, porém, já tem as mudanças das migrations 159–163**: o gatilho-guarda de `conversations` (deriva o controle tipado de toda atribuição legada e incrementa `control_version`) e os produtores do journal (que, sem nenhuma instalação viva, só fazem uma consulta de existência e retornam). Ou seja: a *funcionalidade* fica inerte, mas a plataforma **não** é byte a byte a de antes — há um custo pequeno por escrita e a coluna `control_version` passa a existir/mudar. Medir no ambiente alvo antes de aplicar as migrations (o benchmark mostra a ordem de grandeza).
 Variáveis: `OMNIRA_HEADLESS_ENABLED`, `OMNIRA_HEADLESS_WRITE_ENABLED`, `OMNIRA_HEADLESS_EVENT_RETENTION_DAYS` (30), `OMNIRA_HEADLESS_WEBHOOK_RETRY_HOURS` (72). A chave `OMNIRA_CREDENTIALS_KEY` precisa estar válida (sela os segredos de webhook).
 
 Modelo de segurança em uma linha: o **tenant vem sempre da credencial** (nunca do pedido); uma aplicação não é usuário, nem membro, nem agente do Hub; cada escrita reconfere a instalação **dentro da transação** (revogar/suspender espera a escrita em andamento ou a recusa); o Postgres (RLS) continua sendo a segunda barreira.
@@ -20,7 +22,7 @@ Modelo de segurança em uma linha: o **tenant vem sempre da credencial** (nunca 
 ## 2. Antes de ligar (checklist)
 
 1. Backup recente do banco e `vibe`/restore testado (seção 7).
-2. Migrations **137 a 141** aplicadas pelo serviço `migrate` (`tools/migrate-sql.sh`). A 138 reescreve o controle de `conversations` (uma coluna nova + gatilho): em produção com ~170 conversas leva segundos; em tabelas muito maiores faça fora do horário (o backfill e o índice não são feitos em lotes).
+2. Migrations **159 a 164** aplicadas pelo serviço `migrate` (já aplicadas em produção) (`tools/migrate-sql.sh`). A 160 (antiga 138) reescreve o controle de `conversations` (uma coluna nova + gatilho): em produção com ~170 conversas leva segundos; em tabelas muito maiores faça fora do horário (o backfill e o índice não são feitos em lotes).
 3. `OMNIRA_CREDENTIALS_KEY` presente nos serviços api e worker.
 4. Nginx do host: `/api/v1/external/*` passa pelo `location /api/` (já existe); `/internal/` continua `return 404` (não expor). O corpo é JSON pequeno; o cabeçalho `Authorization` deve ser repassado (é por padrão). Nada de cache nessas rotas.
 5. Revisão das flags: começar com **somente** `OMNIRA_HEADLESS_ENABLED=true` (leitura + eventos + administração). Escrita é um segundo passo, com a aplicação já lendo corretamente.
@@ -79,7 +81,7 @@ Tracing/OpenTelemetry: os spans de HTTP/DB existentes cobrem as rotas novas; nã
 ## 7. Desligar, reverter, backup
 
 **Desligar sem perder dados** (ordem): 1) `OMNIRA_HEADLESS_WRITE_ENABLED=false`; 2) suspender as aplicações na tela (devolve as conversas); 3) `OMNIRA_HEADLESS_ENABLED=false` (rotas somem; o worker para o journal; as tabelas ficam). Reativar é o inverso.
-**Reverter migrations** (só com backup e aprovação do dono; **perde dados** das tabelas novas): `down` de 141 → 140 → 139 → 138 → 137, nessa ordem. A 137 recusa se houver instalação viva (revogue antes). A 141 apaga fechamentos feitos por aplicação externa. O roundtrip foi provado em Postgres descartável (`scripts/test-migration-roundtrip.sh`).
+**Reverter migrations** (só com backup e aprovação do dono; **perde dados** das tabelas novas): `down` de 164 → 163 → 162 → 161 → 160 → 159, nessa ordem (a 164 não apaga instalações: retira o escopo `service.read`). A 159 recusa se houver instalação viva (revogue antes). A 163 apaga fechamentos feitos por aplicação externa. O roundtrip foi provado em Postgres descartável (`scripts/test-migration-roundtrip.sh`).
 **Backup/restore**: tabelas novas — `external_app_installations`, `external_app_credentials`, `external_app_installation_queues/channels`, `conversation_control_events`, `domain_events`, `domain_event_cursors`, `webhook_subscriptions`, `webhook_deliveries`, `external_command_receipts`, `external_conversation_leases`, e as colunas `control_*` de `conversations` e `messages.sent_by_installation_id`. Segredos de webhook estão **selados** com `OMNIRA_CREDENTIALS_KEY`: restaurar sem a mesma chave torna os segredos ilegíveis (gerar novos). Tokens de acesso só existem como digest: nunca são recuperáveis.
 
 ## 8. Limites conhecidos (declarados, não escondidos)
