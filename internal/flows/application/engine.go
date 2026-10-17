@@ -129,7 +129,7 @@ func systemTenant(ctx context.Context) (*tenancydomain.TenantContext, error) {
 // controls reports whether the bot currently owns the conversation. Authority is derived, never trusted from a flag: the
 // moment an operator is assigned, the bot is silent whatever automation_mode says (ADR-0019 §6).
 func controls(f *ports.ConversationFacts) bool {
-	return f.Status == "open" && f.AutomationMode == domain.AutomationBot && f.AssignedTo == nil
+	return f.Status == "open" && f.AutomationMode == domain.AutomationBot && f.AssignedTo == nil && !f.HeldExternally
 }
 
 // Startable reports whether a conversation may be taken by a flow at all: an open conversation with an external contact
@@ -137,7 +137,7 @@ func controls(f *ports.ConversationFacts) bool {
 // open identity conflict. The ingest's gate and the engine use the
 // same rule so what is held is exactly what can start.
 func Startable(f *ports.ConversationFacts) bool {
-	if f.Status != "open" || f.AssignedTo != nil || f.ContactID == nil || f.IdentityConflict {
+	if f.Status != "open" || f.AssignedTo != nil || f.HeldExternally || f.ContactID == nil || f.IdentityConflict {
 		return false
 	}
 	return f.Kind == "customer_service" || f.Kind == "unclassified"
@@ -168,7 +168,7 @@ func (e *Engine) OnInbound(ctx context.Context, ev InboundEvent) (Outcome, error
 		}
 		if run.Status == domain.RunWaitingHuman {
 			// Still waiting in the queue (nobody took it): the contact may end the attendance. Otherwise the bot stays out.
-			if facts.Status == "open" && facts.AssignedTo == nil {
+			if facts.Status == "open" && facts.AssignedTo == nil && !facts.HeldExternally {
 				msg, err := e.runs.LoadInboundMessage(ctx, ev.ConversationID, ev.MessageID)
 				if err != nil {
 					return OutcomeIgnored, err
@@ -282,7 +282,7 @@ func (e *Engine) ReleaseStranded(ctx context.Context, conversationID uuid.UUID) 
 	if err := e.runs.SetAutomationMode(ctx, conversationID, domain.AutomationNone); err != nil {
 		return err
 	}
-	if facts.QueueID == nil && facts.AssignedTo == nil {
+	if facts.QueueID == nil && facts.AssignedTo == nil && !facts.HeldExternally {
 		return e.effects.AssignQueue(ctx, conversationID, nil)
 	}
 	return nil
@@ -544,7 +544,7 @@ func (e *Engine) finish(ctx context.Context, facts *ports.ConversationFacts, run
 			return err
 		}
 		facts.AutomationMode = domain.AutomationNone
-		if facts.QueueID == nil && facts.AssignedTo == nil {
+		if facts.QueueID == nil && facts.AssignedTo == nil && !facts.HeldExternally {
 			return e.effects.AssignQueue(ctx, facts.ID, nil)
 		}
 	}

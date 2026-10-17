@@ -623,6 +623,8 @@ func writeReplyError(w http.ResponseWriter, err error) {
 		httpError(w, "your access to this company is read-only", http.StatusForbidden)
 	case errors.Is(err, replying.ErrTenantMismatch):
 		httpError(w, "the company on screen is not the company of this conversation; reload", http.StatusConflict)
+	case errors.Is(err, replying.ErrHeldByExternal):
+		httpError(w, "conversation is held by an external application", http.StatusConflict)
 	case errors.Is(err, replying.ErrTaken), errors.Is(err, messagesapp.ErrNotAssignedToYou):
 		httpError(w, "conversation is assigned to another agent", http.StatusConflict)
 	case errors.Is(err, replying.ErrNotHolder):
@@ -631,6 +633,8 @@ func writeReplyError(w http.ResponseWriter, err error) {
 		httpError(w, "transfer target not available: that person cannot take this conversation now", http.StatusConflict)
 	case errors.Is(err, replying.ErrClosed), errors.Is(err, messagesapp.ErrConversationClosed):
 		httpError(w, "conversation is finalized: the contact's next message starts a new attendance", http.StatusConflict)
+	case errors.Is(err, messagesapp.ErrHeldByExternal):
+		httpError(w, "conversation is held by an external application", http.StatusConflict)
 	case errors.Is(err, messagesapp.ErrUnassigned):
 		httpError(w, "claim the conversation before replying", http.StatusConflict)
 	case errors.Is(err, messagesapp.ErrChannelUnavailable):

@@ -347,6 +347,32 @@ func TestTheDelegatedReclassificationSideEffectsCheckTheKeyThemselves(t *testing
 		}
 	})
 
+	t.Run("a conversation an external application holds is not taken out of its queue (ADR-0048)", func(t *testing.T) {
+		w.grantKeys(g, "contact.classify")
+		inst := uuid.New()
+		w.exec(`INSERT INTO external_app_installations(id,tenant_id,name,scopes) VALUES($1,$2,'crm',ARRAY['conversation.claim'])`, inst, w.tenant["A"])
+		w.exec(`UPDATE conversations SET queue_id = $2 WHERE id = $1`, w.conv["A"], w.queue1["A"])
+		w.exec(`UPDATE conversations SET control_kind='crm_application', control_holder_id=$2, control_version=control_version+1, control_since=now(), control_origin='crm' WHERE id = $1`, w.conv["A"], inst)
+		w.attend(agent, "A", func(ctx context.Context, q platformdb.Querier) {
+			n, err := dequeue(ctx, q, w.tenant["A"])
+			w.must(err)
+			if n != 0 {
+				t.Errorf("the delegated dequeue touched %d conversations an application holds", n)
+			}
+		})
+		if got := w.ownerOne(`SELECT (queue_id IS NOT NULL)::text FROM conversations WHERE id = $1`, w.conv["A"]); got != "true" {
+			t.Errorf("the conversation an application holds lost its queue")
+		}
+		w.exec(`UPDATE conversations SET control_kind=NULL, control_holder_id=NULL, control_since=NULL, control_origin=NULL, control_version=control_version+1 WHERE id = $1`, w.conv["A"])
+		w.attend(agent, "A", func(ctx context.Context, q platformdb.Querier) {
+			n, err := dequeue(ctx, q, w.tenant["A"])
+			w.must(err)
+			if n != 1 {
+				t.Errorf("control: once it is free the dequeue works again, dequeued %d", n)
+			}
+		})
+	})
+
 	t.Run("a contact that is not spam is never taken out of a queue", func(t *testing.T) {
 		w.exec(`UPDATE contacts SET kind = 'other' WHERE id = $1`, contactA)
 		w.exec(`UPDATE conversations SET queue_id = $2 WHERE id = $1`, w.conv["A"], w.queue1["A"])

@@ -1,0 +1,11 @@
+DROP FUNCTION IF EXISTS external_orphan_holds(INTEGER, UUID[]);
+DROP INDEX IF EXISTS idx_conversations_tenant_created;
+DROP FUNCTION IF EXISTS external_leases_due(INTERVAL, INTEGER, UUID[]);
+DROP TABLE IF EXISTS external_conversation_leases;
+ALTER TABLE conversation_closures DROP CONSTRAINT IF EXISTS conversation_closures_closer_shape, DROP CONSTRAINT IF EXISTS conversation_closures_installation_fk;
+DELETE FROM conversation_closures WHERE source = 'external_app';
+ALTER TABLE conversation_closures DROP COLUMN IF EXISTS closed_by_installation_id;
+ALTER TABLE conversation_closures DROP CONSTRAINT IF EXISTS conversation_closures_source_check;
+ALTER TABLE conversation_closures ADD CONSTRAINT conversation_closures_source_check CHECK (source IN ('agent', 'supervisor', 'system'));
+DROP FUNCTION IF EXISTS external_command_receipts_purge(INTERVAL);
+DROP TABLE IF EXISTS external_command_receipts;

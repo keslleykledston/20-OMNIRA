@@ -7,6 +7,9 @@ import (
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	metachannel "github.com/omnira/omnira/internal/channels/meta"
 	ports "github.com/omnira/omnira/internal/channels/ports"
+	externaladapters "github.com/omnira/omnira/internal/external/adapters"
+	mediaadapters "github.com/omnira/omnira/internal/media/adapters"
+	mediaports "github.com/omnira/omnira/internal/media/ports"
 	toolconnectors "github.com/omnira/omnira/internal/tool/connectors"
 	"log"
 	"os"
@@ -21,6 +24,7 @@ import (
 	accountsadapters "github.com/omnira/omnira/internal/accounts/adapters"
 	attendanceadapters "github.com/omnira/omnira/internal/attendance/adapters"
 	attendanceapplication "github.com/omnira/omnira/internal/attendance/application"
+	attendancedomain "github.com/omnira/omnira/internal/attendance/domain"
 	auditadapters "github.com/omnira/omnira/internal/audit/adapters"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
@@ -114,7 +118,7 @@ func main() {
 			srv.SetupPresence(valkeyClient)
 		}
 	}
-	tenancyadapters.EnableDelegatedServing(cfg.HubServeEnabled) // ADR-0040 phase 02; off by default
+	tenancyadapters.EnableDelegatedServing(cfg.HubServeEnabled)   // ADR-0040 phase 02; off by default
 	tenancyadapters.LeastLoadedEnabled = cfg.RoutingEngineEnabled // ADR-0044: least_loaded is only honoured by the central routing engine
 	srv.ConfigureRateLimits(cfg.RateLimitUserPerMin, cfg.RateLimitTenantPerMin)
 	srv.SetupRateLimiting()
@@ -214,6 +218,23 @@ func main() {
 	if cfg.HubAPIEnabled {
 		srv.RegisterHubHandlers(dbPool, cfg.HubAdminAPIEnabled, cfg.HubAccessAPIEnabled)
 	}
+	// ADR-0048: the external (CRM) API and its administration. Off by default; the features reported by /external/me say what this build serves.
+	var externalMedia mediaports.MediaReader // the same cleared-files-only reader the workspace uses (ADR-0016); without a media directory the media route answers 404
+	if cfg.MediaDir != "" {
+		if store, err := mediaadapters.OpenFileStore(cfg.MediaDir); err == nil {
+			externalMedia = mediaadapters.NewReader(dbPool, store)
+		} else {
+			log.Printf("external API: media store unavailable, media downloads disabled: %v", err)
+		}
+	}
+	var externalSealer externaladapters.Sealer // the signing secrets of webhook subscriptions are sealed with the platform key (ADR-0009)
+	if sealer, serr := channelcrypto.NewAESGCM(cfg.CredentialsKey); serr == nil {
+		externalSealer = sealer
+	} else if cfg.HeadlessEnabled {
+		log.Printf("external API: the webhook administration is off, the credentials key is unusable: %v", serr)
+	}
+	srv.RegisterExternalHandlers(dbPool, cfg.HeadlessEnabled, httpserver.ExternalOptions{
+		Features: externaladapters.Features{Read: true, Events: true, Write: cfg.HeadlessWriteEnabled}, Media: externalMedia, Sealer: externalSealer, RetentionDays: cfg.HeadlessEventRetentionDays})
 	providerRegistry := channelapplication.NewMapProviderRegistry()
 	permissions := channeladapters.NewPostgresPermissionChecker(dbPool)
 	management := channelapplication.NewConnectionManagementService(providerRegistry, permissions).
@@ -387,6 +408,17 @@ func main() {
 		log.Printf("Service Context & Operations API enabled (OMNIRA_SERVICE_CONTEXT_ENABLED=true, finalize hook=%v, auto-open on claim=%v)\n", cfg.ServiceFinalizeHookEnabled, cfg.ServiceAutoOpenOnClaimEnabled)
 	}
 	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
+	srv.RegisterExternalWriteHandlers(dbPool, cfg.HeadlessEnabled && cfg.HeadlessWriteEnabled, func(ctx context.Context, installation, conversation uuid.UUID, reason, note string) (externaladapters.FinalizeOutcome, error) {
+		res, err := attendanceService.FinalizeByExternalApp(ctx, installation, conversation, attendancedomain.CloseReason(reason), note)
+		if err != nil {
+			return externaladapters.FinalizeOutcome{}, err
+		}
+		out := externaladapters.FinalizeOutcome{Reason: reason}
+		if res.Closure != nil {
+			out.ClosureID, out.Reason = res.Closure.ID, string(res.Closure.Reason)
+		}
+		return out, nil
+	})
 	if cfg.FlowsEnabled {
 		flowRepo := flowsadapters.NewPostgresFlowRepository(dbPool)
 		controlPlane := flowsapplication.NewControlPlane(flowRepo, flowRepo, flowsadapters.NewAuditor(auditadapters.NewPostgresAuditEventRepository(dbPool)))

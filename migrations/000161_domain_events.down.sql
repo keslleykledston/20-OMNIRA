@@ -1,0 +1,21 @@
+-- OPERATIONAL GATE: backup and the owner's approval first. DATA LOSS: drops the durable journal of facts (domain_events, domain_event_cursors) and every producer trigger;
+-- an external application that was following the journal must resynchronize from a snapshot. Webhook deliveries (migration 140) are dropped first by their own down.
+DROP TRIGGER IF EXISTS domain_events_ticket_linked_trg ON tickets;
+DROP TRIGGER IF EXISTS domain_events_contact_updated_trg ON contacts;
+DROP TRIGGER IF EXISTS domain_events_message_status_trg ON messages;
+DROP TRIGGER IF EXISTS domain_events_message_created_trg ON messages;
+DROP TRIGGER IF EXISTS domain_events_conversation_changed_trg ON conversations;
+DROP TRIGGER IF EXISTS domain_events_conversation_created_trg ON conversations;
+DROP FUNCTION IF EXISTS domain_events_ticket_linked();
+DROP FUNCTION IF EXISTS domain_events_contact_updated();
+DROP FUNCTION IF EXISTS domain_events_message_status();
+DROP FUNCTION IF EXISTS domain_events_message_created();
+DROP FUNCTION IF EXISTS domain_events_conversation_changed();
+DROP FUNCTION IF EXISTS domain_events_conversation_created();
+DROP FUNCTION IF EXISTS domain_events_purge(INTERVAL);
+DROP FUNCTION IF EXISTS domain_events_backlog();
+DROP FUNCTION IF EXISTS domain_events_sequence(INTEGER);
+DROP FUNCTION IF EXISTS emit_domain_event(UUID, TEXT, TEXT, UUID, UUID, BIGINT, TEXT, UUID, JSONB);
+DROP FUNCTION IF EXISTS external_conversation_visible(UUID, UUID);
+DROP TABLE IF EXISTS domain_event_cursors;
+DROP TABLE IF EXISTS domain_events;

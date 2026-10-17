@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/omnira/omnira/internal/conversationcontrol"
 	"strings"
 
 	"github.com/google/uuid"
@@ -194,16 +195,20 @@ func (r *PostgresRepository) MarkClosed(ctx context.Context, conversationID uuid
 	if tag.RowsAffected() != 1 {
 		return fmt.Errorf("attendance: conversation %s was not open", conversationID)
 	}
+	// ADR-0048: a closed conversation does not stay held by an external application (the contact's next message starts a new one)
+	if _, err := (conversationcontrol.Service{}).ReleaseOnClose(ctx, r.q(ctx), tenant, conversationID); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (r *PostgresRepository) InsertClosure(ctx context.Context, c *domain.Closure) error {
 	_, err := r.q(ctx).Exec(ctx, `
 		INSERT INTO conversation_closures (id, tenant_id, conversation_id, contact_id, closed_by_user_id, source, reason, note, summary,
-		  summary_truth, local_tickets_closed, tickets_kept, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		  summary_truth, local_tickets_closed, tickets_kept, created_at, closed_by_installation_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		c.ID, c.TenantID, c.ConversationID, c.ContactID, c.ClosedBy, c.Source, c.Reason, c.Note, c.Summary, c.SummaryTruth,
-		c.LocalTicketsClosed, c.TicketsKept, c.CreatedAt)
+		c.LocalTicketsClosed, c.TicketsKept, c.CreatedAt, c.ClosedByInstallation)
 	return err
 }
 

@@ -12,8 +12,8 @@ import (
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	groupsadapters "github.com/omnira/omnira/internal/groups/adapters"
 	intelligenceadapters "github.com/omnira/omnira/internal/intelligence/adapters"
-	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	"github.com/omnira/omnira/internal/platform/config"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 )
 
 // Drift guard between contracts/openapi/omnira-v1.yaml and the routes the server really registers.
@@ -95,6 +95,7 @@ func newRoutedServer(t *testing.T) *Server {
 	s.RegisterIntelligenceHandlers(nil, intelligenceadapters.NewTopicHandler(nil, nil, nil))
 	s.RegisterAIIntegrationHandlers(nil, tenancyadapters.NewAIIntegrationHandler(nil, nil, nil))
 	s.RegisterHubHandlers(nil, true, true)
+	s.RegisterExternalHandlers(nil, true, ExternalOptions{Sealer: nilSealer{}})
 	return s
 }
 
@@ -178,10 +179,10 @@ func TestNoRoleEditingOrLegacyMembersRoutes(t *testing.T) {
 // contractMobileHandler stands in for authn.MobileHandler (the contract test only needs the routes to exist).
 type contractMobileHandler struct{}
 
-func (contractMobileHandler) Token(http.ResponseWriter, *http.Request)       {}
-func (contractMobileHandler) Refresh(http.ResponseWriter, *http.Request)     {}
-func (contractMobileHandler) Logout(http.ResponseWriter, *http.Request)      {}
-func (contractMobileHandler) ListDevices(http.ResponseWriter, *http.Request) {}
+func (contractMobileHandler) Token(http.ResponseWriter, *http.Request)        {}
+func (contractMobileHandler) Refresh(http.ResponseWriter, *http.Request)      {}
+func (contractMobileHandler) Logout(http.ResponseWriter, *http.Request)       {}
+func (contractMobileHandler) ListDevices(http.ResponseWriter, *http.Request)  {}
 func (contractMobileHandler) DeleteDevice(http.ResponseWriter, *http.Request) {}
 
 type contractDeviceAdminHandler struct{}

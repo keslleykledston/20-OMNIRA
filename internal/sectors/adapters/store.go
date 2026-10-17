@@ -514,7 +514,7 @@ func KickQueue(ctx context.Context, q platformdb.Querier, tenant, queueID uuid.U
 	for page := 0; page < maxPages; page++ {
 		rows, err := q.Query(ctx, `SELECT c.id FROM conversations c
 			LEFT JOIN routing_engine_state st ON st.tenant_id=c.tenant_id AND st.conversation_id=c.id
-			WHERE c.tenant_id=$1 AND c.status='open' AND c.assigned_to_user_id IS NULL AND c.id > $2
+			WHERE c.tenant_id=$1 AND c.status='open' AND c.assigned_to_user_id IS NULL AND c.control_kind IS NULL AND c.id > $2
 			  AND (c.queue_id=$3 OR st.origin_queue_id=$3)
 			ORDER BY c.id LIMIT $4`, tenant, cursor, queueID, pageSize)
 		if err != nil {

@@ -164,6 +164,8 @@ func fail(w http.ResponseWriter, err error) {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 	case errors.Is(err, application.ErrConversationClosed):
 		http.Error(w, "conversation is finalized: the contact's next message starts a new attendance", http.StatusConflict)
+	case errors.Is(err, application.ErrHeldByExternal):
+		http.Error(w, "conversation is held by an external application", http.StatusConflict)
 	case errors.Is(err, application.ErrUnassigned):
 		http.Error(w, "conversation must be assigned before replying", http.StatusConflict)
 	case errors.Is(err, application.ErrConversationChanged):

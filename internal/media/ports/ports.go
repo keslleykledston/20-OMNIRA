@@ -112,6 +112,9 @@ var ErrMediaNotFound = errors.New("media not found")
 
 // ServedMedia is what the HTTP layer needs to answer a download. File is non-nil only for a cleared file.
 type ServedMedia struct {
+	// ID is the media row the file belongs to (message_media or message_outbound_media). A caller that authorized ONE media id checks it, because a
+	// message can carry a row in each table.
+	ID     uuid.UUID
 	Status string
 	Mime   string
 	Size   int64

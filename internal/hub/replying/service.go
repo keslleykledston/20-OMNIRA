@@ -37,6 +37,8 @@ var (
 	ErrTaken = errors.New("replying: conversation is assigned to another agent")
 	// ErrClosed: the attendance was finalized.
 	ErrClosed = errors.New("replying: conversation is closed")
+	// ErrHeldByExternal: an external application holds the conversation (ADR-0048); the Hub neither takes it nor writes into it.
+	ErrHeldByExternal = errors.New("replying: conversation is held by an external application")
 	// ErrNotHolder: only the person who holds the conversation may hand it over.
 	ErrNotHolder = errors.New("replying: the conversation is not yours")
 	// ErrTransferTarget: the person chosen cannot take this conversation right now (no live reply grant, inactive, or the same person).
@@ -118,8 +120,9 @@ func (s *Service) delegationHolds(ctx context.Context, t *Target, actor uuid.UUI
 	q := platformdb.QuerierFromContext(ctx, s.pool)
 	var queue *uuid.UUID
 	var status string
-	err = q.QueryRow(ctx, `SELECT queue_id, status, assigned_to_user_id FROM conversations WHERE tenant_id = $1 AND id = $2 `+lock,
-		t.Item.TenantID, t.Item.ConversationID).Scan(&queue, &status, &assigned)
+	var held bool
+	err = q.QueryRow(ctx, `SELECT queue_id, status, assigned_to_user_id, COALESCE(control_kind IN ('crm_application','crm_agent_verified'), false) FROM conversations WHERE tenant_id = $1 AND id = $2 `+lock,
+		t.Item.TenantID, t.Item.ConversationID).Scan(&queue, &status, &assigned, &held)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, application.ErrAccessDenied
 	}
@@ -159,6 +162,9 @@ func (s *Service) delegationHolds(ctx context.Context, t *Target, actor uuid.UUI
 	if !ok {
 		return nil, false, application.ErrAccessDenied
 	}
+	if held { // after the access check, so a revoked agent learns nothing about who holds the conversation
+		return nil, false, ErrHeldByExternal
+	}
 	return assigned, status == "closed", nil
 }
 
@@ -196,7 +202,8 @@ func (s *Service) Claim(ctx context.Context, actor uuid.UUID, t *Target) (change
 			return ErrTaken
 		}
 		q := platformdb.QuerierFromContext(c, s.pool)
-		if _, err := q.Exec(c, `UPDATE conversations SET assigned_to_user_id = $3, assigned_at = now(), updated_at = now()
+		if _, err := q.Exec(c, `UPDATE conversations SET assigned_to_user_id = $3, assigned_at = now(), updated_at = now(),
+		                               control_kind = 'hub_user', control_holder_id = $3, control_version = control_version + 1, control_since = now(), control_origin = 'hub'
 		                        WHERE tenant_id = $1 AND id = $2`, t.Item.TenantID, t.Item.ConversationID, actor); err != nil {
 			return fmt.Errorf("claim: %w", err)
 		}
@@ -335,7 +342,11 @@ func (s *Service) Transfer(ctx context.Context, actor uuid.UUID, t *Target, to *
 			reason, action = "hub_transfer", "hub.conversation.transferred"
 			meta["to_user_id"] = *to
 		}
-		if _, err := q.Exec(c, `UPDATE conversations SET assigned_to_user_id = $3, assigned_at = CASE WHEN $3::uuid IS NULL THEN NULL ELSE now() END, updated_at = now()
+		if _, err := q.Exec(c, `UPDATE conversations SET assigned_to_user_id = $3, assigned_at = CASE WHEN $3::uuid IS NULL THEN NULL ELSE now() END, updated_at = now(),
+		                               control_kind = CASE WHEN $3::uuid IS NULL THEN NULL ELSE 'hub_user' END, control_holder_id = $3,
+		                               control_version = control_version + 1,
+		                               control_since = CASE WHEN $3::uuid IS NULL THEN NULL ELSE now() END,
+		                               control_origin = CASE WHEN $3::uuid IS NULL THEN NULL ELSE 'hub' END
 		                        WHERE tenant_id = $1 AND id = $2`, t.Item.TenantID, t.Item.ConversationID, to); err != nil {
 			return fmt.Errorf("transfer: %w", err)
 		}

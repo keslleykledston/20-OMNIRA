@@ -1,0 +1,617 @@
+openapi: 3.0.3
+info:
+  title: OMNIRA External API (Headless)
+  version: 1.0.0-lab
+  license: { name: Proprietary, url: 'https://omnira.devops.k3gsolutions.com.br' }
+  description: |
+    The API an external application (a CRM) uses to see and attend the same conversations as the OMNIRA Workspace. ADR-0048.
+
+    **Status: LAB — IMPLEMENTED in phases.** `GET /external/me`, the read API (conversations, messages, contacts, media) and the event journal
+    (`/external/sync/checkpoint`, `/external/events`; signed webhooks are configured by the company's administrator) are served; the write API is added to this
+    file when it is wired (`/external/me` reports `features` so a client can tell what this build serves).
+
+    **What an installation sees.** Only conversations of its own company that are not conversations with staff, whose contact is not classified internal or
+    spam, and, when the administrator limited the installation, only those of its queues and lines. Anything else is the same `404` as an id that does
+    not exist. No person is named: a holder is a kind (`tenant_user`, `hub_user`, `crm_application`) and `mine`.
+
+    **Pagination.** `limit` (1 to 200, default 50) and an opaque `cursor` returned as `next_cursor`. The order is stable (keyset on a timestamp and the id);
+    lists of conversations are by `created_at` unless `sort=updated` is asked (rows that change while paging can then move: use the event journal to follow
+    changes). **Control version.** `GET /external/conversations/{id}` answers `ETag: "control-N"`; commands later take it back in `If-Match`.
+    `internal/platform/httpserver/external_contract_test.go` fails when a documented route and a registered route diverge.
+
+    **Authentication.** `Authorization: Bearer omn_ext_<key_id>.<secret>`. The token is created by a tenant administrator (Configurações > Integrações >
+    Aplicações externas), shown once, and belongs to ONE installation of ONE company. The company is the one of the installation: it is never
+    chosen by the request. A request carrying `tenant_id` (query), `X-Tenant-ID` or `X-Omnira-Acting-As` is refused with `400 tenant_not_accepted`.
+
+    **Errors.** `application/problem+json` (RFC 9457) with the extension members `code` (stable) and `request_id`. Every response carries
+    `X-Request-ID` (the caller's own, 8-64 characters of `[A-Za-z0-9._:-]`, or generated) and `Cache-Control: no-store`.
+    `401 unauthenticated` is the only answer to a bad, unknown, expired, revoked or suspended credential (the cause is never revealed);
+    `403 forbidden_scope` means the installation lacks the scope; `404` is uniform for anything invisible; `429 rate_limited` carries `Retry-After`.
+servers:
+  - url: /api/v1
+    description: Same host as the OMNIRA API
+security:
+  - integrationToken: []
+tags:
+  - { name: Identity, description: "Who the credential is and what it may do" }
+  - { name: Conversations, description: "Read the conversations and their messages" }
+  - { name: Contacts, description: "Read a contact" }
+  - { name: Media, description: "Download a message's file" }
+  - { name: Commands, description: "Coordinated writes: claim, release, transfer, send, finalize" }
+  - { name: Journal, description: "The durable journal of facts: checkpoint and replay" }
+paths:
+  /external/me:
+    get:
+      operationId: getExternalMe
+      tags: [Identity]
+      summary: The installation behind the credential, its scopes, limits, allow-lists and the features this build serves
+      description: Needs no scope. Reads nothing about conversations.
+      responses:
+        '200':
+          description: The caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+  /external/conversations:
+    get:
+      operationId: listExternalConversations
+      tags: [Conversations]
+      summary: Conversations the installation may see
+      description: Needs the scope `conversation.read`.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, closed, all], default: open } }
+        - { name: control, in: query, schema: { type: string, enum: [free, held, mine] }, description: "free = nobody holds it; held = anybody; mine = this installation" }
+        - { name: channel_connection_id, in: query, schema: { type: string, format: uuid } }
+        - { name: queue_id, in: query, schema: { type: string, format: uuid } }
+        - { name: sort, in: query, schema: { type: string, enum: [created, updated], default: created } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/ConversationPage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}:
+    get:
+      operationId: getExternalConversation
+      tags: [Conversations]
+      summary: One conversation, with its typed control and an ETag "control-N"
+      description: Needs the scope `conversation.read`. `can` is informational (it drives a button); every command checks again inside its own transaction.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: The conversation
+          headers:
+            ETag: { schema: { type: string, example: '"control-42"' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/messages:
+    get:
+      operationId: listExternalMessages
+      tags: [Conversations]
+      summary: The messages of a conversation, with their delivery state
+      description: Needs the scope `message.read`. `status` is the delivery state; `queued` never means delivered.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/MessagePage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: sendExternalMessage
+      tags: [Commands]
+      summary: Queue a message for the customer
+      description: |
+        Needs the scope `message.send` and `If-Match`; this installation must HOLD the conversation at that version. **`202 Accepted` means QUEUED**: the message was
+        handed to the delivery job. It does not mean WhatsApp delivered it; follow `message.status_changed.v1` events or `GET .../messages`.
+        The same rules as a Workspace reply apply: inside the provider's 24-hour customer-service window free `text` is allowed; outside it only an approved
+        `template` is (`422 window_closed`). Attachments are not part of this version (NOT WIRED).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/claim:
+    post:
+      operationId: claimExternalConversation
+      tags: [Commands]
+      summary: Take a free conversation
+      description: |
+        Needs the scope `conversation.claim`. Gives a FREE, open conversation to this installation. Repeating the claim of a conversation it already holds changes
+        nothing (`changed: false`, same version). A conversation held by anyone else is `409 held_by_other`, never taken. Outside the queue's hours it is
+        `409 outside_hours` unless the administrator allowed this installation to work outside hours.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchOptional' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/release:
+    post:
+      operationId: releaseExternalConversation
+      tags: [Commands]
+      summary: Give a held conversation back to the company
+      description: Needs the scope `conversation.claim` and `If-Match`. The conversation becomes free and the router looks at it as it does for a new one.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/transfer:
+    post:
+      operationId: transferExternalConversation
+      tags: [Commands]
+      summary: Hand a held conversation to a queue (or to one eligible person of it)
+      description: |
+        Needs the scope `conversation.transfer` and `If-Match`. The installation stops holding the conversation in the same step. With only `queue_id` the router
+        decides, exactly as for a new conversation; with `user_id` that person must be eligible in the queue now (member, active, on shift, with capacity), else
+        `422 invalid_target` and nothing changes. The queue must be one this installation may use (`403 queue_not_allowed` otherwise).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/heartbeat:
+    post:
+      operationId: heartbeatExternalConversation
+      tags: [Commands]
+      summary: Renew the lease of a conversation this installation holds
+      description: |
+        Needs the scope `conversation.claim` and `If-Match`. Only meaningful for an installation that has a lease (the administrator sets `lease_seconds`): while it holds a
+        conversation, every command it makes and every heartbeat push the expiry forward. If it falls silent for the lease plus a grace period (120 s) the platform frees the
+        conversation with the reason `lease_expired`, the router looks at it again and the application finds out by the control version (`412` / `409` on its next command,
+        `conversation.control_changed.v1` in the journal). A person's hold never expires. A heartbeat with a stale version is `412`: the application lost the conversation.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/finalize:
+    post:
+      operationId: finalizeExternalConversation
+      tags: [Commands]
+      summary: End the attendance
+      description: |
+        Needs the scope `conversation.finalize` and `If-Match`. The same finalization the Workspace and the Hub use: the conversation is closed, local tickets are
+        closed (tickets linked to the ERP are left alone) and the closure is recorded as made by this installation, never by a person. Closing releases the hold.
+        No ERP ticket is changed.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FinalizeRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/contacts/{id}:
+    get:
+      operationId: getExternalContact
+      tags: [Contacts]
+      summary: A contact the installation can reach through a conversation it may see
+      description: Needs the scope `contact.read`. A contact classified internal or spam is a 404.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200': { description: The contact, content: { application/json: { schema: { $ref: '#/components/schemas/Contact' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /external/media/{id}:
+    get:
+      operationId: getExternalMedia
+      tags: [Media]
+      summary: The file of a message (only a file that passed the antivirus pipeline)
+      description: |
+        Needs the scope `media.read`. `{id}` is the media id the message listing returned. Authorization is asked at this request. Never the provider's URL.
+        `409 media_pending` while it is being checked, `403 media_blocked` for an infected or rejected file, `410 media_gone` when it no longer exists.
+        Served with `X-Content-Type-Options: nosniff` and a sandbox CSP; only safe image/audio/video types are `inline`, everything else is an attachment.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200': { description: The bytes (supports Range), content: { '*/*': { schema: { type: string, format: binary } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+  /external/sync/checkpoint:
+    get:
+      operationId: getExternalCheckpoint
+      tags: [Journal]
+      summary: Where the journal is now (read it FIRST, then the snapshot, then the events after it)
+      description: |
+        Needs the scope `events.read`. Bootstrap without a gap: (1) read this checkpoint; (2) page the snapshot (`/external/conversations`, `/messages`); (3) read
+        `/external/events?after=<seq_head>` until `has_more` is false. A change committed before the checkpoint but numbered after it is both in the snapshot and
+        replayed (harmless: events are references); a change after the snapshot is replayed; none falls in between.
+      responses:
+        '200': { description: The checkpoint, content: { application/json: { schema: { $ref: '#/components/schemas/Checkpoint' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/events:
+    get:
+      operationId: listExternalEvents
+      tags: [Journal]
+      summary: The facts after a sequence number (at least once; replayable for the retention period)
+      description: |
+        Needs the scope `events.read`. `after` is required: the `seq_head` of the checkpoint, or the `next_cursor` of the previous page. Facts are written in the
+        transaction of the change they describe and numbered per company in an order that never lets a fact appear under a number already read. Each fact is
+        re-checked for visibility when it is read (an installation limited to a queue never hears about another queue). Envelopes carry references and
+        counters, never a message body, a phone number or an attachment: fetch the content from the read API.
+        `410 resync_required` when `after` is older than the facts kept (default 30 days) or is not a number this journal issued: read the checkpoint and rebuild
+        from the snapshot. `next_cursor` advances even when every fact of the window was filtered out.
+      parameters:
+        - { name: after, in: query, required: true, schema: { type: integer, format: int64, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        '200': { description: A page of facts, content: { application/json: { schema: { $ref: '#/components/schemas/EventsPage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    integrationToken:
+      type: http
+      scheme: bearer
+      description: "omn_ext_<key_id>.<secret>; only a digest of the secret is stored by OMNIRA"
+  parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._:-]{8,128}$' }, description: "Scopes the command to (installation, operation, key). The same key with the same payload returns the same answer (header Idempotent-Replay: true) and the same message_id, even if the conversation has since left the installation's view; with a different payload it is 422 idempotency_key_reused" }
+    IfMatchRequired: { name: If-Match, in: header, required: true, schema: { type: string, example: '"control-7"' }, description: "The control version you read (the ETag of the conversation). 412 when it is not the current one, 428 when missing" }
+    IfMatchOptional: { name: If-Match, in: header, required: false, schema: { type: string, example: '"control-7"' }, description: "Optional on claim: a claim of a free conversation, or a repeated claim of one you already hold, does not need it. When sent it must be the current version (412 otherwise)" }
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 }, description: "Page size. The default is 50 (100 for /external/events)" }
+    Cursor: { name: cursor, in: query, schema: { type: string }, description: "Opaque; the next_cursor of the previous page" }
+  responses:
+    Command:
+      description: "The outcome of a command. The ETag is the control version after it (\"control-N\"); a replay carries Idempotent-Replay: true"
+      headers:
+        ETag: { schema: { type: string } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CommandResult' }
+    Problem:
+      description: "RFC 9457 problem document"
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    ExternalAgentID:
+      type: string
+      minLength: 1
+      maxLength: 80
+      pattern: '^[A-Za-z0-9._:@/+ -]{1,80}$'
+      description: "Which of YOUR operators acted. Recorded in the control history and the audit as UNVERIFIED metadata: it is a label, never an identity, never a user of OMNIRA, and nothing is decided by it. Any command may carry it (claim and release take a body with only this field). It is part of the request: the same Idempotency-Key with another label is 422"
+    CommandBody:
+      type: object
+      additionalProperties: false
+      description: "Body of claim, release and heartbeat: empty, or only the label"
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+    TransferRequest:
+      type: object
+      additionalProperties: false
+      required: [queue_id]
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        queue_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid, description: "Optional: one person eligible in that queue now" }
+    MessageRequest:
+      type: object
+      additionalProperties: false
+      description: "Exactly one of text and template"
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        text: { type: string, minLength: 1, maxLength: 4096 }
+        template:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: { type: string, format: uuid, description: "An approved template of the conversation's line" }
+            params: { type: array, items: { type: string } }
+    FinalizeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        reason: { type: string, enum: [resolved, no_response, duplicate, spam, transferred, other], default: resolved }
+        note: { type: string, maxLength: 1000 }
+    CommandResult:
+      type: object
+      required: [conversation_id, status, control]
+      properties:
+        conversation_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, closed] }
+        control: { $ref: '#/components/schemas/Control' }
+        changed: { type: boolean, description: "claim, release, transfer: false when nothing had to change" }
+        message_id: { type: string, format: uuid, description: "message: the same id on every replay of the same Idempotency-Key" }
+        delivery: { type: string, enum: [queued], description: "message: queued is all that is promised" }
+        closure_id: { type: string, format: uuid }
+        reason: { type: string }
+    Checkpoint:
+      type: object
+      required: [seq_head, min_seq, retention_days, at]
+      properties:
+        seq_head: { type: integer, format: int64, description: "The highest sequence number given. Start the replay with after=seq_head" }
+        min_seq: { type: integer, format: int64, description: "The lowest sequence number still kept" }
+        retention_days: { type: integer }
+        at: { type: string, format: date-time }
+    Event:
+      type: object
+      required: [event_id, seq, type, version, occurred_at, tenant_id, aggregate, origin, data]
+      properties:
+        event_id: { type: string, format: uuid, description: "Born with the fact and stable for ever: the key to deduplicate on" }
+        seq: { type: integer, format: int64 }
+        type: { type: string, enum: [conversation.created.v1, conversation.control_changed.v1, conversation.closed.v1, message.created.v1, message.status_changed.v1, contact.updated.v1, ticket.linked.v1] }
+        version: { type: integer }
+        occurred_at: { type: string, format: date-time }
+        tenant_id: { type: string, format: uuid, description: "Informative only" }
+        aggregate:
+          type: object
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [conversation, message, contact, ticket] }
+            id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        aggregate_version: { type: integer, format: int64, description: "For conversation facts the control version: order one conversation's facts by it" }
+        origin:
+          type: object
+          required: [kind]
+          properties:
+            kind: { type: string, enum: [channel, workspace, hub, crm, automation, system] }
+            mine: { type: boolean, description: "The fact was caused by this installation (so it can recognise its own echo and still follow later statuses)" }
+        data: { type: object, additionalProperties: true, description: "References and counters only" }
+    EventsPage:
+      type: object
+      required: [items, next_cursor, has_more, head]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Event' } }
+        next_cursor: { type: string, description: "Pass as `after` for the next page" }
+        has_more: { type: boolean }
+        head: { type: integer, format: int64 }
+    Holder:
+      type: object
+      required: [kind, mine]
+      properties:
+        kind: { type: string, enum: [tenant_user, hub_user, crm_application, crm_agent_verified] }
+        mine: { type: boolean, description: "this very installation" }
+    Control:
+      type: object
+      required: [state, version]
+      properties:
+        state: { type: string, enum: [unassigned, held] }
+        holder: { $ref: '#/components/schemas/Holder' }
+        version: { type: integer, format: int64, description: "Only grows. The value a command sends back in If-Match as \"control-N\"" }
+        origin: { type: string, enum: [workspace, hub, crm, system] }
+        since: { type: string, format: date-time }
+    Can:
+      type: object
+      description: Informational; drives a button. Commands check again.
+      properties:
+        claim: { type: boolean }
+        reply: { type: boolean }
+        release: { type: boolean }
+        transfer: { type: boolean }
+        finalize: { type: boolean }
+    Conversation:
+      type: object
+      required: [id, status, channel, control, can, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [open, closed] }
+        contact_id: { type: string, format: uuid }
+        channel:
+          type: object
+          properties:
+            connection_id: { type: string, format: uuid }
+            provider: { type: string }
+        queue_id: { type: string, format: uuid }
+        control: { $ref: '#/components/schemas/Control' }
+        can: { $ref: '#/components/schemas/Can' }
+        last_message_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ConversationPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Conversation' } }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+    Media:
+      type: object
+      required: [id, size_bytes, status]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [image, audio, video, document] }
+        mime: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        status: { type: string, enum: [pending, quarantined, clean, infected, rejected, source_gone, failed], description: "Only clean can be downloaded" }
+    Message:
+      type: object
+      required: [id, direction, type, status, sender, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [inbound, outbound] }
+        type: { type: string, enum: [text, image, video, audio, document, sticker] }
+        body: { type: string }
+        status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain] }
+        sender:
+          type: object
+          required: [kind]
+          properties:
+            kind: { type: string, enum: [contact, agent, crm_application, automation] }
+            mine: { type: boolean }
+        media: { $ref: '#/components/schemas/Media' }
+        created_at: { type: string, format: date-time }
+    MessagePage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Message' } }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+    Contact:
+      type: object
+      required: [id, name, kind, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        whatsapp_name: { type: string }
+        phone_e164: { type: string }
+        kind: { type: string, enum: [unclassified, customer, other] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, example: "urn:omnira:problem:unauthenticated" }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code: { type: string, description: "Stable, machine readable" }
+        request_id: { type: string }
+    Me:
+      type: object
+      required: [api_version, installation, tenant, scopes, limits, allowlist, features, server_time]
+      properties:
+        api_version: { type: string, example: v1 }
+        installation:
+          type: object
+          required: [id, name, status]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            status: { type: string, enum: [active] }
+        tenant:
+          type: object
+          description: "Informative only: the credential decides the company, a request can never choose it"
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+        scopes:
+          type: array
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send] }
+        limits:
+          type: object
+          required: [rate_limit_per_min, allow_outside_hours]
+          properties:
+            rate_limit_per_min: { type: integer }
+            lease_seconds: { type: integer, nullable: true, description: "CRM lease; null = held until released" }
+            allow_outside_hours: { type: boolean }
+        allowlist:
+          type: object
+          description: "Empty arrays mean every queue / every line of the company"
+          required: [queue_ids, channel_ids]
+          properties:
+            queue_ids: { type: array, items: { type: string, format: uuid } }
+            channel_ids: { type: array, items: { type: string, format: uuid } }
+        features:
+          type: object
+          required: [read_api, events_api, write_api]
+          properties:
+            read_api: { type: boolean }
+            events_api: { type: boolean }
+            write_api: { type: boolean }
+        server_time: { type: string, format: date-time }

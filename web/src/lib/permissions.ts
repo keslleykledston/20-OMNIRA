@@ -19,6 +19,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       { key: 'conversation.claim', label: 'Assumir e responder conversas' },
       { key: 'conversation.manage', label: 'Gerenciar e transferir conversas' },
       { key: 'conversation.read_internal', label: 'Ver conversas com contatos internos (equipe, parceiros, fornecedores)' },
+      { key: 'conversation.takeover_external', label: 'Retomar uma conversa que uma aplicação externa (CRM) está atendendo' },
     ],
   },
   {
@@ -34,6 +35,13 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     ],
   },
   { title: 'Canais', items: [{ key: 'channel.manage', label: 'Gerenciar canais' }] },
+  {
+    title: 'Aplicações externas',
+    items: [
+      { key: 'integration.read', label: 'Ver as aplicações externas (CRM) e seus endpoints' },
+      { key: 'integration.manage', label: 'Instalar, suspender e revogar aplicações externas, tokens e endpoints' },
+    ],
+  },
   {
     title: 'Grupos',
     items: [

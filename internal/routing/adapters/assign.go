@@ -40,14 +40,18 @@ func (r *PostgresConversationAssigner) LockAssignee(ctx context.Context, convers
 		return nil, false, err
 	}
 	var current *uuid.UUID
+	var held bool
 	err = platformdb.QuerierFromContext(ctx, r.pool).QueryRow(ctx,
-		`SELECT assigned_to_user_id FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
-		tenantID, conversationID).Scan(&current)
+		`SELECT assigned_to_user_id, COALESCE(control_kind IN ('crm_application','crm_agent_verified'), false) FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`,
+		tenantID, conversationID).Scan(&current, &held)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("routing: lock conversation: %w", err)
+	}
+	if held {
+		return nil, true, ports.ErrHeldByExternal
 	}
 	return current, true, nil
 }

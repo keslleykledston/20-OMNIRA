@@ -15,6 +15,7 @@ import ContactsPage from './pages/ContactsPage'
 import ContactDetailPage from './pages/ContactDetailPage'
 import PeoplePage from './pages/PeoplePage'
 import SettingsPage from './pages/SettingsPage'
+import ExternalAppsPage from './pages/ExternalAppsPage'
 import GroupsPage from './pages/GroupsPage'
 import AttendanceSectorsPage from './pages/AttendanceSectorsPage'
 import AttendanceCalendarsPage from './pages/AttendanceCalendarsPage'
@@ -72,6 +73,8 @@ function AppRoutes() {
         <Route path="/settings/attendance/shifts" element={<AttendanceShiftsPage />} />
         <Route path="/settings/attendance/overflow" element={<AttendanceOverflowPage />} />
         <Route path="/settings/roles" element={<RolesPermissionsPage />} />
+        <Route path="/settings/integrations" element={<Navigate to="/settings/integrations/apps" replace />} />
+        <Route path="/settings/integrations/apps" element={<ExternalAppsPage />} />
         <Route path="/settings/general" element={<SettingsPage />} />
         {/* Legacy duplicate retired (DESIGN.5-A) — /channels is the sole Channels UI. */}
         <Route path="/integrations" element={<Navigate to="/channels" replace />} />

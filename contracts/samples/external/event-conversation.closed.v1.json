@@ -1,0 +1,19 @@
+{
+  "event_id": "7d1e0c00-0000-4000-8000-000000000003",
+  "seq": 3,
+  "type": "conversation.closed.v1",
+  "version": 1,
+  "occurred_at": "2026-10-14T20:00:00Z",
+  "tenant_id": "0b2a6a4e-8f0d-4a6f-9d9a-5a1f00000001",
+  "aggregate": {
+    "type": "conversation",
+    "id": "3f9c1b2e-0000-4000-8000-0000000000c1"
+  },
+  "conversation_id": "3f9c1b2e-0000-4000-8000-0000000000c1",
+  "aggregate_version": 2,
+  "origin": {
+    "kind": "crm",
+    "mine": true
+  },
+  "data": {}
+}
