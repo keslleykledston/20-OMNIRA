@@ -73,6 +73,20 @@ afterEach(() => {
 const scroller = () => document.querySelector('.overflow-y-auto') as HTMLElement;
 const order = () => screen.getAllByText(/^texto /).map((n) => n.textContent);
 
+describe('ChatPane — who spoke', () => {
+  it('labels automation apart from the team, and names a new run when the sender kind changes', async () => {
+    thread = [
+      msg('bot', 10, { direction: 'outbound', sender_kind: 'automation' }),
+      msg('pessoa', 11, { direction: 'outbound', sender_kind: 'agent' }),
+    ];
+    serve();
+    renderAt(<ChatPane conversationId={CONV} />);
+    await screen.findByText('texto pessoa');
+    expect(screen.getByText('Automação')).toBeInTheDocument();
+    expect(screen.getByText('Equipe')).toBeInTheDocument();
+  });
+});
+
 describe('ChatPane — thread order and scrolling', () => {
   it('shows the oldest message at the top and the newest at the bottom', async () => {
     thread = [msg('c', 12), msg('a', 10), msg('b', 11)]; // API returns them newest first

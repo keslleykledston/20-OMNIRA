@@ -63,7 +63,12 @@ export default function MessageBubble({ message, sender }: MessageBubbleProps) {
           ? 'border-accent-primary/10 bg-accent-primary-soft text-text-primary'
           : 'border-border-subtle bg-surface text-text-primary'
       )}>
-        {sender && <p className="mb-0.5 text-[11px] font-medium leading-tight text-text-tertiary">{sender}</p>}
+        {sender && (
+          <p className={clsx('mb-0.5 flex items-center gap-1 text-[11px] font-medium leading-tight', message.sender_kind === 'automation' ? 'text-accent-primary' : 'text-text-tertiary')}>
+            {message.sender_kind === 'automation' && <Icon name="sparkles" size={11} />}
+            {sender}
+          </p>
+        )}
         {message.body && (
           <>
             <p className="whitespace-pre-wrap break-words">

@@ -41,6 +41,15 @@ describe('MessageBubble', () => {
   });
 });
 
+describe('MessageBubble — who sent it', () => {
+  it('marks automation apart from a person', () => {
+    const { rerender } = render(<MessageBubble message={{ ...outboundMessage('sent'), sender_kind: 'automation' }} sender="Automação" />);
+    expect(screen.getByText('Automação')).toHaveClass('text-accent-primary');
+    rerender(<MessageBubble message={{ ...outboundMessage('sent'), sender_kind: 'agent' }} sender="Equipe" />);
+    expect(screen.getByText('Equipe')).not.toHaveClass('text-accent-primary');
+  });
+});
+
 describe('MessageBubble — failed delivery', () => {
   it('says why a message was not delivered when the provider gave a reason', () => {
     render(<MessageBubble message={{ id: 'm', conversation_id: 'c', direction: 'outbound', status: 'failed', body: 'oi', created_at: '2026-10-07T06:43:00Z', failure_reason: 'provider:131026: Message undeliverable' }} />)

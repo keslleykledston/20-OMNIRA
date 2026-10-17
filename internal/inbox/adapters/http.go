@@ -122,6 +122,10 @@ type MessageItem struct {
 	// FailureReason says why a message failed or is uncertain (a short class such as "rejected", or the provider's own
 	// code and title for a failure reported after it accepted the message). Never message content.
 	FailureReason string `json:"failure_reason,omitempty"`
+	// SenderKind says who sent an OUTBOUND message, so the timeline can tell a person from automation: "agent" (a person
+	// using OMNIRA), "external_app" (an application through the external API), "automation" (flow, menu, notice, the
+	// bot) or "device" (sent from the phone itself, outside OMNIRA). Empty for inbound. A kind only, never an identity.
+	SenderKind string `json:"sender_kind,omitempty"`
 }
 
 // ListConversations pages the tenant's conversations by LAST ACTIVITY (last message, else
@@ -403,7 +407,12 @@ func (h *InboxAPIHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		SELECT m.id,m.conversation_id,m.channel_connection_id,m.direction,m.message_type,m.body,m.media_ref,m.mime_type,m.size_bytes,m.status,m.created_at,
 		       COALESCE(mm.status, CASE WHEN om.id IS NULL THEN '' WHEN om.file_purged_at IS NOT NULL THEN 'source_gone' ELSE 'clean' END),
 		       CASE WHEN ma.status='done' THEN ma.body ELSE '' END, COALESCE(ma.status,''), COALESCE(ma.suspicious,false),
-		       COALESCE(m.failure_reason,'')
+		       COALESCE(m.failure_reason,''),
+		       CASE WHEN m.direction <> 'outbound' THEN ''
+		            WHEN m.sent_by_user_id IS NOT NULL THEN 'agent'
+		            WHEN m.sent_by_installation_id IS NOT NULL THEN 'external_app'
+		            WHEN m.idempotency_key IS NOT NULL THEN 'automation'
+		            ELSE 'device' END
 		FROM messages m
 		LEFT JOIN message_media mm ON mm.tenant_id=m.tenant_id AND mm.message_id=m.id
 		LEFT JOIN message_outbound_media om ON om.tenant_id=m.tenant_id AND om.message_id=m.id
@@ -484,7 +493,7 @@ func scanMessageItem(row rowScanner) (MessageItem, error) {
 	var direction, status string
 	var created time.Time
 	var mediaRef interface{} // discard media_ref from DB row; never expose to public DTO
-	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &mediaRef, &item.MimeType, &item.SizeBytes, &status, &created, &item.MediaStatus, &item.MediaText, &item.MediaTextStatus, &item.MediaTextSuspicious, &item.FailureReason)
+	err := row.Scan(&item.ID, &item.ConversationID, &item.ChannelConnectionID, &direction, &item.MessageType, &item.Body, &mediaRef, &item.MimeType, &item.SizeBytes, &status, &created, &item.MediaStatus, &item.MediaText, &item.MediaTextStatus, &item.MediaTextSuspicious, &item.FailureReason, &item.SenderKind)
 	item.Direction, item.Status, item.CreatedAt = direction, status, created.UTC().Format(time.RFC3339Nano)
 	return item, err
 }

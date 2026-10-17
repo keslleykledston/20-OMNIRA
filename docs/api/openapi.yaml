@@ -915,6 +915,14 @@ components:
             - delivered
             - read
             - failed
+        sender_kind:
+          type: string
+          description: Who sent an outbound message (absent for inbound). A kind only, never an identity.
+          enum:
+            - agent
+            - external_app
+            - automation
+            - device
         created_at:
           type: string
           format: date-time

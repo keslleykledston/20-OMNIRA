@@ -67,6 +67,8 @@ export interface MessageItem {
   media_text_suspicious?: boolean; // the text looks addressed to an AI model
   // Why the message failed or is uncertain: a short class, or the provider's own code and title for a late failure.
   failure_reason?: string;
+  // Who sent an outbound message (absent for inbound): a person, an external app, automation, or the phone itself.
+  sender_kind?: 'agent' | 'external_app' | 'automation' | 'device';
   media_urls?: string[]; // DEPRECATED: use /api/v1/tenants/{id}/messages/{id}/media instead
 }
 

@@ -218,6 +218,99 @@ func TestMessageItemSerializesUncertainStatusWithoutCoercion(t *testing.T) {
 	}
 }
 
+func TestMessageItemSenderKindTellsPersonFromAutomation(t *testing.T) {
+	seedURL, appURL := testhelpers.RequireIntegrationDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	seed, err := pgxpool.New(ctx, seedURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	app, err := pgxpool.New(ctx, appURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := seed.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+
+	tenantID, userID := uuid.New(), uuid.New()
+	exec(`INSERT INTO users(id,external_subject,email,status) VALUES($1,$2,$3,'active')`, userID, userID, userID.String()+"@invalid")
+	exec(`INSERT INTO tenants(id,legal_name,status) VALUES($1,$2,'active')`, tenantID, tenantID.String())
+	var role uuid.UUID
+	if err := seed.QueryRow(ctx, `SELECT id FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO memberships(tenant_id,user_id,role_id,status) VALUES($1,$2,$3,'active')`, tenantID, userID, role)
+
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = seed.Exec(bg, `DELETE FROM tenants WHERE id=$1`, tenantID)
+		_, _ = seed.Exec(bg, `DELETE FROM users WHERE id=$1`, userID)
+	})
+
+	channelConnID := uuid.New()
+	exec(`INSERT INTO channel_connections(id,tenant_id,channel,provider,provider_kind,external_number_id,status)
+	      VALUES($1,$2,'whatsapp','waha','unofficial',$3,'active')`, channelConnID, tenantID, channelConnID.String())
+
+	contactID := uuid.New()
+	exec(`INSERT INTO contacts(id,tenant_id,display_name,phone_e164) VALUES($1,$2,'Test','+15551234568')`, contactID, tenantID)
+
+	convID := uuid.New()
+	exec(`INSERT INTO conversations(id,tenant_id,contact_id,channel_connection_id,status,title,created_at,updated_at)
+	      VALUES($1,$2,$3,$4,'open','Test',NOW(),NOW())`, convID, tenantID, contactID, channelConnID)
+
+	// one message per way of being sent; the kind comes from how the row was written, never from the text
+	ids := map[string]uuid.UUID{"agent": uuid.New(), "external_app": uuid.New(), "automation": uuid.New(), "device": uuid.New(), "inbound": uuid.New()}
+	instID := uuid.New()
+	exec(`INSERT INTO external_app_installations(id,tenant_id,name,scopes) VALUES($1,$2,'CRM kind',ARRAY['message.send'])`, instID, tenantID)
+	ins := `INSERT INTO messages(id,tenant_id,conversation_id,channel_connection_id,direction,message_type,body,status,idempotency_key,request_hash,sent_by_user_id,sent_by_installation_id,created_at,updated_at)
+	      VALUES($1,$2,$3,$4,$5,'text','x','sent',$6,$7,$8,$9,NOW(),NOW())`
+	exec(ins, ids["agent"], tenantID, convID, channelConnID, "outbound", "k-agent", "h", userID, nil)
+	exec(ins, ids["external_app"], tenantID, convID, channelConnID, "outbound", "k-app", "h", nil, instID)
+	exec(ins, ids["automation"], tenantID, convID, channelConnID, "outbound", "k-bot", "h", nil, nil)
+	exec(ins, ids["device"], tenantID, convID, channelConnID, "outbound", nil, nil, nil, nil)
+	exec(ins, ids["inbound"], tenantID, convID, channelConnID, "inbound", nil, nil, nil, nil)
+
+	authz := tenancyapplication.NewAuthorizationService(tenancyadapters.NewPostgresMembershipRepository(app), tenancyadapters.NewPostgresTenantRepository(app))
+	handler := inboxadapters.NewInboxAPIHandler(app)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", tenancyadapters.AuthorizationMiddleware(app, authz)(http.HandlerFunc(handler.ListMessages)))
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/tenants/%s/inbox/conversations/%s/messages", tenantID, convID), nil)
+	req = req.WithContext(authn.WithPrincipal(req.Context(), &authn.Principal{UserID: userID, Subject: userID.String()}))
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Items []map[string]interface{} `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	kinds := map[string]string{}
+	for _, item := range resp.Items {
+		kinds[fmt.Sprint(item["id"])] = fmt.Sprint(item["sender_kind"])
+	}
+	want := map[string]string{"agent": "agent", "external_app": "external_app", "automation": "automation", "device": "device", "inbound": "<nil>"}
+	for name, kind := range want {
+		if got := kinds[ids[name].String()]; got != kind {
+			t.Errorf("%s message: sender_kind = %q, want %q", name, got, kind)
+		}
+	}
+}
+
 func contains(s, substr string) bool {
 	for i := 0; i < len(s)-len(substr)+1; i++ {
 		if s[i:i+len(substr)] == substr {

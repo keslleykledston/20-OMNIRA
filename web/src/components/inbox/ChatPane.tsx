@@ -26,6 +26,7 @@ import { useAccess } from '../../lib/useAccess';
 import TenantContextBar from './TenantContextBar';
 import ProtocolTag from '../service/ProtocolTag';
 import ExternalHoldPanel, { HOLDER_LABEL, isHeldExternally } from './ExternalHoldPanel';
+import { senderLabel, sameSpeaker } from '../../lib/senderLabel';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -349,7 +350,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                 const showDay = !prev || dayLabel(prev.created_at) !== label;
                 const turn = prev && prev.direction !== msg.direction && !showDay;
                 // the speaker is named once, on the first bubble of a run from the same side
-                const firstOfRun = !prev || showDay || prev.direction !== msg.direction;
+                const firstOfRun = !prev || showDay || !sameSpeaker(prev, msg);
                 return (
                   <div key={msg.id} className={turn ? 'mt-1' : undefined}>
                     {showDay && (
@@ -359,7 +360,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                         <span className="h-px flex-1 bg-border-subtle" />
                       </div>
                     )}
-                    <MessageBubble message={msg} sender={firstOfRun ? (msg.direction === 'outbound' ? 'Equipe' : conversation?.contact_name) : undefined} />
+                    <MessageBubble message={msg} sender={firstOfRun ? senderLabel(msg, conversation?.contact_name) : undefined} />
                   </div>
                 );
               })
