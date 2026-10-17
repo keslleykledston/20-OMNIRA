@@ -501,3 +501,47 @@ func TestAStandaloneCustomerNeverCrossesCompanies(t *testing.T) {
 		t.Fatalf("foreign standalone = %d (accounts %d, kind %s)", rec.Code, e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id IN ($1,$2)`, e.tenant, other), kindOf(t, e.seed, c))
 	}
 }
+
+// Two simultaneous "standalone" requests for the same contact take turns on the contact's lock: one personal account, the loser sees the winner's link. The name is the
+// contact's name, never the phone number (the account list is a company directory every agent reads).
+func TestStandaloneCustomerIsSerializedAndNeverNamedAfterThePhone(t *testing.T) {
+	e := newHTTPEnv(t)
+	c := e.contact("+5592922220121")
+	path := map[string]string{"contact_id": c.String()}
+	done := make(chan int, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			done <- e.do(e.agent, e.tenant, http.MethodPut, `{"kind":"customer","standalone":true}`, path, e.h.PutClassification).Code
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		if code := <-done; code != http.StatusOK {
+			t.Errorf("concurrent standalone = %d", code)
+		}
+	}
+	if n := e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant); n != 1 {
+		t.Fatalf("%d accounts after 4 simultaneous requests, want 1", n)
+	}
+	if n := e.n(`SELECT count(*) FROM contact_account_links WHERE tenant_id=$1 AND contact_id=$2 AND status='active'`, e.tenant, c); n != 1 {
+		t.Errorf("%d active links, want 1", n)
+	}
+	// a contact with no name at all: the account is not named after the phone
+	nameless := e.contact("+5592922220122")
+	e.exec2(`UPDATE contacts SET display_name='', alias=NULL WHERE id=$1`, nameless)
+	if rec := e.do(e.agent, e.tenant, http.MethodPut, `{"kind":"customer","standalone":true}`, map[string]string{"contact_id": nameless.String()}, e.h.PutClassification); rec.Code != http.StatusOK {
+		t.Fatalf("nameless standalone = %d %s", rec.Code, rec.Body.String())
+	}
+	if n := e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1 AND name LIKE '%5592922%'`, e.tenant); n != 0 {
+		t.Error("an account was named after a phone number")
+	}
+	if n := e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1 AND name='Cliente sem nome'`, e.tenant); n != 1 {
+		t.Error("the nameless contact did not get the neutral name")
+	}
+}
+
+func (e *httpEnv) exec2(sql string, args ...any) {
+	e.t.Helper()
+	if _, err := e.seed.Exec(context.Background(), sql, args...); err != nil {
+		e.t.Fatal(err)
+	}
+}

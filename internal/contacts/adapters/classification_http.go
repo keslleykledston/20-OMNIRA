@@ -337,6 +337,16 @@ func (h *ClassificationHandler) resolveRefs(ctx context.Context, tc *tenancydoma
 // active company needs nothing new (the existing link stands, so no empty account is made). The account is the contact's own record, flagged in its metadata.
 func (h *ClassificationHandler) standaloneAccount(ctx context.Context, tc *tenancydomain.TenantContext, contactID uuid.UUID) ([]domain.AccountLinkInput, error) {
 	q := platformdb.QuerierFromContext(ctx, h.pool)
+	// the contact row is locked BEFORE anything is decided (ClassifyWithRole takes the same lock): two simultaneous calls take turns, and the second one sees the first one's
+	// link instead of making a second account; an account is only made when the contact has no active company at that moment
+	var name string
+	err := q.QueryRow(ctx, `SELECT left(btrim(COALESCE(NULLIF(alias,''), NULLIF(display_name,''), '')), 200) FROM contacts WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tc.TenantID, contactID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrContactNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
 	var linked bool
 	if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM contact_account_links WHERE tenant_id=$1 AND contact_id=$2 AND status='active')`, tc.TenantID, contactID).Scan(&linked); err != nil {
 		return nil, err
@@ -344,16 +354,9 @@ func (h *ClassificationHandler) standaloneAccount(ctx context.Context, tc *tenan
 	if linked {
 		return nil, nil
 	}
-	var name string
-	err := q.QueryRow(ctx, `SELECT left(btrim(COALESCE(NULLIF(alias,''), NULLIF(display_name,''), phone_e164, 'Cliente')), 200) FROM contacts WHERE tenant_id=$1 AND id=$2`, tc.TenantID, contactID).Scan(&name)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, domain.ErrContactNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
+	// never the phone number: the account list is a company directory that every agent reads
 	if strings.TrimSpace(name) == "" {
-		name = "Cliente"
+		name = "Cliente sem nome"
 	}
 	id := uuid.New()
 	if _, err := q.Exec(ctx, `INSERT INTO customer_accounts (id, tenant_id, name, account_type, metadata) VALUES ($1,$2,$3,'customer',$4::jsonb)`,
@@ -535,7 +538,7 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 		if change.PreviousKind == domain.KindUnclassified {
 			action = auditdomain.ActionContactClassified
 		}
-		h.record(r, tc, action, contactID, map[string]any{"kind_from": string(change.PreviousKind), "kind_to": string(kind), "internal_role_from": string(change.PreviousRole), "internal_role_to": string(change.Role), "classification_source": string(domain.SourceManual), "accounts": len(req.Accounts)})
+		h.record(r, tc, action, contactID, map[string]any{"kind_from": string(change.PreviousKind), "kind_to": string(kind), "internal_role_from": string(change.PreviousRole), "internal_role_to": string(change.Role), "classification_source": string(domain.SourceManual), "accounts": len(req.Accounts), "standalone": req.Standalone})
 		h.recordKindRecompute(r, tc, contactID, change)
 	} else if len(req.Accounts) > 0 {
 		h.record(r, tc, auditdomain.ActionContactAccountLinked, contactID, map[string]any{"accounts": len(req.Accounts), "classification_source": string(domain.SourceManual)})

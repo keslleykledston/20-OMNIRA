@@ -260,9 +260,11 @@ func (r *PostgresConversationAssigner) MoveToQueue(ctx context.Context, conversa
 	q := platformdb.QuerierFromContext(ctx, r.pool)
 	var fromQueue, holder, staff *uuid.UUID
 	var status string
-	var held bool
-	err = q.QueryRow(ctx, `SELECT queue_id, assigned_to_user_id, internal_user_id, status, COALESCE(control_kind IN ('crm_application','crm_agent_verified'), false)
-		FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, conversationID).Scan(&fromQueue, &holder, &staff, &status, &held)
+	var held, offLimits bool
+	// the contact's kind is read under the same lock: a spam contact left the queue on purpose and an internal contact (the instance's own people) is never routed
+	err = q.QueryRow(ctx, `SELECT c.queue_id, c.assigned_to_user_id, c.internal_user_id, c.status, COALESCE(c.control_kind IN ('crm_application','crm_agent_verified'), false),
+		       COALESCE((SELECT ct.kind IN ('spam','internal') FROM contacts ct WHERE ct.tenant_id=c.tenant_id AND ct.id=c.contact_id), false)
+		FROM conversations c WHERE c.tenant_id=$1 AND c.id=$2 FOR UPDATE OF c`, tenantID, conversationID).Scan(&fromQueue, &holder, &staff, &status, &held, &offLimits)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ports.QueueMove{}, false, nil
 	}
@@ -272,7 +274,7 @@ func (r *PostgresConversationAssigner) MoveToQueue(ctx context.Context, conversa
 	if held {
 		return ports.QueueMove{}, true, ports.ErrHeldByExternal
 	}
-	if status != "open" || staff != nil {
+	if status != "open" || staff != nil || offLimits {
 		return ports.QueueMove{}, true, ports.ErrNotRoutable
 	}
 	var mode string

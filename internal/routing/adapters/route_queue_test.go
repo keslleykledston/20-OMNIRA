@@ -168,3 +168,25 @@ func TestRouteToQueueNeedsAMembershipThatMayAndNeverCrossesCompanies(t *testing.
 		t.Error("a refused request changed the queue")
 	}
 }
+
+// A spam contact left the queue on purpose, and an internal contact (the instance's own people) is never routed: the server refuses both, whatever the screen shows.
+func TestRouteToQueueRefusesSpamAndInternalContacts(t *testing.T) {
+	e := newAssignEnv(t)
+	from, to := e.queue(e.tenantA, "Origem", true), e.queue(e.tenantA, "Destino", true)
+	for _, kind := range []string{"spam", "internal"} {
+		conv := e.conversation(e.tenantA)
+		e.inQueue(conv, from)
+		if kind == "internal" {
+			e.exec(`UPDATE contacts SET kind='internal', internal_role='team' WHERE id=(SELECT contact_id FROM conversations WHERE id=$1)`, conv)
+		} else {
+			e.exec(`UPDATE contacts SET kind='spam' WHERE id=(SELECT contact_id FROM conversations WHERE id=$1)`, conv)
+		}
+		// spam: the routing guard answers 409; an internal contact's conversation is not even visible to the member (404). Either way, it does not move.
+		if r := e.route(e.agent1, e.tenantA, conv, to); r.code != 409 && r.code != 404 {
+			t.Errorf("a %s contact: code=%d body=%q, want 409 or 404", kind, r.code, r.body)
+		}
+		if e.queueOf(conv) != from.String() {
+			t.Errorf("%s: the queue changed", kind)
+		}
+	}
+}
