@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/omnira/omnira/internal/intelligence/application"
+	"github.com/omnira/omnira/internal/platform/authn"
 )
 
 func toolFlags() application.Flags {
@@ -46,7 +47,14 @@ func invoke(e *env, h *TopicHandler, tenant, user uuid.UUID, topic uuid.UUID, to
 		body += `,"proposed_by":"` + by + `"`
 	}
 	body += `}`
-	rec := e.call(tenant, user, http.MethodPost, body, p("topic_id", topic.String()), h.InvokeAITool)
+	// the origin is decided by how the caller authenticated: "agent" tests come from an interactive (cookie) session, every other call from a Bearer token
+	rec := e.call(tenant, user, http.MethodPost, body, p("topic_id", topic.String()), h.InvokeAITool, func(r *http.Request) *http.Request {
+		kind := ""
+		if by == "agent" {
+			kind = authn.SessionKindCookie
+		}
+		return r.WithContext(authn.WithPrincipal(r.Context(), &authn.Principal{UserID: user, Subject: user.String(), SessionKind: kind}))
+	})
 	var out toolBody
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
 	return rec.Code, out
@@ -298,5 +306,56 @@ func TestIdempotencyKeyMakesARetryReturnTheFirstOutcomeAndActOnlyOnce(t *testing
 	code, failed := invoke(e, h, a.id, attendant, topic.ID, "topic.apply_ticket_policy", `{"action":"share_active"}`, "fails-safely-1", "agent")
 	if code != 200 || failed.Status != "failed" || failed.Error == "" || len(failed.Error) > 40 {
 		t.Fatalf("failure = %d %+v", code, failed)
+	}
+}
+
+// R-AI-1: the origin is decided by how the caller authenticated, not by the body. A Bearer ID token (a script, an AI client) can read, can ask for a write (queued for a person),
+// and is REFUSED when it claims "agent" - it never runs a write at once. A person in an interactive session still can.
+func TestAgentOriginNeedsAnInteractiveSessionNotAClaimInTheBody(t *testing.T) {
+	e := newEnv(t)
+	a := e.tenant()
+	attendant := e.member(a.id, "tenant_agent")
+	e.exec(`UPDATE conversations SET assigned_to_user_id=$2 WHERE id=$1`, a.conversation, attendant)
+	topic, _ := e.topicWith(a, attendant, "Pedido", "um", "dois", "três")
+	h := e.toolHandler(toolFlags())
+	bearer := func(r *http.Request) *http.Request {
+		return r.WithContext(authn.WithPrincipal(r.Context(), &authn.Principal{UserID: attendant, Subject: attendant.String()}))
+	}
+	post := func(body string, opts ...func(*http.Request) *http.Request) (int, toolBody) {
+		rec := e.call(a.id, attendant, http.MethodPost, body, p("topic_id", topic.ID.String()), h.InvokeAITool, opts...)
+		var out toolBody
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec.Code, out
+	}
+	// a Bearer token claiming "agent" is refused and nothing is written
+	if code, _ := post(`{"tool":"topic.generate_summary","idempotency_key":"bearer-claims-agent-1","proposed_by":"agent"}`, bearer); code != http.StatusForbidden {
+		t.Fatalf("bearer claiming agent = %d, want 403", code)
+	}
+	// no principal at all counts as not interactive
+	if code, _ := post(`{"tool":"topic.generate_summary","idempotency_key":"no-principal-claims-1","proposed_by":"agent"}`); code != http.StatusForbidden {
+		t.Fatalf("no principal claiming agent = %d, want 403", code)
+	}
+	if e.count(`SELECT count(*) FROM topic_summaries WHERE tenant_id=$1`, a.id) != 0 {
+		t.Fatal("a refused claim wrote a summary")
+	}
+	// the same Bearer token asking as "ai" (or saying nothing) is queued for a person, not executed
+	for i, by := range []string{`,"proposed_by":"ai"`, ``} {
+		code, out := post(`{"tool":"topic.generate_summary","idempotency_key":"bearer-ai-`+string(rune('a'+i))+`-123"`+by+`}`, bearer)
+		if code != http.StatusAccepted || out.Status != "pending_approval" || out.Source != "ai" {
+			t.Fatalf("bearer as ai (%q) = %d %+v, want 202 pending_approval", by, code, out)
+		}
+	}
+	if e.count(`SELECT count(*) FROM topic_summaries WHERE tenant_id=$1`, a.id) != 0 {
+		t.Fatal("a pending request executed")
+	}
+	// a person in an interactive session (cookie or device token) acts directly
+	for _, kind := range []string{authn.SessionKindCookie, authn.SessionKindDevice} {
+		sess := func(r *http.Request) *http.Request {
+			return r.WithContext(authn.WithPrincipal(r.Context(), &authn.Principal{UserID: attendant, Subject: attendant.String(), SessionKind: kind}))
+		}
+		code, out := post(`{"tool":"topic.get_summary","idempotency_key":"session-`+kind+`-123","proposed_by":"agent"}`, sess)
+		if code != http.StatusOK || out.Source != "agent" {
+			t.Errorf("%s session as agent = %d %+v", kind, code, out)
+		}
 	}
 }

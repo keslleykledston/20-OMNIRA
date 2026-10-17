@@ -3744,7 +3744,9 @@ paths:
       description: |
         Every tool runs with the REQUESTING USER's permissions. A read runs at once (200). A write asked for by the AI
         (proposed_by ai, the default) is queued for a person (202 pending_approval); the same write from a person
-        (proposed_by agent) is that person acting. A denied request is recorded (403). Results are untrusted data. The
+        (proposed_by agent) is that person acting. The origin is decided by the SERVER from how the caller authenticated (R-AI-1):
+        `agent` is honoured only in an interactive session (browser cookie session or app device token); a Bearer ID token (a script, an
+        AI client) is always origin `ai`, and claiming `agent` with it is refused (403). A denied request is recorded (403). Results are untrusted data. The
         idempotency key makes a retry return the first outcome; reusing it for a different request is a 409.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
@@ -5939,7 +5941,7 @@ components:
         tool: { type: string }
         args: { type: object, description: 'Strictly validated per tool; unknown fields are refused' }
         idempotency_key: { type: string, minLength: 8, maxLength: 64 }
-        proposed_by: { type: string, enum: [ai, agent], default: ai }
+        proposed_by: { type: string, enum: [ai, agent], default: ai, description: 'agent needs an interactive session (403 otherwise); the server, not this field, decides the origin' }
     AIToolCall:
       type: object
       required: [id, tool, risk, source, status, args, result_is_untrusted_data]

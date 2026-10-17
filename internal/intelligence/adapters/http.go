@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/omnira/omnira/internal/platform/authn"
 	"net/http"
 	"strconv"
 	"time"
@@ -1232,6 +1233,15 @@ func (h *TopicHandler) ListAITools(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
+// interactiveSession: the request was authenticated by a person's server-side session (cookie or device token). A Bearer ID token leaves SessionKind empty.
+func interactiveSession(ctx context.Context) bool {
+	p, err := authn.FromContext(ctx)
+	if err != nil || p == nil {
+		return false
+	}
+	return p.SessionKind == authn.SessionKindCookie || p.SessionKind == authn.SessionKindDevice
+}
+
 type invokeToolRequest struct {
 	Tool           string          `json:"tool"`
 	Args           json.RawMessage `json:"args"`
@@ -1240,8 +1250,10 @@ type invokeToolRequest struct {
 }
 
 // InvokeAITool: POST /tenants/{tenant_id}/topics/{topic_id}/ai/tools/invoke
-// proposed_by=ai is the conservative default; claiming "agent" gives nothing beyond what the user can already do through the
-// corresponding endpoint, because every tool runs with the requesting user's own permissions.
+// The origin of the call is decided HERE, by how the caller authenticated, never by what the body claims (R-AI-1). A person acting in an interactive session (the browser's cookie
+// session or the app's device token) may ask for proposed_by=agent: the write runs at once, as that person, with that person's keys. Anything else (a Bearer ID token, which is
+// what a script or an AI client holds) is always origin "ai": a write waits in the approval queue for a person, whatever proposed_by says. Claiming "agent" without an interactive
+// session is refused (403), not silently downgraded, so a client that believed it was running a write learns it was not.
 func (h *TopicHandler) InvokeAITool(w http.ResponseWriter, r *http.Request) {
 	id, ok := h.toolsGate(w, r, permTopicRead)
 	if !ok {
@@ -1255,6 +1267,10 @@ func (h *TopicHandler) InvokeAITool(w http.ResponseWriter, r *http.Request) {
 	switch req.ProposedBy {
 	case "", "ai":
 	case "agent":
+		if !interactiveSession(r.Context()) {
+			http.Error(w, "proposed_by agent needs an interactive session", http.StatusForbidden)
+			return
+		}
 		source = domain.SourceAgentTool
 	default:
 		http.Error(w, "invalid proposed_by", http.StatusUnprocessableEntity)

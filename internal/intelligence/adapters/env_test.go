@@ -148,7 +148,7 @@ func (e *env) handler() *TopicHandler {
 	return NewTopicHandler(e.app, application.NewTopicService(repo), repo)
 }
 
-func (e *env) call(tenant, user uuid.UUID, method, body string, path map[string]string, fn http.HandlerFunc) *httptest.ResponseRecorder {
+func (e *env) call(tenant, user uuid.UUID, method, body string, path map[string]string, fn http.HandlerFunc, opts ...func(*http.Request) *http.Request) *httptest.ResponseRecorder {
 	e.t.Helper()
 	rec := httptest.NewRecorder()
 	// A statement error inside a request aborts its transaction (the response is already written), so use the tolerant session.
@@ -156,6 +156,9 @@ func (e *env) call(tenant, user uuid.UUID, method, body string, path map[string]
 		req := httptest.NewRequest(method, "/", bytes.NewReader([]byte(body))).WithContext(ctx)
 		for k, v := range path {
 			req.SetPathValue(k, v)
+		}
+		for _, o := range opts {
+			req = o(req)
 		}
 		fn(rec, req)
 	})

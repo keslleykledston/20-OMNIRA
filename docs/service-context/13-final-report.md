@@ -33,7 +33,7 @@ Ainda aberto:
 - **Adaptador real de ERP**: o K3G não oferece o contrato (idempotência/correlação, OS). `docs/service-context/16` diz exatamente o que o provedor precisa fornecer e o teste de contrato (`gatewaytest.Check`) é o aceite. Pedir OS responde `503 not_configured` até lá; flag (c) desligada. `BLOCKED` por terceiro.
 - **Entrega de webhooks a terceiros / aplicação externa**: a headless foi **mesclada em `main`** por ordem do dono (migrations 159–163) e o **gate 4 está construído e testado** (migration 164: 20 nomes públicos, escopo `service.read`, API de eventos e webhook assinado; ver `06`). **Nenhum dos dois está implantado em produção** nem tem flag ligada.
 - **Pedido de OS pela tela**: a tela lista os pedidos; o botão de pedir não existe porque a flag (c) está desligada e a chave `service.request_external` não é concedida a papel algum (decisão do dono).
-- **R-AI-1** (Codex HIGH herdado do ADR-0017): a rota de ferramentas de IA aceita `proposed_by` do cliente. Decisão do dono; recomendação: proveniência do lado do servidor.
+- **R-AI-1** (Codex HIGH herdado do ADR-0017): **FECHADO em 2026-10-17** — a origem é decidida pelo servidor (sessão interativa vs token Bearer); ver `07-rls-security.md`.
 - **Riscos aceitos** (07): R-8 (tentativas de status partilhadas entre atendentes do mesmo escopo), R-9 (aviso que falha depois do commit só vai ao log).
 - **Não executado**: smoke com telefone real (aviso ao cliente, anexos), canal oficial Meta, staging, Playwright de navegador. ESLint do web **não existe** no projeto.
 - **Decisões do dono pendentes**: papéis personalizados com `service.*` e `service.request_external`; aprovação do conjunto para staging.
