@@ -39,7 +39,11 @@ Estado em 2026-10-17 (madrugada): código implantado (`sha-5e06f4c`, migrations 
 3. Testar o retorno: um supervisor com `conversation.takeover_external` retoma a conversa; suspender a aplicação na tela devolve a conversa e corta o token.
 4. Lease: definir 120 s, deixar o simulador mudo e ver a conversa voltar para a fila (`lease_expired`).
 
-**P2 — empresa real, CRM real, 24 h supervisionadas** (só depois de P1 limpo)
+**Resultado de P0 e P1 (2026-10-17, Keslley_Pessoal, produção, simulador `crm-sim`)** — feitos e conferidos no banco:
+- P0: aplicação só-leitura limitada à fila Suporte + linha WAHA; a lista veio vazia enquanto todas as conversas estavam em Default (filtro provado) e mostrou exatamente a conversa nova quando caiu em Suporte (regra "Entrada por canal" da linha).
+- P1: assumir, enviar (a mensagem **chegou ao WhatsApp real** e o banco a marcou `delivered`, enviada pela aplicação), devolver; enviar sem estar com a conversa = 409 `not_holder`; versão velha = 412; sem versão = 428; nenhuma tentativa recusada virou mensagem; **lease** de 120 s: a conversa voltou sozinha à fila (`lease_expired`, ator sistema, ~4 min); auditoria `external_app.command` por comando. Pendentes de pessoa na tela: retomada pelo supervisor, suspender/reativar e revogar a aplicação antiga.
+
+**P2 — empresa real, CRM real, 24 h supervisionadas** (só depois de P1 limpo; roteiro operacional em `docs/ops/HEADLESS-P2-CHECKLIST.md`)
 Conforme a seção 3 do runbook: escopos de leitura primeiro, filtro de fila/linha, endpoint de webhook público (segredo aparece uma vez; conferir assinatura e repetição), depois escrita. Incluir `service.read` se o CRM quiser os fatos de protocolo.
 
 **P3 — segundo CRM** só após 7 dias limpos.
