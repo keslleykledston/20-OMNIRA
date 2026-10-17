@@ -119,6 +119,8 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
     void run(() => classificationAPI.put(contactId, { kind: next }, target), next)
   }
 
+  // a customer with no company (a person, a new lead): the server makes the personal account; not offered through the Hub (a Hub agent cannot create accounts)
+  const becomeStandalone = () => run(() => classificationAPI.put(contactId, { kind: 'customer', standalone: true }, target), 'customer')
   const becomeCustomer = (ref: AccountRef) =>
     run(() => classificationAPI.put(contactId, { kind: 'customer', accounts: [ref] }, target), 'customer')
   // Same kind, other role (or first time internal): one request, the server audits who decided and when.
@@ -246,6 +248,7 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
           pending={pending}
           onCancel={() => setPicking(null)}
           onConfirm={(ref) => void (picking === 'add' ? addCompany(ref) : becomeCustomer(ref))}
+          onStandalone={picking === 'become' && !delegated ? () => void becomeStandalone() : undefined}
         />
       )}
 
@@ -356,6 +359,7 @@ function CompanyPicker({
   pending,
   onCancel,
   onConfirm,
+  onStandalone,
 }: {
   contactId: string
   target?: DelegatedTarget
@@ -364,6 +368,7 @@ function CompanyPicker({
   pending: boolean
   onCancel: () => void
   onConfirm: (ref: AccountRef) => void
+  onStandalone?: () => void
 }) {
   const [directory, setDirectory] = useState<DirectoryCompany[]>([])
   const [accounts, setAccounts] = useState<CustomerAccount[]>([])
@@ -465,7 +470,7 @@ function CompanyPicker({
           Tornar empresa principal
         </label>
       )}
-      <div className="flex gap-2 pt-1">
+      <div className="flex flex-wrap gap-2 pt-1">
         <Button size="sm" disabled={!picked || pending} onClick={() => picked && onConfirm({ ...picked.ref, relationship_type: relationship, primary })}>
           Confirmar
         </Button>
@@ -473,6 +478,14 @@ function CompanyPicker({
           Cancelar
         </Button>
       </div>
+      {onStandalone && (
+        <div className="border-t border-border-subtle pt-2">
+          <p className="mb-1 text-[11px] text-text-tertiary">É uma pessoa, ou ainda não há empresa para ligar? Cadastre como cliente sem empresa: dá para ligar uma empresa depois.</p>
+          <Button size="sm" variant="secondary" disabled={pending} onClick={onStandalone}>
+            Cliente sem empresa
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

@@ -3088,6 +3088,7 @@ paths:
                 internal_role: { type: string, enum: [team, partner, supplier], description: 'Required when kind is internal (422 otherwise), refused for any other kind. Only a person can mark a contact internal: it switches customer automation off.' }
                 accounts: { type: array, maxItems: 20, items: { $ref: '#/components/schemas/AccountRef' } }
                 end_links: { type: boolean, description: 'End every active link when the contact stops being a customer (default: kept).' }
+                standalone: { type: boolean, description: 'A customer with NO company (a person, a new lead): only with kind customer and no `accounts`; the server makes a personal account in the contact''s name (metadata.standalone) and links it as primary, unless the contact already has an active company. Members only (403 through the Hub). 400 otherwise.' }
       responses:
         '200':
           description: The new classification

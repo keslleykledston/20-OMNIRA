@@ -436,3 +436,68 @@ func TestClassificationAPIAnswers404WhenSwitchedOff(t *testing.T) {
 		t.Fatalf("flag on = %d", rec.Code)
 	}
 }
+
+// A customer with no company (a person, a new lead who became a client): the server makes a personal account in the contact's own name and links it, so the rule that
+// every customer is tied to an account still holds. It never invents an account for a contact that already has a company, never for a non-customer, never across companies.
+func TestAStandaloneCustomerGetsAPersonalAccountAndNothingElseDoes(t *testing.T) {
+	e := newHTTPEnv(t)
+	c := e.contact("+5592922220101")
+	path := map[string]string{"contact_id": c.String()}
+
+	rec := e.do(e.agent, e.tenant, http.MethodPut, `{"kind":"customer","standalone":true}`, path, e.h.PutClassification)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("standalone customer = %d %s", rec.Code, rec.Body.String())
+	}
+	v := decodeView(t, rec)
+	if v.Kind != "customer" || len(v.Accounts) != 1 || v.Accounts[0].AccountName != "Joana" || !v.Accounts[0].Primary || v.Accounts[0].Status != "active" {
+		t.Fatalf("view after standalone: %+v", v)
+	}
+	if e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1 AND metadata->>'standalone' = 'true'`, e.tenant) != 1 {
+		t.Error("the personal account is not flagged as standalone")
+	}
+	// asking again does not pile up accounts: the contact already has its company-less account
+	if rec := e.do(e.agent, e.tenant, http.MethodPut, `{"kind":"customer","standalone":true}`, path, e.h.PutClassification); rec.Code != http.StatusOK || e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant) != 1 {
+		t.Errorf("a second standalone call made another account: %d accounts", e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant))
+	}
+
+	// it is only for a customer, and only when no company is named
+	c2 := e.contact("+5592922220102")
+	p2 := map[string]string{"contact_id": c2.String()}
+	for name, body := range map[string]string{
+		"a spam contact":            `{"kind":"spam","standalone":true}`,
+		"an 'other' contact":        `{"kind":"other","standalone":true}`,
+		"with a company also named": `{"kind":"customer","standalone":true,"accounts":[{"directory_company_id":"42"}]}`,
+		"an unclassified contact":   `{"kind":"unclassified","standalone":true}`,
+	} {
+		if rec := e.do(e.agent, e.tenant, http.MethodPut, body, p2, e.h.PutClassification); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, rec.Code)
+		}
+	}
+	if kindOf(t, e.seed, c2) != "unclassified" || e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant) != 1 {
+		t.Error("a refused request changed the contact or made an account")
+	}
+
+	// a contact that already has a company keeps it: no empty personal account is made
+	c3 := e.contact("+5592922220103")
+	p3 := map[string]string{"contact_id": c3.String()}
+	if rec := e.do(e.agent, e.tenant, http.MethodPut, `{"kind":"customer","accounts":[{"directory_company_id":"42"}]}`, p3, e.h.PutClassification); rec.Code != http.StatusOK {
+		t.Fatalf("with a company = %d %s", rec.Code, rec.Body.String())
+	}
+	before := e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant)
+	if rec := e.do(e.agent, e.tenant, http.MethodPut, `{"kind":"customer","standalone":true}`, p3, e.h.PutClassification); rec.Code != http.StatusOK || e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id=$1`, e.tenant) != before {
+		t.Errorf("a contact that already had a company got a personal account too")
+	}
+}
+
+func TestAStandaloneCustomerNeverCrossesCompanies(t *testing.T) {
+	e := newHTTPEnv(t)
+	other := seedTenant(t, e.seed, "clshttp-sa-b")
+	adminB := seedMemberRole(t, e.seed, other, "tenant_admin", "active")
+	c := e.contact("+5592922220111")
+	path := map[string]string{"contact_id": c.String()}
+	// B's admin acting inside B cannot classify A's contact, and no account appears in either company
+	rec := e.do(adminB, other, http.MethodPut, `{"kind":"customer","standalone":true}`, path, e.h.PutClassification)
+	if rec.Code != http.StatusNotFound || e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id IN ($1,$2)`, e.tenant, other) != 0 || kindOf(t, e.seed, c) != "unclassified" {
+		t.Fatalf("foreign standalone = %d (accounts %d, kind %s)", rec.Code, e.n(`SELECT count(*) FROM customer_accounts WHERE tenant_id IN ($1,$2)`, e.tenant, other), kindOf(t, e.seed, c))
+	}
+}

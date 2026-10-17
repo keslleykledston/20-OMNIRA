@@ -332,9 +332,9 @@ export const classificationAPI = {
     call<{ items: CompanySuggestion[] }>(() => axios.get(`${contactsBase(target)}/${id}/company-suggestions`, { headers: scopedHeaders(target) })),
   get: (id: string, target?: DelegatedTarget) =>
     call<ContactClassification>(() => axios.get(`${contactsBase(target)}/${id}/classification`, { headers: scopedHeaders(target) })),
-  // Kind and companies change in ONE transaction on the server. `customer` needs at least one company and `internal` needs
-  // its `internal_role`.
-  put: (id: string, body: { kind: ContactKind; accounts?: AccountRef[]; end_links?: boolean; internal_role?: InternalRole }, target?: DelegatedTarget) =>
+  // Kind and companies change in ONE transaction on the server. `customer` needs at least one company (or `standalone: true`, a customer with no company: the server
+  // makes a personal account in the contact's name; members only) and `internal` needs its `internal_role`.
+  put: (id: string, body: { kind: ContactKind; accounts?: AccountRef[]; end_links?: boolean; internal_role?: InternalRole; standalone?: boolean }, target?: DelegatedTarget) =>
     call<ContactClassification>(() => axios.put(`${contactsBase(target)}/${id}/classification`, body, { headers: scopedHeaders(target) })),
   linkAccount: (id: string, ref: AccountRef, target?: DelegatedTarget) =>
     call<ContactAccountLink>(() => axios.post(`${contactsBase(target)}/${id}/accounts`, ref, { headers: scopedHeaders(target) })),

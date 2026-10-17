@@ -422,3 +422,40 @@ describe('ContactKindControl — what "Interno" does to the Hub', () => {
     expect(await screen.findByText(/Quem atende pelo Hub deixa de ver esta conversa/)).toBeInTheDocument()
   })
 })
+
+describe('ContactKindControl — cliente sem empresa (pessoa física, contato novo)', () => {
+  it('offers "Cliente sem empresa" when becoming a customer, and sends standalone with no company', async () => {
+    const user = userEvent.setup()
+    const { onChanged } = setup('unclassified')
+    await user.click(screen.getByRole('button', { name: 'Cliente' }))
+    const group = await screen.findByRole('group', { name: 'Empresa do cliente' })
+    expect(within(group).getByText(/dá para ligar uma empresa depois/)).toBeInTheDocument()
+    await user.click(within(group).getByRole('button', { name: 'Cliente sem empresa' }))
+    await waitFor(() => expect(axios.put).toHaveBeenCalled())
+    expect(putBody()).toEqual({ kind: 'customer', standalone: true })
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+  })
+
+  it('is not offered when adding one more company to a customer, and never through the Hub', async () => {
+    links = [link()]
+    const user = userEvent.setup()
+    const { unmount } = (() => { setup('customer'); return { unmount: cleanup } })()
+    await user.click(await screen.findByRole('button', { name: /Adicionar empresa/ }))
+    await screen.findByRole('group', { name: 'Adicionar empresa' })
+    expect(screen.queryByRole('button', { name: 'Cliente sem empresa' })).not.toBeInTheDocument()
+    unmount()
+    render(<ContactKindControl contactId={CONTACT} kind="unclassified" contactName="Maria" target={{ tenantId: 't-1', hubId: 'h-1' }} onChanged={() => undefined} />)
+    await user.click(screen.getByRole('button', { name: 'Cliente' }))
+    await screen.findByRole('group', { name: 'Empresa do cliente' })
+    expect(screen.queryByRole('button', { name: 'Cliente sem empresa' })).not.toBeInTheDocument()
+  })
+
+  it('shows what the server refused, in plain words', async () => {
+    vi.mocked(axios.put).mockRejectedValue({ response: { status: 422, data: 'a customer needs at least one linked company' } })
+    const user = userEvent.setup()
+    setup('unclassified')
+    await user.click(screen.getByRole('button', { name: 'Cliente' }))
+    await user.click(await screen.findByRole('button', { name: 'Cliente sem empresa' }))
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+  })
+})

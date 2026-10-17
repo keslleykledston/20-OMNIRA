@@ -333,6 +333,36 @@ func (h *ClassificationHandler) resolveRefs(ctx context.Context, tc *tenancydoma
 	return out, nil
 }
 
+// standaloneAccount gives a customer with no company a personal account: named after the contact, tied to it as the primary link. A contact that already has an
+// active company needs nothing new (the existing link stands, so no empty account is made). The account is the contact's own record, flagged in its metadata.
+func (h *ClassificationHandler) standaloneAccount(ctx context.Context, tc *tenancydomain.TenantContext, contactID uuid.UUID) ([]domain.AccountLinkInput, error) {
+	q := platformdb.QuerierFromContext(ctx, h.pool)
+	var linked bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM contact_account_links WHERE tenant_id=$1 AND contact_id=$2 AND status='active')`, tc.TenantID, contactID).Scan(&linked); err != nil {
+		return nil, err
+	}
+	if linked {
+		return nil, nil
+	}
+	var name string
+	err := q.QueryRow(ctx, `SELECT left(btrim(COALESCE(NULLIF(alias,''), NULLIF(display_name,''), phone_e164, 'Cliente')), 200) FROM contacts WHERE tenant_id=$1 AND id=$2`, tc.TenantID, contactID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrContactNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "Cliente"
+	}
+	id := uuid.New()
+	if _, err := q.Exec(ctx, `INSERT INTO customer_accounts (id, tenant_id, name, account_type, metadata) VALUES ($1,$2,$3,'customer',$4::jsonb)`,
+		id, tc.TenantID, name, `{"standalone":true}`); err != nil {
+		return nil, err
+	}
+	return []domain.AccountLinkInput{{AccountID: id, Relationship: domain.RelOwner, Primary: true, VerifiedByActor: true}}, nil
+}
+
 func (h *ClassificationHandler) record(r *http.Request, tc *tenancydomain.TenantContext, action auditdomain.AuditAction, contactID uuid.UUID, meta map[string]any) {
 	if h.audit == nil {
 		return
@@ -443,6 +473,10 @@ type putClassificationRequest struct {
 	InternalRole string `json:"internal_role"`
 	// EndLinks ends every active company link when the contact stops being a customer (default: links are kept).
 	EndLinks bool `json:"end_links"`
+	// Standalone: a customer with no company (a person, a lead that became a client). Only with kind customer and no company named. The server makes a personal
+	// account in the contact's own name and links it (the database wants every customer tied to an account); a company can be linked afterwards. Members only:
+	// a Hub agent cannot create accounts.
+	Standalone bool `json:"standalone"`
 }
 
 // PutClassification: PUT /contacts/{contact_id}/classification  (contact.classify). Kind and companies change in ONE
@@ -466,11 +500,24 @@ func (h *ClassificationHandler) PutClassification(w http.ResponseWriter, r *http
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if req.Standalone && (kind != domain.KindCustomer || len(req.Accounts) > 0) {
+		http.Error(w, "standalone is only for a customer with no company named", http.StatusBadRequest)
+		return
+	}
+	if req.Standalone && actingForHub(tc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	var change Change
 	err := atomically(r.Context(), h.pool, func(ctx context.Context) error {
 		inputs, err := h.resolveRefs(ctx, tc, contactID, req.Accounts)
 		if err != nil {
 			return err
+		}
+		if req.Standalone {
+			if inputs, err = h.standaloneAccount(ctx, tc, contactID); err != nil {
+				return err
+			}
 		}
 		change, err = h.repo.ClassifyWithRole(ctx, tc.TenantID, tc.ActorID, contactID, kind, domain.SourceManual, inputs, req.EndLinks, domain.InternalRole(req.InternalRole))
 		return err
