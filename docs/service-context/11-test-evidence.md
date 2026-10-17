@@ -76,3 +76,7 @@ Revisão independente (Codex, somente leitura): rodadas sobre aviso/gancho/inter
 **ESLint do web**: não existe — o script `lint` aponta para um binário e uma configuração que o projeto nunca teve. A porta estática do web é `tsc --noEmit`.
 
 Ainda não executado: smoke com telefone real (aviso e anexos), canal oficial (Meta), staging, ERP real.
+
+### Navegador real (Playwright, API simulada) — 2026-10-17
+
+`web/playwright.mock.config.ts` (SPA construída + `page.route`): **5 testes novos** da tela de Configurações com o prefixo do protocolo (administrador escolhe e vê o próximo número, prefixo de outra empresa explicado, travado depois do primeiro protocolo, quem não administra não vê, módulo desligado = some) — **passam**. A suíte mock inteira: 22 passam, 7 falham — **as 7 já falhavam antes desta entrega** (conferido no commit `26e4f01`, anterior ao ADR-0049: `attendance.mock` ×2, `topics.mock` ×2 e `hub.mock` "NorteNet com contexto completo" falham igual; a lista de conversas é re-renderizada sem parar sob o mock e o clique perde o alvo); `flows.mock` ×2 falha aqui só porque `web/test-results/` pertence ao root (EACCES ao gravar a captura de tela) e passa no commit antigo. Não são regressões do módulo; estão registradas para quem for consertar essas suítes.
