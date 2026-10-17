@@ -12,7 +12,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 SRC=${PG_CONTAINER:-omnira-postgres}; OWNER=${PG_OWNER:-omnira}
 SRC_DB=omnira_bkp_src; RST_DB=omnira_bkp_restored; FRESH=omnira-bkp-fresh
-TABLES="tenants users roles memberships contacts channel_connections channel_credentials conversations messages tickets assignment_events audit_events queues queue_members channel_webhook_events outbox_events"
+TABLES="tenants users roles memberships contacts channel_connections channel_credentials conversations messages tickets assignment_events audit_events queues queue_members channel_webhook_events outbox_events service_sessions service_counters context_events"
 GRN=$'\033[32m'; RED=$'\033[31m'; NC=$'\033[0m'; FAILS=0
 ok()  { echo "  ${GRN}✓${NC} $*"; }
 bad() { echo "  ${RED}✗ $*${NC}"; FAILS=$((FAILS+1)); }
@@ -36,6 +36,10 @@ INSERT INTO messages(tenant_id,conversation_id,channel_connection_id,direction,m
   VALUES ('11111111-1111-1111-1111-111111111111','d0d0d0d0-0000-0000-0000-000000000001','c0000000-0000-0000-0000-00000000c001','outbound','text','resposta','queued','bkp-key-0001','h','22222222-2222-2222-2222-222222222222');
 INSERT INTO outbox_events(tenant_id,event_type,aggregate_type,aggregate_id,payload)
   VALUES ('11111111-1111-1111-1111-111111111111','job.channel.send_text.v1','message','00000000-0000-0000-0000-00000000000a','{}');
+-- Service Context (ADR-0049): a protocol and its counter, so the restore proves the module's tables (and their RLS) too
+INSERT INTO service_counters(tenant_id,kind,prefix,last_value) VALUES ('11111111-1111-1111-1111-111111111111','session','BKP',0);
+INSERT INTO service_sessions(tenant_id,protocol,protocol_sequence,status,origin_channel,opened_source)
+  VALUES ('11111111-1111-1111-1111-111111111111','BKP-1001',1001,'open','whatsapp','operator');
 SQL
 echo "   source rows: $(for t in tenants conversations messages channel_credentials audit_events; do printf '%s=%s ' $t "$(psql_src -d $SRC_DB -c "select count(*) from $t")"; done)"
 
