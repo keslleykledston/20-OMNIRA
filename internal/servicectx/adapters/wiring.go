@@ -38,9 +38,9 @@ func Build(pool *pgxpool.Pool, opts Options) (*application.Service, *application
 // module fails (a missing key, a bug), the savepoint is rolled back, the failure is logged with ids only, and the attendance still ends. Finalizing a
 // conversation never waits on the optional module.
 func FinalizeHook(pool *pgxpool.Pool, svc *application.Service) attendanceapplication.SessionCloser {
-	return func(ctx context.Context, conversationID uuid.UUID, reason, source string, actor uuid.UUID) error {
+	return func(ctx context.Context, conversationID uuid.UUID, reason, source string, actor uuid.UUID, result string) error {
 		err := platformdb.WithSavepoint(ctx, pool, func(ctx context.Context) error {
-			return svc.CloseForFinalize(ctx, conversationID, reason, source, actor)
+			return svc.CloseForFinalize(ctx, conversationID, reason, source, actor, result)
 		})
 		if err != nil {
 			log.Printf("service-context: closing the session of conversation %s on finalize failed: %v", conversationID, err)

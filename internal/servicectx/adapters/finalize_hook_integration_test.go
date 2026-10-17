@@ -2,6 +2,7 @@ package adapters_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -189,5 +190,72 @@ func TestFinalizeBySystemAndForAHubAgentClosesTheSessionToo(t *testing.T) {
 	rows = s.sessionsOf(hubConv)
 	if len(rows) != 1 || rows[0].status != "closed" || rows[0].openedBy == nil || *rows[0].openedBy != s.agent {
 		t.Fatalf("hub agent: %+v", rows)
+	}
+}
+
+// finalizeWith finalizes choosing the result of the protocol (the Finalizar dialog's "Resultado do atendimento").
+func (s *stack) finalizeWith(att *attendanceapplication.Service, user, conv uuid.UUID, reason attendancedomain.CloseReason, result string) error {
+	return s.try(user, s.env.TenantA, func(ctx context.Context) error {
+		_, err := att.Finalize(ctx, attendancedomain.FinalizeInput{ConversationID: conv, Reason: reason, Summary: "Cliente tinha o link fora; voltou.", Note: "ok", ServiceResult: result})
+		return err
+	})
+}
+
+func TestFinalizeUsesTheResultThePersonChoseForTheProtocol(t *testing.T) {
+	s := newStack(t)
+	s.as(s.admin, s.env.TenantA, func(ctx context.Context) {
+		if _, err := s.catalog.CreateResultCode(ctx, "segunda_via", domain.ResInformationProvided, "Segunda via enviada"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	att := s.attendance(true)
+	run := func(reason attendancedomain.CloseReason, result string) sessionRow {
+		conv, _ := s.conversation()
+		s.assign(conv, s.agent)
+		if err := s.finalizeWith(att, s.agent, conv, reason, result); err != nil {
+			t.Fatalf("finalize with %q must end the attendance: %v", result, err)
+		}
+		if s.count(`SELECT count(*) FROM conversations WHERE id=$1 AND status='closed'`, conv) != 1 {
+			t.Fatalf("the conversation must be closed whatever the result asked for (%q)", result)
+		}
+		rows := s.sessionsOf(conv)
+		if len(rows) != 1 || rows[0].status == "open" {
+			t.Fatalf("the protocol ends with the attendance: %+v", rows)
+		}
+		return rows[0]
+	}
+	if r := run(attendancedomain.ReasonResolved, ""); r.canonical != domain.ResInformationProvided {
+		t.Errorf("no choice: the automatic result for 'resolved', got %q", r.canonical)
+	}
+	if r := run(attendancedomain.ReasonResolved, domain.ResResolvedFirstContact); r.canonical != domain.ResResolvedFirstContact {
+		t.Errorf("a built-in choice wins over the automatic one, got %q", r.canonical)
+	}
+	if r := run(attendancedomain.ReasonResolved, "segunda_via"); r.canonical != domain.ResInformationProvided {
+		t.Errorf("a company code stands for its canonical result, got %q", r.canonical)
+	}
+	if n := s.count(`SELECT count(*) FROM service_sessions WHERE resolution_code = 'segunda_via'`); n != 1 {
+		t.Errorf("the company's own code is what is recorded: %d", n)
+	}
+	if r := run(attendancedomain.ReasonResolved, "nao_existe"); r.canonical != domain.ResInformationProvided {
+		t.Errorf("an unknown code never stops the attendance; the automatic result stands, got %q", r.canonical)
+	}
+	if r := run(attendancedomain.ReasonNoResponse, domain.ResResolvedFirstContact); r.status != "abandoned" || r.canonical != domain.ResAbandoned {
+		t.Errorf("an attendance that ends as abandoned keeps that result: %+v", r)
+	}
+	if r := run(attendancedomain.ReasonResolved, domain.ResAbandoned); r.status != "closed" || r.canonical != domain.ResInformationProvided {
+		t.Errorf("'abandoned' cannot be chosen for a closed protocol: %+v", r)
+	}
+}
+
+func TestFinalizeRefusesAServiceResultThatIsNotACode(t *testing.T) {
+	s := newStack(t)
+	conv, _ := s.conversation()
+	s.assign(conv, s.agent)
+	err := s.finalizeWith(s.attendance(true), s.agent, conv, attendancedomain.ReasonResolved, "um resultado com espaços")
+	if err == nil || !strings.Contains(err.Error(), "service_result") {
+		t.Fatalf("a value that is not a code is a bad request: %v", err)
+	}
+	if s.count(`SELECT count(*) FROM conversations WHERE id=$1 AND status='closed'`, conv) != 0 {
+		t.Error("a refused request closed the conversation")
 	}
 }

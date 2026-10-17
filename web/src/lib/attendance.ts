@@ -107,6 +107,8 @@ export interface FinalizeBody {
   summary_truth?: Truth
   follow_ups?: FollowUpInput[]
   farewell?: string
+  // the result chosen for the service protocol that ends with the attendance (a built-in or company code); absent = the automatic one
+  service_result?: string
 }
 
 const base = (target?: DelegatedTarget) => `${API_BASE}/tenants/${target?.tenantId ?? getTenantId()}`

@@ -50,7 +50,7 @@ type Service struct {
 // person, "flow" for the flow engine) and actor is that person (uuid.Nil when none). It is called INSIDE the finalize transaction, after the conversation was
 // locked and closed; the installer is responsible for making its failure harmless to the finalization (a savepoint), because ending the attendance never waits
 // on the optional module.
-type SessionCloser func(ctx context.Context, conversationID uuid.UUID, reason string, source string, actor uuid.UUID) error
+type SessionCloser func(ctx context.Context, conversationID uuid.UUID, reason string, source string, actor uuid.UUID, result string) error
 
 // SessionNotice tells the customer, in the conversation, that the attendance's protocol ends. It is called INSIDE the finalize transaction BEFORE the conversation
 // is marked closed (a closed conversation refuses outbound text), by a person (delegated=false: a member; true: a Hub agent in the Hub's write path). The installer
@@ -69,11 +69,11 @@ func (s *Service) WithSessionCloser(c SessionCloser) *Service {
 	return s
 }
 
-func (s *Service) closeSession(ctx context.Context, conversationID uuid.UUID, reason domain.CloseReason, source string, actor uuid.UUID) {
+func (s *Service) closeSession(ctx context.Context, conversationID uuid.UUID, reason domain.CloseReason, source string, actor uuid.UUID, result string) {
 	if s.sessionCloser == nil {
 		return
 	}
-	_ = s.sessionCloser(ctx, conversationID, string(reason), source, actor)
+	_ = s.sessionCloser(ctx, conversationID, string(reason), source, actor, result)
 }
 
 // WithClosingNotice installs how the closing notice is queued: member for a tenant member finalizing, agent for a Hub agent (ADR-0040). Either may be nil.
@@ -297,7 +297,7 @@ func (s *Service) Finalize(ctx context.Context, raw domain.FinalizeInput) (Final
 	if err := s.repo.InsertClosure(ctx, closure); err != nil {
 		return FinalizeResult{}, err
 	}
-	s.closeSession(ctx, in.ConversationID, in.Reason, "finalize", by)
+	s.closeSession(ctx, in.ConversationID, in.Reason, "finalize", by, in.ServiceResult)
 	items := make([]domain.FollowUp, 0, len(in.FollowUps))
 	for _, f := range in.FollowUps {
 		cid := closure.ID
@@ -399,7 +399,7 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 	if err := s.repo.InsertClosure(ctx, closure); err != nil {
 		return FinalizeResult{}, err
 	}
-	s.closeSession(ctx, in.ConversationID, in.Reason, "finalize", by)
+	s.closeSession(ctx, in.ConversationID, in.Reason, "finalize", by, in.ServiceResult)
 	items := make([]domain.FollowUp, 0, len(in.FollowUps))
 	for _, f := range in.FollowUps {
 		cid := closure.ID
@@ -460,7 +460,7 @@ func (s *Service) FinalizeBySystemWithReason(ctx context.Context, conversationID
 	if err := s.repo.InsertClosure(ctx, closure); err != nil {
 		return FinalizeResult{}, err
 	}
-	s.closeSession(ctx, conversationID, in.Reason, "flow", uuid.Nil)
+	s.closeSession(ctx, conversationID, in.Reason, "flow", uuid.Nil, "")
 	return FinalizeResult{Closure: closure, Changed: true}, nil
 }
 

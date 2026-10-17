@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Input, Modal, TextArea } from '../primitives'
 import {
   attendanceAPI,
@@ -16,6 +16,7 @@ import { getTenantId } from '../../lib/session'
 import { isActing } from '../../lib/acting'
 import { useAccess } from '../../lib/useAccess'
 import { useConversationChannel } from '../../lib/channelLines'
+import { BUILTIN_RESULTS, serviceAPI } from '../../lib/serviceContext'
 import type { ConversationItem } from '../../types/api'
 
 interface Props {
@@ -49,6 +50,9 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
   const target: DelegatedTarget | undefined = hub ? { tenantId: hub.tenantId, hubId: hub.hubId } : undefined
   const qc = useQueryClient()
   const [reason, setReason] = useState<CloseReason>('resolved')
+  const [serviceResult, setServiceResult] = useState('') // '' = the automatic result for the reason
+  // the company's own result codes; the answer also says whether the service module is on (404: it is not, and the choice is not offered)
+  const codes = useQuery({ queryKey: ['finalize-service-codes', hub?.hubId ?? 'member', tenantId], queryFn: () => serviceAPI.resultCodes(target), enabled: open, retry: false, staleTime: 60_000 })
   const [summary, setSummary] = useState('')
   const [note, setNote] = useState('')
   const [items, setItems] = useState<DraftItem[]>([])
@@ -83,6 +87,7 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
       const asked = wantsNotice()
       const res = await attendanceAPI.finalize(conversationId, {
         reason, note: note.trim(), summary: summary.trim(), summary_truth, follow_ups, ...(asked ? { farewell: farewell.trim() } : {}),
+        ...(serviceResult && reason !== 'no_response' ? { service_result: serviceResult } : {}),
       }, target)
       return { asked, changed: res.changed, farewell: res.farewell }
     },
@@ -147,6 +152,19 @@ export default function FinalizeDialog({ open, conversationId, contactName, onCl
             {(Object.keys(CLOSE_REASON_LABEL) as CloseReason[]).map((r) => <option key={r} value={r}>{CLOSE_REASON_LABEL[r]}</option>)}
           </select>
         </label>
+        {codes.isSuccess && (
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-text-primary">Resultado do atendimento</span>
+            <select aria-label="Resultado do atendimento" className={selectClass} value={reason === 'no_response' ? '' : serviceResult} disabled={reason === 'no_response'} onChange={(e) => setServiceResult(e.target.value)}>
+              <option value="">Automático (pelo motivo)</option>
+              {BUILTIN_RESULTS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+              {(codes.data ?? []).filter((c) => !BUILTIN_RESULTS.some((b) => b.code === c.code)).map((c) => <option key={c.id} value={c.code}>{c.label}</option>)}
+            </select>
+            <span className="mt-1 block text-xs text-text-tertiary">
+              {reason === 'no_response' ? 'Sem resposta do cliente: o protocolo encerra como abandonado.' : 'O resultado fica no protocolo. Só uma tarefa, ocorrência ou ordem de serviço registra algo no ERP.'}
+            </span>
+          </label>
+        )}
         <div className="flex items-center justify-between gap-2">
           {!hub && (!delegated || can('ai.assist')) ? (
             <Button variant="secondary" size="sm" isLoading={suggest.isPending} disabled={suggest.isPending || finalize.isPending} onClick={() => suggest.mutate()}>Sugerir com IA</Button>

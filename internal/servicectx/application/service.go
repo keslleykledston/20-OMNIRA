@@ -860,9 +860,9 @@ func (s *Service) OpenOnClaim(ctx context.Context, conversationID, actor uuid.UU
 }
 
 // CloseForFinalize is called by the attendance finalization (ADR-0020), in ITS transaction and after it locked the conversation: the session of the
-// conversation is closed with the result that matches the finalization, or created and closed in one go when the attendance never had one (an
+// conversation is closed with the result the person chose or, without a choice, the one that matches the finalization, or created and closed in one go when the attendance never had one (an
 // informational attendance gets its protocol when it ends); a conversation whose session the operator already closed gets nothing more. It does not ask for permissions: finalizing was authorized by its own rules. Idempotent.
-func (s *Service) CloseForFinalize(ctx context.Context, conversationID uuid.UUID, reason string, source string, actor uuid.UUID) error {
+func (s *Service) CloseForFinalize(ctx context.Context, conversationID uuid.UUID, reason string, source string, actor uuid.UUID, chosen string) error {
 	c, err := s.who(ctx)
 	if err != nil {
 		return err
@@ -906,6 +906,13 @@ func (s *Service) CloseForFinalize(ctx context.Context, conversationID uuid.UUID
 			return err
 		}
 		code = domain.RefineResolution(code, o, cs, ts)
+	}
+	// The result the person chose for the protocol wins over the automatic one, unless the attendance is ending as abandoned (that result is fixed) or the code is not
+	// one this company can use: an unusable choice never keeps the attendance from ending, the automatic result stands.
+	if chosen != "" && to != domain.SessionAbandoned {
+		if canonical, rerr := s.repo.ResolveResult(ctx, chosen); rerr == nil && canonical != domain.ResAbandoned {
+			code = chosen
+		}
 	}
 	_, err = s.finish(ctx, c, sess, domain.CloseInput{ResolutionCode: code, Abandon: to == domain.SessionAbandoned}, source, sess.Version)
 	return err

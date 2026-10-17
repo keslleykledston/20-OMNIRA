@@ -727,7 +727,7 @@ func TestASystemSessionOfAnotherCompanyStillCannotReachASession(t *testing.T) {
 		if _, _, err := s.svc.ForConversation(ctx, conv); !errors.Is(err, domain.ErrNotFound) {
 			t.Errorf("by conversation from a system session of B: %v", err)
 		}
-		if err := s.svc.CloseForFinalize(ctx, conv, "resolved", "flow", uuid.Nil); !errors.Is(err, domain.ErrNotFound) {
+		if err := s.svc.CloseForFinalize(ctx, conv, "resolved", "flow", uuid.Nil, ""); !errors.Is(err, domain.ErrNotFound) {
 			t.Errorf("finalize hook from a system session of B: %v", err)
 		}
 	})

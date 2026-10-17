@@ -111,6 +111,10 @@ type FinalizeInput struct {
 	// Farewell, when not empty, is the closing notice for the customer. The server queues it in the SAME transaction that closes the conversation (so it is never
 	// sent for an attendance that was not finalized) and says what happened in FinalizeResult.Farewell; it is never a precondition of finalizing.
 	Farewell string `json:"farewell"`
+	// ServiceResult, when not empty, is the result the person chose for the service protocol that ends with the attendance (a built-in code or one of the company's own,
+	// ADR-0049). Optional: without it the protocol takes the result that matches the reason. The service module decides whether it is usable; an unknown code never
+	// stops the attendance from ending (the automatic result is used).
+	ServiceResult string `json:"service_result"`
 }
 
 // FarewellState is what became of the closing notice a finalize asked for (never the text).
@@ -170,6 +174,12 @@ func (in FinalizeInput) Normalize() (FinalizeInput, error) {
 	}
 	if out.Farewell, err = checkText("farewell", in.Farewell, MaxFarewell, false); err != nil {
 		return out, err
+	}
+	if out.ServiceResult, err = checkText("service_result", in.ServiceResult, 64, false); err != nil {
+		return out, err
+	}
+	if strings.ContainsAny(out.ServiceResult, " \t\r\n") {
+		return out, invalid("service_result is a code, without spaces")
 	}
 	if len(in.FollowUps) > MaxFollowUps {
 		return out, invalid("at most %d follow-up items", MaxFollowUps)

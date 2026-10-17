@@ -314,3 +314,72 @@ describe('Finalize — closing message to the customer', () => {
     expect(vi.mocked(emitInboxNotice).mock.calls[0][1]).toMatch(expected)
   })
 })
+
+describe('Finalizar atendimento — resultado do protocolo (ADR-0049)', () => {
+  function serveWithCodes(codes: 'off' | unknown[]) {
+    serve()
+    const get = vi.mocked(axios.get).getMockImplementation()!
+    vi.mocked(axios.get).mockImplementation(async (url: string, ...rest: unknown[]) => {
+      if (String(url).endsWith('/service-result-codes')) {
+        if (codes === 'off') return Promise.reject({ response: { status: 404 } })
+        return { data: { items: codes } }
+      }
+      return (get as any)(url, ...rest)
+    })
+    vi.mocked(axios.post).mockResolvedValue({ data: { changed: true } })
+  }
+  const company = [{ id: 'rc-1', code: 'segunda_via', canonical_code: 'information_provided', label: 'Segunda via enviada', active: true }]
+  const body = () => vi.mocked(axios.post).mock.calls.find(([u]) => String(u).endsWith('/finalize'))![1] as Record<string, unknown>
+
+  async function openDialog() {
+    const user = userEvent.setup()
+    renderAt(<ContextPane conversationId={CONV} />)
+    await user.click(await screen.findByRole('button', { name: /Finalizar atendimento/ }))
+    const dialog = await screen.findByRole('dialog', { name: 'Finalizar atendimento' })
+    return { user, dialog }
+  }
+
+  it('offers the built-in results and the company\'s own, and sends the one chosen', async () => {
+    serveWithCodes(company)
+    const { user, dialog } = await openDialog()
+    const select = await within(dialog).findByLabelText('Resultado do atendimento')
+    const labels = Array.from((select as HTMLSelectElement).options).map((o) => o.textContent)
+    expect(labels[0]).toBe('Automático (pelo motivo)')
+    expect(labels).toContain('Segunda via enviada')
+    await user.selectOptions(select, 'segunda_via')
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some(([u]) => String(u).endsWith('/finalize'))).toBe(true))
+    expect(body().service_result).toBe('segunda_via')
+  })
+
+  it('left on automatic, it sends no result at all', async () => {
+    serveWithCodes(company)
+    const { user, dialog } = await openDialog()
+    await within(dialog).findByLabelText('Resultado do atendimento')
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some(([u]) => String(u).endsWith('/finalize'))).toBe(true))
+    expect(body()).not.toHaveProperty('service_result')
+  })
+
+  it('does not offer the choice when the service module is off', async () => {
+    serveWithCodes('off')
+    const { user, dialog } = await openDialog()
+    await waitFor(() => expect(vi.mocked(axios.get).mock.calls.some(([u]) => String(u).endsWith('/service-result-codes'))).toBe(true))
+    expect(within(dialog).queryByLabelText('Resultado do atendimento')).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some(([u]) => String(u).endsWith('/finalize'))).toBe(true))
+    expect(body()).not.toHaveProperty('service_result')
+  })
+
+  it('an attendance with no answer from the customer ends the protocol as abandoned: the choice is locked and never sent', async () => {
+    serveWithCodes(company)
+    const { user, dialog } = await openDialog()
+    const select = await within(dialog).findByLabelText('Resultado do atendimento')
+    await user.selectOptions(select, 'segunda_via')
+    await user.selectOptions(within(dialog).getByLabelText('Motivo'), 'no_response')
+    expect(select).toBeDisabled()
+    await user.click(within(dialog).getByRole('button', { name: 'Finalizar atendimento' }))
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some(([u]) => String(u).endsWith('/finalize'))).toBe(true))
+    expect(body()).not.toHaveProperty('service_result')
+  })
+})
