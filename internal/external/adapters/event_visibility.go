@@ -27,6 +27,16 @@ func LoadAllowlistsFor(ctx context.Context, q platformdb.Querier, tenantID, inst
 func EventVisible(ctx context.Context, q platformdb.Querier, v Visibility, aggregateType string, aggregateID uuid.UUID, conversationID *uuid.UUID) (bool, error) {
 	var args Args
 	var ok bool
+	if IsServiceAggregate(aggregateType) {
+		// ADR-0049 gate 4: the service facts need the scope; one tied to a conversation follows that conversation's visibility (queues and lines included); one with
+		// no conversation (a case, a task, an ERP record) cannot be placed in a queue, so only an installation with NO limit hears about it.
+		if !v.ServiceRead {
+			return false, nil
+		}
+		if conversationID == nil {
+			return !v.Restricted(), nil
+		}
+	}
 	switch {
 	case conversationID != nil:
 		vis := v.Conversation("c", &args)
@@ -40,4 +50,24 @@ func EventVisible(ctx context.Context, q platformdb.Querier, v Visibility, aggre
 		return ok, err
 	}
 	return false, nil
+}
+
+// ServiceAggregates are the journal's aggregate types that come from Service Context & Operations (migration 164).
+var ServiceAggregates = []string{"service_session", "service_case", "service_task", "external_record", "external_request"}
+
+func IsServiceAggregate(t string) bool {
+	for _, a := range ServiceAggregates {
+		if a == t {
+			return true
+		}
+	}
+	return false
+}
+
+// LoadServiceReadFor says whether a live installation still holds the scope service.read: the delivery worker asks it at the moment of sending, so withdrawing the
+// scope reaches the deliveries already queued.
+func LoadServiceReadFor(ctx context.Context, q platformdb.Querier, tenantID, installationID uuid.UUID) (bool, error) {
+	var ok bool
+	err := q.QueryRow(ctx, `SELECT external_installation_has_scope($1, $2, 'service.read')`, tenantID, installationID).Scan(&ok)
+	return ok, err
 }

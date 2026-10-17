@@ -15,6 +15,7 @@ export const SCOPES: { key: string; label: string; write: boolean }[] = [
   { key: 'message.send', label: 'Enviar mensagens ao cliente', write: true },
   { key: 'conversation.transfer', label: 'Transferir conversas', write: true },
   { key: 'conversation.finalize', label: 'Finalizar atendimentos', write: true },
+  { key: 'service.read', label: 'Receber eventos de protocolos, ocorrências, tarefas e ordens de serviço', write: false },
 ]
 
 export const EVENT_TYPES: { key: string; label: string }[] = [
@@ -25,6 +26,30 @@ export const EVENT_TYPES: { key: string; label: string }[] = [
   { key: 'message.status_changed.v1', label: 'Status de entrega' },
   { key: 'contact.updated.v1', label: 'Contato atualizado' },
   { key: 'ticket.linked.v1', label: 'Chamado vinculado' },
+]
+
+// Service Context & Operations (ADR-0049): offered only to an installation that holds the scope service.read (the server refuses the others with 422).
+export const SERVICE_EVENT_TYPES: { key: string; label: string }[] = [
+  { key: 'service_session.opened.v1', label: 'Protocolo aberto' },
+  { key: 'service_session.classified.v1', label: 'Atendimento classificado' },
+  { key: 'service_session.status_changed.v1', label: 'Estado do protocolo mudou' },
+  { key: 'service_session.closed.v1', label: 'Protocolo encerrado' },
+  { key: 'service_session.reopened.v1', label: 'Protocolo reaberto' },
+  { key: 'service_case.created.v1', label: 'Ocorrência aberta' },
+  { key: 'service_case.updated.v1', label: 'Ocorrência alterada' },
+  { key: 'service_case.resolved.v1', label: 'Ocorrência resolvida' },
+  { key: 'service_case.assigned.v1', label: 'Ocorrência atribuída' },
+  { key: 'service_case.session_linked.v1', label: 'Ocorrência ligada a um protocolo' },
+  { key: 'service_task.created.v1', label: 'Tarefa criada' },
+  { key: 'service_task.updated.v1', label: 'Tarefa alterada' },
+  { key: 'service_task.status_changed.v1', label: 'Estado da tarefa mudou' },
+  { key: 'service_task.completed.v1', label: 'Tarefa concluída' },
+  { key: 'service_task.assigned.v1', label: 'Tarefa atribuída' },
+  { key: 'external_record.linked.v1', label: 'Registro do ERP ligado' },
+  { key: 'external_record.unlinked.v1', label: 'Registro do ERP desligado' },
+  { key: 'external_record.status_changed.v1', label: 'Registro do ERP mudou de estado' },
+  { key: 'external_request.created.v1', label: 'Pedido enviado ao ERP' },
+  { key: 'external_request.state_changed.v1', label: 'Pedido ao ERP mudou de estado' },
 ]
 
 export type AppStatus = 'active' | 'suspended' | 'revoked'

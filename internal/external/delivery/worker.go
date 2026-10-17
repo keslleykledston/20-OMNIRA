@@ -304,7 +304,11 @@ func (w *Worker) stillVisible(ctx context.Context, c claimed) (bool, error) {
 		if !*active {
 			return errPaused
 		}
-		v := adapters.Visibility{TenantID: c.tenantID, QueueIDs: al.QueueIDs, ChannelIDs: al.ChannelIDs}
+		serviceRead, err := adapters.LoadServiceReadFor(ctx, q, c.tenantID, c.installationID)
+		if err != nil {
+			return err
+		}
+		v := adapters.Visibility{TenantID: c.tenantID, QueueIDs: al.QueueIDs, ChannelIDs: al.ChannelIDs, ServiceRead: serviceRead}
 		visible, err = adapters.EventVisible(ctx, q, v, c.event.Aggregate.Type, c.event.Aggregate.ID, c.event.ConversationID)
 		return err
 	})

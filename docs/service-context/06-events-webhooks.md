@@ -6,19 +6,23 @@
 - **Envelope e nomes públicos versionados**: `domain.Envelope` / `domain.PublicEvent`; contrato `contracts/asyncapi/service-context-events-v1.yaml` + `contracts/jsonschema/service-context-event.v1.schema.json`. Os nomes propostos no pedido existem: `service_session.opened|classified|closed.v1`, `service_case.created|updated|resolved.v1`, `service_task.created|completed.v1`, `external_record.linked|status_changed.v1` (+ os extras: reaberta, atribuída, vínculo de sessão, solicitação ao ERP…). Um teste compara o que o código **pode anunciar** com o que o contrato **documenta**, nos dois sentidos.
 - **Entrada**: `Service.ApplyExternalUpdate` aplica uma atualização empurrada pelo ERP — idempotente por *delivery id* (recibo), segura contra **ordem trocada** (o tempo do próprio provedor só avança), nunca cria registro, só em sessão de sistema (a camada de integração já autenticou e resolveu a empresa a partir da integração armazenada, **nunca** do payload).
 
-## O que NÃO foi entregue e por quê
+## Gate 4 — entrega a aplicações externas (entregue em 2026-10-17, migration 164)
+
+A branch headless (ADR-0048) foi mesclada em `main` (migrations 159–163). O módulo agora entrega seus fatos por ela, **sem reescrever o serviço**:
+
+- **Fonte única**: um gatilho `AFTER INSERT` em `context_events` escreve o fato em `domain_events` **na mesma transação**, com o nome público do módulo (`domain.PublicEvent`; o mapeamento em SQL é conferido contra o Go por teste, nos dois sentidos, para os 19 tipos × cada valor de `to` que muda o nome). São 20 nomes públicos (`service_session.*`, `service_case.*`, `service_task.*`, `external_record.*`, `external_request.*`).
+- **Escopo novo `service.read`** na instalação da aplicação externa. Sem ele: nada é gravado no diário se nenhuma instalação da empresa o tem; e a instalação sem o escopo **nunca** recebe esses fatos, nem pela API de eventos nem por webhook.
+- **Visibilidade**: um fato ligado a uma conversa segue a visibilidade da conversa e os limites de fila/linha da instalação (conversa de equipe, contato interno ou spam: silêncio). Um fato **sem** conversa (ocorrência, tarefa, registro do ERP) só vai a instalação **sem limite** (não dá para situá-lo numa fila). A visibilidade é perguntada de novo na leitura e no envio; retirar o escopo cancela as entregas pendentes (`not_visible`).
+- **Assinatura de webhook**: só para instalação com `service.read` (422 caso contrário); nome desconhecido = 400.
+- **Conteúdo**: `data` leva `links` (ids), `actor_type` e o payload do módulo (ids, enums, contagens; se não couber em 2 KB, só links e ator). A nota digitada por uma pessoa nunca sai.
+- **Contratos**: JSON Schema, AsyncAPI e OpenAPI externo descrevem os 20 tipos e o escopo; 20 amostras validadas pelo teste de contrato.
+- **Testes** (PostgreSQL real): nomes sem deriva; só com o escopo; empresa A nunca ouve a B; instalação limitada a uma fila; contato que vira interno depois do fato; assinatura sem escopo; entrega assinada sem conteúdo; escopo retirado antes do envio (mutações verificadas nas três portas).
+
+## O que continua fora
 
 | Item do pedido | Estado | Motivo |
 |---|---|---|
-| Entrega de webhook assinado a terceiros | **BLOCKED (dependência)** | O motor existe na branch headless (HMAC v1, SSRF guard, backoff 5 s→1 h por 72 h, *dead letter*, `FOR UPDATE SKIP LOCKED`), ainda não integrada ao `main`. Duplicá-lo violaria "não duplicar". Em `main` o publisher só tem *stream* para `job.*`. |
-| Escopos de aplicação externa `service.*` | **BLOCKED (dependência)** | `external_app_installations.scopes` tem CHECK fechado na branch headless. |
-| Cursor/`seq` denso por empresa para consumidores | **BLOCKED (dependência)** | É o sequenciador do diário `domain_events` da headless. |
-| Receptor HTTP de webhook do ERP | **não construído** | Precisa de identidade de integração verificada (assinatura); o caso de uso `ApplyExternalUpdate` está pronto e testado para ser chamado por ele. |
-
-## Critérios de aceite quando a headless for integrada (gate 4 → ativação)
-
-1. Adicionar os 20 nomes públicos ao CHECK de `event_type` do diário e dos `webhook_subscriptions` e produzir o evento a partir de `context_events` (fonte única) — **sem** reescrever o serviço.
-2. Entrega: `event_id` único como chave de deduplicação do consumidor; reprocessar o mesmo evento não muda nada; evento fora de ordem é descartado pela versão da entidade; revogar a credencial interrompe a entrega no próximo ciclo; empresa nunca vem do payload.
-3. Testes: replay seguro, *out-of-order*, *dead letter* após o prazo, revogação de acesso no meio da entrega, empresa A nunca recebe evento da B.
+| Receptor HTTP de webhook **do ERP** (entrada) | **não construído** | Precisa de identidade de integração verificada (assinatura) e do contrato do provedor (`16`); o caso de uso `ApplyExternalUpdate` está pronto e testado para ser chamado por ele. |
+| Fatos de ocorrência/tarefa em instalação com limite de fila | por desenho | Sem conversa não há como situar na fila; só instalação sem limite os recebe. |
 
 Enquanto isso, o diário é consultável pela API (`…/timeline`) e pelo contexto do cliente.

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Input, Skeleton } from '../primitives'
-import { EVENT_TYPES, describeError, externalAppErrorMessage, externalAppsAPI, validateWebhookURL, type Delivery, type Webhook } from '../../lib/externalApps'
+import { EVENT_TYPES, SERVICE_EVENT_TYPES, describeError, externalAppErrorMessage, externalAppsAPI, validateWebhookURL, type Delivery, type Webhook } from '../../lib/externalApps'
 import { getTenantId } from '../../lib/session'
 import { SecretOnce } from './SecretOnce'
 
@@ -54,12 +54,13 @@ function Deliveries({ appId, hook, canManage, onError }: { appId: string; hook: 
 }
 
 // The endpoints that receive the facts of an installation, signed. The signing secret appears once (creation and rotation).
-export default function WebhooksPanel({ appId, canManage, revoked }: { appId: string; canManage: boolean; revoked: boolean }) {
+export default function WebhooksPanel({ appId, canManage, revoked, scopes = [] }: { appId: string; canManage: boolean; revoked: boolean; scopes?: string[] }) {
   const qc = useQueryClient()
   const tenantId = getTenantId()
   const key = ['external-app-webhooks', tenantId, appId]
   const list = useQuery({ queryKey: key, queryFn: () => externalAppsAPI.webhooks.list(appId) })
   const [url, setUrl] = useState('')
+  const offered = scopes.includes('service.read') ? [...EVENT_TYPES, ...SERVICE_EVENT_TYPES] : EVENT_TYPES // the service facts need the scope (the server refuses the rest)
   const [types, setTypes] = useState<string[]>(EVENT_TYPES.map((t) => t.key))
   const [secret, setSecret] = useState<{ title: string; value: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -143,7 +144,7 @@ export default function WebhooksPanel({ appId, canManage, revoked }: { appId: st
             <fieldset className="space-y-1">
               <legend className="text-xs font-medium text-text-secondary">Eventos</legend>
               <div className="grid gap-1 sm:grid-cols-2">
-                {EVENT_TYPES.map((t) => (
+                {offered.map((t) => (
                   <label key={t.key} className="flex items-center gap-2 text-sm text-text-primary">
                     <input type="checkbox" checked={types.includes(t.key)} onChange={() => toggleType(t.key)} /> {t.label}
                   </label>

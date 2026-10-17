@@ -442,7 +442,7 @@ components:
       properties:
         event_id: { type: string, format: uuid, description: "Born with the fact and stable for ever: the key to deduplicate on" }
         seq: { type: integer, format: int64 }
-        type: { type: string, enum: [conversation.created.v1, conversation.control_changed.v1, conversation.closed.v1, message.created.v1, message.status_changed.v1, contact.updated.v1, ticket.linked.v1] }
+        type: { type: string, enum: [conversation.created.v1, conversation.control_changed.v1, conversation.closed.v1, message.created.v1, message.status_changed.v1, contact.updated.v1, ticket.linked.v1, service_session.opened.v1, service_session.classified.v1, service_session.status_changed.v1, service_session.closed.v1, service_session.reopened.v1, service_case.created.v1, service_case.updated.v1, service_case.resolved.v1, service_case.assigned.v1, service_case.session_linked.v1, service_task.created.v1, service_task.updated.v1, service_task.status_changed.v1, service_task.completed.v1, service_task.assigned.v1, external_record.linked.v1, external_record.unlinked.v1, external_record.status_changed.v1, external_request.created.v1, external_request.state_changed.v1] }
         version: { type: integer }
         occurred_at: { type: string, format: date-time }
         tenant_id: { type: string, format: uuid, description: "Informative only" }
@@ -592,7 +592,7 @@ components:
             id: { type: string, format: uuid }
         scopes:
           type: array
-          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send] }
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read] }
         limits:
           type: object
           required: [rate_limit_per_min, allow_outside_hours]

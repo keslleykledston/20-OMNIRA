@@ -1,0 +1,22 @@
+{
+  "event_id": "5e1c0c00-0000-4000-8000-000000000119",
+  "seq": 119,
+  "type": "external_request.state_changed.v1",
+  "version": 1,
+  "occurred_at": "2026-10-17T12:00:00Z",
+  "tenant_id": "0b2a6a4e-8f0d-4a6f-9d9a-5a1f00000001",
+  "aggregate": {
+    "type": "external_request",
+    "id": "7777a000-0000-4000-8000-000000000119"
+  },
+  "origin": {
+    "kind": "workspace"
+  },
+  "data": {
+    "links": {
+      "session_id": "9999a000-0000-4000-8000-000000000001"
+    },
+    "actor_type": "user",
+    "data": {}
+  }
+}

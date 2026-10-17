@@ -131,7 +131,7 @@ function Detail({ appId, canManage, onChanged }: { appId: string; canManage: boo
         </ul>
         {canManage && live && <Button size="sm" variant="secondary" isLoading={newToken.isPending} onClick={() => newToken.mutate()}>Gerar novo token</Button>}
       </section>
-      <WebhooksPanel appId={a.id} canManage={canManage} revoked={!live} />
+      <WebhooksPanel appId={a.id} canManage={canManage} revoked={!live} scopes={a.scopes} />
       <ConfirmDialog open={confirm === 'suspend'} title="Suspender esta aplicação?" message="Ela deixa de acessar a API e devolve à empresa as conversas que está atendendo. Dá para reativar depois." confirmLabel="Suspender" isPending={transition.isPending}
         onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); transition.mutate('suspend') }} />
       <ConfirmDialog open={confirm === 'revoke'} title="Revogar esta aplicação?" message="Definitivo: os tokens deixam de valer, os endpoints param e as conversas que ela atende voltam para a fila. Não dá para desfazer." confirmLabel="Revogar" destructive isPending={transition.isPending}

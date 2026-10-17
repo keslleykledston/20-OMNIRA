@@ -35,7 +35,41 @@ func NewWebhookHandler(admin *AdminHandler, sealer Sealer, newSecret func() (str
 
 const maxSubscriptionsPerInstallation = 5
 
-var allEventTypes = []string{"conversation.created.v1", "conversation.control_changed.v1", "conversation.closed.v1", "message.created.v1", "message.status_changed.v1", "contact.updated.v1", "ticket.linked.v1"}
+var conversationEventTypes = []string{"conversation.created.v1", "conversation.control_changed.v1", "conversation.closed.v1", "message.created.v1", "message.status_changed.v1", "contact.updated.v1", "ticket.linked.v1"}
+
+// serviceEventTypes are the public names of Service Context & Operations (ADR-0049 gate 4, migration 164); an installation may subscribe to them only with the scope service.read.
+var serviceEventTypes = []string{
+	"service_session.opened.v1", "service_session.classified.v1", "service_session.status_changed.v1", "service_session.closed.v1", "service_session.reopened.v1",
+	"service_case.created.v1", "service_case.updated.v1", "service_case.resolved.v1", "service_case.assigned.v1", "service_case.session_linked.v1",
+	"service_task.created.v1", "service_task.updated.v1", "service_task.status_changed.v1", "service_task.completed.v1", "service_task.assigned.v1",
+	"external_record.linked.v1", "external_record.unlinked.v1", "external_record.status_changed.v1", "external_request.created.v1", "external_request.state_changed.v1",
+}
+
+var allEventTypes = append(append([]string{}, conversationEventTypes...), serviceEventTypes...)
+
+func isServiceEventType(t string) bool {
+	for _, a := range serviceEventTypes {
+		if a == t {
+			return true
+		}
+	}
+	return false
+}
+
+// needsServiceScope: the list asks for a service fact but the installation does not hold service.read.
+func needsServiceScope(types []string, in domain.Installation) bool {
+	for _, t := range types {
+		if isServiceEventType(t) {
+			for _, sc := range in.Scopes {
+				if sc == domain.ScopeServiceRead {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
 
 func validEventTypes(in []string) ([]string, bool) {
 	if len(in) == 0 {
@@ -167,6 +201,10 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "event_types must list at least one known event type", http.StatusBadRequest)
 		return
 	}
+	if needsServiceScope(types, in) {
+		http.Error(w, "service events need the scope service.read on this installation", http.StatusUnprocessableEntity)
+		return
+	}
 	if err := netpolicy.ValidateURL(req.URL); err != nil {
 		http.Error(w, "the webhook URL must be https, on a public address, with no credentials, on port 443 or 8443", http.StatusBadRequest)
 		return
@@ -253,6 +291,10 @@ func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		var ok bool
 		if types, ok = validEventTypes(*req.EventTypes); !ok {
 			http.Error(w, "event_types must list at least one known event type", http.StatusBadRequest)
+			return
+		}
+		if needsServiceScope(types, in) {
+			http.Error(w, "service events need the scope service.read on this installation", http.StatusUnprocessableEntity)
 			return
 		}
 	}

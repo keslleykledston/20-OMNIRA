@@ -10,6 +10,8 @@ info:
     * **Push** — signed HTTPS webhooks to the endpoints the company's administrator configured. At least once: a fact may arrive more than once and out of order across
       conversations; deduplicate by `event_id`, order one conversation's facts by `aggregate_version`.
 
+    **Service facts (ADR-0049)** — protocols, occurrences, tasks and ERP records (`service_*`, `external_record.*`, `external_request.*`) — are delivered only to an installation that holds the scope `service.read`. One tied to a conversation follows that conversation's visibility and the installation's queue/line limits; one with no conversation (an occurrence, a task, an ERP record) is delivered only to an installation with NO limit. Their `data` carries `links` (ids), `actor_type` and the module's own payload (ids, enums, counts); the note a person typed never leaves.
+
     **The envelope never carries content.** No message text, no phone number, no name, no attachment: only identifiers, kinds, statuses and counters. Fetch the content with
     the read API (`GET /external/conversations/{id}/messages`, `/contacts/{id}`, `/media/{id}`) — which re-checks, at that moment, that the installation may see it.
     Only facts of conversations the installation may see are sent; a conversation that stops being visible simply stops producing facts.
@@ -49,6 +51,26 @@ channels:
           - $ref: '#/components/messages/MessageStatusChanged'
           - $ref: '#/components/messages/ContactUpdated'
           - $ref: '#/components/messages/TicketLinked'
+          - $ref: '#/components/messages/ServiceSessionOpened'
+          - $ref: '#/components/messages/ServiceSessionClassified'
+          - $ref: '#/components/messages/ServiceSessionStatusChanged'
+          - $ref: '#/components/messages/ServiceSessionClosed'
+          - $ref: '#/components/messages/ServiceSessionReopened'
+          - $ref: '#/components/messages/ServiceCaseCreated'
+          - $ref: '#/components/messages/ServiceCaseUpdated'
+          - $ref: '#/components/messages/ServiceCaseResolved'
+          - $ref: '#/components/messages/ServiceCaseAssigned'
+          - $ref: '#/components/messages/ServiceCaseSessionLinked'
+          - $ref: '#/components/messages/ServiceTaskCreated'
+          - $ref: '#/components/messages/ServiceTaskUpdated'
+          - $ref: '#/components/messages/ServiceTaskStatusChanged'
+          - $ref: '#/components/messages/ServiceTaskCompleted'
+          - $ref: '#/components/messages/ServiceTaskAssigned'
+          - $ref: '#/components/messages/ExternalRecordLinked'
+          - $ref: '#/components/messages/ExternalRecordUnlinked'
+          - $ref: '#/components/messages/ExternalRecordStatusChanged'
+          - $ref: '#/components/messages/ExternalRequestCreated'
+          - $ref: '#/components/messages/ExternalRequestStateChanged'
 components:
   messageTraits:
     signed:
@@ -105,3 +127,123 @@ components:
       traits: [{ $ref: '#/components/messageTraits/signed' }]
       payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
       examples: [{ payload: { $ref: '../samples/external/event-ticket.linked.v1.json' } }]
+    ServiceSessionOpened:
+      name: service_session.opened.v1
+      title: Protocol opened (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_session.opened.v1.json' } }]
+    ServiceSessionClassified:
+      name: service_session.classified.v1
+      title: Attendance classified (category) (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_session.classified.v1.json' } }]
+    ServiceSessionStatusChanged:
+      name: service_session.status_changed.v1
+      title: Protocol status changed (in progress / waiting) (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_session.status_changed.v1.json' } }]
+    ServiceSessionClosed:
+      name: service_session.closed.v1
+      title: Protocol closed (result) (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_session.closed.v1.json' } }]
+    ServiceSessionReopened:
+      name: service_session.reopened.v1
+      title: Protocol reopened (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_session.reopened.v1.json' } }]
+    ServiceCaseCreated:
+      name: service_case.created.v1
+      title: Occurrence opened (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_case.created.v1.json' } }]
+    ServiceCaseUpdated:
+      name: service_case.updated.v1
+      title: Occurrence changed or its status moved (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_case.updated.v1.json' } }]
+    ServiceCaseResolved:
+      name: service_case.resolved.v1
+      title: Occurrence resolved (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_case.resolved.v1.json' } }]
+    ServiceCaseAssigned:
+      name: service_case.assigned.v1
+      title: Occurrence assigned (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_case.assigned.v1.json' } }]
+    ServiceCaseSessionLinked:
+      name: service_case.session_linked.v1
+      title: Occurrence linked to a protocol (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_case.session_linked.v1.json' } }]
+    ServiceTaskCreated:
+      name: service_task.created.v1
+      title: Task created (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_task.created.v1.json' } }]
+    ServiceTaskUpdated:
+      name: service_task.updated.v1
+      title: Task changed (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_task.updated.v1.json' } }]
+    ServiceTaskStatusChanged:
+      name: service_task.status_changed.v1
+      title: Task status changed (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_task.status_changed.v1.json' } }]
+    ServiceTaskCompleted:
+      name: service_task.completed.v1
+      title: Task completed (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_task.completed.v1.json' } }]
+    ServiceTaskAssigned:
+      name: service_task.assigned.v1
+      title: Task assigned (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-service_task.assigned.v1.json' } }]
+    ExternalRecordLinked:
+      name: external_record.linked.v1
+      title: ERP record linked (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-external_record.linked.v1.json' } }]
+    ExternalRecordUnlinked:
+      name: external_record.unlinked.v1
+      title: ERP record unlinked (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-external_record.unlinked.v1.json' } }]
+    ExternalRecordStatusChanged:
+      name: external_record.status_changed.v1
+      title: ERP record status changed (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-external_record.status_changed.v1.json' } }]
+    ExternalRequestCreated:
+      name: external_request.created.v1
+      title: Request sent to the ERP (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-external_request.created.v1.json' } }]
+    ExternalRequestStateChanged:
+      name: external_request.state_changed.v1
+      title: Request to the ERP changed state (needs the scope service.read)
+      traits: [{ $ref: '#/components/messageTraits/signed' }]
+      payload: { $ref: '../jsonschema/external-event.v1.schema.json' }
+      examples: [{ payload: { $ref: '../samples/external/event-external_request.state_changed.v1.json' } }]

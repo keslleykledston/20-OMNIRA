@@ -21,16 +21,19 @@ const (
 	ScopeConversationTransfer Scope = "conversation.transfer"
 	ScopeConversationFinalize Scope = "conversation.finalize"
 	ScopeMessageSend          Scope = "message.send"
+	// ScopeServiceRead lets the application hear about the company's service protocols, cases, tasks and ERP records (ADR-0049 gate 4): the events, never the
+	// conversation itself (that is conversation.read). It never changes anything.
+	ScopeServiceRead Scope = "service.read"
 )
 
 // AllScopes is every scope in a stable order.
 var AllScopes = []Scope{
 	ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead,
-	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend,
+	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend, ScopeServiceRead,
 }
 
 // ReadScopes are the scopes that never change anything.
-var ReadScopes = []Scope{ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead}
+var ReadScopes = []Scope{ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead, ScopeServiceRead}
 
 func (s Scope) Valid() bool {
 	for _, k := range AllScopes {

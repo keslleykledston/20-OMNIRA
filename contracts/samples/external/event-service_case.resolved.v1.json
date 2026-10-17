@@ -1,0 +1,24 @@
+{
+  "event_id": "5e1c0c00-0000-4000-8000-000000000107",
+  "seq": 107,
+  "type": "service_case.resolved.v1",
+  "version": 1,
+  "occurred_at": "2026-10-17T12:00:00Z",
+  "tenant_id": "0b2a6a4e-8f0d-4a6f-9d9a-5a1f00000001",
+  "aggregate": {
+    "type": "service_case",
+    "id": "7777a000-0000-4000-8000-000000000107"
+  },
+  "origin": {
+    "kind": "workspace"
+  },
+  "data": {
+    "links": {
+      "case_id": "9999a000-0000-4000-8000-0000000000c1"
+    },
+    "actor_type": "user",
+    "data": {
+      "to": "resolved"
+    }
+  }
+}

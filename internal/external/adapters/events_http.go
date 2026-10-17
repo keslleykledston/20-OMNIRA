@@ -149,6 +149,8 @@ func (h *EventsHandler) ListEvents(w http.ResponseWriter, r *http.Request) {
 			SELECT w.seq, w.id, w.event_type, w.event_version, w.aggregate_type, w.aggregate_id, w.conversation_id, w.aggregate_version,
 			       w.origin_kind, w.origin_installation_id, w.occurred_at, w.payload,
 			       CASE
+			         WHEN w.aggregate_type = ANY(`+args.Add(ServiceAggregates)+`::text[]) AND NOT `+args.Add(v.ServiceRead)+`::boolean THEN false
+			         WHEN w.aggregate_type = ANY(`+args.Add(ServiceAggregates)+`::text[]) AND w.conversation_id IS NULL THEN NOT `+args.Add(v.Restricted())+`::boolean
 			         WHEN w.conversation_id IS NOT NULL THEN EXISTS (SELECT 1 FROM conversations c WHERE c.id = w.conversation_id AND `+visConv+`)
 			         WHEN w.aggregate_type = 'contact' THEN EXISTS (
 			              SELECT 1 FROM contacts ct JOIN conversations c ON c.contact_id = ct.id AND c.tenant_id = ct.tenant_id

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://omnira.devops.k3gsolutions.com.br/contracts/external-event.v1.schema.json",
   "title": "OMNIRA external event v1 (ADR-0048)",
-  "description": "The envelope of a fact (journal and webhook body). References and counters only: never a message body, a phone number, a name or an attachment. Unknown event types must be ignored by a receiver (new types are additive).",
+  "description": "The envelope of a fact (journal and webhook body). References and counters only: never a message body, a phone number, a name or an attachment. Unknown event types must be ignored by a receiver (new types are additive). Service events (service_*, external_record.*, external_request.*; ADR-0049) need the scope service.read; their data carries `links` (ids), `actor_type` and, when it fits, the module's own payload (ids, enums and counts).",
   "$defs": {
     "uuid": {
       "type": "string",
@@ -43,7 +43,12 @@
             "conversation",
             "message",
             "contact",
-            "ticket"
+            "ticket",
+            "service_session",
+            "service_case",
+            "service_task",
+            "external_record",
+            "external_request"
           ]
         },
         "id": {
@@ -627,6 +632,1966 @@
           "properties": {
             "provider": {
               "type": "string"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_session.opened.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_session"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_session.classified.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_session"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_session.status_changed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_session"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_session.closed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_session"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_session.reopened.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_session"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_case.created.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_case"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_case.updated.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_case"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_case.resolved.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_case"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_case.assigned.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_case"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_case.session_linked.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_case"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_task.created.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_task"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_task.updated.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_task"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_task.status_changed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_task"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_task.completed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_task"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "service_task.assigned.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "service_task"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "external_record.linked.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "external_record"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "external_record.unlinked.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "external_record"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "external_record.status_changed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "external_record"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "external_request.created.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "external_request"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "seq",
+        "type",
+        "version",
+        "occurred_at",
+        "tenant_id",
+        "aggregate",
+        "origin",
+        "data"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "const": "external_request.state_changed.v1"
+        },
+        "version": {
+          "const": 1
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "aggregate": {
+          "type": "object",
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "external_request"
+            },
+            "id": {
+              "$ref": "#/$defs/uuid"
+            }
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "links",
+            "actor_type"
+          ],
+          "properties": {
+            "links": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "case_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "contact_id": {
+                  "$ref": "#/$defs/uuid"
+                },
+                "customer_id": {
+                  "$ref": "#/$defs/uuid"
+                }
+              }
+            },
+            "actor_type": {
+              "enum": [
+                "user",
+                "system",
+                "flow",
+                "ai",
+                "integration"
+              ]
+            },
+            "data": {
+              "type": "object"
             }
           }
         },

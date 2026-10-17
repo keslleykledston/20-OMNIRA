@@ -100,6 +100,21 @@ describe('ExternalAppsPage', () => {
     expect(screen.getByText(/responde clientes e assume conversas/)).toBeInTheDocument()
   })
 
+  it('offers the service events (protocols, occurrences, tasks, ERP) only to an application that holds service.read', async () => {
+    const user = userEvent.setup()
+    server({ permissions: ADMIN, apps: [app({ scopes: ['conversation.read', 'events.read'] })] })
+    const { unmount } = renderAt(<ExternalAppsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Gerenciar' }))
+    await screen.findByText('Conversa criada')
+    expect(screen.queryByText('Protocolo aberto')).not.toBeInTheDocument()
+    unmount()
+    server({ permissions: ADMIN, apps: [app({ scopes: ['conversation.read', 'events.read', 'service.read'] })] })
+    renderAt(<ExternalAppsPage />)
+    await user.click(await screen.findByRole('button', { name: 'Gerenciar' }))
+    expect(await screen.findByText('Protocolo aberto')).toBeInTheDocument()
+    expect(screen.getByText('Pedido ao ERP mudou de estado')).toBeInTheDocument()
+  })
+
   it('validates a webhook address the way the server will', () => {
     expect(validateWebhookURL('https://crm.exemplo.com/hook')).toBeNull()
     expect(validateWebhookURL('https://crm.exemplo.com:8443/hook')).toBeNull()

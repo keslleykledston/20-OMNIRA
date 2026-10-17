@@ -167,6 +167,19 @@ func journalTypes(t *testing.T) []string {
 	for _, x := range regexp.MustCompile(`'([a-z_.0-9]+)'`).FindAllStringSubmatch(m[1], -1) {
 		out = append(out, x[1])
 	}
+	// ADR-0049 gate 4 (migration 164) widened the journal with the service facts
+	raw2, err := os.ReadFile("../../../migrations/000164_service_events_external.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2 := regexp.MustCompile(`ADD CONSTRAINT domain_events_event_type_check CHECK \(event_type IN \(([^)]*)\)`).FindStringSubmatch(string(raw2))
+	if m2 == nil {
+		t.Fatal("the widened event type list of the journal was not found")
+	}
+	out = out[:0]
+	for _, x := range regexp.MustCompile(`'([a-z_.0-9]+)'`).FindAllStringSubmatch(m2[1], -1) {
+		out = append(out, x[1])
+	}
 	sort.Strings(out)
 	return out
 }
@@ -174,7 +187,7 @@ func journalTypes(t *testing.T) []string {
 func TestEverySampleSatisfiesTheSchemaAndEveryJournalTypeIsDescribed(t *testing.T) {
 	schema := readJSON(t, contracts+"jsonschema/external-event.v1.schema.json")
 	types := journalTypes(t)
-	if len(types) != 7 {
+	if len(types) != 27 { // 7 of the conversation world (ADR-0048) + 20 of Service Context (ADR-0049)
 		t.Fatalf("journal types = %v", types)
 	}
 	asyncRaw, err := os.ReadFile(contracts + "asyncapi/omnira-external-events-v1.yaml")

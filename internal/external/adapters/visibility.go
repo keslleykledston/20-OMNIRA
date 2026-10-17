@@ -17,11 +17,16 @@ type Visibility struct {
 	TenantID   uuid.UUID
 	QueueIDs   []uuid.UUID
 	ChannelIDs []uuid.UUID
+	// ServiceRead: the installation holds the scope service.read (ADR-0049 gate 4). Without it the journal's service facts are invisible, whatever the conversation.
+	ServiceRead bool
 }
+
+// Restricted says the administrator limited the installation to some queues or lines.
+func (v Visibility) Restricted() bool { return len(v.QueueIDs) > 0 || len(v.ChannelIDs) > 0 }
 
 // NewVisibility reads the tenant from the authenticated installation, never from the request.
 func NewVisibility(p *domain.Principal, a Allowlists) Visibility {
-	return Visibility{TenantID: p.TenantID, QueueIDs: a.QueueIDs, ChannelIDs: a.ChannelIDs}
+	return Visibility{TenantID: p.TenantID, QueueIDs: a.QueueIDs, ChannelIDs: a.ChannelIDs, ServiceRead: p.Has(domain.ScopeServiceRead)}
 }
 
 // Args collects positional parameters while a query is built.
