@@ -40,6 +40,9 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
   { label: 'Pessoas', path: '/settings/people', icon: 'contacts', alsoActiveOn: '/settings/roles' },
   { label: 'Atendimento', path: '/settings/attendance', icon: 'clock', alsoActiveOn: '/settings/attendance/sectors,/settings/attendance/calendars,/settings/attendance/shifts,/settings/attendance/overflow' },
+  // ADR-0048: aplicações externas (CRMs) que usam a API headless. Sempre visível como as outras entradas de administração; o acesso é conferido dentro da página
+  // (integration.read / integration.manage) e a própria página explica quando o recurso não está ligado neste ambiente.
+  { label: 'Integrações', path: '/settings/integrations/apps', icon: 'key', alsoActiveOn: '/settings/integrations' },
   { label: 'Configurações', path: '/settings/general', icon: 'settings' },
 ]
 
