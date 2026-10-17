@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import axios from 'axios';
 import { TicketPanel } from '../components/TicketPanel';
 import { renderAt, setSession, TENANT } from './testUtils';
@@ -1451,10 +1451,35 @@ describe('TicketPanel — through the Hub', () => {
     expect((read[1] as any).headers['X-Omnira-Acting-As']).toBe('hub:hub-1');
   });
 
-  it('without the key the agent sees the ticket but no refresh; the ERP status controls never show in the delegated context', async () => {
+  it('without the keys the agent sees the ticket but neither refresh nor the ERP status controls', async () => {
     renderAt(<TicketPanel conversationId={CONV} target={target} />);
     await screen.findByText('Chamado vinculado');
     expect(screen.queryByRole('button', { name: 'Atualizar' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Alterar status/i)).not.toBeInTheDocument();
+  });
+
+  it('with ticket.update the agent changes the ERP status: the request names the item\'s company and the Hub', async () => {
+    mockStatusMutation({ status: 200, data: { ...LINKED, external_status: '5', external_status_label: 'Resolvido', replayed: false, reconciled: false } });
+    renderAt(<TicketPanel conversationId={CONV} target={target} canChangeStatus />);
+    fireEvent.change(await screen.findByLabelText('Status externo'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar status' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/ }));
+    await waitFor(() => expect(vi.mocked(axios.post).mock.calls.some((c) => String(c[0]).endsWith('/ticket/status'))).toBe(true));
+    const [url, body, config] = vi.mocked(axios.post).mock.calls.find((c) => String(c[0]).endsWith('/ticket/status')) as [string, any, any];
+    expect(url).toContain(`/tenants/company-k3g/conversations/${CONV}/ticket/status`);
+    expect(body).toEqual({ target_status: '5' });
+    expect(config.headers['X-Omnira-Acting-As']).toBe('hub:hub-1');
+    expect(config.headers['Idempotency-Key']).toBeTruthy();
+  });
+
+  it('when the company switched the Hub\'s right off (403), the message says so', async () => {
+    mockStatusMutation({ status: 403, data: 'changing the ERP status through the Hub is disabled for this company' });
+    renderAt(<TicketPanel conversationId={CONV} target={target} canChangeStatus />);
+    fireEvent.change(await screen.findByLabelText('Status externo'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar status' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/ }));
+    expect(await screen.findByText(/desligado para o Hub/)).toBeInTheDocument();
   });
 });

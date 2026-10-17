@@ -91,6 +91,7 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		"GET " + tn + "/inbox/conversations/{conversation_id}/channel": "conversation.read",
 		// refreshing the ERP projection of the ticket: the same key as opening it (the service asks the database for the person of the context). Changing the ERP status is NOT here on purpose.
 		"POST " + tn + "/conversations/{conversation_id}/ticket/refresh": "ticket.create",
+		"POST " + tn + "/conversations/{conversation_id}/ticket/status":  "ticket.update", // the company's switch hub_ticket_status (on by default) decides on top of the key
 		// phase 05: the realtime streams (admitted in a short transaction, rechecked every 15 s)
 		"GET " + tn + "/inbox/events":                                    "conversation.read",
 		"GET " + tn + "/inbox/conversations/{conversation_id}/events":    "conversation.read",

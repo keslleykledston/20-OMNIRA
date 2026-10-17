@@ -553,6 +553,8 @@ func failUpdateTicketStatus(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &resErr):
 		ticketingUnavailable(w)
+	case errors.Is(err, ticketsapplication.ErrHubStatusDisabled):
+		http.Error(w, "changing the ERP status through the Hub is disabled for this company", http.StatusForbidden)
 	case errors.Is(err, ticketsapplication.ErrForbidden), errors.Is(err, ticketsapplication.ErrNotAssignedToYou):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	case errors.Is(err, ticketsapplication.ErrNoActiveTicket):

@@ -385,13 +385,15 @@ export async function updateConversationTicketStatus(params: {
   conversationId: string;
   targetStatus: string;
   idempotencyKey: string;
+  /** A Hub agent working the instance from the unified inbox: the company and the Hub the request acts for. */
+  target?: DelegatedTarget;
 }): Promise<UpdateExternalTicketStatusResult> {
-  const { conversationId, targetStatus, idempotencyKey } = params;
+  const { conversationId, targetStatus, idempotencyKey, target } = params;
   try {
     const res = await axios.post(
-      `${API_BASE}/tenants/${getTenantId()}/conversations/${conversationId}/ticket/status`,
+      `${tenantBase(target)}/conversations/${conversationId}/ticket/status`,
       { target_status: targetStatus },
-      { headers: { ...authHeaders(), 'Idempotency-Key': idempotencyKey, 'Content-Type': 'application/json' } },
+      { headers: { ...scopedHeaders(target), 'Idempotency-Key': idempotencyKey, 'Content-Type': 'application/json' } },
     );
     return { kind: 'ok', data: res.data };
   } catch (err: any) {

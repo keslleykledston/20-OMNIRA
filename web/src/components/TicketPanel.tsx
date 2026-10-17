@@ -27,8 +27,8 @@ interface TicketPanelProps {
   /** The API only shows the ticket to whoever holds the conversation (or can manage it). */
   conversationUnassigned?: boolean;
   /**
-   * A person attending the instance through the Hub (ADR-0040 phase 04b): they open the ERP ticket and see it, but refreshing the projection and changing
-   * the ERP status are not part of the delegated context yet, so those two controls are not offered (the server would answer 404 to them).
+   * A person attending the instance through the Hub (ADR-0040 phase 04b): they open the ERP ticket and see it; refreshing the projection and changing the
+   * ERP status are offered only when the grant carries the key (canRefresh / canChangeStatus).
    */
   delegated?: boolean;
   /**
@@ -38,8 +38,10 @@ interface TicketPanelProps {
   contactCompanyNames?: string[];
   /** The instance a Hub agent works on from the unified inbox (company + Hub); every request names it. Implies `delegated`. */
   target?: DelegatedTarget;
-  /** A Hub agent may refresh the ticket from the ERP with the key ticket.create (changing the ERP status stays out of the delegated context). Members always can. */
+  /** A Hub agent may refresh the ticket from the ERP with the key ticket.create. Members always can. */
   canRefresh?: boolean;
+  /** A Hub agent may change the ERP status with the key ticket.update, unless the company switched that off for the Hub (the server answers 403 then). Members always can. */
+  canChangeStatus?: boolean;
 }
 
 // "K3G Solutions" and "K3G SOLUTIONS LTDA." are the same company for this purpose: compare without case, accents, punctuation and legal suffix.
@@ -197,7 +199,7 @@ function saveStatusIntent(conversationId: string, intent: PendingStatusIntent | 
   }
 }
 
-export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated: delegatedProp = false, contactCompanyNames = [], target, canRefresh = false }: TicketPanelProps) {
+export function TicketPanel({ conversationId, crmContactId, conversationUnassigned, delegated: delegatedProp = false, contactCompanyNames = [], target, canRefresh = false, canChangeStatus = false }: TicketPanelProps) {
   const tenantId = target?.tenantId ?? getTenantId();
   const delegated = delegatedProp || !!target;
 
@@ -398,7 +400,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
     const requestId = (statusRequestIdRef.current += 1);
     setMutationPhase('pending');
 
-    const result = await updateConversationTicketStatus({ conversationId, targetStatus, idempotencyKey });
+    const result = await updateConversationTicketStatus({ conversationId, targetStatus, idempotencyKey, target });
 
     statusInFlightRef.current = false;
     if (requestId !== statusRequestIdRef.current) return; // superseded by a conversation switch or a newer attempt
@@ -844,7 +846,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                 external_ticket_id), never for the projection-read
                 loading/unlinked/404/inconsistent branches (those never
                 reach this JSX branch at all). */}
-            {hasLinkedIdentity && !delegated && (
+            {hasLinkedIdentity && (!delegated || canChangeStatus) && (
               <div className="mt-3 border-t border-border-subtle pt-3">
                 <p className={SECTION_TITLE}>Status externo</p>
 
@@ -906,7 +908,9 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                     )}
                     {mutationPhase === 'forbidden' && (
                       <p className="mt-2 text-[11px] text-status-danger">
-                        Sem permissão para alterar o status deste chamado.
+                        {delegated
+                          ? 'Sem permissão para alterar o status deste chamado. Pode estar desligado para o Hub nas capacidades desta empresa.'
+                          : 'Sem permissão para alterar o status deste chamado.'}
                       </p>
                     )}
                     {mutationPhase === 'unavailable' && (

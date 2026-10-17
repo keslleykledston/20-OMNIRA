@@ -37,7 +37,7 @@ export default function DelegatedSections({ target, conversationId, contactId, c
       {(can('ticket.create') || can('ticket.read')) && (
         <CollapsibleSection id={`${idPrefix}-ticket`} title="Chamado" icon="tickets" defaultOpen>
           <section aria-label="Chamado no ERP">
-            <TicketPanel conversationId={conversationId} target={target} canRefresh={can('ticket.create')} contactCompanyNames={companyNames} conversationUnassigned={unassigned} />
+            <TicketPanel conversationId={conversationId} target={target} canRefresh={can('ticket.create')} canChangeStatus={can('ticket.update')} contactCompanyNames={companyNames} conversationUnassigned={unassigned} />
           </section>
         </CollapsibleSection>
       )}

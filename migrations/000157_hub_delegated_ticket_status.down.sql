@@ -1,0 +1,6 @@
+SET LOCAL lock_timeout = '5s';
+DROP POLICY IF EXISTS tenant_entitlements_read_delegated ON tenant_entitlements;
+DROP POLICY IF EXISTS ticket_external_status_attempts_acting_one_instance ON ticket_external_status_attempts;
+DROP POLICY IF EXISTS ticket_external_status_attempts_update_delegated ON ticket_external_status_attempts;
+DROP POLICY IF EXISTS ticket_external_status_attempts_insert_delegated ON ticket_external_status_attempts;
+DROP POLICY IF EXISTS ticket_external_status_attempts_read_delegated ON ticket_external_status_attempts;

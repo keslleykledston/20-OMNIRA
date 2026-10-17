@@ -14,8 +14,10 @@ package adapters_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +30,7 @@ import (
 	channelports "github.com/omnira/omnira/internal/channels/ports"
 	contactsadapters "github.com/omnira/omnira/internal/contacts/adapters"
 	crmevidenceadapters "github.com/omnira/omnira/internal/crmevidence/adapters"
+	"github.com/omnira/omnira/internal/entitlements"
 	hubadapters "github.com/omnira/omnira/internal/hub/adapters"
 	"github.com/omnira/omnira/internal/hub/provisioning"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
@@ -51,9 +54,10 @@ type fakeERP struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 	// what reached it
-	listCalls, createCalls, getCalls int
-	auths                            []string
-	lastCreate                       map[string]any
+	listCalls, createCalls, getCalls, putCalls int
+	lastPutStatus                              int
+	auths                                      []string
+	lastCreate                                 map[string]any
 }
 
 func newFakeERP(t *testing.T) *fakeERP {
@@ -80,6 +84,15 @@ func newFakeERP(t *testing.T) *fakeERP {
 			f.getCalls++
 			id := strings.TrimPrefix(r.URL.Path, "/api/support/tickets/")
 			_ = json.NewEncoder(rw).Encode(map[string]any{"ticket": map[string]any{"id": id, "statusId": 2, "status": "2", "statusLabel": "Em andamento"}})
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/support/tickets/") && strings.HasSuffix(r.URL.Path, "/status"):
+			f.putCalls++
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/support/tickets/"), "/status")
+			var body struct {
+				Status int `json:"status"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.lastPutStatus = body.Status
+			_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "ticket": map[string]any{"id": id, "statusId": body.Status, "status": strconv.Itoa(body.Status), "statusLabel": "Resolvido"}})
 		default:
 			rw.WriteHeader(http.StatusNotFound)
 		}
@@ -133,6 +146,14 @@ func (w *world) erpAPI(t *testing.T) *erpAPI {
 		WithAccounts(accountsadapters.NewTicketAccountResolver(w.app)))
 	crm.SetReadTicketService(ticketsapplication.NewReadConversationTicketService(perms, authorizer, localTickets))
 	crm.SetRefreshTicketService(ticketsapplication.NewRefreshTicketProjectionService(perms, authorizer, localTickets, resolver))
+	crm.SetUpdateExternalTicketStatusService(ticketsapplication.NewUpdateExternalTicketStatusService(perms, authorizer, ticketsadapters.NewStatusMutationAttemptStore(w.app), localTickets, resolver).
+		WithHubGate(func(ctx context.Context, tenant uuid.UUID) error {
+			err := entitlements.NewChecker(w.app).Gate(ctx, tenant, entitlements.HubTicketStatus)
+			if errors.Is(err, entitlements.ErrDisabled) {
+				return ticketsapplication.ErrHubStatusDisabled
+			}
+			return err
+		}))
 	crm.SetConversationContactReader(inboxadapters.NewPostgresConversationContacts(w.app))
 	crm.SetEvidenceStore(crmevidenceadapters.NewPostgresEvidenceStore(w.app))
 	crm.SetDelegatedTicketOpenNotifier(hubadapters.NewDelegatedWrites(w.app).TicketOpenedNotice(messagesadapters.NewPostgresOutboundStore(w.app)))
@@ -156,9 +177,9 @@ func (w *world) erpAPI(t *testing.T) *erpAPI {
 	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket", tenancyadapters.Delegable("ticket.create", who(session(http.HandlerFunc(crm.CreateTicket)))))
 	mux.Handle("GET "+t0+"/contacts/{contact_id}/company-suggestions", tenancyadapters.Delegable("account.read", who(session(http.HandlerFunc(classification.ListCompanySuggestions)))))
 	mux.Handle("PUT "+t0+"/contacts/{contact_id}/classification", tenancyadapters.Delegable("contact.classify", who(session(http.HandlerFunc(classification.PutClassification)))))
-	// refreshing the projection is delegable (the same key as opening the ticket); changing the ERP status is deliberately NOT marked: it stays out of the delegated context
+	// refreshing the projection is delegable (the same key as opening the ticket); changing the ERP status needs ticket.update and the company's switch
 	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket/refresh", tenancyadapters.Delegable("ticket.create", who(session(http.HandlerFunc(crm.RefreshTicket)))))
-	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket/status", who(session(http.HandlerFunc(crm.UpdateTicketStatus))))
+	mux.Handle("POST "+t0+"/conversations/{conversation_id}/ticket/status", tenancyadapters.Delegable("ticket.update", who(session(http.HandlerFunc(crm.UpdateTicketStatus)))))
 	return &erpAPI{w: w, h: mux}
 }
 
@@ -528,9 +549,65 @@ func TestDelegatedTicketCreationThroughTheRealHandlers(t *testing.T) {
 		}
 	})
 
-	t.Run("changing the ERP status stays closed in the delegated context", func(t *testing.T) {
-		if code, _ := api.do("POST", ticketURL+"/status", `{"target_status":"2"}`, agent, hub, "Idempotency-Key", "key-status-0001"); code != 404 {
-			t.Errorf("status: %d, want 404", code)
+	t.Run("a holder with ticket.update changes the ERP status: one PUT with the instance's token, the projection follows, a replay sends nothing; the key, the holder and the company's switch decide", func(t *testing.T) {
+		keys := append(append([]string{}, provisioning.ServingPresets["chamados"]...), "ticket.update")
+		w.ceiling("A", keys...)
+		updater := w.hubAgent("status-agent")
+		w.grantKeys(w.grantReply(updater, "A"), keys...)
+		peer := w.hubAgent("status-peer")
+		w.grantKeys(w.grantReply(peer, "A"), keys...)
+		puts := func() int { erp.mu.Lock(); defer erp.mu.Unlock(); return erp.putCalls }
+		assign(&updater)
+		before := puts()
+		code, b := api.do("POST", ticketURL+"/status", `{"target_status":"5"}`, updater, hub, "Idempotency-Key", "key-status-0001")
+		if code != 200 || !strings.Contains(b, `"external_status":"5"`) {
+			t.Fatalf("status change: %d %s", code, b)
+		}
+		if puts() != before+1 {
+			t.Errorf("ERP writes: %d, want exactly one", puts()-before)
+		}
+		if got := w.ownerOne(`SELECT external_status FROM tickets WHERE conversation_id = $1 AND external_ticket_id IS NOT NULL`, conv); got != "5" {
+			t.Errorf("local projection status = %q, want 5", got)
+		}
+		if w.count(`SELECT count(*) FROM ticket_external_status_attempts WHERE conversation_id = $1 AND actor_user_id = $2 AND state = 'confirmed_success'`, conv, updater) != 1 {
+			t.Error("the attempt is not recorded as confirmed in the agent's name")
+		}
+		if strings.Contains(b, erpToken) || strings.Contains(b, erp.srv.URL) {
+			t.Errorf("the answer leaks the ERP credential or address: %s", b)
+		}
+		// the same key again is a replay: no second write
+		if code, _ := api.do("POST", ticketURL+"/status", `{"target_status":"5"}`, updater, hub, "Idempotency-Key", "key-status-0001"); code != 200 || puts() != before+1 {
+			t.Errorf("replay: %d with %d writes, want 200 and still one", code, puts()-before)
+		}
+		// an agent who does not hold the conversation: refused before the ERP is touched
+		if code, _ := api.do("POST", ticketURL+"/status", `{"target_status":"6"}`, peer, hub, "Idempotency-Key", "key-status-0002"); code != 403 {
+			t.Errorf("status by an agent who does not hold the conversation: %d, want 403", code)
+		}
+		// the holder without the key ticket.update: refused by the route
+		assign(&agent)
+		if code, _ := api.do("POST", ticketURL+"/status", `{"target_status":"6"}`, agent, hub, "Idempotency-Key", "key-status-0003"); code != 403 {
+			t.Errorf("status without ticket.update: %d, want 403", code)
+		}
+		if puts() != before+1 {
+			t.Errorf("refused requests reached the ERP: %d writes", puts()-before)
+		}
+		assign(&updater)
+		// the company switches the Hub's right off: refused, naming the switch, nothing written; on again, it works
+		w.exec(`INSERT INTO tenant_entitlements(tenant_id, capability, enabled) VALUES ($1,'hub_ticket_status',false) ON CONFLICT (tenant_id, capability) DO UPDATE SET enabled = false`, w.tenant["A"])
+		code, b = api.do("POST", ticketURL+"/status", `{"target_status":"6"}`, updater, hub, "Idempotency-Key", "key-status-0004")
+		if code != 403 || !strings.Contains(b, "disabled") {
+			t.Errorf("switch off: %d %s, want 403 naming the switch", code, b)
+		}
+		if puts() != before+1 {
+			t.Errorf("a switched-off company still got an ERP write: %d", puts()-before)
+		}
+		w.exec(`DELETE FROM tenant_entitlements WHERE tenant_id = $1 AND capability = 'hub_ticket_status'`, w.tenant["A"])
+		if code, b := api.do("POST", ticketURL+"/status", `{"target_status":"6"}`, updater, hub, "Idempotency-Key", "key-status-0004"); code != 200 {
+			t.Errorf("switch back on (default): %d %s, want 200", code, b)
+		}
+		// another instance the agent has no grant in: not there
+		if code, _ := api.do("POST", "/api/v1/tenants/"+w.tenant["B"].String()+"/conversations/"+w.conv["B"].String()+"/ticket/status", `{"target_status":"6"}`, updater, hub, "Idempotency-Key", "key-status-0005"); code != 404 {
+			t.Errorf("status on an instance with no grant: %d, want 404", code)
 		}
 	})
 }
@@ -624,15 +701,49 @@ func TestDelegatedTicketTablesFollowTheirDomainTheScopeAndTheInstance(t *testing
 			if err := w.try(ctx, q, `UPDATE ticket_external_create_attempts SET conversation_id = $2 WHERE idempotency_key = 'write-key-attempt'`, w.conv["A"], w.conv["A2"]); err == nil {
 				t.Error("an attempt was re-pointed at a conversation outside the contract's queues")
 			}
+			// the status attempts follow the same rule: in scope in THIS instance, never outside the contract's queues, never in another instance, never deleted
+			statusAttempt := func(tenant, conv, ticket uuid.UUID, key string) error {
+				return w.try(ctx, q, `INSERT INTO ticket_external_status_attempts (tenant_id, local_ticket_id, conversation_id, actor_user_id, idempotency_key, request_hash, provider, external_ticket_id, target_status)
+				                      VALUES ($1,$2,$3,$4,$5,'h','k3g','1','5')`, tenant, ticket, conv, writer, key)
+			}
+			if err := statusAttempt(w.tenant["A"], w.conv["A"], ticketOf("A"), "status-in-scope"); err != nil {
+				t.Errorf("a status attempt in scope: %v", err)
+			}
+			if err := statusAttempt(w.tenant["A"], w.conv["A2"], ticketOf("A2"), "status-out-of-scope"); err == nil {
+				t.Error("a status attempt was inserted for a conversation outside the contract's queues")
+			}
+			if err := statusAttempt(w.tenant["B"], w.conv["B"], ticketOf("B"), "status-other-instance"); err == nil {
+				t.Error("a status attempt was inserted in another instance while acting for this one")
+			}
 			var n int
 			w.must(q.QueryRow(ctx, `SELECT count(*) FROM ticket_external_status_attempts`).Scan(&n))
-			if n != 0 {
-				t.Error("the status-attempt table is readable by a delegate")
+			if n != 1 {
+				t.Errorf("status attempts visible to the delegate: %d, want only the one in scope", n)
 			}
-			if err := w.try(ctx, q, `INSERT INTO ticket_external_status_attempts (tenant_id, conversation_id, actor_user_id, idempotency_key, request_hash, target_status) VALUES ($1,$2,$3,'k','h','closed')`, w.tenant["A"], w.conv["A"], writer); err == nil {
-				t.Error("a status attempt was inserted by a delegate")
+			tag, err = q.Exec(ctx, `DELETE FROM ticket_external_status_attempts`)
+			w.must(err)
+			if tag.RowsAffected() != 0 {
+				t.Error("a status attempt was deleted by a delegate")
 			}
 		})
+	})
+
+	t.Run("a delegate reads the switches of the instance it acts for, never another's, and writes none", func(t *testing.T) {
+		w.exec(`INSERT INTO tenant_entitlements(tenant_id, capability, enabled) VALUES ($1,'hub_ticket_status',false), ($2,'hub_ticket_status',false) ON CONFLICT (tenant_id, capability) DO UPDATE SET enabled = false`, w.tenant["A"], w.tenant["B"])
+		w.attend(reader, "A", func(ctx context.Context, q platformdb.Querier) {
+			var own, other int
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1`, w.tenant["A"]).Scan(&own))
+			w.must(q.QueryRow(ctx, `SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1`, w.tenant["B"]).Scan(&other))
+			if own != 1 || other != 0 {
+				t.Errorf("switches seen: own %d (want 1), other instance %d (want 0)", own, other)
+			}
+			if err := w.try(ctx, q, `UPDATE tenant_entitlements SET enabled = true WHERE tenant_id = $1`, w.tenant["A"]); err != nil {
+				t.Logf("update refused: %v", err)
+			}
+		})
+		if w.count(`SELECT count(*) FROM tenant_entitlements WHERE tenant_id = $1 AND capability = 'hub_ticket_status' AND enabled`, w.tenant["A"]) != 0 {
+			t.Error("a delegate switched a capability on")
+		}
 	})
 
 	t.Run("evidence: written with ticket.create for a contact in scope, readable by contact.read, never across instances", func(t *testing.T) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	aiusageadapters "github.com/omnira/omnira/internal/aiusage/adapters"
 	metachannel "github.com/omnira/omnira/internal/channels/meta"
@@ -498,7 +499,13 @@ func main() {
 			ticketsadapters.NewStatusMutationAttemptStore(dbPool),
 			ticketsadapters.NewLocalTicketStore(dbPool),
 			ticketsadapters.NewK3GTicketingRuntimeResolver(dbPool, erpConnections, erpCredentials),
-		)
+		).WithHubGate(func(ctx context.Context, tenant uuid.UUID) error { // the company's own switch (ADR-0038), on by default
+			err := entitlements.NewChecker(dbPool).Gate(ctx, tenant, entitlements.HubTicketStatus)
+			if errors.Is(err, entitlements.ErrDisabled) {
+				return ticketsapplication.ErrHubStatusDisabled
+			}
+			return err
+		})
 		crmHandler.SetUpdateExternalTicketStatusService(updateExternalTicketStatusService)
 	}
 

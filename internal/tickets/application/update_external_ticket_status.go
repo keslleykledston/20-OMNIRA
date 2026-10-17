@@ -127,6 +127,14 @@ type UpdateExternalTicketStatusService struct {
 	attempts     ports.StatusMutationAttemptStore
 	localTickets ports.LocalTicketStore
 	runtime      ports.TicketingRuntimeResolver
+	// hubGate answers whether the company lets a Hub agent change the ERP status (a per-company switch, on by default). Without it a Hub agent is refused.
+	hubGate func(ctx context.Context, tenant uuid.UUID) error
+}
+
+// WithHubGate installs the company's switch for the Hub's right to change the ERP status. It returns ErrHubStatusDisabled when the company turned it off.
+func (s *UpdateExternalTicketStatusService) WithHubGate(g func(ctx context.Context, tenant uuid.UUID) error) *UpdateExternalTicketStatusService {
+	s.hubGate = g
+	return s
 }
 
 func NewUpdateExternalTicketStatusService(perms ports.PermissionChecker, conversation ports.ConversationAuthorizer, attempts ports.StatusMutationAttemptStore, localTickets ports.LocalTicketStore, runtime ports.TicketingRuntimeResolver) *UpdateExternalTicketStatusService {
@@ -174,7 +182,7 @@ func (s *UpdateExternalTicketStatusService) UpdateExternalTicketStatus(ctx conte
 	}
 
 	tc, err := tenancydomain.FromContext(ctx)
-	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || tc.Source != tenancydomain.AccessSourceDirect {
+	if err != nil || tc.TenantID == uuid.Nil || tc.TenantID != cmd.TenantID || tc.ActorID != cmd.ActorUserID || !servesTickets(tc) {
 		return nil, ErrForbidden
 	}
 
@@ -186,6 +194,15 @@ func (s *UpdateExternalTicketStatusService) UpdateExternalTicketStatus(ctx conte
 	}
 	if !canUpdate {
 		return nil, ErrForbidden
+	}
+	// A Hub agent changes the ERP status only where the company allows it (the key above says the contract and the grant do).
+	if tc.Source == tenancydomain.AccessSourceHubServe {
+		if s.hubGate == nil {
+			return nil, ErrForbidden
+		}
+		if err := s.hubGate(ctx, cmd.TenantID); err != nil {
+			return nil, err
+		}
 	}
 
 	assignedTo, found, err := s.conversation.LoadAssignment(ctx, cmd.ConversationID)

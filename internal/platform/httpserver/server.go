@@ -768,8 +768,8 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// net/http's ServeMux resolves the more specific literal segment first
 	// regardless of registration order, but keeping it adjacent to the
 	// other conversation-scoped ticket routes documents intent.
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/refresh", tenancyadapters.Delegable("ticket.create", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.RefreshTicket))))) // a Hub agent too (same key as opening the ticket); changing the ERP status stays out of the delegated context
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/status", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicketStatus))))
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/refresh", tenancyadapters.Delegable("ticket.create", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.RefreshTicket))))) // a Hub agent too (same key as opening the ticket)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/status", tenancyadapters.Delegable("ticket.update", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicketStatus))))) // a Hub agent too, where the company allows it (switch hub_ticket_status, on by default)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetTicket))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicket))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}/close", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.CloseTicket))))

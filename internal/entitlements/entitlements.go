@@ -25,6 +25,8 @@ const (
 	// ServiceProtocolNotice tells the customer, in the conversation, when the service protocol opens and ends (ADR-0049 addendum). It messages customers, so it is
 	// the one switch that starts OFF: a company gets it only when an operator turns it on.
 	ServiceProtocolNotice = "service_protocol_notice"
+	// HubTicketStatus lets a Hub agent change the ERP status of the ticket of a conversation they hold. It starts ON (the owner's decision); the company can turn it off.
+	HubTicketStatus = "hub_ticket_status"
 )
 
 // ErrDisabled: the company's operator has switched this capability off.
@@ -50,6 +52,8 @@ var Registry = []Capability{
 		"Enviar e remover anexos no atendimento. Mensagens de texto continuam.", false},
 	{ServiceProtocolNotice, "Aviso de protocolo ao cliente", "Avisar o cliente, na conversa, quando o protocolo de atendimento abre e quando encerra.",
 		"O aviso de início e de fim do protocolo (as mensagens ao cliente). O protocolo em si continua abrindo e encerrando.", true},
+	{HubTicketStatus, "Hub altera o status do chamado ERP", "Permitir que o atendente do Hub mude o status do chamado no ERP.",
+		"A mudança de status do chamado ERP feita por quem atende pelo Hub (403). Membros da empresa, atualizar o chamado e abrir chamado não mudam.", false},
 }
 
 func Known(key string) bool {

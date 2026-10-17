@@ -57,7 +57,7 @@ Classe e domínio abaixo são **PROPOSTA** a revisar (gate da fase: nenhuma muda
 | `message_template_sends` | T | member | member | — | — | — | operacional | mídia/mensagem | message_media_analysis é de sistema |
 | `audit_events` | T | hub_manage+member | self | — | — | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão |
 | `channel_connections` | T | hub_manage+member | admin+hub_manage | admin+hub_manage | admin+hub_manage | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão |
-| `tenant_entitlements` | T | hub_manage+member | sysadmin | sysadmin | sysadmin | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão |
+| `tenant_entitlements` | T | hub_manage+member (+ delegado só da instância atuante, migration 157) | sysadmin | sysadmin | sysadmin | — | gestão delegada (já existe) | canais/integrações | políticas hub_manage; ver revisão. O atendente do Hub LÊ as chaves da instância que atende (para `hub_ticket_status`); nunca escreve |
 | `ai_usage` | T | admin | sysadmin | — | — | — | administrativa | equipe/governança | nunca por delegação (tenants: leitura do nome já existe via hub_read) |
 | `membership_invitations` | T | sysadmin | member_inline | sysadmin | — | — | administrativa | equipe/governança | nunca por delegação (tenants: leitura do nome já existe via hub_read) |
 | `memberships` | T | member | admin | admin | — | — | administrativa | equipe/governança | nunca por delegação (tenants: leitura do nome já existe via hub_read) |
@@ -127,7 +127,7 @@ Chaves novas (sem papel de empresa que as receba): `conversation.transfer` (dom�
 |---|---|---|---|---|---|
 | `tickets` | `ticket`/leitura (+ conversa visível) | — | `ticket`/escrita (+ conversa visível) | — | o ticket local é criado pela plataforma; delegado só enriquece |
 | `ticket_external_create_attempts` | `ticket`/leitura (+ conversa visível) | `ticket`/escrita (+ conversa visível) | `ticket`/escrita (+ conversa visível) | — | registro durável da tentativa de criação no ERP |
-| `ticket_external_status_attempts` | — | — | — | — | fechada (mudar status no ERP é fase seguinte) |
+| `ticket_external_status_attempts` | domínio `ticket` read | domínio `ticket` write | domínio `ticket` write | — | migration 157: conversa no escopo do contrato + uma instância (RESTRICTIVE); chave `ticket.update` na rota; chave por empresa `hub_ticket_status` (ligada por padrão) |
 | `crm_contact_company_evidence` | `contact`/leitura (+ contato visível) | `ticket`/escrita (+ contato visível) | `ticket`/escrita (+ contato visível) | — | evidência contato ↔ empresa |
 | `account_external_links` | `contact`/leitura | — | — | — | escrita só pela função abaixo |
 | `channel_connections`, `channel_credentials` | — | — | — | — | continuam ilegíveis ao delegado |
