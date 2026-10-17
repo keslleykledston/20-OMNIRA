@@ -897,7 +897,7 @@ paths:
       tags: [Agents]
       summary: List the sectors with their queues
       description: |
-        Requires `agent.read` (ADR-0044). A sector may own several queues; deactivating never deletes.
+        Requires `agent.read` (ADR-0044). A sector may own several queues; deactivating never deletes. Each item carries `description`, `color` and `supervisor` (`{user_id, name}`, present only while that person is still an active member), ADR-0043 S4.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
       responses:
@@ -930,9 +930,9 @@ paths:
     patch:
       operationId: updateSector
       tags: [Agents]
-      summary: Rename, deactivate or set the calendar of a sector
+      summary: Rename, deactivate, set the calendar or the details of a sector
       description: |
-        Requires `agent.manage`. Body fields `name`, `active`, `calendar_id` (null clears: the sector inherits the tenant default). The id is stable: flows keep working after a rename or deactivation.
+        Requires `agent.manage`. Body fields `name`, `active`, `calendar_id` (null clears: the sector inherits the tenant default) and, since ADR-0043 S4, `description` (up to 280 characters), `color` (`slate`, `blue`, `green`, `amber`, `red`, `violet`, `teal`, or empty) and `supervisor_user_id` (null clears; must be an ACTIVE member of this company, else `422`). The three are informational: nothing is routed or hidden by them. The id is stable: flows keep working after a rename or deactivation.
       parameters:
         - { $ref: '#/components/parameters/TenantId' }
         - { name: sector_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -945,6 +945,7 @@ paths:
         '200': { description: "OK" }
         '400': { $ref: '#/components/responses/Text400' }
         '409': { description: "Name already in use, or the state forbids it", content: { text/plain: { schema: { type: string } } } }
+        '422': { description: "The supervisor is not an active member of this company", content: { text/plain: { schema: { type: string } } } }
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }

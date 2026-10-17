@@ -19,6 +19,7 @@ interface World {
   queues: any[]
   calendars: any[]
   agents: any[]
+  team?: any[]
   shifts: any[]
   rosters: any[]
   policies: Record<string, any>
@@ -73,6 +74,7 @@ function serve(w: World) {
     if (url.endsWith('/availability')) return ok(url.includes('q-fin') ? open : { ...open, open: false, next_open: '2026-10-14T12:00:00Z', next_close: undefined })
     if (url.endsWith('/open-notice')) return ok({ queue_id: 'x', text: w.openNotices[url.match(/queues\/([^/]+)\//)![1]] ?? '' })
     if (url.endsWith('/closed-notice')) return ok({ queue_id: 'x', text: w.notices[url.match(/queues\/([^/]+)\//)![1]] ?? '' })
+    if (url.endsWith('/team')) return ok({ items: w.team ?? [] })
     if (url.endsWith('/agents')) return ok({ items: w.agents })
     if (url.endsWith('/shifts')) return ok({ items: w.shifts })
     if (url.endsWith('/on-call/rosters')) return ok({ items: w.rosters })
@@ -140,6 +142,66 @@ describe('Atendimento › Setores', () => {
     expect(loose).toBeInTheDocument()
     expect(screen.getAllByText('Avulso').length).toBeGreaterThan(0)
     await waitFor(() => expect(screen.getAllByText(/Fechado · abre/).length).toBeGreaterThan(0))
+  })
+
+  it('mostra a descrição, a cor e o responsável do setor e edita só o que mudou (ADR-0043 S4)', async () => {
+    const user = userEvent.setup()
+    const w = world()
+    w.sectors[0] = { ...w.sectors[0], description: 'Cobrança e faturas', color: 'green', supervisor: { user_id: 'u-bia', name: 'Bia Lima' } }
+    const calls = serve(w)
+    page()
+    expect(await screen.findByText('Cobrança e faturas')).toBeInTheDocument()
+    expect(screen.getByText(/Responsável: Bia Lima/)).toBeInTheDocument()
+    expect(screen.getByText(/Responsável: não definido/)).toBeInTheDocument() // Suporte
+
+    // Suporte: abre os detalhes, escolhe cor e responsável, escreve a descrição
+    const suporte = screen.getByLabelText('Setor Suporte')
+    await user.click(within(suporte).getByRole('button', { name: 'Detalhes' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('Descrição'), 'Chamados técnicos')
+    await user.click(within(dialog).getByRole('radio', { name: 'Azul' }))
+    await user.selectOptions(await within(dialog).findByLabelText('Responsável pelo setor'), 'u-ana')
+    await user.click(within(dialog).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/sectors/s-sup'))?.body).toEqual({ description: 'Chamados técnicos', color: 'blue', supervisor_user_id: 'u-ana' }))
+
+    // Financeiro: só limpa o responsável -> só esse campo vai
+    const fin = screen.getByLabelText('Setor Financeiro')
+    await user.click(within(fin).getByRole('button', { name: 'Detalhes' }))
+    await user.selectOptions(await screen.findByLabelText('Responsável pelo setor'), '')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/sectors/s-fin'))?.body).toEqual({ supervisor_user_id: null }))
+
+    // e mudar só a cor não toca no responsável nem na descrição
+    await user.click(within(screen.getByLabelText('Setor Financeiro')).getByRole('button', { name: 'Detalhes' }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('radio', { name: 'Vermelho' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH' && c.url.endsWith('/sectors/s-fin')).at(-1)?.body).toEqual({ color: 'red' }))
+  })
+
+  it('o responsável pode ser qualquer membro ativo da equipe, mesmo sem ficha de agente (quem lê a equipe)', async () => {
+    const user = userEvent.setup()
+    const w = world({ permissions: [...ADMIN, 'membership.read'] })
+    w.team = [
+      { membership_id: 'm-adm', user_id: 'u-adm', name: 'Matheus (admin)', email: 'm@k3g.com', role_key: 'tenant_admin', role_name: 'Administrador', status: 'active', created_at: '' },
+      { membership_id: 'm-old', user_id: 'u-old', name: 'Ex-membro', email: 'x@k3g.com', role_key: 'tenant_agent', role_name: 'Agente', status: 'revoked', created_at: '' },
+    ]
+    const calls = serve(w)
+    page()
+    await user.click(within(await screen.findByLabelText('Setor Suporte')).getByRole('button', { name: 'Detalhes' }))
+    const select = await within(await screen.findByRole('dialog')).findByLabelText('Responsável pelo setor')
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Matheus (admin)' })).toBeInTheDocument())
+    expect(within(select).queryByRole('option', { name: 'Ex-membro' })).toBeNull() // revogado não é oferecido
+    expect(within(select).queryByRole('option', { name: 'Ana Souza' })).toBeNull() // a equipe é a fonte, não a lista de agentes
+    await user.selectOptions(select, 'u-adm')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Salvar' }))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/sectors/s-sup'))?.body).toEqual({ supervisor_user_id: 'u-adm' }))
+  })
+
+  it('quem só lê não vê o botão de detalhes', async () => {
+    serve(world({ permissions: READ_ONLY }))
+    page()
+    await screen.findByRole('heading', { name: /Financeiro/ })
+    expect(screen.queryByRole('button', { name: 'Detalhes' })).toBeNull()
   })
 
   it('cria setor, coloca uma fila avulsa em um setor e desativa com confirmação', async () => {

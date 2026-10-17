@@ -130,6 +130,13 @@ func (h *Handler) record(r *http.Request, res auditdomain.ResourceType, id uuid.
 	_ = h.audit.Store(r.Context(), ev)
 }
 
+func sameUser(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 func cleanName(raw string) (string, bool) {
 	n := strings.TrimSpace(raw)
 	c := utf8.RuneCountInString(n)
@@ -156,11 +163,38 @@ func pgCode(err error) string {
 // ---------------------------------------------------------------- sectors
 
 type sectorItem struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	Active     bool       `json:"active"`
-	CalendarID *uuid.UUID `json:"calendar_id,omitempty"`
-	Queues     []sectorQ  `json:"queues"`
+	ID          uuid.UUID         `json:"id"`
+	Name        string            `json:"name"`
+	Active      bool              `json:"active"`
+	CalendarID  *uuid.UUID        `json:"calendar_id,omitempty"`
+	Description string            `json:"description"`
+	Color       string            `json:"color"`
+	Supervisor  *sectorSupervisor `json:"supervisor,omitempty"`
+	Queues      []sectorQ         `json:"queues"`
+}
+
+// sectorSupervisor is the person responsible for a sector (ADR-0043 S4). Informational: nothing is routed or hidden by it.
+type sectorSupervisor struct {
+	UserID uuid.UUID `json:"user_id"`
+	Name   string    `json:"name"`
+}
+
+const (
+	descriptionMax = 280
+	// sectorColors is the closed palette (the CHECK of the column mirrors it); the screen maps each token to its own theme colours.
+	sectorColors = "slate blue green amber red violet teal"
+)
+
+func validColor(c string) bool {
+	if c == "" {
+		return true
+	}
+	for _, k := range strings.Fields(sectorColors) {
+		if k == c {
+			return true
+		}
+	}
+	return false
 }
 
 type sectorQ struct {
@@ -173,9 +207,12 @@ func (h *Handler) ListSectors(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := q.Query(r.Context(), `SELECT s.id, s.name, s.active, s.calendar_id,
+	// the supervisor is shown only while still an ACTIVE member of this company (a revoked member stops appearing)
+	rows, err := q.Query(r.Context(), `SELECT s.id, s.name, s.active, s.calendar_id, s.description, s.color, sup.id, COALESCE(NULLIF(sup.display_name, ''), sup.email),
 		COALESCE((SELECT json_agg(json_build_object('id', qq.id, 'name', qq.name) ORDER BY qq.name) FROM queues qq WHERE qq.tenant_id=s.tenant_id AND qq.sector_id=s.id), '[]'::json)
-		FROM sectors s WHERE s.tenant_id=$1 ORDER BY s.active DESC, s.name`, tc.TenantID)
+		FROM sectors s
+		LEFT JOIN users sup ON sup.id = s.supervisor_user_id AND EXISTS (SELECT 1 FROM memberships m WHERE m.tenant_id = s.tenant_id AND m.user_id = sup.id AND m.status = 'active')
+		WHERE s.tenant_id=$1 ORDER BY s.active DESC, s.name`, tc.TenantID)
 	if err != nil {
 		http.Error(w, "failed to list sectors", http.StatusInternalServerError)
 		return
@@ -185,9 +222,14 @@ func (h *Handler) ListSectors(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var it sectorItem
 		var qs []byte
-		if err := rows.Scan(&it.ID, &it.Name, &it.Active, &it.CalendarID, &qs); err != nil || json.Unmarshal(qs, &it.Queues) != nil {
+		var supID *uuid.UUID
+		var supName *string
+		if err := rows.Scan(&it.ID, &it.Name, &it.Active, &it.CalendarID, &it.Description, &it.Color, &supID, &supName, &qs); err != nil || json.Unmarshal(qs, &it.Queues) != nil {
 			http.Error(w, "failed to read sectors", http.StatusInternalServerError)
 			return
+		}
+		if supID != nil && supName != nil {
+			it.Supervisor = &sectorSupervisor{UserID: *supID, Name: *supName}
 		}
 		items = append(items, it)
 	}
@@ -238,7 +280,8 @@ func (h *Handler) CreateSector(w http.ResponseWriter, r *http.Request) {
 	write(w, http.StatusCreated, sectorItem{ID: id, Name: name, Active: true, Queues: []sectorQ{}})
 }
 
-// UpdateSector changes name, active and/or calendar_id (null clears the calendar: the sector inherits the tenant default again).
+// UpdateSector changes name, active, calendar_id (null clears the calendar: the sector inherits the tenant default again), description, color and supervisor_user_id (ADR-0043 S4;
+// null/empty clears them). The supervisor must be an ACTIVE member of this company.
 func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 	tc, q, ok := h.authorize(w, r, "agent.manage")
 	if !ok {
@@ -253,13 +296,14 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body) == 0 {
-		http.Error(w, "name, active or calendar_id required", http.StatusBadRequest)
+		http.Error(w, "name, active, calendar_id, description, color or supervisor_user_id required", http.StatusBadRequest)
 		return
 	}
 	var curName string
 	var curActive bool
-	var curCal *uuid.UUID
-	err := q.QueryRow(r.Context(), `SELECT name, active, calendar_id FROM sectors WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tc.TenantID, id).Scan(&curName, &curActive, &curCal)
+	var curCal, curSup *uuid.UUID
+	var curDesc, curColor string
+	err := q.QueryRow(r.Context(), `SELECT name, active, calendar_id, description, color, supervisor_user_id FROM sectors WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tc.TenantID, id).Scan(&curName, &curActive, &curCal, &curDesc, &curColor, &curSup)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "sector not found", http.StatusNotFound)
 		return
@@ -269,6 +313,7 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, active, cal := curName, curActive, curCal
+	desc, color, sup := curDesc, curColor, curSup
 	if raw, has := body["name"]; has {
 		var s string
 		if json.Unmarshal(raw, &s) != nil {
@@ -303,6 +348,44 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 			cal = &c
 		}
 	}
+	if raw, has := body["description"]; has {
+		var d string
+		if json.Unmarshal(raw, &d) != nil {
+			http.Error(w, "invalid description", http.StatusBadRequest)
+			return
+		}
+		d = strings.TrimSpace(d)
+		if utf8.RuneCountInString(d) > descriptionMax {
+			http.Error(w, "description must have at most 280 characters", http.StatusBadRequest)
+			return
+		}
+		desc = d
+	}
+	if raw, has := body["color"]; has {
+		var c string
+		if json.Unmarshal(raw, &c) != nil || !validColor(c) {
+			http.Error(w, "color must be one of: "+sectorColors, http.StatusBadRequest)
+			return
+		}
+		color = c
+	}
+	if raw, has := body["supervisor_user_id"]; has {
+		if string(raw) == "null" {
+			sup = nil
+		} else {
+			var u uuid.UUID
+			if json.Unmarshal(raw, &u) != nil {
+				http.Error(w, "invalid supervisor_user_id", http.StatusBadRequest)
+				return
+			}
+			var member bool
+			if q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM memberships WHERE tenant_id=$1 AND user_id=$2 AND status='active')`, tc.TenantID, u).Scan(&member) != nil || !member {
+				http.Error(w, "the supervisor must be an active member of this company", http.StatusUnprocessableEntity)
+				return
+			}
+			sup = &u
+		}
+	}
 	if name != curName {
 		var taken bool
 		if q.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM sectors WHERE tenant_id=$1 AND name=$2 AND id<>$3)`, tc.TenantID, name, id).Scan(&taken) != nil || taken {
@@ -310,8 +393,18 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A NEW supervisor is judged inside the UPDATE itself (not only by the check above), so the window between "was active" and "stored" is the one statement: a member
+	// revoked in that instant is refused. Whatever is stored, the listing shows the person only while still an active member, and nothing reads this field to decide anything.
+	supChanged := !sameUser(sup, curSup)
+	var stored int64
 	if err := attempt(r, q, func() error {
-		_, err := q.Exec(r.Context(), `UPDATE sectors SET name=$3, active=$4, calendar_id=$5, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tc.TenantID, id, name, active, cal)
+		tag, err := q.Exec(r.Context(), `UPDATE sectors SET name=$3, active=$4, calendar_id=$5, description=$6, color=$7, supervisor_user_id=$8, updated_at=now()
+			WHERE tenant_id=$1 AND id=$2
+			  AND ($8::uuid IS NULL OR NOT $9::boolean OR EXISTS (SELECT 1 FROM memberships m WHERE m.tenant_id=$1 AND m.user_id=$8 AND m.status='active'))`,
+			tc.TenantID, id, name, active, cal, desc, color, sup, supChanged)
+		if err == nil {
+			stored = tag.RowsAffected()
+		}
 		return err
 	}); err != nil {
 		if conflict(w, err, "a sector with this name already exists") {
@@ -320,11 +413,15 @@ func (h *Handler) UpdateSector(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to update sector", http.StatusInternalServerError)
 		return
 	}
+	if stored != 1 {
+		http.Error(w, "the supervisor must be an active member of this company", http.StatusUnprocessableEntity)
+		return
+	}
 	if !h.replan(w, r, q, tc.TenantID) {
 		return
 	}
-	h.record(r, auditdomain.ResourceSector, id, auditdomain.ActionSectorUpdated, map[string]any{"name": name, "active": active})
-	write(w, http.StatusOK, map[string]any{"id": id, "name": name, "active": active, "calendar_id": cal})
+	h.record(r, auditdomain.ResourceSector, id, auditdomain.ActionSectorUpdated, map[string]any{"name": name, "active": active, "description_changed": desc != curDesc, "color": color, "supervisor_changed": supChanged})
+	write(w, http.StatusOK, map[string]any{"id": id, "name": name, "active": active, "calendar_id": cal, "description": desc, "color": color, "supervisor_user_id": sup})
 }
 
 // ---------------------------------------------------------------- calendars

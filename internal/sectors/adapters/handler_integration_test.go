@@ -1178,3 +1178,94 @@ func TestOpenNoticeAPIIsIndependentFromTheClosedNoticeAndFollowsTheSameRules(t *
 		t.Fatal("removed")
 	}
 }
+
+// ADR-0043 S4: description, colour and responsible supervisor of a sector. Informational, validated, per company; a person who stopped being a member stops being shown.
+func TestSectorAttributesDescriptionColorAndResponsibleSupervisor(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(t), e.tenant(t)
+	admin := e.member(t, a, "tenant_admin")
+	boss := e.member(t, a, "tenant_supervisor")
+	agent := e.member(t, a, "tenant_agent")
+	adminB := e.member(t, b, "tenant_admin")
+	stranger := e.member(t, b, "tenant_supervisor") // an active member of ANOTHER company
+	sec := decode[sectorItem](t, e.call(t, a, admin, "POST", "/", e.h.CreateSector, nil, map[string]string{"name": "Financeiro"})).ID
+	secB := decode[sectorItem](t, e.call(t, b, adminB, "POST", "/", e.h.CreateSector, nil, map[string]string{"name": "Do B"})).ID
+	patch := func(tenant, actor, sector uuid.UUID, body any) int {
+		return e.call(t, tenant, actor, "PATCH", "/", e.h.UpdateSector, map[string]string{"sector_id": sector.String()}, body).Code
+	}
+	listed := func(tenant, actor uuid.UUID, sector uuid.UUID) sectorItem {
+		for _, s := range decode[struct{ Items []sectorItem }](t, e.call(t, tenant, actor, "GET", "/", e.h.ListSectors, nil, nil)).Items {
+			if s.ID == sector {
+				return s
+			}
+		}
+		t.Fatalf("sector %s not listed", sector)
+		return sectorItem{}
+	}
+
+	// a new sector has none of them
+	if s := listed(a, admin, sec); s.Description != "" || s.Color != "" || s.Supervisor != nil {
+		t.Fatalf("a new sector must start without attributes: %+v", s)
+	}
+	if got := patch(a, admin, sec, map[string]any{"description": "  Cobrança e faturas  ", "color": "green", "supervisor_user_id": boss}); got != 200 {
+		t.Fatalf("set attributes = %d", got)
+	}
+	s := listed(a, admin, sec)
+	if s.Description != "Cobrança e faturas" || s.Color != "green" || s.Supervisor == nil || s.Supervisor.UserID != boss || s.Supervisor.Name == "" {
+		t.Fatalf("attributes not stored/returned: %+v", s)
+	}
+	// a rename alone keeps them
+	if got := patch(a, admin, sec, map[string]any{"name": "Financeiro 2"}); got != 200 {
+		t.Fatalf("rename = %d", got)
+	}
+	if s := listed(a, admin, sec); s.Color != "green" || s.Supervisor == nil || s.Description == "" {
+		t.Fatalf("a rename must not clear the attributes: %+v", s)
+	}
+	// validation: unknown colour, long description, a person of ANOTHER company, a person who is not a member, garbage
+	for name, body := range map[string]any{
+		"unknown colour":            map[string]any{"color": "hotpink"},
+		"description over 280":      map[string]any{"description": strings.Repeat("x", 281)},
+		"supervisor of another co.": map[string]any{"supervisor_user_id": stranger},
+		"supervisor not a member":   map[string]any{"supervisor_user_id": uuid.New()},
+		"supervisor not an id":      map[string]any{"supervisor_user_id": "boss"},
+	} {
+		if got := patch(a, admin, sec, body); got != 400 && got != 422 {
+			t.Errorf("%s = %d, want 400/422", name, got)
+		}
+	}
+	if s := listed(a, admin, sec); s.Supervisor == nil || s.Supervisor.UserID != boss || s.Color != "green" {
+		t.Fatalf("a refused request changed the sector: %+v", s)
+	}
+	// permissions and isolation: an agent cannot even read; another company's admin cannot touch this sector
+	if got := patch(a, agent, sec, map[string]any{"color": "red"}); got != 403 {
+		t.Errorf("agent update = %d, want 403", got)
+	}
+	if got := patch(b, adminB, sec, map[string]any{"color": "red"}); got != 404 {
+		t.Errorf("another company's admin on this sector = %d, want 404", got)
+	}
+	if got := patch(a, admin, secB, map[string]any{"color": "red"}); got != 404 {
+		t.Errorf("this company's admin on B's sector = %d, want 404", got)
+	}
+	if listed(a, admin, sec).Color != "green" {
+		t.Error("a forbidden request changed the colour")
+	}
+	// a revoked member stops being shown as the responsible person (the stored id stays; nothing is guessed)
+	if _, err := e.seed.Exec(context.Background(), `UPDATE memberships SET status='revoked' WHERE tenant_id=$1 AND user_id=$2`, a, boss); err != nil {
+		t.Fatal(err)
+	}
+	if s := listed(a, admin, sec); s.Supervisor != nil {
+		t.Fatalf("a revoked supervisor is still shown: %+v", s.Supervisor)
+	}
+	// clearing: null removes the supervisor, an empty colour removes the colour
+	if got := patch(a, admin, sec, map[string]any{"supervisor_user_id": nil, "color": "", "description": ""}); got != 200 {
+		t.Fatalf("clear = %d", got)
+	}
+	if s := listed(a, admin, sec); s.Supervisor != nil || s.Color != "" || s.Description != "" {
+		t.Fatalf("not cleared: %+v", s)
+	}
+	// the audit records that attributes changed, never the description text
+	var n int
+	if err := e.seed.QueryRow(context.Background(), `SELECT count(*) FROM audit_events WHERE tenant_id=$1 AND resource_id=$2 AND action='sector.updated' AND metadata::text LIKE '%Cobrança%'`, a, sec.String()).Scan(&n); err != nil || n != 0 {
+		t.Errorf("the audit must not carry the description text: %d %v", n, err)
+	}
+}

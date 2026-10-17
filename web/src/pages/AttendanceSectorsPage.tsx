@@ -8,7 +8,9 @@ import { NewQueueDialog, type NewQueueValues } from '../components/queues/NewQue
 import { QueuePeopleDialog } from '../components/queues/QueuePeopleDialog'
 import { buildQueueRows, hasNoDefaultQueue, type QueueRow } from '../lib/peopleModel'
 import { queueErrorMessage, queuesAPI, type QueueMode } from '../lib/queues'
-import { attendanceErrorMessage, calendarsAPI, noticeAPI, openNoticeAPI, sectorsAPI, type Availability, type Sector } from '../lib/sectors'
+import { teamAPI } from '../lib/team'
+import { agentsAPI } from '../lib/agents'
+import { attendanceErrorMessage, calendarsAPI, noticeAPI, openNoticeAPI, SECTOR_COLORS, sectorsAPI, type Availability, type Sector, type SectorColor } from '../lib/sectors'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
 
@@ -23,6 +25,8 @@ export default function AttendanceSectorsPage() {
   const [renaming, setRenaming] = useState<Sector | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deactivating, setDeactivating] = useState<Sector | null>(null)
+  const [details, setDetails] = useState<Sector | null>(null) // ADR-0043 S4: descrição, cor e responsável
+  const [detailsForm, setDetailsForm] = useState<{ description: string; color: SectorColor | ''; supervisor: string }>({ description: '', color: '', supervisor: '' })
   const [noticeFor, setNoticeFor] = useState<{ id: string; name: string } | null>(null)
   const [noticeText, setNoticeText] = useState('')
   const [openText, setOpenText] = useState('')
@@ -36,6 +40,15 @@ export default function AttendanceSectorsPage() {
   const sectors = useQuery({ queryKey: ['att-sectors', tenantId], queryFn: sectorsAPI.list, retry: false, enabled: canRead })
   const queues = useQuery({ queryKey: ['att-queues', tenantId], queryFn: queuesAPI.list, retry: false, enabled: canRead })
   const calendars = useQuery({ queryKey: ['att-calendars', tenantId], queryFn: calendarsAPI.list, retry: false, enabled: canRead })
+  // Quem pode ser o responsável: qualquer membro ATIVO (administradores e supervisores nem sempre têm ficha de agente). Quem não pode ler a equipe escolhe entre os agentes.
+  const canSeeTeam = access.can('membership.read')
+  const people = useQuery({
+    queryKey: ['att-sector-people', tenantId, canSeeTeam],
+    queryFn: async () => canSeeTeam
+      ? (await teamAPI.list()).filter((m) => m.status === 'active').map((m) => ({ user_id: m.user_id, name: m.name || m.email }))
+      : (await agentsAPI.list()).filter((a) => a.status === 'active').map((a) => ({ user_id: a.user_id, name: a.name || a.email })),
+    retry: false, enabled: canRead && !!details,
+  }) // só carrega ao abrir o formulário
   const availability = useQueries({
     queries: (queues.data ?? []).map((q) => ({ queryKey: ['att-availability', tenantId, q.id], queryFn: () => calendarsAPI.availability(q.id), retry: false, staleTime: 30_000 })),
   })
@@ -142,14 +155,20 @@ export default function AttendanceSectorsPage() {
             <Card key={s.id} padding="compact" aria-label={`Setor ${s.name}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-base font-semibold text-text-primary">{s.name} {!s.active && <Badge size="sm">inativo</Badge>}</h2>
+                  <h2 className="flex items-center gap-2 text-base font-semibold text-text-primary">
+                    {s.color && <span aria-hidden className={`inline-block h-2.5 w-2.5 rounded-full ${SECTOR_COLORS.find((c) => c.value === s.color)?.dot ?? ''}`} />}
+                    {s.name} {!s.active && <Badge size="sm">inativo</Badge>}
+                  </h2>
+                  {s.description && <p className="text-sm text-text-secondary">{s.description}</p>}
                   <p className="text-xs text-text-tertiary">
                     Horário: {s.calendar_id ? calendarName(s.calendar_id) ?? 'calendário removido' : 'herda o padrão da empresa'}
+                    {' · '}Responsável: {s.supervisor ? s.supervisor.name : 'não definido'}
                   </p>
                 </div>
                 {manage && (
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="secondary" onClick={() => { setRenaming(s); setRenameValue(s.name) }}>Renomear</Button>
+                    <Button size="sm" variant="secondary" onClick={() => { setDetails(s); setDetailsForm({ description: s.description ?? '', color: s.color ?? '', supervisor: s.supervisor?.user_id ?? '' }) }}>Detalhes</Button>
                     {s.active
                       ? <Button size="sm" variant="secondary" onClick={() => setDeactivating(s)}>Desativar</Button>
                       : <Button size="sm" variant="secondary" disabled={busy} onClick={() => run.mutate(() => sectorsAPI.update(s.id, { active: true }))}>Reativar</Button>}
@@ -213,6 +232,40 @@ export default function AttendanceSectorsPage() {
             footer={<><Button variant="secondary" size="sm" onClick={() => setRenaming(null)}>Cancelar</Button>
               <Button size="sm" disabled={!renameValue.trim() || busy} onClick={() => { const id = renaming!.id; run.mutate(() => sectorsAPI.update(id, { name: renameValue.trim() })); setRenaming(null) }}>Salvar</Button></>}>
             <Input label="Nome do setor" value={renameValue} maxLength={60} onChange={(e) => setRenameValue(e.target.value)} />
+          </Modal>
+
+          <Modal open={!!details} title={`Detalhes — ${details?.name ?? ''}`} description="Informativos: ajudam a equipe a reconhecer o setor. Não mudam quem vê nem para quem as conversas vão." onClose={() => setDetails(null)}
+            footer={<><Button variant="secondary" size="sm" onClick={() => setDetails(null)}>Cancelar</Button>
+              <Button size="sm" disabled={busy} onClick={() => {
+                const d = details!
+                const patch: Parameters<typeof sectorsAPI.update>[1] = {}
+                if (detailsForm.description.trim() !== (d.description ?? '')) patch.description = detailsForm.description.trim()
+                if (detailsForm.color !== (d.color ?? '')) patch.color = detailsForm.color
+                if (detailsForm.supervisor !== (d.supervisor?.user_id ?? '')) patch.supervisor_user_id = detailsForm.supervisor || null
+                if (Object.keys(patch).length > 0) run.mutate(() => sectorsAPI.update(d.id, patch))
+                setDetails(null)
+              }}>Salvar</Button></>}>
+            <div className="space-y-4">
+              <TextArea label="Descrição" rows={3} maxLength={280} value={detailsForm.description} onChange={(e) => setDetailsForm({ ...detailsForm, description: e.target.value })}
+                helperText="Para que serve este setor (até 280 caracteres)." />
+              <div>
+                <span className="mb-1 block text-xs font-medium text-text-secondary">Cor</span>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Cor do setor">
+                  {[{ value: '' as const, label: 'Sem cor', dot: 'bg-transparent border border-border-subtle' }, ...SECTOR_COLORS].map((c) => (
+                    <button key={c.value || 'none'} type="button" role="radio" aria-checked={detailsForm.color === c.value} aria-label={c.label} title={c.label}
+                      onClick={() => setDetailsForm({ ...detailsForm, color: c.value })}
+                      className={`h-7 w-7 rounded-full ${c.dot} ${detailsForm.color === c.value ? 'ring-2 ring-offset-2 ring-text-primary' : ''}`} />
+                  ))}
+                </div>
+              </div>
+              <Field label="Responsável pelo setor" hint="Quem responde por este setor. Só aparece quem ainda é membro ativo da empresa.">
+                <select aria-label="Responsável pelo setor" className={selectClass} value={detailsForm.supervisor} onChange={(e) => setDetailsForm({ ...detailsForm, supervisor: e.target.value })}>
+                  <option value="">Ninguém definido</option>
+                  {details?.supervisor && !people.data?.some((a) => a.user_id === details.supervisor!.user_id) && <option value={details.supervisor.user_id}>{details.supervisor.name}</option>}
+                  {people.data?.map((a) => <option key={a.user_id} value={a.user_id}>{a.name}</option>)}
+                </select>
+              </Field>
+            </div>
           </Modal>
 
           <ConfirmDialog open={!!deactivating} title={`Desativar ${deactivating?.name ?? 'setor'}?`}

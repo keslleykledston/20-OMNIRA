@@ -11,8 +11,24 @@ export interface Sector {
   name: string
   active: boolean
   calendar_id?: string
+  description?: string
+  color?: SectorColor | ''
+  /** Responsável pelo setor (ADR-0043 S4). Informativo: nada é roteado nem escondido por ele. */
+  supervisor?: { user_id: string; name: string }
   queues: { id: string; name: string }[]
 }
+
+// Paleta fechada (o servidor só aceita estes nomes). Classes escritas por extenso para o Tailwind enxergá-las.
+export type SectorColor = 'slate' | 'blue' | 'green' | 'amber' | 'red' | 'violet' | 'teal'
+export const SECTOR_COLORS: { value: SectorColor; label: string; dot: string }[] = [
+  { value: 'slate', label: 'Cinza', dot: 'bg-slate-500' },
+  { value: 'blue', label: 'Azul', dot: 'bg-blue-500' },
+  { value: 'green', label: 'Verde', dot: 'bg-green-500' },
+  { value: 'amber', label: 'Âmbar', dot: 'bg-amber-500' },
+  { value: 'red', label: 'Vermelho', dot: 'bg-red-500' },
+  { value: 'violet', label: 'Violeta', dot: 'bg-violet-500' },
+  { value: 'teal', label: 'Turquesa', dot: 'bg-teal-500' },
+]
 
 export type CalendarKind = '24x7' | 'business' | 'custom'
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
@@ -121,7 +137,7 @@ const h = () => ({ headers: authHeaders() })
 export const sectorsAPI = {
   list: () => call<{ items: Sector[] }>(() => axios.get(`${base()}/sectors`, h())).then((r) => r.items),
   create: (name: string) => call<Sector>(() => axios.post(`${base()}/sectors`, { name }, h())),
-  update: (id: string, patch: { name?: string; active?: boolean; calendar_id?: string | null }) =>
+  update: (id: string, patch: { name?: string; active?: boolean; calendar_id?: string | null; description?: string; color?: SectorColor | ''; supervisor_user_id?: string | null }) =>
     call<unknown>(() => axios.patch(`${base()}/sectors/${id}`, patch, h())),
   setQueueSector: (queueId: string, sectorId: string | null) =>
     call<unknown>(() => axios.put(`${base()}/queues/${queueId}/sector`, { sector_id: sectorId }, h())),
