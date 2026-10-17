@@ -96,6 +96,9 @@ func (f *Fake) Count(t string) (n int) {
 func (f *Fake) Release() { close(f.release) }
 
 func (f *Fake) Get(ctx context.Context, t, id string) (*domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil { // a faithful adapter does not call out with an ended context, and the answer is UNKNOWN
+		return nil, &ports.GatewayError{Kind: ports.GatewayUnknown, Class: "timeout", Err: err}
+	}
 	f.mu.Lock()
 	f.GetCalls++
 	down := f.Down
@@ -114,6 +117,9 @@ func (f *Fake) Get(ctx context.Context, t, id string) (*domain.Snapshot, error) 
 }
 
 func (f *Fake) CreateServiceOrder(ctx context.Context, req ports.CreateOrderRequest) (*domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, &ports.GatewayError{Kind: ports.GatewayUnknown, Class: "timeout", Err: err}
+	}
 	f.mu.Lock()
 	f.CreateCalls++
 	mode := f.Mode
