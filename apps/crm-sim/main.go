@@ -102,7 +102,10 @@ func main() {
 	switch cmd {
 	case "me":
 		var out any
-		resp, err := c.HTTP.Get(strings.TrimRight(base, "/") + "/me")
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/me", nil)
+		must(err)
+		req.Header.Set("Authorization", "Bearer "+token) // the call carries the credential (it did not: /me always answered 401)
+		resp, err := c.HTTP.Do(req)
 		if err == nil {
 			defer resp.Body.Close()
 			raw, _ := io.ReadAll(resp.Body)
