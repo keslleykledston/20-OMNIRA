@@ -247,7 +247,7 @@ export default function InboxWorkspace() {
         {/* Details: a third column when there is room, otherwise a drawer opened from the conversation header */}
         {wide && showContext && selectedConversationId && (
           <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-border-subtle">
-            <Context conversationId={selectedConversationId} onOpenConversation={setSelectedConversationId} />
+            <Context conversationId={selectedConversationId} onOpenConversation={setSelectedConversationId} onSentToQueue={() => setSelectedConversationId(null)} />
           </div>
         )}
       </div>
@@ -257,6 +257,10 @@ export default function InboxWorkspace() {
           {selectedConversationId && (
             <Context
               conversationId={selectedConversationId}
+              onSentToQueue={() => {
+                setSelectedConversationId(null);
+                setDrawerOpen(false);
+              }}
               onOpenConversation={(id) => {
                 setSelectedConversationId(id);
                 setDrawerOpen(false);

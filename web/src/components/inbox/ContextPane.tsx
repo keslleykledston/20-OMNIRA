@@ -33,9 +33,11 @@ interface ContextPaneProps {
   conversationId: string;
   /** Show another conversation (opened/found on a different line). */
   onOpenConversation?: (conversationId: string) => void;
+  /** The conversation was sent to another queue: it may now be outside this person's reach (the queue scope), so the screen lets go of it. */
+  onSentToQueue?: () => void;
 }
 
-export default function ContextPane({ conversationId, onOpenConversation }: ContextPaneProps) {
+export default function ContextPane({ conversationId, onOpenConversation, onSentToQueue }: ContextPaneProps) {
   const tenantId = getTenantId();
   const queryClient = useQueryClient();
   const [assignLoading, setAssignLoading] = useState(false);
@@ -101,6 +103,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
       void queryClient.invalidateQueries({ queryKey: ['conv-routing'] });
       void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
       emitInboxNotice(conversationId, `Conversa enviada para a fila ${queueName}.`);
+      onSentToQueue?.();
     } catch (err: any) {
       if (isUnauthorized(err)) handleUnauthorized();
       else setQueueError(describeAssignError(err, 'route'));

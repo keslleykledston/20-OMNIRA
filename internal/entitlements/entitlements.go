@@ -27,6 +27,9 @@ const (
 	ServiceProtocolNotice = "service_protocol_notice"
 	// HubTicketStatus lets a Hub agent change the ERP status of the ticket of a conversation they hold. It starts ON (the owner's decision); the company can turn it off.
 	HubTicketStatus = "hub_ticket_status"
+	// SectorScope turns on the visibility by queue (ADR-0043 S3): an agent sees only the queues they are an active member of, their own conversations and the ones without a queue;
+	// administrators and supervisors (conversation.read_all_queues) still see everything. It changes what people see, so it starts OFF and is the owner's call per company.
+	SectorScope = "sector_scope"
 )
 
 // ErrDisabled: the company's operator has switched this capability off.
@@ -54,6 +57,8 @@ var Registry = []Capability{
 		"O aviso de início e de fim do protocolo (as mensagens ao cliente). O protocolo em si continua abrindo e encerrando.", true},
 	{HubTicketStatus, "Hub altera o status do chamado ERP", "Permitir que o atendente do Hub mude o status do chamado no ERP.",
 		"A mudança de status do chamado ERP feita por quem atende pelo Hub (403). Membros da empresa, atualizar o chamado e abrir chamado não mudam.", false},
+	{SectorScope, "Visibilidade por fila", "O atendente só vê as filas de que participa (e o que atende); administrador e supervisor continuam vendo tudo.",
+		"O que cada pessoa enxerga: conversas de filas fora do alcance do atendente somem das listas e respondem 404 (rotas, mídia, chamados, tópicos, tempo real). Não apaga nem move nada; desligar devolve a visão completa.", true},
 }
 
 func Known(key string) bool {

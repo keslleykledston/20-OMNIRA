@@ -248,7 +248,8 @@ func (h *Handler) ListAccountTickets(w http.ResponseWriter, r *http.Request) {
 		SELECT t.id, t.conversation_id, t.subject, t.status, t.priority, t.provider, t.external_ticket_id, t.created_at, t.updated_at
 		FROM tickets t
 		WHERE t.tenant_id = $1 AND t.customer_account_id = $2 AND `+ticketsdomain.RealTicketSQL("t")+`
-		ORDER BY t.updated_at DESC, t.id DESC LIMIT 100`, tc.TenantID, id)
+		  AND conversation_in_sector_scope(t.tenant_id, $3, t.conversation_id) -- ADR-0043 S3: only the tickets of conversations the actor may see
+		ORDER BY t.updated_at DESC, t.id DESC LIMIT 100`, tc.TenantID, id, tc.ActorID)
 	if err != nil {
 		fail(w, err)
 		return

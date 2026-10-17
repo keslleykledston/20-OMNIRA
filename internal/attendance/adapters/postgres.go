@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/omnira/omnira/internal/conversationcontrol"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -13,6 +14,7 @@ import (
 	"github.com/omnira/omnira/internal/attendance/domain"
 	"github.com/omnira/omnira/internal/attendance/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -226,13 +228,33 @@ func (r *PostgresRepository) InsertFollowUps(ctx context.Context, items []domain
 	return nil
 }
 
+// sectorScope returns the predicate that keeps a contact's history to the conversations the actor may see when the company's sector scope is on (ADR-0043 S3), with the
+// argument it binds appended to args. Empty when the scope does not narrow this actor.
+func (r *PostgresRepository) sectorScope(ctx context.Context, args []any, tenantCol, convCol string) (string, []any, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil {
+		return "", args, err
+	}
+	restricted, err := tenancyadapters.SectorScopeRestricts(ctx, r.q(ctx), tc)
+	if err != nil || !restricted {
+		return "", args, err
+	}
+	args = append(args, tc.ActorID)
+	return ` AND conversation_in_sector_scope(` + tenantCol + `, $` + strconv.Itoa(len(args)) + `, ` + convCol + `)`, args, nil
+}
+
 func (r *PostgresRepository) ListClosures(ctx context.Context, contactID uuid.UUID, limit int) ([]domain.Closure, error) {
 	tenant, err := tenantOf(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.q(ctx).Query(ctx, `SELECT `+closureColumns+` FROM conversation_closures WHERE tenant_id=$1 AND contact_id=$2
-		ORDER BY created_at DESC, id LIMIT $3`, tenant, contactID, limit)
+	args := []any{tenant, contactID, limit}
+	scope, args, err := r.sectorScope(ctx, args, "tenant_id", "conversation_id")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q(ctx).Query(ctx, `SELECT `+closureColumns+` FROM conversation_closures WHERE tenant_id=$1 AND contact_id=$2`+scope+`
+		ORDER BY created_at DESC, id LIMIT $3`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -253,9 +275,13 @@ func (r *PostgresRepository) ListFollowUps(ctx context.Context, contactID uuid.U
 	if err != nil {
 		return nil, err
 	}
+	args := []any{tenant, contactID, string(status), limit}
+	scope, args, err := r.sectorScope(ctx, args, "tenant_id", "conversation_id")
+	if err != nil {
+		return nil, err
+	}
 	// overdue and dated items first, then the undated ones by recency
-	return r.followUps(ctx, `tenant_id=$1 AND contact_id=$2 AND status=$3 ORDER BY (due_at IS NULL), due_at, created_at DESC, id LIMIT $4`,
-		tenant, contactID, string(status), limit)
+	return r.followUps(ctx, `tenant_id=$1 AND contact_id=$2 AND status=$3`+scope+` ORDER BY (due_at IS NULL), due_at, created_at DESC, id LIMIT $4`, args...)
 }
 
 func (r *PostgresRepository) LockFollowUp(ctx context.Context, id uuid.UUID) (*domain.FollowUp, error) {
@@ -316,6 +342,11 @@ func (r *PostgresRepository) SearchContactMessages(ctx context.Context, contactI
 	if err != nil {
 		return nil, err
 	}
+	args := []any{tenant, contactID, "%" + likeEscape(in.Query) + "%", in.ExcludeConversationID, in.ExcludeTopicID, in.Limit}
+	scope, args, err := r.sectorScope(ctx, args, "m.tenant_id", "m.conversation_id")
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.q(ctx).Query(ctx, `
 		SELECT m.created_at, m.direction, m.body, m.conversation_id
 		FROM messages m
@@ -323,9 +354,9 @@ func (r *PostgresRepository) SearchContactMessages(ctx context.Context, contactI
 		WHERE m.tenant_id = $1 AND c.contact_id = $2 AND m.message_type = 'text' AND m.body ILIKE $3 ESCAPE '\'
 		  AND ($4::uuid IS NULL OR m.conversation_id <> $4)
 		  AND ($5::uuid IS NULL OR NOT EXISTS (
-		        SELECT 1 FROM message_topic_links l WHERE l.tenant_id = m.tenant_id AND l.message_id = m.id AND l.topic_thread_id = $5))
+		        SELECT 1 FROM message_topic_links l WHERE l.tenant_id = m.tenant_id AND l.message_id = m.id AND l.topic_thread_id = $5))`+scope+`
 		ORDER BY m.created_at DESC, m.id
-		LIMIT $6`, tenant, contactID, "%"+likeEscape(in.Query)+"%", in.ExcludeConversationID, in.ExcludeTopicID, in.Limit)
+		LIMIT $6`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/omnira/omnira/internal/intelligence/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 )
 
@@ -264,6 +265,49 @@ func toTopicDTO(t *domain.TopicThread) topicDTO {
 		LastActivityAt: ts(t.LastActivityAt), CreatedAt: ts(t.CreatedAt), ResolvedAt: tsp(t.ResolvedAt),
 		MergedIntoTopicID: t.MergedIntoTopicID, SplitFromTopicID: t.SplitFromTopicID,
 	}
+}
+
+// inSectorScope drops the topics none of whose conversations the actor may see when the company's sector scope is on (ADR-0043 S3). A topic linked to no conversation is
+// kept. With the scope off, or for an actor who holds conversation.read_all_queues, the list is returned as it is.
+func (h *TopicHandler) inSectorScope(ctx context.Context, items []ports.TopicListItem) ([]ports.TopicListItem, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := platformdb.QuerierFromContext(ctx, h.pool)
+	restricted, err := tenancyadapters.SectorScopeRestricts(ctx, q, tc)
+	if err != nil || !restricted || len(items) == 0 {
+		return items, err
+	}
+	ids := make([]uuid.UUID, len(items))
+	for i := range items {
+		ids[i] = items[i].Topic.ID
+	}
+	rows, err := q.Query(ctx, `SELECT t.id FROM unnest($3::uuid[]) t(id)
+		WHERE EXISTS (SELECT 1 FROM topic_conversation_links l WHERE l.tenant_id = $1 AND l.topic_thread_id = t.id AND conversation_in_sector_scope($1, $2, l.conversation_id))`,
+		tc.TenantID, tc.ActorID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	allowed := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		allowed[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := items[:0:0]
+	for _, it := range items {
+		if allowed[it.Topic.ID] {
+			out = append(out, it)
+		}
+	}
+	return out, nil
 }
 
 func toListDTO(items []ports.TopicListItem) []topicDTO {
@@ -659,6 +703,10 @@ func (h *TopicHandler) ListContactTopics(w http.ResponseWriter, r *http.Request)
 	}
 	items, err := h.svc.ListContactTopics(r.Context(), id, status, 0)
 	if err != nil {
+		fail(w, err)
+		return
+	}
+	if items, err = h.inSectorScope(r.Context(), items); err != nil {
 		fail(w, err)
 		return
 	}
@@ -1239,7 +1287,7 @@ func interactiveSession(ctx context.Context) bool {
 	if err != nil || p == nil {
 		return false
 	}
-	return p.SessionKind == authn.SessionKindCookie || p.SessionKind == authn.SessionKindDevice
+	return p.SessionKind == authn.SessionKindCookie
 }
 
 type invokeToolRequest struct {
@@ -1250,8 +1298,7 @@ type invokeToolRequest struct {
 }
 
 // InvokeAITool: POST /tenants/{tenant_id}/topics/{topic_id}/ai/tools/invoke
-// The origin of the call is decided HERE, by how the caller authenticated, never by what the body claims (R-AI-1). A person acting in an interactive session (the browser's cookie
-// session or the app's device token) may ask for proposed_by=agent: the write runs at once, as that person, with that person's keys. Anything else (a Bearer ID token, which is
+// The origin of the call is decided HERE, by how the caller authenticated, never by what the body claims (R-AI-1). A person acting in an interactive session (the browser's cookie session; a device token is NOT enough: it is a bearer credential a script can hold) may ask for proposed_by=agent: the write runs at once, as that person, with that person's keys. Anything else (a Bearer ID token, which is
 // what a script or an AI client holds) is always origin "ai": a write waits in the approval queue for a person, whatever proposed_by says. Claiming "agent" without an interactive
 // session is refused (403), not silently downgraded, so a client that believed it was running a write learns it was not.
 func (h *TopicHandler) InvokeAITool(w http.ResponseWriter, r *http.Request) {

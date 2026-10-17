@@ -17,7 +17,7 @@ import (
 // internal/tenancy/adapters/team_http_test.go.
 var systemRolePermissions = map[string][]string{
 	"tenant_admin": {
-		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "channel.manage", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "conversation.takeover_external",
+		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "channel.manage", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_all_queues", "conversation.read_internal", "conversation.takeover_external",
 		"dashboard.read", "group.manage", "group.read", "identity.manage", "integration.manage", "integration.read", "membership.manage", "membership.read", "routing.override", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.manage", "tenant.read", "topic.manage", "topic.read",
 		// Flow Builder (ADR-0019, migration 000083). Editing and publishing are separate keys on purpose.
 		"flow.archive", "flow.create", "flow.edit", "flow.publish", "flow.test", "flow.view", "flow_run.view", "flow_template.install", "flow_template.view",
@@ -25,7 +25,7 @@ var systemRolePermissions = map[string][]string{
 		"service.assign", "service.close", "service.create", "service.link_external", "service.read", "service.request_external", "service.update",
 	},
 	"tenant_supervisor": {
-		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_internal", "conversation.takeover_external", "dashboard.read", "group.manage", "group.read", "integration.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read", "topic.manage", "topic.read",
+		"account.manage", "account.read", "agent.manage", "agent.read", "audit.read", "contact.classify", "conversation.claim", "conversation.manage", "conversation.read_all_queues", "conversation.read_internal", "conversation.takeover_external", "dashboard.read", "group.manage", "group.read", "integration.read", "membership.read", "ticket.create", "ticket.read", "ticket.reconcile", "ticket.update", "tenant.read", "topic.manage", "topic.read",
 		// Flow Builder (ADR-0019): may look and simulate, never edit or publish.
 		"flow.test", "flow.view", "flow_run.view", "flow_template.view",
 		// Service Context & Operations (ADR-0049): supervisors hold every service key (they assign work and may ask the ERP for a service order).

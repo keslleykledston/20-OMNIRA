@@ -39,6 +39,11 @@ async function call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
 export const queuesAPI = {
   list: () =>
     call<{ items: Queue[] }>(() => axios.get(base(), { headers: authHeaders() })).then((r) => r.items),
+  // the queues a conversation can be sent to: names only, open to any agent (list needs agent.read, which a plain agent does not have)
+  options: () =>
+    call<{ items: Pick<Queue, 'id' | 'name' | 'mode' | 'is_default'>[] }>(() =>
+      axios.get(`${API_BASE}/tenants/${getTenantId()}/inbox/queue-options`, { headers: authHeaders() }),
+    ).then((r) => r.items),
   create: (body: { name: string; mode: QueueMode; is_default: boolean }) =>
     call<Queue>(() => axios.post(base(), body, { headers: authHeaders() })),
   update: (id: string, patch: QueuePatch) =>

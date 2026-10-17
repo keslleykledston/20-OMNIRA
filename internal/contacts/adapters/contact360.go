@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
@@ -191,8 +193,13 @@ func (h *ContactsAPIHandler) ListContactConversations(w http.ResponseWriter, r *
 		     ORDER BY m.created_at DESC, m.id DESC LIMIT 1) lm ON true
 		WHERE cv.tenant_id = $1 AND cv.contact_id = $2`
 	args := []any{tenantID, contactID}
+	query, args, err := h.scopeSectors(r.Context(), query, args, "cv.tenant_id", "cv.id")
+	if err != nil {
+		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
+		return
+	}
 	if page.cursorTS != nil {
-		query += ` AND (cv.updated_at, cv.id) < ($3, $4)`
+		query += ` AND (cv.updated_at, cv.id) < ($` + strconv.Itoa(len(args)+1) + `, $` + strconv.Itoa(len(args)+2) + `)`
 		args = append(args, *page.cursorTS, *page.cursorID)
 	}
 	query += ` ORDER BY cv.updated_at DESC, cv.id DESC LIMIT $` + strconv.Itoa(len(args)+1)
@@ -281,8 +288,13 @@ func (h *ContactsAPIHandler) ListContactTickets(w http.ResponseWriter, r *http.R
 		LEFT JOIN customer_accounts ca ON ca.tenant_id = t.tenant_id AND ca.id = t.customer_account_id
 		WHERE t.tenant_id = $1 AND cv.contact_id = $2 AND ` + ticketdomain.RealTicketSQL("t")
 	args := []any{tenantID, contactID}
+	query, args, err = h.scopeSectors(r.Context(), query, args, "cv.tenant_id", "cv.id")
+	if err != nil {
+		http.Error(w, "failed to list tickets", http.StatusInternalServerError)
+		return
+	}
 	if page.cursorTS != nil {
-		query += ` AND (t.updated_at, t.id) < ($3, $4)`
+		query += ` AND (t.updated_at, t.id) < ($` + strconv.Itoa(len(args)+1) + `, $` + strconv.Itoa(len(args)+2) + `)`
 		args = append(args, *page.cursorTS, *page.cursorID)
 	}
 	query += ` ORDER BY t.updated_at DESC, t.id DESC LIMIT $` + strconv.Itoa(len(args)+1)
@@ -324,4 +336,19 @@ func (h *ContactsAPIHandler) ListContactTickets(w http.ResponseWriter, r *http.R
 		lastID, lastUpdated = items[len(items)-1].ID, items[len(items)-1].UpdatedAt
 	}
 	writeSubresourcePage(w, out, page.limit, hasMore, lastID, lastUpdated)
+}
+
+// scopeSectors narrows a query that already binds the conversation (tenantCol, convCol) to what the actor may see when the company's sector scope is on (ADR-0043 S3).
+// The predicate takes its own bind argument, appended to args; the caller keeps counting placeholders from len(args).
+func (h *ContactsAPIHandler) scopeSectors(ctx context.Context, query string, args []any, tenantCol, convCol string) (string, []any, error) {
+	tc, err := tenancydomain.FromContext(ctx)
+	if err != nil {
+		return query, args, err
+	}
+	restricted, err := tenancyadapters.SectorScopeRestricts(ctx, platformdb.QuerierFromContext(ctx, h.pool), tc)
+	if err != nil || !restricted {
+		return query, args, err
+	}
+	args = append(args, tc.ActorID)
+	return query + ` AND conversation_in_sector_scope(` + tenantCol + `, $` + strconv.Itoa(len(args)) + `, ` + convCol + `)`, args, nil
 }

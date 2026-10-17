@@ -64,9 +64,18 @@ func newSSE(t *testing.T, recheck time.Duration) *sseFixture {
 }
 
 func newSSEWith(t *testing.T, opts inboxadapters.RealtimeOptions) *sseFixture {
+	return newSSEAuthWith(t, opts, nil)
+}
+
+// newSSEAuthWith builds the fixture; wrap, when given, receives the fake authorizer and returns the one the handler and middleware really use (a face of the same fake).
+func newSSEAuthWith(t *testing.T, opts inboxadapters.RealtimeOptions, wrap func(*fakeAuth) inboxadapters.StreamAuthorizer) *sseFixture {
 	f := &sseFixture{nc: natsConn(t), tenant: uuid.New(), user: uuid.New(), conv: uuid.New(), principalOK: true}
 	f.auth = &fakeAuth{allowed: map[uuid.UUID]bool{f.tenant: true}, hidden: map[uuid.UUID]bool{}}
-	h := inboxadapters.NewRealtimeHandler(f.nc, f.auth, opts)
+	var used inboxadapters.StreamAuthorizer = f.auth
+	if wrap != nil {
+		used = wrap(f.auth)
+	}
+	h := inboxadapters.NewRealtimeHandler(f.nc, used, opts)
 	withPrincipal := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if f.principalOK {
@@ -76,7 +85,7 @@ func newSSEWith(t *testing.T, opts inboxadapters.RealtimeOptions) *sseFixture {
 		})
 	}
 	mux := http.NewServeMux()
-	mw := inboxadapters.StreamMiddleware(f.auth)
+	mw := inboxadapters.StreamMiddleware(used)
 	mux.Handle("GET /t/{tenant_id}/events", withPrincipal(mw(http.HandlerFunc(h.StreamInboxEvents))))
 	mux.Handle("GET /t/{tenant_id}/c/{conversation_id}/events", withPrincipal(mw(http.HandlerFunc(h.StreamConversationEvents))))
 	f.srv = httptest.NewUnstartedServer(mux)

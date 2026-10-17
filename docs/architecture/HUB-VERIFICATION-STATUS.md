@@ -231,7 +231,7 @@ Provas: `internal/hub/adapters` (audit), mutantes `scripts/test-hub-audit-mutati
 - **Armadilha achada:** `web/playwright.config.ts` aponta `baseURL` para a **produção**; os specs `*.mock.spec.ts` rodados com ele verificam o bundle JÁ implantado,
   não o código local. Use `npm run test:e2e:local` (`playwright.local.config.ts`, build + preview na porta 3187). As rodadas "Playwright mock" anteriores
   a esta data foram contra o bundle implantado.
-- **NOT WIRED:** o contexto completo (mídia, contato, ERP) para quem tem acesso SÓ pelo Hub: depende do ADR-0040 (PROPOSTA, nenhuma migration). Até lá essas abas mostram a visão de texto.
+- ~~NOT WIRED: o contexto completo para quem tem acesso SÓ pelo Hub~~ — **superado:** o ADR-0040 foi aceito (2026-10-17) e implementado/implantado nas fases 01–09 (mídia, contato, ERP, transferir, finalizar, memória, histórico); ver as seções do ADR-0040 e as entradas posteriores deste arquivo.
 - **Sem revisão Codex** desta fatia (front, sem mudança de autorização): `CODEX_PLUGIN_NOT_EXECUTED`.
 
 ## 2026-10-09 (noite) — migration 107 e decisões do ADR-0040

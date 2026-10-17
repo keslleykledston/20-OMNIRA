@@ -17,7 +17,7 @@ const QUEUES = [queue('q-default', 'Default', { is_default: true }), queue('q-co
 function serve(over: Record<string, unknown> = {}) {
   vi.mocked(axios.get).mockImplementation(async (url: string) => {
     if (url.endsWith(`/inbox/conversations/${CONV}`)) return { data: { id: CONV, contact_name: 'Maria', contact_phone: '+5511999998888', status: 'open', message_count: 1, assigned_to_user_id: null, queue_id: 'q-default', ...over } }
-    if (url.endsWith('/queues')) return { data: { items: QUEUES } }
+    if (url.endsWith('/inbox/queue-options')) return { data: { items: QUEUES } }
     if (url.endsWith('/me/access')) return { data: { role_key: 'tenant_agent', permissions: ['conversation.claim'] } }
     return Promise.reject({ response: { status: 404 } })
   })
@@ -34,7 +34,8 @@ describe('Enviar a conversa para uma fila (setor)', () => {
     serve()
     vi.mocked(axios.post).mockResolvedValue({ data: { conversation_id: CONV, queue_id: 'q-sup', changed: true } })
     const user = userEvent.setup()
-    renderAt(<ContextPane conversationId={CONV} />)
+    const onSent = vi.fn()
+    renderAt(<ContextPane conversationId={CONV} onSentToQueue={onSent} />)
     await user.click(await screen.findByRole('button', { name: 'Enviar para uma fila' }))
     const dialog = await screen.findByRole('dialog', { name: 'Enviar para uma fila' })
     expect(await within(dialog).findByText('Comercial')).toBeInTheDocument()
@@ -49,19 +50,23 @@ describe('Enviar a conversa para uma fila (setor)', () => {
     expect(body).toEqual({ queue_id: 'q-sup' })
     await waitFor(() => expect(emitInboxNotice).toHaveBeenCalledWith(CONV, 'Conversa enviada para a fila Suporte.'))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Enviar para uma fila' })).not.toBeInTheDocument())
+    // the screen lets go of the conversation: it may now be outside this person's queues
+    expect(onSent).toHaveBeenCalledTimes(1)
   })
 
   it('says why a refusal happened and keeps the dialog open (a colleague holds it)', async () => {
     serve()
     vi.mocked(axios.post).mockRejectedValue({ response: { status: 403, data: 'forbidden' } })
     const user = userEvent.setup()
-    renderAt(<ContextPane conversationId={CONV} />)
+    const onSentRefused = vi.fn()
+    renderAt(<ContextPane conversationId={CONV} onSentToQueue={onSentRefused} />)
     await user.click(await screen.findByRole('button', { name: 'Enviar para uma fila' }))
     const dialog = await screen.findByRole('dialog', { name: 'Enviar para uma fila' })
     await user.click(await within(dialog).findByRole('radio', { name: /Comercial/ }))
     await user.click(within(dialog).getByRole('button', { name: 'Enviar' }))
     expect(await within(dialog).findByText(/ela está com outra pessoa ou você não tem permissão/)).toBeInTheDocument()
     expect(emitInboxNotice).not.toHaveBeenCalled()
+    expect(onSentRefused).not.toHaveBeenCalled()
   })
 
   it('a queue that vanished (422) is explained', async () => {

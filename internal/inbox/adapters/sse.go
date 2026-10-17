@@ -60,6 +60,12 @@ type StreamAuthorizer interface {
 // streamAdmissionTimeout bounds every lookup made before a stream starts (a stalled database must not hold the request).
 const streamAdmissionTimeout = 10 * time.Second
 
+// SectorScopedStreamAuthorizer is the optional third face: whether the company's sector scope (ADR-0043 S3) narrows what THIS person may be told about. When it does, the
+// instance stream tells them only about conversations ConversationVisible lets them see, and a conversation stream ends when its conversation leaves their reach.
+type SectorScopedStreamAuthorizer interface {
+	SectorRestricted(ctx context.Context, userID, tenantID uuid.UUID) (bool, error)
+}
+
 // DelegatedStreamAuthorizer is the optional second face of a StreamAuthorizer: admission for a person who attends the instance as a Hub agent
 // (`X-Omnira-Acting-As: hub:<id>`, ADR-0040 phase 05). Same rules as a delegated request, in short transactions that end before the stream starts.
 type DelegatedStreamAuthorizer interface {
@@ -382,6 +388,24 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 	streamCtx, stop := context.WithCancel(r.Context())
 	defer stop()
 
+	// A member under the company's sector scope (ADR-0043 S3): the instance stream is filtered per event with the same decision the routes use. Unknown answer = restricted (fail closed).
+	var sectorRestricted atomic.Bool
+	var sectorFilter *seenFilter
+	sectorAuth, sectorAware := h.auth.(SectorScopedStreamAuthorizer)
+	if !isDelegated && sectorAware {
+		first, cancelFirst := context.WithTimeout(streamCtx, h.opts.DatabaseTimeout)
+		restricted, serr := sectorAuth.SectorRestricted(first, principal.UserID, tc.TenantID)
+		cancelFirst()
+		sectorRestricted.Store(serr != nil || restricted)
+		if onlyConversation == nil {
+			sectorFilter = newSeenFilter(h.opts.VisibilityTTL, func(id uuid.UUID) (bool, error) {
+				c, cancel := context.WithTimeout(streamCtx, h.opts.DatabaseTimeout)
+				defer cancel()
+				return h.auth.ConversationVisible(c, principal.UserID, tc.TenantID, id)
+			})
+		}
+	}
+
 	// A Hub agent: is the contract limited to some queues? (an instance stream is filtered per event only then). Asked at admission and at every recheck.
 	var unrestricted atomic.Bool
 	var filter *seenFilter
@@ -466,6 +490,9 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 			if filter != nil && !unrestricted.Load() && !filter.allow(event.ID, time.Now()) {
 				continue
 			}
+			if sectorFilter != nil && sectorRestricted.Load() && !sectorFilter.allow(event.ID, time.Now()) {
+				continue
+			}
 			if !write(sseFrame(event)) {
 				return
 			}
@@ -487,6 +514,21 @@ func (h *RealtimeHandler) stream(w http.ResponseWriter, r *http.Request, tc *ten
 					log.Printf("inbox realtime: closing stream, authorization lost")
 				}
 				return
+			}
+			if sectorAware {
+				c, cancel := context.WithTimeout(r.Context(), h.opts.DatabaseTimeout)
+				restricted, serr := sectorAuth.SectorRestricted(c, principal.UserID, tc.TenantID)
+				sectorRestricted.Store(serr != nil || restricted)
+				// a conversation stream ends the moment its conversation leaves the person's reach (a transfer to another queue, a queue they left)
+				visible := true
+				if onlyConversation != nil && (serr != nil || restricted) {
+					visible, serr = h.auth.ConversationVisible(c, principal.UserID, tc.TenantID, *onlyConversation)
+				}
+				cancel()
+				if (serr != nil && !errors.Is(serr, context.Canceled)) || !visible {
+					log.Printf("inbox realtime: closing stream, conversation left the person's reach")
+					return
+				}
 			}
 		}
 	}

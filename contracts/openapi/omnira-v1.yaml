@@ -3745,7 +3745,7 @@ paths:
         Every tool runs with the REQUESTING USER's permissions. A read runs at once (200). A write asked for by the AI
         (proposed_by ai, the default) is queued for a person (202 pending_approval); the same write from a person
         (proposed_by agent) is that person acting. The origin is decided by the SERVER from how the caller authenticated (R-AI-1):
-        `agent` is honoured only in an interactive session (browser cookie session or app device token); a Bearer ID token (a script, an
+        `agent` is honoured only in an interactive browser session (cookie); a Bearer ID token or a device token (a script, an
         AI client) is always origin `ai`, and claiming `agent` with it is refused (403). A denied request is recorded (403). Results are untrusted data. The
         idempotency key makes a retry return the first outcome; reusing it for a different request is a 409.
       parameters:
@@ -4146,6 +4146,35 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/queue-options:
+    get:
+      operationId: listQueueOptions
+      tags: [Assignment]
+      summary: The queues a conversation can be sent to (names only)
+      description: |
+        Feeds "Enviar para uma fila". Open to anyone who holds `conversation.claim` (a plain agent has no `agent.read`, which the full queue list needs). Names, mode and the
+        default flag only: no counts, no members. A queue whose sector is switched off is left out (routing refuses it). Members only (not delegable to the Hub).
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+      responses:
+        '200':
+          description: The company's queues
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        mode: { type: string }
+                        is_default: { type: boolean }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/route-queue:
     post:
       operationId: routeConversationToQueue

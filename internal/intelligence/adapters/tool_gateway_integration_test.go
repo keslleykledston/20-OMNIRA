@@ -348,14 +348,19 @@ func TestAgentOriginNeedsAnInteractiveSessionNotAClaimInTheBody(t *testing.T) {
 	if e.count(`SELECT count(*) FROM topic_summaries WHERE tenant_id=$1`, a.id) != 0 {
 		t.Fatal("a pending request executed")
 	}
-	// a person in an interactive session (cookie or device token) acts directly
-	for _, kind := range []string{authn.SessionKindCookie, authn.SessionKindDevice} {
-		sess := func(r *http.Request) *http.Request {
-			return r.WithContext(authn.WithPrincipal(r.Context(), &authn.Principal{UserID: attendant, Subject: attendant.String(), SessionKind: kind}))
-		}
-		code, out := post(`{"tool":"topic.get_summary","idempotency_key":"session-`+kind+`-123","proposed_by":"agent"}`, sess)
-		if code != http.StatusOK || out.Source != "agent" {
-			t.Errorf("%s session as agent = %d %+v", kind, code, out)
-		}
+	// a person in an interactive browser session (cookie) acts directly...
+	cookie := func(r *http.Request) *http.Request {
+		return r.WithContext(authn.WithPrincipal(r.Context(), &authn.Principal{UserID: attendant, Subject: attendant.String(), SessionKind: authn.SessionKindCookie}))
+	}
+	code, out := post(`{"tool":"topic.get_summary","idempotency_key":"session-cookie-123","proposed_by":"agent"}`, cookie)
+	if code != http.StatusOK || out.Source != "agent" {
+		t.Errorf("cookie session as agent = %d %+v", code, out)
+	}
+	// ...a device token is a bearer credential a script can hold, so it is NOT enough (Codex, R-AI-1)
+	device := func(r *http.Request) *http.Request {
+		return r.WithContext(authn.WithPrincipal(r.Context(), &authn.Principal{UserID: attendant, Subject: attendant.String(), SessionKind: authn.SessionKindDevice}))
+	}
+	if code, _ := post(`{"tool":"topic.generate_summary","idempotency_key":"session-device-123","proposed_by":"agent"}`, device); code != http.StatusForbidden {
+		t.Errorf("device token claiming agent = %d, want 403", code)
 	}
 }

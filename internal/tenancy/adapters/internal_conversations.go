@@ -100,6 +100,8 @@ func WriteInternalRefusal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 	case r.PathValue("message_id") != "":
 		http.Error(w, "media not found", http.StatusNotFound)
+	case r.PathValue("topic_id") != "":
+		http.Error(w, "not found", http.StatusNotFound)
 	default:
 		http.Error(w, "contact not found", http.StatusNotFound)
 	}

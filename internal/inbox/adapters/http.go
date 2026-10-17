@@ -208,6 +208,13 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 	} else if !canInternal {
 		where += " AND (co.kind IS NULL OR co.kind <> 'internal')"
 	}
+	// ADR-0043 S3: with the company's sector scope on, an agent's list holds only their queues, their own conversations and the unqueued ones (same SQL decision as the routes).
+	if restricted, perr := tenancyadapters.SectorScopeRestricts(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc); perr != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	} else if restricted {
+		where += " AND conversation_in_sector_scope(c.tenant_id, " + arg(tc.ActorID) + ", c.id)"
+	}
 	// Conversations with staff (internal) are kept but, like spam, out of the default view: they are not attendance.
 	// Ask for them (or any other kind) explicitly with conversation_kind.
 	switch ck := r.URL.Query().Get("conversation_kind"); ck {

@@ -433,6 +433,8 @@ func (s *Server) RegisterTenancyHandlers(dbPool *pgxpool.Pool, invitationDeliver
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/settings/inbox", authnMiddleware(tenantSession(http.HandlerFunc(inboxSettings.Get))))
 	s.mux.Handle("PUT /api/v1/tenants/{tenant_id}/settings/inbox", authnMiddleware(tenantSession(http.HandlerFunc(inboxSettings.Put))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/queues", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.List))))
+	// the queues a person may send a conversation to (names only; conversation.claim, because the plain agent has no agent.read)
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/queue-options", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Options))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/queues", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Create))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/queues/{queue_id}", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Update))))
 	s.mux.Handle("DELETE /api/v1/tenants/{tenant_id}/queues/{queue_id}", authnMiddleware(tenantSession(http.HandlerFunc(queuesHandler.Delete))))
@@ -1285,9 +1287,19 @@ func (a sessionStreamAuthorizer) ConversationVisible(ctx context.Context, userID
 			// a conversation of a contact declared internal is visible only with conversation.read_internal (ADR-0018 addendum)
 			`SELECT EXISTS(SELECT 1 FROM conversations cv WHERE cv.tenant_id=$1 AND cv.id=$2
 			   AND (NOT EXISTS (SELECT 1 FROM contacts co WHERE co.tenant_id=cv.tenant_id AND co.id=cv.contact_id AND co.kind='internal')
-			        OR actor_has_permission($1, $3, 'conversation.read_internal')))`, tenantID, conversationID, userID).Scan(&visible)
+			        OR actor_has_permission($1, $3, 'conversation.read_internal'))
+			   AND conversation_in_sector_scope($1, $3, cv.id))`, tenantID, conversationID, userID).Scan(&visible) // ADR-0043 S3: the sector scope, same decision as the routes
 	})
 	return visible, err
+}
+
+// SectorRestricted: does the company's sector scope narrow what this person may be told about (ADR-0043 S3)? Same SQL decision as the routes and the lists.
+func (a sessionStreamAuthorizer) SectorRestricted(ctx context.Context, userID, tenantID uuid.UUID) (bool, error) {
+	var restricted bool
+	err := platformdb.WithTenantSession(ctx, a.pool, userID, false, func(scoped context.Context) error {
+		return platformdb.QuerierFromContext(scoped, a.pool).QueryRow(scoped, `SELECT sector_scope_restricts($1, $2)`, tenantID, userID).Scan(&restricted)
+	})
+	return restricted, err
 }
 
 // streamCredentialRecheck adapts the optional session checker to the SSE options (nil when none is installed).

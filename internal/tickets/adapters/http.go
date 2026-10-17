@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/pagination"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
@@ -123,6 +125,17 @@ func ticketFilterWhere(tenantID uuid.UUID, status, priority, externalTicketID st
 	return where, args
 }
 
+// scopeToSectors narrows a ticket query to the conversations the actor may see when the company's sector scope is on (ADR-0043 S3). It adds the predicate with its own
+// bind arguments, so it can be called right after the base where-clause is built.
+func scopeToSectors(ctx context.Context, q platformdb.Querier, tc *tenancydomain.TenantContext, where string, args []any) (string, []any, error) {
+	restricted, err := tenancyadapters.SectorScopeRestricts(ctx, q, tc)
+	if err != nil || !restricted {
+		return where, args, err
+	}
+	args = append(args, tc.ActorID)
+	return where + ` AND conversation_in_sector_scope(tenant_id, $` + strconv.Itoa(len(args)) + `, conversation_id)`, args, nil
+}
+
 func scanTicketItem(rows interface {
 	Scan(dest ...any) error
 }) (TicketItem, error) {
@@ -171,6 +184,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	where, args := ticketFilterWhere(tc.TenantID, status, priority, externalTicketID)
+	where, args, err = scopeToSectors(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc, where, args)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	if cursor != nil {
 		cursorID, parseErr := uuid.Parse(cursor.ID)
 		if parseErr != nil {
@@ -290,6 +308,11 @@ func (h *Handler) ExportCSV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	where, args := ticketFilterWhere(tc.TenantID, status, priority, externalTicketID)
+	where, args, err = scopeToSectors(r.Context(), platformdb.QuerierFromContext(r.Context(), h.pool), tc, where, args)
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	args = append(args, exportMaxRows+1)
 	query := `SELECT ` + ticketColumns + ` FROM tickets ` + where + ` ORDER BY updated_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args))
 

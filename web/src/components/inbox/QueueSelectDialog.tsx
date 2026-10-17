@@ -16,7 +16,7 @@ export default function QueueSelectDialog({ open, currentQueueId, busy, error, o
 }) {
   const tenantId = getTenantId()
   const [picked, setPicked] = useState('')
-  const queues = useQuery({ queryKey: ['queues', tenantId], queryFn: queuesAPI.list, enabled: open, retry: false })
+  const queues = useQuery({ queryKey: ['queue-options', tenantId], queryFn: queuesAPI.options, enabled: open, retry: false })
   const list = queues.data ?? []
   const chosen = list.find((q) => q.id === picked)
   return (
@@ -37,7 +37,6 @@ export default function QueueSelectDialog({ open, currentQueueId, busy, error, o
               <input type="radio" name="queue" value={q.id} disabled={current || busy} checked={picked === q.id} onChange={() => setPicked(q.id)} />
               <span className="min-w-0 flex-1 truncate">{q.name}</span>
               {current && <span className="text-xs">fila atual</span>}
-              {!current && q.mode !== 'manual' && <span className="text-xs text-text-tertiary">{q.available_count} disponíveis</span>}
             </label>
           )
         })}

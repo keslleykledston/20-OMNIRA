@@ -33,7 +33,7 @@ const KIND: Record<string, string> = { customer: 'Cliente', internal: 'Interno',
 // contact.note the notes of the contact (phase 04c), and with ai.assist the AI summary of the conversation (phase 05; the text goes to the platform's AI provider, so it is only offered with that key)., with attendance.history the memory of the contact (earlier attendances and open items) and with followup.resolve marking an item done or dropped (phase 06), and (phase 09) with attendance.history AND conversation.read the search over the earlier messages of the contact. The keys come from the server (/me/access answers with the DELEGATED keys in this
 // context), so the controls are only offered when the server will accept them; the server still decides every request. It reads the same conversation
 // query the chat uses (one request) and the contact card (the key contact.read; without it the card is simply not shown).
-export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void }) {
+export default function DelegatedContextPane({ conversationId }: { conversationId: string; onOpenConversation?: (id: string) => void; onSentToQueue?: () => void }) {
   const tenantId = getTenantId()
   // the instance this workspace acts for and the Hub it is served through, named explicitly for the shared panels (same thing the global interceptor does for the session's tenant)
   const hubId = getActingHub()

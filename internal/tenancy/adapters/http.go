@@ -106,6 +106,14 @@ func AuthorizationMiddleware(pool *pgxpool.Pool, authzSvc *application.Authoriza
 					return errHandled
 				}
 
+				// ADR-0043 S3: with the sector scope on, a conversation outside the actor's queues is invisible, with the same answer as a missing one.
+				if refused, rerr := RefusesOutOfSectorScope(ctx, platformdb.QuerierFromContext(ctx, pool), r, tenantContext); rerr != nil {
+					return rerr
+				} else if refused {
+					WriteInternalRefusal(tw, r)
+					return errHandled
+				}
+
 				// Injetar TenantContext no context e servir o handler
 				// downstream dentro da mesma sessão/transação de banco.
 				ctx = domain.WithTenantContext(ctx, tenantContext)

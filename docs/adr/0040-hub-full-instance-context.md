@@ -1,8 +1,6 @@
 # ADR-0040 — Contexto completo da instância dentro do Hub (acesso delegado a dados operacionais)
 
-Status: **PROPOSTA v2 — alternativa A+** (aguarda aceite do dono; nenhuma migration escrita). Vocabulário de evidência: tudo abaixo é desenho (`NOT WIRED`)
-salvo onde diz o contrário. v1 (2026-10-09) propunha o predicado único; v2 incorpora o parecer externo "Arquitetura de Acesso Delegado Hub–Instâncias"
-(09/10/2026), que aprova a base A e exige separar relacionamento, contexto e capacidade.
+Status: **ACEITO pelo dono em 2026-10-17 ("Aceito"), alternativa A+; IMPLEMENTADO e IMPLANTADO** nas fases 01–09, na paridade de UX (§24) e na escala da política (§25, migration 119) — ver cada seção e `docs/architecture/HUB-VERIFICATION-STATUS.md` para a evidência (vocabulário: IMPLEMENTED, NOT WIRED, POSTGRES/HTTP/E2E VERIFIED, BLOCKED). O cabeçalho anterior ("PROPOSTA v2, nenhuma migration escrita") descrevia só o desenho inicial de 2026-10-09 e ficou desatualizado; o aceite formal do dono foi registrado agora. Este aceite **não** declara produção geral: continua `LIMITED_INTERNAL_PRODUCTION`/LAB, com os gates do pré-gate (`HUB-PRE-GATE-REPORT.md`). v1 (2026-10-09) propunha o predicado único; v2 incorporou o parecer externo "Arquitetura de Acesso Delegado Hub–Instâncias" (09/10/2026), que aprova a base A e exige separar relacionamento, contexto e capacidade.
 Relaciona: ADR-0036, ADR-0038, ADR-0039; `docs/architecture/HUB-DELEGATION-TABLE-MATRIX.md` (Fase 01, gerada do catálogo real).
 
 ## 1. O problema

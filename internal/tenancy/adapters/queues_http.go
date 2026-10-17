@@ -167,6 +167,45 @@ func (h *QueuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeQueueJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }
 
+// Options: GET /inbox/queue-options - the queues a person may send a conversation to ("Enviar para uma fila"): names only, no counts, no members. Needs
+// conversation.claim (any agent; the plain agent has no agent.read, which is what List needs). A queue whose sector is switched off is left out, because routing refuses it.
+func (h *QueuesHandler) Options(w http.ResponseWriter, r *http.Request) {
+	tc, ok := h.authorize(w, r, "conversation.claim")
+	if !ok {
+		return
+	}
+	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), `
+		SELECT q.id, q.name, q.mode, q.is_default
+		FROM queues q LEFT JOIN sectors sc ON sc.tenant_id = q.tenant_id AND sc.id = q.sector_id
+		WHERE q.tenant_id = $1 AND COALESCE(sc.active, true)
+		ORDER BY q.is_default DESC, q.name ASC, q.id ASC`, tc.TenantID)
+	if err != nil {
+		http.Error(w, "failed to list queues", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	type option struct {
+		ID        uuid.UUID `json:"id"`
+		Name      string    `json:"name"`
+		Mode      string    `json:"mode"`
+		IsDefault bool      `json:"is_default"`
+	}
+	items := []option{}
+	for rows.Next() {
+		var o option
+		if err := rows.Scan(&o.ID, &o.Name, &o.Mode, &o.IsDefault); err != nil {
+			http.Error(w, "failed to read queues", http.StatusInternalServerError)
+			return
+		}
+		items = append(items, o)
+	}
+	if rows.Err() != nil {
+		http.Error(w, "failed to read queues", http.StatusInternalServerError)
+		return
+	}
+	writeQueueJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 type createQueueRequest struct {
 	Name      string `json:"name"`
 	Mode      string `json:"mode"`

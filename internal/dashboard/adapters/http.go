@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	tenancyadapters "github.com/omnira/omnira/internal/tenancy/adapters"
 	tenancydomain "github.com/omnira/omnira/internal/tenancy/domain"
 	ticketdomain "github.com/omnira/omnira/internal/tickets/domain"
 )
@@ -78,14 +79,22 @@ func (h *Handler) GetSnapshot(w http.ResponseWriter, r *http.Request) {
 	q := platformdb.QuerierFromContext(r.Context(), h.pool)
 	var snap Snapshot
 
+	// ADR-0043 S3: with the company's sector scope on, the counts of a person who does not see every queue count only what they may see
+	restricted, rerr := tenancyadapters.SectorScopeRestricts(r.Context(), q, tc)
+	if rerr != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
 	if err := q.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM conversations WHERE tenant_id=$1 AND status='open' AND conversation_kind <> 'internal'`, tc.TenantID,
+		`SELECT COUNT(*) FROM conversations WHERE tenant_id=$1 AND status='open' AND conversation_kind <> 'internal'
+		   AND (NOT $3::boolean OR conversation_in_sector_scope(tenant_id, $2, id))`, tc.TenantID, tc.ActorID, restricted,
 	).Scan(&snap.OpenConversations); err != nil {
 		http.Error(w, "failed to count open conversations", http.StatusInternalServerError)
 		return
 	}
 	if err := q.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM tickets WHERE tenant_id=$1 AND status='open' AND `+ticketdomain.RealTicketSQL(""), tc.TenantID,
+		`SELECT COUNT(*) FROM tickets WHERE tenant_id=$1 AND status='open' AND `+ticketdomain.RealTicketSQL("")+`
+		   AND (NOT $3::boolean OR conversation_in_sector_scope(tenant_id, $2, conversation_id))`, tc.TenantID, tc.ActorID, restricted,
 	).Scan(&snap.OpenTickets); err != nil {
 		http.Error(w, "failed to count open tickets", http.StatusInternalServerError)
 		return
