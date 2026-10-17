@@ -22,7 +22,16 @@ var (
 	ErrConflict        = errors.New("routing: conversation already assigned to another agent")
 	ErrInvalidAssignee = errors.New("routing: assignee is not an eligible agent of this tenant")
 	ErrHeldByExternal  = ports.ErrHeldByExternal
+	// ErrQueueUnavailable / ErrNotRoutable: sending a conversation to a queue (see ports).
+	ErrQueueUnavailable = ports.ErrQueueUnavailable
+	ErrNotRoutable      = ports.ErrNotRoutable
 )
+
+// QueueMoveResult says where the conversation went and whether anything changed.
+type QueueMoveResult struct {
+	QueueID uuid.UUID
+	Changed bool
+}
 
 // AssignResult reports the resulting assignee and whether anything changed.
 // Repeating an operation that already holds is a successful no-op
@@ -201,4 +210,58 @@ func (a *Assigner) apply(ctx context.Context, change ports.AssignmentChange) err
 		return a.audit.ConversationAssignmentChanged(ctx, change)
 	}
 	return nil
+}
+
+// RouteToQueue sends the conversation to another queue (a department: Comercial, Suporte...). The routing engine then distributes it inside that queue, exactly as it does
+// for a new conversation. Needs conversation.claim (any agent: the same level as handing a chat to a person); a conversation someone ELSE holds needs conversation.manage as well (a person cannot pull a colleague's chat out
+// of their hands). A holder, if any, is released with history and the move is audited. A conversation an external application holds, a closed one and a conversation
+// with staff are refused; a queue that does not exist in this company (or whose sector is off) is refused.
+func (a *Assigner) RouteToQueue(ctx context.Context, conversationID, queueID uuid.UUID) (QueueMoveResult, error) {
+	if a == nil || a.repo == nil || conversationID == uuid.Nil || queueID == uuid.Nil {
+		return QueueMoveResult{}, errors.New("routing: a conversation and a queue are required")
+	}
+	router, ok := a.repo.(ports.QueueRouter)
+	if !ok {
+		return QueueMoveResult{}, errors.New("routing: sending to a queue is not available")
+	}
+	tc, err := a.actor(ctx)
+	if err != nil {
+		return QueueMoveResult{}, err
+	}
+	// the permission first: someone without it learns nothing about the conversation
+	if err := a.require(ctx, tc.ActorID, PermissionClaim); err != nil {
+		return QueueMoveResult{}, err
+	}
+	current, found, err := a.repo.LockAssignee(ctx, conversationID)
+	if err != nil {
+		return QueueMoveResult{}, err
+	}
+	if !found {
+		return QueueMoveResult{}, ErrNotFound
+	}
+	if current != nil && *current != tc.ActorID {
+		if err := a.require(ctx, tc.ActorID, PermissionManage); err != nil {
+			return QueueMoveResult{}, err
+		}
+	}
+	move, found, err := router.MoveToQueue(ctx, conversationID, queueID, tc.ActorID)
+	if err != nil {
+		return QueueMoveResult{}, err
+	}
+	if !found {
+		return QueueMoveResult{}, ErrNotFound
+	}
+	if move.Changed {
+		if move.PreviousAssignee != nil && a.audit != nil {
+			if err := a.audit.ConversationAssignmentChanged(ctx, ports.AssignmentChange{ConversationID: conversationID, From: move.PreviousAssignee, To: nil, Actor: tc.ActorID, Reason: "queue_transfer"}); err != nil {
+				return QueueMoveResult{}, err
+			}
+		}
+		if qa, ok := a.audit.(ports.QueueAuditRecorder); ok {
+			if err := qa.ConversationQueueChanged(ctx, conversationID, tc.ActorID, move.FromQueue, move.ToQueue); err != nil {
+				return QueueMoveResult{}, err
+			}
+		}
+	}
+	return QueueMoveResult{QueueID: move.ToQueue, Changed: move.Changed}, nil
 }

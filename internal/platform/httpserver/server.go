@@ -809,6 +809,8 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// reaches the original handler untouched. Delegable marks the route and names the key it needs in the delegated context.
 	delegatedWrites := hubadapters.NewDelegatedWrites(dbPool).WithClaimHook(&s.claimHook)
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", tenancyadapters.Delegable("conversation.claim", authnMiddleware(tenantSession(delegatedWrites.Claim(http.HandlerFunc(assignHandler.Assign))))))
+	// a person sends the conversation to another queue (department); members only for now (not delegable to the Hub)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/route-queue", authnMiddleware(tenantSession(http.HandlerFunc(assignHandler.RouteToQueue))))
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", tenancyadapters.Delegable("conversation.claim", authnMiddleware(tenantSession(delegatedWrites.Release(http.HandlerFunc(assignHandler.Unassign))))))
 
 	// Co-attendance: invite, transfer, accept, reject, leave
@@ -872,7 +874,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// net/http's ServeMux resolves the more specific literal segment first
 	// regardless of registration order, but keeping it adjacent to the
 	// other conversation-scoped ticket routes documents intent.
-	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/refresh", tenancyadapters.Delegable("ticket.create", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.RefreshTicket))))) // a Hub agent too (same key as opening the ticket)
+	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/refresh", tenancyadapters.Delegable("ticket.create", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.RefreshTicket)))))     // a Hub agent too (same key as opening the ticket)
 	s.mux.Handle("POST /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/status", tenancyadapters.Delegable("ticket.update", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicketStatus))))) // a Hub agent too, where the company allows it (switch hub_ticket_status, on by default)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.GetTicket))))
 	s.mux.Handle("PATCH /api/v1/tenants/{tenant_id}/conversations/{conversation_id}/ticket/{ticket_id}", authnMiddleware(tenantSession(http.HandlerFunc(crmHandler.UpdateTicket))))

@@ -246,3 +246,87 @@ func (a *AuditRecorder) ConversationTransferred(ctx context.Context, conversatio
 		Metadata: meta, CreatedAt: time.Now().UTC(),
 	})
 }
+
+var _ ports.QueueRouter = (*PostgresConversationAssigner)(nil)
+
+// MoveToQueue sends the conversation to another queue (the person's decision). Under the row lock: refuses what is held by an external application, closed or with
+// staff; the queue must exist in this company and its sector must be on; a holder is released with history; the queue is written and the routing job is queued so the
+// engine distributes it inside the new queue. Moving to the queue it is already in, with nobody holding it, changes nothing.
+func (r *PostgresConversationAssigner) MoveToQueue(ctx context.Context, conversationID, queueID, actor uuid.UUID) (ports.QueueMove, bool, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return ports.QueueMove{}, false, err
+	}
+	q := platformdb.QuerierFromContext(ctx, r.pool)
+	var fromQueue, holder, staff *uuid.UUID
+	var status string
+	var held bool
+	err = q.QueryRow(ctx, `SELECT queue_id, assigned_to_user_id, internal_user_id, status, COALESCE(control_kind IN ('crm_application','crm_agent_verified'), false)
+		FROM conversations WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, tenantID, conversationID).Scan(&fromQueue, &holder, &staff, &status, &held)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ports.QueueMove{}, false, nil
+	}
+	if err != nil {
+		return ports.QueueMove{}, false, fmt.Errorf("routing: lock conversation: %w", err)
+	}
+	if held {
+		return ports.QueueMove{}, true, ports.ErrHeldByExternal
+	}
+	if status != "open" || staff != nil {
+		return ports.QueueMove{}, true, ports.ErrNotRoutable
+	}
+	var mode string
+	var sectorOn bool
+	err = q.QueryRow(ctx, `SELECT qq.mode, COALESCE(sc.active, true) FROM queues qq LEFT JOIN sectors sc ON sc.tenant_id=qq.tenant_id AND sc.id=qq.sector_id
+		WHERE qq.tenant_id=$1 AND qq.id=$2`, tenantID, queueID).Scan(&mode, &sectorOn)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !sectorOn) {
+		return ports.QueueMove{}, true, ports.ErrQueueUnavailable
+	}
+	if err != nil {
+		return ports.QueueMove{}, true, fmt.Errorf("routing: look up queue: %w", err)
+	}
+	move := ports.QueueMove{FromQueue: fromQueue, ToQueue: queueID, PreviousAssignee: holder}
+	if holder == nil && fromQueue != nil && *fromQueue == queueID {
+		return move, true, nil
+	}
+	move.Changed = true
+	if holder != nil {
+		if _, err := q.Exec(ctx, `UPDATE conversations SET assigned_to_user_id=NULL, assigned_at=NULL, updated_at=now() WHERE tenant_id=$1 AND id=$2`, tenantID, conversationID); err != nil {
+			return ports.QueueMove{}, true, fmt.Errorf("routing: release holder: %w", err)
+		}
+		if _, err := q.Exec(ctx, `INSERT INTO assignment_events(tenant_id,conversation_id,from_user_id,to_user_id,changed_by,reason) VALUES($1,$2,$3,NULL,$4,'queue_transfer')`,
+			tenantID, conversationID, holder, actor); err != nil {
+			return ports.QueueMove{}, true, fmt.Errorf("routing: record assignment history: %w", err)
+		}
+	}
+	if _, err := q.Exec(ctx, `UPDATE conversations SET queue_id=$3, updated_at=now(),
+		routing_retry_at = CASE WHEN $4 IN ('round_robin','least_loaded') THEN now() + interval '90 seconds' ELSE NULL END
+		WHERE tenant_id=$1 AND id=$2`, tenantID, conversationID, queueID, mode); err != nil {
+		return ports.QueueMove{}, true, fmt.Errorf("routing: set queue: %w", err)
+	}
+	// the same job a new conversation gets: the engine (or the legacy distributor) places it inside the new queue
+	if _, err := q.Exec(ctx, `INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
+		VALUES (uuid_generate_v4(), $1, 'job.routing.assign.v1', 'conversation', $2::text, uuid_generate_v4(), '{}'::jsonb)`, tenantID, conversationID); err != nil {
+		return ports.QueueMove{}, true, fmt.Errorf("routing: queue the routing job: %w", err)
+	}
+	return move, true, nil
+}
+
+var _ ports.QueueAuditRecorder = (*AuditRecorder)(nil)
+
+func (a *AuditRecorder) ConversationQueueChanged(ctx context.Context, conversationID, actor uuid.UUID, from *uuid.UUID, to uuid.UUID) error {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return err
+	}
+	meta := map[string]interface{}{"new_queue": to.String()}
+	if from != nil {
+		meta["previous_queue"] = from.String()
+	}
+	return a.repo.Store(ctx, &auditdomain.AuditEvent{
+		ID: uuid.New(), TenantID: tenantID, ActorID: actor, Action: auditdomain.ActionConversationQueueChanged,
+		ResourceType: auditdomain.ResourceConversation, ResourceID: conversationID,
+		Outcome: auditdomain.OutcomeSuccess, CorrelationID: uuid.New(), CausationID: uuid.New(),
+		Metadata: meta, CreatedAt: time.Now().UTC(),
+	})
+}

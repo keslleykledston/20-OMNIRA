@@ -12,6 +12,32 @@ import (
 // database is only the net under them).
 var ErrHeldByExternal = errors.New("routing: conversation is held by an external application")
 
+// ErrQueueUnavailable: the queue does not exist in this company, or its sector was switched off (a person cannot send a conversation there).
+var ErrQueueUnavailable = errors.New("routing: the queue does not exist in this company or its sector is off")
+
+// ErrNotRoutable: the conversation is closed or is a conversation with a team member; neither is sent to a queue.
+var ErrNotRoutable = errors.New("routing: the conversation is closed or is a conversation with staff")
+
+// QueueMove is the outcome of sending a conversation to a queue.
+type QueueMove struct {
+	FromQueue        *uuid.UUID
+	ToQueue          uuid.UUID
+	PreviousAssignee *uuid.UUID // who held it before (released by the move), nil when nobody
+	Changed          bool       // false: it was already in that queue with nobody holding it
+}
+
+// QueueRouter is the optional persistence port of "send this conversation to a queue" (a person, not the routing engine, decides). It runs in the caller's tenant
+// session; the conversation row is locked first. found=false covers "does not exist" and "belongs to another company". The routing engine then distributes it
+// inside the new queue: the move writes the queue, releases a holder with history, and queues the same routing job a new conversation gets.
+type QueueRouter interface {
+	MoveToQueue(ctx context.Context, conversationID, queueID, actor uuid.UUID) (move QueueMove, found bool, err error)
+}
+
+// QueueAuditRecorder is the optional audit of a queue change (kept apart from AuditRecorder so existing doubles stay as they are).
+type QueueAuditRecorder interface {
+	ConversationQueueChanged(ctx context.Context, conversationID, actor uuid.UUID, from *uuid.UUID, to uuid.UUID) error
+}
+
 // AssignmentChange is one applied assignee transition, recorded append-only.
 type AssignmentChange struct {
 	ConversationID uuid.UUID

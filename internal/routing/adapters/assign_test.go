@@ -106,6 +106,7 @@ func newAssignEnv(t *testing.T) *assignEnv {
 	e.mux = http.NewServeMux()
 	e.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/assign", mw(http.HandlerFunc(h.Assign)))
 	e.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/unassign", mw(http.HandlerFunc(h.Unassign)))
+	e.mux.Handle("POST /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/route-queue", mw(http.HandlerFunc(h.RouteToQueue)))
 	return e
 }
 

@@ -65,6 +65,43 @@ func (h *AssignHandler) Unassign(w http.ResponseWriter, r *http.Request) {
 	respond(w, id, res, err)
 }
 
+type routeQueueRequest struct {
+	QueueID uuid.UUID `json:"queue_id"`
+}
+
+type routeQueueResponse struct {
+	ConversationID uuid.UUID `json:"conversation_id"`
+	QueueID        uuid.UUID `json:"queue_id"`
+	Changed        bool      `json:"changed"`
+}
+
+// RouteToQueue serves POST .../inbox/conversations/{id}/route-queue {"queue_id"}: a person sends the conversation to another queue (department).
+func (h *AssignHandler) RouteToQueue(w http.ResponseWriter, r *http.Request) {
+	id, ok := conversationID(w, r)
+	if !ok {
+		return
+	}
+	var req routeQueueRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || req.QueueID == uuid.Nil {
+		http.Error(w, "queue_id is required", http.StatusBadRequest)
+		return
+	}
+	res, err := h.svc.RouteToQueue(r.Context(), id, req.QueueID)
+	switch {
+	case err == nil:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(routeQueueResponse{ConversationID: id, QueueID: res.QueueID, Changed: res.Changed})
+	case errors.Is(err, application.ErrQueueUnavailable):
+		http.Error(w, "the queue does not exist or its sector is off", http.StatusUnprocessableEntity)
+	case errors.Is(err, application.ErrNotRoutable):
+		http.Error(w, "a closed conversation or one with staff cannot be sent to a queue", http.StatusConflict)
+	default:
+		respond(w, id, application.AssignResult{}, err)
+	}
+}
+
 func conversationID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("conversation_id"))
 	if err != nil {

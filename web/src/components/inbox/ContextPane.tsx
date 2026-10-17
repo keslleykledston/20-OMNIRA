@@ -19,6 +19,7 @@ import AttendanceMemoryPanel from './AttendanceMemoryPanel';
 import RoutingPanel from './RoutingPanel';
 import HistorySearch from './HistorySearch';
 import FinalizeDialog from './FinalizeDialog';
+import QueueSelectDialog from './QueueSelectDialog';
 import { finalizedNotice } from '../../lib/attendance';
 import { emitInboxNotice } from '../../lib/inboxNotice';
 import { CollapsibleSection } from './CollapsibleSection';
@@ -40,6 +41,9 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
   const [assignLoading, setAssignLoading] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showQueueDialog, setShowQueueDialog] = useState(false);
+  const [queueBusy, setQueueBusy] = useState(false);
+  const [queueError, setQueueError] = useState<string | null>(null);
   const [showFinalize, setShowFinalize] = useState(false);
   const { can } = useAccess();
   const [tab, setTab] = useState<'details' | 'history'>('details');
@@ -82,6 +86,26 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
       else setAssignError(describeAssignError(err, 'unassign'));
     } finally {
       setAssignLoading(false);
+    }
+  };
+
+  // send the conversation to another queue (department): the queue's rules distribute it; whoever holds it (you) is released
+  const handleSendToQueue = async (queueId: string, queueName: string) => {
+    setQueueBusy(true);
+    setQueueError(null);
+    try {
+      await axios.post(`${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/route-queue`, { queue_id: queueId }, { headers: authHeaders() });
+      setShowQueueDialog(false);
+      void queryClient.invalidateQueries({ queryKey: ['inbox-context', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['conv-routing'] });
+      void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
+      emitInboxNotice(conversationId, `Conversa enviada para a fila ${queueName}.`);
+    } catch (err: any) {
+      if (isUnauthorized(err)) handleUnauthorized();
+      else setQueueError(describeAssignError(err, 'route'));
+    } finally {
+      setQueueBusy(false);
     }
   };
 
@@ -264,6 +288,7 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
                 <ActionIcon icon="user-plus" label="Assumir" tone="primary" onClick={handleAssign} disabled={assignLoading} />
               )}
               <ActionIcon icon="transfer" label="Transferir" onClick={handleTransfer} disabled={assignLoading || !conversation?.assigned_to_user_id} />
+              {!internal && conversation?.status !== 'closed' && <ActionIcon icon="building" label="Enviar para uma fila" onClick={() => { setQueueError(null); setShowQueueDialog(true) }} disabled={assignLoading} />}
               {!internal && <ActionIcon icon="check-circle" label="Finalizar atendimento" onClick={() => setShowFinalize(true)} disabled={assignLoading} />}
             </div>
           )}
@@ -382,6 +407,15 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
         onFinalized={(farewell) => emitInboxNotice(conversationId, finalizedNotice(farewell))}
       />
 
+      <QueueSelectDialog
+        open={showQueueDialog}
+        currentQueueId={conversation?.queue_id}
+        busy={queueBusy}
+        error={queueError}
+        onSend={(id, name) => void handleSendToQueue(id, name)}
+        onClose={() => setShowQueueDialog(false)}
+      />
+
       {/* Transfer Modal */}
       <TechnicianSelectModal
         isOpen={showTransferModal}
@@ -394,9 +428,16 @@ export default function ContextPane({ conversationId, onOpenConversation }: Cont
   );
 }
 
-function describeAssignError(err: any, action: 'assign' | 'unassign' | 'transfer' = 'assign'): string {
+function describeAssignError(err: any, action: 'assign' | 'unassign' | 'transfer' | 'route' = 'assign'): string {
   const status = err?.response?.status;
   const body = typeof err?.response?.data === 'string' ? err.response.data : '';
+  if (action === 'route') {
+    if (status === 403) return 'Você não pode enviar esta conversa: ela está com outra pessoa ou você não tem permissão.';
+    if (status === 409) return 'Esta conversa não pode ir para uma fila agora: está encerrada, é uma conversa interna ou está com uma aplicação externa.';
+    if (status === 422) return 'Essa fila não existe mais ou o setor dela está desligado. Escolha outra.';
+    if (status === 404) return 'Conversa não encontrada.';
+    return 'Não foi possível enviar para a fila. Tente de novo.';
+  }
   if (status === 409) {
     return 'Este atendimento acabou de ser modificado por outro operador.';
   }
@@ -414,7 +455,8 @@ function describeAssignError(err: any, action: 'assign' | 'unassign' | 'transfer
   const messages = {
     assign: 'Erro ao assumir conversa.',
     unassign: 'Erro ao soltar conversa.',
-    transfer: 'Erro ao transferir conversa.'
+    transfer: 'Erro ao transferir conversa.',
+    route: 'Erro ao enviar para a fila.'
   };
   return body || messages[action];
 }

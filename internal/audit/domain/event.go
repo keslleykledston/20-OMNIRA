@@ -53,6 +53,7 @@ const (
 	ActionConversationAssigned     AuditAction = "conversation.assigned"
 	ActionConversationUnassigned   AuditAction = "conversation.unassigned"
 	ActionConversationTransferred  AuditAction = "conversation.transferred"
+	ActionConversationQueueChanged AuditAction = "conversation.queue_changed"
 	ActionAgentEnabled             AuditAction = "agent.enabled"
 	ActionAgentDisabled            AuditAction = "agent.disabled"
 	ActionAgentQueueAssigned       AuditAction = "agent.queue_assigned"
