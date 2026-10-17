@@ -14,6 +14,7 @@ import {
 import type { DelegatedTarget } from '../../lib/attendance'
 import { getTenantId } from '../../lib/session'
 import { serviceSessionKey } from './ProtocolTag'
+import SessionExtras from './SessionExtras'
 
 const selectClass = 'w-full rounded-control border border-border-subtle bg-surface px-3 py-2 text-sm text-text-primary'
 const active = (s: ServiceSession) => s.status === 'open' || s.status === 'in_progress' || s.status === 'waiting'
@@ -152,6 +153,7 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
           </form>
         )}
       </div>
+      <SessionExtras session={session} can={can} hub={hub} scope={`${kind}:${tenantId}`} />
       {error && <p role="alert" className="rounded-control bg-status-danger-soft p-2 text-xs text-status-danger">{error}</p>}
     </section>
   )

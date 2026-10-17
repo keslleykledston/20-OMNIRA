@@ -76,6 +76,67 @@ export interface ServiceTask {
 }
 
 export interface ResultCode { id: string; code: string; canonical_code: CanonicalResult; label: string; active: boolean }
+export type CaseStatus = 'open' | 'investigating' | 'waiting' | 'resolved' | 'closed' | 'cancelled'
+export const CASE_STATUS_LABEL: Record<CaseStatus, string> = {
+  open: 'Aberta', investigating: 'Em investigação', waiting: 'Aguardando', resolved: 'Resolvida', closed: 'Encerrada', cancelled: 'Cancelada',
+}
+export interface ServiceCase {
+  id: string
+  case_number: string
+  title: string
+  status: CaseStatus
+  priority: Priority
+  origin_session_id: string | null
+  opened_at: string
+  version: number
+}
+
+export interface TimelineItem {
+  id: string
+  event_type: string
+  occurred_at: string
+  actor_type: 'user' | 'system' | 'flow' | 'ai' | 'integration'
+  note?: string
+  derived?: boolean
+}
+
+export type RequestState = 'in_flight' | 'confirmed_success' | 'confirmed_failure' | 'outcome_unknown'
+export const REQUEST_STATE_LABEL: Record<RequestState, string> = {
+  in_flight: 'Enviando ao ERP', confirmed_success: 'Criada no ERP', confirmed_failure: 'Recusada pelo ERP', outcome_unknown: 'Sem resposta do ERP: confirmar antes de repetir',
+}
+export interface ExternalRequest {
+  id: string
+  title: string
+  state: RequestState
+  operation: string
+  created_at: string
+}
+
+// What the history shows for each stored event (ids and enums only; never message text). An unknown type is shown by its raw name: the module may grow.
+export const EVENT_LABEL: Record<string, string> = {
+  'service_session.opened': 'Protocolo aberto',
+  'service_session.classified': 'Atendimento classificado',
+  'service_session.status_changed': 'Estado do atendimento mudou',
+  'service_session.closed': 'Protocolo encerrado',
+  'service_session.reopened': 'Protocolo reaberto',
+  'service_task.created': 'Tarefa criada',
+  'service_task.assigned': 'Tarefa atribuída',
+  'service_task.status_changed': 'Tarefa mudou de estado',
+  'service_task.updated': 'Tarefa alterada',
+  'service_case.opened': 'Ocorrência aberta',
+  'service_case.assigned': 'Ocorrência atribuída',
+  'service_case.status_changed': 'Ocorrência mudou de estado',
+  'service_case.updated': 'Ocorrência alterada',
+  'service_case.session_linked': 'Ocorrência ligada ao protocolo',
+  'external_record.linked': 'Registro do ERP ligado',
+  'external_record.unlinked': 'Registro do ERP desligado',
+  'external_record.status_changed': 'Registro do ERP mudou de estado',
+  'external_request.created': 'Pedido enviado ao ERP',
+  'external_request.state_changed': 'Pedido ao ERP mudou de estado',
+  'conversation.assignment_changed': 'Conversa passou para outra pessoa',
+}
+export const ACTOR_LABEL: Record<TimelineItem['actor_type'], string> = { user: 'Pessoa', system: 'Sistema', flow: 'Fluxo', ai: 'IA', integration: 'Integração' }
+
 export interface ProtocolPrefix { prefix: string; configured: boolean; locked: boolean; next_protocol: string }
 export interface Category { id: string; code: string; label: string; active: boolean }
 
@@ -116,6 +177,15 @@ export const serviceAPI = {
     call<ServiceTask>(() => axios.post(`${base(target)}/service-tasks`, body, h(target, { 'Idempotency-Key': key }))),
   completeTask: (t: ServiceTask, target?: DelegatedTarget) =>
     call<ServiceTask>(() => axios.post(`${base(target)}/service-tasks/${t.id}/complete`, {}, h(target, { 'If-Match': ifMatch(t.version) }))),
+  casesOfSession: (sessionId: string, target?: DelegatedTarget) =>
+    call<{ items: ServiceCase[] }>(() => axios.get(`${base(target)}/service-cases`, { ...h(target), params: { session_id: sessionId, limit: 50 } })).then((r) => r.items),
+  openCase: (body: { title: string; session_id: string }, key: string, target?: DelegatedTarget) =>
+    call<ServiceCase>(() => axios.post(`${base(target)}/service-cases`, body, h(target, { 'Idempotency-Key': key }))),
+  timeline: (sessionId: string, target?: DelegatedTarget) =>
+    call<{ items: TimelineItem[] }>(() => axios.get(`${base(target)}/service-sessions/${sessionId}/timeline`, { ...h(target), params: { order: 'desc', limit: 50 } })).then((r) => r.items),
+  // The requests made to the ERP are the company's own (never delegable): a member asks, a Hub agent does not.
+  externalRequestsOfSession: (sessionId: string) =>
+    call<{ items: ExternalRequest[] }>(() => axios.get(`${base()}/external-requests`, { ...h(), params: { session_id: sessionId, limit: 20 } })).then((r) => r.items),
   // Members only (never delegable): the company's prefix and the next protocol number.
   protocolPrefix: () => call<ProtocolPrefix>(() => axios.get(`${base()}/service-settings/protocol-prefix`, h())),
   setProtocolPrefix: (prefix: string) =>
