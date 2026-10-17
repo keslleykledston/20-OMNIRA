@@ -31,8 +31,10 @@ const msg = (id: string, h: number, over: Partial<MessageItem> = {}): MessageIte
 let thread: MessageItem[] = [];
 let assignedTo: string | undefined = 'u-1';
 let pageSize = 100;
+let channelData: Record<string, unknown> | undefined;
 function serve() {
   vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
+    if (channelData && (url as string).endsWith(`/inbox/conversations/${CONV}/channel`)) return { data: channelData };
     if ((url as string).endsWith(`/inbox/conversations/${CONV}`)) {
       return { data: { id: CONV, contact_name: 'Maria', contact_phone: '+5511999990000', status: 'active', assigned_to_user_id: assignedTo } };
     }
@@ -57,6 +59,7 @@ beforeEach(() => {
   setSession();
   pageSize = 100;
   assignedTo = 'u-1';
+  channelData = undefined;
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 1000 });
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 400 });
 });
@@ -266,5 +269,62 @@ describe('ChatPane — claim first (channel selector slice)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Assumir' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/não é atendente desta instância/i);
+  });
+});
+
+describe('ChatPane — the two actions of the status strip are real buttons (UX audit A1)', () => {
+  it('"Assumir atendimento" and "Finalizar" are bordered or filled buttons with an icon, not bare links', async () => {
+    assignedTo = undefined;
+    thread = [msg('a', 9)];
+    serve();
+    const first = renderAt(<ChatPane conversationId={CONV} />);
+    const claimBtn = await screen.findByRole('button', { name: 'Assumir atendimento' });
+    expect(claimBtn.className).toMatch(/bg-accent-primary/);
+    expect(claimBtn.querySelector('svg')).not.toBeNull();
+    first.unmount();
+
+    assignedTo = 'u-1';
+    renderAt(<ChatPane conversationId={CONV} />);
+    const finalize = await screen.findByRole('button', { name: 'Finalizar' });
+    expect(finalize.className).toMatch(/border-border-strong/);
+    expect(finalize.querySelector('svg')).not.toBeNull();
+  });
+});
+
+describe('ChatPane — the 24 h window says how long is left (UX audit M6)', () => {
+  const channelState = (expiresInMs: number) => ({ can_send_text: true, can_send_media: false, window_required: true, window_open: true, window_expires_at: new Date(Date.now() + expiresInMs).toISOString() });
+  it('is calm with hours left and turns into a warning with the template shortcut under two hours', async () => {
+    thread = [msg('a', 9)];
+    channelData = channelState(5 * 3_600_000 + 12 * 60_000);
+    serve();
+    const calm = renderAt(<ChatPane conversationId={CONV} />);
+    const calmNote = await screen.findByText(/restam 5 h/);
+    expect(calmNote.closest('[role="status"]')?.className).not.toMatch(/bg-status-warning-soft/);
+    calm.unmount();
+
+    channelData = channelState(40 * 60_000);
+    renderAt(<ChatPane conversationId={CONV} />);
+    const urgentNote = await screen.findByText(/restam (39|40) min/);
+    expect(urgentNote.closest('[role="status"]')?.className).toMatch(/bg-status-warning-soft/);
+    expect(screen.getByRole('button', { name: 'Enviar template' })).toBeInTheDocument();
+  });
+
+  it('asks the server again the moment the window runs out, so free text is not offered after it closed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      thread = [msg('a', 9)];
+      channelData = channelState(60_000);
+      serve();
+      renderAt(<ChatPane conversationId={CONV} />);
+      await screen.findByText(/resta/);
+      const channelCalls = () => vi.mocked(axios.get).mock.calls.filter(([u]) => String(u).endsWith(`/inbox/conversations/${CONV}/channel`)).length;
+      const before = channelCalls();
+      channelData = { ...channelState(0), window_open: false, window_expires_at: new Date(Date.now() - 1000).toISOString() };
+      await act(async () => { vi.advanceTimersByTime(61_000); });
+      await waitFor(() => expect(channelCalls()).toBeGreaterThan(before));
+      expect(await screen.findByText(/Janela de 24 h fechada/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

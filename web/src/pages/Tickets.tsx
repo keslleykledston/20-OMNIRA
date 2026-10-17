@@ -243,7 +243,7 @@ export default function TicketsPage() {
                 <TableRow>
                   <TableHeaderCell>Assunto</TableHeaderCell>
                   <TableHeaderCell>Prioridade</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Situação</TableHeaderCell>
                   <TableHeaderCell>Origem</TableHeaderCell>
                   <TableHeaderCell>Atualizado</TableHeaderCell>
                   <TableHeaderCell>Ação</TableHeaderCell>

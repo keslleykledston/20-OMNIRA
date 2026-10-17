@@ -130,7 +130,7 @@ export default function MessageComposer({
   return (
     <div className="space-y-1.5">
       {label && (
-        <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-text-tertiary">
+        <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] text-text-tertiary">
           <span className="flex items-center gap-1.5">
             <Icon name="conversations" size={12} />
             {label}

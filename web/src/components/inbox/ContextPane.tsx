@@ -237,7 +237,7 @@ export default function ContextPane({ conversationId, onOpenConversation, onSent
       {tab === 'history' && (
         <div role="tabpanel" id={`${tabsId}-panel-history`} aria-labelledby={`${tabsId}-tab-history`} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto focus-visible:outline-none">
           <div className="p-4">
-            <h3 className="mb-3 text-[10px] font-semibold uppercase text-text-tertiary">Histórico deste atendimento</h3>
+            <h3 className="mb-3 text-xs font-semibold uppercase text-text-tertiary">Histórico deste atendimento</h3>
             <ol className="m-0 list-none space-y-4 border-l border-border-subtle pl-4">
               <li>
                 <p className="text-sm font-medium text-text-primary">Conversa iniciada</p>
@@ -297,9 +297,9 @@ export default function ContextPane({ conversationId, onOpenConversation, onSent
           )}
         </div>
         {closed ? (
-          <p role="status" className="text-[11px] text-text-tertiary">Atendimento finalizado.</p>
+          <p role="status" className="text-xs text-text-tertiary">Atendimento finalizado.</p>
         ) : (
-          <p className="text-[11px] text-text-tertiary">
+          <p className="text-xs text-text-tertiary">
             {conversation?.created_at ? `Desde ${new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}
             {conversation?.message_count != null && ` · ${conversation.message_count} ${conversation.message_count === 1 ? 'mensagem' : 'mensagens'}`}
           </p>

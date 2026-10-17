@@ -236,7 +236,7 @@ export default function ConversationListPanel({
 // What the conversation is, when it is not plain customer service (ADR-0018). A customer conversation shows nothing: it is
 // the normal case. "Não classificado" tells the attendant to say who this is before treating it as a customer.
 function kindBadge(conv: ConversationItem) {
-  const base = 'flex-shrink-0 rounded-pill px-1.5 text-[10px] font-medium leading-4'
+  const base = 'flex-shrink-0 rounded-pill px-1.5 text-[11px] font-medium leading-4'
   // a contact an operator declared internal (team on a personal number, partner, supplier): say which, instead of "Outros"
   if (conv.contact_kind === 'internal' && conv.conversation_kind !== 'internal') {
     const role = conv.contact_internal_role
@@ -322,7 +322,7 @@ function ConversationRow({
               <span
                 title="Cliente aguardando resposta"
                 className={clsx(
-                  'inline-flex flex-shrink-0 items-center gap-0.5 rounded-pill px-1.5 text-[10px] font-medium leading-4 tabular-nums',
+                  'inline-flex flex-shrink-0 items-center gap-0.5 rounded-pill px-1.5 text-[11px] font-medium leading-4 tabular-nums',
                   WAIT_STYLE[wait.tone]
                 )}
               >
@@ -331,7 +331,7 @@ function ConversationRow({
               </span>
             )}
           </span>
-          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-text-tertiary">
+          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
             <ChannelOrigin source={origin?.provider ?? 'whatsapp'} detail={origin?.label} />
             <ChannelBadge line={line} />
             <span className={clsx(unassigned && 'font-medium text-status-warning')}>{state}</span>

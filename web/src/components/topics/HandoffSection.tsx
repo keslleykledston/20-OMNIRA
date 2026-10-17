@@ -55,7 +55,7 @@ export function HandoffSection({ topicId }: { topicId: string }) {
           <code className="block break-all rounded-control bg-surface-muted p-2 text-xs text-text-primary" data-testid="handoff-token">
             {invite.token}
           </code>
-          <p className="text-[11px] text-status-warning">Este código aparece só agora e vale uma única vez.</p>
+          <p className="text-xs text-status-warning">Este código aparece só agora e vale uma única vez.</p>
           <SmallButton onClick={copy}>{copied ? 'Copiado' : 'Copiar código'}</SmallButton>
         </div>
       )}

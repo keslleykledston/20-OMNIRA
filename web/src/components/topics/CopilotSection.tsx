@@ -53,7 +53,7 @@ export function CopilotSection({ topicId }: { topicId: string }) {
       )}
       {draft && (
         <div className="mt-2 space-y-2 rounded-control border border-border-subtle p-2">
-          <p className="text-[11px] font-medium text-status-warning">Rascunho sugerido por IA — não foi enviado. Revise antes de enviar.</p>
+          <p className="text-xs font-medium text-status-warning">Rascunho sugerido por IA — não foi enviado. Revise antes de enviar.</p>
           <p className="text-sm text-text-primary whitespace-pre-wrap break-words" data-testid="copilot-draft">
             {draft.reply}
           </p>
@@ -69,7 +69,7 @@ export function CopilotSection({ topicId }: { topicId: string }) {
           )}
           {draft.missing_info.length > 0 && (
             <div>
-              <p className="text-[11px] font-medium text-text-tertiary">Falta saber</p>
+              <p className="text-xs font-medium text-text-tertiary">Falta saber</p>
               <ul className="list-disc pl-4 text-xs text-text-secondary">
                 {draft.missing_info.map((m) => (
                   <li key={m}>{m}</li>

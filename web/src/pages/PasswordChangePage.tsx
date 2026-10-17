@@ -71,10 +71,10 @@ export default function PasswordChangePage() {
           <div className="inline-flex items-center justify-center w-12 h-12 bg-indigo-100 rounded-full mb-4">
             <Icon name="settings" className="w-6 h-6 text-indigo-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-bold text-text-primary">
             {isForcedChange ? 'Alterar Senha' : 'Alterar Senha'}
           </h1>
-          <p className="text-gray-600 mt-2">
+          <p className="text-text-secondary mt-2">
             {isForcedChange
               ? 'Você precisa alterar sua senha antes de continuar'
               : 'Atualize sua senha por segurança'}
@@ -83,14 +83,14 @@ export default function PasswordChangePage() {
 
         {/* Status Messages */}
         {status.kind === 'error' && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-700 text-sm font-medium">{status.message}</p>
+          <div className="mb-6 p-4 bg-status-danger-soft border border-status-danger-border rounded-lg">
+            <p className="text-status-danger text-sm font-medium">{status.message}</p>
           </div>
         )}
 
         {status.kind === 'success' && (
-          <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-            <p className="text-green-700 text-sm font-medium">✓ Senha alterada com sucesso! Redirecionando...</p>
+          <div className="mb-6 p-4 bg-status-success-soft border border-status-success-border rounded-lg">
+            <p className="text-status-success text-sm font-medium">✓ Senha alterada com sucesso! Redirecionando...</p>
           </div>
         )}
 
@@ -99,7 +99,7 @@ export default function PasswordChangePage() {
           {/* Old Password (se não é troca forçada) */}
           {!isForcedChange && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-text-primary mb-2">
                 Senha Atual
               </label>
               <Input
@@ -114,7 +114,7 @@ export default function PasswordChangePage() {
 
           {/* New Password */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-text-primary mb-2">
               Nova Senha
             </label>
             <Input
@@ -124,14 +124,14 @@ export default function PasswordChangePage() {
               onChange={(e) => setNewPassword(e.target.value)}
               disabled={status.kind === 'loading' || status.kind === 'success'}
             />
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-text-tertiary mt-1">
               Mínimo 8 caracteres. Use letras, números e símbolos.
             </p>
           </div>
 
           {/* Confirm Password */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-text-primary mb-2">
               Confirmar Senha
             </label>
             <Input
@@ -155,8 +155,8 @@ export default function PasswordChangePage() {
 
         {/* Info */}
         {isForcedChange && (
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-blue-700 text-xs">
+          <div className="mt-6 p-4 bg-status-info-soft border border-status-info-border rounded-lg">
+            <p className="text-status-info text-xs">
               <strong>Atenção:</strong> Você deve alterar sua senha para acessar a plataforma. Esta é uma troca obrigatória após o login inicial.
             </p>
           </div>

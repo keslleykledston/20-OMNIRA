@@ -42,7 +42,7 @@ export default function HubOpenTabs({ tabs, selectedId, onSelect, onClose }: Pro
   };
   return (
     <div className="shrink-0 border-b border-border-subtle bg-surface">
-      <p className="flex items-center gap-1.5 px-4 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">
+      <p className="flex items-center gap-1.5 px-4 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">
         <Icon name="conversations" size={12} />
         Atendimentos abertos
       </p>
@@ -65,12 +65,12 @@ export default function HubOpenTabs({ tabs, selectedId, onSelect, onClose }: Pro
                   active ? 'border-accent-primary/40 bg-accent-primary-soft' : 'border-border-subtle bg-surface-muted hover:bg-surface-secondary',
                 )}
               >
-                <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-secondary text-[10px] font-semibold text-text-secondary">
+                <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full bg-surface-secondary text-[11px] font-semibold text-text-secondary">
                   {initials(t.name)}
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-[11px] font-semibold text-text-primary">{t.name}</span>
-                  <span className="block truncate text-[10px] text-text-secondary">{t.tenantName}</span>
+                  <span className="block truncate text-[11px] text-text-secondary">{t.tenantName}</span>
                 </span>
               </button>
               <button

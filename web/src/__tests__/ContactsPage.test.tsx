@@ -432,7 +432,7 @@ describe('ContactsPage — search, filters and kind (ADR-0014)', () => {
     expect(listCalls().filter((p) => typeof p.q === 'string' && p.q !== 'maria').length).toBe(0);
 
     await user.click(screen.getByRole('tab', { name: 'Spam' }));
-    await user.selectOptions(screen.getByLabelText('Status'), 'blocked');
+    await user.selectOptions(screen.getByLabelText('Situação'), 'blocked');
     await waitFor(() => expect(listCalls().some((p) => p.q === 'maria' && p.view === 'spam' && p.status === 'blocked')).toBe(true));
   });
 

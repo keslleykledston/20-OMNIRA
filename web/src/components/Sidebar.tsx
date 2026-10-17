@@ -39,7 +39,7 @@ const navItems: { label: string; path: string; icon: IconName; alsoActiveOn?: st
   { label: 'Relatórios', path: '/reports', icon: 'reports', mockBacked: true },
   { label: 'Supervisor', path: '/supervisor', icon: 'supervisor' },
   { label: 'Pessoas', path: '/settings/people', icon: 'contacts', alsoActiveOn: '/settings/roles' },
-  { label: 'Atendimento', path: '/settings/attendance', icon: 'clock', alsoActiveOn: '/settings/attendance/sectors,/settings/attendance/calendars,/settings/attendance/shifts,/settings/attendance/overflow' },
+  { label: 'Setores e horários', path: '/settings/attendance', icon: 'clock', alsoActiveOn: '/settings/attendance/sectors,/settings/attendance/calendars,/settings/attendance/shifts,/settings/attendance/overflow' },
   // ADR-0048: aplicações externas (CRMs) que usam a API headless. Sempre visível como as outras entradas de administração; o acesso é conferido dentro da página
   // (integration.read / integration.manage) e a própria página explica quando o recurso não está ligado neste ambiente.
   { label: 'Integrações', path: '/settings/integrations/apps', icon: 'key', alsoActiveOn: '/settings/integrations' },
@@ -173,7 +173,7 @@ export default function Sidebar() {
                 {item.path === '/inbox' && waiting > 0 && (
                   <span
                     aria-hidden="true"
-                    className={clsx('absolute -right-2 -top-2 min-w-[16px] rounded-full bg-accent-primary px-1 text-center text-[10px] font-semibold leading-4 text-white', wide('xl:hidden'))}
+                    className={clsx('absolute -right-2 -top-2 min-w-[16px] rounded-full bg-accent-primary px-1 text-center text-[11px] font-semibold leading-4 text-white', wide('xl:hidden'))}
                   >
                     {waiting > 99 ? '99+' : waiting}
                   </span>
@@ -201,7 +201,7 @@ export default function Sidebar() {
             <p className="text-xs text-text-tertiary truncate">
               {tenant.roleLabel}
             </p>
-            <p className="text-[10px] text-text-quaternary truncate font-mono">
+            <p className="text-[11px] text-text-quaternary truncate font-mono">
               {tenant.tenantId}
             </p>
           </div>

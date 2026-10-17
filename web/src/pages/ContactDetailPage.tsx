@@ -424,7 +424,7 @@ function TicketList({ tickets, onOpen }: { tickets: ContactTicket[]; onOpen: (co
           <TableHead>
             <TableRow>
               <TableHeaderCell>Assunto</TableHeaderCell>
-              <TableHeaderCell>Status</TableHeaderCell>
+              <TableHeaderCell>Situação</TableHeaderCell>
               <TableHeaderCell>Prioridade</TableHeaderCell>
               <TableHeaderCell>Atualização</TableHeaderCell>
             </TableRow>

@@ -12,6 +12,7 @@ import { teamAPI } from '../lib/team'
 import { agentsAPI } from '../lib/agents'
 import { attendanceErrorMessage, calendarsAPI, noticeAPI, openNoticeAPI, SECTOR_COLORS, sectorsAPI, type Availability, type Sector, type SectorColor } from '../lib/sectors'
 import { getTenantId } from '../lib/session'
+import { showToast } from '../lib/toast'
 import { useAccess } from '../lib/useAccess'
 
 export default function AttendanceSectorsPage() {
@@ -242,7 +243,7 @@ export default function AttendanceSectorsPage() {
                 if (detailsForm.description.trim() !== (d.description ?? '')) patch.description = detailsForm.description.trim()
                 if (detailsForm.color !== (d.color ?? '')) patch.color = detailsForm.color
                 if (detailsForm.supervisor !== (d.supervisor?.user_id ?? '')) patch.supervisor_user_id = detailsForm.supervisor || null
-                if (Object.keys(patch).length > 0) run.mutate(() => sectorsAPI.update(d.id, patch))
+                if (Object.keys(patch).length > 0) run.mutate(() => sectorsAPI.update(d.id, patch), { onSuccess: () => showToast(`Detalhes de “${d.name}” salvos.`) })
                 setDetails(null)
               }}>Salvar</Button></>}>
             <div className="space-y-4">

@@ -32,7 +32,7 @@ export function TimelineSection({ topicId }: { topicId: string }) {
       <ol className="space-y-1.5">
         {items.map((m) => (
           <li key={m.id} className={clsx('rounded-control px-2 py-1.5 text-xs', m.direction === 'outbound' ? 'bg-accent-primary-soft' : 'bg-surface-muted')}>
-            <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
+            <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-xs text-text-tertiary">
               <span>{m.direction === 'outbound' ? 'Atendente' : 'Cliente'}</span>
               <span>{formatWhen(m.created_at)}</span>
               {m.relation !== 'primary' && <Chip tone="neutral">{m.relation === 'secondary' ? 'também aqui' : 'apoio'}</Chip>}

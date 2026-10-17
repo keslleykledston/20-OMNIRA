@@ -92,7 +92,7 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
           delegated agent could already reach is hidden behind a click. */}
       <CollapsibleSection id="d-contact" title="Contato" icon="contacts" defaultOpen>
         <section aria-label="Contato" className="px-4 pb-4">
-          <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Contato</h3>
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-tertiary">Contato</h3>
           <p className="text-[15px] font-semibold text-text-primary">{name}</p>
           {whatsapp && <p className="text-[12px] text-text-secondary">{whatsapp} no WhatsApp</p>}
           {(card?.phone_e164 || c?.contact_phone) && <p className="text-[13px] text-text-secondary">{card?.phone_e164 || c?.contact_phone}</p>}
@@ -103,7 +103,7 @@ export default function DelegatedContextPane({ conversationId }: { conversationI
       </CollapsibleSection>
       <CollapsibleSection id="d-attendance" title="Atendimento" icon="conversations" defaultOpen>
         <section aria-label="Atendimento" className="px-4 pb-4">
-          <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">Atendimento</h3>
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-tertiary">Atendimento</h3>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
             <dt className="text-text-secondary">Estado</dt>
             <dd className="text-right text-text-primary">{c?.status === 'closed' ? 'Finalizado' : 'Em atendimento'}</dd>

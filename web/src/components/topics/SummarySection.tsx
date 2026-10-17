@@ -40,11 +40,11 @@ export function SummarySection({ topicId, canManage }: { topicId: string; canMan
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-1.5">
             <Chip tone={current.status === 'ai_inferred' ? 'warning' : 'success'}>{summaryStatusLabel[current.status]}</Chip>
-            <span className="text-[11px] text-text-tertiary">v{current.version}</span>
+            <span className="text-xs text-text-tertiary">v{current.version}</span>
           </div>
           <p className="text-sm text-text-primary whitespace-pre-wrap break-words">{current.summary_text}</p>
           {current.status === 'ai_inferred' && (
-            <p className="text-[11px] text-text-tertiary">Gerado automaticamente a partir das mensagens deste assunto. Confira antes de confiar.</p>
+            <p className="text-xs text-text-tertiary">Gerado automaticamente a partir das mensagens deste assunto. Confira antes de confiar.</p>
           )}
         </div>
       )}
@@ -105,7 +105,7 @@ export function SummarySection({ topicId, canManage }: { topicId: string; canMan
                 <li key={s.id} className="rounded-control border border-border-subtle p-2">
                   <div className="mb-1 flex items-center gap-1.5">
                     <Chip tone="neutral">{summaryStatusLabel[s.status]}</Chip>
-                    <span className="text-[11px] text-text-tertiary">v{s.version}</span>
+                    <span className="text-xs text-text-tertiary">v{s.version}</span>
                   </div>
                   <p className="text-xs text-text-secondary whitespace-pre-wrap break-words">{s.summary_text}</p>
                 </li>

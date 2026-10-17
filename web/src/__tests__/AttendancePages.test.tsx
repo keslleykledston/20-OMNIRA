@@ -6,6 +6,7 @@ import AttendanceSectorsPage from '../pages/AttendanceSectorsPage'
 import AttendanceCalendarsPage from '../pages/AttendanceCalendarsPage'
 import AttendanceShiftsPage from '../pages/AttendanceShiftsPage'
 import AttendanceOverflowPage from '../pages/AttendanceOverflowPage'
+import { ToastRegion } from '../components/primitives'
 import { renderAt, setSession } from './testUtils'
 
 vi.mock('axios')
@@ -128,7 +129,7 @@ beforeEach(() => {
 })
 
 describe('Atendimento › Setores', () => {
-  const page = () => renderAt(<AttendanceSectorsPage />, '/settings/attendance/sectors', '/settings/attendance/sectors')
+  const page = () => renderAt(<><AttendanceSectorsPage /><ToastRegion /></>, '/settings/attendance/sectors', '/settings/attendance/sectors')
 
   it('mostra cada setor com suas filas, se estão abertas agora e o que ainda não tem setor', async () => {
     serve(world())
@@ -163,6 +164,8 @@ describe('Atendimento › Setores', () => {
     await user.selectOptions(await within(dialog).findByLabelText('Responsável pelo setor'), 'u-ana')
     await user.click(within(dialog).getByRole('button', { name: 'Salvar' }))
     await waitFor(() => expect(calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/sectors/s-sup'))?.body).toEqual({ description: 'Chamados técnicos', color: 'blue', supervisor_user_id: 'u-ana' }))
+    // confirmação passageira de que salvou (UX audit M3); só aparece depois de o servidor aceitar
+    expect(await screen.findByText('Detalhes de “Suporte” salvos.')).toBeInTheDocument()
 
     // Financeiro: só limpa o responsável -> só esse campo vai
     const fin = screen.getByLabelText('Setor Financeiro')

@@ -99,16 +99,16 @@ export default function ServiceSessionPanel({ conversationId, can, hub, delegate
           </div>
         )}
       </div>
-      <p className="m-0 text-[11px] text-text-tertiary">
+      <p className="m-0 text-xs text-text-tertiary">
         Aberto {when(session.opened_at)}
         {session.closed_at && ` · encerrado ${when(session.closed_at)}`}
         {session.resolution_canonical && ` · ${BUILTIN_RESULTS.find((r) => r.code === session.resolution_canonical)?.label ?? 'Abandonado'}`}
       </p>
 
-      {isActive && <p className="m-0 text-[11px] text-text-tertiary">O protocolo encerra junto com o atendimento, em “Finalizar”.</p>}
+      {isActive && <p className="m-0 text-xs text-text-tertiary">O protocolo encerra junto com o atendimento, em “Finalizar”.</p>}
 
       <div>
-        <h4 className="mb-1 text-[11px] font-semibold uppercase text-text-tertiary">Tarefas</h4>
+        <h4 className="mb-1 text-xs font-semibold uppercase text-text-tertiary">Tarefas</h4>
         {(tasks.data ?? []).length === 0 && <p className="m-0 text-xs text-text-tertiary">Nenhuma tarefa.</p>}
         <ul className="m-0 list-none space-y-1 p-0">
           {pending.map((t) => (

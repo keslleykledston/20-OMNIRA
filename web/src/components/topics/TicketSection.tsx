@@ -51,7 +51,7 @@ export function TicketSection({ topicId, canManage }: { topicId: string; canMana
             </div>
           )}
           {advice.data.action === 'needs_agent' && advice.data.allowed_actions.length === 0 && (
-            <p className="text-[11px] text-text-tertiary">Decisão do atendente: use o painel de chamados da conversa.</p>
+            <p className="text-xs text-text-tertiary">Decisão do atendente: use o painel de chamados da conversa.</p>
           )}
         </div>
       )}

@@ -82,7 +82,7 @@ export default function HubInboxToolbar({ view, onViewChange, search, onSearchCh
               >
                 {f.label}
                 {typeof n === 'number' && n > 0 && (
-                  <span aria-hidden="true" className={clsx('rounded-pill px-1.5 text-[10px] font-semibold', f.id === 'waiting' ? 'bg-accent-primary text-white' : 'bg-surface-secondary text-text-secondary')}>
+                  <span aria-hidden="true" className={clsx('rounded-pill px-1.5 text-[11px] font-semibold', f.id === 'waiting' ? 'bg-accent-primary text-white' : 'bg-surface-secondary text-text-secondary')}>
                     {n > 99 ? '99+' : n}
                   </span>
                 )}

@@ -44,7 +44,7 @@ export function ContactDetailsEditor({ contactId, onChanged, target }: { contact
     return (
       <div className="px-4 pb-3">
         {c.email && <p className="text-sm text-text-secondary break-words">{c.email}</p>}
-        {c.alias && c.whatsapp_name && <p className="text-[11px] text-text-tertiary break-words">Nome no WhatsApp: {c.whatsapp_name}</p>}
+        {c.alias && c.whatsapp_name && <p className="text-xs text-text-tertiary break-words">Nome no WhatsApp: {c.whatsapp_name}</p>}
         <button
           type="button"
           onClick={() => {
@@ -79,7 +79,7 @@ export function ContactDetailsEditor({ contactId, onChanged, target }: { contact
           onChange={(e) => setAlias(e.target.value)}
         />
       </label>
-      <p className="text-[11px] text-text-tertiary">
+      <p className="text-xs text-text-tertiary">
         {c.whatsapp_name ? `Nome no WhatsApp: ${c.whatsapp_name}. ` : ''}Apague o apelido para voltar ao nome do WhatsApp.
       </p>
       <label className="block text-xs text-text-secondary">

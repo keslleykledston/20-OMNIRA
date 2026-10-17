@@ -14,7 +14,7 @@ import {
 import type { DelegatedTarget } from '../../lib/attendance'
 
 const when = (iso: string) => new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-const TITLE = 'mb-1 text-[11px] font-semibold uppercase text-text-tertiary'
+const TITLE = 'mb-1 text-xs font-semibold uppercase text-text-tertiary'
 
 interface Props {
   session: ServiceSession
@@ -92,7 +92,7 @@ export default function SessionExtras({ session, can, hub, scope }: Props) {
       )}
 
       <details onToggle={(e) => setHistoryOpen((e.currentTarget as HTMLDetailsElement).open)}>
-        <summary className="cursor-pointer text-[11px] font-semibold uppercase text-text-tertiary">Histórico do atendimento</summary>
+        <summary className="cursor-pointer text-xs font-semibold uppercase text-text-tertiary">Histórico do atendimento</summary>
         {history.isLoading && <p className="mt-1 text-xs text-text-tertiary">Carregando…</p>}
         {history.isError && <p className="mt-1 text-xs text-text-tertiary">Não foi possível carregar o histórico.</p>}
         {history.isSuccess && (history.data ?? []).length === 0 && <p className="mt-1 text-xs text-text-tertiary">Sem eventos.</p>}

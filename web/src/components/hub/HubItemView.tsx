@@ -30,7 +30,7 @@ function Bubble({ m }: { m: HubMessage }) {
       >
         {m.body && <p className="whitespace-pre-wrap break-words text-text-primary">{m.body}</p>}
         {attachment && <p className="italic text-text-secondary">{attachment}</p>}
-        <p className="mt-0.5 text-right text-[10px] text-text-tertiary">
+        <p className="mt-0.5 text-right text-[11px] text-text-tertiary">
           <time>{Number.isNaN(time.getTime()) ? '' : time.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</time>
           {outbound && <span className="sr-only"> enviada pela equipe</span>}
         </p>

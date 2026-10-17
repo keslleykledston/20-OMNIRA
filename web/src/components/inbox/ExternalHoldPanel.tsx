@@ -11,7 +11,7 @@ import { useAccess } from '../../lib/useAccess'
 // the last change. A supervisor with conversation.takeover_external may take it back: explicit, with a written reason and a confirmation — never automatic.
 
 export const HOLDER_LABEL: Record<string, string> = {
-  tenant_user: 'Workspace',
+  tenant_user: 'Equipe',
   hub_user: 'Hub',
   crm_application: 'CRM',
   crm_agent_verified: 'CRM',

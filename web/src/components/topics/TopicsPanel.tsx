@@ -102,7 +102,7 @@ export default function TopicsPanel({ conversationId }: { conversationId: string
               </div>
             </div>
           ))}
-          {waiting.length > 3 && <p className="text-[11px] text-text-tertiary">E mais {waiting.length - 3} aguardando.</p>}
+          {waiting.length > 3 && <p className="text-xs text-text-tertiary">E mais {waiting.length - 3} aguardando.</p>}
         </div>
       )}
 
@@ -124,7 +124,7 @@ export default function TopicsPanel({ conversationId }: { conversationId: string
                 <span className="min-w-0 truncate text-sm font-medium text-text-primary">{t.title}</span>
                 <Chip tone={t.status === 'open' ? 'info' : 'neutral'}>{statusLabel[t.status] ?? t.status}</Chip>
               </div>
-              <div className="mt-0.5 flex items-center gap-2 text-[11px] text-text-tertiary">
+              <div className="mt-0.5 flex items-center gap-2 text-xs text-text-tertiary">
                 <span>{plural(t.message_count ?? 0, 'mensagem', 'mensagens')}</span>
                 {(t.ticket_count ?? 0) > 0 && <span>· {plural(t.ticket_count ?? 0, 'chamado', 'chamados')}</span>}
                 <span>· {formatWhen(t.last_activity_at)}</span>

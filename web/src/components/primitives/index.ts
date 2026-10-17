@@ -10,6 +10,7 @@ export { DropdownMenu } from './DropdownMenu';
 export type { MenuAction } from './DropdownMenu';
 export { Modal, ConfirmDialog } from './Modal';
 export { Drawer } from './Drawer';
+export { ToastRegion } from './ToastRegion';
 export type { IconName } from './Icon';
 export { Card, CardHeader, CardBody, CardFooter } from './Card';
 export { MetricCard, MetricCardSkeleton } from './MetricCard';

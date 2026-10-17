@@ -23,9 +23,15 @@ export function Modal({ open, title, description, onClose, children, footer, siz
   // cada render) refazia o foco inicial a cada tecla e engolia o texto digitado em qualquer campo dentro do modal.
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  // Clicar no fundo fecha, a menos que a pessoa já tenha mexido num campo do modal: um clique perdido não pode descartar o que foi
+  // digitado (X, Esc e "Cancelar" continuam fechando). O clique só conta se começou no fundo: arrastar uma seleção de texto de
+  // dentro do painel até fora dele também gera um clique no fundo.
+  const touched = useRef(false)
+  const pressedOnBackdrop = useRef(false)
 
   useEffect(() => {
     if (!open) return
+    touched.current = false
     restoreTo.current = document.activeElement as HTMLElement
 
     const panel = panelRef.current
@@ -65,13 +71,18 @@ export function Modal({ open, title, description, onClose, children, footer, siz
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       // margin 0 inline: rendered in place, a parent's space-y-* margin would push the fixed overlay down and uncover the top
       style={{ backgroundColor: 'var(--color-surface-overlay)', margin: 0 }}
-      onClick={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => { pressedOnBackdrop.current = e.target === e.currentTarget }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && pressedOnBackdrop.current && !touched.current) onClose()
+        pressedOnBackdrop.current = false
+      }}
     >
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onInput={() => { touched.current = true }}
         className={clsx(
           // never taller than the screen: header and footer stay put and only the body scrolls, so a long list can
           // never push the confirm/close buttons out of reach

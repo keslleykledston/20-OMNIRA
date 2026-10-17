@@ -70,7 +70,7 @@ const FIELD =
   'placeholder:text-text-tertiary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary ' +
   'disabled:opacity-50 disabled:cursor-not-allowed';
 
-const SECTION_TITLE = 'mb-2 text-[10px] font-bold uppercase text-text-tertiary';
+const SECTION_TITLE = 'mb-2 text-xs font-bold uppercase text-text-tertiary';
 
 // PRODUCT.6-N: creating a real external ticket (PRODUCT.6-M) is a single,
 // non-retryable-by-us write against K3G — the Idempotency-Key and the
@@ -744,9 +744,9 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
               necessária antes de qualquer nova ação.
             </p>
             {diagnosticExternalTicketId && (
-              <p className="mt-1 font-mono text-[10px]">ID externo possível: {diagnosticExternalTicketId}</p>
+              <p className="mt-1 font-mono text-xs">ID externo possível: {diagnosticExternalTicketId}</p>
             )}
-            {diagnosticProvider && <p className="mt-1 font-mono text-[10px]">Provedor possível: {diagnosticProvider}</p>}
+            {diagnosticProvider && <p className="mt-1 font-mono text-xs">Provedor possível: {diagnosticProvider}</p>}
           </div>
         ) : finished && state.result ? (
           <div className="rounded-control border border-border-subtle bg-surface p-3">
@@ -756,7 +756,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
             {state.phase === 'replayed' && (
               <p className="mt-1 text-text-secondary">Ticket já havia sido criado; resultado recuperado.</p>
             )}
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
               <dt className="text-text-tertiary">ID externo</dt>
               <dd className="font-mono text-text-primary">{state.result.external_ticket_id}</dd>
               <dt className="text-text-tertiary">Provedor</dt>
@@ -771,7 +771,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
             <p className="mt-1 text-text-secondary">
               Esta conversa já possui um chamado externo vinculado — nenhum chamado novo foi criado.
             </p>
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
               {state.problem?.external_ticket_id && (
                 <>
                   <dt className="text-text-tertiary">ID externo</dt>
@@ -793,7 +793,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
               A criação pode ter sido processada. Verificação necessária antes de tentar novamente.
             </p>
             {state.problem?.external_ticket_id && (
-              <p className="mt-1 font-mono text-[10px]">ID externo possível: {state.problem.external_ticket_id}</p>
+              <p className="mt-1 font-mono text-xs">ID externo possível: {state.problem.external_ticket_id}</p>
             )}
           </div>
         ) : readPhase === 'linked' && linkedTicket ? (
@@ -820,14 +820,14 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                 </Button>
               )}
             </div>
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
               <dt className="text-text-tertiary">ID externo</dt>
               <dd className="font-mono text-text-primary">{linkedTicket.external_ticket_id}</dd>
               <dt className="text-text-tertiary">Provedor</dt>
               <dd className="text-text-primary">{linkedTicket.provider}</dd>
               {linkedTicket.external_status_label && (
                 <>
-                  <dt className="text-text-tertiary">Status</dt>
+                  <dt className="text-text-tertiary">Situação</dt>
                   <dd className="text-text-primary">{linkedTicket.external_status_label}</dd>
                 </>
               )}
@@ -851,7 +851,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                 <p className={SECTION_TITLE}>Status externo</p>
 
                 {canVerifyPendingIntent ? (
-                  <div className="rounded-control border border-status-warning-border bg-status-warning-soft p-2 text-[11px] text-status-warning">
+                  <div className="rounded-control border border-status-warning-border bg-status-warning-soft p-2 text-xs text-status-warning">
                     <p className="font-semibold">
                       {mutationPhase === 'network_ambiguous'
                         ? 'Não foi possível confirmar a alteração.'
@@ -899,27 +899,27 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                         Alterar status
                       </Button>
                     </div>
-                    {mutationNote && <p className="mt-2 text-[11px] text-text-secondary">{mutationNote}</p>}
+                    {mutationNote && <p className="mt-2 text-xs text-text-secondary">{mutationNote}</p>}
                     {mutationPhase === 'unprocessable' && (
-                      <p className="mt-2 text-[11px] text-status-danger">
+                      <p className="mt-2 text-xs text-status-danger">
                         Não foi possível confirmar esta alteração de status. Revise o status atual e tente novamente
                         com uma nova seleção.
                       </p>
                     )}
                     {mutationPhase === 'forbidden' && (
-                      <p className="mt-2 text-[11px] text-status-danger">
+                      <p className="mt-2 text-xs text-status-danger">
                         {delegated
                           ? 'Sem permissão para alterar o status deste chamado. Pode estar desligado para o Hub nas capacidades desta empresa.'
                           : 'Sem permissão para alterar o status deste chamado.'}
                       </p>
                     )}
                     {mutationPhase === 'unavailable' && (
-                      <p className="mt-2 text-[11px] text-status-danger">
+                      <p className="mt-2 text-xs text-status-danger">
                         Não foi possível confirmar a alteração agora.
                       </p>
                     )}
                     {mutationPhase === 'not_found' && (
-                      <p className="mt-2 text-[11px] text-status-warning">
+                      <p className="mt-2 text-xs text-status-warning">
                         Verificação necessária antes de tentar novamente.
                       </p>
                     )}
@@ -933,7 +933,7 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
                 linked=false/CREATE. The last known projection above remains
                 visible and useful regardless of the outcome below. */}
             {refreshState === 'reconciliation' && (
-              <div className="mt-2 rounded-control border border-status-warning-border bg-status-warning-soft p-2 text-[11px] text-status-warning">
+              <div className="mt-2 rounded-control border border-status-warning-border bg-status-warning-soft p-2 text-xs text-status-warning">
                 <p className="font-semibold">Verificação necessária</p>
                 <p className="mt-1">
                   Chamado vinculado, mas não foi possível confirmá-lo no provedor agora. O vínculo existente foi
@@ -942,13 +942,13 @@ export function TicketPanel({ conversationId, crmContactId, conversationUnassign
               </div>
             )}
             {refreshState === 'unavailable' && (
-              <p className="mt-2 text-[11px] text-status-danger">Não foi possível atualizar o chamado agora.</p>
+              <p className="mt-2 text-xs text-status-danger">Não foi possível atualizar o chamado agora.</p>
             )}
             {refreshState === 'forbidden' && (
-              <p className="mt-2 text-[11px] text-status-danger">Sem permissão para atualizar o chamado desta conversa.</p>
+              <p className="mt-2 text-xs text-status-danger">Sem permissão para atualizar o chamado desta conversa.</p>
             )}
             {refreshState === 'network_error' && (
-              <p className="mt-2 text-[11px] text-status-danger">Falha de conexão ao atualizar o chamado.</p>
+              <p className="mt-2 text-xs text-status-danger">Falha de conexão ao atualizar o chamado.</p>
             )}
           </div>
           <ConfirmDialog

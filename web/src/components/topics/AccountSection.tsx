@@ -74,7 +74,7 @@ export function AccountSection({ topicId, canManage }: { topicId: string; canMan
               </SmallButton>
             ))}
           </div>
-          {!canManage && <p className="text-[11px] text-text-tertiary">Quem atende a conversa escolhe a empresa.</p>}
+          {!canManage && <p className="text-xs text-text-tertiary">Quem atende a conversa escolhe a empresa.</p>}
         </div>
       )}
 

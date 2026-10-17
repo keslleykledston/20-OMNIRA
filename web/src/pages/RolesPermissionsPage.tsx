@@ -112,7 +112,7 @@ function MatrixSection({ title, rows }: { title: string; rows: { key: string; la
   return (
     <Card>
       <section aria-labelledby={`perm-${title}`}>
-        <h2 id={`perm-${title}`} className="px-4 pb-1 pt-3 text-[10px] font-bold uppercase tracking-wide text-text-tertiary">{title}</h2>
+        <h2 id={`perm-${title}`} className="px-4 pb-1 pt-3 text-[11px] font-bold uppercase tracking-wide text-text-tertiary">{title}</h2>
         <ul className="divide-y divide-border-subtle border-t border-border-subtle">
           {rows.map((row) => (
             <li key={row.key} className="flex min-w-0 items-center justify-between gap-4 px-4 py-2.5 text-body-sm">

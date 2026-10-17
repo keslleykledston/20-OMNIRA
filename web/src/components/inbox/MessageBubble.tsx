@@ -45,7 +45,7 @@ export default function MessageBubble({ message, sender }: MessageBubbleProps) {
   // they are positioned in the bubble's bottom-right corner over an empty spacer that ends the last line; without text
   // they take their own line under the attachment.
   const timeMark = (extra: string) => (
-    <span className={clsx('inline-flex items-center gap-0.5 text-[10px] leading-none text-text-tertiary', extra)}>
+    <span className={clsx('inline-flex items-center gap-0.5 text-[11px] leading-none text-text-tertiary', extra)}>
       <time>{new Date(message.created_at).toLocaleTimeString('pt-BR', {
         hour: '2-digit',
         minute: '2-digit'
@@ -63,7 +63,7 @@ export default function MessageBubble({ message, sender }: MessageBubbleProps) {
           ? 'border-accent-primary/10 bg-accent-primary-soft text-text-primary'
           : 'border-border-subtle bg-surface text-text-primary'
       )}>
-        {sender && <p className="mb-0.5 text-[10px] font-medium leading-tight text-text-tertiary">{sender}</p>}
+        {sender && <p className="mb-0.5 text-[11px] font-medium leading-tight text-text-tertiary">{sender}</p>}
         {message.body && (
           <>
             <p className="whitespace-pre-wrap break-words">

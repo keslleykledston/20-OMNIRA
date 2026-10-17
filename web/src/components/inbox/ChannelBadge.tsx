@@ -9,7 +9,7 @@ export function ChannelBadge({ line, className }: { line?: ChannelLine; classNam
     <span
       title={line.label + (line.can_send_text ? '' : ' (inativo)')}
       className={clsx(
-        'inline-flex flex-shrink-0 items-center rounded-pill px-1.5 text-[10px] font-medium leading-4',
+        'inline-flex flex-shrink-0 items-center rounded-pill px-1.5 text-[11px] font-medium leading-4',
         official ? 'bg-status-info-soft text-status-info' : 'bg-surface-muted text-text-secondary',
         !line.can_send_text && 'opacity-60',
         className,

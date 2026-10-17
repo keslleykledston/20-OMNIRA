@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import { TopicsError } from '../../lib/topics'
 
 export function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h5 className="text-[11px] font-semibold text-text-tertiary uppercase tracking-wide mb-2">{children}</h5>
+  return <h5 className="text-xs font-semibold text-text-tertiary uppercase tracking-wide mb-2">{children}</h5>
 }
 
 export function Chip({ tone, children }: { tone: 'neutral' | 'info' | 'success' | 'warning' | 'danger'; children: React.ReactNode }) {
@@ -14,7 +14,7 @@ export function Chip({ tone, children }: { tone: 'neutral' | 'info' | 'success' 
     warning: 'bg-status-warning-soft text-status-warning',
     danger: 'bg-status-danger-soft text-status-danger',
   }
-  return <span className={clsx('inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium', tones[tone])}>{children}</span>
+  return <span className={clsx('inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-medium', tones[tone])}>{children}</span>
 }
 
 export function SmallButton({

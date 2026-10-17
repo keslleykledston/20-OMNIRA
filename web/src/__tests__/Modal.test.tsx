@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Modal } from '../components/primitives'
 
@@ -40,5 +40,55 @@ describe('Modal', () => {
   it('moves focus into the dialog when it opens', () => {
     render(<Host />)
     expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement)
+  })
+
+  // Fundo: fecha só com clique limpo, e nunca depois de a pessoa ter mexido num campo.
+  it('closes on a click on the backdrop while nothing was edited', async () => {
+    const user = userEvent.setup()
+    render(<Host />)
+    await user.click(screen.getByRole('dialog').parentElement as HTMLElement)
+    expect(screen.getByTestId('open')).toHaveTextContent('false')
+  })
+
+  it('ignores the backdrop once a field was edited, and still closes by Escape and by the X', async () => {
+    const user = userEvent.setup()
+    render(<Host />)
+    await user.type(screen.getByLabelText('Texto'), 'a')
+    await user.click(screen.getByRole('dialog').parentElement as HTMLElement)
+    expect(screen.getByTestId('open')).toHaveTextContent('true')
+    await user.click(screen.getByRole('button', { name: 'Fechar' }))
+    expect(screen.getByTestId('open')).toHaveTextContent('false')
+  })
+
+  it('does not close when a text selection is dragged from inside the panel out to the backdrop', () => {
+    render(<Host />)
+    const panel = screen.getByRole('dialog')
+    const backdrop = panel.parentElement as HTMLElement
+    fireEvent.mouseDown(panel)
+    fireEvent.mouseUp(backdrop)
+    fireEvent.click(backdrop) // the browser fires the click on the common ancestor
+    expect(screen.getByTestId('open')).toHaveTextContent('true')
+  })
+
+  it('starts untouched every time it opens', async () => {
+    const user = userEvent.setup()
+    function Reopen() {
+      const [open, setOpen] = useState(true)
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>abrir</button>
+          <p data-testid="open">{String(open)}</p>
+          <Modal open={open} title="Nota" onClose={() => setOpen(false)}>
+            <input aria-label="Texto" />
+          </Modal>
+        </>
+      )
+    }
+    render(<Reopen />)
+    await user.type(screen.getByLabelText('Texto'), 'x')
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByText('abrir'))
+    await user.click(screen.getByRole('dialog').parentElement as HTMLElement)
+    expect(screen.getByTestId('open')).toHaveTextContent('false')
   })
 })

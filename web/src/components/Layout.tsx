@@ -5,7 +5,7 @@ import Header from './Header'
 import MobileNav from './MobileNav'
 import { useEffect } from 'react'
 import { hasSession } from '../lib/session'
-import { LoadingState } from './primitives'
+import { LoadingState, ToastRegion } from './primitives'
 import { usePresenceHeartbeat } from '../hooks/usePresenceHeartbeat'
 
 export default function Layout() {
@@ -61,6 +61,7 @@ export default function Layout() {
       </div>
 
       <MobileNav />
+      <ToastRegion />
     </div>
   )
 }

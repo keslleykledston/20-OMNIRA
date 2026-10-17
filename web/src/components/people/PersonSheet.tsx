@@ -179,7 +179,7 @@ function ReadinessBox({ person, readiness, canManage, busy, pendingOn, onAttend 
       <ul className="space-y-1">
         {checks.map(([label, ok]) => (
           <li key={label} className={clsx('flex items-center gap-2 text-sm', ok ? 'text-text-primary' : 'font-semibold text-status-warning-strong')}>
-            <span aria-hidden="true" className={clsx('inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold', ok ? 'bg-status-success text-white' : 'border-2 border-status-warning')}>{ok ? '✓' : ''}</span>
+            <span aria-hidden="true" className={clsx('inline-flex h-4 w-4 items-center justify-center rounded-full text-[11px] font-bold', ok ? 'bg-status-success text-white' : 'border-2 border-status-warning')}>{ok ? '✓' : ''}</span>
             {label}
             {!ok && <span className="sr-only">(falta)</span>}
           </li>

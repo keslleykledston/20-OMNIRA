@@ -144,9 +144,9 @@ export default function ContactsPage() {
           />
         </div>
         <label className="flex items-center gap-2 text-sm text-text-secondary">
-          Status
+          Situação
           <select
-            aria-label="Status"
+            aria-label="Situação"
             className={SELECT}
             value={status}
             onChange={(e) => {
@@ -235,7 +235,7 @@ export default function ContactsPage() {
                   <TableHeaderCell>Última interação</TableHeaderCell>
                   <TableHeaderCell>Conversas abertas</TableHeaderCell>
                   <TableHeaderCell>Tipo</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Situação</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>

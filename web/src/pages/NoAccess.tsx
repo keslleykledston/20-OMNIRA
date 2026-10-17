@@ -19,15 +19,15 @@ export default function NoAccess() {
     <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md text-center">
         <div className="mb-6">
-          <div className="text-6xl text-slate-300 mb-4">🔒</div>
-          <h1 className="text-2xl font-bold text-slate-900">Sem Acesso</h1>
+          <div className="text-6xl text-text-tertiary mb-4">🔒</div>
+          <h1 className="text-2xl font-bold text-text-primary">Sem Acesso</h1>
         </div>
 
-        <p className="text-slate-600 mb-6">
+        <p className="text-text-secondary mb-6">
           Sua conta foi autenticada, mas você ainda não possui acesso a nenhuma organização.
         </p>
 
-        <p className="text-sm text-slate-500 mb-8 bg-blue-50 p-4 rounded-lg">
+        <p className="text-sm text-text-secondary mb-8 bg-status-info-soft p-4 rounded-lg">
           Entre em contato com o administrador da sua organização para obter acesso.
         </p>
 

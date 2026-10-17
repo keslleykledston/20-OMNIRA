@@ -10,6 +10,7 @@ import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
 import { useThreadScroll } from '../../hooks/useThreadScroll';
 import MessageBubble from './MessageBubble';
 import MessageComposer from './MessageComposer';
+import { windowLeft } from '../../lib/windowLeft';
 import { isActing } from '../../lib/acting';
 import { uploadAttachment, removeAttachment, describeAttachmentError } from '../../lib/attachments';
 import { Icon } from '../primitives';
@@ -135,13 +136,29 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   const [showTemplates, setShowTemplates] = useState(false);
   const [showFinalize, setShowFinalize] = useState(false);
   const [notice, clearNotice] = useInboxNotice(conversationId);
+  // relógio de um minuto: a contagem da janela de 24 h anda sem depender de chegar mensagem nova
+  const [windowNow, setWindowNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setWindowNow(Date.now()), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
+  // Ao chegar a hora de a janela fechar, pergunta de novo ao servidor (a fonte da verdade): sem isso a tela diria "a janela fechou"
+  // e ainda ofereceria texto livre até alguém recarregar.
+  const windowExpiresAt = cs?.window_required && cs.window_open ? cs.window_expires_at : undefined;
+  useEffect(() => {
+    if (!windowExpiresAt) return undefined;
+    const wait = new Date(windowExpiresAt).getTime() - Date.now() + 500;
+    if (!Number.isFinite(wait) || wait > 2_147_000_000) return undefined; // fora do alcance de um timer
+    const t = window.setTimeout(() => void queryClient.invalidateQueries({ queryKey: ['conversation-channel', tenantId, conversationId] }), Math.max(wait, 0));
+    return () => window.clearTimeout(t);
+  }, [windowExpiresAt, queryClient, tenantId, conversationId]);
   const { can } = useAccess();
   const metaLine = !!cs && cs.window_required;
   // Read the conversation, its context and its messages again: what a person does after a 409/412, or when the holder changed.
   const refreshConversation = async () => {
     setSendError(null);
     setStaleHint(false);
-    for (const key of ['inbox-conversation-detail', 'inbox-context', 'inbox-messages', 'channel-state']) {
+    for (const key of ['inbox-conversation-detail', 'inbox-context', 'inbox-messages', 'conversation-channel']) {
       await queryClient.invalidateQueries({ queryKey: [key, tenantId, conversationId] });
     }
     void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
@@ -262,7 +279,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
 
       <TenantContextBar />
       {conversation && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border-subtle bg-surface px-4 py-1.5 text-[11px]">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border-subtle bg-surface px-4 py-1.5 text-xs">
           <span
             className={clsx(
               'rounded-pill px-2 py-0.5 font-medium',
@@ -281,12 +298,14 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             </span>
           )}
           {unassigned && (
-            <button type="button" onClick={() => void claim()} disabled={claiming} className="ml-auto font-medium text-accent-primary hover:underline disabled:opacity-60">
+            <button type="button" onClick={() => void claim()} disabled={claiming} className="ml-auto inline-flex items-center gap-1.5 rounded-control bg-accent-primary px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-accent-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-1 disabled:opacity-60">
+              <Icon name="user-plus" size={14} />
               {claiming ? 'Assumindo…' : 'Assumir atendimento'}
             </button>
           )}
           {mine && conversation.status !== 'closed' && conversation.conversation_kind !== 'internal' && (!isActing() || can('conversation.finalize')) && (
-            <button type="button" onClick={() => setShowFinalize(true)} className="ml-auto rounded-control px-1.5 py-0.5 font-medium text-text-secondary hover:bg-surface-muted hover:text-text-primary">
+            <button type="button" onClick={() => setShowFinalize(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-control border border-border-strong bg-surface px-3 py-1 text-xs font-medium text-text-primary transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-1">
+              <Icon name="check-circle" size={14} />
               Finalizar
             </button>
           )}
@@ -315,7 +334,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
               </button>
             )}
             {!hasNextPage && conversation?.created_at && (
-              <p className="mb-1 flex items-center justify-center gap-1.5 text-[10px] text-text-tertiary">
+              <p className="mb-1 flex items-center justify-center gap-1.5 text-[11px] text-text-tertiary">
                 <Icon name="clock" size={12} />
                 Início do atendimento · {new Date(conversation.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                 <ProtocolTag conversationId={conversationId} />
@@ -334,7 +353,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                 return (
                   <div key={msg.id} className={turn ? 'mt-1' : undefined}>
                     {showDay && (
-                      <div className="my-2 flex items-center gap-3 text-[10px] text-text-tertiary">
+                      <div className="my-2 flex items-center gap-3 text-[11px] text-text-tertiary">
                         <span className="h-px flex-1 bg-border-subtle" />
                         <span>{label}</span>
                         <span className="h-px flex-1 bg-border-subtle" />
@@ -412,12 +431,25 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
             </button>
           </div>
         )}
-        {cs?.window_required && cs.window_open && cs.window_expires_at && (
-          <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-text-tertiary">
-            <span>Resposta livre permitida até {new Date(cs.window_expires_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.</span>
-            <button type="button" onClick={() => setShowTemplates(true)} className="font-medium text-accent-primary hover:underline">Enviar template</button>
-          </div>
-        )}
+        {cs?.window_required && cs.window_open && cs.window_expires_at && (() => {
+          const w = windowLeft(cs.window_expires_at, windowNow)
+          const until = new Date(cs.window_expires_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+          return (
+            <div
+              role="status"
+              className={clsx('mb-2 flex items-center justify-between gap-2 text-xs', w.urgent ? 'rounded-control bg-status-warning-soft p-2 text-status-warning' : 'text-text-tertiary')}
+            >
+              <span>Resposta livre permitida até {until} · <strong className="font-semibold">{w.text}</strong>.</span>
+              <button
+                type="button"
+                onClick={() => setShowTemplates(true)}
+                className={w.urgent ? 'rounded-control border border-status-warning-border bg-surface px-2 py-0.5 font-medium text-text-primary hover:bg-surface-hover' : 'font-medium text-accent-primary hover:underline'}
+              >
+                Enviar template
+              </button>
+            </div>
+          )
+        })()}
         <MessageComposer
           draftKey={`${tenantId}:${conversationId}`}
           onSend={handleSendMessage}
@@ -425,7 +457,6 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
           onRemoveAttachment={(id) => void removeAttachment(tenantId, conversationId, id)}
           describeError={describeAttachmentError}
           label={`Responder ao contato${line ? ` · ${line.label}` : ''}`}
-          labelRight={conversation?.contact_name}
           disabled={sending || windowClosed || channelDown}
           placeholder="Escreva uma resposta..."
         />
