@@ -222,7 +222,8 @@ export class OmniraClient {
  *   const feed = new JournalFeed(client, (ev) => meuCrm.aplicar(ev))
  *   await feed.start()        // checkpoint -> foto -> eventos
  *   // a cada 2-3 s:  await feed.poll()
- * Cada `event_id` é entregue UMA vez ao seu callback. O diário é "pelo menos uma vez": o mesmo fato pode chegar de novo (principalmente logo depois do checkpoint).
+ * Cada `event_id` é entregue UMA vez ao seu callback *durante a vida deste objeto*. O diário é "pelo menos uma vez": o mesmo fato pode chegar de novo (principalmente logo depois do checkpoint).
+ * A memória de `seen` e o `cursor` ficam só no processo: em produção grave o `event_id` e o `cursor` no banco do CRM, na mesma transação que aplica o fato, e recarregue-os ao reiniciar.
  * O evento traz só REFERÊNCIAS (ids e contadores): busque o conteúdo com `messages()`/`conversation()`.
  */
 export class JournalFeed {

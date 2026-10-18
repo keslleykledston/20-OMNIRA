@@ -1,6 +1,6 @@
 # Roteiro de teste: CRM falando com o OMNIRA
 
-Quem faz: a equipe do CRM (terminal 1 e 2) **junto com** quem tem o telefone de teste e a tela do OMNIRA (Keslley). Duração: cerca de 1 hora (o passo 14 é opcional e leva ~20 min).
+Quem faz: a equipe do CRM (terminal 1 e 2) **junto com** quem tem o telefone de teste e a tela do OMNIRA (a pessoa responsável pelo OMNIRA). Duração: cerca de 1 hora (o passo 17 é opcional e leva ~20 min).
 
 **Regras do teste**
 - Só a empresa e a linha de **teste** combinadas. Nada de cliente real.
@@ -68,7 +68,7 @@ Guarde o `<conversa>` (uuid) e a versão de controle (`vN` em `sim list`).
 curl -s -o /dev/null -w '%{http_code}\n' "$OMNIRA_EXTERNAL_URL/conversations"
 # a empresa não é escolhida pelo pedido -> 400 tenant_not_accepted
 curl -s -H "Authorization: Bearer $OMNIRA_EXTERNAL_TOKEN" -H 'X-Tenant-ID: 00000000-0000-0000-0000-000000000000' "$OMNIRA_EXTERNAL_URL/conversations" | head -c 300
-# cursor do diário que o OMNIRA não emitiu -> 410 resync_required (o CRM deve refazer checkpoint + foto)
+# cursor maior que o diário já emitiu -> 410 resync_required (o CRM deve refazer checkpoint + foto). Já `after=abc` ou sem `after` é 400 (erro de chamada, não é para ressincronizar)
 curl -s -H "Authorization: Bearer $OMNIRA_EXTERNAL_TOKEN" -w '\n%{http_code}\n' "$OMNIRA_EXTERNAL_URL/events?after=99999999999"
 ```
 
@@ -80,4 +80,4 @@ curl -s -H "Authorization: Bearer $OMNIRA_EXTERNAL_TOKEN" -w '\n%{http_code}\n' 
 
 Saída (sem o token) dos passos 1, 2, 5, 7, 8, 9, 10-13, 14, 15; os fatos do terminal 2 durante o teste (arquivo de texto); foto da tela do telefone nos passos 7, 8, 10 e 11; e a lista do que **não** funcionou, com código e horário. Mande também a **tabela etiqueta -> fila** que o CRM vai usar e o **valor de `lease_seconds`** que o CRM prefere.
 
-Com os passos 1-16 verdes, a leitura e a escrita ficam aprovadas para a fila de piloto. O que vier vermelho vira correção do lado do OMNIRA ou do adaptador antes de avançar.
+Com os passos 1-16 verdes (17 e 18 são opcionais), a leitura e a escrita ficam aprovadas para a fila de piloto. O que vier vermelho vira correção do lado do OMNIRA ou do adaptador antes de avançar.

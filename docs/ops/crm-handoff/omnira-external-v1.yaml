@@ -416,8 +416,8 @@ paths:
         transaction of the change they describe and numbered per company in an order that never lets a fact appear under a number already read. Each fact is
         re-checked for visibility when it is read (an installation limited to a queue never hears about another queue). Envelopes carry references and
         counters, never a message body, a phone number or an attachment: fetch the content from the read API.
-        `410 resync_required` when `after` is older than the facts kept (default 30 days) or is not a number this journal issued: read the checkpoint and rebuild
-        from the snapshot. `next_cursor` advances even when every fact of the window was filtered out.
+        `410 resync_required` when `after` is older than the facts kept (default 30 days) or newer than the head (a number this journal never issued): read the
+        checkpoint and rebuild from the snapshot. A missing, malformed or negative `after` is `400` (a bad call, not a reason to resynchronize). `next_cursor` advances even when every fact of the window was filtered out.
       parameters:
         - { name: after, in: query, required: true, schema: { type: integer, format: int64, minimum: 0 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }

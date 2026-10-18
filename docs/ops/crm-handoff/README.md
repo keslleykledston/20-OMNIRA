@@ -9,7 +9,7 @@ O CRM deixa de falar com o Chatwoot e passa a falar com a **API externa do OMNIR
 Duas ideias resolvem quase tudo:
 
 1. **Quem atende é a aplicação.** A conversa tem um titular tipado. Quando o CRM faz `claim`, o titular passa a ser a *aplicação CRM*; enquanto isso o Workspace do OMNIRA e o bot não falam por cima. O atendente humano do CRM viaja só como rótulo (`external_agent_id`, não verificado, usado em auditoria).
-2. **O CRM consulta, o OMNIRA não empurra.** Não há webhook, receptor, URL pública nem assinatura no CRM. O CRM lê o **diário de fatos** (`GET /external/events?after=<seq>`) a cada 2 a 3 segundos.
+2. **O CRM consulta, o OMNIRA não empurra.** Para esta integração não há webhook, receptor, URL pública nem assinatura no CRM: ele lê o **diário de fatos** (`GET /external/events?after=<seq>`) a cada 2 a 3 segundos. (O OMNIRA sabe entregar webhooks assinados a quem pedir; ficam desligados aqui, e o simulador só traz o comando `listen` para quem quiser experimentar.)
 
 ## 2. Endereço e credencial
 
@@ -49,10 +49,10 @@ Duas ideias resolvem quase tudo:
 ```
 
 - **Mudanças na foto durante a leitura não se perdem**: o checkpoint vem primeiro, e o passo 3 repete o que for preciso.
-- **"Pelo menos uma vez"**: o mesmo `event_id` pode chegar de novo. Guarde os já processados e ignore repetidos.
+- **"Pelo menos uma vez"**: o mesmo `event_id` pode chegar de novo. Ignore repetidos. Em produção, grave o `event_id` e o cursor **junto** do processamento do fato (no banco do CRM), para que um reinício do processo não aplique o mesmo fato duas vezes.
 - **O fato traz referências, não conteúdo** (ids, estados). Para ver o texto de uma mensagem nova, busque `GET /conversations/{id}/messages`.
 - **`next_cursor` avança mesmo** quando todos os fatos da janela foram filtrados para você. Sempre grave o último.
-- **`410 resync_required`**: seu cursor é mais antigo do que o OMNIRA guarda (padrão 30 dias) ou inválido. Refaça do passo 1.
+- **`410 resync_required`**: o `after` é mais antigo do que o OMNIRA guarda (padrão 30 dias) ou é um número que o diário nunca emitiu (maior que o `seq_head`). Refaça do passo 1. Já um `after` ausente, mal formado ou negativo é `400`: é erro de chamada, **não** ressincronize.
 - **Atraso**: um fato é numerado em ~0,5 s. Com consulta a cada 2-3 s, a tela do CRM enxerga uma mudança em até uns 3 s. Gasta ~25 requisições por minuto.
 - O fato é conferido de novo para você no momento da leitura: uma credencial limitada a uma fila nunca ouve falar de outra.
 
@@ -69,7 +69,7 @@ Tipos de fato de atendimento (exemplos reais, `data` resumido):
 
 Todo fato tem `origin: {kind, mine}`. `mine=true` quer dizer "causado por esta credencial": use para reconhecer o próprio eco. **Atenção:** em `conversation.closed.v1` causado por você, `mine` vem `false` hoje; reconheça a sua finalização pela resposta do `finalize`.
 
-Ordene os fatos **de uma conversa** por `aggregate_version` (versão de controle); entre conversas diferentes, só pelo `seq`.
+Aplique os fatos **na ordem do `seq`** (é a ordem do diário). `aggregate_version` só existe nos fatos de controle e de conversa (`control_changed`, `created`, `closed`) e é a versão de controle: use-a para decidir se um fato de controle é mais novo do que o estado que você já tem. Em `message.*` ela vem `null`.
 
 ## 5. Escrever (comandos)
 
@@ -107,6 +107,7 @@ Rotas (todas `POST /external/conversations/{id}/...`):
 | `422 invalid_message` / `invalid_template` / `invalid_target` / `invalid_caption` / `invalid_request` | corpo ou destino inválido | corrija |
 | `422 attachment_unavailable` | anexo inexistente, já enviado, de outra conversa ou de outra credencial | suba de novo |
 | `422 file_rejected` / `file_blocked` / `media_unsupported` | arquivo recusado pelo OMNIRA (tipo, estrutura, antivírus) | não repita o mesmo arquivo |
+| `503 scanner_unavailable` | o antivírus está fora do ar; **o arquivo não foi aceito** | espere um pouco e suba de novo o mesmo arquivo |
 | `413 file_too_large` | acima de 16 MiB | reduza |
 | `429` (`rate_limited`, `upload_rate`) | limite de taxa | espere o `Retry-After` |
 | `5xx` / falha de rede | transitório | repita com a **mesma** `Idempotency-Key` |
@@ -162,14 +163,14 @@ Receber: a mensagem do cliente traz `media {id, kind, mime, size_bytes, status}`
 
 1. **Simulador de referência** (`bin/crm-sim-<sistema>`): executa cada chamada deste guia pela linha de comando, inclusive o laço de consulta (`poll`). Comandos: `me`, `queues`, `poll`, `bootstrap`, `list`, `show`, `claim`, `heartbeat`, `send`, `attach`, `media`, `transfer`, `release`, `finalize`. Variáveis: `OMNIRA_EXTERNAL_URL`, `OMNIRA_EXTERNAL_TOKEN`; `SIM_KEY` repete um comando com a mesma chave; `SIM_NOTIFY_PROTOCOL=false` finaliza sem avisar o protocolo.
 2. **Cliente TypeScript de exemplo** (`exemplo-typescript/`): `OmniraClient` (comandos com chave e versão, anexo em dois passos, erros tipados) e `JournalFeed` (o laço de consulta com dedupe e 410), com testes. Copie o que servir; não é biblioteca.
-3. **`ROTEIRO-DE-TESTE.md`**: 16 passos com resultado esperado e as evidências que devem voltar para nós.
+3. **`ROTEIRO-DE-TESTE.md`**: 18 passos com resultado esperado e as evidências que devem voltar para nós.
 
 ## 12. Por onde começar (ordem sugerida)
 
 1. Rodar `me`, `queues` e `poll` com credencial **só de leitura** durante um dia, comparando com o Chatwoot em modo sombra (sem escrever).
 2. Implementar `OmniraProvider` com leitura + o laço de consulta.
 3. Ligar a escrita numa fila só (Suporte): `claim`, texto, `transfer`, `finalize`.
-4. Anexos, depois da prova no `ROTEIRO-DE-TESTE.md` (passos 9-11).
+4. Anexos, depois da prova no `ROTEIRO-DE-TESTE.md` (passos 10-13).
 5. Desligar o Chatwoot por fila, nunca de uma vez.
 
 Desfazer a qualquer momento: o administrador suspende a aplicação na tela (corta a credencial na hora e devolve as conversas ao roteador). O OMNIRA continua atendendo sozinho.
