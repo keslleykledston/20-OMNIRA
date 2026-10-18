@@ -22,3 +22,14 @@ describe('Layout — search palette', () => {
     expect(screen.getByRole('dialog', { name: 'Buscar' })).toBeInTheDocument()
   })
 })
+
+describe('Layout — help link', () => {
+  it('has a Ajuda link to the static help, opened in another tab', () => {
+    setSession()
+    renderAt(<Layout />)
+    const link = screen.getByRole('link', { name: 'Ajuda' })
+    expect(link).toHaveAttribute('href', '/ajuda/')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
+})

@@ -71,6 +71,15 @@ export default function Header({ onSearch }: { onSearch?: () => void } = {}) {
             <kbd className="hidden rounded border border-border-subtle px-1 text-[11px] md:inline">Ctrl K</kbd>
           </button>
         )}
+        {/* A ajuda é uma página estática do mesmo endereço (docs/wiki): outra aba, para não tirar a pessoa do atendimento. */}
+        <a
+          href="/ajuda/"
+          target="_blank"
+          rel="noopener"
+          className="hidden rounded-control px-2 py-1.5 text-body-sm text-text-secondary hover:bg-surface-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary sm:inline"
+        >
+          Ajuda
+        </a>
         {!isActing() && <TenantSwitcher />}
         {user && (
           <div className="flex items-center gap-2 sm:gap-3">
