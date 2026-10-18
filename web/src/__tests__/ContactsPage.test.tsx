@@ -147,6 +147,51 @@ describe('ContactsPage', () => {
   });
 });
 
+describe('ContactsPage — order and result counter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    setSession();
+  });
+
+  it('says how many people match, in all pages', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: page([contact()], { total: 134 }) });
+    renderAt(<ContactsPage />, '/contacts', '/contacts');
+    expect(await screen.findByText('134 pessoas')).toBeInTheDocument();
+    expect(screen.getByText(/1 pessoa nesta página · 134 no total/)).toBeInTheDocument();
+  });
+
+  it('sorts by name from the header: asks the server, starts again from the first page, and comes back to the default order', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    vi.mocked(axios.get).mockImplementation(async (_url: string, config?: any) => {
+      calls.push({ ...(config?.params ?? {}) });
+      const more = !config?.params?.cursor;
+      return { data: page([contact({ id: 'c1', display_name: 'Ana Souza' })], { has_more: more, next_cursor: more ? 'CURSOR_2' : undefined, total: 2 }) };
+    });
+    renderAt(<ContactsPage />, '/contacts', '/contacts');
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('button', { name: 'Próxima' }));
+    await waitFor(() => expect(calls.some((c) => c.cursor === 'CURSOR_2')).toBe(true));
+
+    const header = () => screen.getByRole('columnheader', { name: /Pessoa/ });
+    expect(header()).toHaveAttribute('aria-sort', 'none');
+    await userEvent.click(within(header()).getByRole('button'));
+    await waitFor(() => expect(header()).toHaveAttribute('aria-sort', 'ascending'));
+    // the cursor of the old order is gone: the new order starts at the first page
+    const last = calls[calls.length - 1];
+    expect(last.sort).toBe('name:asc');
+    expect(last.cursor).toBeUndefined();
+
+    await userEvent.click(within(header()).getByRole('button'));
+    await waitFor(() => expect(header()).toHaveAttribute('aria-sort', 'descending'));
+    expect(calls[calls.length - 1].sort).toBe('name:desc');
+
+    await userEvent.click(within(header()).getByRole('button'));
+    await waitFor(() => expect(header()).toHaveAttribute('aria-sort', 'none'));
+    expect(calls[calls.length - 1].sort).toBeUndefined();
+  });
+});
+
 describe('ContactDetailPage (Contact 360)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

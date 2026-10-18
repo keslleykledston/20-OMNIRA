@@ -2,6 +2,7 @@ package pagination
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -65,6 +66,8 @@ type PageResult struct {
 	HasMore    bool          `json:"has_more"`
 	Count      int           `json:"count"`
 	Limit      int           `json:"limit"`
+	// Total is how many rows match the filters in all pages (set by the lists that show a result counter; absent elsewhere).
+	Total *int `json:"total,omitempty"`
 }
 
 // NewPageResult — cria novo resultado de página
@@ -122,4 +125,42 @@ func ParseSort(s string) (*SortSpec, error) {
 		Field:     field,
 		Direction: dir,
 	}, nil
+}
+
+// KeyCursor is the position in a list ordered by something other than the default activity time: the value the list is ordered by (Key, as text) and the row id that breaks
+// ties. It names the sort it belongs to, so a cursor taken under one ordering is refused under another instead of silently skipping or repeating rows.
+type KeyCursor struct {
+	Sort string `json:"s"`
+	Key  string `json:"k"`
+	ID   string `json:"i"`
+}
+
+const keyCursorPrefix = "k1."
+
+// Encode — string opaca para a próxima página.
+func (c *KeyCursor) Encode() string {
+	if c == nil {
+		return ""
+	}
+	raw, _ := json.Marshal(c)
+	return keyCursorPrefix + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// DecodeKeyCursor reads a cursor made by KeyCursor.Encode for THIS sort. Empty means the first page. A cursor of another sort, or the default time cursor, is an error.
+func DecodeKeyCursor(s, sort string) (*KeyCursor, error) {
+	if s == "" {
+		return nil, nil
+	}
+	if !strings.HasPrefix(s, keyCursorPrefix) {
+		return nil, fmt.Errorf("invalid cursor for this sort")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(s, keyCursorPrefix))
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor: %w", err)
+	}
+	var c KeyCursor
+	if err := json.Unmarshal(raw, &c); err != nil || c.ID == "" || c.Sort != sort {
+		return nil, fmt.Errorf("invalid cursor for this sort")
+	}
+	return &c, nil
 }

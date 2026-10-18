@@ -171,6 +171,8 @@ export interface PeopleFilters {
   view?: PeopleView;
   q?: string;
   status?: 'active' | 'blocked' | 'archived' | 'inactive';
+  // Default order is newest activity first; `name:asc|desc` orders by the shown name.
+  sort?: 'name:asc' | 'name:desc';
 }
 
 export interface ContactLastMessage {
@@ -218,6 +220,8 @@ export interface Page<T> {
   next_cursor?: string;
   count: number;
   limit: number;
+  // How many match the filters in all pages (the people directory sends it).
+  total?: number;
 }
 
 export interface ContactPage {
@@ -322,6 +326,7 @@ export const peopleAPI = {
           ...(filters.view && filters.view !== 'all' ? { view: filters.view } : {}),
           ...(filters.q ? { q: filters.q } : {}),
           ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.sort ? { sort: filters.sort } : {}),
         },
       }),
     ),

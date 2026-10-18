@@ -33,6 +33,7 @@ import {
   type PersonContact,
   type PersonInternalUser,
 } from '../lib/contacts'
+import { directionOf, nextSort } from '../lib/sorting'
 import { useDebounced } from '../hooks/useDebounced'
 import { getTenantId } from '../lib/session'
 
@@ -111,12 +112,13 @@ export default function ContactsPage() {
   const [view, setView] = useState<PeopleView>('all')
   const [status, setStatus] = useState<NonNullable<PeopleFilters['status']> | ''>('')
   const q = useDebounced(search.trim(), 300)
-  const filters: PeopleFilters = { view, q: q || undefined, status: status || undefined }
+  const [sort, setSort] = useState<PeopleFilters['sort']>(undefined)
+  const filters: PeopleFilters = { view, q: q || undefined, status: status || undefined, sort }
   const filtering = Boolean(q || view !== 'all' || status)
   const resetPaging = () => setCursorStack([])
 
   const contacts = useQuery({
-    queryKey: ['people', tenantId, cursor ?? 'first', q, view, status],
+    queryKey: ['people', tenantId, cursor ?? 'first', q, view, status, sort ?? ''],
     queryFn: () => peopleAPI.list(cursor, PAGE_SIZE, filters),
     retry: false,
   })
@@ -243,12 +245,26 @@ export default function ContactsPage() {
 
       {!contacts.isLoading && !contacts.isError && items.length > 0 && (
         <>
+          {page?.total !== undefined && (
+            <p aria-live="polite" className="text-sm text-text-secondary">
+              {page.total} {page.total === 1 ? 'pessoa' : 'pessoas'}
+              {filtering ? ' com estes filtros' : ''}
+            </p>
+          )}
           {/* Desktop: table. Mobile falls back to cards below. */}
           <div className="hidden md:block">
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Pessoa</TableHeaderCell>
+                  <TableHeaderCell
+                    sortDirection={directionOf(sort, 'name')}
+                    onSort={() => {
+                      setSort(nextSort(sort, ['name:asc', 'name:desc']) as PeopleFilters['sort'])
+                      resetPaging()
+                    }}
+                  >
+                    Pessoa
+                  </TableHeaderCell>
                   <TableHeaderCell>Telefone</TableHeaderCell>
                   <TableHeaderCell>Canais</TableHeaderCell>
                   <TableHeaderCell>Última interação</TableHeaderCell>
@@ -284,7 +300,7 @@ export default function ContactsPage() {
             hasNext={Boolean(page?.has_more && page?.next_cursor)}
             onPrevious={() => setCursorStack((s) => s.slice(0, -1))}
             onNext={() => page?.next_cursor && setCursorStack((s) => [...s, page.next_cursor!])}
-            label={`${page?.count ?? 0} ${page?.count === 1 ? 'pessoa' : 'pessoas'} nesta página`}
+            label={`${page?.count ?? 0} ${page?.count === 1 ? 'pessoa' : 'pessoas'} nesta página${page?.total !== undefined ? ` · ${page.total} no total` : ''}`}
           />
         </>
       )}

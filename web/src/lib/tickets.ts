@@ -34,7 +34,12 @@ export interface TicketPage {
   next_cursor?: string;
   count: number;
   limit: number;
+  // How many tickets match the filters in all pages.
+  total?: number;
 }
+
+// Orderings the server offers besides the default (newest activity first).
+export type TicketSort = 'updated_at:asc' | 'priority:desc' | 'priority:asc' | 'subject:asc' | 'subject:desc';
 
 export interface TicketFilters {
   status?: Ticket['status'];
@@ -70,7 +75,7 @@ function filenameFromContentDisposition(header: string | undefined): string {
 }
 
 export const ticketsAPI = {
-  list: (cursor?: string, limit?: number, filters?: TicketFilters) =>
+  list: (cursor?: string, limit?: number, filters?: TicketFilters, sort?: TicketSort) =>
     call<TicketPage>(() =>
       axios.get(ticketsBase(), {
         headers: authHeaders(),
@@ -80,6 +85,7 @@ export const ticketsAPI = {
           ...(filters?.status ? { status: filters.status } : {}),
           ...(filters?.priority ? { priority: filters.priority } : {}),
           ...(filters?.externalTicketId ? { external_ticket_id: filters.externalTicketId } : {}),
+          ...(sort ? { sort } : {}),
         },
       }),
     ),

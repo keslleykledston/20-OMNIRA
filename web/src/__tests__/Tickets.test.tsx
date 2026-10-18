@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 import TicketsPage from '../pages/Tickets';
 import { renderAt, setSession, mockGets } from './testUtils';
@@ -454,5 +455,49 @@ describe('TicketsPage', () => {
       expect(vi.mocked(axios.patch)).not.toHaveBeenCalled();
       expect(vi.mocked(axios.delete)).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('TicketsPage — order and result counter', () => {
+  it('says how many tickets match, in all pages', async () => {
+    setSession();
+    mockGets({ '/tickets': { items: [ticket({ subject: 'Ticket real 1' })], has_more: false, count: 1, limit: 20, total: 87 } });
+    renderAt(<TicketsPage />);
+    expect(await screen.findByText('87 tickets')).toBeInTheDocument();
+    expect(screen.getByText(/1 ticket nesta página · 87 no total/)).toBeInTheDocument();
+  });
+
+  it('sorts from the column headers and walks each cycle back to the default order', async () => {
+    setSession();
+    const calls: Array<Record<string, unknown>> = [];
+    vi.mocked(axios.get).mockImplementation(async (_url: string, config?: any) => {
+      calls.push({ ...(config?.params ?? {}) });
+      return { data: { items: [ticket({ subject: 'Ticket real 1' })], has_more: false, count: 1, limit: 20, total: 1 } };
+    });
+    renderAt(<TicketsPage />);
+    await screen.findAllByText('Ticket real 1');
+
+    const header = (name: RegExp) => screen.getByRole('columnheader', { name });
+    // the default order is newest activity first, so "Atualizado" already runs downwards
+    expect(header(/Atualizado/)).toHaveAttribute('aria-sort', 'descending');
+    expect(header(/Prioridade/)).toHaveAttribute('aria-sort', 'none');
+
+    await userEvent.click(within(header(/Prioridade/)).getByRole('button'));
+    await waitFor(() => expect(header(/Prioridade/)).toHaveAttribute('aria-sort', 'descending'));
+    expect(calls[calls.length - 1].sort).toBe('priority:desc'); // most urgent first
+    expect(header(/Atualizado/)).toHaveAttribute('aria-sort', 'none');
+
+    await userEvent.click(within(header(/Prioridade/)).getByRole('button'));
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBe('priority:asc'));
+    await userEvent.click(within(header(/Prioridade/)).getByRole('button'));
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBeUndefined());
+
+    await userEvent.click(within(header(/Assunto/)).getByRole('button'));
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBe('subject:asc'));
+
+    await userEvent.click(within(header(/Atualizado/)).getByRole('button'));
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBe('updated_at:asc'));
+    await userEvent.click(within(header(/Atualizado/)).getByRole('button'));
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBeUndefined());
   });
 });

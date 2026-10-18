@@ -145,6 +145,35 @@ func scanTicketItem(rows interface {
 	return item, err
 }
 
+// ticketSorts are the orderings the Tickets screen offers besides the default (newest activity first). The SQL is ours, never the caller's.
+var ticketSorts = func() map[string]struct {
+	col  pagination.SortColumn
+	desc bool
+} {
+	type spec = struct {
+		col  pagination.SortColumn
+		desc bool
+	}
+	priorityRank := pagination.SortColumn{Expr: "(CASE priority WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END)", Kind: pagination.SortInt}
+	updated := pagination.SortColumn{Expr: "updated_at", Kind: pagination.SortTime}
+	subject := pagination.SortColumn{Expr: "lower(subject)", Kind: pagination.SortText}
+	return map[string]spec{
+		"updated_at:asc": {updated, false},
+		"priority:desc":  {priorityRank, true}, // most urgent first
+		"priority:asc":   {priorityRank, false},
+		"subject:asc":    {subject, false},
+		"subject:desc":   {subject, true},
+	}
+}()
+
+// withExtra lets scanTicketItem read the usual columns and then one more (the value the list is ordered by).
+type withExtra struct {
+	rows  interface{ Scan(dest ...any) error }
+	extra *any
+}
+
+func (w withExtra) Scan(dest ...any) error { return w.rows.Scan(append(dest, w.extra)...) }
+
 // List returns one page of the TenantContext tenant's tickets, newest
 // activity first, gated by ticket.read. Ordering matches the leading
 // (tenant_id, ...) columns tickets already has via
@@ -167,11 +196,19 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := pagination.ParsePageOptionsFromQuery(r)
-	if opts.Sort != "" && opts.Sort != "updated_at:desc" {
+	// The default (newest activity first) keeps its own cursor; every other ordering the screen offers carries the sorted value in a key cursor.
+	sortSpec, sorted := ticketSorts[opts.Sort]
+	if opts.Sort != "" && opts.Sort != "updated_at:desc" && !sorted {
 		http.Error(w, "unsupported sort", http.StatusBadRequest)
 		return
 	}
-	cursor, err := pagination.DecodeCursor(opts.Cursor)
+	var cursor *pagination.Cursor
+	var keyCursor *pagination.KeyCursor
+	if sorted {
+		keyCursor, err = pagination.DecodeKeyCursor(opts.Cursor, opts.Sort)
+	} else {
+		cursor, err = pagination.DecodeCursor(opts.Cursor)
+	}
 	if err != nil {
 		http.Error(w, "invalid pagination", http.StatusBadRequest)
 		return
@@ -189,6 +226,8 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	// how many tickets match the filters in all pages (the result counter); counted before the cursor narrows the rows
+	countWhere, countArgs := where, append([]any(nil), args...)
 	if cursor != nil {
 		cursorID, parseErr := uuid.Parse(cursor.ID)
 		if parseErr != nil {
@@ -198,10 +237,37 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		args = append(args, cursor.Timestamp, cursorID)
 		where += ` AND (updated_at, id) < ($` + strconv.Itoa(len(args)-1) + `, $` + strconv.Itoa(len(args)) + `)`
 	}
+	orderBy := "updated_at DESC, id DESC"
+	selectKey := ""
+	if sorted {
+		dir := "ASC"
+		if sortSpec.desc {
+			dir = "DESC"
+		}
+		orderBy = sortSpec.col.Expr + " " + dir + ", id " + dir
+		selectKey = ", " + sortSpec.col.Expr
+		if keyCursor != nil {
+			pred, perr := pagination.KeysetWhere(sortSpec.col, "id", sortSpec.desc, keyCursor, func(v any) string {
+				args = append(args, v)
+				return "$" + strconv.Itoa(len(args))
+			})
+			if perr != nil {
+				http.Error(w, "invalid pagination", http.StatusBadRequest)
+				return
+			}
+			where += " AND " + pred
+		}
+	}
 	args = append(args, opts.Limit+1)
-	query := `SELECT ` + ticketColumns + ` FROM tickets ` + where + ` ORDER BY updated_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args))
+	query := `SELECT ` + ticketColumns + selectKey + ` FROM tickets ` + where + ` ORDER BY ` + orderBy + ` LIMIT $` + strconv.Itoa(len(args))
 
-	rows, err := platformdb.QuerierFromContext(r.Context(), h.pool).Query(r.Context(), query, args...)
+	dbq := platformdb.QuerierFromContext(r.Context(), h.pool)
+	var total int
+	if err := dbq.QueryRow(r.Context(), `SELECT count(*) FROM tickets `+countWhere, countArgs...).Scan(&total); err != nil {
+		http.Error(w, "failed to list tickets", http.StatusInternalServerError)
+		return
+	}
+	rows, err := dbq.Query(r.Context(), query, args...)
 	if err != nil {
 		http.Error(w, "failed to list tickets", http.StatusInternalServerError)
 		return
@@ -209,8 +275,17 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	items := make([]TicketItem, 0, opts.Limit)
+	var keys []any // the sorted value of each row, for the next cursor
 	for rows.Next() {
-		item, scanErr := scanTicketItem(rows)
+		var item TicketItem
+		var scanErr error
+		if sorted {
+			var sortValue any
+			item, scanErr = scanTicketItem(withExtra{rows, &sortValue})
+			keys = append(keys, sortValue)
+		} else {
+			item, scanErr = scanTicketItem(rows)
+		}
 		if scanErr != nil {
 			http.Error(w, "failed to read tickets", http.StatusInternalServerError)
 			return
@@ -232,13 +307,23 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		HasMore: hasMore,
 		Count:   len(items),
 		Limit:   opts.Limit,
+		Total:   &total,
 	}
 	for i, item := range items {
 		result.Items[i] = item
 	}
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]
-		result.NextCursor = (&pagination.Cursor{ID: last.ID.String(), Timestamp: last.UpdatedAt}).Encode()
+		if sorted {
+			key, kerr := sortSpec.col.KeyText(keys[len(items)-1])
+			if kerr != nil {
+				http.Error(w, "failed to read tickets", http.StatusInternalServerError)
+				return
+			}
+			result.NextCursor = (&pagination.KeyCursor{Sort: opts.Sort, Key: key, ID: last.ID.String()}).Encode()
+		} else {
+			result.NextCursor = (&pagination.Cursor{ID: last.ID.String(), Timestamp: last.UpdatedAt}).Encode()
+		}
 	}
 
 	pagination.WritePaginationHeaders(w, result)

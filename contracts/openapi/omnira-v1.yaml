@@ -416,8 +416,10 @@ paths:
         `subject_type=contact` rows are external people (classification, companies); `subject_type=internal_user` rows
         are staff (Users/Memberships): they have NO `kind` and are managed through `manage_path`, never classified.
         Staff are listed only for callers with `membership.read`: `view=internal` is 403 without it and `view=all` then
-        returns the contacts part only. Keyset-paginated across both types by activity.
+        returns the contacts part only. Keyset-paginated across both types, by activity (default) or by name.
+        `total` is how many people match the filters in all pages.
       parameters:
+        - { name: sort, in: query, required: false, description: 'Default `updated_at:desc` (newest activity first). `name:asc|desc` orders by the shown name, case-insensitively; its `next_cursor` only works with the same `sort` (400 otherwise).', schema: { type: string, enum: ['updated_at:desc', 'name:asc', 'name:desc'] } }
         - { name: view, in: query, required: false, schema: { type: string, enum: [all, customers, others, unclassified, spam, internal], default: all, description: '`internal` = staff Users (needs membership.read) plus contacts declared internal' } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 100 } }
         - { name: status, in: query, required: false, description: 'active|blocked|archived are contact states; active|inactive are membership states.', schema: { type: string, enum: [active, blocked, archived, inactive] } }
@@ -443,6 +445,7 @@ paths:
                   next_cursor: { type: string }
                   count: { type: integer }
                   limit: { type: integer }
+                  total: { type: integer, description: People matching the filters in all pages }
         '400': { $ref: '#/components/responses/Text400' }
         '403': { $ref: '#/components/responses/Text403' }
   /tenants/{tenant_id}/contacts:

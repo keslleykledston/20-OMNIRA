@@ -99,11 +99,19 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 		view.internal = false // "all" without it: the contacts part only
 	}
 	opts := pagination.ParsePageOptionsFromQuery(r)
-	if opts.Sort != "" && opts.Sort != "updated_at:desc" {
+	// Newest activity first is the default and keeps its own cursor; ordering by name carries the name in a key cursor.
+	byName := opts.Sort == "name:asc" || opts.Sort == "name:desc"
+	if opts.Sort != "" && opts.Sort != "updated_at:desc" && !byName {
 		http.Error(w, "unsupported sort", http.StatusBadRequest)
 		return
 	}
-	cursor, err := pagination.DecodeCursor(opts.Cursor)
+	var cursor *pagination.Cursor
+	var keyCursor *pagination.KeyCursor
+	if byName {
+		keyCursor, err = pagination.DecodeKeyCursor(opts.Cursor, opts.Sort)
+	} else {
+		cursor, err = pagination.DecodeCursor(opts.Cursor)
+	}
 	if err != nil {
 		http.Error(w, "invalid pagination", http.StatusBadRequest)
 		return
@@ -147,7 +155,7 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 				where += " AND c.status = " + arg(status)
 			}
 		}
-		branches = append(branches, `SELECT 'contact'::text AS subject_type, c.id AS id, c.updated_at AS activity FROM contacts c WHERE `+where)
+		branches = append(branches, `SELECT 'contact'::text AS subject_type, c.id AS id, c.updated_at AS activity, lower(c.display_name) AS name_key FROM contacts c WHERE `+where)
 	}
 	if view.internal {
 		where := "m.tenant_id = $1 AND m.status IN ('active','inactive')"
@@ -162,10 +170,28 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 		default: // blocked / archived are contact lifecycle states
 			where += " AND false"
 		}
-		branches = append(branches, `SELECT 'internal_user'::text AS subject_type, m.user_id AS id, m.updated_at AS activity FROM memberships m JOIN users u ON u.id = m.user_id WHERE `+where)
+		branches = append(branches, `SELECT 'internal_user'::text AS subject_type, m.user_id AS id, m.updated_at AS activity, lower(COALESCE(NULLIF(u.display_name,''), u.email, '')) AS name_key FROM memberships m JOIN users u ON u.id = m.user_id WHERE `+where)
 	}
-	page := "SELECT subject_type, id, activity FROM (" + strings.Join(branches, " UNION ALL ") + ") people"
-	if cursor != nil {
+	union := strings.Join(branches, " UNION ALL ")
+	// how many people match the filters in all pages (the result counter); counted before the cursor narrows the rows
+	countArgs := append([]any(nil), args...)
+	page := "SELECT subject_type, id, activity, name_key FROM (" + union + ") people"
+	orderBy := "activity DESC, id DESC"
+	if byName {
+		dir := "ASC"
+		if opts.Sort == "name:desc" {
+			dir = "DESC"
+		}
+		orderBy = "name_key " + dir + ", id " + dir
+		if keyCursor != nil {
+			pred, perr := pagination.KeysetWhere(pagination.SortColumn{Expr: "name_key", Kind: pagination.SortText}, "id", opts.Sort == "name:desc", keyCursor, arg)
+			if perr != nil {
+				http.Error(w, "invalid pagination", http.StatusBadRequest)
+				return
+			}
+			page += " WHERE " + pred
+		}
+	} else if cursor != nil {
 		cid, perr := uuid.Parse(cursor.ID)
 		if perr != nil {
 			http.Error(w, "invalid pagination", http.StatusBadRequest)
@@ -173,10 +199,16 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 		}
 		page += " WHERE (activity, id) < (" + arg(cursor.Timestamp) + ", " + arg(cid) + ")"
 	}
-	page += " ORDER BY activity DESC, id DESC LIMIT " + arg(opts.Limit+1)
+	page += " ORDER BY " + orderBy + " LIMIT " + arg(opts.Limit+1)
 
 	ctx := r.Context()
 	dbq := platformdb.QuerierFromContext(ctx, h.pool)
+	var total int
+	if err := dbq.QueryRow(ctx, "SELECT count(*) FROM ("+union+") people", countArgs...).Scan(&total); err != nil {
+		log.Printf("contacts: count people: %v", err)
+		http.Error(w, "failed to list people", http.StatusInternalServerError)
+		return
+	}
 	rows, err := dbq.Query(ctx, page, args...)
 	if err != nil {
 		log.Printf("contacts: list people: %v", err)
@@ -187,11 +219,12 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 		subject  string
 		id       uuid.UUID
 		activity time.Time
+		nameKey  string
 	}
 	var keys []key
 	for rows.Next() {
 		var k key
-		if err := rows.Scan(&k.subject, &k.id, &k.activity); err != nil {
+		if err := rows.Scan(&k.subject, &k.id, &k.activity, &k.nameKey); err != nil {
 			rows.Close()
 			http.Error(w, "failed to read people", http.StatusInternalServerError)
 			return
@@ -280,7 +313,7 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 		srows.Close()
 	}
 
-	result := &pagination.PageResult{Items: make([]interface{}, 0, len(keys)), HasMore: hasMore, Limit: opts.Limit}
+	result := &pagination.PageResult{Items: make([]interface{}, 0, len(keys)), HasMore: hasMore, Limit: opts.Limit, Total: &total}
 	for _, k := range keys {
 		if k.subject == "contact" {
 			if p, ok := contacts[k.id]; ok {
@@ -293,7 +326,11 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 	result.Count = len(result.Items)
 	if hasMore && len(keys) > 0 {
 		last := keys[len(keys)-1]
-		result.NextCursor = (&pagination.Cursor{ID: last.id.String(), Timestamp: last.activity}).Encode()
+		if byName {
+			result.NextCursor = (&pagination.KeyCursor{Sort: opts.Sort, Key: last.nameKey, ID: last.id.String()}).Encode()
+		} else {
+			result.NextCursor = (&pagination.Cursor{ID: last.id.String(), Timestamp: last.activity}).Encode()
+		}
 	}
 	pagination.WritePaginationHeaders(w, result)
 	writeJSON(w, result)

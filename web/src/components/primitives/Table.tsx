@@ -80,16 +80,39 @@ export function TableRow({ children, interactive = false, selected = false, clas
 
 interface TableHeaderCellProps extends React.ThHTMLAttributes<HTMLTableCellElement> {
   children?: React.ReactNode;
+  /** Makes the column sortable: the direction it is ordered in now ('none' = not this column). Pair with `onSort`. */
+  sortDirection?: 'asc' | 'desc' | 'none';
+  /** Called when the person asks to change this column's order; the page decides the next state. */
+  onSort?: () => void;
 }
 
-export function TableHeaderCell({ children, className, ...props }: TableHeaderCellProps) {
+export function TableHeaderCell({ children, className, sortDirection, onSort, ...props }: TableHeaderCellProps) {
+  const sortable = !!onSort;
   return (
     <th
       scope="col"
       {...props}
+      aria-sort={sortable ? (sortDirection === 'asc' ? 'ascending' : sortDirection === 'desc' ? 'descending' : 'none') : undefined}
       className={clsx('px-6', 'py-3', 'text-sm', 'font-medium', 'text-text-secondary', className)}
     >
-      {children}
+      {sortable ? (
+        <button
+          type="button"
+          onClick={onSort}
+          className={clsx(
+            '-mx-2 inline-flex items-center gap-1 rounded-control px-2 py-1 font-medium transition-colors',
+            'hover:bg-surface-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary',
+            sortDirection && sortDirection !== 'none' && 'text-text-primary',
+          )}
+        >
+          {children}
+          <span aria-hidden="true" className={clsx('text-xs', sortDirection && sortDirection !== 'none' ? 'opacity-100' : 'opacity-30')}>
+            {sortDirection === 'asc' ? '▲' : sortDirection === 'desc' ? '▼' : '↕'}
+          </span>
+        </button>
+      ) : (
+        children
+      )}
     </th>
   );
 }

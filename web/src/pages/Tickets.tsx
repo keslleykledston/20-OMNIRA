@@ -20,7 +20,8 @@ import {
   TableHeaderCell,
   TableRow,
 } from '../components/primitives'
-import { ticketErrorMessage, ticketsAPI, type Ticket, type TicketFilters } from '../lib/tickets'
+import { ticketErrorMessage, ticketsAPI, type Ticket, type TicketFilters, type TicketSort } from '../lib/tickets'
+import { directionOf, nextSort } from '../lib/sorting'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
 
@@ -108,9 +109,16 @@ export default function TicketsPage() {
   const [cursorStack, setCursorStack] = useState<string[]>([])
   const cursor = cursorStack[cursorStack.length - 1]
 
+  // The order of the list (undefined = newest activity first); changing it starts again from the first page, like a filter.
+  const [sort, setSort] = useState<TicketSort | undefined>(undefined)
+  const changeSort = (cycle: TicketSort[]) => {
+    setCursorStack([])
+    setSort(nextSort(sort, cycle) as TicketSort | undefined)
+  }
+
   const tickets = useQuery({
-    queryKey: ['tickets', tenantId, cursor ?? 'first', filters.status ?? '', filters.priority ?? '', filters.externalTicketId ?? ''],
-    queryFn: () => ticketsAPI.list(cursor, PAGE_SIZE, filters),
+    queryKey: ['tickets', tenantId, cursor ?? 'first', filters.status ?? '', filters.priority ?? '', filters.externalTicketId ?? '', sort ?? ''],
+    queryFn: () => ticketsAPI.list(cursor, PAGE_SIZE, filters, sort),
     retry: false,
   })
 
@@ -257,15 +265,27 @@ export default function TicketsPage() {
 
       {!tickets.isLoading && !tickets.isError && items.length > 0 && (
         <>
+          {page?.total !== undefined && (
+            <p aria-live="polite" className="text-sm text-text-secondary">
+              {page.total} {page.total === 1 ? 'ticket' : 'tickets'}
+              {filters.status || filters.priority || filters.externalTicketId ? ' com estes filtros' : ''}
+            </p>
+          )}
           <div className="hidden md:block">
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Assunto</TableHeaderCell>
-                  <TableHeaderCell>Prioridade</TableHeaderCell>
+                  <TableHeaderCell sortDirection={directionOf(sort, 'subject')} onSort={() => changeSort(['subject:asc', 'subject:desc'])}>
+                    Assunto
+                  </TableHeaderCell>
+                  <TableHeaderCell sortDirection={directionOf(sort, 'priority')} onSort={() => changeSort(['priority:desc', 'priority:asc'])}>
+                    Prioridade
+                  </TableHeaderCell>
                   <TableHeaderCell>Situação</TableHeaderCell>
                   <TableHeaderCell>Origem</TableHeaderCell>
-                  <TableHeaderCell>Atualizado</TableHeaderCell>
+                  <TableHeaderCell sortDirection={directionOf(sort, 'updated_at', 'desc')} onSort={() => changeSort(['updated_at:asc'])}>
+                    Atualizado
+                  </TableHeaderCell>
                   <TableHeaderCell>Ação</TableHeaderCell>
                 </TableRow>
               </TableHead>
@@ -318,7 +338,7 @@ export default function TicketsPage() {
             hasNext={Boolean(page?.has_more && page?.next_cursor)}
             onPrevious={() => setCursorStack((s) => s.slice(0, -1))}
             onNext={() => page?.next_cursor && setCursorStack((s) => [...s, page.next_cursor!])}
-            label={`${page?.count ?? 0} ${page?.count === 1 ? 'ticket' : 'tickets'} nesta página`}
+            label={`${page?.count ?? 0} ${page?.count === 1 ? 'ticket' : 'tickets'} nesta página${page?.total !== undefined ? ` · ${page.total} no total` : ''}`}
           />
         </>
       )}
