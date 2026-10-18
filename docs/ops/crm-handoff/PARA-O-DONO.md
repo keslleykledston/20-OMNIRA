@@ -14,8 +14,8 @@ A "CRM Piloto escrita" que existe lá não serve para o teste completo: **não t
 |---|---|
 | Nome | `CRM teste` |
 | Escopos | `conversation.read`, `message.read`, `contact.read`, `media.read`, `events.read`, `conversation.claim`, `message.send`, `conversation.transfer`, `conversation.finalize` (**não** marque `service.read`) |
-| Taxa | 600 por minuto |
-| Lease | 900 s (para o passo 17 do roteiro, temporariamente 60 s) |
+| Taxa | **não se edita na tela**: nasce em 600 por minuto (o valor aparece em Gerenciar) |
+| Lease (prazo de titularidade) | **não se define na tela**: nasce sem prazo (a conversa fica com o CRM até ser devolvida ou a aplicação ser suspensa). Para ter prazo (ex.: 900 s) ou outra taxa (ex.: 300 na fase de leitura da K3G_Solutions), peça a mim: a API de administração aceita `lease_seconds` e `rate_limit_per_min`. Sem isso o passo 17 do roteiro (perda de lease) não é testável |
 | Fora do horário | permitido, só neste teste (senão o `claim` dá `409 outside_hours` fora do expediente da fila) |
 | Filas/linhas | sem filtro (todas as da empresa de teste) |
 
