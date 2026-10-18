@@ -1,0 +1,234 @@
+<title>Ajuda OMNIRA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: leitura em coluna estreita, menu fixo à esquerda, busca no topo. Documentação de produto: sóbria, azul da marca como único acento. */
+:root {
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --fg: #142033;
+  --muted: #566579;
+  --line: #dbe3ed;
+  --accent: #1f62d8;
+  --accent-soft: #e6eefc;
+  --code-bg: #eef2f8;
+  --note-bg: #fff7e0;
+  --note-line: #e9c46a;
+  --shadow: 0 1px 2px rgba(20, 32, 51, .06), 0 8px 24px rgba(20, 32, 51, .06);
+  --font: "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e151f; --surface: #141d2a; --fg: #e5ecf5; --muted: #9aa8ba; --line: #253346; --accent: #6aa3ff;
+    --accent-soft: #1b2a44; --code-bg: #1a2535; --note-bg: #2a2412; --note-line: #8a7230; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e151f; --surface: #141d2a; --fg: #e5ecf5; --muted: #9aa8ba; --line: #253346; --accent: #6aa3ff;
+  --accent-soft: #1b2a44; --code-bg: #1a2535; --note-bg: #2a2412; --note-line: #8a7230; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.65 var(--font); margin: 0; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.topo { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.marca { font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+.marca span { color: var(--muted); font-weight: 500; }
+.busca { position: relative; flex: 1; max-width: 520px; }
+.busca input { width: 100%; font: inherit; padding: 9px 12px 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+.resultados { position: absolute; left: 0; right: 0; top: calc(100% + 6px); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); max-height: 60vh; overflow: auto; }
+.resultados a { display: block; padding: 10px 14px; text-decoration: none; color: var(--fg); border-bottom: 1px solid var(--line); }
+.resultados a:last-child { border-bottom: 0; }
+.resultados a:hover, .resultados a:focus-visible { background: var(--accent-soft); }
+.resultados .t { font-weight: 600; }
+.resultados .g { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.resultados .s { font-size: 14px; color: var(--muted); }
+.resultados .vazio { padding: 12px 14px; color: var(--muted); }
+.menu-botao { display: none; font: inherit; padding: 8px 12px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 8px; }
+
+.moldura { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 0; max-width: 1240px; margin: 0 auto; }
+.lateral { position: sticky; top: calc(58px + env(safe-area-inset-top, 0px)); align-self: start; height: calc(100dvh - 58px); overflow: auto; padding: 20px 12px 40px 16px; }
+.grupo { margin-bottom: 18px; }
+.grupo-nome { margin: 0 0 6px 10px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.item { display: block; padding: 7px 10px; border-radius: 8px; color: var(--fg); text-decoration: none; font-size: 15px; line-height: 1.35; }
+.item:hover { background: var(--accent-soft); }
+.item[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+main { min-width: 0; padding: 28px 16px 80px 40px; }
+.pagina article { max-width: 760px; }
+h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .4em; font-weight: 700; text-wrap: balance; }
+h2 { font-size: 1.35rem; margin: 2em 0 .5em; font-weight: 700; text-wrap: balance; }
+h3 { font-size: 1.1rem; margin: 1.6em 0 .4em; font-weight: 600; }
+p, li { max-width: 68ch; }
+li { margin: .25em 0; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+img { max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); cursor: zoom-in; display: block; margin: 14px 0; background: var(--surface); }
+code { font: 500 .88em var(--mono); background: var(--code-bg); padding: .12em .4em; border-radius: 5px; }
+pre { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; max-width: 100%; line-height: 1.5; }
+pre code { background: none; padding: 0; font-size: .84rem; white-space: pre; }
+.copiar { position: absolute; top: 8px; right: 8px; font: 500 12px var(--font); padding: 4px 8px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 6px; cursor: pointer; }
+blockquote { margin: 1em 0; padding: 10px 16px; background: var(--note-bg); border-left: 4px solid var(--note-line); border-radius: 0 8px 8px 0; max-width: 68ch; }
+blockquote p { margin: .3em 0; }
+.rolagem { overflow-x: auto; margin: 1em 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.tabela { border-collapse: collapse; width: 100%; font-size: .93rem; }
+.tabela th, .tabela td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tabela th { font-size: .78rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); background: var(--code-bg); white-space: nowrap; }
+.tabela tr:last-child td { border-bottom: 0; }
+
+.pergunta { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); margin: 10px 0; }
+.pergunta summary { cursor: pointer; padding: 12px 16px; font-weight: 600; list-style-position: inside; }
+.pergunta[open] summary { border-bottom: 1px solid var(--line); }
+.resposta { padding: 4px 16px 14px; }
+
+.passos { display: flex; justify-content: space-between; gap: 12px; margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.passos a { display: block; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-decoration: none; color: var(--fg); min-width: 0; max-width: 48%; }
+.passos a small { display: block; color: var(--muted); }
+.passos a:hover { border-color: var(--accent); }
+.rodape { margin-top: 40px; color: var(--muted); font-size: 13px; }
+
+.zoom { position: fixed; inset: 0; z-index: 50; background: rgba(8, 12, 20, .82); display: flex; align-items: center; justify-content: center; padding: 16px; cursor: zoom-out; }
+.zoom img { max-width: 100%; max-height: 100%; width: auto; border-radius: 8px; margin: 0; cursor: zoom-out; }
+
+@media (max-width: 860px) {
+  .menu-botao { display: inline-block; }
+  .moldura { grid-template-columns: minmax(0, 1fr); }
+  .lateral { position: fixed; inset: calc(58px + env(safe-area-inset-top, 0px)) 0 0 0; height: auto; background: var(--surface); z-index: 15; display: none; padding-bottom: 80px; }
+  .lateral.aberto { display: block; }
+  main { padding: 20px 16px 80px; }
+  h1 { font-size: 1.6rem; }
+  .marca span { display: none; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<header class="topo">
+  <button class="menu-botao" id="menu-botao" aria-expanded="false" aria-controls="lateral">Menu</button>
+  <div class="marca">OMNIRA <span>Ajuda</span></div>
+  <div class="busca">
+    <input id="busca" type="search" placeholder="Buscar na ajuda" aria-label="Buscar na ajuda" autocomplete="off">
+    <div class="resultados" id="resultados" hidden></div>
+  </div>
+</header>
+<div class="moldura">
+  <nav class="lateral" id="lateral" aria-label="Documentação">
+{{MENU}}
+  </nav>
+  <main id="conteudo" tabindex="-1">
+{{SECOES}}
+  </main>
+</div>
+
+<script>
+(function () {
+  var INDICE = {{INDICE}};
+  var ORDEM = {{ORDEM}};
+  var DATA = "{{DATA}}";
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var paginas = Array.prototype.slice.call(document.querySelectorAll('.pagina'));
+  var itens = Array.prototype.slice.call(document.querySelectorAll('.item'));
+  var titulos = {};
+  INDICE.forEach(function (p) { titulos[p.id] = p.titulo; });
+
+  function idAtual() {
+    var h = decodeURIComponent((location.hash || '').replace(/^#/, ''));
+    return ORDEM.indexOf(h) >= 0 ? h : 'inicio';
+  }
+
+  function mostrar() {
+    var id = idAtual();
+    paginas.forEach(function (p) { p.hidden = p.id !== 'p-' + id; });
+    itens.forEach(function (a) {
+      if (a.getAttribute('data-id') === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    document.title = (id === 'inicio' ? '' : titulos[id] + ' · ') + 'Ajuda OMNIRA';
+    montarPassos(id);
+    $('#lateral').classList.remove('aberto');
+    $('#menu-botao').setAttribute('aria-expanded', 'false');
+    window.scrollTo(0, 0);
+  }
+
+  function montarPassos(id) {
+    var secao = $('#p-' + id);
+    if (!secao || secao.querySelector('.passos')) return;
+    var i = ORDEM.indexOf(id), ant = ORDEM[i - 1], prox = ORDEM[i + 1];
+    var html = '<div class="passos">';
+    html += ant ? '<a href="#' + ant + '"><small>Anterior</small>' + esc(titulos[ant]) + '</a>' : '<span></span>';
+    html += prox ? '<a href="#' + prox + '"><small>Próximo</small>' + esc(titulos[prox]) + '</a>' : '<span></span>';
+    html += '</div><p class="rodape">Página gerada em ' + DATA + '. As telas são capturas do sistema com dados fictícios.</p>';
+    secao.querySelector('article').insertAdjacentHTML('beforeend', html);
+  }
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function sem(t) { return t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+
+  // Busca: cada palavra precisa aparecer no título ou no texto; título pesa mais.
+  var caixa = $('#busca'), lista = $('#resultados');
+  caixa.addEventListener('input', function () {
+    var termos = sem(caixa.value).split(/\s+/).filter(function (t) { return t.length > 1; });
+    if (!termos.length) { lista.hidden = true; return; }
+    var achados = [];
+    INDICE.forEach(function (p) {
+      var tit = sem(p.titulo), txt = sem(p.texto), pontos = 0, ok = true;
+      termos.forEach(function (t) {
+        var a = tit.indexOf(t) >= 0, b = txt.indexOf(t);
+        if (!a && b < 0) ok = false; else pontos += (a ? 10 : 0) + 1;
+      });
+      if (!ok) return;
+      var pos = txt.indexOf(termos[0]);
+      var trecho = pos >= 0 ? p.texto.substr(Math.max(0, pos - 50), 140) : p.texto.substr(0, 140);
+      achados.push({ p: p, pontos: pontos, trecho: trecho });
+    });
+    achados.sort(function (x, y) { return y.pontos - x.pontos; });
+    lista.innerHTML = achados.length ? achados.slice(0, 8).map(function (r) {
+      return '<a href="#' + r.p.id + '"><span class="g">' + esc(r.p.grupo) + '</span><div class="t">' + esc(r.p.titulo) + '</div><div class="s">…' + esc(r.trecho) + '…</div></a>';
+    }).join('') : '<div class="vazio">Nada encontrado. Tente outra palavra.</div>';
+    lista.hidden = false;
+  });
+  lista.addEventListener('click', function (e) { if (e.target.closest('a')) { lista.hidden = true; caixa.value = ''; } });
+  document.addEventListener('click', function (e) { if (!e.target.closest('.busca')) lista.hidden = true; });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { lista.hidden = true; var z = $('.zoom'); if (z) z.remove(); }
+    if (e.key === '/' && document.activeElement !== caixa && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); caixa.focus(); }
+  });
+
+  $('#menu-botao').addEventListener('click', function () {
+    var aberto = $('#lateral').classList.toggle('aberto');
+    this.setAttribute('aria-expanded', aberto ? 'true' : 'false');
+  });
+
+  // Ampliar captura ao clicar.
+  document.addEventListener('click', function (e) {
+    var img = e.target.closest('article img');
+    if (!img) return;
+    var z = document.createElement('div');
+    z.className = 'zoom';
+    z.innerHTML = '<img alt="">';
+    z.firstChild.src = img.src; z.firstChild.alt = img.alt;
+    z.addEventListener('click', function () { z.remove(); });
+    document.body.appendChild(z);
+  });
+
+  // Botão copiar nos blocos de código.
+  Array.prototype.forEach.call(document.querySelectorAll('pre'), function (pre) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'copiar'; b.textContent = 'Copiar';
+    b.addEventListener('click', function () {
+      var t = pre.querySelector('code').innerText;
+      var feito = function () { b.textContent = 'Copiado'; setTimeout(function () { b.textContent = 'Copiar'; }, 1500); };
+      try { navigator.clipboard.writeText(t).then(feito, function () { selecionar(pre); }); } catch (_) { selecionar(pre); }
+    });
+    pre.appendChild(b);
+  });
+  function selecionar(pre) {
+    var r = document.createRange(); r.selectNodeContents(pre.querySelector('code'));
+    var s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  }
+
+  window.addEventListener('hashchange', mostrar);
+  mostrar();
+})();
+</script>
