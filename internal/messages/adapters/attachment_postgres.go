@@ -18,10 +18,17 @@ func (s *PostgresOutboundStore) InsertAttachment(ctx context.Context, a ports.Ou
 	if err != nil {
 		return err
 	}
+	// exactly one owner: a person or an installation (the table refuses anything else)
+	var person, installation *uuid.UUID
+	if a.UploadedByInstallation != uuid.Nil {
+		installation = &a.UploadedByInstallation
+	} else {
+		person = &a.UploadedBy
+	}
 	_, err = platformdb.QuerierFromContext(ctx, s.pool).Exec(ctx, `
-		INSERT INTO message_outbound_media (id, tenant_id, conversation_id, uploaded_by, kind, mime, size_bytes, sha256, file_name, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		a.ID, tenantID, a.ConversationID, a.UploadedBy, a.Kind, a.Mime, a.SizeBytes, a.SHA256, a.FileName, a.ExpiresAt)
+		INSERT INTO message_outbound_media (id, tenant_id, conversation_id, uploaded_by, uploaded_by_installation_id, kind, mime, size_bytes, sha256, file_name, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		a.ID, tenantID, a.ConversationID, person, installation, a.Kind, a.Mime, a.SizeBytes, a.SHA256, a.FileName, a.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("messages: record attachment: %w", err)
 	}
@@ -61,15 +68,22 @@ func (s *PostgresOutboundStore) LoadAttachment(ctx context.Context, id uuid.UUID
 	}
 	a := &ports.OutboundAttachment{}
 	var purged bool
+	var person, installation *uuid.UUID
 	err = platformdb.QuerierFromContext(ctx, s.pool).QueryRow(ctx, `
-		SELECT id, conversation_id, uploaded_by, kind, mime, size_bytes, sha256, file_name, message_id, expires_at, file_purged_at IS NOT NULL
+		SELECT id, conversation_id, uploaded_by, uploaded_by_installation_id, kind, mime, size_bytes, sha256, file_name, message_id, expires_at, file_purged_at IS NOT NULL
 		FROM message_outbound_media WHERE tenant_id=$1 AND id=$2`, tenantID, id).
-		Scan(&a.ID, &a.ConversationID, &a.UploadedBy, &a.Kind, &a.Mime, &a.SizeBytes, &a.SHA256, &a.FileName, &a.MessageID, &a.ExpiresAt, &purged)
+		Scan(&a.ID, &a.ConversationID, &person, &installation, &a.Kind, &a.Mime, &a.SizeBytes, &a.SHA256, &a.FileName, &a.MessageID, &a.ExpiresAt, &purged)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("messages: load attachment: %w", err)
+	}
+	if person != nil {
+		a.UploadedBy = *person
+	}
+	if installation != nil {
+		a.UploadedByInstallation = *installation
 	}
 	a.Purged = purged
 	return a, nil
@@ -159,4 +173,99 @@ func (s *PostgresOutboundStore) InsertQueuedMedia(ctx context.Context, sender uu
 		return nil, false, fmt.Errorf("messages: load idempotent media message: %w", err)
 	}
 	return existing, true, nil
+}
+
+var _ ports.ExternalAttachmentStore = (*PostgresOutboundStore)(nil)
+
+// ExternalAttachmentUsage is AttachmentUsage for an installation's uploads. The tenant's total is the same number: it counts every file the company keeps.
+func (s *PostgresOutboundStore) ExternalAttachmentUsage(ctx context.Context, conversationID, installation uuid.UUID) (ports.AttachmentUsage, error) {
+	var u ports.AttachmentUsage
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return u, err
+	}
+	q := platformdb.QuerierFromContext(ctx, s.pool)
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('outbound_media:' || $1::text || ':' || $2::text, 0))`, conversationID.String(), installation.String()); err != nil {
+		return u, fmt.Errorf("messages: lock pending attachments: %w", err)
+	}
+	err = q.QueryRow(ctx, `
+		SELECT
+		  count(*) FILTER (WHERE conversation_id = $2 AND uploaded_by_installation_id = $3 AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now()),
+		  COALESCE(sum(size_bytes) FILTER (WHERE uploaded_by_installation_id = $3 AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now()), 0),
+		  count(*) FILTER (WHERE uploaded_by_installation_id = $3 AND created_at > now() - interval '1 minute'),
+		  COALESCE(sum(size_bytes) FILTER (WHERE file_purged_at IS NULL), 0)
+		FROM message_outbound_media WHERE tenant_id = $1`, tenantID, conversationID, installation).
+		Scan(&u.PendingFiles, &u.PendingBytes, &u.UploadsLastMinute, &u.TenantBytes)
+	if err != nil {
+		return u, fmt.Errorf("messages: attachment usage: %w", err)
+	}
+	return u, nil
+}
+
+// InsertQueuedExternalMedia: ONE statement. The conversation must be open, on the same active text channel, and held by THIS installation at exactly the control
+// version it proved; the installation's own unsent, unexpired upload in this conversation is claimed in the same statement, and the message (with its delivery job
+// and the link to the file) exists only if both held. A concurrent second send of the same upload loses (zero rows) instead of producing two messages with one file.
+func (s *PostgresOutboundStore) InsertQueuedExternalMedia(ctx context.Context, installation uuid.UUID, controlVersion int64, in ports.SendContext, att ports.OutboundAttachment, caption, hash string) (*ports.QueuedMessage, error) {
+	tenantID, err := tenantOf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := platformdb.QuerierFromContext(ctx, s.pool)
+	msg := &ports.QueuedMessage{ID: uuid.New(), ConversationID: in.ConversationID, Body: caption, Status: "queued", RequestHash: hash}
+	err = q.QueryRow(ctx, `
+		WITH target AS (
+		  SELECT c.id, c.tenant_id, c.channel_connection_id
+		  FROM conversations c
+		  JOIN channel_connections cc ON cc.tenant_id = c.tenant_id AND cc.id = c.channel_connection_id
+		       AND cc.status = 'active' AND cc.capabilities ? 'text'
+		  WHERE c.tenant_id = $2 AND c.id = $3
+		    AND c.status = 'open'
+		    AND c.channel_connection_id IS NOT DISTINCT FROM $4::uuid
+		    AND c.control_kind = 'crm_application' AND c.control_holder_id = $7 AND c.control_version = $10   -- held by this installation, at this version
+		    AND (NOT $11::bool OR EXISTS (SELECT 1 FROM messages w WHERE w.tenant_id = c.tenant_id AND w.conversation_id = c.id AND w.direction = 'inbound'
+		                                   AND w.created_at > now() - interval '24 hours'))     -- the provider's 24 h customer-service window
+		  FOR SHARE OF c
+		), claim AS (
+		  SELECT id FROM message_outbound_media
+		  WHERE tenant_id = $2 AND id = $12 AND conversation_id = $3 AND uploaded_by_installation_id = $7
+		    AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now()
+		    AND EXISTS (SELECT 1 FROM target)
+		  FOR UPDATE
+		), ins AS (
+		  INSERT INTO messages
+		    (id, tenant_id, conversation_id, channel_connection_id, direction, message_type, body, mime_type, size_bytes, status,
+		     request_hash, sent_by_user_id, sent_by_installation_id)
+		  SELECT $1, t.tenant_id, t.id, t.channel_connection_id, 'outbound', $13, $5, $14, $15, 'queued', $6, NULL, $7
+		  FROM target t WHERE EXISTS (SELECT 1 FROM claim)
+		  RETURNING id, created_at
+		), link AS (
+		  UPDATE message_outbound_media SET message_id = (SELECT id FROM ins)
+		  WHERE tenant_id = $2 AND id = $12 AND EXISTS (SELECT 1 FROM ins)
+		  RETURNING id
+		), job AS (
+		  INSERT INTO outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id, payload)
+		  SELECT $8, $2, 'job.channel.send_text.v1', 'message', id::text, $9, '{}'::jsonb FROM ins
+		  RETURNING id
+		), touched AS (
+		  UPDATE conversations SET updated_at = now()
+		  WHERE tenant_id = $2 AND id = $3 AND EXISTS (SELECT 1 FROM ins)
+		  RETURNING id
+		)
+		SELECT id, created_at FROM ins`,
+		msg.ID, tenantID, in.ConversationID, in.ConnectionID, caption, hash, installation, uuid.New(), uuid.New(), controlVersion, in.Provider == "meta_cloud",
+		att.ID, att.Kind, att.Mime, att.SizeBytes).
+		Scan(&msg.ID, &msg.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// zero rows: the hold, the version, the channel or the window changed, or the upload is not usable any more. Say which family of reasons it is.
+		var usable bool
+		if qerr := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM message_outbound_media WHERE tenant_id = $1 AND id = $2 AND conversation_id = $3 AND uploaded_by_installation_id = $4
+			AND message_id IS NULL AND file_purged_at IS NULL AND expires_at > now())`, tenantID, att.ID, in.ConversationID, installation).Scan(&usable); qerr == nil && !usable {
+			return nil, ports.ErrAttachmentUnavailable
+		}
+		return nil, ports.ErrConversationChanged
+	}
+	if err != nil {
+		return nil, fmt.Errorf("messages: queue external media: %w", err)
+	}
+	return msg, nil
 }

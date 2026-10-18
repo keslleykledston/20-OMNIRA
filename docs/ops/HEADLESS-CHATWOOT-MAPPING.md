@@ -1,6 +1,6 @@
 # CRM K3G: do Chatwoot para o OMNIRA como motor (mapeamento)
 
-Estado: **decisões do dono tomadas em 2026-10-17 (§7); G2 e G8 implementados; G1 (anexos) em construção.** Entrada: `OMNIRA_CHATWOOT_API_USADA_PELO_CRM.md` (equipe do CRM, 2026-10-17). Base no OMNIRA: ADR-0048 (headless), `docs/ops/HEADLESS-P2-K3G.md`, rotas em `internal/platform/httpserver/server.go` (`RegisterExternalHandlers`, `RegisterExternalWriteHandlers`).
+Estado: **decisões do dono tomadas em 2026-10-17 (§7); G1, G2 e G8 implementados e em produção (api).** Entrada: `OMNIRA_CHATWOOT_API_USADA_PELO_CRM.md` (equipe do CRM, 2026-10-17). Base no OMNIRA: ADR-0048 (headless), `docs/ops/HEADLESS-P2-K3G.md`, rotas em `internal/platform/httpserver/server.go` (`RegisterExternalHandlers`, `RegisterExternalWriteHandlers`).
 
 ## 1. Decisão recomendada: o CRM troca o provedor, o OMNIRA não imita o Chatwoot
 
@@ -29,7 +29,7 @@ Base OMNIRA: `https://<host>/api/v1/external`, `Authorization: Bearer omn_ext_<i
 | campos da mensagem: `message_type` 0/1/2 | `direction` + `sender.kind` (`contact\|agent\|crm_application\|automation`) | **ADAPTA** | `activity` (2) não é mensagem: vem como evento (`conversation.control_changed`, `conversation.closed`) |
 | `echo_id` (dedupe de eco) | `Idempotency-Key` no `POST` + `sender.mine` | **ADAPTA** | O eco do CRM se reconhece por `sender.kind = crm_application` e `mine = true`, sem prefixo `crm-` |
 | `POST /conversations/{id}/messages` (texto) | `POST /conversations/{id}/messages` `{text}` ou `{template}` | **OK** | Mesma janela de 24 h e mesmos templates do Workspace. `Idempotency-Key` obrigatório. `409 not_holder` se a aplicação não segura a conversa (assuma antes), `409 held_by_other` se outro titular |
-| `POST .../messages` multipart (anexos) | nenhuma | **LACUNA** | Ver §4-G1 |
+| `POST .../messages` multipart (anexos) | `POST /conversations/{id}/attachments` (multipart) e depois `POST /messages` com `attachment_id` | **ADAPTA** | Dois passos (subir, enviar). Ver §4-G1 |
 | `private: true` (nota interna) | nenhuma | **LACUNA** | Ver §4-G3 |
 | `POST /conversations/{id}/assignments` `{assignee_id}` | `POST /conversations/{id}/claim` / `release` (+`heartbeat`) | **ADAPTA** | Assumir/soltar é da aplicação, com lease e `If-Match`. Ver §3.2 |
 | `POST /conversations/{id}/labels` (equipe) | `POST /conversations/{id}/transfer` `{queue_id}` | **ADAPTA** | Fila = setor (ADR-0043). Falta listar filas (§4-G2) |
@@ -65,7 +65,7 @@ Enquanto o CRM segura a conversa, o Workspace recusa a atribuição/resposta (AD
 
 | # | Lacuna | Proposta | Esforço / cuidado |
 |---|---|---|---|
-| G1 | **Enviar anexo** (imagem, áudio, vídeo, documento) | Escopo existente `message.send` ganha mídia: `POST /conversations/{id}/messages` com `media_id` previamente enviado a `POST /media` (novo, quarentena/antivírus igual ao inbound, MIME e tamanho limitados). Reaproveita o pipeline de anexos de saída (R-4, flag OFF em prod). Áudio: o CRM converte para MP3 como hoje | Médio. Precisa Codex, teste de duas empresas e prova ao vivo com número de teste (R-4 ainda sem ela) |
+| G1 | **Enviar anexo** (imagem, áudio, vídeo, documento) | **FEITO (2026-10-18), migration 167:** `POST /external/conversations/{id}/attachments` (multipart, campo `file`, até 16 MiB, escopo `message.send`; a instalação precisa **deter** a conversa) devolve `attachment_id`; depois `POST /messages` com `attachment_id` (o `text` vira a legenda, até 1024 caracteres), com `Idempotency-Key` e `If-Match` como o texto. Mesmo pipeline do operador: tipo pelos bytes, metadados removidos, estrutura, ClamAV (falha = recusa), cotas **por instalação** (5 pendentes por conversa, 64 MiB, 30 por minuto), chave "Anexos de saída" da empresa (ligada por padrão) e janela de 24 h na linha oficial. O arquivo pertence à instalação; outra instalação, outra conversa ou outra empresa recebe o mesmo `422 attachment_unavailable`. Áudio: o CRM converte para MP3 como hoje. **Falta a prova ao vivo** (número de teste: foto, PDF, nota de voz OGG, MP4; a prova do pipeline de saída ainda está pendente desde R-4) | — |
 | G2 | **Listar filas** (para o mapa label → fila) | **FEITO**: `GET /external/queues` (`id`, `name`), escopo `conversation.read`, filtrado pela allowlist da instalação; teste com duas empresas | — |
 | G3 | **Nota interna** (`private`) | Não expor agora. O CRM guarda a nota no próprio ticket. Se for essencial: nota de conversa (hoje as notas são do contato, sem vínculo com conversa) | Alto para o ganho; recomendo adiar |
 | G4 | **Lido / não lido** | O CRM calcula não lido pelo journal (`message.created.v1` inbound após o último `seen` dele). Sem endpoint | Zero no OMNIRA |
@@ -96,7 +96,7 @@ Regras do lado do CRM (já pedidas no P2): backoff exponencial em `429`/`5xx`, `
 
 1. **Fase A, 24 h só leitura** (já planejada em `HEADLESS-P2-K3G.md`): o CRM liga o `OmniraProvider` em modo sombra, compara lista e mensagens com o Chatwoot, não escreve.
 2. **Fase B, escrita em UMA fila (Suporte)**: claim, enviar texto, transferir, finalizar. Chatwoot segue para as outras filas.
-3. **Fase C**: G2 (listar filas) e G6 (grupos); depois G1 (anexos) com prova real.
+3. **Fase B inclui anexos (G1)**, depois da prova ao vivo com número de teste. **Fase C**: G6 (grupos) e ampliar filas. (G2, listar filas, já existe.)
 4. **Fase D**: G5 só com ADR e decisão do dono.
 5. Desligar o Chatwoot por fila, nunca de uma vez. Desfazer: suspender a aplicação na tela, `OMNIRA_HEADLESS_WRITE_ENABLED=false`, revogar.
 
@@ -105,7 +105,7 @@ Pré-requisitos (`HEADLESS-P2-K3G.md` §4, corrigido): lease, destinatário do t
 ## 7. Decisões do dono (2026-10-17) e o que decorre delas
 
 1. **Adaptador no CRM: aprovado.**
-2. **Anexos entram já na fase de escrita:** G1 vira obrigatório antes da fase B (em construção, ver §4-G1).
+2. **Anexos entram já na fase de escrita:** G1 implementado (ver §4-G1); falta só a prova ao vivo com número de teste.
 3. **Alertas do Gateway por WhatsApp (G5):** o dono não soube decidir. Explicação e recomendação abaixo.
 4. **Nota interna fica no CRM:** G3 encerrado.
 5. **Setores reais, ainda não preparados no OMNIRA:** ver lista abaixo.

@@ -250,6 +250,52 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
         '428': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/attachments:
+    post:
+      operationId: uploadExternalAttachment
+      tags: [Commands]
+      summary: Upload a file to send to the customer
+      description: |
+        Needs the scope `message.send`. `multipart/form-data` with one `file` part (up to 16 MiB). The installation must see the conversation and HOLD it now. The file
+        goes through the same pipeline as an operator's: kind and size by the real bytes, metadata removed, structure checked, antivirus, per-installation quotas (5
+        pending files per conversation, 64 MiB pending, 30 uploads a minute) and the company's `outbound_attachments` switch. An upload that is not sent expires in 24 h.
+        Then send it with `POST /messages` and `attachment_id` (text becomes the caption).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '201':
+          description: The file is stored and ready to be sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attachment_id, conversation_id, kind, mime, size_bytes, file_name, expires_at]
+                properties:
+                  attachment_id: { type: string, format: uuid }
+                  conversation_id: { type: string, format: uuid }
+                  kind: { type: string, enum: [image, audio, video, document] }
+                  mime: { type: string }
+                  size_bytes: { type: integer, format: int64 }
+                  file_name: { type: string }
+                  expires_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
   /external/conversations/{id}/heartbeat:
     post:
       operationId: heartbeatExternalConversation
@@ -427,10 +473,11 @@ components:
     MessageRequest:
       type: object
       additionalProperties: false
-      description: "Exactly one of text and template"
+      description: "Exactly one of text and template; or an attachment_id (a file uploaded to this conversation by this installation) with an optional text as its caption"
       properties:
         external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
-        text: { type: string, minLength: 1, maxLength: 4096 }
+        text: { type: string, minLength: 1, maxLength: 4096, description: "The message; with attachment_id, the caption (plain text, up to 1024 characters)" }
+        attachment_id: { type: string, format: uuid }
         template:
           type: object
           additionalProperties: false

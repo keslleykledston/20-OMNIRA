@@ -16,7 +16,9 @@ var ErrAttachmentUnavailable = errors.New("messages: attachment is not available
 type OutboundAttachment struct {
 	ID             uuid.UUID
 	ConversationID uuid.UUID
-	UploadedBy     uuid.UUID
+	UploadedBy     uuid.UUID // the person who uploaded it; uuid.Nil when an external application did
+	// UploadedByInstallation is the external application that uploaded it (ADR-0048); uuid.Nil when a person did. Exactly one of the two owners is set.
+	UploadedByInstallation uuid.UUID
 	Kind           string // image | audio | video | document
 	Mime           string // from the real bytes
 	SizeBytes      int64
@@ -30,6 +32,22 @@ type OutboundAttachment struct {
 // Usable reports whether the attachment can still be attached to a new message by actor in conversation.
 func (a OutboundAttachment) Usable(conversation, actor uuid.UUID, now time.Time) bool {
 	return a.ConversationID == conversation && a.UploadedBy == actor && a.MessageID == nil && !a.Purged && a.ExpiresAt.After(now)
+}
+
+// UsableByInstallation is Usable for an external application's upload.
+func (a OutboundAttachment) UsableByInstallation(conversation, installation uuid.UUID, now time.Time) bool {
+	return installation != uuid.Nil && a.ConversationID == conversation && a.UploadedByInstallation == installation && a.MessageID == nil && !a.Purged && a.ExpiresAt.After(now)
+}
+
+// ExternalAttachmentStore is the part of the store an external application's files need (ADR-0048 x ADR-0024). InsertAttachment and LoadAttachment (AttachmentStore)
+// already carry either owner.
+type ExternalAttachmentStore interface {
+	// ExternalAttachmentUsage is AttachmentUsage for an installation: it takes the installation's per-conversation lock and counts what IT holds.
+	ExternalAttachmentUsage(ctx context.Context, conversationID, installation uuid.UUID) (AttachmentUsage, error)
+	// InsertQueuedExternalMedia is InsertQueuedMedia for an application: ONE statement proves the installation still holds the conversation at exactly
+	// controlVersion, claims the installation's unsent upload and queues the media message (sent_by_installation_id, no idempotency key: the command receipt
+	// written by the caller makes a retry return the same message). ErrAttachmentUnavailable when the upload is not usable, ErrConversationChanged otherwise.
+	InsertQueuedExternalMedia(ctx context.Context, installation uuid.UUID, controlVersion int64, in SendContext, att OutboundAttachment, caption, requestHash string) (*QueuedMessage, error)
 }
 
 // AttachmentStore is the persistence of uploads and of the media message that carries one. Like OutboundStore it runs inside the

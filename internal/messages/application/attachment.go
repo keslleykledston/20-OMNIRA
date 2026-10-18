@@ -59,6 +59,8 @@ func (e *AttachmentRejected) Error() string { return "messages: attachment rejec
 type Attachments struct {
 	sender    *Sender
 	delegated *DelegatedSender // optional: files for a Hub agent (ADR-0040), see delegated_attachment.go
+	external    ports.ExternalAttachmentStore // optional: files for an external application (ADR-0048), see external_attachment.go
+	externalOut ports.ExternalOutboundStore
 	store     ports.AttachmentStore
 	files     ports.AttachmentFiles
 	scanner   ports.VirusScanner
@@ -80,6 +82,8 @@ func (a *Attachments) SendMedia(ctx context.Context, store ports.AttachmentStore
 type AttachmentTarget struct {
 	TenantID, ActorID, ConversationID uuid.UUID
 	Provider                          string
+	// InstallationID is set (and ActorID is Nil) when the upload is an external application's: quotas are counted for it and it owns the record.
+	InstallationID uuid.UUID
 }
 
 func (s *Sender) mediaSupported(provider string) bool {
@@ -114,7 +118,13 @@ func (a *Attachments) Upload(ctx context.Context, conversationID uuid.UUID, decl
 // ingest is everything an upload does AFTER it was authorized: quotas, kind and size, metadata stripping, structure, antivirus, storage. A member and a Hub agent
 // (UploadAs) differ only in who authorized it; the file goes through exactly the same checks.
 func (a *Attachments) ingest(ctx context.Context, target *AttachmentTarget, conversationID uuid.UUID, declaredName, declaredMime string, data []byte) (*ports.OutboundAttachment, error) {
-	usage, err := a.store.AttachmentUsage(ctx, conversationID, target.ActorID)
+	var usage ports.AttachmentUsage
+	var err error
+	if target.InstallationID != uuid.Nil {
+		usage, err = a.external.ExternalAttachmentUsage(ctx, conversationID, target.InstallationID)
+	} else {
+		usage, err = a.store.AttachmentUsage(ctx, conversationID, target.ActorID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +180,7 @@ func (a *Attachments) ingest(ctx context.Context, target *AttachmentTarget, conv
 	}
 	sum := sha256.Sum256(clean)
 	att := ports.OutboundAttachment{
-		ID: uuid.New(), ConversationID: conversationID, UploadedBy: target.ActorID,
+		ID: uuid.New(), ConversationID: conversationID, UploadedBy: target.ActorID, UploadedByInstallation: target.InstallationID,
 		Kind: string(res.Kind), Mime: res.Mime, SizeBytes: int64(len(clean)), SHA256: hex.EncodeToString(sum[:]),
 		FileName: mediadomain.SafeFileName(declaredName, res.Mime), ExpiresAt: a.now().Add(AttachmentTTL),
 	}

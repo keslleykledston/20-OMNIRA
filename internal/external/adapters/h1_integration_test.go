@@ -46,6 +46,7 @@ type env struct {
 	n    int // a counter for unique phone numbers and names in the fixtures
 	// adminH is the administration handler mounted on mux (the webhook administration shares it)
 	adminH  *adapters.AdminHandler
+	writeUp bool // the write routes are mounted on ext (once)
 	session func(http.Handler) http.Handler
 }
 

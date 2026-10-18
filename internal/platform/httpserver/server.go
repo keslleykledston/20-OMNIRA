@@ -670,6 +670,9 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 		Eligible:  externaladapters.SectorsEligible,
 		QueueOpen: externaladapters.SectorsQueueOpen,
 	}
+	if s.outboundAttachments != nil { // files for an application exist only where outbound media is on (a nil pointer in the interface would not be nil)
+		deps.Media = s.outboundAttachments
+	}
 	w := externaladapters.NewWriteHandler(dbPool, deps)
 	post := func(path string, scope externaldomain.Scope, h http.Handler) {
 		s.mux.Handle("POST /api/v1/external/conversations/{id}/"+path, ext.Authenticated(externaladapters.RequireScope(scope, h)))
@@ -680,6 +683,18 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 	post("messages", externaldomain.ScopeMessageSend, w.Message())
 	post("finalize", externaldomain.ScopeConversationFinalize, w.Finalize())
 	post("heartbeat", externaldomain.ScopeConversationClaim, w.Heartbeat())
+	// the route always exists (the contract says so); without outbound media it answers 501 before reading the body. The multipart body is read BEFORE the database
+	// is touched (a slow client holds only an upload slot), counted per installation.
+	buffer := messagesadapters.UploadBuffer(func() bool { return deps.Media != nil }, func(r *http.Request) (uuid.UUID, bool) {
+		p, ok := externaladapters.PrincipalFrom(r.Context())
+		if !ok || p == nil {
+			return uuid.Nil, false
+		}
+		return p.InstallationID, true
+	})
+	post("attachments", externaldomain.ScopeMessageSend, buffer(w.UploadAttachment(func(ctx context.Context) (string, string, []byte, bool) {
+		return messagesadapters.UploadedFileFromContext(ctx)
+	})))
 }
 
 // logins (ADR-0046) is nil unless invitations should prepare the invitee's sign-in account at Keycloak.
@@ -846,7 +861,7 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 			sender := messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(dbPool)).WithMediaProviders(mediaProviderReady).
 				WithEntitlements(entitlements.NewChecker(dbPool).Gate)
 			// a Hub agent's files go through the same pipeline, in the Hub's write path (ADR-0040): the delegated sender is the one the Hub's routes use
-			attachments := messagesapplication.NewAttachments(sender, store, files, mediaadapters.NewVirusScanner(cfg.ClamAVAddr)).WithDelegated(messagesapplication.NewDelegatedSender(store))
+			attachments := messagesapplication.NewAttachments(sender, store, files, mediaadapters.NewVirusScanner(cfg.ClamAVAddr)).WithDelegated(messagesapplication.NewDelegatedSender(store)).WithExternal(store, store) // an external application's files (ADR-0048) use the same pipeline
 			sendHandler.WithAttachments(attachments, store)
 			delegatedWrites.WithAttachments(attachments)
 			s.outboundAttachments, s.uploadBuffer = attachments, sendHandler.BufferUpload

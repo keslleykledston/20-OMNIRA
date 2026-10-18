@@ -32,7 +32,11 @@ import (
 
 var writeScopes = append(append([]string{}, journalScopes...), "conversation.claim", "conversation.transfer", "conversation.finalize", "message.send")
 
-func (e *env) writeAPI() {
+func (e *env) writeAPI(opts ...func(*adapters.WriteDeps)) {
+	if e.writeUp {
+		return
+	}
+	e.writeUp = true
 	e.readAPI(nil)
 	e.eventsAPI()
 	mw := adapters.NewMiddleware(adapters.NewPostgresLookup(e.app))
@@ -53,6 +57,9 @@ func (e *env) writeAPI() {
 		Eligible:  adapters.SectorsEligible,
 		QueueOpen: adapters.SectorsQueueOpen,
 	}
+	for _, o := range opts {
+		o(&deps)
+	}
 	w := adapters.NewWriteHandler(e.app, deps)
 	post := func(op string, scope domain.Scope, h http.Handler) {
 		e.ext.Handle("POST /api/v1/external/conversations/{id}/"+op, mw.Authenticated(adapters.RequireScope(scope, h)))
@@ -63,6 +70,16 @@ func (e *env) writeAPI() {
 	post("messages", domain.ScopeMessageSend, w.Message())
 	post("finalize", domain.ScopeConversationFinalize, w.Finalize())
 	post("heartbeat", domain.ScopeConversationClaim, w.Heartbeat())
+	buffer := messagesadapters.UploadBuffer(func() bool { return deps.Media != nil }, func(r *http.Request) (uuid.UUID, bool) {
+		p, ok := adapters.PrincipalFrom(r.Context())
+		if !ok || p == nil {
+			return uuid.Nil, false
+		}
+		return p.InstallationID, true
+	})
+	post("attachments", domain.ScopeMessageSend, buffer(w.UploadAttachment(func(ctx context.Context) (string, string, []byte, bool) {
+		return messagesadapters.UploadedFileFromContext(ctx)
+	})))
 }
 
 type cmdResp struct {

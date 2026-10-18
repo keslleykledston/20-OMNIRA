@@ -20,7 +20,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	attendancedomain "github.com/omnira/omnira/internal/attendance/domain"
 	"github.com/omnira/omnira/internal/conversationcontrol"
+	"github.com/omnira/omnira/internal/entitlements"
 	"github.com/omnira/omnira/internal/external/domain"
+	mediadomain "github.com/omnira/omnira/internal/media/domain"
 	messagesapp "github.com/omnira/omnira/internal/messages/application"
 	messagesports "github.com/omnira/omnira/internal/messages/ports"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
@@ -50,12 +52,19 @@ type FinalizeOutcome struct {
 // Finalizer ends the attendance (attendance/application.FinalizeByExternalApp), in the caller's system session with the conversation locked.
 type Finalizer func(ctx context.Context, installationID, conversationID uuid.UUID, reason, note string, controlVersion int64, notifyProtocol *bool) (FinalizeOutcome, error)
 
+// MediaSender is the file side of an application's messages (messagesapp.Attachments): upload one file, then queue the message that carries it.
+type MediaSender interface {
+	UploadExternal(ctx context.Context, installation, conversationID uuid.UUID, declaredName, declaredMime string, data []byte) (*messagesports.OutboundAttachment, error)
+	SendMediaExternal(ctx context.Context, m messagesapp.ExternalMediaMessage) (*messagesports.QueuedMessage, error)
+}
+
 // QueueOpener says whether a queue is inside its calendar now (sectors/adapters.QueueAvailability).
 type QueueOpener func(ctx context.Context, q platformdb.Querier, tenant, queue uuid.UUID) (bool, error)
 
 // WriteDeps are the pieces of the platform the write side reuses; none of them is reimplemented here.
 type WriteDeps struct {
 	Sender    MessageSender
+	Media     MediaSender // nil: this deployment does not deliver files (outbound media off)
 	Finalize  Finalizer
 	Eligible  conversationcontrol.Eligible
 	QueueOpen QueueOpener
@@ -250,8 +259,10 @@ type templatePayload struct {
 }
 
 type messagePayload struct {
+	// Text is the message, or the caption of the file when AttachmentID is set (plain text, up to 1024 characters).
 	Text            string           `json:"text,omitempty"`
 	Template        *templatePayload `json:"template,omitempty"`
+	AttachmentID    *uuid.UUID       `json:"attachment_id,omitempty"` // a file this installation uploaded to this conversation
 	ExternalAgentID string           `json:"external_agent_id,omitempty"`
 }
 
@@ -260,8 +271,12 @@ func decodeMessage(body []byte) (any, []byte, error) {
 	if err := strictJSON(body, &v); err != nil {
 		return nil, nil, err
 	}
-	if (v.Template == nil) == (strings.TrimSpace(v.Text) == "") {
-		return nil, nil, errors.New("send exactly one of text and template")
+	if v.AttachmentID != nil {
+		if v.Template != nil || *v.AttachmentID == uuid.Nil {
+			return nil, nil, errors.New("attachment_id goes alone, with an optional text as the caption")
+		}
+	} else if (v.Template == nil) == (strings.TrimSpace(v.Text) == "") {
+		return nil, nil, errors.New("send exactly one of text and template, or an attachment_id with an optional caption")
 	}
 	if v.Template != nil && v.Template.ID == uuid.Nil {
 		return nil, nil, errors.New("template.id is required")
@@ -431,6 +446,18 @@ func (h *WriteHandler) messageSpec() cmdSpec {
 		if err := h.mustHold(cur, in); err != nil {
 			return nil, err
 		}
+		if pl.AttachmentID != nil {
+			if h.d.Media == nil {
+				return nil, refuse(http.StatusUnprocessableEntity, "media_unavailable", "Files are not available", "This deployment does not deliver files.", &cur)
+			}
+			msg, err := h.d.Media.SendMediaExternal(ctx, messagesapp.ExternalMediaMessage{InstallationID: in.p.InstallationID, ConversationID: in.conv, ControlVersion: cur.Version, AttachmentID: *pl.AttachmentID, Caption: pl.Text})
+			if err != nil {
+				return nil, h.fromMessage(err, &cur)
+			}
+			r := result(cur, in.p.InstallationID)
+			r.MessageID, r.Delivery = &msg.ID, "queued"
+			return &cmdOutput{status: http.StatusAccepted, body: r, messageID: &msg.ID, version: cur.Version}, nil
+		}
 		m := messagesapp.ExternalMessage{InstallationID: in.p.InstallationID, ConversationID: in.conv, ControlVersion: cur.Version, Text: pl.Text, Now: h.now()}
 		if pl.Template != nil {
 			id := pl.Template.ID
@@ -541,6 +568,37 @@ func (h *WriteHandler) fromMessage(err error, st *conversationcontrol.State) err
 	case errors.Is(err, messagesapp.ErrForbidden):
 		return refuse(http.StatusForbidden, "forbidden", "Forbidden", "This operation is not allowed.", st)
 	}
+	return fromMedia(err, st)
+}
+
+// fromMedia maps what a file operation can refuse; anything else is left to the caller (an unexpected error stays a 500 with no detail).
+func fromMedia(err error, st *conversationcontrol.State) error {
+	var rejected *messagesapp.AttachmentRejected
+	switch {
+	case errors.As(err, &rejected):
+		if rejected.Reason == mediadomain.ReasonTooLarge {
+			return refuse(http.StatusRequestEntityTooLarge, "file_too_large", "File too large", "The limit is 16 MiB.", st)
+		}
+		return refuse(http.StatusUnprocessableEntity, "file_rejected", "File not accepted", "The file was not accepted: "+rejected.Reason+".", st)
+	case errors.Is(err, messagesapp.ErrMediaUnsupported):
+		return refuse(http.StatusUnprocessableEntity, "media_unsupported", "Files are not supported here", "This line or this deployment cannot send files.", st)
+	case errors.Is(err, messagesapp.ErrInvalidCaption):
+		return refuse(http.StatusUnprocessableEntity, "invalid_caption", "Invalid caption", "The caption is plain text of up to 1024 characters.", st)
+	case errors.Is(err, messagesapp.ErrAttachmentUnavailable):
+		return refuse(http.StatusUnprocessableEntity, "attachment_unavailable", "Attachment not available", "The upload does not exist for this installation in this conversation, was already sent or has expired.", st)
+	case errors.Is(err, messagesapp.ErrTooManyAttachments):
+		return refuse(http.StatusConflict, "too_many_attachments", "Too many unsent files", "Send or let expire the pending files of this conversation first.", st)
+	case errors.Is(err, messagesapp.ErrAttachmentQuota):
+		return refuse(http.StatusConflict, "attachment_quota", "Storage quota reached", "Send or let expire the pending files first.", st)
+	case errors.Is(err, messagesapp.ErrAttachmentRate):
+		return refuse(http.StatusTooManyRequests, "upload_rate", "Too many uploads", "Wait a moment and try again.", st)
+	case errors.Is(err, messagesapp.ErrAttachmentInfected):
+		return refuse(http.StatusUnprocessableEntity, "file_blocked", "File blocked", "The file was blocked by the antivirus.", st)
+	case errors.Is(err, messagesapp.ErrScannerUnavailable):
+		return refuse(http.StatusServiceUnavailable, "scanner_unavailable", "Antivirus unavailable", "The file was not accepted: try again later.", st)
+	case errors.Is(err, entitlements.ErrDisabled):
+		return refuse(http.StatusForbidden, "capability_disabled", "Capability disabled", "Sending files is not enabled for this company.", st)
+	}
 	return err
 }
 
@@ -556,6 +614,100 @@ func (h *WriteHandler) fromAttendance(err error, st *conversationcontrol.State) 
 		return errNotVisible
 	}
 	return err
+}
+
+// ---- upload of a file ----
+
+// UploadedFile is what the upload buffer read before the database was touched: the declared name and type, and the bytes (already size-limited).
+type UploadedFile func(ctx context.Context) (name, mime string, data []byte, ok bool)
+
+type uploadedResponse struct {
+	ID             uuid.UUID `json:"attachment_id"`
+	ConversationID uuid.UUID `json:"conversation_id"`
+	Kind           string    `json:"kind"`
+	Mime           string    `json:"mime"`
+	SizeBytes      int64     `json:"size_bytes"`
+	FileName       string    `json:"file_name"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+// UploadAttachment: POST /external/conversations/{id}/attachments (multipart, one "file" part), scope message.send, for a body the upload buffer already read.
+// It is not a coordinated command: it changes nothing about the conversation and needs no receipt (a retry is another pending file, bounded by the quotas and
+// the 24 h expiry). It does need the conversation to be one the installation may see AND hold right now, so an application cannot park files on conversations
+// it does not serve; the message that carries the file proves the hold again at the control version.
+func (h *WriteHandler) UploadAttachment(file UploadedFile) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := PrincipalFrom(r.Context())
+		if !ok {
+			WriteProblem(w, r, http.StatusUnauthorized, "unauthenticated", "Authentication required", "Send Authorization: Bearer <integration token>.")
+			return
+		}
+		conv, ok := uuidParam(r, "id")
+		if !ok {
+			problemNotFound(w, r)
+			return
+		}
+		name, mimeType, data, ok := file(r.Context())
+		if !ok {
+			problemBad(w, r, "A multipart \"file\" part is required.")
+			return
+		}
+		if h.d.Media == nil {
+			WriteProblem(w, r, http.StatusUnprocessableEntity, "media_unavailable", "Files are not available", "This deployment does not deliver files.")
+			return
+		}
+		var att *messagesports.OutboundAttachment
+		err := platformdb.WithSystemTenantSession(r.Context(), h.pool, p.TenantID, func(ctx context.Context) error {
+			q := platformdb.QuerierFromContext(ctx, h.pool)
+			if err := RecheckPrincipal(ctx, q, p); err != nil {
+				return err
+			}
+			al, err := LoadAllowlists(ctx, q, p)
+			if err != nil {
+				return err
+			}
+			in := &cmdInput{p: p, conv: conv, al: al, vis: NewVisibility(p, al)}
+			visible, _, err := h.visibleConversation(ctx, q, in)
+			if err != nil {
+				return err
+			}
+			if !visible {
+				return errNotVisible
+			}
+			cur, err := h.ctl.Get(ctx, q, p.TenantID, conv)
+			if err != nil {
+				return h.fromControl(err, nil)
+			}
+			if cur.Status != "open" {
+				return refuse(http.StatusConflict, "conversation_closed", "Conversation closed", "The attendance was finalized.", &cur)
+			}
+			if !cur.HeldBy(conversationcontrol.KindCRMApplication, p.InstallationID) {
+				if cur.Free() {
+					return refuse(http.StatusConflict, "not_holder", "Not the holder", "This installation does not hold the conversation: claim it first.", &cur)
+				}
+				return refuse(http.StatusConflict, "held_by_other", "Held by someone else", "Another holder has the conversation.", &cur)
+			}
+			att, err = h.d.Media.UploadExternal(ctx, p.InstallationID, conv, name, mimeType, data)
+			if err != nil {
+				return h.fromMessage(err, &cur)
+			}
+			return nil
+		})
+		if err != nil {
+			h.fail(w, r, err)
+			return
+		}
+		externalMetric.Inc("served")
+		hd := w.Header()
+		hd.Set("Content-Type", "application/json")
+		hd.Set("Cache-Control", "no-store")
+		hd.Set("X-Content-Type-Options", "nosniff")
+		if id := RequestIDFrom(r.Context()); id != "" {
+			hd.Set("X-Request-ID", id)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(uploadedResponse{ID: att.ID, ConversationID: conv, Kind: att.Kind, Mime: att.Mime, SizeBytes: att.SizeBytes, FileName: att.FileName, ExpiresAt: att.ExpiresAt.UTC()})
+	})
 }
 
 // ---- the engine ----

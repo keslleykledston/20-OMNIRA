@@ -69,21 +69,37 @@ type uploadedFileKey struct{}
 // Mount it after authentication and before the tenant session. Only the bytes of the part named "file" are kept (limit 16 MiB), in memory,
 // never in a temporary file.
 func (h *SendHandler) BufferUpload(next http.Handler) http.Handler {
+	return bufferUpload(next, func() bool { return h.att != nil }, func() *uploadLimiter { return h.limiter }, func() chan struct{} { return h.slots }, func(r *http.Request) (uuid.UUID, bool) {
+		principal, err := authn.FromContext(r.Context())
+		return principal.UserID, err == nil
+	})
+}
+
+// UploadBuffer is BufferUpload for a caller that is not a signed-in person (an external application, ADR-0048): ownerOf names who the rate limit counts, the way
+// the person's id does for an operator. It has its own limiter and its own upload slots, so a busy integration cannot starve the operators' composer (nor the reverse).
+func UploadBuffer(enabled func() bool, ownerOf func(*http.Request) (uuid.UUID, bool)) func(http.Handler) http.Handler {
+	limiter, slots := newUploadLimiter(20, time.Minute), make(chan struct{}, maxConcurrentUploads)
+	return func(next http.Handler) http.Handler {
+		return bufferUpload(next, enabled, func() *uploadLimiter { return limiter }, func() chan struct{} { return slots }, ownerOf)
+	}
+}
+
+func bufferUpload(next http.Handler, enabled func() bool, limiterOf func() *uploadLimiter, slotsOf func() chan struct{}, ownerOf func(*http.Request) (uuid.UUID, bool)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.att == nil {
+		if !enabled() {
 			http.Error(w, "outbound media is not enabled", http.StatusNotImplemented)
 			return
 		}
-		principal, err := authn.FromContext(r.Context())
-		if err != nil {
+		owner, ok := ownerOf(r)
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if !h.limiter.allow(principal.UserID) {
+		if !limiterOf().allow(owner) {
 			http.Error(w, "too many uploads, wait a moment", http.StatusTooManyRequests)
 			return
 		}
-		slots := h.slots // captured: SetUploadSlots must not change the channel this request releases
+		slots := slotsOf() // captured: SetUploadSlots must not change the channel this request releases
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
