@@ -133,6 +133,8 @@ type Syncer struct {
 	Applied int
 	// Resyncs counts how many times a 410 forced a rebuild from the snapshot.
 	Resyncs int
+	// OnFact, when set, is called once for every fact applied for the first time (a repeated event_id is not called again).
+	OnFact func(Event)
 }
 
 func NewSyncer(c *Client) *Syncer {
@@ -185,6 +187,9 @@ func (s *Syncer) Apply(ev Event) {
 	}
 	s.Seen[ev.EventID] = true
 	s.Applied++
+	if s.OnFact != nil {
+		s.OnFact(ev)
+	}
 	if ev.ConversationID == "" {
 		return
 	}

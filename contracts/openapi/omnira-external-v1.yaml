@@ -6,9 +6,14 @@ info:
   description: |
     The API an external application (a CRM) uses to see and attend the same conversations as the OMNIRA Workspace. ADR-0048.
 
-    **Status: LAB — IMPLEMENTED in phases.** `GET /external/me`, the read API (conversations, messages, contacts, media) and the event journal
-    (`/external/sync/checkpoint`, `/external/events`; signed webhooks are configured by the company's administrator) are served; the write API is added to this
-    file when it is wired (`/external/me` reports `features` so a client can tell what this build serves).
+    **Status: LAB, served in production for pilot installations.** Everything in this file is served: `GET /external/me`, the read API (conversations, queues,
+    messages, contacts, media), the event journal (`/external/sync/checkpoint`, `/external/events`) and the write API (claim, release, transfer, send text,
+    template or file, finalize, heartbeat). `/external/me` reports `features` so a client can tell what a build serves.
+
+    **How an application follows changes: it polls the journal.** Read `/external/sync/checkpoint` once, load the snapshot, then call
+    `/external/events?after=<seq>` every 2 to 3 seconds and keep the last `next_cursor`. A fact is numbered within about half a second of the change.
+    Nothing is pushed to your side: you do not need a public endpoint. (Signed webhooks exist as an option the company's administrator can configure; this
+    integration does not use them.)
 
     **What an installation sees.** Only conversations of its own company that are not conversations with staff, whose contact is not classified internal or
     spam, and, when the administrator limited the installation, only those of its queues and lines. Anything else is the same `404` as an id that does
@@ -146,7 +151,7 @@ paths:
         Needs the scope `message.send` and `If-Match`; this installation must HOLD the conversation at that version. **`202 Accepted` means QUEUED**: the message was
         handed to the delivery job. It does not mean WhatsApp delivered it; follow `message.status_changed.v1` events or `GET .../messages`.
         The same rules as a Workspace reply apply: inside the provider's 24-hour customer-service window free `text` is allowed; outside it only an approved
-        `template` is (`422 window_closed`). Attachments are not part of this version (NOT WIRED).
+        `template` is (`422 window_closed`). To send a file, upload it first (`POST .../attachments`) and send `attachment_id` here (the text becomes the caption).
       parameters:
         - { $ref: '#/components/parameters/Id' }
         - { $ref: '#/components/parameters/IdempotencyKey' }

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -76,12 +77,22 @@ type Conversation struct {
 	} `json:"can"`
 }
 
+// Media is the file of a message, as the listing describes it. Download it with Client.Media once Status is "clean".
+type Media struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Mime      string `json:"mime"`
+	SizeBytes int64  `json:"size_bytes"`
+	Status    string `json:"status"`
+}
+
 type Message struct {
 	ID        string `json:"id"`
 	Direction string `json:"direction"`
 	Type      string `json:"type"`
 	Body      string `json:"body"`
 	Status    string `json:"status"`
+	Media     *Media `json:"media,omitempty"`
 	Sender    struct {
 		Kind string `json:"kind"`
 		Mine bool   `json:"mine"`
@@ -252,6 +263,97 @@ func (c *Client) Messages(ctx context.Context, id string) ([]Message, error) {
 	}
 }
 
+// Queue is one sector the installation may transfer to.
+type Queue struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Queues lists the company's queues (sectors), narrowed to the installation's allowlist. Use it to map your own team labels to the queue_id of a transfer.
+func (c *Client) Queues(ctx context.Context) ([]Queue, error) {
+	var out struct {
+		Items []Queue `json:"items"`
+	}
+	_, err := c.do(ctx, http.MethodGet, "/queues", nil, nil, nil, &out)
+	return out.Items, err
+}
+
+// Attachment is a file stored for sending: pass its ID to SendAttachment. It expires in 24 hours if it is not sent.
+type Attachment struct {
+	AttachmentID string `json:"attachment_id"`
+	Kind         string `json:"kind"`
+	Mime         string `json:"mime"`
+	SizeBytes    int64  `json:"size_bytes"`
+	FileName     string `json:"file_name"`
+	ExpiresAt    string `json:"expires_at"`
+}
+
+// UploadAttachment stores a file for a conversation this installation HOLDS (multipart, one "file" part). It is a plain upload, not a command: no Idempotency-Key.
+// Uploading the same bytes twice makes two attachments; keep the attachment_id you got and reuse it when you retry the SEND.
+func (c *Client) UploadAttachment(ctx context.Context, conv, fileName string, data []byte) (Attachment, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("file", fileName)
+	if err != nil {
+		return Attachment{}, err
+	}
+	if _, err := part.Write(data); err != nil {
+		return Attachment{}, err
+	}
+	if err := mw.Close(); err != nil {
+		return Attachment{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/conversations/"+conv+"/attachments", &body)
+	if err != nil {
+		return Attachment{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Attachment{}, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		p := &Problem{Status: resp.StatusCode}
+		_ = json.Unmarshal(raw, p)
+		if p.Status == 0 {
+			p.Status = resp.StatusCode
+		}
+		return Attachment{}, p
+	}
+	var out Attachment
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return Attachment{}, fmt.Errorf("decode attachment: %w", err)
+	}
+	return out, nil
+}
+
+// Media downloads the file of a message (only a file that passed the antivirus pipeline; 409 media_pending while it is checked).
+func (c *Client) Media(ctx context.Context, mediaID string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/media/"+mediaID, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if resp.StatusCode >= 300 {
+		p := &Problem{Status: resp.StatusCode}
+		_ = json.Unmarshal(raw, p)
+		if p.Status == 0 {
+			p.Status = resp.StatusCode
+		}
+		return nil, "", p
+	}
+	return raw, resp.Header.Get("Content-Type"), nil
+}
+
 // Events returns one page of facts after seq, and the cursor for the next call.
 func (c *Client) Events(ctx context.Context, after int64) ([]Event, int64, bool, error) {
 	var p struct {
@@ -329,4 +431,18 @@ func (c *Client) Transfer(ctx context.Context, conv, key string, version int64, 
 }
 func (c *Client) Finalize(ctx context.Context, conv, key string, version int64, reason, note string) (CommandResult, error) {
 	return c.Do(ctx, Command{Op: "finalize", Conv: conv, Key: key, Version: version, Body: map[string]any{"reason": reason, "note": note}})
+}
+
+// FinalizeQuietly ends the attendance WITHOUT telling the customer the protocol number (notify_protocol=false): what a CRM does when it sends its own closing message.
+func (c *Client) FinalizeQuietly(ctx context.Context, conv, key string, version int64, reason, note string) (CommandResult, error) {
+	return c.Do(ctx, Command{Op: "finalize", Conv: conv, Key: key, Version: version, Body: map[string]any{"reason": reason, "note": note, "notify_protocol": false}})
+}
+
+// SendAttachment sends an uploaded file (see UploadAttachment); text becomes its caption.
+func (c *Client) SendAttachment(ctx context.Context, conv, key string, version int64, attachmentID, caption string) (CommandResult, error) {
+	body := map[string]any{"attachment_id": attachmentID}
+	if caption != "" {
+		body["text"] = caption
+	}
+	return c.Do(ctx, Command{Op: "messages", Conv: conv, Key: key, Version: version, Body: body})
 }

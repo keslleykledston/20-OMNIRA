@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"bytes"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -157,3 +159,19 @@ func TestEveryRegisteredExternalAdminRouteIsDocumented(t *testing.T) {
 type nilSealer struct{}
 
 func (nilSealer) Encrypt(b []byte) ([]byte, error) { return b, nil }
+
+// The hand-over package for the CRM team carries a copy of the contract; a copy that drifts from the contract would teach the integrator a wrong API.
+func TestTheCRMHandoffCarriesTheCurrentExternalContract(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	want, err := os.ReadFile(filepath.Join(root, "contracts", "openapi", "omnira-external-v1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "docs", "ops", "crm-handoff", "omnira-external-v1.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(want, got) {
+		t.Fatal("docs/ops/crm-handoff/omnira-external-v1.yaml differs from contracts/openapi/omnira-external-v1.yaml: copy the contract again")
+	}
+}
