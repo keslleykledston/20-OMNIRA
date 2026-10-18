@@ -32,6 +32,8 @@ let thread: MessageItem[] = [];
 let assignedTo: string | undefined = 'u-1';
 let pageSize = 100;
 let channelData: Record<string, unknown> | undefined;
+let events: Record<string, unknown>[] = [];
+let timelineDown = false;
 function serve() {
   vi.mocked(axios.get).mockImplementation(async (url: string, config?: any) => {
     if (channelData && (url as string).endsWith(`/inbox/conversations/${CONV}/channel`)) return { data: channelData };
@@ -45,6 +47,7 @@ function serve() {
       const more = offset + pageSize < newestFirst.length;
       return { data: { items, has_more: more, next_cursor: more ? String(offset + pageSize) : undefined } };
     }
+    if ((url as string).endsWith(`/inbox/conversations/${CONV}/timeline`)) return timelineDown ? Promise.reject({ response: { status: 500 } }) : { data: { items: events } };
     return Promise.reject({ response: { status: 404 } });
   });
 }
@@ -60,6 +63,8 @@ beforeEach(() => {
   pageSize = 100;
   assignedTo = 'u-1';
   channelData = undefined;
+  events = [];
+  timelineDown = false;
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 1000 });
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 400 });
 });
@@ -84,6 +89,39 @@ describe('ChatPane — who spoke', () => {
     await screen.findByText('texto pessoa');
     expect(screen.getByText('Automação')).toBeInTheDocument();
     expect(screen.getByText('Equipe')).toBeInTheDocument();
+  });
+});
+
+describe('ChatPane — what happened to the attendance', () => {
+  it('draws the events as lines between the messages, in time order, and a line ends the run of the speaker before it', async () => {
+    thread = [msg('a', 10, { direction: 'outbound', sender_kind: 'agent' }), msg('b', 12, { direction: 'outbound', sender_kind: 'agent' })];
+    events = [
+      { id: 'assignment:1', kind: 'claimed', at: T(11), actor_id: 'u-1' },
+      { id: 'protocol_opened:1', kind: 'protocol_opened', at: T(11, 5), protocol: 'KTG-1007' },
+    ];
+    serve();
+    renderAt(<ChatPane conversationId={CONV} />);
+    await screen.findByText('texto b');
+    const claimed = await screen.findByText('Você assumiu o atendimento');
+    const protocol = screen.getByText('Protocolo KTG-1007 aberto');
+    const a = screen.getByText('texto a');
+    const b = screen.getByText('texto b');
+    const before = (x: Node, y: Node) => !!(x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(a, claimed)).toBe(true);
+    expect(before(claimed, protocol)).toBe(true);
+    expect(before(protocol, b)).toBe(true);
+    // the same speaker, but an event came between: the second bubble names the speaker again
+    expect(screen.getAllByText('Equipe')).toHaveLength(2);
+  });
+
+  it('still shows the messages when the events cannot be read', async () => {
+    thread = [msg('a', 10)];
+    events = [{ id: 'assignment:1', kind: 'claimed', at: T(11), actor_id: 'u-1' }];
+    timelineDown = true;
+    serve();
+    renderAt(<ChatPane conversationId={CONV} />);
+    await screen.findByText('texto a');
+    expect(screen.queryByText(/assumiu o atendimento/)).not.toBeInTheDocument();
   });
 });
 

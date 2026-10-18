@@ -27,6 +27,8 @@ import TenantContextBar from './TenantContextBar';
 import ProtocolTag from '../service/ProtocolTag';
 import ExternalHoldPanel, { HOLDER_LABEL, isHeldExternally } from './ExternalHoldPanel';
 import { senderLabel, sameSpeaker } from '../../lib/senderLabel';
+import { knownEvents, mergeTimeline, type TimelineEvent } from '../../lib/timelineEvents';
+import TimelineEventLine from './TimelineEventLine';
 
 interface ChatPaneProps {
   conversationId: string;
@@ -107,6 +109,21 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     [messagesData]
   );
 
+  // What happened to the attendance (taken, handed over, protocol, finalized), drawn between the messages. It is an extra: if it cannot be read the thread
+  // is just the messages, as before.
+  const { data: timelineData } = useQuery({
+    queryKey: ['inbox-timeline', tenantId, conversationId],
+    queryFn: async () => {
+      const res = await axios.get(`${API_BASE}/tenants/${tenantId}/inbox/conversations/${conversationId}/timeline`, { headers: authHeaders() });
+      return knownEvents((res.data as { items?: unknown }).items) as TimelineEvent[];
+    },
+    enabled: !!tenantId && !!conversationId,
+    retry: false,
+    refetchInterval: isActing() ? 15_000 : false,
+  });
+  const selfId = currentUserId() || null;
+  const thread = useMemo(() => mergeTimeline(messages, timelineData ?? [], !!hasNextPage), [messages, timelineData, hasNextPage]);
+
   useEffect(() => {
     if (conversationData) setConversation(conversationData);
   }, [conversationData]);
@@ -117,6 +134,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
     conversationId,
     onEvent: () => {
       void queryClient.invalidateQueries({ queryKey: ['inbox-messages', tenantId, conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ['inbox-timeline', tenantId, conversationId] });
       void queryClient.invalidateQueries({ queryKey: ['inbox-conversation-detail', tenantId, conversationId] });
     },
   });
@@ -159,7 +177,7 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
   const refreshConversation = async () => {
     setSendError(null);
     setStaleHint(false);
-    for (const key of ['inbox-conversation-detail', 'inbox-context', 'inbox-messages', 'conversation-channel']) {
+    for (const key of ['inbox-conversation-detail', 'inbox-context', 'inbox-messages', 'inbox-timeline', 'conversation-channel']) {
       await queryClient.invalidateQueries({ queryKey: [key, tenantId, conversationId] });
     }
     void queryClient.invalidateQueries({ queryKey: ['inbox-conversations', tenantId] });
@@ -341,25 +359,37 @@ export default function ChatPane({ conversationId, onBack, onToggleContext }: Ch
                 <ProtocolTag conversationId={conversationId} />
               </p>
             )}
-            {messages.length === 0 ? (
+            {thread.length === 0 ? (
               <div className="flex items-center justify-center py-10 text-text-tertiary text-sm">Nenhuma mensagem neste atendimento.</div>
             ) : (
-              messages.map((msg, idx) => {
-                const prev = idx > 0 ? messages[idx - 1] : null;
-                const label = dayLabel(msg.created_at);
-                const showDay = !prev || dayLabel(prev.created_at) !== label;
+              thread.map((item, idx) => {
+                const prevItem = idx > 0 ? thread[idx - 1] : null;
+                const label = dayLabel(item.at);
+                const showDay = !prevItem || dayLabel(prevItem.at) !== label;
+                const dayRule = showDay && (
+                  <div className="my-2 flex items-center gap-3 text-[11px] text-text-tertiary">
+                    <span className="h-px flex-1 bg-border-subtle" />
+                    <span>{label}</span>
+                    <span className="h-px flex-1 bg-border-subtle" />
+                  </div>
+                );
+                if (item.type === 'event') {
+                  return (
+                    <div key={item.event.id}>
+                      {dayRule}
+                      <TimelineEventLine event={item.event} selfId={selfId} />
+                    </div>
+                  );
+                }
+                const msg = item.message;
+                // a run is the messages of one speaker with nothing between them: an event line starts a new one
+                const prev = prevItem && prevItem.type === 'message' ? prevItem.message : null;
                 const turn = prev && prev.direction !== msg.direction && !showDay;
                 // the speaker is named once, on the first bubble of a run from the same side
                 const firstOfRun = !prev || showDay || !sameSpeaker(prev, msg);
                 return (
                   <div key={msg.id} className={turn ? 'mt-1' : undefined}>
-                    {showDay && (
-                      <div className="my-2 flex items-center gap-3 text-[11px] text-text-tertiary">
-                        <span className="h-px flex-1 bg-border-subtle" />
-                        <span>{label}</span>
-                        <span className="h-px flex-1 bg-border-subtle" />
-                      </div>
-                    )}
+                    {dayRule}
                     <MessageBubble message={msg} sender={firstOfRun ? senderLabel(msg, conversation?.contact_name) : undefined} />
                   </div>
                 );

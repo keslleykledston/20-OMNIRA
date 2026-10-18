@@ -443,6 +443,55 @@ paths:
         '500':
           description: Internal server error
 
+  /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/timeline:
+    get:
+      operationId: listConversationTimeline
+      summary: Events of the attendance (not messages)
+      tags:
+        - Inbox
+      description: |
+        What happened TO the attendance, oldest first, for the screen to draw as discreet lines between the messages: taken, assigned, released,
+        transferred, sent to a queue, taken over from an external application, claimed/released by an external application, protocol opened/closed,
+        finalized. At most the latest 300. Guarded like the messages (conversation.read, sector scope included); a conversation of another company is a 404.
+        People appear by display name; an external application by kind only (never its operator); a finalization by reason code (never its note or summary).
+      security:
+        - Bearer: []
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TimelineEvent'
+        '400':
+          description: Invalid conversation_id
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Conversation not found
+        '500':
+          description: Internal server error
+
   /api/v1/tenants/{tenant_id}/inbox/events:
     get:
       operationId: streamInboxEvents
@@ -616,6 +665,32 @@ components:
         example: "created_at:desc"
 
   schemas:
+    TimelineEvent:
+      type: object
+      required: [id, kind, at]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [claimed, assigned, released, transferred, sent_to_queue, taken_over, auto_assigned, external_claimed, external_released, protocol_opened, protocol_closed, finalized]
+        at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          description: Display name of the person who did it (absent for the platform and for an external application)
+        target:
+          type: string
+          description: Display name of the person who received it
+        protocol:
+          type: string
+        detail:
+          type: string
+          description: 'finalized: the reason code (resolved, no_response, duplicate, spam, transferred, other)'
+        system:
+          type: boolean
+          description: Done by the platform itself (distribution, a timer, a rule)
     RateLimitExceeded:
       type: object
       required:

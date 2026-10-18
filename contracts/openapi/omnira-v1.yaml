@@ -2711,6 +2711,35 @@ paths:
         '401': { $ref: '#/components/responses/Text401' }
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
+  /tenants/{tenant_id}/inbox/conversations/{conversation_id}/timeline:
+    get:
+      operationId: listConversationTimeline
+      tags: [Inbox]
+      summary: Events of the attendance (not messages)
+      description: |
+        Requires `conversation.read` (delegable to a Hub operator serving the conversation); guarded like the messages, sector scope included. What
+        happened TO the attendance, oldest first, at most the latest 300: taken, assigned, released, transferred, sent to a queue, taken over from an
+        external application, claimed or released by an external application, protocol opened or closed, finalized. A person is named only when the
+        reader may read that person (their own name, or `membership.read`); the id is always given. An external application is told by kind alone
+        (never its operator); a finalization by its reason code (never its note or summary). A conversation of another company is a 404.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { name: conversation_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/TimelineEvent' }
+        '400': { $ref: '#/components/responses/Text400' }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/inbox/conversations/{conversation_id}/topics:
     get:
       operationId: listConversationTopics
@@ -5360,6 +5389,20 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ChannelConnection' }
   schemas:
+    TimelineEvent:
+      type: object
+      required: [id, kind, at]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [claimed, assigned, released, transferred, sent_to_queue, taken_over, auto_assigned, external_claimed, external_released, protocol_opened, protocol_closed, finalized] }
+        at: { type: string, format: date-time }
+        actor: { type: string, description: Display name of the person who did it; present only when the reader may read that person }
+        actor_id: { type: string, format: uuid }
+        target: { type: string, description: Display name of the person who received it; present only when the reader may read that person }
+        target_id: { type: string, format: uuid }
+        protocol: { type: string }
+        detail: { type: string, description: 'finalized - the reason code (resolved, no_response, duplicate, spam, transferred, other)' }
+        system: { type: boolean, description: Done by the platform itself (distribution, a timer, a rule) }
     Webhook:
       type: object
       required: [id, url, event_types, status, key_id, enqueued_through_seq, consecutive_failures, created_at, updated_at]

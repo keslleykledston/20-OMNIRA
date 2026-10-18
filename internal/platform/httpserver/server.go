@@ -745,6 +745,8 @@ func (s *Server) RegisterInboxHandlers(dbPool *pgxpool.Pool, cfg *config.Config)
 	// ADR-0044: where the conversation is routed and why (read-only; whoever can read the conversation, also a Hub operator serving it)
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/routing", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(sectorsadapters.NewHandler(dbPool, nil).GetConversationRouting)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/messages", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListMessages)))))
+	// what happened to the attendance (taken, handed over, protocol opened/closed, finalized): lines between the messages; guarded like the messages
+	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/timeline", tenancyadapters.Delegable("conversation.read", authnMiddleware(tenantSession(http.HandlerFunc(handler.ListTimeline)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/events", tenancyadapters.Delegable("conversation.read", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamInboxEvents)))))
 	s.mux.Handle("GET /api/v1/tenants/{tenant_id}/inbox/conversations/{conversation_id}/events", tenancyadapters.Delegable("conversation.read", authnMiddleware(streamSession(http.HandlerFunc(realtimeHandler.StreamConversationEvents)))))
 	// Media retrieval: GET /api/v1/tenants/{tenant_id}/messages/{message_id}/media

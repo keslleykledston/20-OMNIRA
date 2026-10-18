@@ -65,6 +65,7 @@ func TestTheDelegableRoutesAndTheirKeysAreExactlyTheReviewedOnes(t *testing.T) {
 		// ADR-0044: where a conversation is routed and why; reviewed (names and states only; same visibility as the conversation read; tested in hub/adapters)
 		"GET " + tn + "/inbox/conversations/{conversation_id}/routing":            "conversation.read",
 		"GET " + tn + "/inbox/conversations/{conversation_id}/messages":           "conversation.read",
+		"GET " + tn + "/inbox/conversations/{conversation_id}/timeline":           "conversation.read",
 		"GET " + tn + "/messages/{message_id}/media":                              "media.read",
 		"GET /api/v1/hubs/{hub_id}/serve/{tenant_id}/messages/{message_id}/media": "media.read",
 		"GET " + tn + "/contacts/{contact_id}":                                    "contact.read",
