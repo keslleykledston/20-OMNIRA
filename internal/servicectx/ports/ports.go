@@ -293,6 +293,7 @@ const (
 	AnnounceMember          AnnounceMode = "member"
 	AnnounceDelegatedSystem AnnounceMode = "delegated_system"
 	AnnounceDelegatedServe  AnnounceMode = "delegated_serve"
+	AnnounceExternal        AnnounceMode = "external" // an external application that holds the conversation: the notice is that application's own message
 )
 
 // Announcement is what the customer is told about a protocol.
@@ -303,6 +304,9 @@ type Announcement struct {
 	Protocol       string
 	Actor          uuid.UUID
 	Mode           AnnounceMode
+	// InstallationID and ControlVersion are set for AnnounceExternal: the application and the control version it holds the conversation at.
+	InstallationID uuid.UUID
+	ControlVersion int64
 }
 
 // Announcer tells the customer, in the conversation, that the protocol opened or ended (ADR-0049 addendum). It is optional and best-effort: a refusal (closed

@@ -44,6 +44,8 @@ type Service struct {
 	sessionNotice SessionNotice
 	// sessionCloser, when set, closes the conversation's service session in the finalize transaction (ADR-0049). nil = the service-context module is not on.
 	sessionCloser SessionCloser
+	// externalNotice, when set, tells the customer the protocol ends when an external application finalizes (ADR-0048). nil = nobody is told.
+	externalNotice ExternalSessionNotice
 }
 
 // SessionCloser closes (or creates and closes) the service session of a conversation that is being finalized. source says who finalized ("finalize" for a
@@ -56,6 +58,16 @@ type SessionCloser func(ctx context.Context, conversationID uuid.UUID, reason st
 // is marked closed (a closed conversation refuses outbound text), by a person (delegated=false: a member; true: a Hub agent in the Hub's write path). The installer
 // makes its failure harmless (a savepoint): ending the attendance never waits on a courtesy.
 type SessionNotice func(ctx context.Context, conversationID, actor uuid.UUID, delegated bool, reason domain.CloseReason)
+
+// ExternalSessionNotice is SessionNotice for an external application that HOLDS the conversation at controlVersion: the notice is queued as that application's own
+// message (the sender proves the hold at exactly that version). Same placement and the same harmlessness as SessionNotice.
+type ExternalSessionNotice func(ctx context.Context, conversationID, installationID uuid.UUID, controlVersion int64, reason domain.CloseReason)
+
+// WithExternalSessionNotice installs the hook that tells the customer the protocol ends when an application finalizes. nil keeps finalizing exactly as before.
+func (s *Service) WithExternalSessionNotice(n ExternalSessionNotice) *Service {
+	s.externalNotice = n
+	return s
+}
 
 // WithSessionNotice installs the hook that tells the customer the protocol ends. nil keeps finalizing exactly as before.
 func (s *Service) WithSessionNotice(n SessionNotice) *Service {
@@ -420,8 +432,10 @@ func (s *Service) FinalizeAsHubAgent(ctx context.Context, agent uuid.UUID, raw d
 // and has proved the hold and the control version; what stays here is the attendance rule, the same as a person's finalize: the contact must be a customer,
 // local tickets are closed and ERP-linked ones are left alone, and an already finalized conversation returns its existing closure. The closure is attributed
 // to the installation (never to a user); the application's text is a short note, there is no summary and no follow-up (those are a person's confirmation).
-// No farewell is sent: the application sends its own message first if it wants one.
-func (s *Service) FinalizeByExternalApp(ctx context.Context, installationID uuid.UUID, conversationID uuid.UUID, reason domain.CloseReason, note string) (FinalizeResult, error) {
+// The service session (protocol) ends with the attendance, like a person's finalize; the customer is told the protocol number unless the application opts out
+// (notifyProtocol=false, same switch as the Workspace's "Informar o número do protocolo ao cliente"; nil = tell). controlVersion is the version the application holds
+// the conversation at (the notice is its own message). No farewell is sent: the application sends its own message first if it wants one.
+func (s *Service) FinalizeByExternalApp(ctx context.Context, installationID uuid.UUID, conversationID uuid.UUID, reason domain.CloseReason, note string, controlVersion int64, notifyProtocol *bool) (FinalizeResult, error) {
 	tc, err := tenancydomain.FromContext(ctx)
 	if err != nil || tc.TenantID == uuid.Nil || tc.Source != tenancydomain.AccessSourceSystem || installationID == uuid.Nil {
 		return FinalizeResult{}, domain.ErrForbidden
@@ -441,6 +455,10 @@ func (s *Service) FinalizeByExternalApp(ctx context.Context, installationID uuid
 		existing, err := s.repo.ClosureByConversation(ctx, conversationID)
 		return FinalizeResult{Closure: existing}, err
 	}
+	// the protocol notice goes before the conversation is closed (a closed conversation refuses outbound text)
+	if s.externalNotice != nil && (notifyProtocol == nil || *notifyProtocol) {
+		s.externalNotice(ctx, conversationID, installationID, controlVersion, in.Reason)
+	}
 	closed, kept, err := s.repo.CloseLocalTickets(ctx, conversationID)
 	if err != nil {
 		return FinalizeResult{}, err
@@ -457,6 +475,7 @@ func (s *Service) FinalizeByExternalApp(ctx context.Context, installationID uuid
 	if err := s.repo.InsertClosure(ctx, closure); err != nil {
 		return FinalizeResult{}, err
 	}
+	s.closeSession(ctx, conversationID, in.Reason, "api", uuid.Nil, "")
 	return FinalizeResult{Closure: closure, Changed: true}, nil
 }
 

@@ -76,6 +76,34 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+  /external/queues:
+    get:
+      operationId: listExternalQueues
+      tags: [Conversations]
+      summary: The queues (sectors) the installation may transfer to
+      description: |
+        Needs the scope `conversation.read`. The company's queues, narrowed to the installation's queue allowlist when the administrator set one. Id and name only;
+        use it to map your own team labels to the `queue_id` of a transfer.
+      responses:
+        '200':
+          description: The queues
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name]
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
   /external/conversations/{id}:
     get:
       operationId: getExternalConversation
@@ -259,7 +287,8 @@ paths:
       description: |
         Needs the scope `conversation.finalize` and `If-Match`. The same finalization the Workspace and the Hub use: the conversation is closed, local tickets are
         closed (tickets linked to the ERP are left alone) and the closure is recorded as made by this installation, never by a person. Closing releases the hold.
-        No ERP ticket is changed.
+        No ERP ticket is changed. The service protocol of the attendance ends with it (and one is created first if the attendance never had one), and, when the
+        company has the protocol notice on, the customer is told the number as this installation's own message, unless `notify_protocol` is false.
       parameters:
         - { $ref: '#/components/parameters/Id' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -416,6 +445,7 @@ components:
         external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
         reason: { type: string, enum: [resolved, no_response, duplicate, spam, transferred, other], default: resolved }
         note: { type: string, maxLength: 1000 }
+        notify_protocol: { type: boolean, default: true, description: "Tell the customer the protocol number as the attendance ends (only where the company has the protocol notice on). Send false when your application already says it." }
     CommandResult:
       type: object
       required: [conversation_id, status, control]

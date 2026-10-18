@@ -31,6 +31,7 @@ func (e *env) readAPI(media mediaports.MediaReader) {
 	e.ext.Handle("GET /api/v1/external/conversations", mw.Authenticated(adapters.RequireScope(domain.ScopeConversationRead, http.HandlerFunc(h.ListConversations))))
 	e.ext.Handle("GET /api/v1/external/conversations/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeConversationRead, http.HandlerFunc(h.GetConversation))))
 	e.ext.Handle("GET /api/v1/external/conversations/{id}/messages", mw.Authenticated(adapters.RequireScope(domain.ScopeMessageRead, http.HandlerFunc(h.ListMessages))))
+	e.ext.Handle("GET /api/v1/external/queues", mw.Authenticated(adapters.RequireScope(domain.ScopeConversationRead, http.HandlerFunc(h.ListQueues))))
 	e.ext.Handle("GET /api/v1/external/contacts/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeContactRead, http.HandlerFunc(h.GetContact))))
 	e.ext.Handle("GET /api/v1/external/media/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeMediaRead, http.HandlerFunc(h.GetMedia))))
 }
@@ -734,5 +735,58 @@ func TestReadAPIACursorOfOneConversationRevealsNothingOfAnother(t *testing.T) {
 	_, body, _ = e.callExt(http.MethodGet, "/api/v1/external/conversations/"+two.String()+"/messages?limit=50&cursor="+p.NextCursor, app.Credential.Token, nil)
 	if strings.Contains(string(body), "um ") {
 		t.Fatalf("the other conversation's page contains the first one's messages: %s", body)
+	}
+}
+
+// The queues an application can transfer to: its company's, narrowed by the queue allowlist, never another company's, and only the id and the name.
+func TestReadAPIListsTheQueuesOfTheCompanyNarrowedByTheAllowlist(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a, b := e.tenant(), e.tenant()
+	adminA, adminB := e.member(a, "tenant_admin"), e.member(b, "tenant_admin")
+	q1, q2, qb := e.queue(a), e.queue(a), e.queue(b)
+	full := e.install(adminA, a, "CRM full", readScopes...)
+	code, body := e.admin(adminA, a, http.MethodPost, "", map[string]any{"name": "limited", "scopes": readScopes, "queue_ids": []string{q1.String()}})
+	if code != http.StatusCreated {
+		t.Fatalf("create limited = %d %s", code, body)
+	}
+	var limited created
+	_ = json.Unmarshal(body, &limited)
+	other := e.install(adminB, b, "CRM B", readScopes...)
+	noScope := e.install(adminA, a, "CRM no conversation scope", "contact.read")
+
+	queues := func(token string) (int, []string) {
+		code, raw, _ := e.callExt(http.MethodGet, "/api/v1/external/queues", token, nil)
+		var doc struct {
+			Items []map[string]any `json:"items"`
+		}
+		_ = json.Unmarshal(raw, &doc)
+		var out []string
+		for _, it := range doc.Items {
+			if len(it) != 2 {
+				t.Errorf("a queue names only its id and name: %v", it)
+			}
+			out = append(out, fmt.Sprint(it["id"]))
+		}
+		return code, out
+	}
+	if code, got := queues(full.Credential.Token); code != 200 {
+		t.Fatalf("queues = %d", code)
+	} else {
+		if len(got) != 2 || !((got[0] == q1.String() && got[1] == q2.String()) || (got[0] == q2.String() && got[1] == q1.String())) {
+			t.Errorf("all of A: %v", got)
+		}
+	}
+	if _, got := queues(limited.Credential.Token); len(got) != 1 || got[0] != q1.String() {
+		t.Errorf("the allowlist narrows the list: %v", got)
+	}
+	if _, got := queues(other.Credential.Token); len(got) != 1 || got[0] != qb.String() {
+		t.Errorf("another company sees only its own: %v", got)
+	}
+	if code, _ := queues(noScope.Credential.Token); code != http.StatusForbidden {
+		t.Errorf("without conversation.read = %d, want 403", code)
+	}
+	if code, _ := queues(""); code != http.StatusUnauthorized {
+		t.Errorf("without a token = %d, want 401", code)
 	}
 }

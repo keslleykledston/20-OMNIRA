@@ -29,6 +29,7 @@ type Notice struct {
 	store     *messagesadapters.PostgresOutboundStore
 	operator  *messagesapplication.Sender
 	delegated *messagesapplication.DelegatedSender
+	external  *messagesapplication.ExternalSender
 	checker   *entitlements.Checker // the company's own switch (ADR-0038 entitlement service_protocol_notice, off until an operator turns it on)
 }
 
@@ -40,6 +41,7 @@ func NewNotice(pool *pgxpool.Pool) *Notice {
 		store:     store,
 		operator:  messagesapplication.NewSender(store, channeladapters.NewPostgresPermissionChecker(pool)),
 		delegated: messagesapplication.NewDelegatedSender(store),
+		external:  messagesapplication.NewExternalSender(store),
 		checker:   entitlements.NewChecker(pool),
 	}
 	return n
@@ -74,6 +76,7 @@ func notSent(err error) bool {
 	for _, e := range []error{
 		messagesapplication.ErrWindowClosed, messagesapplication.ErrChannelUnavailable, messagesapplication.ErrForbidden,
 		messagesapplication.ErrUnassigned, messagesapplication.ErrNotAssignedToYou, messagesapplication.ErrNotFound,
+		messagesapplication.ErrConversationClosed, messagesports.ErrConversationChanged,
 	} {
 		if errors.Is(err, e) {
 			return true
@@ -99,6 +102,8 @@ func (n *Notice) send(ctx context.Context, a ports.Announcement, kind string, re
 		switch a.Mode {
 		case ports.AnnounceMember:
 			_, err = n.operator.Send(ctx, a.ConversationID, text, key)
+		case ports.AnnounceExternal:
+			_, err = n.external.Send(ctx, messagesapplication.ExternalMessage{InstallationID: a.InstallationID, ConversationID: a.ConversationID, ControlVersion: a.ControlVersion, Text: text})
 		default: // delegated: the key conversation.reply was proven by the caller; the sender still needs the agent to HOLD the conversation, the line and the open window
 			_, err = n.delegated.Send(ctx, a.Actor, a.ConversationID, text, key, func(context.Context, *messagesports.SendContext) error { return nil })
 		}
@@ -175,6 +180,45 @@ func FinalizeNotice(pool *pgxpool.Pool, notice *Notice, svc *application.Service
 		})
 		if err != nil {
 			log.Printf("service-context: telling the customer the protocol of conversation %s ends failed: %v", conversationID, err)
+		}
+	}
+}
+
+// ExternalFinalizeNotice is FinalizeNotice for an external application finalizing a conversation it holds (ADR-0048): the notice is that application's own message,
+// queued at the control version it holds. Same rules: inside the finalize transaction before the close, under a savepoint, no notice for spam or duplicates, an
+// attendance nobody had a protocol for gets one first so the number the customer is told is the one that ends.
+func ExternalFinalizeNotice(pool *pgxpool.Pool, notice *Notice, svc *application.Service) attendanceapplication.ExternalSessionNotice {
+	repo := NewPostgresRepository(pool)
+	return func(ctx context.Context, conversationID, installationID uuid.UUID, controlVersion int64, reason attendancedomain.CloseReason) {
+		if reason == attendancedomain.ReasonSpam || reason == attendancedomain.ReasonDuplicate {
+			return
+		}
+		tc, err := tenancydomain.FromContext(ctx)
+		if err != nil || notice == nil || !notice.enabledFor(ctx, tc.TenantID) {
+			return
+		}
+		err = platformdb.WithSavepoint(ctx, pool, func(ctx context.Context) error {
+			sess, err := repo.ActiveByConversation(ctx, conversationID)
+			if err != nil {
+				return err
+			}
+			if sess == nil && svc != nil {
+				if created, err := svc.EnsureForFinalize(ctx, conversationID, uuid.Nil, domain.SourceAPI); err != nil {
+					return err
+				} else if created {
+					if sess, err = repo.ActiveByConversation(ctx, conversationID); err != nil {
+						return err
+					}
+				}
+			}
+			if sess == nil {
+				return nil
+			}
+			return notice.Closed(ctx, ports.Announcement{TenantID: tc.TenantID, ConversationID: conversationID, SessionID: sess.ID, Protocol: sess.Protocol,
+				Mode: ports.AnnounceExternal, InstallationID: installationID, ControlVersion: controlVersion})
+		})
+		if err != nil {
+			log.Printf("service-context: telling the customer the protocol of conversation %s ends (external) failed: %v", conversationID, err)
 		}
 	}
 }

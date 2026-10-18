@@ -488,3 +488,43 @@ func isInlineSafeMime(mime string) bool {
 	}
 	return false
 }
+
+// QueueDTO is a queue (a sector, ADR-0043) the application can name when it transfers a conversation. Id and name only: members, hours and rules stay inside.
+type QueueDTO struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// ListQueues: GET /external/queues. The company's queues, narrowed to the installation's queue allowlist when the administrator set one (the same narrowing the
+// conversation reads and the transfer apply), so the application can map its own team labels to queue ids without being told about queues it may not use.
+func (h *ReadHandler) ListQueues(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	items := []QueueDTO{}
+	err := h.scoped(r, p, func(ctx context.Context, db platformdb.Querier, v Visibility) error {
+		var args Args
+		tenant := args.Add(v.TenantID)
+		narrow := ""
+		if len(v.QueueIDs) > 0 {
+			narrow = " AND q.id = ANY(" + args.Add(v.QueueIDs) + "::uuid[])"
+		}
+		rows, err := db.Query(ctx, `SELECT q.id, q.name FROM queues q WHERE q.tenant_id = `+tenant+narrow+` ORDER BY lower(q.name), q.id`, args.Values()...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d QueueDTO
+			if err := rows.Scan(&d.ID, &d.Name); err != nil {
+				return err
+			}
+			items = append(items, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		failRead(w, r, err)
+		return
+	}
+	externalMetric.Inc("served")
+	WriteJSON(w, r, http.StatusOK, map[string]any{"items": items})
+}

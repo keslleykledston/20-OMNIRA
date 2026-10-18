@@ -610,6 +610,7 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	s.mux.Handle("GET /api/v1/external/conversations", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.ListConversations))))
 	s.mux.Handle("GET /api/v1/external/conversations/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.GetConversation))))
 	s.mux.Handle("GET /api/v1/external/conversations/{id}/messages", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMessageRead, http.HandlerFunc(read.ListMessages))))
+	s.mux.Handle("GET /api/v1/external/queues", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.ListQueues))))
 	s.mux.Handle("GET /api/v1/external/contacts/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactRead, http.HandlerFunc(read.GetContact))))
 	s.mux.Handle("GET /api/v1/external/media/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMediaRead, http.HandlerFunc(read.GetMedia))))
 	// the durable journal (H4): the checkpoint to bootstrap from and the facts after a sequence number

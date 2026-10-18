@@ -15,7 +15,7 @@ Pré-requisitos (todos precisam estar "sim" antes de começar; nada aqui roda so
 ## Passos
 
 1. **Aplicação do CRM** (Integrações → Nova aplicação, na empresa escolhida): começar **só leitura** (`conversation.read`, `message.read`, `contact.read`, `events.read`), filtrada pela fila e pela linha do piloto. Entregar o token por canal seguro (uma vez só).
-2. **Endpoint de eventos**: o integrador cadastra a URL (Aplicação → Webhooks). O segredo de assinatura aparece **uma vez**. Conferir no CRM que a assinatura `X-Omnira-Signature` confere com o corpo cru e que o mesmo `event_id` repetido não duplica (o simulador faz isso: `crm-sim listen`).
+2. **Eventos (K3G: o CRM consulta, sem webhook — decisão do dono 2026-10-17; pular esta etapa).** Para outro integrador que queira webhook: cadastra a URL (Aplicação → Webhooks). O segredo de assinatura aparece **uma vez**. Conferir no CRM que a assinatura `X-Omnira-Signature` confere com o corpo cru e que o mesmo `event_id` repetido não duplica (o simulador faz isso: `crm-sim listen`).
    - Sem endpoint público ainda, o CRM pode **consultar** `GET /external/events?after=<seq>` (o diário é a fonte da verdade; o webhook é conveniência).
 3. **Primeiro dia = leitura.** O CRM sincroniza (`/external/sync/checkpoint` → snapshot → eventos). Rodar o `headless-pilot-check.sh` de hora em hora; critérios de abortar na seção 4 do plano.
 4. **Escrita** só depois de 24 h limpas e com o integrador na linha: nova aplicação com `conversation.claim` + `message.send` (e `transfer`/`finalize` só se o piloto precisar), `OMNIRA_HEADLESS_WRITE_ENABLED` já está ligada em produção; definir o **lease** (ex.: 600 s) pela tela ou pedindo ao operador.

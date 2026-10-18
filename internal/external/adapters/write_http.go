@@ -48,7 +48,7 @@ type FinalizeOutcome struct {
 }
 
 // Finalizer ends the attendance (attendance/application.FinalizeByExternalApp), in the caller's system session with the conversation locked.
-type Finalizer func(ctx context.Context, installationID, conversationID uuid.UUID, reason, note string) (FinalizeOutcome, error)
+type Finalizer func(ctx context.Context, installationID, conversationID uuid.UUID, reason, note string, controlVersion int64, notifyProtocol *bool) (FinalizeOutcome, error)
 
 // QueueOpener says whether a queue is inside its calendar now (sectors/adapters.QueueAvailability).
 type QueueOpener func(ctx context.Context, q platformdb.Querier, tenant, queue uuid.UUID) (bool, error)
@@ -277,6 +277,8 @@ type finalizePayload struct {
 	Reason          string `json:"reason,omitempty"`
 	Note            string `json:"note,omitempty"`
 	ExternalAgentID string `json:"external_agent_id,omitempty"`
+	// NotifyProtocol: tell the customer the protocol number as the attendance ends. Absent = yes (the same default as the Workspace).
+	NotifyProtocol *bool `json:"notify_protocol,omitempty"`
 }
 
 func decodeFinalize(body []byte) (any, []byte, error) {
@@ -454,7 +456,7 @@ func (h *WriteHandler) finalizeSpec() cmdSpec {
 		if err := h.mustHold(cur, in); err != nil {
 			return nil, err
 		}
-		out, err := h.d.Finalize(ctx, in.p.InstallationID, in.conv, pl.Reason, pl.Note)
+		out, err := h.d.Finalize(ctx, in.p.InstallationID, in.conv, pl.Reason, pl.Note, cur.Version, pl.NotifyProtocol)
 		if err != nil {
 			return nil, h.fromAttendance(err, &cur)
 		}

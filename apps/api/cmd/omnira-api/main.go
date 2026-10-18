@@ -402,14 +402,15 @@ func main() {
 			notice := servicectxadapters.NewNotice(dbPool)
 			serviceSvc.WithAnnouncer(notice)
 			attendanceService.WithSessionNotice(servicectxadapters.FinalizeNotice(dbPool, notice, serviceSvc))
+			attendanceService.WithExternalSessionNotice(servicectxadapters.ExternalFinalizeNotice(dbPool, notice, serviceSvc)) // a CRM's finalize tells the protocol too (unless it opts out)
 			log.Printf("Service protocol notice installed (each company's own switch decides; off by default)\n")
 		}
 		srv.RegisterServiceContextHandlers(dbPool, serviceHandler)
 		log.Printf("Service Context & Operations API enabled (OMNIRA_SERVICE_CONTEXT_ENABLED=true, finalize hook=%v, auto-open on claim=%v)\n", cfg.ServiceFinalizeHookEnabled, cfg.ServiceAutoOpenOnClaimEnabled)
 	}
 	srv.RegisterAttendanceHandlers(dbPool, attendanceadapters.NewHandler(attendanceService))
-	srv.RegisterExternalWriteHandlers(dbPool, cfg.HeadlessEnabled && cfg.HeadlessWriteEnabled, func(ctx context.Context, installation, conversation uuid.UUID, reason, note string) (externaladapters.FinalizeOutcome, error) {
-		res, err := attendanceService.FinalizeByExternalApp(ctx, installation, conversation, attendancedomain.CloseReason(reason), note)
+	srv.RegisterExternalWriteHandlers(dbPool, cfg.HeadlessEnabled && cfg.HeadlessWriteEnabled, func(ctx context.Context, installation, conversation uuid.UUID, reason, note string, controlVersion int64, notifyProtocol *bool) (externaladapters.FinalizeOutcome, error) {
+		res, err := attendanceService.FinalizeByExternalApp(ctx, installation, conversation, attendancedomain.CloseReason(reason), note, controlVersion, notifyProtocol)
 		if err != nil {
 			return externaladapters.FinalizeOutcome{}, err
 		}

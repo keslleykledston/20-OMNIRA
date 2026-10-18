@@ -39,8 +39,8 @@ func (e *env) writeAPI() {
 	att := attendanceapp.NewService(attendanceadapters.NewPostgresRepository(e.app), nil, nil)
 	deps := adapters.WriteDeps{
 		Sender: messagesapp.NewExternalSender(messagesadapters.NewPostgresOutboundStore(e.app)),
-		Finalize: func(ctx context.Context, inst, conv uuid.UUID, reason, note string) (adapters.FinalizeOutcome, error) {
-			res, err := att.FinalizeByExternalApp(ctx, inst, conv, attendancedomain.CloseReason(reason), note)
+		Finalize: func(ctx context.Context, inst, conv uuid.UUID, reason, note string, ver int64, notify *bool) (adapters.FinalizeOutcome, error) {
+			res, err := att.FinalizeByExternalApp(ctx, inst, conv, attendancedomain.CloseReason(reason), note, ver, notify)
 			if err != nil {
 				return adapters.FinalizeOutcome{}, err
 			}
@@ -457,7 +457,10 @@ func TestWriteFinalizeClosesLikeTheWorkspaceAndIsAttributedToTheInstallation(t *
 	if r := e.cmd(tok, conv, "finalize", "key-fin-000001", match(v), map[string]any{"reason": "maybe"}); r.Code != 422 {
 		t.Errorf("invalid reason = %d", r.Code)
 	}
-	fin := e.cmd(tok, conv, "finalize", "key-fin-000001", match(v), map[string]any{"reason": "resolved", "note": "Resolvido pelo CRM"})
+	if r := e.cmd(tok, conv, "finalize", "key-fin-000001", match(v), `{"reason":"resolved","notify_protocol":"sim"}`); r.Code != 422 {
+		t.Errorf("notify_protocol that is not a boolean = %d", r.Code)
+	}
+	fin := e.cmd(tok, conv, "finalize", "key-fin-000001", match(v), map[string]any{"reason": "resolved", "note": "Resolvido pelo CRM", "notify_protocol": false})
 	if fin.Code != 200 || fin.Doc.Status != "closed" || fin.Doc.Control.State != "unassigned" || fin.Doc.ClosureID == nil {
 		t.Fatalf("finalize = %d %s", fin.Code, fin.Raw)
 	}
@@ -477,7 +480,7 @@ func TestWriteFinalizeClosesLikeTheWorkspaceAndIsAttributedToTheInstallation(t *
 		t.Errorf("conversation status = %s", cs)
 	}
 	// a retry yields the stored answer; a new key on a closed conversation is a conflict, not a second closure
-	if r := e.cmd(tok, conv, "finalize", "key-fin-000001", match(v), map[string]any{"reason": "resolved", "note": "Resolvido pelo CRM"}); r.Code != 200 || r.Header.Get("Idempotent-Replay") != "true" || *r.Doc.ClosureID != *fin.Doc.ClosureID {
+	if r := e.cmd(tok, conv, "finalize", "key-fin-000001", match(v), map[string]any{"reason": "resolved", "note": "Resolvido pelo CRM", "notify_protocol": false}); r.Code != 200 || r.Header.Get("Idempotent-Replay") != "true" || *r.Doc.ClosureID != *fin.Doc.ClosureID {
 		t.Errorf("retry of finalize = %d %s", r.Code, r.Raw)
 	}
 	if r := e.cmd(tok, conv, "finalize", "key-fin-000002", match(fin.Doc.Control.Version), nil); r.Code != 409 || r.Doc.Code != "conversation_closed" {
