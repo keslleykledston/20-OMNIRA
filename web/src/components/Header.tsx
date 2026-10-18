@@ -3,12 +3,12 @@ import { BrandMark } from './BrandMark'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../lib/store'
 import { authAPI } from '../lib/api'
-import { Button, Avatar } from './primitives'
+import { Button, Avatar, Icon } from './primitives'
 import TenantSwitcher from './TenantSwitcher'
 import { isActing } from '../lib/acting'
 import clsx from 'clsx'
 
-export default function Header() {
+export default function Header({ onSearch }: { onSearch?: () => void } = {}) {
   const navigate = useNavigate()
   const { user, logout, setUser } = useAuthStore()
 
@@ -58,6 +58,19 @@ export default function Header() {
       </div>
 
       <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+        {onSearch && (
+          <button
+            type="button"
+            onClick={onSearch}
+            aria-label="Buscar (Ctrl+K)"
+            title="Buscar (Ctrl+K)"
+            className="flex items-center gap-2 rounded-control border border-border-subtle bg-surface px-2.5 py-1.5 text-body-sm text-text-tertiary hover:bg-surface-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-accent-primary"
+          >
+            <Icon name="search" size={16} />
+            <span className="hidden md:inline">Buscar</span>
+            <kbd className="hidden rounded border border-border-subtle px-1 text-[11px] md:inline">Ctrl K</kbd>
+          </button>
+        )}
         {!isActing() && <TenantSwitcher />}
         {user && (
           <div className="flex items-center gap-2 sm:gap-3">

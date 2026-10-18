@@ -3,15 +3,18 @@ import { isActing } from '../lib/acting'
 import Sidebar from './Sidebar'
 import Header from './Header'
 import MobileNav from './MobileNav'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { hasSession } from '../lib/session'
 import { LoadingState, ToastRegion } from './primitives'
 import { usePresenceHeartbeat } from '../hooks/usePresenceHeartbeat'
+import CommandPalette from './CommandPalette'
+import { isPaletteShortcut } from '../lib/commandPalette'
 
 export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const authenticated = hasSession()
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   useEffect(() => {
     if (!authenticated) {
@@ -31,6 +34,18 @@ export default function Layout() {
     if (!authenticated) return
     document.documentElement.classList.add('app-shell-lock')
     return () => document.documentElement.classList.remove('app-shell-lock')
+  }, [authenticated])
+
+  // ⌘K / Ctrl+K opens the search from any screen (it also closes it, so the shortcut is a toggle).
+  useEffect(() => {
+    if (!authenticated) return
+    const onKey = (e: KeyboardEvent) => {
+      if (!isPaletteShortcut(e)) return
+      e.preventDefault()
+      setPaletteOpen((o) => !o)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [authenticated])
 
   if (!authenticated) {
@@ -53,7 +68,7 @@ export default function Layout() {
 
       {/* Main Content */}
       <div className="min-h-0 flex-1 flex flex-col overflow-clip">
-        <Header />
+        <Header onSearch={() => setPaletteOpen(true)} />
         {/* pb-16 keeps content clear of the fixed mobile nav */}
         <main className="min-h-0 flex-1 overflow-auto pb-16 lg:pb-0">
           <Outlet />
@@ -61,6 +76,7 @@ export default function Layout() {
       </div>
 
       <MobileNav />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ToastRegion />
     </div>
   )
