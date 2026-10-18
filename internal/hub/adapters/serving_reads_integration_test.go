@@ -342,6 +342,7 @@ func (w *world) readsAPI(t *testing.T) *readsAPI {
 	mux.Handle("GET "+t0+"/inbox/conversations", tenancyadapters.Delegable("conversation.read", who(session(http.HandlerFunc(inbox.ListConversations)))))
 	mux.Handle("GET "+t0+"/inbox/conversations/{conversation_id}", tenancyadapters.Delegable("conversation.read", who(session(http.HandlerFunc(inbox.GetConversation)))))
 	mux.Handle("GET "+t0+"/inbox/conversations/{conversation_id}/messages", tenancyadapters.Delegable("conversation.read", who(session(http.HandlerFunc(inbox.ListMessages)))))
+	mux.Handle("GET "+t0+"/inbox/conversations/{conversation_id}/timeline", tenancyadapters.Delegable("conversation.read", who(session(http.HandlerFunc(inbox.ListTimeline)))))
 	mux.Handle("GET "+t0+"/contacts/{contact_id}", tenancyadapters.Delegable("contact.read", who(session(http.HandlerFunc(contacts.GetContact)))))
 	mux.Handle("GET "+t0+"/messages/{message_id}/media", tenancyadapters.Delegable("media.read", who(session(http.HandlerFunc(inbox.GetMedia)))))
 	mux.Handle("GET /api/v1/hubs/{hub_id}/serve/{tenant_id}/messages/{message_id}/media", tenancyadapters.Delegable("media.read", who(tenancyadapters.DelegatedPath(w.app)(http.HandlerFunc(inbox.GetMedia)))))

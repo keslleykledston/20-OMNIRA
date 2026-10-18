@@ -1,0 +1,4 @@
+DROP POLICY IF EXISTS conversation_control_events_acting_one_instance ON conversation_control_events;
+DROP POLICY IF EXISTS assignment_events_acting_one_instance ON assignment_events;
+DROP POLICY IF EXISTS conversation_control_events_read_acting ON conversation_control_events;
+DROP POLICY IF EXISTS assignment_events_read_acting ON assignment_events;
