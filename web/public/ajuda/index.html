@@ -1,0 +1,2288 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Ajuda OMNIRA</title>
+<link rel="stylesheet" href="ajuda.css?v=c5c01c2bc5">
+</head>
+<body>
+
+
+
+
+
+<header class="topo">
+  <button class="menu-botao" id="menu-botao" aria-expanded="false" aria-controls="lateral">Menu</button>
+  <div class="marca">OMNIRA <span>Ajuda</span></div>
+  <div class="busca">
+    <input id="busca" type="search" placeholder="Buscar na ajuda" aria-label="Buscar na ajuda" autocomplete="off">
+    <div class="resultados" id="resultados" hidden></div>
+  </div>
+</header>
+<div class="moldura">
+  <nav class="lateral" id="lateral" aria-label="Documentação">
+<div class="grupo"><p class="grupo-nome">Início</p>
+<a class="item" href="#inicio" data-id="inicio">OMNIRA: documentação e wiki</a>
+</div>
+<div class="grupo"><p class="grupo-nome">Primeiros passos</p>
+<a class="item" href="#guias-01-visao-geral" data-id="guias-01-visao-geral">Visão geral: a tela do OMNIRA</a>
+</div>
+<div class="grupo"><p class="grupo-nome">Tutoriais</p>
+<a class="item" href="#tutoriais-01-atender-uma-conversa" data-id="tutoriais-01-atender-uma-conversa">Tutorial 1 · atender uma conversa do começo ao fim</a>
+<a class="item" href="#tutoriais-02-buscar-e-navegar-com-ctrl-k" data-id="tutoriais-02-buscar-e-navegar-com-ctrl-k">Tutorial 2 · achar qualquer coisa com Ctrl+K</a>
+<a class="item" href="#tutoriais-03-tickets-e-pessoas" data-id="tutoriais-03-tickets-e-pessoas">Tutorial 3 · Tickets e Pessoas (filtrar, ordenar, contar)</a>
+<a class="item" href="#tutoriais-04-classificar-contatos-e-spam" data-id="tutoriais-04-classificar-contatos-e-spam">Tutorial 4 · classificar o contato e tratar spam</a>
+<a class="item" href="#tutoriais-05-filas-e-setores" data-id="tutoriais-05-filas-e-setores">Tutorial 5 · filas, setores e horários</a>
+<a class="item" href="#tutoriais-06-conectar-um-crm-pelo-painel" data-id="tutoriais-06-conectar-um-crm-pelo-painel">Tutorial 6 · conectar um CRM pelo painel (administrador)</a>
+<a class="item" href="#tutoriais-07-primeira-chamada-a-api" data-id="tutoriais-07-primeira-chamada-a-api">Tutorial 7 · sua primeira chamada à API (integrador)</a>
+<a class="item" href="#tutoriais-08-conectar-um-numero-de-whatsapp" data-id="tutoriais-08-conectar-um-numero-de-whatsapp">Tutorial 8 · conectar um número de WhatsApp</a>
+<a class="item" href="#tutoriais-09-pessoas-funcoes-e-permissoes" data-id="tutoriais-09-pessoas-funcoes-e-permissoes">Tutorial 9 · pessoas, funções e permissões</a>
+<a class="item" href="#tutoriais-10-automacao-fluxos" data-id="tutoriais-10-automacao-fluxos">Tutorial 10 · automação (fluxos)</a>
+<a class="item" href="#tutoriais-11-acompanhar-a-equipe" data-id="tutoriais-11-acompanhar-a-equipe">Tutorial 11 · acompanhar a operação (Dashboard e Supervisor)</a>
+<a class="item" href="#tutoriais-12-horarios-escalas-e-transbordo" data-id="tutoriais-12-horarios-escalas-e-transbordo">Tutorial 12 · horários, escalas e transbordo</a>
+</div>
+<div class="grupo"><p class="grupo-nome">Para integradores</p>
+<a class="item" href="#integradores-guia-da-api" data-id="integradores-guia-da-api">Guia da API para integradores</a>
+<a class="item" href="#integradores-roteiro-de-teste" data-id="integradores-roteiro-de-teste">Roteiro de teste: CRM falando com o OMNIRA</a>
+<a class="item" href="#integradores-contrato-openapi" data-id="integradores-contrato-openapi">Contrato OpenAPI da API externa</a>
+</div>
+<div class="grupo"><p class="grupo-nome">Ajuda</p>
+<a class="item" href="#faq-faq" data-id="faq-faq">Perguntas frequentes</a>
+<a class="item" href="#glossario" data-id="glossario">Glossário</a>
+</div>
+  </nav>
+  <main id="conteudo" tabindex="-1">
+<section class="pagina" id="p-inicio" data-titulo="OMNIRA: documentação e wiki" hidden><article><h1>OMNIRA: documentação e wiki</h1>
+<p>O OMNIRA atende e organiza as conversas de WhatsApp da sua empresa. Aqui você aprende a usar a tela, configurar a operação e conectar um CRM.</p>
+<h2>Comece por aqui</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Eu sou...</th>
+<th>Quero...</th>
+<th>Vá para</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Atendente</strong></td>
+<td>atender uma conversa do começo ao fim</td>
+<td><a href="#tutoriais-01-atender-uma-conversa">Tutorial 1</a></td>
+</tr>
+<tr>
+<td><strong>Atendente</strong></td>
+<td>achar contato, conversa ou tela rápido</td>
+<td><a href="#tutoriais-02-buscar-e-navegar-com-ctrl-k">Tutorial 2</a></td>
+</tr>
+<tr>
+<td><strong>Atendente / supervisor</strong></td>
+<td>filtrar, ordenar e contar tickets e pessoas</td>
+<td><a href="#tutoriais-03-tickets-e-pessoas">Tutorial 3</a></td>
+</tr>
+<tr>
+<td><strong>Atendente</strong></td>
+<td>classificar contato e tratar spam</td>
+<td><a href="#tutoriais-04-classificar-contatos-e-spam">Tutorial 4</a></td>
+</tr>
+<tr>
+<td><strong>Administrador / supervisor</strong></td>
+<td>configurar filas, setores e horários</td>
+<td><a href="#tutoriais-05-filas-e-setores">Tutorial 5</a></td>
+</tr>
+<tr>
+<td><strong>Administrador</strong></td>
+<td>conectar um CRM</td>
+<td><a href="#tutoriais-06-conectar-um-crm-pelo-painel">Tutorial 6</a></td>
+</tr>
+<tr>
+<td><strong>Administrador</strong></td>
+<td>conectar um número de WhatsApp</td>
+<td><a href="#tutoriais-08-conectar-um-numero-de-whatsapp">Tutorial 8</a></td>
+</tr>
+<tr>
+<td><strong>Administrador</strong></td>
+<td>pessoas, funções e permissões</td>
+<td><a href="#tutoriais-09-pessoas-funcoes-e-permissoes">Tutorial 9</a></td>
+</tr>
+<tr>
+<td><strong>Administrador</strong></td>
+<td>automação (fluxos)</td>
+<td><a href="#tutoriais-10-automacao-fluxos">Tutorial 10</a></td>
+</tr>
+<tr>
+<td><strong>Supervisor</strong></td>
+<td>acompanhar a operação</td>
+<td><a href="#tutoriais-11-acompanhar-a-equipe">Tutorial 11</a></td>
+</tr>
+<tr>
+<td><strong>Administrador / supervisor</strong></td>
+<td>horários, escalas, plantões e transbordo</td>
+<td><a href="#tutoriais-12-horarios-escalas-e-transbordo">Tutorial 12</a></td>
+</tr>
+<tr>
+<td><strong>Integrador (CRM)</strong></td>
+<td>fazer a primeira chamada à API</td>
+<td><a href="#tutoriais-07-primeira-chamada-a-api">Tutorial 7</a></td>
+</tr>
+<tr>
+<td><strong>Integrador (CRM)</strong></td>
+<td>o guia completo, o roteiro de teste e o contrato</td>
+<td><a href="#integradores-guia-da-api">Guia da API</a></td>
+</tr>
+<tr>
+<td><strong>Qualquer pessoa</strong></td>
+<td>tirar uma dúvida</td>
+<td><a href="#faq-faq">Perguntas frequentes</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>Novo por aqui? Leia a <a href="#guias-01-visao-geral">Visão geral</a> e o <a href="#glossario">Glossário</a>.</p>
+<h2>Sobre esta documentação</h2>
+<ul>
+<li>As telas são <strong>capturas do sistema real com dados inventados</strong> (&quot;Empresa Exemplo&quot;, &quot;Ana Souza&quot;): nenhum dado de cliente aparece.</li>
+<li>Cada passo foi conferido contra o produto. O que <strong>ainda não existe</strong> está no FAQ, e o que ainda falta documentar está no fim do <a href="#faq-faq">FAQ</a>.</li>
+<li>Achou algo diferente do que viu na tela? Avise a equipe do OMNIRA: a doc é corrigida junto com o produto.</li>
+</ul>
+</article></section>
+<section class="pagina" id="p-guias-01-visao-geral" data-titulo="Visão geral: a tela do OMNIRA" hidden><article><h1>Visão geral: a tela do OMNIRA</h1>
+<p>O OMNIRA reúne as conversas de WhatsApp da sua empresa em um só lugar, distribui cada conversa para a fila certa e deixa a equipe atender, registrar o protocolo e fechar o atendimento.</p>
+<p><img src="imagens/01-conversas.png?v=c5c01c2bc5" alt="Tela de Conversas" loading="lazy" /></p>
+<h2>O menu da esquerda</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Grupo</th>
+<th>Item</th>
+<th>Para que serve</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Operação</td>
+<td><strong>Dashboard</strong></td>
+<td>Visão geral: conversas abertas, tickets, contatos e filas que pedem atenção</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Conversas</strong></td>
+<td>Onde se atende. Lista, conversa e detalhes na mesma tela</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Tickets</strong></td>
+<td>Solicitações ligadas às conversas</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Reconciliação</strong></td>
+<td>Conferência de tickets com sistemas externos (uso do administrador)</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Contatos</strong></td>
+<td>Pessoas que já falaram com a empresa e a equipe interna</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Supervisor</strong></td>
+<td>Acompanhamento da operação (para supervisores)</td>
+</tr>
+<tr>
+<td>Automação e canais</td>
+<td><strong>Automação</strong></td>
+<td>Fluxos automáticos (menu de boas-vindas, avisos)</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Canais</strong></td>
+<td>Os números de WhatsApp conectados</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Grupos</strong></td>
+<td>Grupos de WhatsApp (somente leitura)</td>
+</tr>
+<tr>
+<td>Configuração</td>
+<td><strong>Pessoas</strong></td>
+<td>Quem usa o sistema e com qual papel</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Setores e horários</strong></td>
+<td>Filas, setores, horários de atendimento, escalas e SLA</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Integrações</strong></td>
+<td>Aplicações externas (CRMs) que usam a API</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Configurações</strong></td>
+<td>Ajustes da empresa</td>
+</tr>
+</tbody>
+</table></div>
+<p>Você só vê o que o seu papel permite. Se um item abre uma tela de &quot;Acesso restrito&quot;, peça a permissão ao administrador.</p>
+<h2>A barra de cima</h2>
+<ul>
+<li><strong>Buscar (Ctrl+K)</strong>: abre a busca rápida de telas, contatos e conversas. Veja o <a href="#tutoriais-02-buscar-e-navegar-com-ctrl-k">Tutorial 2</a>.</li>
+<li><strong>Seu nome e Sair</strong>.</li>
+<li>Em celular, a barra de baixo traz Conversas, Contatos e Canais.</li>
+</ul>
+<h2>Quem pode fazer o quê</h2>
+<p>As permissões vêm do <strong>papel</strong> da pessoa (administrador, supervisor, atendente). O sistema nunca esconde um dado só pela tela: o servidor confere de novo a cada pedido. Detalhes de papéis: próxima rodada da documentação.</p>
+<h2>Conceitos que aparecem o tempo todo</h2>
+<ul>
+<li><strong>Conversa</strong>: o histórico com um contato em uma linha (número) de WhatsApp.</li>
+<li><strong>Atendimento</strong>: o período em que a equipe cuida da conversa, do momento em que alguém assume até Finalizar.</li>
+<li><strong>Protocolo</strong>: o número do atendimento (por exemplo <code>EXE-1042</code>). Nasce ao assumir e encerra ao Finalizar.</li>
+<li><strong>Fila</strong>: onde as conversas esperam. <strong>Setor</strong>: um grupo de filas com o mesmo horário.</li>
+<li><strong>Titular</strong>: quem está atendendo agora. Pode ser uma pessoa ou uma aplicação externa (CRM).</li>
+</ul>
+<p>Mais termos no <a href="#glossario">Glossário</a>.</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-01-atender-uma-conversa" data-titulo="Tutorial 1: atender uma conversa do começo ao fim" hidden><article><h1>Tutorial 1: atender uma conversa do começo ao fim</h1>
+<p><strong>Para quem:</strong> atendente. <strong>Tempo:</strong> 5 minutos. <strong>No fim você sabe:</strong> assumir, responder, mandar um arquivo, passar para outra pessoa ou setor e finalizar com o protocolo.</p>
+<h2>1. Encontre a conversa</h2>
+<p>Abra <strong>Conversas</strong>. A lista da esquerda mostra as conversas <strong>Em andamento</strong>; a aba <strong>Encerradas</strong> guarda as finalizadas.</p>
+<p><img src="imagens/01-conversas.png?v=c5c01c2bc5" alt="Tela de Conversas" loading="lazy" /></p>
+<p>Em cada linha você vê o nome, o telefone, a última mensagem e:</p>
+<ul>
+<li><strong>Quanto tempo o cliente espera</strong> (o relógio vermelho ou laranja quando passa do limite que a empresa definiu).</li>
+<li><strong>Em atendimento</strong> (já tem alguém) ou <strong>Sem atendente</strong>.</li>
+<li><strong>Não classificado</strong>, quando ninguém disse ainda se o contato é cliente, interno ou outro (veja o <a href="#tutoriais-04-classificar-contatos-e-spam">Tutorial 4</a>).</li>
+</ul>
+<p>Use os filtros <strong>Todas</strong>, <strong>Aguardando</strong> e <strong>Minhas</strong>, ou <strong>Buscar contato</strong> acima da lista.</p>
+<h2>2. Assuma</h2>
+<p>Se a conversa está <strong>Sem atendente</strong>, clique em <strong>Assumir</strong> (no alto da conversa). Ao assumir:</p>
+<ul>
+<li>a conversa passa a ser sua e aparece em <strong>Minhas</strong>;</li>
+<li>nasce o <strong>protocolo</strong> do atendimento (por exemplo <code>EXE-1042</code>), que aparece em <em>Protocolo e tarefas</em>;</li>
+<li>uma linha discreta registra o fato no meio da conversa: &quot;Protocolo EXE-1042 aberto&quot;.</li>
+</ul>
+<p>Se o sistema distribuiu a conversa automaticamente para você, a linha diz &quot;Distribuído automaticamente para Você&quot;.</p>
+<h2>3. Leia e responda</h2>
+<p>No centro, as mensagens do cliente ficam à esquerda e as da empresa à direita. Cada bloco de mensagens da empresa mostra <strong>quem falou</strong>:</p>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Rótulo</th>
+<th>Quem foi</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Equipe</strong></td>
+<td>uma pessoa da empresa</td>
+</tr>
+<tr>
+<td><strong>Automação</strong></td>
+<td>o assistente automático (menu de boas-vindas, avisos)</td>
+</tr>
+<tr>
+<td><strong>Aplicativo externo</strong></td>
+<td>um CRM ou outro sistema ligado pela API</td>
+</tr>
+<tr>
+<td><strong>Celular da empresa</strong></td>
+<td>alguém respondeu direto do celular, fora do OMNIRA</td>
+</tr>
+</tbody>
+</table></div>
+<p>Entre as mensagens aparecem <strong>linhas de evento</strong> em cinza: quem assumiu, atribuiu, soltou, transferiu, enviou para fila, o protocolo aberto e encerrado, e a finalização.</p>
+<p><img src="imagens/16-linha-do-tempo.png?v=c5c01c2bc5" alt="Linha do tempo com os eventos do atendimento" loading="lazy" /></p>
+<p>Escreva no campo <strong>Escreva uma resposta...</strong> e use o botão de enviar. Debaixo do campo aparece por qual número a resposta sai.</p>
+<p><strong>Mandar um arquivo:</strong> clique no clipe (<strong>Anexar arquivo</strong>), escolha o arquivo e envie. É <strong>um arquivo por mensagem</strong>; o texto digitado vira a legenda. Se a empresa desligou os anexos de saída, o clipe fica inativo.</p>
+<p><strong>Número oficial (Meta):</strong> o WhatsApp oficial só aceita texto livre até 24 horas depois da última mensagem do cliente. A tela mostra o tempo que falta e, depois disso, só aceita mensagem de <strong>template</strong> aprovado.</p>
+<h2>4. Passe para outra pessoa ou outro setor</h2>
+<p>Os botões ficam em <strong>Detalhes do atendimento</strong>, à direita.</p>
+<ul>
+<li>
+<p><strong>Transferir</strong> abre a lista de <strong>técnicos</strong> disponíveis; escolha a pessoa que continua.</p>
+<p><img src="imagens/04-transferir.png?v=c5c01c2bc5" alt="Transferir para um técnico" loading="lazy" /></p>
+</li>
+<li>
+<p>No menu <strong>⋯</strong> (ao lado de Finalizar): <strong>Soltar</strong> devolve a conversa à fila; <strong>Enviar para uma fila</strong> manda para outro setor.</p>
+<p><img src="imagens/15-enviar-para-fila.png?v=c5c01c2bc5" alt="Enviar para uma fila" loading="lazy" /></p>
+<p>As regras da fila escolhem quem atende, e a conversa sai da sua lista e fica registrada no histórico.</p>
+</li>
+</ul>
+<h2>5. Finalize</h2>
+<p>Quando resolver, clique em <strong>Finalizar</strong>.</p>
+<p><img src="imagens/03-finalizar.png?v=c5c01c2bc5" alt="Finalizar atendimento" loading="lazy" /></p>
+<ul>
+<li><strong>Motivo</strong>: resolvido, sem resposta, duplicado, spam, transferido ou outro.</li>
+<li><strong>Resultado do atendimento</strong>: automático pelo motivo, ou escolha um da lista.</li>
+<li><strong>Resumo do atendimento</strong>: o que foi tratado. A próxima pessoa que atender esse contato vê esse resumo.</li>
+<li><strong>O que ficou pendente ou foi prometido</strong>: itens para não esquecer.</li>
+<li><strong>Informar o número do protocolo ao cliente</strong>: marcado, o cliente recebe o protocolo por mensagem (quando a empresa tem esse aviso ligado).</li>
+<li><strong>Avisar o cliente que o atendimento foi encerrado</strong>.</li>
+</ul>
+<p><strong>Finalizar</strong> encerra a conversa <strong>e</strong> o protocolo juntos. Se o cliente escrever de novo, abre-se um atendimento novo, com protocolo novo.</p>
+<h2>Se algo não funcionar</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Você vê</th>
+<th>O que significa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Não consigo responder e a conversa mostra &quot;Aplicativo externo&quot;</td>
+<td>um CRM está com a conversa; um supervisor pode retomá-la. Veja o <a href="#faq-faq">FAQ</a></td>
+</tr>
+<tr>
+<td>&quot;Janela de 24 h fechada&quot; e o botão <strong>Enviar template</strong></td>
+<td>passou a janela de 24 horas do número oficial: só vai template aprovado</td>
+</tr>
+<tr>
+<td>&quot;A conversa mudou, tente novamente.&quot; (e o botão <strong>Atualizar conversa</strong>)</td>
+<td>outra pessoa ou um sistema mexeu agora; clique em Atualizar conversa e tente de novo</td>
+</tr>
+</tbody>
+</table></div>
+</article></section>
+<section class="pagina" id="p-tutoriais-02-buscar-e-navegar-com-ctrl-k" data-titulo="Tutorial 2: achar qualquer coisa com Ctrl+K" hidden><article><h1>Tutorial 2: achar qualquer coisa com Ctrl+K</h1>
+<p><strong>Para quem:</strong> todos. <strong>Tempo:</strong> 1 minuto.</p>
+<p>Em qualquer tela, aperte <strong>Ctrl+K</strong> (no Mac, <strong>⌘K</strong>) ou clique em <strong>Buscar</strong> no alto. Aperte de novo, ou <strong>Esc</strong>, para fechar.</p>
+<p><img src="imagens/02-paleta-ctrl-k.png?v=c5c01c2bc5" alt="Busca rápida" loading="lazy" /></p>
+<h2>O que ela encontra</h2>
+<ul>
+<li><strong>Ir para</strong>: as telas do menu. Digite parte do nome, sem se preocupar com acento ou maiúscula (&quot;configuracoes&quot; acha &quot;Configurações&quot;).</li>
+<li><strong>Contatos</strong>: por nome, e-mail ou telefone.</li>
+<li><strong>Conversas</strong>: pelo nome ou telefone do contato; abre a conversa direto.</li>
+</ul>
+<p>A busca de contatos e conversas começa com <strong>2 letras</strong>.</p>
+<h2>Como usar</h2>
+<ol>
+<li>Digite.</li>
+<li>Use as setas para cima e para baixo para escolher.</li>
+<li><strong>Enter</strong> abre. Também funciona clicar.</li>
+</ol>
+<p>Você só vê resultados que o seu papel permite. Na busca de conversas, quem só atende certos setores vê apenas as conversas desses setores.</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-03-tickets-e-pessoas" data-titulo="Tutorial 3: Tickets e Pessoas (filtrar, ordenar, contar)" hidden><article><h1>Tutorial 3: Tickets e Pessoas (filtrar, ordenar, contar)</h1>
+<p><strong>Para quem:</strong> atendente e supervisor. <strong>Tempo:</strong> 3 minutos.</p>
+<h2>Tickets</h2>
+<p><strong>Tickets</strong> lista as solicitações ligadas às conversas.</p>
+<p><img src="imagens/06-tickets-ordenar.png?v=c5c01c2bc5" alt="Tickets ordenados por prioridade" loading="lazy" /></p>
+<ul>
+<li><strong>Filtre</strong> por situação (aberto, em progresso, aguardando, resolvido, fechado), por prioridade ou pelo <strong>ID do chamado externo</strong> (o número do chamado no sistema da empresa, quando há).</li>
+<li><strong>Ordene</strong> clicando no título da coluna: <strong>Assunto</strong> (A a Z, depois Z a A), <strong>Prioridade</strong> (mais urgente primeiro, depois menos urgente) e <strong>Atualizado</strong> (mais antigo primeiro). Clicar de novo avança no ciclo; depois do último volta à ordem padrão (mais recentes primeiro). A coluna que ordena mostra uma seta e é a única marcada.</li>
+<li><strong>Quantos há:</strong> acima da tabela aparece o total (&quot;37 tickets&quot;, ou &quot;37 tickets com estes filtros&quot;), e no rodapé &quot;4 tickets nesta página · 37 no total&quot;.</li>
+<li><strong>Exportar CSV</strong> baixa o resultado filtrado.</li>
+<li><strong>Abrir conversa</strong> leva à conversa do ticket.</li>
+</ul>
+<h3>No celular</h3>
+<p>Os resultados viram cartões e não há títulos para clicar. Use o menu <strong>Ordenar por</strong> acima dos cartões, com as mesmas opções.</p>
+<p><img src="imagens/07-tickets-celular.png?v=c5c01c2bc5" alt="Tickets no celular com Ordenar por" loading="lazy" /></p>
+<h2>Pessoas (Contatos)</h2>
+<p>O item <strong>Contatos</strong> do menu abre a tela <strong>Pessoas</strong>: quem já falou com a empresa e a equipe interna, separados por tipo (Todos, Clientes, Outros, Não classificados, Internos, Spam).</p>
+<p><img src="imagens/08-pessoas.png?v=c5c01c2bc5" alt="Pessoas" loading="lazy" /></p>
+<ul>
+<li><strong>Buscar</strong> por nome, e-mail ou telefone.</li>
+<li><strong>Situação</strong>: ativos, bloqueados, arquivados (e inativos, para a equipe).</li>
+<li><strong>Ordenar</strong> por <strong>Pessoa</strong> clicando no título (A a Z, Z a A, padrão). No celular, use <strong>Ordenar por</strong>.</li>
+<li>O total aparece acima da lista (&quot;134 pessoas&quot;) e no rodapé (&quot;20 pessoas nesta página · 134 no total&quot;). O total é contado ao abrir a primeira página e se mantém ao avançar.</li>
+<li>Os <strong>filtros ativos</strong> aparecem como etiquetas que você remove com um clique, e <strong>Limpar tudo</strong> zera.</li>
+</ul>
+<p>Mudou o filtro ou a ordem? A lista volta para a primeira página, porque a posição só vale para aquela combinação.</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-04-classificar-contatos-e-spam" data-titulo="Tutorial 4: classificar o contato e tratar spam" hidden><article><h1>Tutorial 4: classificar o contato e tratar spam</h1>
+<p><strong>Para quem:</strong> atendente. <strong>Tempo:</strong> 2 minutos.</p>
+<p>Todo contato novo chega <strong>Não classificado</strong>. A classificação diz ao sistema como tratar a pessoa: cliente, interno ou outro.</p>
+<h2>Classificar</h2>
+<p>No painel <strong>Detalhes do atendimento</strong>, seção <strong>Contato</strong>, escolha:</p>
+<p><img src="imagens/01-conversas.png?v=c5c01c2bc5" alt="Contato e classificação" loading="lazy" /></p>
+<ul>
+<li><strong>Cliente</strong>: uma pessoa que compra ou usa o serviço. O sistema pede a empresa dela (ou cria um cadastro pessoal para quem não tem empresa).</li>
+<li><strong>Interno</strong>: gente de fora da conta de usuário mas da casa, como equipe em número pessoal, parceiro ou fornecedor. Você escolhe qual dos três. <strong>Contato interno não recebe a automação de cliente</strong> (bot, ticket, tempo de espera).</li>
+<li><strong>Outros</strong>: qualquer outra pessoa.</li>
+</ul>
+<p>Enquanto está <strong>Não classificado</strong>, o atendimento é limitado: o próprio painel avisa &quot;Ainda não classificado: o atendimento é limitado até você dizer se é cliente, interno ou outro contato.&quot;</p>
+<p>Quem é da sua equipe e tem usuário no OMNIRA <strong>não é contato</strong>: aparece em Pessoas, na parte de equipe.</p>
+<h2>Spam ou golpe</h2>
+<p>Contato não classificado: use o link vermelho <strong>Marcar como spam ou golpe</strong>.</p>
+<p>Contato já classificado: abra o menu <strong>⋯</strong> da seção Contato e escolha <strong>Marcar como spam ou golpe</strong>. O botão fica escondido no menu de propósito, para ninguém clicar sem querer.</p>
+<p><img src="imagens/05-contato-menu-spam.png?v=c5c01c2bc5" alt="Menu do contato com a ação de spam" loading="lazy" /></p>
+<p>O sistema <strong>pergunta antes</strong>. Ao confirmar:</p>
+<ul>
+<li>as conversas desse contato ficam só na caixa <strong>Spam</strong> e <strong>não entram na fila</strong>;</li>
+<li>nada é apagado.</li>
+</ul>
+<p>Foi engano? Abra a conversa na caixa <strong>Spam</strong> (menu <strong>Mais...</strong> da lista de conversas) e use <strong>Não é spam</strong> (o contato volta como &quot;Outros&quot;) ou <strong>É cliente</strong>.</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-05-filas-e-setores" data-titulo="Tutorial 5: filas, setores e horários" hidden><article><h1>Tutorial 5: filas, setores e horários</h1>
+<p><strong>Para quem:</strong> administrador e supervisor. <strong>Tempo:</strong> 5 minutos para entender; a configuração leva mais.</p>
+<p>Em <strong>Setores e horários</strong> você decide <strong>para onde cada conversa vai</strong> e <strong>quando cada setor atende</strong>.</p>
+<p><img src="imagens/12-setores.png?v=c5c01c2bc5" alt="Filas e setores" loading="lazy" /></p>
+<h2>As ideias</h2>
+<ul>
+<li><strong>Fila</strong>: onde as conversas esperam e de onde são distribuídas. Cada fila tem um modo de distribuição (por exemplo <strong>Rodízio</strong>) e pode ser a <strong>Padrão</strong>.</li>
+<li><strong>Setor</strong>: agrupa filas que compartilham o mesmo <strong>horário</strong> e um <strong>responsável</strong> (informativo). Exemplo: o setor &quot;Atendimento ao cliente&quot; com as filas Comercial, Suporte e Financeiro.</li>
+<li><strong>Horário</strong>: define quando o setor atende (&quot;Horário comercial&quot;, &quot;Plantão 24 horas&quot;). Fora dele, a conversa espera ou segue as regras de transbordo.</li>
+</ul>
+<h2>A tela</h2>
+<p>As abas no alto: <strong>Filas e setores</strong>, <strong>Horários</strong>, <strong>Escalas e plantões</strong> e <strong>Transbordo e SLA</strong>.</p>
+<p>Em <strong>Filas e setores</strong>:</p>
+<ul>
+<li><strong>+ Nova fila</strong> e <strong>+ Novo setor</strong> criam.</li>
+<li>No cartão do setor: <strong>Renomear</strong>, <strong>Detalhes</strong> e <strong>Desativar</strong>, e o <strong>Horário de atendimento do setor</strong>. As filas do setor herdam esse horário, a menos que tenham um próprio.</li>
+<li>Em cada fila: quantas <strong>pessoas</strong> estão nela, quantas <strong>disponíveis</strong>, quantas <strong>conversas abertas</strong>, e se está <strong>Aberta agora</strong>. Os botões <strong>Pessoas</strong> (quem atende a fila), <strong>Avisos de horário</strong> (a mensagem que o cliente recebe fora do horário), <strong>Tirar do setor</strong> e o menu <strong>⋯</strong>.</li>
+<li><strong>Entrada por canal</strong>: escolha para qual fila vão as conversas <strong>novas</strong> de cada número de WhatsApp. Sem escolha, vão para a <strong>fila padrão</strong>. Conversas que já estão numa fila não mudam.</li>
+</ul>
+<h2>Quem vê o quê</h2>
+<p>A empresa pode ligar a <strong>visibilidade por setor</strong>. Ligada, o atendente vê só as conversas das filas dele, as que são dele e as que ainda não têm fila; supervisores e administradores continuam vendo todas. Isso vale para a lista, a busca (Ctrl+K), os tickets e os contatos.</p>
+<h2>Para o CRM</h2>
+<p>As filas aparecem na API como <strong>setores</strong> que o CRM pode usar ao transferir uma conversa. Cada aplicação pode ser limitada a algumas filas (Tutorial 6).</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-06-conectar-um-crm-pelo-painel" data-titulo="Tutorial 6: conectar um CRM pelo painel (administrador)" hidden><article><h1>Tutorial 6: conectar um CRM pelo painel (administrador)</h1>
+<p><strong>Para quem:</strong> administrador da empresa. <strong>Tempo:</strong> 10 minutos. <strong>No fim você tem:</strong> uma aplicação criada, um token guardado em local seguro e o time do CRM pronto para testar.</p>
+<p>Um CRM usa a <strong>API do OMNIRA</strong> para ver e atender as mesmas conversas que o time. Cada CRM é uma <strong>aplicação externa</strong>, com seus próprios tokens e permissões.</p>
+<h2>1. Abra Integrações</h2>
+<p>Menu <strong>Integrações</strong> → aba <strong>Aplicações externas</strong>. A lista mostra cada aplicação, a situação (<strong>Ativa</strong>, <strong>Suspensa</strong>) e quantas permissões tem.</p>
+<p><img src="imagens/10-integracoes.png?v=c5c01c2bc5" alt="Aplicações externas" loading="lazy" /></p>
+<h2>2. Crie a aplicação</h2>
+<p>Clique em <strong>+ Nova aplicação</strong>.</p>
+<p><img src="imagens/11-nova-aplicacao.png?v=c5c01c2bc5" alt="Nova aplicação externa" loading="lazy" /></p>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Campo</th>
+<th>O que fazer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Nome da aplicação</strong></td>
+<td>O nome do CRM (&quot;CRM da empresa&quot;)</td>
+</tr>
+<tr>
+<td><strong>O que a aplicação pode fazer</strong></td>
+<td>Marque só o necessário. Para um CRM que atende de ponta a ponta: ler conversas, mensagens e contatos, baixar arquivos, receber o histórico de eventos, assumir e devolver conversas, enviar mensagens, transferir e finalizar. Para começar <strong>só olhando</strong>, marque apenas as de leitura</td>
+</tr>
+<tr>
+<td><strong>Filas / Linhas</strong></td>
+<td>Vazio = todas. Marque para limitar a aplicação a algumas filas ou números</td>
+</tr>
+<tr>
+<td><strong>Pode assumir conversas fora do horário do setor</strong></td>
+<td>Desmarcado por padrão. Marque só se o CRM deve atender fora do expediente</td>
+</tr>
+<tr>
+<td><strong>Validade do token (dias)</strong></td>
+<td>Quanto tempo o token vale (padrão 90). Depois é preciso gerar outro</td>
+</tr>
+</tbody>
+</table></div>
+<p>As permissões que <strong>escrevem</strong> têm a etiqueta <strong>escreve</strong>. Receber eventos de protocolos, ocorrências e tarefas (<code>service</code>) é opcional.</p>
+<p><img src="imagens/17-aplicacao-escopos.png?v=c5c01c2bc5" alt="Permissões marcadas para um CRM completo" loading="lazy" /></p>
+<p>Clique em <strong>Criar aplicação</strong>.</p>
+<h2>3. Guarde o token (ele aparece uma vez)</h2>
+<p><img src="imagens/18-token-exibido-uma-vez.png?v=c5c01c2bc5" alt="Token exibido uma única vez" loading="lazy" /></p>
+<p>O token tem a forma <code>omn_ext_&lt;id&gt;.&lt;segredo&gt;</code>. <strong>Copie e entregue ao time do CRM por um canal seguro</strong> (gerenciador de senhas ou mensagem criptografada; nunca e-mail aberto ou chat comum). O OMNIRA guarda só um resumo: se perder, gere outro. Clique em <strong>Já guardei, fechar</strong>.</p>
+<blockquote>
+<p>O exemplo da imagem usa um token fictício.</p>
+</blockquote>
+<h2>4. Gerencie</h2>
+<p>Clique em <strong>Gerenciar</strong> na aplicação.</p>
+<p><img src="imagens/19-gerenciar-aplicacao.png?v=c5c01c2bc5" alt="Gerenciar aplicação" loading="lazy" /></p>
+<ul>
+<li>O alto mostra a situação, o <strong>limite de chamadas por minuto</strong> (padrão 600), se pode assumir fora do horário, as permissões e as filas/linhas permitidas.</li>
+<li><strong>Suspender</strong> corta o acesso na hora e <strong>devolve ao roteador as conversas que a aplicação segurava</strong>. Dá para reativar depois.</li>
+<li><strong>Revogar</strong> é definitivo: os tokens deixam de valer e a aplicação não volta.</li>
+<li><strong>Tokens de acesso</strong>: veja o prefixo, a validade e o último uso; <strong>Revogar token</strong> invalida um; <strong>Gerar novo token</strong> cria outro (também mostrado uma vez).</li>
+<li><strong>Endpoints de eventos (webhooks)</strong>: opcional. A integração padrão <strong>não precisa</strong>: o CRM consulta o diário de eventos pela API. Sem endpoint, a aplicação só lê os eventos consultando.</li>
+</ul>
+<h2>5. O que o time do CRM faz agora</h2>
+<p>Entregue a eles o <strong>pacote do integrador</strong> (guia da API, roteiro de teste, contrato e o simulador). O roteiro exige você ao lado, com um telefone de teste, em alguns passos. Veja o <a href="#tutoriais-07-primeira-chamada-a-api">Tutorial 7</a>.</p>
+<h2>Boas práticas</h2>
+<ul>
+<li>Uma aplicação por sistema; nunca compartilhe o token entre sistemas.</li>
+<li>Comece <strong>só leitura</strong>, confira por um dia, depois dê escrita.</li>
+<li>Teste numa empresa e numa linha de teste antes de conectar a operação real.</li>
+<li>Se algo estranho acontecer, <strong>Suspender</strong> primeiro e investigar depois.</li>
+</ul>
+<h2>O que ainda não se ajusta nesta tela</h2>
+<p>O <strong>limite de chamadas por minuto</strong> (padrão 600) e o <strong>prazo de titularidade</strong> (o tempo que o CRM pode ficar calado antes de a conversa voltar à fila) são configurados pela API de administração; a tela mostra o limite mas ainda não o edita. Peça o ajuste à equipe do OMNIRA se precisar de um valor diferente.</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-07-primeira-chamada-a-api" data-titulo="Tutorial 7: sua primeira chamada à API (integrador)" hidden><article><h1>Tutorial 7: sua primeira chamada à API (integrador)</h1>
+<p><strong>Para quem:</strong> equipe do CRM. <strong>Tempo:</strong> 15 minutos. <strong>Você precisa de:</strong> o token entregue pelo administrador (Tutorial 6) e um terminal.</p>
+<p>A base é <code>https://omnira.devops.k3gsolutions.com.br/api/v1/external</code>. Toda chamada leva <code>Authorization: Bearer &lt;token&gt;</code>. A empresa é a do token: você nunca informa o <code>tenant_id</code>.</p>
+<pre><code class="language-bash">export OMNIRA_EXTERNAL_URL='https://omnira.devops.k3gsolutions.com.br/api/v1/external'
+export OMNIRA_EXTERNAL_TOKEN='omn_ext_&lt;id&gt;.&lt;segredo&gt;'
+H=&quot;Authorization: Bearer $OMNIRA_EXTERNAL_TOKEN&quot;
+</code></pre>
+<h2>1. Quem sou eu</h2>
+<pre><code class="language-bash">curl -s -H &quot;$H&quot; &quot;$OMNIRA_EXTERNAL_URL/me&quot;
+</code></pre>
+<p>Devolve a instalação, os <strong>escopos</strong>, o limite de chamadas, o <em>lease</em>, as filas e linhas permitidas e as <code>features</code> do servidor. Guarde a resposta: ela explica qualquer <code>403</code> futuro.</p>
+<h2>2. As filas (setores)</h2>
+<pre><code class="language-bash">curl -s -H &quot;$H&quot; &quot;$OMNIRA_EXTERNAL_URL/queues&quot;
+</code></pre>
+<p>Monte a tabela do CRM <code>etiqueta → queue_id</code> com isso.</p>
+<h2>3. As conversas abertas</h2>
+<pre><code class="language-bash">curl -s -H &quot;$H&quot; &quot;$OMNIRA_EXTERNAL_URL/conversations?status=open&amp;limit=20&quot;
+</code></pre>
+<p>Cada conversa traz <code>control</code> (quem atende e a <strong>versão de controle</strong>), <code>can</code> (o que a sua aplicação pode fazer agora) e <code>queue_id</code>. Para uma só, <code>GET /conversations/{id}</code> devolve também o cabeçalho <code>ETag: &quot;control-N&quot;</code>.</p>
+<h2>4. Siga as mudanças sem webhook</h2>
+<pre><code class="language-bash">curl -s -H &quot;$H&quot; &quot;$OMNIRA_EXTERNAL_URL/sync/checkpoint&quot;         # { &quot;seq_head&quot;: 1234, ... }
+curl -s -H &quot;$H&quot; &quot;$OMNIRA_EXTERNAL_URL/events?after=1234&quot;       # fatos depois do checkpoint
+</code></pre>
+<p>Repita a segunda chamada a cada 2 a 3 segundos com <code>after</code> igual ao <code>next_cursor</code> da resposta anterior. Ignore <code>event_id</code> repetido. Um <code>410 resync_required</code> significa &quot;refaça a partir do checkpoint&quot;. O guia explica cada fato.</p>
+<h2>5. Assumir e responder</h2>
+<pre><code class="language-bash">CONV='&lt;id da conversa livre&gt;'
+curl -s -X POST -H &quot;$H&quot; -H &quot;Idempotency-Key: assumir-$CONV-0001&quot; &quot;$OMNIRA_EXTERNAL_URL/conversations/$CONV/claim&quot;
+# a resposta traz control.version (por exemplo 3); use-a no If-Match
+curl -s -X POST -H &quot;$H&quot; -H 'Content-Type: application/json' \
+  -H &quot;Idempotency-Key: msg-$CONV-0001&quot; -H 'If-Match: &quot;control-3&quot;' \
+  -d '{&quot;text&quot;:&quot;Olá, aqui é o atendimento.&quot;}' &quot;$OMNIRA_EXTERNAL_URL/conversations/$CONV/messages&quot;
+</code></pre>
+<ul>
+<li><code>202</code> significa <strong>na fila de envio</strong>, não &quot;entregue&quot;. A entrega aparece nos fatos <code>message.status_changed.v1</code>.</li>
+<li>A mesma <code>Idempotency-Key</code> com o mesmo corpo devolve a <strong>mesma</strong> resposta: é como se repete com segurança depois de uma falha de rede.</li>
+<li><code>412</code> ou <code>409</code>: a conversa mudou. <strong>Releia</strong> e decida de novo.</li>
+</ul>
+<h2>6. Sem escrever código: o simulador</h2>
+<p>O pacote traz o <code>crm-sim</code>, que faz tudo isso pela linha de comando, inclusive o laço de consulta:</p>
+<pre><code class="language-bash">./bin/crm-sim-linux-amd64 me
+./bin/crm-sim-linux-amd64 queues
+./bin/crm-sim-linux-amd64 poll 3          # imprime cada fato novo, a cada 3 s
+./bin/crm-sim-linux-amd64 claim &lt;conversa&gt;
+./bin/crm-sim-linux-amd64 send &lt;conversa&gt; &lt;versão&gt; &quot;Teste do CRM&quot;
+</code></pre>
+<p>Depois siga o <a href="#integradores-roteiro-de-teste">roteiro de teste</a> e leia o <a href="#integradores-guia-da-api">guia da API</a>.</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-08-conectar-um-numero-de-whatsapp" data-titulo="Tutorial 8: conectar um número de WhatsApp" hidden><article><h1>Tutorial 8: conectar um número de WhatsApp</h1>
+<p><strong>Para quem:</strong> administrador. <strong>Tempo:</strong> 5 minutos. <strong>Você precisa de:</strong> o celular com o WhatsApp do número que vai atender, e que seja um número <strong>dedicado</strong> à operação.</p>
+<p>Em <strong>Canais</strong> ficam os números conectados. Aqui você conecta um <strong>número não oficial</strong> pelo QR Code, o mesmo que se usa no WhatsApp Web.</p>
+<p><img src="imagens/13-canais.png?v=c5c01c2bc5" alt="Canais" loading="lazy" /></p>
+<p>Cada número aparece com a situação (<strong>Conectado</strong>), o telefone e a sessão. As abas filtram por tipo de canal.</p>
+<blockquote>
+<p><strong>Atenção.</strong> A conexão pelo QR Code é <strong>não oficial</strong>. O sistema avisa: &quot;A automação não oficial pode causar o banimento do número. Use um número dedicado e aceite o risco antes de continuar.&quot; Use um número só da operação, nunca o pessoal. A conexão pela API oficial da Meta é outro caminho, descrito à parte.</p>
+</blockquote>
+<h2>1. Comece a conexão</h2>
+<p>Em <strong>Canais</strong>, clique em <strong>Adicionar canal</strong> e escolha <strong>WhatsApp (não oficial)</strong>. Abre o assistente de 4 passos: <strong>Configuração</strong>, <strong>Conectar</strong>, <strong>Escanear QR</strong> e <strong>Concluído</strong>.</p>
+<p><img src="imagens/20-whatsapp-configuracao.png?v=c5c01c2bc5" alt="Passo 1: aceitar o aviso" loading="lazy" /></p>
+<p>Leia o aviso, marque a caixa para aceitar o risco e clique em <strong>Continuar</strong>.</p>
+<h2>2. Escaneie o QR Code</h2>
+<p>O sistema abre a sessão (leva alguns segundos, aparece &quot;Preparando conexão...&quot;) e mostra o QR Code.</p>
+<p><img src="imagens/21-whatsapp-qr.png?v=c5c01c2bc5" alt="Passo 3: escanear o QR" loading="lazy" /></p>
+<p>No celular do número:</p>
+<ol>
+<li>Abra o WhatsApp.</li>
+<li>Toque em <strong>Dispositivos conectados</strong>.</li>
+<li>Toque em <strong>Conectar um dispositivo</strong>.</li>
+<li>Escaneie o código da tela.</li>
+</ol>
+<p>O código <strong>se renova sozinho</strong> a cada poucos segundos. Se expirar ou a tela não avançar, use <strong>Gerar novo QR</strong>. A tela fica em &quot;Aguardando conexão...&quot; até o WhatsApp confirmar. <strong>Cancelar</strong> desfaz a conexão.</p>
+<blockquote>
+<p>A imagem do QR acima é um exemplo, e não funciona.</p>
+</blockquote>
+<h2>3. Concluído</h2>
+<p><img src="imagens/22-whatsapp-conectado.png?v=c5c01c2bc5" alt="WhatsApp conectado" loading="lazy" /></p>
+<p>A tela mostra o <strong>número</strong>, o <strong>provedor</strong>, o <strong>tipo</strong> e a situação <strong>Conectado</strong>. Clique em <strong>Ir para conversas</strong> ou em <strong>Voltar aos canais</strong>.</p>
+<h2>Depois de conectar</h2>
+<ul>
+<li>Escolha <strong>para qual fila</strong> vão as conversas novas desse número, em <strong>Setores e horários → Entrada por canal</strong> (<a href="#tutoriais-05-filas-e-setores">Tutorial 5</a>). Sem escolha, vão para a fila padrão.</li>
+<li>Mande uma mensagem de outro celular para o número e confira se a conversa aparece em <strong>Conversas</strong>.</li>
+</ul>
+<h2>Se der problema</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Você vê</th>
+<th>O que fazer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>&quot;A sessão não pôde ser iniciada&quot;</td>
+<td>O serviço de conexão não abriu a sessão. Clique em <strong>Tentar novamente</strong> (ou <strong>Reiniciar tentativa</strong>)</td>
+</tr>
+<tr>
+<td>&quot;Esse número já está conectado.&quot;</td>
+<td>O número já existe em Canais; não conecte duas vezes</td>
+</tr>
+<tr>
+<td>O QR não aparece</td>
+<td>Aguarde alguns segundos e clique em <strong>Gerar novo QR</strong></td>
+</tr>
+<tr>
+<td>O número desconecta depois de um tempo</td>
+<td>O WhatsApp pode ter encerrado a sessão no celular; repita a conexão</td>
+</tr>
+</tbody>
+</table></div>
+</article></section>
+<section class="pagina" id="p-tutoriais-09-pessoas-funcoes-e-permissoes" data-titulo="Tutorial 9: pessoas, funções e permissões" hidden><article><h1>Tutorial 9: pessoas, funções e permissões</h1>
+<p><strong>Para quem:</strong> administrador. <strong>Tempo:</strong> 5 minutos.</p>
+<p>Em <strong>Pessoas</strong> (menu <strong>Configuração</strong>) você vê <strong>quem trabalha na empresa, o que cada pessoa pode fazer e de quais filas recebe conversas</strong>. Não confunda com a tela <strong>Contatos</strong>, que lista os clientes.</p>
+<h2>Equipe</h2>
+<p><img src="imagens/23-pessoas-equipe.png?v=c5c01c2bc5" alt="Equipe" loading="lazy" /></p>
+<p>No alto, os filtros rápidos contam quantas pessoas estão em cada situação:</p>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Filtro</th>
+<th>Quem aparece</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Todas</strong></td>
+<td>Todo mundo, inclusive convites</td>
+</tr>
+<tr>
+<td><strong>Recebem conversas</strong></td>
+<td>Quem está em alguma fila e pode receber</td>
+</tr>
+<tr>
+<td><strong>Precisam de atenção</strong></td>
+<td>Quem tem algum problema de configuração para atender</td>
+</tr>
+<tr>
+<td><strong>Não atendem agora</strong></td>
+<td>Quem não está recebendo (função sem atendimento, fora do turno etc.)</td>
+</tr>
+<tr>
+<td><strong>Convites enviados</strong></td>
+<td>Quem foi convidado e ainda não entrou</td>
+</tr>
+</tbody>
+</table></div>
+<p>A busca acha por nome, e-mail ou fila, e os menus filtram por função e por fila.</p>
+<p>Cada linha mostra a <strong>função</strong> (Administrador, Supervisor, Agente), a situação de <strong>atendimento</strong> (por exemplo &quot;Recebe conversas&quot;, &quot;Não atende&quot;, &quot;Acesso suspenso&quot;, &quot;Convite enviado&quot;), se a pessoa está <strong>online ou offline</strong> e as <strong>filas</strong> dela. Clique na linha para abrir a <strong>ficha</strong> da pessoa.</p>
+<h3>Na ficha da pessoa</h3>
+<ul>
+<li><strong>Função</strong>: escolha entre as funções disponíveis.</li>
+<li><strong>Recebe conversas</strong>: liga e desliga o atendimento da pessoa.</li>
+<li><strong>Filas</strong>: marque as filas de onde ela recebe conversas e, em cada uma, as <strong>Simultâneas</strong> (quantas conversas ao mesmo tempo). <strong>0 quer dizer sem limite.</strong></li>
+<li><strong>Suspender acesso</strong>: a pessoa deixa de entrar e de receber, <strong>sem perder função e filas</strong>. <strong>Reativar acesso</strong> devolve tudo.</li>
+</ul>
+<p>As mudanças só valem em <strong>Salvar alterações</strong>, com uma confirmação. Se fechar a ficha com alterações não salvas, o sistema pergunta antes.</p>
+<h3>Convidar alguém</h3>
+<p>Quando a empresa tem envio de e-mail configurado, a tela oferece <strong>convidar</strong>. Você informa o <strong>E-mail</strong> e a <strong>Função</strong>, escolhe se a pessoa <strong>Vai atender conversas</strong> e, se for atender, as filas e as conversas ao mesmo tempo em cada uma (0 = sem limite). A pessoa recebe um link para criar o acesso. Quem ainda não aceitou aparece como <strong>Convite enviado</strong> e o convite pode ser reenviado ou cancelado enquanto está pendente.</p>
+<h2>Funções e permissões</h2>
+<p>A aba <strong>Funções e permissões</strong> mostra, para cada função, <strong>o que ela pode e o que não pode fazer</strong>, em grupos (Conversas, Atendimento com protocolo e outros).</p>
+<p><img src="imagens/24-papeis.png?v=c5c01c2bc5" alt="Funções e permissões" loading="lazy" /></p>
+<ul>
+<li><strong>Administrador</strong>: faz tudo na empresa: convida pessoas, muda funções e configura canais, filas, horários e automações.</li>
+<li><strong>Supervisor</strong>: acompanha a operação e pode retomar uma conversa que um aplicativo externo está atendendo, entre outras coisas.</li>
+<li><strong>Agente</strong>: atende conversas.</li>
+</ul>
+<p>As permissões de cada função são <strong>definidas pela plataforma</strong> e só se leem aqui; o que muda é <strong>qual função cada pessoa tem</strong>. A função da pessoa aparece marcada como <strong>Seu papel</strong> na sua própria visão.</p>
+<h2>Boas práticas</h2>
+<ul>
+<li>Dê a cada pessoa a <strong>menor função</strong> que resolve o trabalho dela.</li>
+<li>Quando alguém sair da empresa, <strong>suspenda o acesso</strong> (não precisa apagar nada).</li>
+<li>Se a empresa usa <strong>visibilidade por setor</strong>, a pessoa só enxerga as filas dela; supervisor e administrador veem todas.</li>
+</ul>
+</article></section>
+<section class="pagina" id="p-tutoriais-10-automacao-fluxos" data-titulo="Tutorial 10: automação (fluxos)" hidden><article><h1>Tutorial 10: automação (fluxos)</h1>
+<p><strong>Para quem:</strong> administrador. <strong>Tempo:</strong> 3 minutos para conhecer a tela.</p>
+<p><strong>Automação</strong> reúne os <strong>fluxos</strong>: conversas automáticas com o cliente <strong>antes de uma pessoa assumir</strong>, como um menu de boas-vindas ou um aviso de fora do horário.</p>
+<p><img src="imagens/25-automacao.png?v=c5c01c2bc5" alt="Automação" loading="lazy" /></p>
+<h2>A tela</h2>
+<p>Três abas: <strong>Fluxos</strong>, <strong>Modelos e packs</strong> e <strong>Execuções</strong>.</p>
+<p>Em <strong>Fluxos</strong>, cada linha mostra:</p>
+<ul>
+<li><strong>Nome</strong> (clique para abrir o editor). A etiqueta <strong>padrão</strong> marca o fluxo que atende por padrão.</li>
+<li><strong>Tipo</strong>, por exemplo <strong>Atendimento (entrada)</strong> ou <strong>Fora do horário</strong>.</li>
+<li><strong>Situação</strong>: <strong>Rascunho</strong> (ainda em edição) ou <strong>Publicado vN</strong> (a versão em uso).</li>
+<li><strong>Atualizado</strong>: quando foi mexido.</li>
+</ul>
+<p><strong>Só a versão publicada atende conversas.</strong> Um rascunho pode ser editado à vontade sem afetar nenhum cliente; ao <strong>publicar</strong>, nasce uma versão nova que passa a valer.</p>
+<p><strong>Novo fluxo</strong> cria um fluxo. <strong>Modelos e packs</strong> traz fluxos prontos para instalar. <strong>Execuções</strong> mostra o que cada fluxo fez em cada conversa.</p>
+<h2>O que o cliente vê</h2>
+<p>As mensagens do fluxo aparecem na conversa com o rótulo <strong>Automação</strong> e, para a equipe, uma linha de evento mostra quando a conversa foi entregue a uma pessoa. Quando uma pessoa assume, o fluxo para.</p>
+<h2>Quando o fluxo não fala</h2>
+<ul>
+<li><strong>O CRM está com a conversa</strong>: enquanto um aplicativo externo atende, o bot <strong>não</strong> fala por cima.</li>
+<li><strong>O contato é interno ou spam</strong>: não recebe a automação de cliente.</li>
+<li><strong>Não há fluxo publicado</strong> para aquele tipo de situação.</li>
+</ul>
+<h2>Cuidados</h2>
+<ul>
+<li>Teste num número de teste antes de publicar.</li>
+<li>Edite sempre o <strong>rascunho</strong> e publique só quando estiver pronto.</li>
+<li>Fluxos que perguntam e esperam resposta podem mandar <strong>lembretes</strong> e, depois de um tempo sem resposta, <strong>encerrar</strong> a conversa. Confira esses tempos antes de publicar.</li>
+</ul>
+</article></section>
+<section class="pagina" id="p-tutoriais-11-acompanhar-a-equipe" data-titulo="Tutorial 11: acompanhar a operação (Dashboard e Supervisor)" hidden><article><h1>Tutorial 11: acompanhar a operação (Dashboard e Supervisor)</h1>
+<p><strong>Para quem:</strong> supervisor e administrador. <strong>Tempo:</strong> 3 minutos.</p>
+<h2>Dashboard</h2>
+<p>O <strong>Dashboard</strong> é o resumo do momento.</p>
+<p><img src="imagens/09-dashboard.png?v=c5c01c2bc5" alt="Dashboard" loading="lazy" /></p>
+<ul>
+<li><strong>Conversas abertas</strong>, <strong>Tickets abertos</strong>, <strong>Contatos</strong>, <strong>Não classificados</strong> e <strong>Agentes online</strong>. Cada cartão leva à lista correspondente.</li>
+<li><strong>Filas que pedem atenção</strong>: as filas com conversas cujo <strong>relógio de SLA</strong> está em risco ou estourou, as mais urgentes primeiro. <strong>Ver monitor de SLA</strong> abre a tela de transbordo e SLA (<a href="#tutoriais-12-horarios-escalas-e-transbordo">Tutorial 12</a>). Se nenhuma fila corre risco, a tela diz &quot;Tudo em dia&quot;.</li>
+</ul>
+<h2>Supervisor</h2>
+<p><strong>Supervisor</strong> mostra a <strong>presença da equipe em tempo real</strong>.</p>
+<p><img src="imagens/26-supervisor.png?v=c5c01c2bc5" alt="Supervisor" loading="lazy" /></p>
+<ul>
+<li><strong>Total de agentes</strong>, quantos estão <strong>Online</strong> e quantos <strong>Offline</strong>.</li>
+<li>A lista traz cada pessoa, a função e a presença.</li>
+</ul>
+<p>Uma pessoa só fica <strong>online</strong> quando está com o OMNIRA aberto; é a presença que o roteador usa, junto com o turno e a capacidade, para decidir quem recebe a próxima conversa (veja o <a href="#tutoriais-12-horarios-escalas-e-transbordo">Tutorial 12</a>).</p>
+<h2>Retomar uma conversa que um CRM atende</h2>
+<p>Se um aplicativo externo está com uma conversa e algo deu errado, um supervisor com a permissão certa pode <strong>retomar</strong> a conversa, informando o motivo. A permissão aparece em <strong>Pessoas → Funções e permissões</strong>: &quot;Retomar uma conversa que uma aplicação externa (CRM) está atendendo&quot;.</p>
+</article></section>
+<section class="pagina" id="p-tutoriais-12-horarios-escalas-e-transbordo" data-titulo="Tutorial 12: horários, escalas e transbordo" hidden><article><h1>Tutorial 12: horários, escalas e transbordo</h1>
+<p><strong>Para quem:</strong> administrador e supervisor. <strong>Tempo:</strong> 10 minutos para entender.</p>
+<p>Em <strong>Setores e horários</strong> há quatro abas que trabalham juntas (<a href="#tutoriais-05-filas-e-setores">Tutorial 5</a> explica <strong>Filas e setores</strong>). Este tutorial cobre as outras três.</p>
+<h2>Horários</h2>
+<p>Define <strong>quando cada setor ou fila atende</strong>.</p>
+<p><img src="imagens/27-horarios.png?v=c5c01c2bc5" alt="Horários" loading="lazy" /></p>
+<ul>
+<li>Cada horário tem nome e tipo (<strong>Horário comercial</strong>, <strong>24 horas, todos os dias</strong> ou <strong>personalizado</strong>), o fuso horário e <strong>quantos itens o usam</strong>. Um horário em uso não pode ser removido.</li>
+<li><strong>+ Novo horário</strong> cria outro; <strong>Editar</strong> ajusta os dias, os intervalos, <strong>feriados</strong>, <strong>exceções</strong> e a <strong>suspensão de emergência</strong>.</li>
+<li><strong>Horário padrão da empresa</strong> vale para os setores e filas que não têm horário próprio. Sem padrão, ficam abertos 24 horas.</li>
+</ul>
+<h2>Escalas e plantões</h2>
+<p>Define <strong>quem atende em quais horários e quem cobre fora do expediente</strong>.</p>
+<p><img src="imagens/28-escalas.png?v=c5c01c2bc5" alt="Escalas e plantões" loading="lazy" /></p>
+<ul>
+<li><strong>Escalas dos atendentes</strong>: quem não tem escala fica disponível 24 horas (padrão). A escala de uma pessoa vale <strong>somente dentro do horário do setor</strong>: o atendente só recebe conversa quando o setor está <strong>aberto</strong>, ele está <strong>de turno</strong>, <strong>online</strong> e <strong>com capacidade</strong>.</li>
+<li>Para cada pessoa, escolha o <strong>horário</strong> e a que <strong>setores e filas</strong> ele vale, e clique em <strong>Definir escala</strong>. <strong>Remover</strong> volta ao padrão.</li>
+<li><strong>Plantões e contingência</strong>: uma lista de plantão recebe conversas que o <strong>transbordo</strong> manda <strong>fora do expediente</strong> ou quando <strong>ninguém do setor pode atender</strong>. Quem está de plantão atende mesmo fora da própria escala, <strong>só dentro do período marcado</strong>. <strong>+ Nova lista de plantão</strong> cria uma; cada lista tem <strong>Períodos</strong>.</li>
+</ul>
+<h2>Transbordo e SLA</h2>
+<p>Define <strong>o que acontece com a conversa</strong> quando a fila está fechada, sem atendente ou lotada, <strong>e quanto tempo cada etapa pode levar</strong>.</p>
+<p><img src="imagens/29-transbordo-sla.png?v=c5c01c2bc5" alt="Transbordo e SLA" loading="lazy" /></p>
+<ol>
+<li>Escolha a <strong>Fila de atendimento</strong>.</li>
+<li><strong>Situação agora</strong> mostra <strong>quem pode atender agora</strong> e por que alguém não pode (por exemplo, capacidade cheia).</li>
+<li><strong>Transbordo em cadeia</strong>: marque <strong>Política ativa</strong>, defina o <strong>Limite de etapas por conversa</strong> e o que fazer <strong>quando acabarem as etapas</strong> (por exemplo, <strong>Continuar aguardando na fila</strong>).</li>
+<li>Cada <strong>Etapa</strong> diz <strong>quando agir</strong>: <strong>Fora do expediente</strong>, <strong>Sem atendente elegível</strong>, <strong>Capacidade esgotada</strong>, <strong>Tempo máximo de espera</strong>, <strong>SLA em risco</strong> ou <strong>SLA violado</strong> (basta um deles). Depois define <strong>quanto esperar</strong> (em minutos, opcionalmente só no <strong>horário útil</strong>) e o <strong>destino</strong>: <strong>Outra fila</strong>, <strong>Plantão</strong> ou <strong>Atendente específico</strong>.</li>
+<li>As etapas podem ser reordenadas (<strong>Subir</strong> e <strong>Descer</strong>) ou removidas.</li>
+<li>Mais abaixo fica a <strong>política de SLA</strong>: os prazos de <strong>primeira resposta</strong>, <strong>espera na fila</strong>, <strong>atribuição</strong> e <strong>resolução</strong>, com o <strong>percentual de risco</strong> (quando o relógio passa a &quot;em risco&quot;) e se a contagem é <strong>corrida</strong> ou só em <strong>horário útil</strong>.</li>
+</ol>
+<p>O <strong>SLA</strong> é o prazo combinado. O sistema acompanha um relógio por conversa; quando ele passa do risco, a conversa aparece em <strong>Filas que pedem atenção</strong> no Dashboard, e pode disparar o transbordo.</p>
+<h2>Um exemplo</h2>
+<p>&quot;Se o Suporte estiver fechado ou sem ninguém disponível, espere 5 minutos úteis e mande para o plantão. Se ninguém do plantão pegar, continue aguardando na fila.&quot; É uma política de uma etapa: gatilhos <strong>Fora do expediente</strong> e <strong>Sem atendente elegível</strong>, espera <strong>5 minutos úteis</strong>, destino <strong>Plantão</strong>, e ao acabar as etapas <strong>Continuar aguardando na fila</strong>.</p>
+</article></section>
+<section class="pagina" id="p-integradores-guia-da-api" data-titulo="Guia da API para integradores" hidden><article><h1>Guia da API para integradores</h1>
+<blockquote>
+<p>Os arquivos citados aqui (<code>bin/</code> com o simulador, <code>exemplo-typescript/</code>, <code>referencia/</code> e o contrato <code>omnira-external-v1.yaml</code>) vêm no <strong>pacote do integrador</strong>, entregue pelo administrador. O contrato também está nesta wiki, em <a href="#integradores-contrato-openapi">Contrato OpenAPI</a>.</p>
+</blockquote>
+<p>Contrato: <code>omnira-external-v1.yaml</code> (OpenAPI 3.0, é a fonte da verdade; este guia explica como usá-lo).</p>
+<h2>1. O que muda para o CRM</h2>
+<p>O CRM deixa de falar com o Chatwoot e passa a falar com a <strong>API externa do OMNIRA</strong>. A troca é uma camada nova (<code>OmniraProvider</code>) por trás da fachada <code>/api/support/chatwoot/*</code> que o CRM já tem; o front do CRM não muda. O OMNIRA <strong>não imita</strong> o Chatwoot: o contrato é o dele (cursor, <code>If-Match</code>, <code>Idempotency-Key</code>, posse da conversa).</p>
+<p>Duas ideias resolvem quase tudo:</p>
+<ol>
+<li><strong>Quem atende é a aplicação.</strong> A conversa tem um titular tipado. Quando o CRM faz <code>claim</code>, o titular passa a ser a <em>aplicação CRM</em>; enquanto isso o Workspace do OMNIRA e o bot não falam por cima. O atendente humano do CRM viaja só como rótulo (<code>external_agent_id</code>, não verificado, usado em auditoria).</li>
+<li><strong>O CRM consulta, o OMNIRA não empurra.</strong> Para esta integração não há webhook, receptor, URL pública nem assinatura no CRM: ele lê o <strong>diário de fatos</strong> (<code>GET /external/events?after=&lt;seq&gt;</code>) a cada 2 a 3 segundos. (O OMNIRA sabe entregar webhooks assinados a quem pedir; ficam desligados aqui, e o simulador só traz o comando <code>listen</code> para quem quiser experimentar.)</li>
+</ol>
+<h2>2. Endereço e credencial</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Base</td>
+<td><code>https://omnira.devops.k3gsolutions.com.br/api/v1/external</code></td>
+</tr>
+<tr>
+<td>Autenticação</td>
+<td><code>Authorization: Bearer omn_ext_&lt;id&gt;.&lt;segredo&gt;</code></td>
+</tr>
+<tr>
+<td>Quem cria a credencial</td>
+<td>o administrador da empresa no OMNIRA (Configurações &gt; Integrações &gt; Aplicações externas). O segredo aparece <strong>uma vez</strong>; só um resumo fica guardado. Entregue ao CRM por canal seguro; nunca em chat, e-mail aberto ou navegador</td>
+</tr>
+<tr>
+<td>Empresa</td>
+<td>é a da credencial. Mandar <code>tenant_id</code>, <code>X-Tenant-ID</code> ou <code>X-Omnira-Acting-As</code> dá <code>400 tenant_not_accepted</code></td>
+</tr>
+<tr>
+<td>Taxa</td>
+<td>por credencial, padrão 600 req/min (a fase de leitura usa 300). Excedeu: <code>429</code> com <code>Retry-After</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><code>GET /external/me</code> (sem escopo) diz quem é a credencial, os escopos, o limite, o <em>lease</em>, as filas/linhas permitidas e as <code>features</code> do servidor. Chame na partida e registre a resposta.</p>
+<h2>3. Escopos que o CRM pede</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Escopo</th>
+<th>Para quê</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>conversation.read</code></td>
+<td>listar/ler conversas e <code>GET /queues</code></td>
+</tr>
+<tr>
+<td><code>message.read</code></td>
+<td>listar mensagens</td>
+</tr>
+<tr>
+<td><code>contact.read</code></td>
+<td>nome e telefone do contato</td>
+</tr>
+<tr>
+<td><code>media.read</code></td>
+<td>baixar o arquivo que o cliente mandou</td>
+</tr>
+<tr>
+<td><code>events.read</code></td>
+<td>checkpoint e diário de fatos</td>
+</tr>
+<tr>
+<td><code>conversation.claim</code></td>
+<td>assumir, devolver e <code>heartbeat</code></td>
+</tr>
+<tr>
+<td><code>message.send</code></td>
+<td>enviar texto, template e anexo (e subir o arquivo)</td>
+</tr>
+<tr>
+<td><code>conversation.transfer</code></td>
+<td>passar para uma fila (setor)</td>
+</tr>
+<tr>
+<td><code>conversation.finalize</code></td>
+<td>finalizar o atendimento</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>service.read</code> (protocolos, ocorrências, tarefas, ordens de serviço) só se o CRM quiser esses fatos. Sem o escopo, a chamada dá <code>403 forbidden_scope</code>.</p>
+<h2>4. Manter o CRM sincronizado (o laço de consulta)</h2>
+<pre><code>1. GET /sync/checkpoint            -&gt; { seq_head }          (leia ANTES da foto)
+2. GET /conversations?status=all   -&gt; a foto atual (pagine até has_more=false)
+3. GET /events?after=&lt;seq_head&gt;    -&gt; fatos depois do checkpoint
+4. repita o passo 3 a cada 2-3 s, com after = next_cursor da resposta anterior
+</code></pre>
+<ul>
+<li><strong>Mudanças na foto durante a leitura não se perdem</strong>: o checkpoint vem primeiro, e o passo 3 repete o que for preciso.</li>
+<li><strong>&quot;Pelo menos uma vez&quot;</strong>: o mesmo <code>event_id</code> pode chegar de novo. Ignore repetidos. Em produção, grave o <code>event_id</code> e o cursor <strong>junto</strong> do processamento do fato (no banco do CRM), para que um reinício do processo não aplique o mesmo fato duas vezes.</li>
+<li><strong>O fato traz referências, não conteúdo</strong> (ids, estados). Para ver o texto de uma mensagem nova, busque <code>GET /conversations/{id}/messages</code>.</li>
+<li><strong><code>next_cursor</code> avança mesmo</strong> quando todos os fatos da janela foram filtrados para você. Sempre grave o último.</li>
+<li><strong><code>410 resync_required</code></strong>: o <code>after</code> é mais antigo do que o OMNIRA guarda (padrão 30 dias) ou é um número que o diário nunca emitiu (maior que o <code>seq_head</code>). Refaça do passo 1. Já um <code>after</code> ausente, mal formado ou negativo é <code>400</code>: é erro de chamada, <strong>não</strong> ressincronize.</li>
+<li><strong>Atraso</strong>: um fato é numerado em ~0,5 s. Com consulta a cada 2-3 s, a tela do CRM enxerga uma mudança em até uns 3 s. Gasta ~25 requisições por minuto.</li>
+<li>O fato é conferido de novo para você no momento da leitura: uma credencial limitada a uma fila nunca ouve falar de outra.</li>
+</ul>
+<p>Tipos de fato de atendimento (exemplos reais, <code>data</code> resumido):</p>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th><code>type</code></th>
+<th>quando</th>
+<th><code>data</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>conversation.created.v1</code></td>
+<td>chegou conversa nova</td>
+<td><code>{status:&quot;open&quot;}</code></td>
+</tr>
+<tr>
+<td><code>message.created.v1</code></td>
+<td>mensagem nova (do cliente, sua ou de outro)</td>
+<td><code>{direction, status, type}</code></td>
+</tr>
+<tr>
+<td><code>message.status_changed.v1</code></td>
+<td>entrega mudou</td>
+<td><code>{previous, status}</code> (<code>queued</code>→<code>sent</code>→<code>delivered</code>→<code>read</code>, ou <code>failed</code>/<code>uncertain</code>)</td>
+</tr>
+<tr>
+<td><code>conversation.control_changed.v1</code></td>
+<td>quem atende mudou</td>
+<td><code>{control:{kind,state,version}, previous:{kind,state}}</code>; <code>aggregate_version</code> é a versão de controle</td>
+</tr>
+<tr>
+<td><code>conversation.closed.v1</code></td>
+<td>atendimento finalizado</td>
+<td><code>{}</code></td>
+</tr>
+<tr>
+<td><code>contact.updated.v1</code>, <code>ticket.linked.v1</code></td>
+<td>contato/chamado</td>
+<td>referências</td>
+</tr>
+</tbody>
+</table></div>
+<p>Todo fato tem <code>origin: {kind, mine}</code>. <code>mine=true</code> quer dizer &quot;causado por esta credencial&quot;: use para reconhecer o próprio eco. <strong>Atenção:</strong> em <code>conversation.closed.v1</code> causado por você, <code>mine</code> vem <code>false</code> hoje; reconheça a sua finalização pela resposta do <code>finalize</code>.</p>
+<p>Aplique os fatos <strong>na ordem do <code>seq</code></strong> (é a ordem do diário). <code>aggregate_version</code> só existe nos fatos de controle e de conversa (<code>control_changed</code>, <code>created</code>, <code>closed</code>) e é a versão de controle: use-a para decidir se um fato de controle é mais novo do que o estado que você já tem. Em <code>message.*</code> ela vem <code>null</code>.</p>
+<h2>5. Escrever (comandos)</h2>
+<p>Rotas (todas <code>POST /external/conversations/{id}/...</code>):</p>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Rota</th>
+<th>Escopo</th>
+<th>Corpo</th>
+<th>Observação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>claim</code></td>
+<td><code>conversation.claim</code></td>
+<td><code>{external_agent_id?}</code></td>
+<td>conversa <strong>livre</strong>. <code>If-Match</code> opcional. Repetir o claim de quem já segura não muda nada</td>
+</tr>
+<tr>
+<td><code>release</code></td>
+<td><code>conversation.claim</code></td>
+<td>idem</td>
+<td>devolve ao roteador</td>
+</tr>
+<tr>
+<td><code>heartbeat</code></td>
+<td><code>conversation.claim</code></td>
+<td>idem</td>
+<td>renova o <em>lease</em></td>
+</tr>
+<tr>
+<td><code>messages</code></td>
+<td><code>message.send</code></td>
+<td><code>{text}</code> ou <code>{template:{id,params}}</code> ou <code>{attachment_id, text?}</code></td>
+<td><code>202</code> = <strong>enfileirada</strong>, não entregue</td>
+</tr>
+<tr>
+<td><code>attachments</code></td>
+<td><code>message.send</code></td>
+<td>multipart, campo <code>file</code></td>
+<td>sobe o arquivo; devolve <code>attachment_id</code></td>
+</tr>
+<tr>
+<td><code>transfer</code></td>
+<td><code>conversation.transfer</code></td>
+<td><code>{queue_id, user_id?}</code></td>
+<td>a aplicação deixa de ser titular</td>
+</tr>
+<tr>
+<td><code>finalize</code></td>
+<td><code>conversation.finalize</code></td>
+<td><code>{reason?, note?, notify_protocol?}</code></td>
+<td>fecha a conversa e o protocolo</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Duas regras de ouro</strong></p>
+<ol>
+<li><strong><code>Idempotency-Key</code> em todo comando</strong> (8-128 caracteres <code>[A-Za-z0-9._:-]</code>). Uma chave por <em>intenção</em> (&quot;mandar este texto nesta conversa&quot;), guardada junto com a intenção e <strong>reaproveitada em cada nova tentativa</strong>. Mesma chave + mesmo corpo devolve a mesma resposta (<code>Idempotent-Replay: true</code>, mesmo <code>message_id</code>). Mesma chave com corpo diferente é <code>422 idempotency_key_reused</code>.</li>
+<li><strong><code>If-Match: &quot;control-N&quot;</code></strong> com a versão que você leu (<code>ETag</code> do <code>GET /conversations/{id}</code>, ou <code>control.version</code> da última resposta). Faltou: <code>428</code>. Velha: <code>412 stale_control_version</code> (a recusa traz o <code>ETag</code> atual). Nunca repita às cegas um 412/409: <strong>releia a conversa e decida de novo</strong>.</li>
+</ol>
+<p><strong>O que fazer com cada erro</strong></p>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Resposta</th>
+<th>Significa</th>
+<th>Ação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>401 unauthenticated</code></td>
+<td>credencial inválida, expirada, suspensa ou revogada (a causa nunca é dita)</td>
+<td>pare e avise o operador</td>
+</tr>
+<tr>
+<td><code>403 forbidden_scope</code> / <code>queue_not_allowed</code> / <code>capability_disabled</code></td>
+<td>falta escopo; fila fora da lista; anexos desligados na empresa</td>
+<td>corrija a configuração; não repita</td>
+</tr>
+<tr>
+<td><code>404</code></td>
+<td>não existe <strong>ou</strong> não é visível para esta credencial (igual)</td>
+<td>trate como inexistente</td>
+</tr>
+<tr>
+<td><code>409 not_holder</code></td>
+<td>você não segura a conversa</td>
+<td>faça <code>claim</code> antes (se <code>can.claim</code>)</td>
+</tr>
+<tr>
+<td><code>409 held_by_other</code></td>
+<td>outro titular (pessoa, Hub, outra aplicação)</td>
+<td>releia; não tome</td>
+</tr>
+<tr>
+<td><code>409 conversation_closed</code></td>
+<td>já finalizada</td>
+<td>atualize a tela</td>
+</tr>
+<tr>
+<td><code>409 outside_hours</code></td>
+<td>fora do horário da fila e a credencial não tem permissão</td>
+<td>avise o atendente</td>
+</tr>
+<tr>
+<td><code>409 channel_unavailable</code>, <code>too_many_attachments</code>, <code>attachment_quota</code></td>
+<td>linha fora do ar; limite de anexos pendentes</td>
+<td>tente depois / envie os pendentes</td>
+</tr>
+<tr>
+<td><code>412 stale_control_version</code> / <code>428</code></td>
+<td>versão velha / faltou <code>If-Match</code></td>
+<td>releia e refaça com a versão nova</td>
+</tr>
+<tr>
+<td><code>422 window_closed</code></td>
+<td>passou a janela de 24 h do WhatsApp oficial: só <strong>template</strong></td>
+<td>envie template</td>
+</tr>
+<tr>
+<td><code>422 invalid_message</code> / <code>invalid_template</code> / <code>invalid_target</code> / <code>invalid_caption</code> / <code>invalid_request</code></td>
+<td>corpo ou destino inválido</td>
+<td>corrija</td>
+</tr>
+<tr>
+<td><code>422 attachment_unavailable</code></td>
+<td>anexo inexistente, já enviado, de outra conversa ou de outra credencial</td>
+<td>suba de novo</td>
+</tr>
+<tr>
+<td><code>422 file_rejected</code> / <code>file_blocked</code> / <code>media_unsupported</code></td>
+<td>arquivo recusado pelo OMNIRA (tipo, estrutura, antivírus)</td>
+<td>não repita o mesmo arquivo</td>
+</tr>
+<tr>
+<td><code>503 scanner_unavailable</code></td>
+<td>o antivírus está fora do ar; <strong>o arquivo não foi aceito</strong></td>
+<td>espere um pouco e suba de novo o mesmo arquivo</td>
+</tr>
+<tr>
+<td><code>413 file_too_large</code></td>
+<td>acima de 16 MiB</td>
+<td>reduza</td>
+</tr>
+<tr>
+<td><code>429</code> (<code>rate_limited</code>, <code>upload_rate</code>)</td>
+<td>limite de taxa</td>
+<td>espere o <code>Retry-After</code></td>
+</tr>
+<tr>
+<td><code>5xx</code> / falha de rede</td>
+<td>transitório</td>
+<td>repita com a <strong>mesma</strong> <code>Idempotency-Key</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Lease (titularidade com prazo).</strong> Se o administrador definiu <code>lease_seconds</code> para a credencial (ver <code>/me</code>), toda conversa que o CRM segura expira quando o CRM fica calado por <em>lease + 120 s</em>: o OMNIRA devolve a conversa ao roteador (<code>reason lease_expired</code>) e o CRM descobre pela versão (<code>412</code>/<code>409</code> no próximo comando e o fato <code>conversation.control_changed.v1</code>). Enquanto houver atendente com a conversa aberta na tela, mande <code>heartbeat</code> (por exemplo a cada <code>lease/3</code>). Pessoa do OMNIRA nunca perde a conversa por prazo.</p>
+<p><strong>Supervisor pode retomar.</strong> Um supervisor do OMNIRA com a permissão certa pode retomar uma conversa que o CRM segura (com motivo). O CRM descobre pela versão e pelo fato de controle; trate como <code>412</code>/<code>409</code>.</p>
+<h2>6. Setores (filas) e etiquetas</h2>
+<p><code>GET /queues</code> devolve <code>{id, name}</code> das filas que a credencial pode usar. O CRM mantém uma tabela de configuração <code>etiqueta -&gt; queue_id</code> e usa <code>transfer {queue_id}</code>:</p>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Etiqueta do CRM</th>
+<th>Fila no OMNIRA</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>financeiro</code></td>
+<td>Financeiro</td>
+</tr>
+<tr>
+<td><code>suporte_ti</code></td>
+<td>Suporte (ou Suporte TI, a confirmar)</td>
+</tr>
+<tr>
+<td><code>provedor_telecom</code></td>
+<td>Provedores Telecom</td>
+</tr>
+<tr>
+<td><code>servidores</code></td>
+<td>Servidores</td>
+</tr>
+</tbody>
+</table></div>
+<p>Transferir encerra a titularidade do CRM no mesmo passo e entrega a conversa ao roteador do setor (horário, elegibilidade, capacidade). Com <code>user_id</code>, a pessoa precisa estar elegível <strong>agora</strong> na fila, senão <code>422 invalid_target</code> e nada muda.</p>
+<h2>7. Anexos</h2>
+<p>Enviar: <code>POST .../attachments</code> (multipart, campo <code>file</code>, até 16 MiB, <strong>você precisa segurar a conversa</strong>) -&gt; <code>attachment_id</code>; depois <code>POST .../messages {attachment_id, text?}</code> (o texto vira legenda, até 1024 caracteres). O arquivo passa pelo mesmo caminho do operador: tipo e tamanho pelos bytes reais, metadados removidos, estrutura conferida, antivírus (falha do antivírus = recusa). Limites por credencial: 5 arquivos pendentes por conversa, 64 MiB pendentes, 30 envios por minuto. Um upload não enviado expira em 24 h. Áudio: converta para MP3 como o CRM já faz.</p>
+<p>Receber: a mensagem do cliente traz <code>media {id, kind, mime, size_bytes, status}</code>. Só <code>status=clean</code> baixa: <code>GET /media/{id}</code> (<code>409 media_pending</code> enquanto confere; <code>403 media_blocked</code>; <code>410 media_gone</code>). Nunca vem a URL do provedor.</p>
+<h2>8. Finalizar</h2>
+<p><code>finalize</code> fecha a conversa, fecha os tickets locais (os ligados ao ERP ficam como estão) e <strong>encerra o protocolo do atendimento</strong> (cria um antes, se o atendimento nunca teve). Nas empresas com o <strong>aviso de protocolo</strong> ligado, o cliente recebe o número como mensagem da aplicação. Se o CRM já manda a sua mensagem de encerramento, envie <code>notify_protocol: false</code>. Motivos: <code>resolved</code>, <code>no_response</code>, <code>duplicate</code>, <code>spam</code>, <code>transferred</code>, <code>other</code>.</p>
+<h2>9. Mensagens: campos que importam</h2>
+<ul>
+<li><code>direction</code> (<code>inbound</code>/<code>outbound</code>) e <code>sender.kind</code>: <code>contact</code>, <code>agent</code> (pessoa do OMNIRA), <code>crm_application</code> (<code>mine</code> diz se foi esta credencial), <code>automation</code> (bot/fluxo).</li>
+<li><code>status</code>: <code>received</code>, <code>queued</code>, <code>sent</code>, <code>delivered</code>, <code>read</code>, <code>failed</code>, <code>uncertain</code>. <strong><code>queued</code> nunca significa entregue.</strong></li>
+<li>Para reconhecer o eco da própria mensagem, use <code>sender.kind=crm_application</code> + <code>mine=true</code> (ou <code>origin.mine</code> no fato), sem prefixo no texto.</li>
+<li>Não existe <code>message_type</code> 0/1/2 do Chatwoot: &quot;atividade&quot; aparece como <strong>fato</strong> (<code>control_changed</code>, <code>closed</code>).</li>
+</ul>
+<h2>10. O que o OMNIRA ainda NÃO faz (planejado para o CRM)</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Necessidade</th>
+<th>Situação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Abrir conversa nova por telefone (alertas do Gateway)</td>
+<td><strong>não existe</strong>; continua no Chatwoot até haver ADR e template aprovado</td>
+</tr>
+<tr>
+<td>Buscar contato por nome/telefone, criar contato</td>
+<td>não existe (o <code>contact_id</code> vem na conversa)</td>
+</tr>
+<tr>
+<td>Nota interna (<code>private</code>)</td>
+<td>fica no CRM</td>
+</tr>
+<tr>
+<td>Lido/não lido, &quot;digitando&quot;</td>
+<td>o CRM calcula pelo diário (inbound depois da última leitura dele)</td>
+</tr>
+<tr>
+<td>Grupos de WhatsApp</td>
+<td>a API <strong>nunca devolve grupo</strong>; só contatos</td>
+</tr>
+<tr>
+<td>Listar templates aprovados</td>
+<td>não há rota; peça os <code>template.id</code> ao administrador do OMNIRA</td>
+</tr>
+<tr>
+<td>Etiquetas livres</td>
+<td>não; setor = fila</td>
+</tr>
+<tr>
+<td>Identidade verificada do atendente do CRM</td>
+<td>não; só rótulo (<code>external_agent_id</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h2>11. Como testar (sem esperar o adaptador pronto)</h2>
+<ol>
+<li><strong>Simulador de referência</strong> (<code>bin/crm-sim-&lt;sistema&gt;</code>): executa cada chamada deste guia pela linha de comando, inclusive o laço de consulta (<code>poll</code>). Comandos: <code>me</code>, <code>queues</code>, <code>poll</code>, <code>bootstrap</code>, <code>list</code>, <code>show</code>, <code>claim</code>, <code>heartbeat</code>, <code>send</code>, <code>attach</code>, <code>media</code>, <code>transfer</code>, <code>release</code>, <code>finalize</code>. Variáveis: <code>OMNIRA_EXTERNAL_URL</code>, <code>OMNIRA_EXTERNAL_TOKEN</code>; <code>SIM_KEY</code> repete um comando com a mesma chave; <code>SIM_NOTIFY_PROTOCOL=false</code> finaliza sem avisar o protocolo.</li>
+<li><strong>Cliente TypeScript de exemplo</strong> (<code>exemplo-typescript/</code>): <code>OmniraClient</code> (comandos com chave e versão, anexo em dois passos, erros tipados) e <code>JournalFeed</code> (o laço de consulta com dedupe e 410), com testes. Copie o que servir; não é biblioteca.</li>
+<li><strong><a href="#integradores-roteiro-de-teste">Roteiro de teste</a></strong>: 18 passos com resultado esperado e as evidências que devem voltar para nós.</li>
+</ol>
+<h2>12. Por onde começar (ordem sugerida)</h2>
+<ol>
+<li>Rodar <code>me</code>, <code>queues</code> e <code>poll</code> com credencial <strong>só de leitura</strong> durante um dia, comparando com o Chatwoot em modo sombra (sem escrever).</li>
+<li>Implementar <code>OmniraProvider</code> com leitura + o laço de consulta.</li>
+<li>Ligar a escrita numa fila só (Suporte): <code>claim</code>, texto, <code>transfer</code>, <code>finalize</code>.</li>
+<li>Anexos, depois da prova no <code>ROTEIRO-DE-TESTE.md</code> (passos 10-13).</li>
+<li>Desligar o Chatwoot por fila, nunca de uma vez.</li>
+</ol>
+<p>Desfazer a qualquer momento: o administrador suspende a aplicação na tela (corta a credencial na hora e devolve as conversas ao roteador). O OMNIRA continua atendendo sozinho.</p>
+<h2>13. Mapa e referência</h2>
+<p><code>referencia/MAPEAMENTO-CHATWOOT-OMNIRA.md</code> (no pacote): rota a rota do Chatwoot que o CRM usa hoje e o equivalente no OMNIRA, diferenças de modelo e lacunas.</p>
+</article></section>
+<section class="pagina" id="p-integradores-roteiro-de-teste" data-titulo="Roteiro de teste: CRM falando com o OMNIRA" hidden><article><h1>Roteiro de teste: CRM falando com o OMNIRA</h1>
+<p>Quem faz: a equipe do CRM (terminal 1 e 2) <strong>junto com</strong> quem tem o telefone de teste e a tela do OMNIRA (a pessoa responsável pelo OMNIRA). Duração: cerca de 1 hora (o passo 17 é opcional e leva ~20 min).</p>
+<p><strong>Regras do teste</strong></p>
+<ul>
+<li>Só a empresa e a linha de <strong>teste</strong> combinadas. Nada de cliente real.</li>
+<li>O segredo da credencial não vai para chat nem para print. Nas evidências, apague o token.</li>
+<li>Anote o horário e a saída de cada passo. Onde o resultado esperado não aparecer, <strong>pare e avise</strong>; não force.</li>
+</ul>
+<h2>0. Preparação</h2>
+<pre><code class="language-bash">export OMNIRA_EXTERNAL_URL='https://omnira.devops.k3gsolutions.com.br/api/v1/external'
+export OMNIRA_EXTERNAL_TOKEN='&lt;o token que o administrador entregou&gt;'
+chmod +x ./bin/crm-sim-linux-amd64        # (Linux). No macOS: crm-sim-darwin-arm64 ou -amd64. No Windows: crm-sim-windows-amd64.exe
+alias sim=./bin/crm-sim-linux-amd64
+</code></pre>
+<p>Terminal 2 (deixe aberto o teste inteiro): <code>sim poll 3</code> imprime cada fato novo do diário a cada 3 s.</p>
+<h2>1. Quem sou eu</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>#</th>
+<th>Ação</th>
+<th>Esperado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>sim me</code></td>
+<td><code>installation.status: active</code>; <code>scopes</code> com os 9 pedidos (leitura + <code>conversation.claim</code>, <code>message.send</code>, <code>conversation.transfer</code>, <code>conversation.finalize</code>, <code>media.read</code>); <code>features.read_api</code>, <code>events_api</code> e <code>write_api</code> = <code>true</code>; anote <code>rate_limit_per_min</code>, <code>lease_seconds</code> e a lista de filas/linhas permitidas</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>sim queues</code></td>
+<td>uma linha <code>uuid  nome</code> por fila. Monte a tabela <code>etiqueta -&gt; queue_id</code> do CRM com isto</td>
+</tr>
+</tbody>
+</table></div>
+<h2>2. Ler e acompanhar</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>#</th>
+<th>Ação</th>
+<th>Esperado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3</td>
+<td>No <strong>telefone de teste</strong>, mande &quot;oi&quot; para a linha de teste. No terminal 2 observe</td>
+<td>em até ~3 s: <code>conversation.created.v1</code> e <code>message.created.v1</code> (<code>origin=channel</code>). <code>sim list open</code> mostra a conversa com <code>control=unassigned</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>sim show &lt;conversa&gt;</code></td>
+<td>a mensagem &quot;oi&quot; (<code>inbound</code>, <code>received</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Guarde o <code>&lt;conversa&gt;</code> (uuid) e a versão de controle (<code>vN</code> em <code>sim list</code>).</p>
+<h2>3. Assumir e conversar</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>#</th>
+<th>Ação</th>
+<th>Esperado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5</td>
+<td><code>sim claim &lt;conversa&gt;</code></td>
+<td><code>200</code>; <code>control.state: held</code>, <code>holder.kind: crm_application</code>, <code>mine: true</code>; terminal 2: <code>conversation.control_changed.v1 ... mine=true</code>. <strong>Na tela do OMNIRA</strong> a conversa mostra o aplicativo externo e <strong>não deixa responder</strong></td>
+</tr>
+<tr>
+<td>6</td>
+<td>Na tela do OMNIRA, tentar assumir/responder</td>
+<td>recusado</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>sim send &lt;conversa&gt; &lt;versão&gt; &quot;Teste do CRM&quot;</code></td>
+<td><strong><code>202</code>, <code>delivery: queued</code></strong> e um <code>message_id</code>. <strong>No telefone chega a mensagem.</strong> Terminal 2: <code>message.created.v1 mine=true</code>, depois <code>message.status_changed.v1</code> (<code>sent</code>, <code>delivered</code>, <code>read</code> quando o telefone abrir)</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Repita o passo 7 com a <strong>mesma chave</strong>: <code>SIM_KEY=teste-repetido-0001 sim send ...</code> duas vezes</td>
+<td>a 2ª resposta é a mesma (<code>Idempotent-Replay</code>, <strong>mesmo</strong> <code>message_id</code>) e <strong>uma só</strong> mensagem no telefone</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>sim send &lt;conversa&gt; &lt;versão-menos-1&gt; &quot;versão velha&quot;</code></td>
+<td><code>412 stale_control_version</code>; nada chega ao telefone. O simulador mostra a versão atual: <strong>releia antes de repetir</strong></td>
+</tr>
+</tbody>
+</table></div>
+<h2>4. Arquivos</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>#</th>
+<th>Ação</th>
+<th>Esperado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10</td>
+<td><code>sim attach &lt;conversa&gt; &lt;versão&gt; foto.jpg &quot;Segue a foto&quot;</code> com uma foto <strong>com GPS nos metadados</strong></td>
+<td><code>uploaded: attachment_id=... kind=image</code>, depois <code>202 queued</code>. A foto chega ao telefone <strong>com a legenda</strong> e <strong>sem</strong> a localização (os metadados saem)</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Repita com um PDF, uma nota de voz (<code>.ogg</code>/<code>.mp3</code>) e um vídeo (<code>.mp4</code>)</td>
+<td>cada um chega ao telefone; anote o que <strong>não</strong> chegou e o erro (<code>422 media_unsupported</code> etc.)</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Crie um arquivo de texto com a linha de teste padrão de antivírus (EICAR) e envie: <code>sim attach ...</code></td>
+<td><strong>recusado</strong> (<code>422 file_blocked</code>/<code>file_rejected</code>); nada chega ao telefone</td>
+</tr>
+<tr>
+<td>13</td>
+<td>No <strong>telefone</strong>, mande uma foto ao CRM. Depois <code>sim show &lt;conversa&gt;</code> e <code>sim media &lt;media_id&gt; saida.jpg</code></td>
+<td>a mensagem aparece com <code>[image image/jpeg clean media=&lt;id&gt;]</code> (pode ficar <code>pending</code> por instantes); o arquivo baixa e abre</td>
+</tr>
+</tbody>
+</table></div>
+<h2>5. Transferir, devolver, finalizar</h2>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>#</th>
+<th>Ação</th>
+<th>Esperado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>14</td>
+<td><code>sim transfer &lt;conversa&gt; &lt;versão&gt; &lt;queue_id de outra fila&gt;</code></td>
+<td><code>200</code>; a aplicação deixa de ser titular; terminal 2: <code>control_changed</code> (<code>unassigned</code> ou atribuída a uma pessoa da fila). Um novo <code>sim send</code> na mesma conversa dá <code>409 not_holder</code></td>
+</tr>
+<tr>
+<td>15</td>
+<td>Em <strong>outra</strong> conversa (o telefone manda &quot;oi&quot; de novo ou use outra), <code>sim claim</code> e depois <code>SIM_NOTIFY_PROTOCOL=false sim finalize &lt;conversa&gt; &lt;versão&gt;</code></td>
+<td><code>200</code>, <code>status: closed</code>. Tela do OMNIRA: conversa <strong>finalizada</strong>, protocolo <strong>encerrado</strong>. O telefone <strong>não</strong> recebe aviso de protocolo. Terminal 2: <code>conversation.closed.v1</code></td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>sim release &lt;conversa&gt; &lt;versão&gt;</code> em uma conversa assumida</td>
+<td><code>200</code>, volta à fila; o roteador a distribui</td>
+</tr>
+</tbody>
+</table></div>
+<h2>6. Falhas que o CRM precisa tratar</h2>
+<pre><code class="language-bash"># sem credencial -&gt; 401
+curl -s -o /dev/null -w '%{http_code}\n' &quot;$OMNIRA_EXTERNAL_URL/conversations&quot;
+# a empresa não é escolhida pelo pedido -&gt; 400 tenant_not_accepted
+curl -s -H &quot;Authorization: Bearer $OMNIRA_EXTERNAL_TOKEN&quot; -H 'X-Tenant-ID: 00000000-0000-0000-0000-000000000000' &quot;$OMNIRA_EXTERNAL_URL/conversations&quot; | head -c 300
+# cursor maior que o diário já emitiu -&gt; 410 resync_required (o CRM deve refazer checkpoint + foto). Já `after=abc` ou sem `after` é 400 (erro de chamada, não é para ressincronizar)
+curl -s -H &quot;Authorization: Bearer $OMNIRA_EXTERNAL_TOKEN&quot; -w '\n%{http_code}\n' &quot;$OMNIRA_EXTERNAL_URL/events?after=99999999999&quot;
+</code></pre>
+<p><strong>Opcional (passo 17, ~20 min): perda do <em>lease</em>.</strong> O administrador define <code>lease_seconds</code> curto (ex.: 60) para a credencial. Assuma uma conversa e <strong>não</strong> mande nada nem <code>heartbeat</code>: depois de <em>lease + 120 s</em> a conversa volta à fila. Terminal 2 mostra <code>conversation.control_changed.v1</code> (devolvida); o próximo <code>send</code> dá <code>412</code>/<code>409</code>. Repita com <code>sim heartbeat &lt;conversa&gt; &lt;versão&gt;</code> de 30 em 30 s e ela <strong>não</strong> expira.</p>
+<p><strong>Suspensão (passo 18, com o administrador):</strong> o administrador suspende a aplicação na tela. <code>sim me</code> passa a dar <code>401</code> na hora e as conversas que o CRM segurava voltam à fila.</p>
+<h2>7. O que devolver para nós</h2>
+<p>Saída (sem o token) dos passos 1, 2, 5, 7, 8, 9, 10-13, 14, 15; os fatos do terminal 2 durante o teste (arquivo de texto); foto da tela do telefone nos passos 7, 8, 10 e 11; e a lista do que <strong>não</strong> funcionou, com código e horário. Mande também a <strong>tabela etiqueta -&gt; fila</strong> que o CRM vai usar e o <strong>valor de <code>lease_seconds</code></strong> que o CRM prefere.</p>
+<p>Com os passos 1-16 verdes (17 e 18 são opcionais), a leitura e a escrita ficam aprovadas para a fila de piloto. O que vier vermelho vira correção do lado do OMNIRA ou do adaptador antes de avançar.</p>
+</article></section>
+<section class="pagina" id="p-integradores-contrato-openapi" data-titulo="Contrato OpenAPI da API externa" hidden><article><h1>Contrato OpenAPI da API externa</h1>
+<p>A fonte da verdade da API (<code>omnira-external-v1.yaml</code>, OpenAPI 3.0). O <a href="#integradores-guia-da-api">guia</a> explica como usá-lo; abaixo está o arquivo inteiro.</p>
+<pre><code class="language-yaml">openapi: 3.0.3
+info:
+  title: OMNIRA External API (Headless)
+  version: 1.0.0-lab
+  license: { name: Proprietary, url: 'https://omnira.devops.k3gsolutions.com.br' }
+  description: |
+    The API an external application (a CRM) uses to see and attend the same conversations as the OMNIRA Workspace. ADR-0048.
+
+    **Status: LAB, served in production for pilot installations.** Everything in this file is served: `GET /external/me`, the read API (conversations, queues,
+    messages, contacts, media), the event journal (`/external/sync/checkpoint`, `/external/events`) and the write API (claim, release, transfer, send text,
+    template or file, finalize, heartbeat). `/external/me` reports `features` so a client can tell what a build serves.
+
+    **How an application follows changes: it polls the journal.** Read `/external/sync/checkpoint` once, load the snapshot, then call
+    `/external/events?after=&lt;seq&gt;` every 2 to 3 seconds and keep the last `next_cursor`. A fact is numbered within about half a second of the change.
+    Nothing is pushed to your side: you do not need a public endpoint. (Signed webhooks exist as an option the company's administrator can configure; this
+    integration does not use them.)
+
+    **What an installation sees.** Only conversations of its own company that are not conversations with staff, whose contact is not classified internal or
+    spam, and, when the administrator limited the installation, only those of its queues and lines. Anything else is the same `404` as an id that does
+    not exist. No person is named: a holder is a kind (`tenant_user`, `hub_user`, `crm_application`) and `mine`.
+
+    **Pagination.** `limit` (1 to 200, default 50) and an opaque `cursor` returned as `next_cursor`. The order is stable (keyset on a timestamp and the id);
+    lists of conversations are by `created_at` unless `sort=updated` is asked (rows that change while paging can then move: use the event journal to follow
+    changes). **Control version.** `GET /external/conversations/{id}` answers `ETag: &quot;control-N&quot;`; commands later take it back in `If-Match`.
+    `internal/platform/httpserver/external_contract_test.go` fails when a documented route and a registered route diverge.
+
+    **Authentication.** `Authorization: Bearer omn_ext_&lt;key_id&gt;.&lt;secret&gt;`. The token is created by a tenant administrator (Configurações &gt; Integrações &gt;
+    Aplicações externas), shown once, and belongs to ONE installation of ONE company. The company is the one of the installation: it is never
+    chosen by the request. A request carrying `tenant_id` (query), `X-Tenant-ID` or `X-Omnira-Acting-As` is refused with `400 tenant_not_accepted`.
+
+    **Errors.** `application/problem+json` (RFC 9457) with the extension members `code` (stable) and `request_id`. Every response carries
+    `X-Request-ID` (the caller's own, 8-64 characters of `[A-Za-z0-9._:-]`, or generated) and `Cache-Control: no-store`.
+    `401 unauthenticated` is the only answer to a bad, unknown, expired, revoked or suspended credential (the cause is never revealed);
+    `403 forbidden_scope` means the installation lacks the scope; `404` is uniform for anything invisible; `429 rate_limited` carries `Retry-After`.
+servers:
+  - url: /api/v1
+    description: Same host as the OMNIRA API
+security:
+  - integrationToken: []
+tags:
+  - { name: Identity, description: &quot;Who the credential is and what it may do&quot; }
+  - { name: Conversations, description: &quot;Read the conversations and their messages&quot; }
+  - { name: Contacts, description: &quot;Read a contact&quot; }
+  - { name: Media, description: &quot;Download a message's file&quot; }
+  - { name: Commands, description: &quot;Coordinated writes: claim, release, transfer, send, finalize&quot; }
+  - { name: Journal, description: &quot;The durable journal of facts: checkpoint and replay&quot; }
+paths:
+  /external/me:
+    get:
+      operationId: getExternalMe
+      tags: [Identity]
+      summary: The installation behind the credential, its scopes, limits, allow-lists and the features this build serves
+      description: Needs no scope. Reads nothing about conversations.
+      responses:
+        '200':
+          description: The caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+  /external/conversations:
+    get:
+      operationId: listExternalConversations
+      tags: [Conversations]
+      summary: Conversations the installation may see
+      description: Needs the scope `conversation.read`.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, closed, all], default: open } }
+        - { name: control, in: query, schema: { type: string, enum: [free, held, mine] }, description: &quot;free = nobody holds it; held = anybody; mine = this installation&quot; }
+        - { name: channel_connection_id, in: query, schema: { type: string, format: uuid } }
+        - { name: queue_id, in: query, schema: { type: string, format: uuid } }
+        - { name: sort, in: query, schema: { type: string, enum: [created, updated], default: created } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/ConversationPage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/queues:
+    get:
+      operationId: listExternalQueues
+      tags: [Conversations]
+      summary: The queues (sectors) the installation may transfer to
+      description: |
+        Needs the scope `conversation.read`. The company's queues, narrowed to the installation's queue allowlist when the administrator set one. Id and name only;
+        use it to map your own team labels to the `queue_id` of a transfer.
+      responses:
+        '200':
+          description: The queues
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name]
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}:
+    get:
+      operationId: getExternalConversation
+      tags: [Conversations]
+      summary: One conversation, with its typed control and an ETag &quot;control-N&quot;
+      description: Needs the scope `conversation.read`. `can` is informational (it drives a button); every command checks again inside its own transaction.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200':
+          description: The conversation
+          headers:
+            ETag: { schema: { type: string, example: '&quot;control-42&quot;' } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/Conversation' } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/messages:
+    get:
+      operationId: listExternalMessages
+      tags: [Conversations]
+      summary: The messages of a conversation, with their delivery state
+      description: Needs the scope `message.read`. `status` is the delivery state; `queued` never means delivered.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/MessagePage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: sendExternalMessage
+      tags: [Commands]
+      summary: Queue a message for the customer
+      description: |
+        Needs the scope `message.send` and `If-Match`; this installation must HOLD the conversation at that version. **`202 Accepted` means QUEUED**: the message was
+        handed to the delivery job. It does not mean WhatsApp delivered it; follow `message.status_changed.v1` events or `GET .../messages`.
+        The same rules as a Workspace reply apply: inside the provider's 24-hour customer-service window free `text` is allowed; outside it only an approved
+        `template` is (`422 window_closed`). To send a file, upload it first (`POST .../attachments`) and send `attachment_id` here (the text becomes the caption).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/claim:
+    post:
+      operationId: claimExternalConversation
+      tags: [Commands]
+      summary: Take a free conversation
+      description: |
+        Needs the scope `conversation.claim`. Gives a FREE, open conversation to this installation. Repeating the claim of a conversation it already holds changes
+        nothing (`changed: false`, same version). A conversation held by anyone else is `409 held_by_other`, never taken. Outside the queue's hours it is
+        `409 outside_hours` unless the administrator allowed this installation to work outside hours.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchOptional' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/release:
+    post:
+      operationId: releaseExternalConversation
+      tags: [Commands]
+      summary: Give a held conversation back to the company
+      description: Needs the scope `conversation.claim` and `If-Match`. The conversation becomes free and the router looks at it as it does for a new one.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/transfer:
+    post:
+      operationId: transferExternalConversation
+      tags: [Commands]
+      summary: Hand a held conversation to a queue (or to one eligible person of it)
+      description: |
+        Needs the scope `conversation.transfer` and `If-Match`. The installation stops holding the conversation in the same step. With only `queue_id` the router
+        decides, exactly as for a new conversation; with `user_id` that person must be eligible in the queue now (member, active, on shift, with capacity), else
+        `422 invalid_target` and nothing changes. The queue must be one this installation may use (`403 queue_not_allowed` otherwise).
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/attachments:
+    post:
+      operationId: uploadExternalAttachment
+      tags: [Commands]
+      summary: Upload a file to send to the customer
+      description: |
+        Needs the scope `message.send`. `multipart/form-data` with one `file` part (up to 16 MiB). The installation must see the conversation and HOLD it now. The file
+        goes through the same pipeline as an operator's: kind and size by the real bytes, metadata removed, structure checked, antivirus, per-installation quotas (5
+        pending files per conversation, 64 MiB pending, 30 uploads a minute) and the company's `outbound_attachments` switch. An upload that is not sent expires in 24 h.
+        Then send it with `POST /messages` and `attachment_id` (text becomes the caption).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '201':
+          description: The file is stored and ready to be sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attachment_id, conversation_id, kind, mime, size_bytes, file_name, expires_at]
+                properties:
+                  attachment_id: { type: string, format: uuid }
+                  conversation_id: { type: string, format: uuid }
+                  kind: { type: string, enum: [image, audio, video, document] }
+                  mime: { type: string }
+                  size_bytes: { type: integer, format: int64 }
+                  file_name: { type: string }
+                  expires_at: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/heartbeat:
+    post:
+      operationId: heartbeatExternalConversation
+      tags: [Commands]
+      summary: Renew the lease of a conversation this installation holds
+      description: |
+        Needs the scope `conversation.claim` and `If-Match`. Only meaningful for an installation that has a lease (the administrator sets `lease_seconds`): while it holds a
+        conversation, every command it makes and every heartbeat push the expiry forward. If it falls silent for the lease plus a grace period (120 s) the platform frees the
+        conversation with the reason `lease_expired`, the router looks at it again and the application finds out by the control version (`412` / `409` on its next command,
+        `conversation.control_changed.v1` in the journal). A person's hold never expires. A heartbeat with a stale version is `412`: the application lost the conversation.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommandBody' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/finalize:
+    post:
+      operationId: finalizeExternalConversation
+      tags: [Commands]
+      summary: End the attendance
+      description: |
+        Needs the scope `conversation.finalize` and `If-Match`. The same finalization the Workspace and the Hub use: the conversation is closed, local tickets are
+        closed (tickets linked to the ERP are left alone) and the closure is recorded as made by this installation, never by a person. Closing releases the hold.
+        No ERP ticket is changed. The service protocol of the attendance ends with it (and one is created first if the attendance never had one), and, when the
+        company has the protocol notice on, the customer is told the number as this installation's own message, unless `notify_protocol` is false.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FinalizeRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/contacts/{id}:
+    get:
+      operationId: getExternalContact
+      tags: [Contacts]
+      summary: A contact the installation can reach through a conversation it may see
+      description: Needs the scope `contact.read`. A contact classified internal or spam is a 404.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200': { description: The contact, content: { application/json: { schema: { $ref: '#/components/schemas/Contact' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /external/media/{id}:
+    get:
+      operationId: getExternalMedia
+      tags: [Media]
+      summary: The file of a message (only a file that passed the antivirus pipeline)
+      description: |
+        Needs the scope `media.read`. `{id}` is the media id the message listing returned. Authorization is asked at this request. Never the provider's URL.
+        `409 media_pending` while it is being checked, `403 media_blocked` for an infected or rejected file, `410 media_gone` when it no longer exists.
+        Served with `X-Content-Type-Options: nosniff` and a sandbox CSP; only safe image/audio/video types are `inline`, everything else is an attachment.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+      responses:
+        '200': { description: The bytes (supports Range), content: { '*/*': { schema: { type: string, format: binary } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+  /external/sync/checkpoint:
+    get:
+      operationId: getExternalCheckpoint
+      tags: [Journal]
+      summary: Where the journal is now (read it FIRST, then the snapshot, then the events after it)
+      description: |
+        Needs the scope `events.read`. Bootstrap without a gap: (1) read this checkpoint; (2) page the snapshot (`/external/conversations`, `/messages`); (3) read
+        `/external/events?after=&lt;seq_head&gt;` until `has_more` is false. A change committed before the checkpoint but numbered after it is both in the snapshot and
+        replayed (harmless: events are references); a change after the snapshot is replayed; none falls in between.
+      responses:
+        '200': { description: The checkpoint, content: { application/json: { schema: { $ref: '#/components/schemas/Checkpoint' } } } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/events:
+    get:
+      operationId: listExternalEvents
+      tags: [Journal]
+      summary: The facts after a sequence number (at least once; replayable for the retention period)
+      description: |
+        Needs the scope `events.read`. `after` is required: the `seq_head` of the checkpoint, or the `next_cursor` of the previous page. Facts are written in the
+        transaction of the change they describe and numbered per company in an order that never lets a fact appear under a number already read. Each fact is
+        re-checked for visibility when it is read (an installation limited to a queue never hears about another queue). Envelopes carry references and
+        counters, never a message body, a phone number or an attachment: fetch the content from the read API.
+        `410 resync_required` when `after` is older than the facts kept (default 30 days) or newer than the head (a number this journal never issued): read the
+        checkpoint and rebuild from the snapshot. A missing, malformed or negative `after` is `400` (a bad call, not a reason to resynchronize). `next_cursor` advances even when every fact of the window was filtered out.
+      parameters:
+        - { name: after, in: query, required: true, schema: { type: integer, format: int64, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        '200': { description: A page of facts, content: { application/json: { schema: { $ref: '#/components/schemas/EventsPage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '410': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    integrationToken:
+      type: http
+      scheme: bearer
+      description: &quot;omn_ext_&lt;key_id&gt;.&lt;secret&gt;; only a digest of the secret is stored by OMNIRA&quot;
+  parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, pattern: '^[A-Za-z0-9._:-]{8,128}$' }, description: &quot;Scopes the command to (installation, operation, key). The same key with the same payload returns the same answer (header Idempotent-Replay: true) and the same message_id, even if the conversation has since left the installation's view; with a different payload it is 422 idempotency_key_reused&quot; }
+    IfMatchRequired: { name: If-Match, in: header, required: true, schema: { type: string, example: '&quot;control-7&quot;' }, description: &quot;The control version you read (the ETag of the conversation). 412 when it is not the current one, 428 when missing&quot; }
+    IfMatchOptional: { name: If-Match, in: header, required: false, schema: { type: string, example: '&quot;control-7&quot;' }, description: &quot;Optional on claim: a claim of a free conversation, or a repeated claim of one you already hold, does not need it. When sent it must be the current version (412 otherwise)&quot; }
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 }, description: &quot;Page size. The default is 50 (100 for /external/events)&quot; }
+    Cursor: { name: cursor, in: query, schema: { type: string }, description: &quot;Opaque; the next_cursor of the previous page&quot; }
+  responses:
+    Command:
+      description: &quot;The outcome of a command. The ETag is the control version after it (\&quot;control-N\&quot;); a replay carries Idempotent-Replay: true&quot;
+      headers:
+        ETag: { schema: { type: string } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CommandResult' }
+    Problem:
+      description: &quot;RFC 9457 problem document&quot;
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    ExternalAgentID:
+      type: string
+      minLength: 1
+      maxLength: 80
+      pattern: '^[A-Za-z0-9._:@/+ -]{1,80}$'
+      description: &quot;Which of YOUR operators acted. Recorded in the control history and the audit as UNVERIFIED metadata: it is a label, never an identity, never a user of OMNIRA, and nothing is decided by it. Any command may carry it (claim and release take a body with only this field). It is part of the request: the same Idempotency-Key with another label is 422&quot;
+    CommandBody:
+      type: object
+      additionalProperties: false
+      description: &quot;Body of claim, release and heartbeat: empty, or only the label&quot;
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+    TransferRequest:
+      type: object
+      additionalProperties: false
+      required: [queue_id]
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        queue_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid, description: &quot;Optional: one person eligible in that queue now&quot; }
+    MessageRequest:
+      type: object
+      additionalProperties: false
+      description: &quot;Exactly one of text and template; or an attachment_id (a file uploaded to this conversation by this installation) with an optional text as its caption&quot;
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        text: { type: string, minLength: 1, maxLength: 4096, description: &quot;The message; with attachment_id, the caption (plain text, up to 1024 characters)&quot; }
+        attachment_id: { type: string, format: uuid }
+        template:
+          type: object
+          additionalProperties: false
+          required: [id]
+          properties:
+            id: { type: string, format: uuid, description: &quot;An approved template of the conversation's line&quot; }
+            params: { type: array, items: { type: string } }
+    FinalizeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        reason: { type: string, enum: [resolved, no_response, duplicate, spam, transferred, other], default: resolved }
+        note: { type: string, maxLength: 1000 }
+        notify_protocol: { type: boolean, default: true, description: &quot;Tell the customer the protocol number as the attendance ends (only where the company has the protocol notice on). Send false when your application already says it.&quot; }
+    CommandResult:
+      type: object
+      required: [conversation_id, status, control]
+      properties:
+        conversation_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, closed] }
+        control: { $ref: '#/components/schemas/Control' }
+        changed: { type: boolean, description: &quot;claim, release, transfer: false when nothing had to change&quot; }
+        message_id: { type: string, format: uuid, description: &quot;message: the same id on every replay of the same Idempotency-Key&quot; }
+        delivery: { type: string, enum: [queued], description: &quot;message: queued is all that is promised&quot; }
+        closure_id: { type: string, format: uuid }
+        reason: { type: string }
+    Checkpoint:
+      type: object
+      required: [seq_head, min_seq, retention_days, at]
+      properties:
+        seq_head: { type: integer, format: int64, description: &quot;The highest sequence number given. Start the replay with after=seq_head&quot; }
+        min_seq: { type: integer, format: int64, description: &quot;The lowest sequence number still kept&quot; }
+        retention_days: { type: integer }
+        at: { type: string, format: date-time }
+    Event:
+      type: object
+      required: [event_id, seq, type, version, occurred_at, tenant_id, aggregate, origin, data]
+      properties:
+        event_id: { type: string, format: uuid, description: &quot;Born with the fact and stable for ever: the key to deduplicate on&quot; }
+        seq: { type: integer, format: int64 }
+        type: { type: string, enum: [conversation.created.v1, conversation.control_changed.v1, conversation.closed.v1, message.created.v1, message.status_changed.v1, contact.updated.v1, ticket.linked.v1, service_session.opened.v1, service_session.classified.v1, service_session.status_changed.v1, service_session.closed.v1, service_session.reopened.v1, service_case.created.v1, service_case.updated.v1, service_case.resolved.v1, service_case.assigned.v1, service_case.session_linked.v1, service_task.created.v1, service_task.updated.v1, service_task.status_changed.v1, service_task.completed.v1, service_task.assigned.v1, external_record.linked.v1, external_record.unlinked.v1, external_record.status_changed.v1, external_request.created.v1, external_request.state_changed.v1] }
+        version: { type: integer }
+        occurred_at: { type: string, format: date-time }
+        tenant_id: { type: string, format: uuid, description: &quot;Informative only&quot; }
+        aggregate:
+          type: object
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [conversation, message, contact, ticket] }
+            id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        aggregate_version: { type: integer, format: int64, description: &quot;For conversation facts the control version: order one conversation's facts by it&quot; }
+        origin:
+          type: object
+          required: [kind]
+          properties:
+            kind: { type: string, enum: [channel, workspace, hub, crm, automation, system] }
+            mine: { type: boolean, description: &quot;The fact was caused by this installation (so it can recognise its own echo and still follow later statuses)&quot; }
+        data: { type: object, additionalProperties: true, description: &quot;References and counters only&quot; }
+    EventsPage:
+      type: object
+      required: [items, next_cursor, has_more, head]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Event' } }
+        next_cursor: { type: string, description: &quot;Pass as `after` for the next page&quot; }
+        has_more: { type: boolean }
+        head: { type: integer, format: int64 }
+    Holder:
+      type: object
+      required: [kind, mine]
+      properties:
+        kind: { type: string, enum: [tenant_user, hub_user, crm_application, crm_agent_verified] }
+        mine: { type: boolean, description: &quot;this very installation&quot; }
+    Control:
+      type: object
+      required: [state, version]
+      properties:
+        state: { type: string, enum: [unassigned, held] }
+        holder: { $ref: '#/components/schemas/Holder' }
+        version: { type: integer, format: int64, description: &quot;Only grows. The value a command sends back in If-Match as \&quot;control-N\&quot;&quot; }
+        origin: { type: string, enum: [workspace, hub, crm, system] }
+        since: { type: string, format: date-time }
+    Can:
+      type: object
+      description: Informational; drives a button. Commands check again.
+      properties:
+        claim: { type: boolean }
+        reply: { type: boolean }
+        release: { type: boolean }
+        transfer: { type: boolean }
+        finalize: { type: boolean }
+    Conversation:
+      type: object
+      required: [id, status, channel, control, can, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [open, closed] }
+        contact_id: { type: string, format: uuid }
+        channel:
+          type: object
+          properties:
+            connection_id: { type: string, format: uuid }
+            provider: { type: string }
+        queue_id: { type: string, format: uuid }
+        control: { $ref: '#/components/schemas/Control' }
+        can: { $ref: '#/components/schemas/Can' }
+        last_message_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ConversationPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Conversation' } }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+    Media:
+      type: object
+      required: [id, size_bytes, status]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [image, audio, video, document] }
+        mime: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        status: { type: string, enum: [pending, quarantined, clean, infected, rejected, source_gone, failed], description: &quot;Only clean can be downloaded&quot; }
+    Message:
+      type: object
+      required: [id, direction, type, status, sender, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [inbound, outbound] }
+        type: { type: string, enum: [text, image, video, audio, document, sticker] }
+        body: { type: string }
+        status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain] }
+        sender:
+          type: object
+          required: [kind]
+          properties:
+            kind: { type: string, enum: [contact, agent, crm_application, automation] }
+            mine: { type: boolean }
+        media: { $ref: '#/components/schemas/Media' }
+        created_at: { type: string, format: date-time }
+    MessagePage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Message' } }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+    Contact:
+      type: object
+      required: [id, name, kind, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        whatsapp_name: { type: string }
+        phone_e164: { type: string }
+        kind: { type: string, enum: [unclassified, customer, other] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, example: &quot;urn:omnira:problem:unauthenticated&quot; }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code: { type: string, description: &quot;Stable, machine readable&quot; }
+        request_id: { type: string }
+    Me:
+      type: object
+      required: [api_version, installation, tenant, scopes, limits, allowlist, features, server_time]
+      properties:
+        api_version: { type: string, example: v1 }
+        installation:
+          type: object
+          required: [id, name, status]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            status: { type: string, enum: [active] }
+        tenant:
+          type: object
+          description: &quot;Informative only: the credential decides the company, a request can never choose it&quot;
+          required: [id]
+          properties:
+            id: { type: string, format: uuid }
+        scopes:
+          type: array
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read] }
+        limits:
+          type: object
+          required: [rate_limit_per_min, allow_outside_hours]
+          properties:
+            rate_limit_per_min: { type: integer }
+            lease_seconds: { type: integer, nullable: true, description: &quot;CRM lease; null = held until released&quot; }
+            allow_outside_hours: { type: boolean }
+        allowlist:
+          type: object
+          description: &quot;Empty arrays mean every queue / every line of the company&quot;
+          required: [queue_ids, channel_ids]
+          properties:
+            queue_ids: { type: array, items: { type: string, format: uuid } }
+            channel_ids: { type: array, items: { type: string, format: uuid } }
+        features:
+          type: object
+          required: [read_api, events_api, write_api]
+          properties:
+            read_api: { type: boolean }
+            events_api: { type: boolean }
+            write_api: { type: boolean }
+        server_time: { type: string, format: date-time }
+
+</code></pre>
+</article></section>
+<section class="pagina" id="p-faq-faq" data-titulo="Perguntas frequentes" hidden><article><h1>Perguntas frequentes</h1>
+<p>Use a busca da página para achar uma palavra. Cada resposta diz onde ver o passo a passo.</p>
+<h2>Acesso e senha</h2>
+<details class="pergunta"><summary>Esqueci minha senha. Como recupero?</summary><div class="resposta">
+<p>Na tela de login, clique em <strong>Esqueceu sua senha?</strong>, informe seu e-mail e abra o e-mail que chega de <strong>OMNIRA</strong> (remetente <code>autenticacao@k3gsolutions.com.br</code>). O link vale <strong>15 minutos</strong>. Escolha uma senha nova: mínimo de 8 caracteres, com letra maiúscula, minúscula e número. Depois entre normalmente.</p>
+</div></details><details class="pergunta"><summary>O e-mail de recuperação não chegou.</summary><div class="resposta">
+<p>Confira a caixa de spam e se digitou o e-mail do <strong>seu cadastro</strong>. A tela responde igual exista a conta ou não, por segurança. Se continuar sem chegar em alguns minutos, peça ao administrador da empresa para enviar um novo link de redefinição.</p>
+</div></details><details class="pergunta"><summary>O link expirou ou já foi usado.</summary><div class="resposta">
+<p>Cada link vale 15 minutos e serve uma vez. Volte à tela de login e clique em <strong>Esqueceu sua senha?</strong> de novo.</p>
+</div></details><details class="pergunta"><summary>Posso trocar a senha estando logado?</summary><div class="resposta">
+<p>Quando a senha expira, o sistema abre a tela de troca logo depois do login. Para trocar por vontade própria hoje, use <strong>Esqueceu sua senha?</strong> na tela de login: é o caminho que existe.</p>
+</div></details><details class="pergunta"><summary>Digitei a senha errada algumas vezes. A conta trava?</summary><div class="resposta">
+<p>Hoje o login não bloqueia por tentativas. Se não lembrar, use <strong>Esqueceu sua senha?</strong>. Nunca compartilhe a senha nem a envie em mensagem ou captura de tela.</p>
+</div></details><h2>Atendimento</h2>
+<details class="pergunta"><summary>Por que não consigo responder uma conversa?</summary><div class="resposta">
+<p>Quase sempre é um destes casos:</p>
+<ol>
+<li><strong>Ninguém assumiu</strong> e a conversa está &quot;Sem atendente&quot;: clique em <strong>Assumir</strong>.</li>
+<li><strong>Outra pessoa atende</strong>: só quem está com a conversa responde. Peça que ela transfira, ou um supervisor retome.</li>
+<li><strong>Um CRM está com a conversa</strong> (aparece &quot;Aplicativo externo&quot;): enquanto o aplicativo atende, o OMNIRA não deixa a equipe responder por cima. Um supervisor com a permissão certa pode <strong>retomar</strong> a conversa, informando o motivo.</li>
+<li><strong>A conversa foi finalizada</strong>: está em <strong>Encerradas</strong>, só para consulta. Se o cliente escrever, abre um atendimento novo.</li>
+<li><strong>Janela de 24 horas fechada</strong> (só no número oficial da Meta): só vai mensagem de <strong>template</strong> aprovado.</li>
+<li><strong>Você não tem permissão</strong> de responder: fale com o administrador.</li>
+</ol>
+</div></details><details class="pergunta"><summary>O que é o protocolo? Quando nasce e quando termina?</summary><div class="resposta">
+<p>É o número do atendimento (por exemplo <code>EXE-1042</code>). Nasce quando alguém assume (ou quando o sistema distribui a conversa) e <strong>termina junto com o atendimento, ao Finalizar</strong>. Aparece em <em>Protocolo e tarefas</em> e como uma linha na conversa.</p>
+</div></details><details class="pergunta"><summary>O cliente recebe o número do protocolo?</summary><div class="resposta">
+<p>Depende de dois interruptores: a empresa precisa ter o <strong>aviso de protocolo</strong> ligado, e a caixa <strong>Informar o número do protocolo ao cliente</strong> precisa estar marcada no Finalizar. Quando um CRM finaliza pela API, ele pode pedir para <strong>não</strong> avisar (<code>notify_protocol: false</code>) se já manda a própria mensagem de encerramento.</p>
+</div></details><details class="pergunta"><summary>Qual a diferença entre Soltar, Transferir e Enviar para uma fila?</summary><div class="resposta">
+<ul>
+<li><strong>Soltar</strong> devolve a conversa à fila: ninguém a segura e o roteador distribui de novo.</li>
+<li><strong>Transferir</strong> passa a conversa para <strong>uma pessoa</strong> (um técnico) escolhida na lista.</li>
+<li><strong>Enviar para uma fila</strong> passa a conversa para <strong>outro setor</strong>; as regras da fila escolhem quem atende.</li>
+</ul>
+</div></details><details class="pergunta"><summary>O que significam &quot;Equipe&quot;, &quot;Automação&quot;, &quot;Aplicativo externo&quot; e &quot;Celular da empresa&quot;?</summary><div class="resposta">
+<p>São os rótulos de <strong>quem falou</strong> nas mensagens da empresa: uma pessoa, o assistente automático, um CRM ligado pela API, ou alguém que respondeu direto do celular do número (fora do OMNIRA).</p>
+</div></details><details class="pergunta"><summary>O que são as linhas cinzas no meio da conversa?</summary><div class="resposta">
+<p>São <strong>eventos do atendimento</strong>: quem assumiu, atribuiu, soltou, transferiu, enviou para fila, retomou de um aplicativo, quando um aplicativo externo assumiu ou liberou, o protocolo aberto e encerrado, e a finalização (com o motivo). Não são mensagens para o cliente.</p>
+</div></details><details class="pergunta"><summary>Por que às vezes o nome de um colega não aparece nessas linhas?</summary><div class="resposta">
+<p>Quem só atende vê o <strong>próprio</strong> nome e &quot;Um atendente&quot; para colegas; supervisores e administradores, que podem consultar a equipe, veem os nomes. É de propósito, para não expor a equipe sem necessidade.</p>
+</div></details><details class="pergunta"><summary>O que é a janela de 24 horas?</summary><div class="resposta">
+<p>No WhatsApp <strong>oficial (Meta)</strong>, a empresa só pode mandar texto livre até 24 horas depois da última mensagem do cliente. Depois disso só vai <strong>template</strong> aprovado pela Meta. A tela mostra quanto tempo falta e oferece <strong>Enviar template</strong>. Em número não oficial (sessão do aplicativo) essa regra não vale.</p>
+</div></details><details class="pergunta"><summary>Posso mandar foto, PDF, áudio ou vídeo?</summary><div class="resposta">
+<p>Sim, pelo clipe (<strong>Anexar arquivo</strong>), <strong>um arquivo por mensagem</strong>, com o texto como legenda. O sistema confere o tipo e o tamanho pelo conteúdo, remove dados escondidos da foto (como a localização) e passa pelo antivírus; um arquivo recusado mostra o motivo. A empresa pode desligar os anexos de saída. O envio por WhatsApp real ainda está em validação final na operação.</p>
+</div></details><details class="pergunta"><summary>Como vejo o que já aconteceu com este contato?</summary><div class="resposta">
+<p>Em <strong>Detalhes do atendimento</strong>, a aba <strong>Histórico</strong> e a seção <strong>Histórico do atendimento</strong> mostram os atendimentos anteriores, com o resumo de cada um e o que ficou pendente.</p>
+</div></details><details class="pergunta"><summary>As mensagens de grupos de WhatsApp aparecem nas conversas?</summary><div class="resposta">
+<p>Não. Grupos ficam em <strong>Grupos</strong>, só para leitura. Nenhum atendimento nasce de um grupo.</p>
+</div></details><h2>Contatos e tickets</h2>
+<details class="pergunta"><summary>O que significa &quot;Não classificado&quot;?</summary><div class="resposta">
+<p>Ninguém disse ainda se a pessoa é cliente, interno ou outro. O atendimento fica limitado até a classificação. Veja o <a href="#tutoriais-04-classificar-contatos-e-spam">Tutorial 4</a>.</p>
+</div></details><details class="pergunta"><summary>Marquei spam sem querer. E agora?</summary><div class="resposta">
+<p>Nada foi apagado. Abra a conversa na caixa <strong>Spam</strong> (menu <strong>Mais...</strong> da lista) e use <strong>Não é spam</strong> ou <strong>É cliente</strong>.</p>
+</div></details><details class="pergunta"><summary>Por que o total dos tickets ou das pessoas não muda quando passo de página?</summary><div class="resposta">
+<p>O total é contado <strong>uma vez</strong>, ao abrir a primeira página, e se mantém nas seguintes. Se você mudar um filtro, ele é contado de novo.</p>
+</div></details><details class="pergunta"><summary>Posso ordenar por qualquer coluna?</summary><div class="resposta">
+<p>Em Tickets: <strong>Assunto</strong>, <strong>Prioridade</strong> e <strong>Atualizado</strong>. Em Pessoas: <strong>Pessoa</strong> (nome). No celular, pelo menu <strong>Ordenar por</strong>. As outras colunas ainda não ordenam.</p>
+</div></details><details class="pergunta"><summary>Mudei o filtro e voltei para a primeira página. É normal?</summary><div class="resposta">
+<p>Sim. A posição na lista só vale para aquela combinação de filtro e ordem.</p>
+</div></details><details class="pergunta"><summary>Quem pode ver o Dashboard e o Supervisor?</summary><div class="resposta">
+<p>Quem tem as permissões de leitura correspondentes, em geral supervisores e administradores. Veja <strong>Pessoas → Funções e permissões</strong>.</p>
+</div></details><details class="pergunta"><summary>Onde está &quot;Relatórios&quot;?</summary><div class="resposta">
+<p>Ainda não existe no produto; a tela fica oculta até ter dados reais.</p>
+</div></details><h2>Administração</h2>
+<details class="pergunta"><summary>Como crio um setor ou uma fila?</summary><div class="resposta">
+<p><strong>Setores e horários</strong> → <strong>+ Novo setor</strong> ou <strong>+ Nova fila</strong>. Veja o <a href="#tutoriais-05-filas-e-setores">Tutorial 5</a>.</p>
+</div></details><details class="pergunta"><summary>Para onde vão as conversas novas de um número?</summary><div class="resposta">
+<p>Para a fila escolhida em <strong>Entrada por canal</strong>; sem escolha, para a <strong>fila padrão</strong>. Conversas que já estão numa fila não mudam.</p>
+</div></details><details class="pergunta"><summary>O atendente vê todas as filas?</summary><div class="resposta">
+<p>Depende da empresa. Com a <strong>visibilidade por setor</strong> ligada, o atendente vê só as filas dele, as conversas dele e as sem fila; supervisores e administradores veem todas.</p>
+</div></details><details class="pergunta"><summary>O que acontece fora do horário?</summary><div class="resposta">
+<p>A conversa espera e o cliente pode receber o <strong>aviso de horário</strong> configurado na fila (botão <strong>Avisos de horário</strong>). O que fazer com o que sobrar depende das regras de <strong>Transbordo e SLA</strong>.</p>
+</div></details><details class="pergunta"><summary>Como conecto um número de WhatsApp?</summary><div class="resposta">
+<p>Em <strong>Canais</strong> → <strong>Adicionar canal</strong>. O <a href="#tutoriais-08-conectar-um-numero-de-whatsapp">Tutorial 8</a> mostra o assistente passo a passo.</p>
+</div></details><h2>Integrações e API</h2>
+<details class="pergunta"><summary>Preciso de um endereço público (webhook) no meu CRM?</summary><div class="resposta">
+<p><strong>Não.</strong> O CRM <strong>consulta</strong> o diário de eventos (<code>GET /events?after=&lt;seq&gt;</code>) a cada 2 a 3 segundos. O OMNIRA sabe entregar webhooks assinados a quem pedir, mas a integração padrão não usa.</p>
+</div></details><details class="pergunta"><summary>Com que frequência consultar?</summary><div class="resposta">
+<p>A cada 2 a 3 segundos, com <code>limit=200</code>. Um fato aparece em cerca de meio segundo depois da mudança. Isso gasta uns 25 pedidos por minuto, bem abaixo do limite.</p>
+</div></details><details class="pergunta"><summary>O que é <code>Idempotency-Key</code>?</summary><div class="resposta">
+<p>Um identificador que <strong>você</strong> cria para cada intenção (&quot;mandar este texto nesta conversa&quot;). Se a chamada falhar por rede e você repetir com a <strong>mesma chave</strong>, o OMNIRA devolve a mesma resposta e não duplica a mensagem. Chave nova a cada tentativa é erro.</p>
+</div></details><details class="pergunta"><summary>O que é <code>If-Match</code>?</summary><div class="resposta">
+<p>A <strong>versão de controle</strong> da conversa que você leu (<code>ETag: &quot;control-N&quot;</code>). Se a conversa mudou, a resposta é <code>412 stale_control_version</code>: releia e decida de novo. Não repita às cegas.</p>
+</div></details><details class="pergunta"><summary>Recebi <code>409</code>. O que fazer?</summary><div class="resposta">
+<p>Leia o <code>code</code>: <code>not_holder</code> (você não segura a conversa: faça <code>claim</code>), <code>held_by_other</code> (outro titular), <code>conversation_closed</code>, <code>outside_hours</code> (fora do horário do setor e a aplicação não tem permissão). O guia da API traz a tabela completa.</p>
+</div></details><details class="pergunta"><summary>O <code>202</code> quer dizer que a mensagem foi entregue?</summary><div class="resposta">
+<p>Não. <code>202</code> quer dizer <strong>na fila de envio</strong>. A entrega vem nos fatos <code>message.status_changed.v1</code> (<code>sent</code>, <code>delivered</code>, <code>read</code>, ou <code>failed</code>).</p>
+</div></details><details class="pergunta"><summary>Qual o limite de chamadas?</summary><div class="resposta">
+<p>Padrão de <strong>600 por minuto</strong> por aplicação. Passou: <code>429</code> com <code>Retry-After</code>; espere esse tempo.</p>
+</div></details><details class="pergunta"><summary>Posso abrir uma conversa nova por telefone?</summary><div class="resposta">
+<p><strong>Ainda não.</strong> A API responde a conversas que já existem. Abrir conversa ativa (alertas, por exemplo) exige template aprovado e consentimento, e ainda está em planejamento.</p>
+</div></details><details class="pergunta"><summary>Posso mandar template?</summary><div class="resposta">
+<p>Sim, com <code>{&quot;template&quot;: {&quot;id&quot;: &quot;&lt;uuid&gt;&quot;, &quot;params&quot;: [...]}}</code>. Hoje não há rota para <strong>listar</strong> os templates aprovados: peça os <code>id</code> ao administrador.</p>
+</div></details><details class="pergunta"><summary>Como o CRM lê a foto que o cliente mandou?</summary><div class="resposta">
+<p>Com o escopo <code>media.read</code>: a mensagem traz <code>media.id</code> e, com <code>status: clean</code>, <code>GET /media/{id}</code> devolve o arquivo. Enquanto confere, <code>409 media_pending</code>.</p>
+</div></details><details class="pergunta"><summary>Como mando um arquivo pelo CRM?</summary><div class="resposta">
+<p>Suba com <code>POST /conversations/{id}/attachments</code> (a aplicação precisa estar com a conversa) e envie com <code>POST /messages</code> e o <code>attachment_id</code>; o texto vira legenda. Limites e erros no guia.</p>
+</div></details><details class="pergunta"><summary>O que acontece se o CRM cair com conversas na mão?</summary><div class="resposta">
+<p>Se a aplicação tem <strong>prazo de titularidade</strong> (lease), a conversa volta para a fila depois de o prazo mais 2 minutos sem sinal. Sem prazo, ela fica com a aplicação até alguém soltar. O administrador pode <strong>Suspender</strong> a aplicação: as conversas voltam na hora.</p>
+</div></details><details class="pergunta"><summary>Quem é o &quot;atendente&quot; do CRM para o OMNIRA?</summary><div class="resposta">
+<p>Ninguém: quem atende, para o OMNIRA, é a <strong>aplicação</strong>. O nome do atendente do CRM vai no campo opcional <code>external_agent_id</code>, só como rótulo de auditoria; não dá acesso a nada.</p>
+</div></details><details class="pergunta"><summary>Os grupos de WhatsApp aparecem na API?</summary><div class="resposta">
+<p>Não. A API só devolve conversas com contatos.</p>
+</div></details><details class="pergunta"><summary>O que o CRM não consegue fazer hoje?</summary><div class="resposta">
+<p>Abrir conversa por telefone, buscar ou criar contato, nota interna, lido/não lido (o CRM calcula pelo diário), listar templates e etiquetas livres (setor é fila). O guia da API tem a tabela.</p>
+</div></details><h2>Segurança e privacidade</h2>
+<details class="pergunta"><summary>O token aparece de novo?</summary><div class="resposta">
+<p>Não. É mostrado <strong>uma vez</strong>, na criação. O OMNIRA guarda só um resumo. Perdeu? <strong>Gerar novo token</strong> e revogue o antigo.</p>
+</div></details><details class="pergunta"><summary>Suspender ou revogar?</summary><div class="resposta">
+<p><strong>Suspender</strong> é temporário: corta o acesso e devolve as conversas; dá para reativar. <strong>Revogar</strong> é definitivo.</p>
+</div></details><details class="pergunta"><summary>Um CRM vê todas as conversas da empresa?</summary><div class="resposta">
+<p>Só as conversas da <strong>empresa da aplicação</strong>, que <strong>não</strong> sejam conversas com a equipe, de contato classificado como interno ou spam, e, se o administrador limitou a aplicação, só as das filas e números permitidos. O que a aplicação não pode ver responde como &quot;não encontrado&quot;.</p>
+</div></details><details class="pergunta"><summary>O que a aplicação vê de cada pessoa?</summary><div class="resposta">
+<p>Não vê nomes de atendentes: o titular aparece só como tipo (pessoa, Hub ou aplicação) e &quot;é minha&quot;. Os fatos do diário trazem <strong>referências</strong>, não o texto das mensagens nem telefones.</p>
+</div></details><details class="pergunta"><summary>Onde ficam os dados de uma empresa em relação às outras?</summary><div class="resposta">
+<p>Cada empresa só acessa os próprios dados: o servidor confere a empresa em <strong>toda</strong> consulta e o banco aplica uma segunda barreira. Aplicações externas nunca escolhem a empresa por parâmetro.</p>
+</div></details><h2>O que ainda vamos documentar</h2>
+<p>Estes assuntos existem no produto e entram nas próximas rodadas da ajuda:</p>
+<ul>
+<li>Conectar o WhatsApp <strong>oficial</strong> (API da Meta) e o uso de templates.</li>
+<li>O editor de fluxos de automação, passo a passo.</li>
+<li>Hub: equipes que atendem conversas de várias empresas.</li>
+<li>Grupos de WhatsApp (somente leitura).</li>
+<li>Protocolos, ocorrências e tarefas em detalhe.</li>
+</ul>
+<p>Quer ver outro assunto aqui? Avise a equipe do OMNIRA.</p>
+</article></section>
+<section class="pagina" id="p-glossario" data-titulo="Glossário" hidden><article><h1>Glossário</h1>
+<div class="rolagem"><table class="tabela">
+<thead>
+<tr>
+<th>Termo</th>
+<th>Significado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Aplicação externa</strong></td>
+<td>Um sistema (CRM) ligado ao OMNIRA pela API, com token e permissões próprias</td>
+</tr>
+<tr>
+<td><strong>Atendimento</strong></td>
+<td>O período em que a equipe cuida de uma conversa, de assumir até Finalizar</td>
+</tr>
+<tr>
+<td><strong>Canal / linha</strong></td>
+<td>Um número de WhatsApp conectado ao OMNIRA</td>
+</tr>
+<tr>
+<td><strong>Claim (assumir)</strong></td>
+<td>Tomar uma conversa livre para atender</td>
+</tr>
+<tr>
+<td><strong>Conversa</strong></td>
+<td>O histórico com um contato em uma linha</td>
+</tr>
+<tr>
+<td><strong>Diário de eventos</strong></td>
+<td>A lista durável e numerada de fatos (mensagem nova, mudança de titular, finalização) que o CRM consulta</td>
+</tr>
+<tr>
+<td><strong>ETag / versão de controle</strong></td>
+<td>O número &quot;control-N&quot; que muda quando quem atende a conversa muda</td>
+</tr>
+<tr>
+<td><strong>Fila</strong></td>
+<td>Onde as conversas esperam para serem distribuídas</td>
+</tr>
+<tr>
+<td><strong>Finalizar</strong></td>
+<td>Encerrar o atendimento e o protocolo juntos</td>
+</tr>
+<tr>
+<td><strong>Hub</strong></td>
+<td>Estrutura para uma equipe atender conversas de várias empresas</td>
+</tr>
+<tr>
+<td><strong>Idempotency-Key</strong></td>
+<td>Chave que torna seguro repetir um comando depois de uma falha</td>
+</tr>
+<tr>
+<td><strong>Janela de 24 horas</strong></td>
+<td>Prazo em que o WhatsApp oficial aceita texto livre depois da última mensagem do cliente</td>
+</tr>
+<tr>
+<td><strong>Lease (prazo de titularidade)</strong></td>
+<td>Tempo que uma aplicação pode ficar calada antes de a conversa voltar à fila</td>
+</tr>
+<tr>
+<td><strong>Protocolo</strong></td>
+<td>O número do atendimento (por exemplo <code>EXE-1042</code>)</td>
+</tr>
+<tr>
+<td><strong>Roteador</strong></td>
+<td>Quem escolhe a fila e a pessoa de cada conversa nova</td>
+</tr>
+<tr>
+<td><strong>Setor</strong></td>
+<td>Grupo de filas com o mesmo horário e responsável</td>
+</tr>
+<tr>
+<td><strong>SLA</strong></td>
+<td>Prazo combinado para responder; o sistema acompanha o relógio de cada conversa</td>
+</tr>
+<tr>
+<td><strong>Template</strong></td>
+<td>Mensagem pré-aprovada pela Meta, a única aceita fora da janela de 24 horas</td>
+</tr>
+<tr>
+<td><strong>Titular</strong></td>
+<td>Quem atende a conversa agora: pessoa, Hub ou aplicação</td>
+</tr>
+<tr>
+<td><strong>Transbordo</strong></td>
+<td>Regra que passa a conversa adiante quando ninguém atende no prazo</td>
+</tr>
+<tr>
+<td><strong>Webhook</strong></td>
+<td>Aviso que um sistema envia a outro quando algo acontece; a integração padrão do CRM não usa</td>
+</tr>
+</tbody>
+</table></div>
+</article></section>
+  </main>
+</div>
+
+
+
+<script src="ajuda.js?v=c5c01c2bc5" defer></script>
+</body>
+</html>

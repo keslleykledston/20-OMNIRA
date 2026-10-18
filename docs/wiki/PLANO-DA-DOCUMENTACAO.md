@@ -27,7 +27,7 @@ docs/wiki/
   README.md                    início e mapa por perfil
   PLANO-DA-DOCUMENTACAO.md     este arquivo
   guias/01-visao-geral.md      a tela, o menu, os perfis
-  tutoriais/01..07-*.md        tarefas passo a passo, com capturas
+  tutoriais/01..12-*.md        tarefas passo a passo, com capturas
   integradores/                guia da API, roteiro de teste, contrato
   faq/FAQ.md                   perguntas frequentes por assunto
   GLOSSARIO.md                 termos
@@ -50,10 +50,12 @@ docs/wiki/
 | Guia da API, roteiro de teste, contrato | **escrito** | `integradores/` |
 | FAQ | **escrito** (Atendimento, Contatos e tickets, Administração, API, Segurança) | `faq/FAQ.md` |
 | Glossário | **escrito** | `GLOSSARIO.md` |
-| Conectar um número de WhatsApp (passo a passo do assistente) | **a escrever**: precisa de uma linha de teste para capturar o assistente real | próxima rodada |
-| Pessoas, papéis e permissões | **a escrever** | próxima rodada |
-| Automação (fluxos, menu de boas-vindas) | **a escrever** | próxima rodada |
-| Supervisor: monitor de SLA e transbordo | **a escrever** | próxima rodada |
+| Conectar um número de WhatsApp (QR, não oficial) | **escrito** | Tutorial 8 |
+| Pessoas, funções e permissões | **escrito** | Tutorial 9 |
+| Automação (fluxos): a tela e as situações | **escrito**; o **editor** de fluxos fica para a próxima rodada | Tutorial 10 |
+| Dashboard e Supervisor | **escrito** | Tutorial 11 |
+| Horários, escalas, plantões, transbordo e SLA | **escrito** | Tutorial 12 |
+| WhatsApp oficial (Meta) e templates | **a escrever** | próxima rodada |
 | Hub (atender várias empresas) | **a escrever**, público restrito | próxima rodada |
 | Relatórios | não existe ainda no produto (tela oculta) | quando existir |
 | Documentação técnica interna (ADRs, runbooks, deploy) | **existe**, fora desta wiki | `docs/adr`, `docs/ops`, `docs/architecture` |

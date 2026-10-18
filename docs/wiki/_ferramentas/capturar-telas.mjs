@@ -8,6 +8,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as D from './dados-ficticios.mjs'
+import { QR_EXEMPLO } from './qr-exemplo.mjs'
 
 const aqui = dirname(fileURLToPath(import.meta.url))
 const require = createRequire(join(aqui, '../../../web/package.json'))
@@ -19,7 +20,8 @@ mkdirSync(OUT, { recursive: true })
 const naoRespondido = new Set()
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
-const PERMISSOES = [
+import { ROLES } from './dados-ficticios.mjs'
+const PERMISSOES = [...ROLES.find((r) => r.key === 'tenant_admin').permissions, 'flow.view', 'flow.create', 'flow_template.view', 'flow_template.install', 'flow_run.view'] || [
   'conversation.read', 'conversation.reply', 'conversation.claim', 'conversation.manage', 'conversation.transfer', 'conversation.finalize',
   'contact.read', 'contact.classify', 'contact.note', 'ticket.read', 'ticket.write', 'account.read', 'membership.read', 'integration.read', 'integration.manage',
   'tenant.read', 'dashboard.read', 'agent.read', 'agent.manage', 'channel.manage', 'channel.read', 'queue.manage', 'service.read', 'service.create', 'service.update', 'service.close', 'attendance.history',
@@ -79,6 +81,16 @@ async function instalar(page, extra = {}) {
       if ((url.searchParams.get('sort') || '').startsWith('name')) itens = [...itens].sort((a, b) => a.display_name.localeCompare(b.display_name) * (url.searchParams.get('sort').endsWith('desc') ? -1 : 1))
       return json(route, { items: itens, has_more: !q && p.endsWith('/people'), next_cursor: 'x', count: itens.length, limit: 20, ...(p.endsWith('/people') ? { total: q ? itens.length : 134 } : {}) })
     }
+    if (p.endsWith('/team')) return json(route, { items: D.TEAM })
+    if (p.endsWith('/team/invitations')) return json(route, { items: D.INVITATIONS })
+    if (p.endsWith('/roles')) return json(route, { items: D.ROLES })
+    if (p.endsWith('/flows')) return json(route, { items: D.FLOWS, count: D.FLOWS.length })
+    if (p.endsWith('/shifts')) return json(route, { items: [{ user_id: 'u-bruna', calendar_id: 'cal-1', queue_id: 'q-suporte' }, { user_id: 'u-caio', calendar_id: 'cal-2', queue_id: 'q-suporte' }] })
+    if (p.endsWith('/on-call/rosters')) return json(route, { items: [{ id: 'ro-1', name: 'Plantão de fim de semana', kind: 'on_call', sector_id: 'sec-1', active: true, on_now: 0 }] })
+    if (/\/queues\/[^/]+\/overflow-policy$/.test(p)) return json(route, { policy: { active: true, max_steps: 3, on_exhausted: 'keep_waiting', revision: 2, steps: [{ position: 1, name: 'Chamar o plantão', triggers: ['after_hours', 'sla_risk'], wait_seconds: 300, wait_business: true, destination_kind: 'queue', destination_id: 'q-suporte', allow_closed: false, allow_off_shift: false }] } })
+    if (p.endsWith('/sla-policies')) return json(route, { items: [{ scope_kind: 'tenant', first_response_seconds: 600, queue_wait_seconds: 900, resolution_seconds: 28800, risk_percent: 80, counting: 'business', active: true, revision: 1 }] })
+    if (/\/queues\/[^/]+\/eligibility$/.test(p)) return json(route, { queue_id: 'q-comercial', at: D.T(0), open: true, presence_required: false, eligible_count: 2, calendar_only: false, agents: [{ user_id: 'u-bruna', name: 'Bruna Alves', eligible: true, reasons: [], on_call: false, workload: 2, capacity: 5, shift_source: 'calendar' }, { user_id: 'u-caio', name: 'Caio Ferreira', eligible: false, reasons: ['capacity_full'], on_call: false, workload: 5, capacity: 5, shift_source: 'calendar' }] })
+    if (p.endsWith('/hub-contracts')) return json(route, { items: [] })
     if (p.endsWith('/sectors')) return json(route, { items: D.SECTORS })
     if (p.endsWith('/calendars')) return json(route, { items: D.CALENDARS, default_timezone: 'America/Manaus', default_calendar_id: 'cal-1' })
     if (/\/queues\/[^/]+\/availability$/.test(p)) return json(route, { open: true, calendar_id: 'cal-1' })
@@ -226,6 +238,65 @@ const CENAS = {
     await page.getByRole('button', { name: 'Gerenciar' }).first().click()
     await esperar(page, 1000)
     await foto(page, '19-gerenciar-aplicacao.png')
+    await ctx.close()
+  },
+  async whatsapp(b) {
+    let fase = 'novo'
+    const conexao = () => ({ id: 'ch-novo', provider: 'waha', provider_kind: 'unofficial', status: fase === 'conectado' ? 'active' : 'pending', session_status: fase === 'conectado' ? 'working' : 'needs_qr', external_account_id: fase === 'conectado' ? '5511900008888' : undefined, capabilities: ['text'], created_at: D.T(0) })
+    const { ctx, page } = await nova(b, { extra: { api: (p, m) => {
+      if (p.endsWith('/channels/providers')) return { items: [{ id: 'waha', name: 'WhatsApp (não oficial)', channel: 'whatsapp', kind: 'unofficial', connect_method: 'qr_session', risk_notice: 'A automação não oficial pode causar o banimento do número. Use um número dedicado e aceite o risco antes de continuar.', capabilities: ['text'], enabled: true, inputs: [], displays: [] }] }
+      if (/\/channels\/connections$/.test(p) && m === 'POST') return conexao()
+      if (/\/session\/start$/.test(p)) return conexao()
+      if (/\/connections\/ch-novo\/qr$/.test(p)) return { mimetype: 'image/png', data: QR_EXEMPLO }
+      if (/\/channels\/connections\/ch-novo$/.test(p)) return conexao()
+      return undefined
+    } } })
+    await entrar(page, '/channels/whatsapp/new')
+    await page.getByRole('checkbox').check()
+    await esperar(page, 400)
+    await foto(page, '20-whatsapp-configuracao.png')
+    await page.getByRole('button', { name: /Continuar/ }).click()
+    await page.getByText('Escaneie o QR Code').waitFor({ timeout: 15000 })
+    await esperar(page, 800)
+    await foto(page, '21-whatsapp-qr.png')
+    fase = 'conectado'
+    await page.getByText(/Conectado|Concluído|conectado/).first().waitFor({ timeout: 20000 }).catch(() => {})
+    await esperar(page, 1500)
+    await foto(page, '22-whatsapp-conectado.png')
+    await ctx.close()
+  },
+  async gestao_pessoas(b) {
+    const { ctx, page } = await nova(b)
+    await entrar(page, '/settings/people')
+    await foto(page, '23-pessoas-equipe.png')
+    await ctx.close()
+  },
+  async papeis(b) {
+    const { ctx, page } = await nova(b)
+    await entrar(page, '/settings/roles')
+    await foto(page, '24-papeis.png')
+    await ctx.close()
+  },
+  async automacao(b) {
+    const { ctx, page } = await nova(b)
+    await entrar(page, '/flows')
+    await foto(page, '25-automacao.png')
+    await ctx.close()
+  },
+  async supervisor(b) {
+    const { ctx, page } = await nova(b)
+    await entrar(page, '/supervisor')
+    await foto(page, '26-supervisor.png')
+    await ctx.close()
+  },
+  async horarios(b) {
+    const { ctx, page } = await nova(b)
+    await entrar(page, '/settings/attendance/calendars')
+    await foto(page, '27-horarios.png')
+    await entrar(page, '/settings/attendance/shifts')
+    await foto(page, '28-escalas.png')
+    await entrar(page, '/settings/attendance/overflow')
+    await foto(page, '29-transbordo-sla.png')
     await ctx.close()
   },
   async setores(b) {

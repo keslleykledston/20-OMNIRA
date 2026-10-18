@@ -101,6 +101,10 @@ Em Tickets: **Assunto**, **Prioridade** e **Atualizado**. Em Pessoas: **Pessoa**
 
 Sim. A posição na lista só vale para aquela combinação de filtro e ordem.
 
+### Quem pode ver o Dashboard e o Supervisor?
+
+Quem tem as permissões de leitura correspondentes, em geral supervisores e administradores. Veja **Pessoas → Funções e permissões**.
+
 ### Onde está "Relatórios"?
 
 Ainda não existe no produto; a tela fica oculta até ter dados reais.
@@ -125,7 +129,7 @@ A conversa espera e o cliente pode receber o **aviso de horário** configurado n
 
 ### Como conecto um número de WhatsApp?
 
-Em **Canais** → **Adicionar canal**. O passo a passo com capturas do assistente entra na próxima rodada desta documentação.
+Em **Canais** → **Adicionar canal**. O [Tutorial 8](../tutoriais/08-conectar-um-numero-de-whatsapp.md) mostra o assistente passo a passo.
 
 ## Integrações e API
 
@@ -210,3 +214,16 @@ Não vê nomes de atendentes: o titular aparece só como tipo (pessoa, Hub ou ap
 ### Onde ficam os dados de uma empresa em relação às outras?
 
 Cada empresa só acessa os próprios dados: o servidor confere a empresa em **toda** consulta e o banco aplica uma segunda barreira. Aplicações externas nunca escolhem a empresa por parâmetro.
+
+## O que ainda vamos documentar
+
+Estes assuntos existem no produto e entram nas próximas rodadas da ajuda:
+
+- Conectar o WhatsApp **oficial** (API da Meta) e o uso de templates.
+- O editor de fluxos de automação, passo a passo.
+- Hub: equipes que atendem conversas de várias empresas.
+- Grupos de WhatsApp (somente leitura).
+- Protocolos, ocorrências e tarefas em detalhe.
+
+Quer ver outro assunto aqui? Avise a equipe do OMNIRA.
+

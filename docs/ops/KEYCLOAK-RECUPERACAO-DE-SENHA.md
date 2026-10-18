@@ -30,7 +30,11 @@ A senha do admin do Keycloak e a do SMTP nunca vão em argumento de linha de com
 ## Redefinir a senha de alguém (administrador)
 No Keycloak (realm `omnira` > Users > a pessoa > Credentials > Reset password), ou pelo `kcadm` com a ação `UPDATE_PASSWORD` por e-mail (`users/<id>/execute-actions-email`, `lifespan=900`). Evite escolher a senha pela pessoa; mande o link.
 
+## Proteção contra tentativa em massa (brute force): LIGADA em 2026-10-18
+Realm `omnira`: `bruteForceProtected=true`, bloqueio **temporário** (nunca permanente). **5 falhas** seguidas bloqueiam o usuário por **60 s**; cada falha nova soma 60 s, até **15 minutos**; o contador zera depois de 12 h sem falha. Falhas em menos de 1 s do login anterior (robô) bloqueiam por 60 s. Backup anterior: `~/.config/omnira/keycloak-realm-omnira-before-bruteforce-*.json`. Está também no `deploy/keycloak/omnira-realm.json`.
+
+Efeito prático: quem erra a senha 5 vezes espera um minuto; um atacante deixa de poder tentar milhares de senhas. Contrapartida conhecida: alguém pode **bloquear temporariamente** uma conta conhecida errando de propósito (negação de serviço de baixo custo); o bloqueio expira sozinho, e o administrador pode liberar em Users > a pessoa > Credentials. Para desfazer: `kcadm.sh update realms/omnira -s bruteForceProtected=false`.
+
 ## Ainda em aberto (recomendações, não feitas)
-- **Proteção contra tentativa em massa (brute force) está desligada** no realm `omnira`. Com a recuperação ligada, vale ligar (Realm settings > Security defenses > Brute force detection) com limite de falhas por usuário e bloqueio temporário.
-- **Eventos de login** do realm: estão em log, mas não há painel; considere guardar `LOGIN_ERROR` e `RESET_PASSWORD`.
-- **Admin do Keycloak** (`/admin/` e `/realms/master/` no nginx público): continua alcançável de fora (item do dono).
+- **Eventos de login** do realm: estão em log, mas não há painel; considere guardar `LOGIN_ERROR`, `RESET_PASSWORD` e os bloqueios.
+- **Admin do Keycloak** (`/admin/` e `/realms/master/` no nginx público): continua alcançável de fora (item do dono; o realm `master` também está sem brute force).
