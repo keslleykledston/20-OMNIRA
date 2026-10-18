@@ -100,11 +100,16 @@
     ]
   },
   "groups": [],
-  "internationalizationEnabled": false,
-  "supportedLocales": [],
+  "internationalizationEnabled": true,
+  "supportedLocales": [
+    "pt-BR",
+    "en"
+  ],
   "defaultLocale": "pt-BR",
   "requiredCredentials": [
     "password"
   ],
-  "passwordPolicy": "upperCase(1) and lowerCase(1) and digits(1) and length(8)"
+  "passwordPolicy": "upperCase(1) and lowerCase(1) and digits(1) and length(8)",
+  "resetPasswordAllowed": true,
+  "actionTokenGeneratedByUserLifespan": 900
 }

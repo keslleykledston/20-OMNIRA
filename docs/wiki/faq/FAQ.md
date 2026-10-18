@@ -2,6 +2,28 @@
 
 Use a busca da página para achar uma palavra. Cada resposta diz onde ver o passo a passo.
 
+## Acesso e senha
+
+### Esqueci minha senha. Como recupero?
+
+Na tela de login, clique em **Esqueceu sua senha?**, informe seu e-mail e abra o e-mail que chega de **OMNIRA** (remetente `autenticacao@k3gsolutions.com.br`). O link vale **15 minutos**. Escolha uma senha nova: mínimo de 8 caracteres, com letra maiúscula, minúscula e número. Depois entre normalmente.
+
+### O e-mail de recuperação não chegou.
+
+Confira a caixa de spam e se digitou o e-mail do **seu cadastro**. A tela responde igual exista a conta ou não, por segurança. Se continuar sem chegar em alguns minutos, peça ao administrador da empresa para enviar um novo link de redefinição.
+
+### O link expirou ou já foi usado.
+
+Cada link vale 15 minutos e serve uma vez. Volte à tela de login e clique em **Esqueceu sua senha?** de novo.
+
+### Posso trocar a senha estando logado?
+
+Quando a senha expira, o sistema abre a tela de troca logo depois do login. Para trocar por vontade própria hoje, use **Esqueceu sua senha?** na tela de login: é o caminho que existe.
+
+### Digitei a senha errada algumas vezes. A conta trava?
+
+Hoje o login não bloqueia por tentativas. Se não lembrar, use **Esqueceu sua senha?**. Nunca compartilhe a senha nem a envie em mensagem ou captura de tela.
+
 ## Atendimento
 
 ### Por que não consigo responder uma conversa?
