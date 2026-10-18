@@ -24,6 +24,8 @@ export { FilterBar } from './FilterBar';
 export { ActiveFilters } from './ActiveFilters';
 export type { ActiveFilter } from './ActiveFilters';
 export { Pagination } from './Pagination';
+export { SortSelect } from './SortSelect';
+export type { SortOption } from './SortSelect';
 export {
   Skeleton,
   EmptyState,

@@ -12,6 +12,7 @@ import {
   SearchField,
   Skeleton,
   StatusBadge,
+  SortSelect,
   Table,
   TableBody,
   TableCell,
@@ -257,6 +258,20 @@ export default function ContactsPage() {
               {filtering ? ' com estes filtros' : ''}
             </p>
           )}
+          {/* The phone shows cards, which have no headers to click: the same orderings as a menu */}
+          <SortSelect
+            className="md:hidden"
+            value={sort ?? ''}
+            onChange={(v) => {
+              setSort((v || undefined) as PeopleFilters['sort'])
+              resetPaging()
+            }}
+            options={[
+              { value: '', label: 'Mais recentes' },
+              { value: 'name:asc', label: 'Nome (A a Z)' },
+              { value: 'name:desc', label: 'Nome (Z a A)' },
+            ]}
+          />
           {/* Desktop: table. Mobile falls back to cards below. */}
           <div className="hidden md:block">
             <Table>

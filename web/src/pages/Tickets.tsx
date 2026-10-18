@@ -13,6 +13,7 @@ import {
   SearchField,
   Skeleton,
   StatusBadge,
+  SortSelect,
   Table,
   TableBody,
   TableCell,
@@ -277,6 +278,23 @@ export default function TicketsPage() {
               {filters.status || filters.priority || filters.externalTicketId ? ' com estes filtros' : ''}
             </p>
           )}
+          {/* The phone shows cards, which have no headers to click: the same orderings as a menu */}
+          <SortSelect
+            className="md:hidden"
+            value={sort ?? ''}
+            onChange={(v) => {
+              setCursorStack([])
+              setSort((v || undefined) as TicketSort | undefined)
+            }}
+            options={[
+              { value: '', label: 'Mais recentes' },
+              { value: 'updated_at:asc', label: 'Mais antigos' },
+              { value: 'priority:desc', label: 'Prioridade (mais urgente primeiro)' },
+              { value: 'priority:asc', label: 'Prioridade (menos urgente primeiro)' },
+              { value: 'subject:asc', label: 'Assunto (A a Z)' },
+              { value: 'subject:desc', label: 'Assunto (Z a A)' },
+            ]}
+          />
           <div className="hidden md:block">
             <Table>
               <TableHead>

@@ -174,6 +174,23 @@ describe('ContactsPage — order and result counter', () => {
     expect(screen.getByText(/1 pessoa nesta página · 2 no total/)).toBeInTheDocument();
   });
 
+  it('offers the same orderings as a menu where the table headers are not shown (the phone), starting again from the first page', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    vi.mocked(axios.get).mockImplementation(async (_url: string, config?: any) => {
+      calls.push({ ...(config?.params ?? {}) });
+      return { data: page([contact({ id: 'c1', display_name: 'Ana Souza' })], { has_more: true, next_cursor: 'CURSOR_2', total: 2 }) };
+    });
+    renderAt(<ContactsPage />, '/contacts', '/contacts');
+    await screen.findAllByText('Ana Souza');
+    await userEvent.click(screen.getByRole('button', { name: 'Próxima' }));
+    await waitFor(() => expect(calls.some((c) => c.cursor === 'CURSOR_2')).toBe(true));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Ordenar por' }), 'name:desc');
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBe('name:desc'));
+    expect(calls[calls.length - 1].cursor).toBeUndefined();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Ordenar por' }), '');
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBeUndefined());
+  });
+
   it('sorts by name from the header: asks the server, starts again from the first page, and comes back to the default order', async () => {
     const calls: Array<Record<string, unknown>> = [];
     vi.mocked(axios.get).mockImplementation(async (_url: string, config?: any) => {

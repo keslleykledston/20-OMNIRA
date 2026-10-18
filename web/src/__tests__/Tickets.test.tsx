@@ -500,4 +500,22 @@ describe('TicketsPage — order and result counter', () => {
     await userEvent.click(within(header(/Atualizado/)).getByRole('button'));
     await waitFor(() => expect(calls[calls.length - 1].sort).toBeUndefined());
   });
+
+  it('offers the same orderings as a menu where the table headers are not shown (the phone)', async () => {
+    setSession();
+    const calls: Array<Record<string, unknown>> = [];
+    vi.mocked(axios.get).mockImplementation(async (_url: string, config?: any) => {
+      calls.push({ ...(config?.params ?? {}) });
+      return { data: { items: [ticket({ subject: 'Ticket real 1' })], has_more: false, count: 1, limit: 20, total: 1 } };
+    });
+    renderAt(<TicketsPage />);
+    await screen.findAllByText('Ticket real 1');
+    const menu = () => screen.getByRole('combobox', { name: 'Ordenar por' });
+    await userEvent.selectOptions(menu(), 'priority:desc');
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBe('priority:desc'));
+    // the header and the menu tell the same story
+    expect(screen.getByRole('columnheader', { name: /Prioridade/ })).toHaveAttribute('aria-sort', 'descending');
+    await userEvent.selectOptions(menu(), '');
+    await waitFor(() => expect(calls[calls.length - 1].sort).toBeUndefined());
+  });
 });
