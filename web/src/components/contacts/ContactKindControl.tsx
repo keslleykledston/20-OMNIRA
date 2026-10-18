@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
-import { ActionIcon, Button, ConfirmDialog } from '../primitives'
+import { Button, ConfirmDialog, DropdownMenu } from '../primitives'
 import {
   CONTACT_KIND_LABEL,
   INTERNAL_ROLES,
@@ -171,9 +171,14 @@ export function ContactKindControl({ contactId, kind, internalRole, contactName,
                 {CONTACT_KIND_LABEL[k]}
               </button>
             ))}
-            {/* Already classified: the red "spam" text is noise; the action stays one click away, as an icon. */}
+            {/* Already classified: the red "spam" text is noise, and an always-visible red shield invites a mis-click; the action lives in the contact's menu. */}
             {kind !== 'unclassified' && (
-              <ActionIcon icon="shield-alert" label="Marcar como spam ou golpe" tone="danger" className="ml-auto" disabled={pending} onClick={() => setConfirmSpam(true)} />
+              <div className="ml-auto">
+                <DropdownMenu
+                  label="Mais ações do contato"
+                  actions={[{ label: 'Marcar como spam ou golpe', destructive: true, disabled: pending, onSelect: () => setConfirmSpam(true) }]}
+                />
+              </div>
             )}
           </div>
           {kind === 'unclassified' && (

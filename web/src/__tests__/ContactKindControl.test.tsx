@@ -272,11 +272,17 @@ describe('ContactKindControl — a customer with several companies', () => {
   })
 })
 
+// Once classified, the spam action lives in the contact's menu ("⋯"): open it, then pick the item.
+async function chooseSpam(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: 'Mais ações do contato' }))
+  await user.click(await screen.findByRole('menuitem', { name: 'Marcar como spam ou golpe' }))
+}
+
 describe('ContactKindControl — spam', () => {
   it('asks before marking spam, and cancelling changes nothing', async () => {
     const user = userEvent.setup()
     const { onChanged } = setup('other', { name: 'Promoção Chata' })
-    await user.click(screen.getByRole('button', { name: 'Marcar como spam ou golpe' }))
+    await chooseSpam(user)
     expect(await screen.findByText('Marcar como spam?')).toBeInTheDocument()
     expect(screen.getByText(/Promoção Chata deixa a fila/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Cancelar' }))
@@ -284,16 +290,18 @@ describe('ContactKindControl — spam', () => {
     expect(onChanged).not.toHaveBeenCalled()
   })
 
-  it('shows the red spam text only while the contact is unclassified; once classified it is a quiet icon (same action, same name)', () => {
+  it('shows the red spam text only while the contact is unclassified; once classified the action is inside the contact menu, not on the screen', async () => {
+    const user = userEvent.setup()
     setup('unclassified')
     const text = screen.getByRole('button', { name: 'Marcar como spam ou golpe' })
     expect(text).toHaveTextContent('Marcar como spam ou golpe')
     cleanup()
     for (const kind of ['customer', 'internal', 'other'] as const) {
       setup(kind)
-      const icon = screen.getByRole('button', { name: 'Marcar como spam ou golpe' })
-      expect(icon).toHaveTextContent('')
-      expect(icon.parentElement?.querySelector('[data-tooltip]')).toHaveTextContent('Marcar como spam ou golpe')
+      expect(screen.queryByRole('button', { name: 'Marcar como spam ou golpe' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('menuitem')).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Mais ações do contato' }))
+      expect(await screen.findByRole('menuitem', { name: 'Marcar como spam ou golpe' })).toBeInTheDocument()
       cleanup()
     }
   })
@@ -301,7 +309,7 @@ describe('ContactKindControl — spam', () => {
   it('marks spam only after the confirmation', async () => {
     const user = userEvent.setup()
     const { onChanged } = setup('other')
-    await user.click(screen.getByRole('button', { name: 'Marcar como spam ou golpe' }))
+    await chooseSpam(user)
     await user.click(await screen.findByRole('button', { name: 'Marcar como spam' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith('spam'))
     expect(putBody()).toEqual({ kind: 'spam' })
@@ -312,6 +320,7 @@ describe('ContactKindControl — spam', () => {
     const { onChanged } = setup('spam')
     expect(screen.getByText('Marcado como spam')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Marcar como spam ou golpe' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Mais ações do contato' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Não é spam' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith('other'))
     expect(putBody()).toEqual({ kind: 'other' })
@@ -329,7 +338,7 @@ describe('ContactKindControl — spam', () => {
     const user = userEvent.setup()
     vi.mocked(axios.put).mockRejectedValue({ response: { status: 500 } })
     const { onChanged } = setup('other')
-    await user.click(screen.getByRole('button', { name: 'Marcar como spam ou golpe' }))
+    await chooseSpam(user)
     await user.click(await screen.findByRole('button', { name: 'Marcar como spam' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Não foi possível salvar')
     expect(onChanged).not.toHaveBeenCalled()
