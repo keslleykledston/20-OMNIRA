@@ -85,6 +85,18 @@ describe('CommandPalette', () => {
     expect(screen.getByText(/Nada encontrado/)).toBeInTheDocument()
   })
 
+  it('does not open a result of the previous text while the new text is still being typed', async () => {
+    renderAt(palette(), '/')
+    const box = screen.getByRole('combobox')
+    await userEvent.type(box, 'ana souza')
+    await waitFor(() => expect(screen.getAllByRole('option', { name: /Ana Souza/ })).toHaveLength(2))
+    // more text and Enter at once: the server has not answered for it yet, so the old contact must not be offered
+    await userEvent.type(box, 'zz{Enter}')
+    expect(screen.getByTestId('where')).toHaveTextContent('/')
+    expect(screen.getByTestId('where')).not.toHaveTextContent('/contacts/')
+    expect(screen.getByTestId('where')).not.toHaveTextContent('conversation_id')
+  })
+
   it('closes with Escape', async () => {
     const onClose = vi.fn()
     renderAt(palette(onClose), '/')

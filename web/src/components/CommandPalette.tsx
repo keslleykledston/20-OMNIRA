@@ -76,7 +76,9 @@ export default function CommandPalette({ open, onClose }: Props) {
       .filter((i) => (!i.mockBacked || isDevSurface()) && (!acting || i.path === '/inbox'))
       .filter((i) => matchesQuery(i.label, query))
       .map<Row>((i) => ({ key: `nav:${i.path}`, group: 'Ir para', label: i.label, icon: i.icon, to: i.path }))
-    const people = (contacts.data?.items ?? []).map<Row>((c) => ({
+    // Server results belong to the debounced text: while the person is still typing something else they are stale and not offered (Enter must not open them).
+    const fresh = debounced === query.trim()
+    const people = (fresh ? contacts.data?.items ?? [] : []).map<Row>((c) => ({
       key: `contact:${c.id}`,
       group: 'Contatos',
       label: c.display_name || c.phone_e164 || 'Sem nome',
@@ -84,7 +86,7 @@ export default function CommandPalette({ open, onClose }: Props) {
       icon: 'contacts',
       to: `/contacts/${c.id}`,
     }))
-    const chats = (conversations.data ?? []).map<Row>((c) => ({
+    const chats = (fresh ? conversations.data ?? [] : []).map<Row>((c) => ({
       key: `conversation:${c.id}`,
       group: 'Conversas',
       label: c.contact_name || c.contact_phone || 'Sem nome',
@@ -93,7 +95,7 @@ export default function CommandPalette({ open, onClose }: Props) {
       to: `/inbox?conversation_id=${c.id}`,
     }))
     return [...screens, ...people, ...chats]
-  }, [query, acting, contacts.data, conversations.data])
+  }, [query, debounced, acting, contacts.data, conversations.data])
 
   // A fresh palette every time it opens; the focus goes back to where it was when it closes.
   useEffect(() => {
@@ -106,7 +108,7 @@ export default function CommandPalette({ open, onClose }: Props) {
   }, [open])
 
   // A new result list starts at the top.
-  useEffect(() => setActive(0), [query, contacts.data, conversations.data])
+  useEffect(() => setActive(0), [query, debounced, contacts.data, conversations.data])
 
   if (!open) return null
 
@@ -136,9 +138,16 @@ export default function CommandPalette({ open, onClose }: Props) {
     }
   }
 
-  const searching = remote && (contacts.isFetching || conversations.isFetching)
+  const typed = query.trim()
+  const searching = !acting && typed.length >= MIN_REMOTE_QUERY && (debounced !== typed || contacts.isFetching || conversations.isFetching)
   const failed = remote && (contacts.isError || conversations.isError)
-  let lastGroup = ''
+  // rows keep their flat position (the keyboard walks the flat list); the groups are only how they are shown
+  const groups: { name: string; rows: { row: Row; index: number }[] }[] = []
+  rows.forEach((row, index) => {
+    const last = groups[groups.length - 1]
+    if (last && last.name === row.group) last.rows.push({ row, index })
+    else groups.push({ name: row.group, rows: [{ row, index }] })
+  })
 
   return (
     <div
@@ -167,13 +176,12 @@ export default function CommandPalette({ open, onClose }: Props) {
           <kbd className="hidden rounded-control border border-border-subtle px-1.5 py-0.5 text-[11px] text-text-tertiary sm:inline">Esc</kbd>
         </div>
         <div id={listId} role="listbox" aria-label="Resultados" className="min-h-0 flex-1 overflow-y-auto py-2">
-          {rows.map((row, i) => {
-            const heading = row.group !== lastGroup
-            lastGroup = row.group
-            return (
-              <div key={row.key}>
-                {heading && <p className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{row.group}</p>}
+          {groups.map((g) => (
+            <div key={g.name} role="group" aria-label={g.name}>
+              <p aria-hidden="true" className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">{g.name}</p>
+              {g.rows.map(({ row, index: i }) => (
                 <div
+                  key={row.key}
                   id={`${listId}-${i}`}
                   role="option"
                   aria-selected={i === active}
@@ -185,9 +193,9 @@ export default function CommandPalette({ open, onClose }: Props) {
                   <span className="min-w-0 flex-1 truncate">{row.label}</span>
                   {row.hint && <span className="flex-shrink-0 text-text-tertiary">{row.hint}</span>}
                 </div>
-              </div>
-            )
-          })}
+              ))}
+            </div>
+          ))}
           {rows.length === 0 && !searching && <p className="px-4 py-6 text-center text-body-sm text-text-secondary">Nada encontrado para “{query.trim()}”.</p>}
           {searching && <p className="px-4 py-2 text-body-sm text-text-tertiary">Buscando…</p>}
           {failed && <p className="px-4 py-2 text-body-sm text-status-danger">Não foi possível buscar contatos e conversas agora.</p>}
