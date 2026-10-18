@@ -262,10 +262,15 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	query := `SELECT ` + ticketColumns + selectKey + ` FROM tickets ` + where + ` ORDER BY ` + orderBy + ` LIMIT $` + strconv.Itoa(len(args))
 
 	dbq := platformdb.QuerierFromContext(r.Context(), h.pool)
-	var total int
-	if err := dbq.QueryRow(r.Context(), `SELECT count(*) FROM tickets `+countWhere, countArgs...).Scan(&total); err != nil {
-		http.Error(w, "failed to list tickets", http.StatusInternalServerError)
-		return
+	// The result counter is counted once, with the first page: asking for the next pages does not recount (the screen keeps the first page's number).
+	var total *int
+	if cursor == nil && keyCursor == nil {
+		var n int
+		if err := dbq.QueryRow(r.Context(), `SELECT count(*) FROM tickets `+countWhere, countArgs...).Scan(&n); err != nil {
+			http.Error(w, "failed to list tickets", http.StatusInternalServerError)
+			return
+		}
+		total = &n
 	}
 	rows, err := dbq.Query(r.Context(), query, args...)
 	if err != nil {
@@ -307,7 +312,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		HasMore: hasMore,
 		Count:   len(items),
 		Limit:   opts.Limit,
-		Total:   &total,
+		Total:   total,
 	}
 	for i, item := range items {
 		result.Items[i] = item

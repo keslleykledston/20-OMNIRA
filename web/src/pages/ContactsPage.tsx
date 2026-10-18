@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ActiveFilters,
   Avatar,
@@ -125,6 +125,12 @@ export default function ContactsPage() {
 
   const page = contacts.data
   const items = page?.items ?? []
+  // The server counts once, with the first page; the next pages keep showing that number (read back from the first page's cached answer).
+  const queryClient = useQueryClient()
+  const total =
+    cursor === undefined
+      ? page?.total
+      : queryClient.getQueryData<{ total?: number }>(['people', tenantId, 'first', q, view, status, sort ?? ''])?.total
 
   return (
     <div className="space-y-6 px-6 py-6 lg:px-8 lg:py-8">
@@ -245,9 +251,9 @@ export default function ContactsPage() {
 
       {!contacts.isLoading && !contacts.isError && items.length > 0 && (
         <>
-          {page?.total !== undefined && (
+          {total !== undefined && (
             <p aria-live="polite" className="text-sm text-text-secondary">
-              {page.total} {page.total === 1 ? 'pessoa' : 'pessoas'}
+              {total} {total === 1 ? 'pessoa' : 'pessoas'}
               {filtering ? ' com estes filtros' : ''}
             </p>
           )}
@@ -300,7 +306,7 @@ export default function ContactsPage() {
             hasNext={Boolean(page?.has_more && page?.next_cursor)}
             onPrevious={() => setCursorStack((s) => s.slice(0, -1))}
             onNext={() => page?.next_cursor && setCursorStack((s) => [...s, page.next_cursor!])}
-            label={`${page?.count ?? 0} ${page?.count === 1 ? 'pessoa' : 'pessoas'} nesta página${page?.total !== undefined ? ` · ${page.total} no total` : ''}`}
+            label={`${page?.count ?? 0} ${page?.count === 1 ? 'pessoa' : 'pessoas'} nesta página${total !== undefined ? ` · ${total} no total` : ''}`}
           />
         </>
       )}

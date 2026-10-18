@@ -53,13 +53,15 @@ func TestPeopleSortByNameWalksEveryPageOnceAndCountsTheMatches(t *testing.T) {
 				t.Fatal(err)
 			}
 			seen = append(seen, names(page.Items)...)
-			if page.Total == nil {
-				t.Fatalf("sort %s: no total on page %d", sort, i)
+			// the count comes with the first page only; the pages after it do not recount
+			if i == 0 {
+				if page.Total == nil {
+					t.Fatalf("sort %s: no total on the first page", sort)
+				}
+				total = *page.Total
+			} else if page.Total != nil {
+				t.Fatalf("sort %s: page %d recounted the total", sort, i)
 			}
-			if total != -1 && total != *page.Total {
-				t.Fatalf("sort %s: the total changed between pages", sort)
-			}
-			total = *page.Total
 			if !page.HasMore {
 				break
 			}

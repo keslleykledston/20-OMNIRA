@@ -66,7 +66,7 @@ type PageResult struct {
 	HasMore    bool          `json:"has_more"`
 	Count      int           `json:"count"`
 	Limit      int           `json:"limit"`
-	// Total is how many rows match the filters in all pages (set by the lists that show a result counter; absent elsewhere).
+	// Total is how many rows match the filters in all pages. The lists that show a result counter send it with the FIRST page only (it is not recounted per page).
 	Total *int `json:"total,omitempty"`
 }
 

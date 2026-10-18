@@ -203,11 +203,16 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 	dbq := platformdb.QuerierFromContext(ctx, h.pool)
-	var total int
-	if err := dbq.QueryRow(ctx, "SELECT count(*) FROM ("+union+") people", countArgs...).Scan(&total); err != nil {
-		log.Printf("contacts: count people: %v", err)
-		http.Error(w, "failed to list people", http.StatusInternalServerError)
-		return
+	// The result counter is counted once, with the first page: asking for the next pages does not recount (the screen keeps the first page's number).
+	var total *int
+	if cursor == nil && keyCursor == nil {
+		var n int
+		if err := dbq.QueryRow(ctx, "SELECT count(*) FROM ("+union+") people", countArgs...).Scan(&n); err != nil {
+			log.Printf("contacts: count people: %v", err)
+			http.Error(w, "failed to list people", http.StatusInternalServerError)
+			return
+		}
+		total = &n
 	}
 	rows, err := dbq.Query(ctx, page, args...)
 	if err != nil {
@@ -313,7 +318,7 @@ func (h *ContactsAPIHandler) ListPeople(w http.ResponseWriter, r *http.Request) 
 		srows.Close()
 	}
 
-	result := &pagination.PageResult{Items: make([]interface{}, 0, len(keys)), HasMore: hasMore, Limit: opts.Limit, Total: &total}
+	result := &pagination.PageResult{Items: make([]interface{}, 0, len(keys)), HasMore: hasMore, Limit: opts.Limit, Total: total}
 	for _, k := range keys {
 		if k.subject == "contact" {
 			if p, ok := contacts[k.id]; ok {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ActiveFilters,
   Button,
@@ -124,6 +124,12 @@ export default function TicketsPage() {
 
   const page = tickets.data
   const items = page?.items ?? []
+  // The server counts once, with the first page; the next pages keep showing that number (read back from the first page's cached answer).
+  const queryClient = useQueryClient()
+  const total =
+    cursor === undefined
+      ? page?.total
+      : queryClient.getQueryData<{ total?: number }>(['tickets', tenantId, 'first', filters.status ?? '', filters.priority ?? '', filters.externalTicketId ?? '', sort ?? ''])?.total
 
   const updateFilter = (patch: Partial<TicketFilters>) => {
     setCursorStack([])
@@ -265,9 +271,9 @@ export default function TicketsPage() {
 
       {!tickets.isLoading && !tickets.isError && items.length > 0 && (
         <>
-          {page?.total !== undefined && (
+          {total !== undefined && (
             <p aria-live="polite" className="text-sm text-text-secondary">
-              {page.total} {page.total === 1 ? 'ticket' : 'tickets'}
+              {total} {total === 1 ? 'ticket' : 'tickets'}
               {filters.status || filters.priority || filters.externalTicketId ? ' com estes filtros' : ''}
             </p>
           )}
@@ -338,7 +344,7 @@ export default function TicketsPage() {
             hasNext={Boolean(page?.has_more && page?.next_cursor)}
             onPrevious={() => setCursorStack((s) => s.slice(0, -1))}
             onNext={() => page?.next_cursor && setCursorStack((s) => [...s, page.next_cursor!])}
-            label={`${page?.count ?? 0} ${page?.count === 1 ? 'ticket' : 'tickets'} nesta página${page?.total !== undefined ? ` · ${page.total} no total` : ''}`}
+            label={`${page?.count ?? 0} ${page?.count === 1 ? 'ticket' : 'tickets'} nesta página${total !== undefined ? ` · ${total} no total` : ''}`}
           />
         </>
       )}

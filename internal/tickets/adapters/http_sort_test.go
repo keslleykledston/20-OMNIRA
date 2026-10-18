@@ -44,13 +44,15 @@ func TestListTicketsSortsByColumnWalksEveryPageOnceAndCountsTheMatches(t *testin
 			for _, it := range p.Items {
 				seen = append(seen, it["subject"].(string))
 			}
-			if p.Total == nil {
-				t.Fatalf("sort %s: no total on page %d", sort, i)
+			// the count comes with the first page only; the pages after it do not recount
+			if i == 0 {
+				if p.Total == nil {
+					t.Fatalf("sort %s: no total on the first page", sort)
+				}
+				total = *p.Total
+			} else if p.Total != nil {
+				t.Fatalf("sort %s: page %d recounted the total", sort, i)
 			}
-			if total != -1 && total != *p.Total {
-				t.Fatalf("sort %s: the total changed between pages: %d then %d", sort, total, *p.Total)
-			}
-			total = *p.Total
 			if !p.HasMore {
 				break
 			}

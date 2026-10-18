@@ -161,6 +161,19 @@ describe('ContactsPage — order and result counter', () => {
     expect(screen.getByText(/1 pessoa nesta página · 134 no total/)).toBeInTheDocument();
   });
 
+  it('keeps the first page\'s total on the next pages, which are not recounted', async () => {
+    vi.mocked(axios.get).mockImplementation(async (_url: string, config?: any) => {
+      const second = config?.params?.cursor === 'CURSOR_2';
+      return { data: page([contact({ id: second ? 'c2' : 'c1', display_name: second ? 'Bruno Lima' : 'Ana Souza' })], second ? {} : { has_more: true, next_cursor: 'CURSOR_2', total: 2 }) };
+    });
+    renderAt(<ContactsPage />, '/contacts', '/contacts');
+    expect(await screen.findByText('2 pessoas')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Próxima' }));
+    await screen.findAllByText('Bruno Lima');
+    expect(screen.getByText('2 pessoas')).toBeInTheDocument();
+    expect(screen.getByText(/1 pessoa nesta página · 2 no total/)).toBeInTheDocument();
+  });
+
   it('sorts by name from the header: asks the server, starts again from the first page, and comes back to the default order', async () => {
     const calls: Array<Record<string, unknown>> = [];
     vi.mocked(axios.get).mockImplementation(async (_url: string, config?: any) => {
@@ -174,7 +187,7 @@ describe('ContactsPage — order and result counter', () => {
     await waitFor(() => expect(calls.some((c) => c.cursor === 'CURSOR_2')).toBe(true));
 
     const header = () => screen.getByRole('columnheader', { name: /Pessoa/ });
-    expect(header()).toHaveAttribute('aria-sort', 'none');
+    expect(header()).not.toHaveAttribute('aria-sort');
     await userEvent.click(within(header()).getByRole('button'));
     await waitFor(() => expect(header()).toHaveAttribute('aria-sort', 'ascending'));
     // the cursor of the old order is gone: the new order starts at the first page
@@ -187,7 +200,7 @@ describe('ContactsPage — order and result counter', () => {
     expect(calls[calls.length - 1].sort).toBe('name:desc');
 
     await userEvent.click(within(header()).getByRole('button'));
-    await waitFor(() => expect(header()).toHaveAttribute('aria-sort', 'none'));
+    await waitFor(() => expect(header()).not.toHaveAttribute('aria-sort'));
     expect(calls[calls.length - 1].sort).toBeUndefined();
   });
 });

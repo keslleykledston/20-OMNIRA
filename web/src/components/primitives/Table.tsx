@@ -92,7 +92,8 @@ export function TableHeaderCell({ children, className, sortDirection, onSort, ..
     <th
       scope="col"
       {...props}
-      aria-sort={sortable ? (sortDirection === 'asc' ? 'ascending' : sortDirection === 'desc' ? 'descending' : 'none') : undefined}
+      // only the column that is ordered says so (a table has at most one sorted column); the others stay silent
+      aria-sort={sortDirection === 'asc' ? 'ascending' : sortDirection === 'desc' ? 'descending' : undefined}
       className={clsx('px-6', 'py-3', 'text-sm', 'font-medium', 'text-text-secondary', className)}
     >
       {sortable ? (

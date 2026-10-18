@@ -480,12 +480,12 @@ describe('TicketsPage — order and result counter', () => {
     const header = (name: RegExp) => screen.getByRole('columnheader', { name });
     // the default order is newest activity first, so "Atualizado" already runs downwards
     expect(header(/Atualizado/)).toHaveAttribute('aria-sort', 'descending');
-    expect(header(/Prioridade/)).toHaveAttribute('aria-sort', 'none');
+    expect(header(/Prioridade/)).not.toHaveAttribute('aria-sort');
 
     await userEvent.click(within(header(/Prioridade/)).getByRole('button'));
     await waitFor(() => expect(header(/Prioridade/)).toHaveAttribute('aria-sort', 'descending'));
     expect(calls[calls.length - 1].sort).toBe('priority:desc'); // most urgent first
-    expect(header(/Atualizado/)).toHaveAttribute('aria-sort', 'none');
+    expect(header(/Atualizado/)).not.toHaveAttribute('aria-sort');
 
     await userEvent.click(within(header(/Prioridade/)).getByRole('button'));
     await waitFor(() => expect(calls[calls.length - 1].sort).toBe('priority:asc'));
