@@ -17,7 +17,7 @@ const detail = (a: typeof ACME, over: object = {}) => ({
 
 let access = ['account.read', 'account.manage', 'ticket.read']
 let accounts = [ACME, XPTO]
-let tickets: object[] = [{ id: 't1', conversation_id: 'c1', subject: 'Link caiu', status: 'open', priority: 'high', provider: 'k3g', external_ticket_id: '28180', created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:00:00Z' }]
+const tickets: object[] = [{ id: 't1', conversation_id: 'c1', subject: 'Link caiu', status: 'open', priority: 'high', provider: 'k3g', external_ticket_id: '28180', created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:00:00Z' }]
 
 const err = (status: number) => Promise.reject({ response: { status, data: '' } })
 

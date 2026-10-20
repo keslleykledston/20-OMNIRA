@@ -244,12 +244,15 @@ Pendências/risco:
     `feat/omnira-release-update-engine` nem nenhuma outra worktree):
     - **gofmt: 42 de 42 corrigidos** (100%). `gofmt -w` puro, sem mudança de comportamento;
       `go build`/`go vet`/`go test ./...` completos, sem FAIL, depois da correção.
-    - **ESLint: 2 de 4 erros reais corrigidos** (os 2 que exigiam só entendimento + correção
-      pontual: `no-control-regex` em MessageMedia.tsx — comportamento já estava certo, só
-      silenciado com eslint-disable + comentário; `no-empty-object-type` em types/api.ts —
-      interface vazia trocada por type alias). As 43 **warnings** continuam abertas de propósito
-      — cada uma exige julgamento caso a caso sobre dependência de hook/export, não é "corrigir
-      e seguir"; não tocadas.
+    - **ESLint: 4 de 4 erros reais corrigidos** (2 na branch `fix/release-eng-legacy-drift` —
+      `no-control-regex` em MessageMedia.tsx, comportamento já estava certo, só silenciado com
+      eslint-disable + comentário; `no-empty-object-type` em types/api.ts, interface vazia
+      trocada por type alias — e 2 encontrados só depois do merge de volta nesta branch, ao
+      revalidar `npm run lint` com 0 erros esperados e encontrando 1 ainda aberto:
+      `prefer-const` em `AccountsPage.test.tsx`, `let tickets` nunca reatribuído, trocado por
+      `const`, 9/9 testes daquele arquivo confirmados depois). `npm run lint` agora termina em
+      **0 erros**. As 43 **warnings** continuam abertas de propósito — cada uma exige julgamento
+      caso a caso sobre dependência de hook/export, não é "corrigir e seguir"; não tocadas.
     - **govulncheck: 3 de 19 achados corrigidos** (go-redis v9.7.0→v9.7.3 — o único com caminho
       de chamada real no código do projeto —, grpc v1.83.1→v1.83.2, klauspost/compress
       v1.18.5→v1.18.7). **16 permanecem, explicitamente não corrigíveis sem uma decisão maior**:
