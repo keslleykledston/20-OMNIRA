@@ -29,3 +29,6 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0046 - Convite completo: função e filas no convite, e conta de login criada pelo OMNIRA — implementada (Fase 2 de Pessoas)
 - 0047 - Ficha da pessoa no console do Hub: instâncias e filas de cada uma — implementada, versão mínima só no frontend (Fase 3 de Pessoas)
 - 0048 - OMNIRA Headless / Híbrido: CRM externo e Workspace sobre um único controle de conversa (identidade de aplicação, journal durável, webhooks) — implementação local na branch feat/headless-crm-dual-operation
+- 0049 - Service Context & Operations: protocolo de atendimento, linha do tempo, ocorrências, tarefas e registros externos — proposto, em implementação
+- 0050 - Abrir conversa outbound por telefone na API externa (Headless) — proposto, bloqueado por questão em aberto (número do Gateway compartilha linha com o atendimento?)
+- 0051 - Superfície de leitura de grupos do WhatsApp na API externa (Headless) — proposto, sem implementação até haver caso de uso concreto do CRM
