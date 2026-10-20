@@ -231,14 +231,44 @@ Pendências/risco:
     relativos (`page.goto('/inbox')` etc.), resolvidos contra esse baseURL. Ligar isso ao CI hoje
     mandaria tráfego automatizado real contra produção em todo push. Corrigir isso com um target
     isolado é exatamente o trabalho de F8 (staging); não é patch de F2.
+    **Atualização (branch fix/release-eng-legacy-drift, commit 1f8a9c2):** o landmine do default
+    de produção em si já foi corrigido — `baseURL` agora usa
+    `process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000'` (o próprio servidor local que o
+    `webServer` do config já inicia). Isso NÃO liga E2E ao CI (ainda é trabalho de F8), só remove
+    o risco de uma execução manual/local acidental ir contra produção.
   - `tools/validate-schema.sh` e `tools/check-rls.sh` existentes apontam, por padrão, para
     `omnira-postgres`/`omnira_dev` (o banco real) — não foram usados nestes workflows; os gates
     novos usam exclusivamente containers descartáveis (scripts/test-integration.sh).
-  - Drift pré-existente classificado, não corrigido (fora de escopo — "não refatore partes não
-    relacionadas"): 42 arquivos Go sem gofmt, 47 problemas de ESLint (4 erros), 19 achados do
-    govulncheck, 16 vulnerabilidades de dependências npm, 35 erros/7 warnings de redocly (este
-    último já baselined via .redocly.lint-ignore.yaml; os outros quatro não têm mecanismo de
-    ratchet ainda — recomendado como item de limpeza separado ao dono do repositório).
+  - **Drift pré-existente — accounting final depois da branch `fix/release-eng-legacy-drift`**
+    (4 commits: `2b86d2b`, `d8329f3`, `4db6d2c`, `6f2486d`; branch separada, nunca tocou
+    `feat/omnira-release-update-engine` nem nenhuma outra worktree):
+    - **gofmt: 42 de 42 corrigidos** (100%). `gofmt -w` puro, sem mudança de comportamento;
+      `go build`/`go vet`/`go test ./...` completos, sem FAIL, depois da correção.
+    - **ESLint: 2 de 4 erros reais corrigidos** (os 2 que exigiam só entendimento + correção
+      pontual: `no-control-regex` em MessageMedia.tsx — comportamento já estava certo, só
+      silenciado com eslint-disable + comentário; `no-empty-object-type` em types/api.ts —
+      interface vazia trocada por type alias). As 43 **warnings** continuam abertas de propósito
+      — cada uma exige julgamento caso a caso sobre dependência de hook/export, não é "corrigir
+      e seguir"; não tocadas.
+    - **govulncheck: 3 de 19 achados corrigidos** (go-redis v9.7.0→v9.7.3 — o único com caminho
+      de chamada real no código do projeto —, grpc v1.83.1→v1.83.2, klauspost/compress
+      v1.18.5→v1.18.7). **16 permanecem, explicitamente não corrigíveis sem uma decisão maior**:
+      12 são da própria biblioteca padrão do Go (precisam do toolchain go1.26.9, hoje
+      go1.25.14 instalado — e os Dockerfiles pinam `golang:1.25-alpine`); os outros são
+      `golang.org/x/net`@v0.60.0 e `golang.org/x/crypto`@v0.56.0, cuja correção existe mas cada
+      uma delas exige `go 1.26.0` no próprio go.mod (testado e revertido nesta branch antes de
+      prosseguir — ver commit `4db6d2c`); e GO-2026-5932 em x/crypto não tem fix publicado ainda
+      ("Fixed in: N/A"). Bump de toolchain Go é uma decisão de infraestrutura separada (afeta
+      Dockerfile.api/Dockerfile.worker e qualquer imagem CI pinada), não uma correção de
+      dependência pontual — recomendado como item próprio ao dono do repositório.
+    - **npm audit: 2 de 16 vulnerabilidades corrigidas** (`npm audit fix`, sem `--force`:
+      follow-redirects e postcss-selector-parser, dentro das faixas semver já declaradas). As
+      14 restantes (6 moderate, 6 high, 2 critical) exigem `npm audit fix --force` — o próprio
+      npm avisa que isso instala tailwindcss@4, react-router-dom@7.18.4 e vitest@5/tinypool,
+      todos breaking changes reais que pedem teste de regressão manual à parte; deliberadamente
+      não aplicados.
+    - **redocly (contratos): sem mudança nesta branch** — já baselined em `.redocly.lint-ignore.yaml`
+      no commit original de F2 (`12891ca`); ratchet confirmado (uma violação nova ainda é pega).
   - Publicação real de qualquer workflow (execução no GitHub Actions, push de imagem, SARIF na
     aba Security) continua BLOCKED_EXTERNAL: sem `gh` CLI, sem credenciais confirmadas, sem
     acesso a Settings/Environments deste repositório nesta sessão (achado original do F0,

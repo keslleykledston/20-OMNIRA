@@ -701,4 +701,3 @@ func TestHubReply_RefusesAConversationAnExternalApplicationHolds(t *testing.T) {
 		t.Fatalf("after the Hub released it: control=%v assignee=%v", free, w.assignee("A"))
 	}
 }
-

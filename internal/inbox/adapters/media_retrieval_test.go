@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/omnira/omnira/internal/testhelpers"
 	inboxadapters "github.com/omnira/omnira/internal/inbox/adapters"
 	platformdb "github.com/omnira/omnira/internal/platform/db"
+	"github.com/omnira/omnira/internal/testhelpers"
 )
 
 func TestMediaRetrieverOriginValidation(t *testing.T) {
@@ -150,8 +150,8 @@ func TestMediaRetrieverRedirectBlocking(t *testing.T) {
 func TestMediaRetrieverMimeTypeValidation(t *testing.T) {
 	// Test safe vs. unsafe MIME type classification.
 	tests := []struct {
-		name       string
-		mimeType   string
+		name         string
+		mimeType     string
 		shouldBeSafe bool
 	}{
 		{"image/jpeg", "image/jpeg", true},
@@ -162,8 +162,8 @@ func TestMediaRetrieverMimeTypeValidation(t *testing.T) {
 		{"image/svg+xml", "image/svg+xml", false},
 		{"application/xhtml+xml", "application/xhtml+xml", false},
 		{"application/x-executable", "application/x-executable", false},
-		{"application/pdf", "application/pdf", true}, // Safe as attachment
-		{"text/plain", "text/plain", true}, // Safe as attachment
+		{"application/pdf", "application/pdf", true},                     // Safe as attachment
+		{"text/plain", "text/plain", true},                               // Safe as attachment
 		{"image/jpeg; charset=utf-8", "image/jpeg; charset=utf-8", true}, // Safe, params ignored
 	}
 
@@ -180,9 +180,9 @@ func TestMediaRetrieverMimeTypeValidation(t *testing.T) {
 func TestMediaRetrieverFilenamesSanitized(t *testing.T) {
 	// Test that filenames are sanitized to prevent path traversal and injection.
 	tests := []struct {
-		name     string
-		input    string
-		safe     bool
+		name  string
+		input string
+		safe  bool
 	}{
 		{"normal filename", "media_abc123.jpg", true},
 		{"path traversal", "../../../etc/passwd", true},

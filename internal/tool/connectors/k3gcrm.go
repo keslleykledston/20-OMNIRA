@@ -228,7 +228,9 @@ func (c *K3GCRMClient) ListCompanies(ctx context.Context) ([]CRMCompany, error) 
 // ambiguousError carries the Ambiguous marker so layers that must not import this package can still recognise it.
 type ambiguousError struct{}
 
-func (ambiguousError) Error() string   { return "k3gcrm: more than one CRM contact matches; refusing to pick one" }
+func (ambiguousError) Error() string {
+	return "k3gcrm: more than one CRM contact matches; refusing to pick one"
+}
 func (ambiguousError) Ambiguous() bool { return true }
 
 // FindCustomerByPhone procura contato no CRM por telefone e empresa.
@@ -243,7 +245,7 @@ func (c *K3GCRMClient) FindCustomerByPhone(ctx context.Context, phone, companyID
 	if phone == "" || companyID == "" {
 		return nil, fmt.Errorf("%w: phone and companyId are required", ErrCRMRejected)
 	}
-	body, err := c.get(ctx, fmt.Sprintf("/api/crm/contacts?phone=%s&companyId=%s", 
+	body, err := c.get(ctx, fmt.Sprintf("/api/crm/contacts?phone=%s&companyId=%s",
 		strings.ReplaceAll(phone, "+", "%2B"), companyID))
 	if err != nil {
 		return nil, err
@@ -356,10 +358,10 @@ func (c *K3GCRMClient) CreateActivity(ctx context.Context, actType, subject, con
 		return nil, fmt.Errorf("%w: type, subject, contactId and companyId are required", ErrCRMRejected)
 	}
 	payload := map[string]string{
-		"type":       actType,
-		"subject":    subject,
-		"contactId":  contactID,
-		"companyId":  companyID,
+		"type":      actType,
+		"subject":   subject,
+		"contactId": contactID,
+		"companyId": companyID,
 	}
 	body, err := c.post(ctx, "/api/crm/activities", payload)
 	if err != nil {

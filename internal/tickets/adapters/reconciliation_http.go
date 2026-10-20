@@ -137,18 +137,18 @@ type ReconciliationActor struct {
 // no local ticket until the provider confirms success (section 10) —
 // that row must remain visible, never dropped.
 type CreateAttemptItem struct {
-	ID                     uuid.UUID  `json:"id"`
-	State                  string     `json:"state"`
-	ConversationID         uuid.UUID  `json:"conversation_id"`
-	LocalTicketID          *uuid.UUID `json:"local_ticket_id"`
-	LocalTicketSubject     *string    `json:"local_ticket_subject"`
-	Provider               *string    `json:"provider"`
-	ExternalTicketID       *string    `json:"external_ticket_id"`
+	ID                     uuid.UUID           `json:"id"`
+	State                  string              `json:"state"`
+	ConversationID         uuid.UUID           `json:"conversation_id"`
+	LocalTicketID          *uuid.UUID          `json:"local_ticket_id"`
+	LocalTicketSubject     *string             `json:"local_ticket_subject"`
+	Provider               *string             `json:"provider"`
+	ExternalTicketID       *string             `json:"external_ticket_id"`
 	Actor                  ReconciliationActor `json:"actor"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
-	ProjectionSyncedAt     *time.Time `json:"projection_synced_at"`
-	IdempotencyKeyRedacted string     `json:"idempotency_key_redacted"`
+	CreatedAt              time.Time           `json:"created_at"`
+	UpdatedAt              time.Time           `json:"updated_at"`
+	ProjectionSyncedAt     *time.Time          `json:"projection_synced_at"`
+	IdempotencyKeyRedacted string              `json:"idempotency_key_redacted"`
 }
 
 const reconciliationCreateColumns = `a.id, a.state, a.conversation_id, a.local_ticket_id, a.provider, a.external_ticket_id,
@@ -272,21 +272,21 @@ func (h *Handler) ListCreateAttempts(w http.ResponseWriter, r *http.Request) {
 // invariant visible in the type itself, per section 8 (no artificial
 // shared model with the create-attempt DTO).
 type StatusAttemptItem struct {
-	ID                           uuid.UUID  `json:"id"`
-	State                        string     `json:"state"`
-	ConversationID               uuid.UUID  `json:"conversation_id"`
-	LocalTicketID                uuid.UUID  `json:"local_ticket_id"`
-	LocalTicketSubject           *string    `json:"local_ticket_subject"`
-	Provider                     string     `json:"provider"`
-	ExternalTicketID             string     `json:"external_ticket_id"`
-	TargetStatus                 string     `json:"target_status"`
-	ConfirmedExternalStatus      *string    `json:"confirmed_external_status"`
-	ConfirmedExternalStatusLabel *string    `json:"confirmed_external_status_label"`
+	ID                           uuid.UUID           `json:"id"`
+	State                        string              `json:"state"`
+	ConversationID               uuid.UUID           `json:"conversation_id"`
+	LocalTicketID                uuid.UUID           `json:"local_ticket_id"`
+	LocalTicketSubject           *string             `json:"local_ticket_subject"`
+	Provider                     string              `json:"provider"`
+	ExternalTicketID             string              `json:"external_ticket_id"`
+	TargetStatus                 string              `json:"target_status"`
+	ConfirmedExternalStatus      *string             `json:"confirmed_external_status"`
+	ConfirmedExternalStatusLabel *string             `json:"confirmed_external_status_label"`
 	Actor                        ReconciliationActor `json:"actor"`
-	CreatedAt                    time.Time  `json:"created_at"`
-	UpdatedAt                    time.Time  `json:"updated_at"`
-	ProjectionSyncedAt           *time.Time `json:"projection_synced_at"`
-	IdempotencyKeyRedacted       string     `json:"idempotency_key_redacted"`
+	CreatedAt                    time.Time           `json:"created_at"`
+	UpdatedAt                    time.Time           `json:"updated_at"`
+	ProjectionSyncedAt           *time.Time          `json:"projection_synced_at"`
+	IdempotencyKeyRedacted       string              `json:"idempotency_key_redacted"`
 }
 
 const reconciliationStatusColumns = `a.id, a.state, a.conversation_id, a.local_ticket_id, a.provider, a.external_ticket_id,

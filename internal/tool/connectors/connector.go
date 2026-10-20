@@ -30,7 +30,7 @@ type ActionSpec struct {
 
 // ParamSpec — especificação de um parâmetro
 type ParamSpec struct {
-	Type        string      `json:"type"`        // string, number, boolean, array, object
+	Type        string      `json:"type"` // string, number, boolean, array, object
 	Description string      `json:"description"`
 	Required    bool        `json:"required"`
 	Example     interface{} `json:"example,omitempty"`

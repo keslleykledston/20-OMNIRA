@@ -14,11 +14,11 @@ import (
 )
 
 type mockCRMConnector struct {
-	findPhoneCalls   []struct{ phone, companyID string }
-	createCalls      []struct{ name, phone, companyID string }
-	findPhoneErr     error
-	findPhoneResult  map[string]string // phone -> contactID
-	createResult     map[string]string // phone -> contactID
+	findPhoneCalls  []struct{ phone, companyID string }
+	createCalls     []struct{ name, phone, companyID string }
+	findPhoneErr    error
+	findPhoneResult map[string]string // phone -> contactID
+	createResult    map[string]string // phone -> contactID
 }
 
 func (m *mockCRMConnector) FindCustomerByPhone(ctx context.Context, phone, companyID string) (string, error) {
@@ -71,12 +71,12 @@ func TestInboundServiceWithCRMCreatesContactOnFirstMessage(t *testing.T) {
 	}
 
 	inbound := domain.InboundMessage{
-		ConnectionID:    connection.ID.String(),
+		ConnectionID:      connection.ID.String(),
 		ProviderMessageID: "msg-123",
-		FromE164:        "+5592991740090",
-		SenderName:      "Alice",
-		Text:            "Olá",
-		ProviderChatID:  "chat-999",
+		FromE164:          "+5592991740090",
+		SenderName:        "Alice",
+		Text:              "Olá",
+		ProviderChatID:    "chat-999",
 	}
 
 	result, err := svc.Ingest(ctx, connection, inbound)
@@ -149,12 +149,12 @@ func TestInboundServiceWithCRMReusesExistingContact(t *testing.T) {
 	}
 
 	inbound := domain.InboundMessage{
-		ConnectionID:     connection.ID.String(),
+		ConnectionID:      connection.ID.String(),
 		ProviderMessageID: "msg-456",
-		FromE164:        "+5592991740090",
-		SenderName:      "Bob",
-		Text:            "Oi",
-		ProviderChatID:  "chat-888",
+		FromE164:          "+5592991740090",
+		SenderName:        "Bob",
+		Text:              "Oi",
+		ProviderChatID:    "chat-888",
 	}
 
 	result, err := svc.Ingest(ctx, connection, inbound)
@@ -210,12 +210,12 @@ func TestInboundServiceWithoutCRMWorksAsNormal(t *testing.T) {
 	}
 
 	inbound := domain.InboundMessage{
-		ConnectionID:     connection.ID.String(),
+		ConnectionID:      connection.ID.String(),
 		ProviderMessageID: "msg-789",
-		FromE164:        "+5592991740090",
-		SenderName:      "Charlie",
-		Text:            "Tudo bem",
-		ProviderChatID:  "chat-777",
+		FromE164:          "+5592991740090",
+		SenderName:        "Charlie",
+		Text:              "Tudo bem",
+		ProviderChatID:    "chat-777",
 	}
 
 	result, err := svc.Ingest(ctx, connection, inbound)

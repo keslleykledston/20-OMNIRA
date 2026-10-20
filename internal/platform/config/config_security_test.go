@@ -82,11 +82,11 @@ func TestConfigFailClosedProduction(t *testing.T) {
 
 func TestConfigProductionHTTPS(t *testing.T) {
 	tests := []struct {
-		name       string
-		issuer     string
+		name        string
+		issuer      string
 		redirectURL string
-		secure     bool
-		shouldErr  bool
+		secure      bool
+		shouldErr   bool
 	}{
 		{
 			name:        "prod + https issuer + https redirect + secure cookie",

@@ -8,11 +8,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/omnira/omnira/internal/testhelpers"
 	channeladapters "github.com/omnira/omnira/internal/channels/adapters"
 	channelcrypto "github.com/omnira/omnira/internal/channels/adapters/crypto"
 	channelsdomain "github.com/omnira/omnira/internal/channels/domain"
 	channelports "github.com/omnira/omnira/internal/channels/ports"
+	"github.com/omnira/omnira/internal/testhelpers"
 	"github.com/omnira/omnira/internal/tickets/ports"
 )
 

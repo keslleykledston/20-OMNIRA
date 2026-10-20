@@ -57,14 +57,14 @@ func (e *AttachmentRejected) Error() string { return "messages: attachment rejec
 
 // Attachments uploads files for outbound messages.
 type Attachments struct {
-	sender    *Sender
-	delegated *DelegatedSender // optional: files for a Hub agent (ADR-0040), see delegated_attachment.go
+	sender      *Sender
+	delegated   *DelegatedSender              // optional: files for a Hub agent (ADR-0040), see delegated_attachment.go
 	external    ports.ExternalAttachmentStore // optional: files for an external application (ADR-0048), see external_attachment.go
 	externalOut ports.ExternalOutboundStore
-	store     ports.AttachmentStore
-	files     ports.AttachmentFiles
-	scanner   ports.VirusScanner
-	now       func() time.Time
+	store       ports.AttachmentStore
+	files       ports.AttachmentFiles
+	scanner     ports.VirusScanner
+	now         func() time.Time
 }
 
 func NewAttachments(sender *Sender, store ports.AttachmentStore, files ports.AttachmentFiles, scanner ports.VirusScanner) *Attachments {
