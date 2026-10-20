@@ -82,6 +82,42 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: startExternalConversation
+      tags: [Commands]
+      summary: Create-or-reuse an outbound conversation by phone (ADR-0050)
+      description: |
+        Needs BOTH scopes `contact.write` and `conversation.open`. The Gateway-alert use case: open a conversation with a contact the
+        company has not been talked to yet, and optionally send the opening message in the same call.
+
+        **Create vs. reuse.** When no OPEN conversation exists yet for `phone_e164` (on `channel_id`, or on one of the installation's
+        allowed lines when it is not given), one is created and **auto-claimed by this installation** — there was no prior holder to take
+        from. When one already exists: reusing it **never** changes who holds it. Already held by this SAME installation: reused as-is,
+        `message` (if sent) goes through normally. Free (nobody holds it): reused, but `message` fails `409 not_holder` — claim it first.
+        Held by anyone else: `409 held_by_other`, nothing is created or changed.
+
+        **The message, if given, is subject to the same rules as `POST .../messages`**: outside the 24h customer-service window, only an
+        approved template may be sent (`422 window_closed` otherwise) — exactly the one-call "create + template" ADR-0050 asks for.
+
+        No `If-Match`: there is nothing to match against before this call (a brand-new conversation, or an existing one whose control this
+        call never changes).
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartConversationRequest' }
+      responses:
+        '200': { description: Reused an existing conversation, content: { application/json: { schema: { $ref: '#/components/schemas/StartConversationResult' } } } }
+        '201': { description: Created a new conversation, content: { application/json: { schema: { $ref: '#/components/schemas/StartConversationResult' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '415': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
   /external/templates:
     get:
       operationId: listExternalTemplates
@@ -640,6 +676,40 @@ components:
       properties:
         external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
         text: { type: string, minLength: 1, maxLength: 4000 }
+    StartConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [phone_e164]
+      description: "ADR-0050. message, if given, follows the same text-or-template rule as MessageRequest (no attachment_id here: a file needs an existing conversation and a hold, so it always goes through the normal POST .../messages after this call)."
+      properties:
+        phone_e164: { type: string, pattern: '^\+[1-9][0-9]{6,14}$', example: '+5592999999999' }
+        queue_id: { type: string, format: uuid, description: "Optional: the queue a newly created conversation starts in (must be one of the installation's allowed queues, when it has an allow-list)." }
+        channel_id: { type: string, format: uuid, description: "Optional: which WhatsApp line to use. Omitted: the installation's one allowed active line, when unambiguous (422 channel_ambiguous otherwise)." }
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        message:
+          type: object
+          additionalProperties: false
+          description: "Exactly one of text and template."
+          properties:
+            text: { type: string, minLength: 1, maxLength: 4096 }
+            template:
+              type: object
+              additionalProperties: false
+              required: [id]
+              properties:
+                id: { type: string, format: uuid }
+                params: { type: array, items: { type: string } }
+    StartConversationResult:
+      type: object
+      required: [conversation_id, contact_id, created, status, control]
+      properties:
+        conversation_id: { type: string, format: uuid }
+        contact_id: { type: string, format: uuid }
+        created: { type: boolean, description: "true: this call created the conversation (and so holds it now). false: an existing OPEN conversation was reused, unchanged in who holds it." }
+        status: { type: string, enum: [open, closed] }
+        control: { $ref: '#/components/schemas/Control' }
+        message_id: { type: string, format: uuid }
+        delivery: { type: string, enum: [queued] }
     FinalizeRequest:
       type: object
       additionalProperties: false
@@ -889,7 +959,7 @@ components:
             id: { type: string, format: uuid }
         scopes:
           type: array
-          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read, message.note, group.read.external] }
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read, message.note, group.read.external, contact.write, conversation.open] }
         limits:
           type: object
           required: [rate_limit_per_min, allow_outside_hours]

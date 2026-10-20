@@ -75,6 +75,7 @@ type WriteDeps struct {
 	Finalize  Finalizer
 	Eligible  conversationcontrol.Eligible
 	QueueOpen QueueOpener
+	Starter   ConversationStarter // ADR-0050: create-or-reuse a conversation by phone
 }
 
 // SectorsEligible is the rule the router applies to a person of a queue (membership, active, shift, capacity). Presence is not asked: it lives in Valkey,
@@ -224,6 +225,8 @@ func agentRefOf(p any) string {
 	case finalizePayload:
 		return v.ExternalAgentID
 	case notePayload:
+		return v.ExternalAgentID
+	case startPayload:
 		return v.ExternalAgentID
 	}
 	return ""

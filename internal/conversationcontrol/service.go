@@ -150,6 +150,22 @@ func (s Service) ClaimByApplication(ctx context.Context, q platformdb.Querier, t
 	return st, err == nil, err
 }
 
+// CreateHeldByApplication grants, inside the caller's transaction, the capability a brand-new conversation needs to be inserted already
+// held by an external application (ADR-0050): there is no prior holder to take from — the row does not exist yet — so this is the one
+// place control is set directly at INSERT time instead of by an UPDATE transition. insert must perform that INSERT itself (control_kind =
+// 'crm_application', control_holder_id, control_version = 1, control_since, control_origin = 'crm') and nothing else may run between the
+// capability grant and the insert. The history record describes "before: free" (there was no holder, which a nil Kind/HolderID already
+// means) even though, literally, there was no row — the same meaning, the simplest representation.
+func (s Service) CreateHeldByApplication(ctx context.Context, q platformdb.Querier, tenantID, conversationID uuid.UUID, insert func(ctx context.Context) error, actor Actor) error {
+	if err := s.begin(ctx, q, tenantID); err != nil {
+		return err
+	}
+	if err := insert(ctx); err != nil {
+		return err
+	}
+	return s.record(ctx, q, tenantID, State{ConversationID: conversationID}, actor, "crm_create")
+}
+
 // ReleaseByApplication frees a conversation the application holds. The version must match (the application must know what it is releasing);
 // releasing what it does not hold is ErrNotHolder, releasing it twice is ErrNotHolder as well (the second time it is free or someone else's).
 func (s Service) ReleaseByApplication(ctx context.Context, q platformdb.Querier, tenantID, conversationID, installationID uuid.UUID, ifMatch int64, actor Actor) (State, error) {

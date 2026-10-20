@@ -677,11 +677,16 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 		Finalize:  finalize,
 		Eligible:  externaladapters.SectorsEligible,
 		QueueOpen: externaladapters.SectorsQueueOpen,
+		Starter:   externaladapters.PostgresStartStore{}, // ADR-0050
 	}
 	if s.outboundAttachments != nil { // files for an application exist only where outbound media is on (a nil pointer in the interface would not be nil)
 		deps.Media = s.outboundAttachments
 	}
 	w := externaladapters.NewWriteHandler(dbPool, deps)
+	// ADR-0050: create-or-reuse a conversation by phone. No {id} (nothing may exist yet), so it needs BOTH contact.write and
+	// conversation.open — chaining RequireScope twice is the same "this installation lacks scope X" 403 either scope is missing.
+	s.mux.Handle("POST /api/v1/external/conversations",
+		ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactWrite, externaladapters.RequireScope(externaldomain.ScopeConversationOpen, w.StartConversation()))))
 	post := func(path string, scope externaldomain.Scope, h http.Handler) {
 		s.mux.Handle("POST /api/v1/external/conversations/{id}/"+path, ext.Authenticated(externaladapters.RequireScope(scope, h)))
 	}

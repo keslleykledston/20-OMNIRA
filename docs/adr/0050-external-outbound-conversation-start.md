@@ -1,7 +1,9 @@
 # ADR-0050: Abrir conversa outbound por telefone na API externa (Headless)
 
 ## Status
-**Aceito (2026-10-20).** Reabre a "fase D" de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4-G5 e §7.1, a pedido explícito do dono do produto nesta sessão.
+**Aceito e implementado (2026-10-20).** Reabre a "fase D" de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4-G5 e §7.1, a pedido explícito do dono do produto nesta sessão.
+
+Implementado como desenhado: `POST /api/v1/external/conversations` (scopes `contact.write` + `conversation.open`), migration `000172`, novo método `conversationcontrol.Service.CreateHeldByApplication` (o único lugar do sistema em que o controle de uma conversa é fixado na própria inserção, não por uma transição de UPDATE — porque não existe holder anterior a tomar). Testes Tenant A/B, allowlist de canal/fila, reuso com e sem posse, idempotência e canal ambíguo, todos contra PostgreSQL real. Detalhes no CHANGELOG.
 
 O dono do produto decidiu destravar a implementação sem esperar a resposta do CRM sobre o número do Gateway, porque essa resposta **não muda o desenho técnico** deste ADR (seção "Decisão", item 1 já condiciona `channel_id` à allowlist da instalação chamadora — o mecanismo é o mesmo esteja o número compartilhado com o atendimento ou não). O que a resposta pendente muda é só:
 - a **urgência operacional** de uma migração separada do inbox de alerta para dentro do OMNIRA, caso o número seja de fato compartilhado com o atendimento (sessão única do WhatsApp oficial) — isso é decisão de operação/infra, não de arquitetura da API, e fica registrado como follow-up em aberto, não como bloqueio de engenharia;

@@ -35,13 +35,20 @@ const (
 	// (enable/disable/purge history stays exclusive to the Workspace). Independent of group.read, the Workspace-user permission: a
 	// closed-list scope of its own, same pattern as every other capability in this catalog.
 	ScopeGroupReadExternal Scope = "group.read.external"
+	// ScopeContactWrite (ADR-0050) lets the application find-or-create a contact by phone — only what POST /conversations needs to open an
+	// outbound conversation, never an arbitrary field edit (there is no general "edit a contact" capability in this catalog).
+	ScopeContactWrite Scope = "contact.write"
+	// ScopeConversationOpen (ADR-0050) lets the application create-or-reuse a conversation by phone (POST /conversations). Independent of
+	// conversation.claim: creating a NEW conversation this way auto-claims it for the caller (there was no prior holder to take from), but
+	// reusing one already held by someone else is 409 held_by_other — this scope never substitutes for conversation.claim on a pre-existing one.
+	ScopeConversationOpen Scope = "conversation.open"
 )
 
 // AllScopes is every scope in a stable order.
 var AllScopes = []Scope{
 	ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead,
 	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend, ScopeServiceRead, ScopeTemplateRead, ScopeMessageNote,
-	ScopeGroupReadExternal,
+	ScopeGroupReadExternal, ScopeContactWrite, ScopeConversationOpen,
 }
 
 // ReadScopes are the scopes that never change anything.

@@ -57,11 +57,14 @@ func (e *env) writeAPI(opts ...func(*adapters.WriteDeps)) {
 		},
 		Eligible:  adapters.SectorsEligible,
 		QueueOpen: adapters.SectorsQueueOpen,
+		Starter:   adapters.PostgresStartStore{}, // ADR-0050
 	}
 	for _, o := range opts {
 		o(&deps)
 	}
 	w := adapters.NewWriteHandler(e.app, deps)
+	e.ext.Handle("POST /api/v1/external/conversations",
+		mw.Authenticated(adapters.RequireScope(domain.ScopeContactWrite, adapters.RequireScope(domain.ScopeConversationOpen, w.StartConversation()))))
 	post := func(op string, scope domain.Scope, h http.Handler) {
 		e.ext.Handle("POST /api/v1/external/conversations/{id}/"+op, mw.Authenticated(adapters.RequireScope(scope, h)))
 	}

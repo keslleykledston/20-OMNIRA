@@ -19,6 +19,8 @@ export const SCOPES: { key: string; label: string; write: boolean }[] = [
   { key: 'template.read', label: 'Listar templates aprovados do WhatsApp', write: false },
   { key: 'message.note', label: 'Registrar notas internas (nunca enviadas ao cliente)', write: true },
   { key: 'group.read.external', label: 'Ler grupos de WhatsApp habilitados (nome dos participantes, nunca telefone)', write: false },
+  { key: 'contact.write', label: 'Achar ou criar contato por telefone', write: true },
+  { key: 'conversation.open', label: 'Abrir ou reusar conversa por telefone (outbound)', write: true },
 ]
 
 export const EVENT_TYPES: { key: string; label: string }[] = [
