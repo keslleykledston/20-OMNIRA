@@ -1,0 +1,60 @@
+# Política de canais de release (ADR-0054 §2.1/§2.6).
+#
+# O canal é metadado de ROTEAMENTO, nunca autoridade de segurança — uma
+# release só é instalável se, além de estar no canal certo, tiver assinatura
+# válida e não estiver revogada (ver signing.yaml). Uma release "stable" com
+# assinatura inválida é rejeitada; uma release "dev" com assinatura válida
+# nunca é promovida automaticamente a "stable" só por existir.
+
+schema_version: 1
+
+channels:
+  dev:
+    description: >
+      Build de uma branch de feature ou de main após merge, antes de
+      qualquer gate de staging. Nunca instalável na instalação SaaS
+      compartilhada (production/stable) — só em ambiente de
+      desenvolvimento/lab isolado, sem dados reais de tenant.
+    promotable_to: [candidate]
+    installable_in: [dev]
+    requires_staging_pass: false
+    requires_platform_operator_approval: false
+    retention_days: 14
+
+  candidate:
+    description: >
+      Build que passou em ci-main.yml (G0-G5) e foi promovido por
+      release-build.yml a partir de um commit/ref confiável. Instalável
+      apenas em staging, para os testes de F8 (upgrade simulado, fault
+      injection, RPO/RTO). Nunca instalável na instalação SaaS compartilhada.
+    promotable_to: [stable]
+    installable_in: [staging]
+    requires_staging_pass: false
+    requires_platform_operator_approval: false
+    retention_days: 30
+
+  stable:
+    description: >
+      Única classe instalável na instalação SaaS compartilhada
+      (production/LIMITED_INTERNAL_PRODUCTION neste host, ver
+      docs/release/00-audit.md §0). Promoção exige todos os gates G0-G10
+      verdes (ver especificação §4.3) e aprovação explícita de um
+      platform_operator (ADR-0038) no momento da instalação — a promoção de
+      catálogo (candidate -> stable) autoriza o CATÁLOGO, não dispara
+      instalação automática em nenhuma instalação real.
+    promotable_to: []
+    installable_in: [staging, production]
+    requires_staging_pass: true
+    requires_platform_operator_approval: true
+    # Retenção mínima: a release stable atual + a imediatamente anterior
+    # (classe de rollback R1/R2 depende do digest anterior continuar
+    # disponível). Garbage collection (F9) nunca remove um digest referenciado
+    # por uma instalação real ou por um rollback pendente, mesmo após este
+    # prazo.
+    retention_days: 180
+
+# Uma versão "beta" só seria adicionada aqui mediante ADR novo (ADR-0054 §2.6
+# e especificação §3 "Canais: dev, candidate, stable — adicionar beta só se
+# justificar"). Não adicionar valor aqui sem atualizar
+# internal/platformrelease/domain/manifest.go (type Channel) e o schema JSON
+# no mesmo commit — as três fontes precisam concordar sempre.

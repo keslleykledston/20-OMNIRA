@@ -34,3 +34,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0051 - Superfície de leitura de grupos do WhatsApp na API externa (Headless) — aceito e implementado (caso de uso: pedido P1 do CRM)
 - 0052 - Listar templates aprovados na API externa (`template.read`) — aceito e implementado
 - 0053 - Nota interna na API externa como mensagem `private` (paridade com Chatwoot) — aceito e implementado; revisão do Codex achou e corrigiu vazamento de visibilidade no Workspace/Hub
+- 0054 - Platform Release/Update Engine: CI/CD, catálogo assinado, Update Manager e Update Agent para a instalação SaaS inteira (fases F0–F11) — aceito, em implementação na branch `feat/omnira-release-update-engine`

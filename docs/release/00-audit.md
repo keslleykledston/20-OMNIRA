@@ -219,4 +219,4 @@ Array plano de `{path, sha256, bytes}` cobrindo `.agents/skills/*`, docs raiz e 
 
 **PASS.** Nenhuma modificação de código feita. Baseline, riscos, arquitetura real e padrões reutilizáveis mapeados com evidência `arquivo:linha`. As descobertas mais importantes — `platform_operators` já existente, backup real (ainda que com cron caído neste host), console admin já existente (ADR-0041), runner de migration correto já existente, chart Helm não sancionado — mudam significativamente o escopo de F1–F7: este programa é majoritariamente **integração e extensão de infraestrutura real já existente**, não construção do zero.
 
-**Próxima fase:** F1 — ADR do sistema de release/update (usará `ADR-0050`), `release/components.yaml` alinhado ao vocabulário já definido em `docs/architecture/MODULE-MANAGEMENT.md`, schemas JSON do release manifest.
+**Próxima fase:** F1 — ADR do sistema de release/update (usará `ADR-0054`), `release/components.yaml` alinhado ao vocabulário já definido em `docs/architecture/MODULE-MANAGEMENT.md`, schemas JSON do release manifest.

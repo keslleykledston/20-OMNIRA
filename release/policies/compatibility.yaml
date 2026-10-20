@@ -1,0 +1,69 @@
+# Política de compatibilidade entre versões da plataforma (ADR-0054 §2.5,
+# especificação §3 "Compatibilidade" e §8).
+#
+# Esta política é consultada pelo planner (F6) ao montar um
+# platform_update_plan: uma release cujo compatibility.from_versions (no
+# manifesto, ver release/schemas/release-manifest.schema.json) não cobre a
+# versão realmente instalada é BLOCKED antes de qualquer mutação — nunca
+# "tentada" com aviso.
+
+schema_version: 1
+
+# upgrade_window: quantas versões MINOR anteriores uma release "stable"
+# precisa, no mínimo, aceitar como from_versions (matriz N-1 exigida pela
+# especificação §3/§13). Uma release que só aceita a própria versão menos 1
+# já satisfaz o mínimo; aceitar mais (N-2, N-3) é permitido, nunca exigido
+# além deste mínimo.
+minimum_upgrade_window: 1
+
+# database_strategy permitidos no manifesto e o que cada um significa para o
+# planner e para o Update Agent (F5). A ordem de uma release "contract" (que
+# remove uma coluna/tabela que uma versão anterior ainda lê) só é permitida
+# numa release POSTERIOR à expand, depois de comprovada ausência de
+# leitores/escritores antigos e após a janela de retenção/backup da release
+# expand (especificação §3 "Compatibilidade").
+database_strategies:
+  no_schema_change:
+    description: "Nenhuma migration nesta release. Rollback de código é sempre seguro (R0/R1)."
+    allows_contract: false
+  expand_only:
+    description: >
+      Só adições aditivas (nova coluna nullable/com default, nova tabela,
+      novo índice) — nunca DROP/NOT NULL retroativo/rename destrutivo.
+      Código anterior continua funcionando sobre o schema novo (R1/R2).
+    allows_contract: false
+  expand_then_contract_later:
+    description: >
+      Esta release é a fase "expand" de uma mudança em duas releases. A
+      fase "contract" (remoção do que ficou obsoleto) só pode ser
+      manifestada numa release FUTURA cujo from_versions comprove que
+      nenhuma versão ainda em from_versions lê/escreve a forma antiga —
+      ver especificação §3. O planner rejeita um manifesto "contract" cujo
+      from_versions inclua uma versão anterior à expand correspondente.
+    allows_contract: true
+
+# min_agent_protocol: o planner compara compatibility.min_agent_protocol do
+# manifesto com o protocolo que o Update Agent instalado reporta (F5). Um
+# agente com protocolo menor é BLOCKED antes de qualquer download — atualizar
+# o próprio agente segue um procedimento separado (especificação §7.1 item 2),
+# nunca o mesmo fluxo de atualização de workload.
+agent_protocol:
+  current: 1
+  # Nenhuma versão de agente abaixo deste valor pode executar qualquer
+  # platform_update_run — é tratado como incompatibilidade bloqueante, nunca
+  # como aviso.
+  minimum_supported: 1
+
+# Downgrade (instalar uma versão anterior à atualmente instalada) nunca é
+# tratado como "upgrade ao contrário": é avaliado contra esta mesma matriz na
+# direção oposta e é BLOCKED por padrão a menos que a release de destino
+# declare explicitamente a versão de origem em from_versions E a classe de
+# recuperação seja R1 (nunca R2+, que pressupõe schema já expandido
+# incompatível com código mais antigo).
+downgrade:
+  allowed: false
+  note: >
+    Nenhuma release hoje declara suporte a downgrade. Mudar este valor para
+    true exige ADR específico (especificação §8 "Não reintroduzir
+    vulnerabilidade por downgrade" — R4) e nunca é decisão de UI/operador
+    isolada.

@@ -1,0 +1,213 @@
+# Inventário declarativo de módulos, build units e deploy units — OMNIRA.
+#
+# module_id usa o vocabulário já definido em docs/architecture/MODULE-MANAGEMENT.md;
+# não inventa nomes paralelos. Um module_id pode apontar para o MESMO build_unit que
+# outro (binário Go compartilhado) — atualizar um módulo dispara release coordenada
+# do workload inteiro, nunca hot-swap de um submódulo dentro do mesmo binário.
+#
+# modules.*.build_units é SEMPRE uma lista, mesmo quando tem um elemento só: o código de
+# um module_id pode estar compilado em mais de um binário Go ao mesmo tempo (ex.: routing,
+# audit e channels vivem tanto em omnira-api quanto em omnira-worker — confirmado por
+# import real, não suposição; achado da revisão independente Codex, F1). Declarar só um
+# build_unit quando dois importam o pacote subestimaria o diff real de workloads de uma
+# release para o planner (F6).
+#
+# build_unit (catálogo top-level acima): pacote compilável real (Dockerfile.api / Dockerfile.worker / web/Dockerfile).
+# deploy_unit: nome do serviço real no docker-compose.yml (ver docs/release/00-audit.md §5.2
+# para a lista completa de serviços/volumes já auditada).
+
+schema_version: 1
+
+build_units:
+  omnira-api:
+    dockerfile: Dockerfile.api
+    language: go
+    version_ldflags:
+      - github.com/omnira/omnira/internal/platform/config.Version
+      - github.com/omnira/omnira/internal/platform/config.Commit
+      - github.com/omnira/omnira/internal/platform/config.BuildTime
+    deploy_unit: api
+  omnira-worker:
+    dockerfile: Dockerfile.worker
+    language: go
+    version_ldflags:
+      - github.com/omnira/omnira/internal/platform/config.Version
+      - github.com/omnira/omnira/internal/platform/config.Commit
+      - github.com/omnira/omnira/internal/platform/config.BuildTime
+    deploy_unit: worker
+  omnira-web:
+    dockerfile: web/Dockerfile
+    language: vite
+    deploy_unit: web
+
+# Dependências transitivas declaradas aqui são o que o planner (F6) usa para decidir
+# o diff real de workloads de uma release — nunca inferido do nome do módulo.
+modules:
+  identity:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    api_contracts: [contracts/openapi/omnira-v1.yaml]
+    owner: platform
+    rollback_class: R1
+    data_impact: low
+
+  tenancy:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    api_contracts: [contracts/openapi/omnira-v1.yaml]
+    owner: platform
+    rollback_class: R2
+    data_impact: high
+    note: "RLS/FORCE ROW LEVEL SECURITY — ver docs/release/00-audit.md §3.2."
+
+  audit:
+    # omnira-api escreve via internal/platform/httpserver; omnira-worker
+    # também grava eventos de auditoria (apps/worker/cmd/omnira-worker/main.go
+    # importa internal/audit) — achado da revisão independente Codex, F1.
+    build_units: [omnira-api, omnira-worker]
+    migration_scope: postgres/schema_migrations
+    owner: platform
+    rollback_class: R1
+    data_impact: medium
+    note: "Tabela única audit_events; views cross-tenant são filtros, não tabelas novas."
+
+  contacts:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    dependencies: [tenancy]
+    owner: product
+    rollback_class: R1
+    data_impact: medium
+
+  conversations:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    dependencies: [tenancy, contacts]
+    owner: product
+    rollback_class: R2
+    data_impact: high
+
+  tickets:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    dependencies: [conversations]
+    owner: product
+    rollback_class: R1
+    data_impact: medium
+
+  routing:
+    # internal/platform/httpserver/server.go também importa
+    # internal/routing/{adapters,application} (achado da revisão
+    # independente Codex, F1) — uma mudança em routing afeta omnira-api,
+    # não só omnira-worker; declarar só um dos dois deixaria o planner (F6)
+    # subestimar o diff real de workloads de uma release.
+    build_units: [omnira-api, omnira-worker]
+    migration_scope: postgres/schema_migrations
+    event_contracts: ["job.routing.assign.v1"]
+    dependencies: [tenancy]
+    owner: product
+    rollback_class: R1
+    data_impact: low
+
+  channels:
+    # apps/worker/cmd/omnira-worker/main.go também importa internal/channels
+    # (entrega de mensagens de saída) — achado da revisão independente
+    # Codex, F1, mesmo padrão de routing/audit acima.
+    build_units: [omnira-api, omnira-worker]
+    migration_scope: postgres/schema_migrations
+    dependencies: [tenancy]
+    owner: product
+    rollback_class: R1
+    data_impact: medium
+    note: >
+      Inclui o adapter WAHA. O Update Agent nunca reinicia o container waha como
+      parte de um deploy de aplicação (ver docs/release/00-audit.md §0 e §5.6,
+      PILOT-RUNBOOK.md §5-8: sessão WAHA é monitorada separadamente de
+      liveness/readiness da API, nunca acoplada a ela).
+
+  integrations:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    dependencies: [tenancy]
+    owner: product
+    rollback_class: R1
+    data_impact: low
+
+  tools:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    owner: product
+    rollback_class: R1
+    data_impact: low
+
+  realtime:
+    build_units: [omnira-api]
+    event_contracts: ["realtime SSE — ADR-0023"]
+    dependencies: [tenancy]
+    owner: platform
+    rollback_class: R0
+    data_impact: none
+
+  hub:
+    # apps/worker/cmd/omnira-worker/main.go -> internal/worker/hubdistributor
+    # -> internal/hub/distribution (distribuição automática de pools de
+    # trabalho do Hub, ADR-0038 fase 4) — achado da revisão independente
+    # Codex, F1, mesmo padrão de routing/audit/channels acima.
+    build_units: [omnira-api, omnira-worker]
+    migration_scope: postgres/schema_migrations
+    api_contracts: [contracts/openapi/omnira-v1.yaml]
+    dependencies: [tenancy, audit]
+    owner: platform
+    rollback_class: R2
+    data_impact: high
+    note: "platform_operators (ADR-0038) vive aqui — autorização do próprio updater depende deste módulo."
+
+  sla:
+    build_units: [omnira-worker]
+    migration_scope: postgres/schema_migrations
+    dependencies: [tickets]
+    owner: product
+    rollback_class: R1
+    data_impact: low
+
+  automation:
+    build_units: [omnira-worker]
+    event_contracts: ["job.>"]
+    dependencies: [conversations, routing]
+    owner: product
+    rollback_class: R1
+    data_impact: medium
+
+  analytics:
+    build_units: [omnira-worker]
+    owner: product
+    rollback_class: R0
+    data_impact: none
+
+  # Novo módulo deste programa (F1+). Vive em internal/platformrelease/ (ADR-0054 §2.1).
+  platform_release:
+    build_units: [omnira-api]
+    migration_scope: postgres/schema_migrations
+    api_contracts: ["/api/v1/platform/*"]
+    event_contracts: ["job.platform.update.apply.v1"]
+    dependencies: [hub]
+    owner: platform
+    rollback_class: R1
+    data_impact: medium
+    feature_flag: null
+    note: >
+      Autorização exclusiva via is_platform_operator() (ADR-0038/ADR-0054). Tabelas:
+      platform_installations, platform_releases, platform_update_plans,
+      platform_update_runs, platform_update_events (append-only reforçado),
+      platform_backup_records, platform_component_versions.
+
+deploy_units:
+  api:
+    build_units: [omnira-api]
+    compose_service: api
+  worker:
+    build_units: [omnira-worker]
+    compose_service: worker
+  web:
+    build_units: [omnira-web]
+    compose_service: web
