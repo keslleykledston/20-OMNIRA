@@ -669,6 +669,7 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
 	deps := externaladapters.WriteDeps{
 		Sender:    messagesapplication.NewExternalSender(messagesadapters.NewPostgresOutboundStore(dbPool)),
+		Note:      messagesapplication.NewExternalNoteWriter(messagesadapters.NewPostgresOutboundStore(dbPool)),
 		Finalize:  finalize,
 		Eligible:  externaladapters.SectorsEligible,
 		QueueOpen: externaladapters.SectorsQueueOpen,
@@ -684,6 +685,7 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 	post("release", externaldomain.ScopeConversationClaim, w.Release())
 	post("transfer", externaldomain.ScopeConversationTransfer, w.Transfer())
 	post("messages", externaldomain.ScopeMessageSend, w.Message())
+	post("notes", externaldomain.ScopeMessageNote, w.Note())
 	post("finalize", externaldomain.ScopeConversationFinalize, w.Finalize())
 	post("heartbeat", externaldomain.ScopeConversationClaim, w.Heartbeat())
 	// the route always exists (the contract says so); without outbound media it answers 501 before reading the body. The multipart body is read BEFORE the database

@@ -196,6 +196,35 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
         '428': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/notes:
+    post:
+      operationId: addExternalNote
+      tags: [Commands]
+      summary: Record an internal note, never sent to the contact (ADR-0053)
+      description: |
+        Needs the scope `message.note` and `If-Match`; this installation must HOLD the conversation at that version, same as sending a message. **`201 Created`,
+        never `202`**: nothing is queued for delivery — a note cannot reach WhatsApp. It appears intercalated in `GET .../messages` with `private: true` and
+        `status: "noted"`.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NoteRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
   /external/conversations/{id}/claim:
     post:
       operationId: claimExternalConversation
@@ -535,6 +564,14 @@ components:
           properties:
             id: { type: string, format: uuid, description: "An approved template of the conversation's line" }
             params: { type: array, items: { type: string } }
+    NoteRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      description: "ADR-0053: an internal note, plain text only — no template, no attachment."
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        text: { type: string, minLength: 1, maxLength: 4000 }
     FinalizeRequest:
       type: object
       additionalProperties: false
@@ -673,7 +710,8 @@ components:
         direction: { type: string, enum: [inbound, outbound] }
         type: { type: string, enum: [text, image, video, audio, document, sticker] }
         body: { type: string }
-        status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain] }
+        status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain, noted] }
+        private: { type: boolean, description: "ADR-0053: true for an internal note. A private message is never sent to the contact; status is always noted." }
         sender:
           type: object
           required: [kind]
@@ -741,7 +779,7 @@ components:
             id: { type: string, format: uuid }
         scopes:
           type: array
-          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read] }
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read, message.note] }
         limits:
           type: object
           required: [rate_limit_per_min, allow_outside_hours]

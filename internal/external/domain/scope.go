@@ -27,12 +27,15 @@ const (
 	// ScopeTemplateRead (ADR-0052) lets the application list the company's APPROVED, sendable WhatsApp templates — never sync, create or edit one
 	// (that stays exclusive to channel.manage in the Workspace), and never a template outside the installation's channel allow-list.
 	ScopeTemplateRead Scope = "template.read"
+	// ScopeMessageNote (ADR-0053) lets the application record an internal note on a conversation it holds — a message that is NEVER queued for
+	// delivery. Independent of message.send: an installation may hold one without the other.
+	ScopeMessageNote Scope = "message.note"
 )
 
 // AllScopes is every scope in a stable order.
 var AllScopes = []Scope{
 	ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead,
-	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend, ScopeServiceRead, ScopeTemplateRead,
+	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend, ScopeServiceRead, ScopeTemplateRead, ScopeMessageNote,
 }
 
 // ReadScopes are the scopes that never change anything.

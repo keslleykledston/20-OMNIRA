@@ -92,7 +92,8 @@ src AS (
   LEFT JOIN LATERAL (SELECT count(*) AS unread FROM messages m
         WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id AND m.direction = 'inbound'
           AND m.created_at > COALESCE((SELECT max(o.created_at) FROM messages o
-                WHERE o.tenant_id = c.tenant_id AND o.conversation_id = c.id AND o.direction = 'outbound' AND o.status <> 'failed'),
+                -- ADR-0053: a private note is never a reply (it never reaches the customer); it must not clear the hub's own "unanswered" count.
+                WHERE o.tenant_id = c.tenant_id AND o.conversation_id = c.id AND o.direction = 'outbound' AND o.status <> 'failed' AND NOT o.private),
                 '-infinity'::timestamptz)) w ON true
   WHERE c.tenant_id = $2
     AND c.conversation_kind <> 'internal'

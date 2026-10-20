@@ -1,7 +1,13 @@
 # ADR-0053: Nota interna na API externa como mensagem `private` (Opção B — paridade com Chatwoot)
 
 ## Status
-**Proposto (2026-10-20).** Reabre G3 de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4 ("Não expor agora... Alto para o ganho; recomendo adiar"), a pedido explícito do dono do produto nesta sessão, escolhendo a opção de maior fidelidade ao Chatwoot (e maior risco) em vez da alternativa mais simples (ADR teria sido "nota ligada à conversa, fora do feed de mensagens"). **Não implementar antes deste ADR ser aceito.**
+**Aceito e implementado (2026-10-20).** Reabre G3 de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4 ("Não expor agora... Alto para o ganho; recomendo adiar"), a pedido explícito do dono do produto nesta sessão, escolhendo a opção de maior fidelidade ao Chatwoot (e maior risco) em vez da alternativa mais simples.
+
+**Revisão independente (Codex CLI, `codex review --uncommitted`)**, exigida pela seção "Revisão" abaixo, encontrou dois problemas reais que a implementação original não previa — nenhum deles no caminho externo em si, e sim nos outros consumidores da mesma tabela `messages`:
+1. O cálculo de "cliente esperando resposta" (Workspace e projeção do Hub) tratava uma nota privada como se fosse uma resposta real, zerando o indicador de espera sem o cliente ter sido respondido de fato.
+2. O feed de mensagens do Workspace e do Hub, a busca de histórico do contato e o resumo do Contact 360 mostravam a nota privada como se fosse uma mensagem normal, sem o rótulo `private`, arriscando um operador humano achar que aquele texto foi enviado ao cliente.
+
+Ambos corrigidos antes de aceitar a fatia como pronta: `internal/inbox/adapters/http.go`, `internal/worker/hubprojector/projector.go`, `internal/hub/adapters/http.go`, `internal/attendance/adapters/postgres.go` e `internal/contacts/adapters/contact360.go` agora excluem `private` de toda contagem de "não respondido"/"última mensagem" e de todo feed fora da API externa — uma nota continua inteiramente invisível para qualquer coisa que não seja a própria API externa, até que uma extensão de UI própria do Workspace decida como exibi-la rotulada. Detalhes e testes no CHANGELOG.
 
 ## Contexto
 Pendência §3.4 de `OMNIRA_API_PENDENCIAS_CRM.md`: no Chatwoot, uma mensagem com `private: true` é uma **nota interna** — nunca enviada ao cliente, mas que aparece **intercalada no mesmo feed de mensagens**, com autor e horário, igual a qualquer outra. O CRM quer essa paridade; hoje grava a nota só no próprio ticket.

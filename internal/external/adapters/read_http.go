@@ -364,7 +364,7 @@ func (h *ReadHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 			where2 += " AND (m.created_at, m.id) " + cmp + " (" + args2.Add(cur.Timestamp.UTC()) + ", " + args2.Add(cid) + ")"
 		}
 		rows, err := db.Query(ctx, `
-			SELECT m.id, m.direction, m.message_type, COALESCE(m.body, ''), m.status, m.sent_by_user_id IS NOT NULL, m.sent_by_installation_id, m.created_at,
+			SELECT m.id, m.direction, m.message_type, COALESCE(m.body, ''), m.status, m.private, m.sent_by_user_id IS NOT NULL, m.sent_by_installation_id, m.created_at,
 			       COALESCE(mm.id, om.id), COALESCE(mm.kind, om.kind, ''), COALESCE(mm.mime, om.mime, ''), COALESCE(mm.size_bytes, om.size_bytes, 0),
 			       CASE WHEN mm.id IS NOT NULL THEN mm.status WHEN om.id IS NOT NULL THEN CASE WHEN om.file_purged_at IS NULL THEN 'clean' ELSE 'source_gone' END END
 			  FROM messages m
@@ -384,7 +384,7 @@ func (h *ReadHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 			var mKind, mMime string
 			var mSize int64
 			var mStatus *string
-			if err := rows.Scan(&m.ID, &m.Direction, &m.Type, &m.Body, &m.Status, &byUser, &byApp, &m.CreatedAt, &mediaID, &mKind, &mMime, &mSize, &mStatus); err != nil {
+			if err := rows.Scan(&m.ID, &m.Direction, &m.Type, &m.Body, &m.Status, &m.Private, &byUser, &byApp, &m.CreatedAt, &mediaID, &mKind, &mMime, &mSize, &mStatus); err != nil {
 				return err
 			}
 			switch {

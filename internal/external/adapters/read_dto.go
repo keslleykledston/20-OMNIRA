@@ -79,7 +79,8 @@ type MessageDTO struct {
 	Direction string    `json:"direction"` // inbound | outbound
 	Type      string    `json:"type"`
 	Body      string    `json:"body,omitempty"`
-	Status    string    `json:"status"` // received | queued | sent | delivered | read | failed | uncertain
+	Status    string    `json:"status"` // received | queued | sent | delivered | read | failed | uncertain | noted
+	Private   bool      `json:"private,omitempty"` // ADR-0053: an internal note, never sent to the contact
 	Sender    SenderDTO `json:"sender"`
 	Media     *MediaDTO `json:"media,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
