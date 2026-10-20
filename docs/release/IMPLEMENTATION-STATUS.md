@@ -250,3 +250,137 @@ Próxima fase: F3 — Builder de releases e cadeia de suprimentos (release-build
 ```
 
 **Veredito: PASS**
+
+---
+
+## F3 — Builder de releases e cadeia de suprimentos
+
+```
+Fase: F3
+Baseline SHA: 12891ca (commit de F2 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+Implementação:
+  apps/releasectl/cmd/releasectl (novo, CLI Go puro — zero HTTP/pgx/NATS): `build-manifest`
+    monta um manifesto a partir de flags e SEMPRE o revalida com o mesmo ParseManifest estrito
+    de F1 antes de gravar em qualquer lugar (nunca escreve um manifesto que seu próprio
+    verificador rejeitaria); `validate-manifest` parseia/valida um arquivo existente.
+  release/fixtures/{manifest-good,manifest-tampered-movable-tag,manifest-malicious-unknown-field,
+    manifest-malicious-case-variant-key}.json (novos) + scripts/release/test-manifest-verifier.sh
+    (novo): exercita o binário real (não só as funções Go) contra bom/adulterado/malicioso —
+    pedido explícito desta fase.
+  scripts/release/migrations-checksum.sh (novo): sha256 de um INVENTÁRIO ordenado (nome +
+    digest de conteúdo) de migrations/*.up.sql — não dos bytes concatenados (ver achados do
+    Codex abaixo) — para o campo migrations.checksum_bundle do manifesto.
+  .github/workflows/release-build.yml (novo): workflow confiável, build+SBOM+scan+attestation+
+    assinatura dos 3 workloads por digest OCI, nunca `:latest`; monta e assina o manifesto de
+    release (channel sempre "candidate" — nunca "stable", que é F8/F9); gatilho `workflow_run`
+    de "CI (main)" (nunca builda/assina um commit cujo CI não passou) + workflow_dispatch manual
+    gated por ambiente aprovado (nome referenciado, criação real do Environment com reviewers é
+    BLOCKED_EXTERNAL); mecanismo próprio de baseline de migrations via tag git
+    `release-candidate-latest`, movida só após sucesso completo, com checagem de ancestralidade
+    (nunca anda pra trás) e concorrência global (nunca duas corridas decidem a tag ao mesmo tempo).
+Arquivos: ver Implementação acima; nenhuma migration nova.
+Migrations: nenhuma.
+Contratos/endpoints: nenhum HTTP novo (API de /api/v1/platform/* é F6). O "contrato" desta fase
+  é o manifesto assinado + o binário releasectl que o monta/valida.
+Testes executados (comandos, PASS/FAIL):
+  go test ./apps/releasectl/... ./internal/platformrelease/... → PASS (8 testes novos do CLI)
+  gofmt -l, go vet ./..., go build ./... (repo inteiro) → limpos
+  actionlint .github/workflows/*.yml (com shellcheck embutido, ambos instalados via
+    `go install`/`apt-get` nesta sessão) → limpo, incluindo release-build.yml
+  bash scripts/release/test-manifest-verifier.sh → 4/4 fixtures (bom aceito; 3 adulterados/
+    maliciosos rejeitados)
+  bash scripts/release/migrations-checksum.sh → determinístico (rodado 2x, mesmo digest);
+    testado sensível a rename (fixture sintética) e a diretório ausente/vazio (fail-closed)
+  Simulação local completa do pipeline de montagem do manifesto (sem Docker/GHCR reais):
+    digests simulados → release-manifest-sim.json → validate-manifest → PASS; testado também
+    o split de --from-version por vírgula e a checagem de ancestralidade de tag com SHAs reais
+    deste repositório (git merge-base --is-ancestor)
+  cosign real baixado e `cosign sign-blob --help` inspecionado nesta sessão para confirmar os
+    flags corretos (--bundle), não assumidos de memória — ver achados do Codex
+  Fontes reais inspecionadas (não assumidas) para 2 achados do Codex: actions/toolkit
+    packages/attest/src/provenance.ts (gitCommit: claims.sha) e aquasecurity/trivy-action
+    action.yaml (limit-severities-for-sarif)
+Gates de segurança / RLS: N/A (sem tabela de banco nesta fase). Hardening de Actions aplicado:
+  toda action de terceiro pinada por SHA completo; ci-pr.yml nunca usa pull_request_target;
+  todo input de workflow_dispatch lido via env: (nunca interpolado direto num run:, e validado
+  por formato) — 2 achados reais de injeção corrigidos, ver abaixo; ref confiável
+  (refs/heads/main|refs/tags/omnira-*) verificado antes de qualquer permissão de escrita/OIDC.
+Review Codex (evidência real): `codex exec review --uncommitted` executado 11 vezes nesta
+  branch (ciclo fix→retest→re-review a cada achado). 11 achados reais corrigidos em 10 rodadas;
+  a 11ª voltou "No actionable regressions were identified":
+    1. [P1] `digest.env` de cada unidade da matriz tinha o MESMO nome de arquivo — download com
+       merge-multiple sobrescrevia, deixando só 1 de 3 artifacts no manifesto. Corrigido com
+       nome de arquivo único por unidade.
+    2. [P1] Caminho do Dockerfile do web duplicado (`web/web/Dockerfile`, que não existe) — a
+       variável `dockerfile` já era repo-root-relative; corrigido removendo a concatenação com
+       `context`.
+    3. [P2] VERSION da imagem calculado separadamente do manifesto (podiam divergir) — movido
+       para um job `vars` único, computado uma vez, usado nos dois lugares via `needs.vars.outputs`.
+    4. [P2] `--from-version` recebia a string inteira separada por vírgula como um valor só —
+       corrigido fazendo split e repetindo a flag.
+    5. [P1] Nenhuma assinatura/attestation cobria o MANIFESTO (só as imagens) — adicionado
+       attest-build-provenance + cosign sign-blob sobre o release-manifest.json.
+    6. [P1] workflow_dispatch não restringia a ref — qualquer branch obtinha packages:write/
+       id-token:write. Corrigido com checagem explícita (falha alta, nunca skip silencioso)
+       contra release/policies/signing.yaml's allowed_ref_patterns.
+    7. [P2] Inputs de workflow_dispatch interpolados direto num `run:` (injeção de shell clássica
+       do GitHub Actions) — corrigido lendo tudo via `env:` + validação de formato por regex.
+    8. [P2] `migrations_start_after`=`migrations_target` (mesmo valor) declarava "nenhuma
+       migration nesta release" mesmo quando havia migrations novas — corrigido derivando de
+       uma tag git própria (`release-candidate-latest`), não de um palpite.
+    9. [P2] Nenhum scan de vulnerabilidade de imagem (só SBOM) — adicionado trivy image scan,
+       fail-closed só em CRITICAL (severidade mais alta só bloqueia stable, F9).
+   10. [P1] Gate completamente ausente: release-build.yml rodava independente de ci-main.yml —
+       um commit que falhasse testes/RLS/contratos/secret-scan ainda seria buildado e assinado.
+       Corrigido trocando o gatilho de `push` para `workflow_run` de "CI (main)", com checagem
+       de `conclusion == 'success'`.
+    (as próximas rodadas, já depois da correção acima, encontraram problemas NESSA correção
+    — típico de revisão iterativa real, não um round único raso):
+   11. [P1] Flag `cosign sign-blob --output-signature/--output-certificate` não existe nesta
+       versão do cosign (confirmado baixando o binário real e lendo `--help`) — corrigido para
+       `--bundle`, a forma atual suportada.
+   12. [P1] A tag `git rev-parse <ref> || true` imprimia a string literal do ref (não vazio) e
+       não falhava de verdade quando o ref não existia — `|| true` escondia isso. Corrigido com
+       `git rev-parse --verify -q`.
+   13. [P1] Race: dois builds de commits diferentes podiam mover `release-candidate-latest` para
+       trás se o mais antigo terminasse depois. Corrigido com `concurrency.group` GLOBAL (não
+       por SHA) + checagem de ancestralidade (`git merge-base --is-ancestor`) antes de mover.
+   14. [P1] workflow_dispatch nunca exigia o "ambiente aprovado" que o próprio
+       release/policies/signing.yaml (F1) já proibia pular — adicionado `environment:` condicional
+       nos jobs que assinam (nome referenciado; criação real do Environment é BLOCKED_EXTERNAL).
+   15. [P1] `migrations_start_after` manual não era validado antes de ir para $GITHUB_OUTPUT —
+       um valor com newline injetaria uma segunda linha de output (ex. sobrescrever
+       `resolved_sha`). Corrigido validando contra o formato exato de um stem de migration.
+   16. [P1] Mesma classe de injeção em `from_versions`: a string bruta (possivelmente multilinha)
+       ainda era reemitida para o output mesmo depois de validada entrada a entrada. Corrigido
+       reconstruindo o valor a partir do array já validado, nunca reemitindo o input bruto.
+   17. [P1] `trivy-action` não aplica o filtro de severidade a saída SARIF sem
+       `limit-severities-for-sarif: true` (confirmado lendo o `action.yaml` real da versão
+       pinada) — sem isso, `severity: CRITICAL` não limitava o `exit-code`. Corrigido.
+  (17 achados, não 11 — a contagem de "rodadas" conta ciclos de revisão, não achados; alguns
+  ciclos trouxeram 2 achados de uma vez.)
+  LIMITAÇÃO DOCUMENTADA, NÃO UM BUG CORRIGÍVEL AQUI: o predicado de proveniência de
+  `actions/attest-build-provenance` usa `claims.sha` do token OIDC do job (confirmado lendo
+  `actions/toolkit`'s `packages/attest/src/provenance.ts` real) — um valor que este workflow
+  não controla. Não foi possível confirmar sem uma execução real se esse claim reflete
+  `workflow_run.head_sha` (o que foi de fato buildado) quando `main` já avançou. Documentado no
+  próprio workflow; precisa de verificação ao vivo antes de confiar na proveniência para algo
+  além do teste local deste programa.
+Commits: (ver git log da branch feat/omnira-release-update-engine — commit desta fase citado no
+  próximo update deste arquivo)
+Pendências/risco:
+  - Publicação real (push GHCR, execução do Actions, Environment com reviewers configurado,
+    verificação ao vivo da proveniência) continua BLOCKED_EXTERNAL — sem gh CLI, sem
+    credenciais, sem acesso a Settings deste repositório nesta sessão (achado original do F0).
+  - `modules_changed` é sempre `[]` nesta fase (sem planner — isso é F6). `platform_version`/
+    `from_versions`/o bootstrap da tag `release-candidate-latest` são esquemas deliberadamente
+    simples (documentados no cabeçalho do workflow) até existir histórico real de release.
+  - A checagem de ancestralidade/tag e o gate de CI(main) nunca foram exercitados contra uma
+    execução real do GitHub Actions — só localmente, com SHAs e cenários simulados à mão.
+Próxima fase: F4 — Compatibilidade de DB, backup e restore (integrar tools/migrate-sql.sh como
+  único runner usado por automação, acrescentar ledger de checksum por migration sem reescrever
+  as já aplicadas, mapear backups de PG/mídia/config, testar upgrade N-1 e restore descartável)
+```
+
+**Veredito: PASS**

@@ -8,6 +8,7 @@
 # Build
 bin/
 *.exe
+/releasectl
 
 # Local AI — métricas locais, não versionar
 .local-ai-metrics.jsonl
