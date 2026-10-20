@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added (API externa — preview da última mensagem na listagem, pendência CRM §3.3)
+- `GET /api/v1/external/conversations` e `GET /api/v1/external/conversations/{id}` passam a trazer `last_message: { id, direction, type, body, created_at }` (nunca mídia nem remetente — isso continua em `GET .../messages`).
+- Implementação: uma única consulta em lote (`DISTINCT ON`) por página, não uma subconsulta por conversa — uma primeira versão com `LEFT JOIN LATERAL` por linha media p95 > 2s sob carga real (`TestReadAPIListLatencyOnAMidSizeCompany`, 4000 conversas); a versão em lote mantém o mesmo teste estável (~20s de teste, sem violar o limite) e foi confirmada 3x consecutivas contra Postgres real.
+- Teste novo: `TestReadAPIListIncludesLastMessagePreview` (preview correto da mensagem mais nova, conversa sem mensagem não tem `last_message`, corpo de outro tenant nunca aparece). Contrato `omnira-external-v1.yaml` atualizado (schema `LastMessagePreview`) e sincronizado em `docs/ops/crm-handoff/`. Sem migration.
+
 ### Added (Aplicações externas — editar sem recriar, ADR-0048, pendência CRM §3.6)
 - Tela "Aplicações externas" ganhou botão **Editar** (nome, escopos, filas/linhas da allowlist), reaproveitando o `PATCH /tenants/{t}/integrations/apps/{app_id}` que já existia no backend (testado) mas nunca era chamado pela tela — até agora, qualquer ajuste exigia criar outra aplicação. `rate_limit_per_min` e `lease_seconds` continuam fora da tela (decisão já tomada no commit `9df1010`).
 - **Histórico** por aplicação: `GET /tenants/{t}/integrations/apps/{app_id}/audit` (novo `AdminHandler.History`, novo `AuditEventRepository.FindByResource`), listado na tela — quem criou/alterou/suspendeu/revogou e quando, sem token nem segredo.

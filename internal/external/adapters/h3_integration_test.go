@@ -95,7 +95,13 @@ type listed struct {
 				Mine bool   `json:"mine"`
 			} `json:"holder"`
 		} `json:"control"`
-		Can map[string]bool `json:"can"`
+		Can         map[string]bool `json:"can"`
+		LastMessage *struct {
+			ID        uuid.UUID `json:"id"`
+			Direction string    `json:"direction"`
+			Type      string    `json:"type"`
+			Body      string    `json:"body"`
+		} `json:"last_message"`
 	} `json:"items"`
 	HasMore    bool   `json:"has_more"`
 	NextCursor string `json:"next_cursor"`
@@ -385,6 +391,55 @@ func TestReadAPIConversationShowsTypedControlAndScopedCan(t *testing.T) {
 	}
 	if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/media/"+uuid.NewString(), noMessages.Credential.Token, nil); code != http.StatusForbidden {
 		t.Errorf("media without the scope = %d, want 403", code)
+	}
+}
+
+// OMNIRA_API_PENDENCIAS_CRM.md §3.3: the list carries enough of the newest message to render a preview without a second call per row.
+func TestReadAPIListIncludesLastMessagePreview(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a, b := e.tenant(), e.tenant()
+	admin := e.member(a, "tenant_admin")
+	full := e.install(admin, a, "full", readScopes...)
+
+	withMsgs, _ := e.conv(a, convOpts{})
+	e.message(a, withMsgs, "inbound", "primeira", "received", 10*time.Minute, nil)
+	newest := e.message(a, withMsgs, "outbound", "mais recente", "delivered", time.Minute, nil)
+	empty, _ := e.conv(a, convOpts{createdAgo: time.Minute})
+
+	// another tenant's message body must never leak into A's preview, even for a conversation created at the very same instant
+	otherAdmin := e.member(b, "tenant_admin")
+	bConv, _ := e.conv(b, convOpts{})
+	e.message(b, bConv, "inbound", "segredo de outra empresa", "received", time.Second, nil)
+	_ = otherAdmin
+
+	code, l := e.list(full.Credential.Token, "")
+	if code != http.StatusOK {
+		t.Fatalf("list = %d", code)
+	}
+	byID := map[uuid.UUID]int{}
+	for i, it := range l.Items {
+		byID[it.ID] = i
+	}
+	withIdx, ok := byID[withMsgs]
+	if !ok {
+		t.Fatalf("conversation with messages missing from the list")
+	}
+	lm := l.Items[withIdx].LastMessage
+	if lm == nil || lm.ID != newest || lm.Direction != "outbound" || lm.Type != "text" || lm.Body != "mais recente" {
+		t.Fatalf("last_message = %+v, want the newest message (%s, outbound, 'mais recente')", lm, newest)
+	}
+	emptyIdx, ok := byID[empty]
+	if !ok {
+		t.Fatalf("conversation without messages missing from the list")
+	}
+	if l.Items[emptyIdx].LastMessage != nil {
+		t.Fatalf("a conversation with no messages has a last_message: %+v", l.Items[emptyIdx].LastMessage)
+	}
+	for _, it := range l.Items {
+		if it.LastMessage != nil && strings.Contains(it.LastMessage.Body, "outra empresa") {
+			t.Fatalf("tenant B's message body leaked into A's list: %+v", it.LastMessage)
+		}
 	}
 }
 

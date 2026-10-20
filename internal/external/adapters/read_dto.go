@@ -37,17 +37,28 @@ type ChannelDTO struct {
 	Provider     string     `json:"provider,omitempty"`
 }
 
+// LastMessagePreviewDTO is the preview requested in OMNIRA_API_PENDENCIAS_CRM.md §3.3: enough for a conversation list to render without a
+// second call per row, never the full message (no media, no sender) — that stays behind GET .../messages.
+type LastMessagePreviewDTO struct {
+	ID        uuid.UUID `json:"id"`
+	Direction string    `json:"direction"` // inbound | outbound
+	Type      string    `json:"type"`
+	Body      string    `json:"body,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type ConversationDTO struct {
-	ID            uuid.UUID  `json:"id"`
-	Status        string     `json:"status"` // open | closed
-	ContactID     *uuid.UUID `json:"contact_id,omitempty"`
-	Channel       ChannelDTO `json:"channel"`
-	QueueID       *uuid.UUID `json:"queue_id,omitempty"`
-	Control       ControlDTO `json:"control"`
-	Can           CanDTO     `json:"can"`
-	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            uuid.UUID              `json:"id"`
+	Status        string                 `json:"status"` // open | closed
+	ContactID     *uuid.UUID             `json:"contact_id,omitempty"`
+	Channel       ChannelDTO             `json:"channel"`
+	QueueID       *uuid.UUID             `json:"queue_id,omitempty"`
+	Control       ControlDTO             `json:"control"`
+	Can           CanDTO                 `json:"can"`
+	LastMessageAt *time.Time             `json:"last_message_at,omitempty"`
+	LastMessage   *LastMessagePreviewDTO `json:"last_message,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
 type SenderDTO struct {

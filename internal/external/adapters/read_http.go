@@ -140,6 +140,46 @@ func scanConversation(row pgx.Row, p *domain.Principal) (ConversationDTO, error)
 	return d, nil
 }
 
+// attachLastMessagePreviews fills LastMessage (OMNIRA_API_PENDENCIAS_CRM.md §3.3) with ONE extra query for the whole page — never a
+// per-conversation subquery/lateral join, which measured far slower under load (p95 over 2s on a mid-size company, Codex H3-LAT) than the
+// keyset listing itself. DISTINCT ON reads the same (tenant_id, conversation_id, created_at, id) index the keyset query already relies on.
+func attachLastMessagePreviews(ctx context.Context, db platformdb.Querier, tenantID uuid.UUID, items []ConversationDTO) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(items))
+	for i, it := range items {
+		ids[i] = it.ID
+	}
+	rows, err := db.Query(ctx, `
+		SELECT DISTINCT ON (m.conversation_id) m.conversation_id, m.id, m.direction, m.message_type, m.body, m.created_at
+		  FROM messages m
+		 WHERE m.tenant_id = $1 AND m.conversation_id = ANY($2::uuid[])
+		 ORDER BY m.conversation_id, m.created_at DESC, m.id DESC`, tenantID, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byConv := make(map[uuid.UUID]LastMessagePreviewDTO, len(items))
+	for rows.Next() {
+		var convID uuid.UUID
+		var lm LastMessagePreviewDTO
+		if err := rows.Scan(&convID, &lm.ID, &lm.Direction, &lm.Type, &lm.Body, &lm.CreatedAt); err != nil {
+			return err
+		}
+		byConv[convID] = lm
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range items {
+		if lm, ok := byConv[items[i].ID]; ok {
+			items[i].LastMessage = &lm
+		}
+	}
+	return nil
+}
+
 // ListConversations: GET /external/conversations?status=open|closed|all&control=free|held|mine&channel_connection_id=&queue_id=&sort=created|updated&limit=&cursor=
 func (h *ReadHandler) ListConversations(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFrom(r.Context())
@@ -222,7 +262,10 @@ func (h *ReadHandler) ListConversations(w http.ResponseWriter, r *http.Request) 
 			}
 			out.Items = append(out.Items, d)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return attachLastMessagePreviews(ctx, db, p.TenantID, out.Items)
 	})
 	if err != nil {
 		failRead(w, r, err)
@@ -258,7 +301,15 @@ func (h *ReadHandler) GetConversation(w http.ResponseWriter, r *http.Request) {
 		where := v.Conversation("c", &args) + " AND c.id = " + args.Add(id)
 		var err error
 		d, err = scanConversation(db.QueryRow(ctx, conversationSelect+" WHERE "+where, args.Values()...), p)
-		return err
+		if err != nil {
+			return err
+		}
+		items := []ConversationDTO{d}
+		if err := attachLastMessagePreviews(ctx, db, p.TenantID, items); err != nil {
+			return err
+		}
+		d = items[0]
+		return nil
 	})
 	if err != nil {
 		failRead(w, r, err)

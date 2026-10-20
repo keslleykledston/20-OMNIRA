@@ -591,8 +591,19 @@ components:
         control: { $ref: '#/components/schemas/Control' }
         can: { $ref: '#/components/schemas/Can' }
         last_message_at: { type: string, format: date-time }
+        last_message: { $ref: '#/components/schemas/LastMessagePreview' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    LastMessagePreview:
+      type: object
+      description: Enough of the newest message to render a list preview without a second call per row. Never the full message (no media, no sender) — that stays behind GET .../messages.
+      required: [id, direction, type, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [inbound, outbound] }
+        type: { type: string }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
     ConversationPage:
       type: object
       required: [items, has_more]
