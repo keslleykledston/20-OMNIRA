@@ -32,3 +32,4 @@ Não criar ADR para escolha trivial ou facilmente reversível.
 - 0049 - Service Context & Operations: protocolo de atendimento, linha do tempo, ocorrências, tarefas e registros externos — proposto, em implementação
 - 0050 - Abrir conversa outbound por telefone na API externa (Headless) — proposto, bloqueado por questão em aberto (número do Gateway compartilha linha com o atendimento?)
 - 0051 - Superfície de leitura de grupos do WhatsApp na API externa (Headless) — proposto, sem implementação até haver caso de uso concreto do CRM
+- 0052 - Listar templates aprovados na API externa (`template.read`) — aceito e implementado
