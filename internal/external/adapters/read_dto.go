@@ -93,6 +93,9 @@ type ContactDTO struct {
 	Kind         string    `json:"kind"` // unclassified | customer | other
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	// OpenConversationID is set only by the phone search (OMNIRA_API_PENDENCIAS_CRM.md §2.3): the newest OPEN conversation with this
+	// contact that this installation may see, if any. GetContact (by id) never sets it.
+	OpenConversationID *uuid.UUID `json:"open_conversation_id,omitempty"`
 }
 
 type PageDTO[T any] struct {

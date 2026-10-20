@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +34,7 @@ func (e *env) readAPI(media mediaports.MediaReader) {
 	e.ext.Handle("GET /api/v1/external/conversations/{id}/messages", mw.Authenticated(adapters.RequireScope(domain.ScopeMessageRead, http.HandlerFunc(h.ListMessages))))
 	e.ext.Handle("GET /api/v1/external/queues", mw.Authenticated(adapters.RequireScope(domain.ScopeConversationRead, http.HandlerFunc(h.ListQueues))))
 	e.ext.Handle("GET /api/v1/external/contacts/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeContactRead, http.HandlerFunc(h.GetContact))))
+	e.ext.Handle("GET /api/v1/external/contacts", mw.Authenticated(adapters.RequireScope(domain.ScopeContactRead, http.HandlerFunc(h.SearchContacts))))
 	e.ext.Handle("GET /api/v1/external/media/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeMediaRead, http.HandlerFunc(h.GetMedia))))
 }
 
@@ -440,6 +442,95 @@ func TestReadAPIListIncludesLastMessagePreview(t *testing.T) {
 		if it.LastMessage != nil && strings.Contains(it.LastMessage.Body, "outra empresa") {
 			t.Fatalf("tenant B's message body leaked into A's list: %+v", it.LastMessage)
 		}
+	}
+}
+
+// OMNIRA_API_PENDENCIAS_CRM.md §2.3: find a contact by phone, with the open conversation id when there is one — same visibility rule as
+// GetContact, so this is never a wider door than the one that already exists.
+func TestReadAPISearchContactsByPhoneRespectsVisibilityAndNeverCrossesTenants(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a, b := e.tenant(), e.tenant()
+	adminA, adminB := e.member(a, "tenant_admin"), e.member(b, "tenant_admin")
+	appA := e.install(adminA, a, "CRM A", readScopes...)
+	appB := e.install(adminB, b, "CRM B", readScopes...)
+	noContactScope := e.install(adminA, a, "no-contact-scope", "conversation.read", "message.read")
+
+	phoneOf := func(contact uuid.UUID) string {
+		var p string
+		if err := e.seed.QueryRow(e.ctx, `SELECT phone_e164 FROM contacts WHERE id=$1`, contact).Scan(&p); err != nil {
+			e.t.Fatal(err)
+		}
+		return p
+	}
+	search := func(token, phone string) (int, adapters.ContactDTO) {
+		e.t.Helper()
+		code, body, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(phone), token, nil)
+		var d adapters.ContactDTO
+		if code == http.StatusOK {
+			if err := json.Unmarshal(body, &d); err != nil {
+				e.t.Fatalf("%s: %v", body, err)
+			}
+		}
+		return code, d
+	}
+
+	openConv, openContact := e.conv(a, convOpts{})
+	_, closedContact := e.conv(a, convOpts{status: "closed"})
+	_, internalContact := e.conv(a, convOpts{contactKind: "internal"})
+	_, bContact := e.conv(b, convOpts{})
+
+	openPhone, closedPhone, internalPhone, bPhone := phoneOf(openContact), phoneOf(closedContact), phoneOf(internalContact), phoneOf(bContact)
+
+	// found, with the open conversation id
+	code, d := search(appA.Credential.Token, openPhone)
+	if code != http.StatusOK || d.ID != openContact || d.OpenConversationID == nil || *d.OpenConversationID != openConv {
+		t.Fatalf("open contact: %d %+v", code, d)
+	}
+	// found, but no OPEN conversation to report
+	code, d = search(appA.Credential.Token, closedPhone)
+	if code != http.StatusOK || d.ID != closedContact || d.OpenConversationID != nil {
+		t.Fatalf("closed-only contact: %d %+v", code, d)
+	}
+
+	// not found: same 404 shape for internal, another tenant's, an unknown number, and a contact this installation lacks the scope for
+	var reference string
+	cases := map[string]struct{ token, phone string }{
+		"internal contact":         {appA.Credential.Token, internalPhone},
+		"another tenant's contact": {appA.Credential.Token, bPhone},
+		"unknown number":           {appA.Credential.Token, "+5592900000000"},
+	}
+	for name, c := range cases {
+		code, body, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(c.phone), c.token, nil)
+		if code != http.StatusNotFound {
+			t.Errorf("%s = %d %s, want 404", name, code, body)
+		}
+		var p adapters.Problem
+		_ = json.Unmarshal(body, &p)
+		p.RequestID = ""
+		shape := fmt.Sprintf("%+v", p)
+		if reference == "" {
+			reference = shape
+		} else if shape != reference {
+			t.Errorf("%s answers differently from the others: %s vs %s", name, shape, reference)
+		}
+	}
+	// B reading its own contact works, and still never sees A's
+	if code, d := search(appB.Credential.Token, bPhone); code != http.StatusOK || d.ID != bContact {
+		t.Errorf("B reads its own contact: %d %+v", code, d)
+	}
+	if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(openPhone), appB.Credential.Token, nil); code != http.StatusNotFound {
+		t.Errorf("B reading A's contact = %d, want 404", code)
+	}
+
+	// validation and scope
+	for _, bad := range []string{"", "5592999999999", "not-a-phone", "+0999999999"} {
+		if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(bad), appA.Credential.Token, nil); code != http.StatusBadRequest {
+			t.Errorf("phone_e164=%q = %d, want 400", bad, code)
+		}
+	}
+	if code, _, _ := e.callExt(http.MethodGet, "/api/v1/external/contacts?phone_e164="+url.QueryEscape(openPhone), noContactScope.Credential.Token, nil); code != http.StatusForbidden {
+		t.Errorf("without contact.read = %d, want 403", code)
 	}
 }
 

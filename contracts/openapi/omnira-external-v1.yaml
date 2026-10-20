@@ -360,6 +360,27 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
         '428': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+  /external/contacts:
+    get:
+      operationId: searchExternalContacts
+      tags: [Contacts]
+      summary: Find a contact by phone number
+      description: |
+        Needs the scope `contact.read`. Same visibility as GET /contacts/{id}: a contact exists for this installation only through a conversation
+        it may see, never when classified internal or spam. Returns `open_conversation_id` when there is a currently open conversation with it
+        that the installation may see, so a caller stops scanning the open list to find out. Creating a contact or a conversation is not covered
+        here (see ADR-0050 — not implemented).
+      parameters:
+        - name: phone_e164
+          in: query
+          required: true
+          schema: { type: string, example: "+5592999999999" }
+      responses:
+        '200': { description: The contact, content: { application/json: { schema: { $ref: '#/components/schemas/Contact' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
   /external/contacts/{id}:
     get:
       operationId: getExternalContact
@@ -655,6 +676,7 @@ components:
         kind: { type: string, enum: [unclassified, customer, other] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        open_conversation_id: { type: string, format: uuid, description: "Set only by GET /contacts?phone_e164=: the newest OPEN conversation with this contact the installation may see, if any." }
     Problem:
       type: object
       required: [type, title, status, code]

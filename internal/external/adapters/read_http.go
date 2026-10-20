@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -438,6 +439,41 @@ func (h *ReadHandler) GetContact(w http.ResponseWriter, r *http.Request) {
 			 WHERE ct.tenant_id = $1 AND ct.id = `+args.Add(id)+` AND ct.kind NOT IN ('internal', 'spam')
 			   AND EXISTS (SELECT 1 FROM conversations c WHERE c.contact_id = ct.id AND `+vis+`)`, args.Values()...).
 			Scan(&d.ID, &d.Name, &d.WhatsAppName, &d.Phone, &d.Kind, &d.CreatedAt, &d.UpdatedAt)
+	})
+	if err != nil {
+		failRead(w, r, err)
+		return
+	}
+	externalMetric.Inc("served")
+	WriteJSON(w, r, http.StatusOK, d)
+}
+
+// e164Pattern mirrors internal/contacts/domain's own (the source of truth for what a stored phone_e164 looks like); the external API
+// validates independently rather than importing that package, to keep module boundaries.
+var e164Pattern = regexp.MustCompile(`^\+[1-9][0-9]{6,14}$`)
+
+// SearchContacts: GET /external/contacts?phone_e164=+5592999999999 (OMNIRA_API_PENDENCIAS_CRM.md §2.3). Same visibility as GetContact
+// (a contact exists for this installation only through a conversation it may see), plus the newest OPEN conversation with it, if any —
+// so the CRM stops scanning the open list to find out whether a number already has an open conversation. Read-only: contact.read, the
+// scope it already holds for GetContact; no new scope, no new capability (creating a conversation is ADR-0050, not implemented).
+func (h *ReadHandler) SearchContacts(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	phone := strings.TrimSpace(r.URL.Query().Get("phone_e164"))
+	if !e164Pattern.MatchString(phone) {
+		problemBad(w, r, "phone_e164 must be a valid E.164 number, e.g. +5592999999999.")
+		return
+	}
+	var d ContactDTO
+	err := h.scoped(r, p, func(ctx context.Context, db platformdb.Querier, v Visibility) error {
+		var args Args
+		vis := v.Conversation("c", &args)
+		return db.QueryRow(ctx, `
+			SELECT ct.id, COALESCE(NULLIF(ct.alias, ''), ct.display_name, ''), COALESCE(ct.whatsapp_name, ''), COALESCE(ct.phone_e164, ''), ct.kind, ct.created_at, ct.updated_at,
+			       (SELECT c.id FROM conversations c WHERE c.contact_id = ct.id AND c.status = 'open' AND `+vis+` ORDER BY c.created_at DESC LIMIT 1)
+			  FROM contacts ct
+			 WHERE ct.tenant_id = $1 AND ct.phone_e164 = `+args.Add(phone)+` AND ct.kind NOT IN ('internal', 'spam')
+			   AND EXISTS (SELECT 1 FROM conversations c WHERE c.contact_id = ct.id AND `+vis+`)`, args.Values()...).
+			Scan(&d.ID, &d.Name, &d.WhatsAppName, &d.Phone, &d.Kind, &d.CreatedAt, &d.UpdatedAt, &d.OpenConversationID)
 	})
 	if err != nil {
 		failRead(w, r, err)

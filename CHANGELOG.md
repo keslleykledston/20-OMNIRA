@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added (API externa — busca de contato por telefone, pendência CRM §2.3)
+- `GET /api/v1/external/contacts?phone_e164=+55...`: acha um contato pelo telefone e devolve `open_conversation_id` quando há conversa aberta visível a essa instalação. Mesma regra de visibilidade do `GET /contacts/{id}` já existente (precisa de uma conversa visível, nunca contato interno/spam) — não é porta nova, reusa o scope `contact.read`, sem scope novo. Não cria contato nem conversa (isso é ADR-0050, bloqueado por decisão do dono).
+- Teste `TestReadAPISearchContactsByPhoneRespectsVisibilityAndNeverCrossesTenants` (Tenant A/B, Postgres real): contato com conversa aberta, contato só com conversa fechada (sem `open_conversation_id`), contato interno/de outro tenant/inexistente respondem o mesmo 404, validação de E.164, 403 sem o scope. Contrato `omnira-external-v1.yaml` atualizado (`GET /contacts`, campo `open_conversation_id`) e sincronizado em `docs/ops/crm-handoff/`. Sem migration.
+
 ### Added (API externa — preview da última mensagem na listagem, pendência CRM §3.3)
 - `GET /api/v1/external/conversations` e `GET /api/v1/external/conversations/{id}` passam a trazer `last_message: { id, direction, type, body, created_at }` (nunca mídia nem remetente — isso continua em `GET .../messages`).
 - Implementação: uma única consulta em lote (`DISTINCT ON`) por página, não uma subconsulta por conversa — uma primeira versão com `LEFT JOIN LATERAL` por linha media p95 > 2s sob carga real (`TestReadAPIListLatencyOnAMidSizeCompany`, 4000 conversas); a versão em lote mantém o mesmo teste estável (~20s de teste, sem violar o limite) e foi confirmada 3x consecutivas contra Postgres real.
