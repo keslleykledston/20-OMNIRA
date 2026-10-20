@@ -26,13 +26,18 @@ import (
 //
 // SUPOSIÇÃO (autenticação): HTTP Basic com usuário e token da API.
 // SUPOSIÇÃO (consulta): POST na tabela com header "ixcsoft: listar" e corpo
-//   {qtype, query, oper, page, rp, sortname, sortorder}; resposta
-//   {type, total, registros:[...]}.
+//
+//	{qtype, query, oper, page, rp, sortname, sortorder}; resposta
+//	{type, total, registros:[...]}.
+//
 // SUPOSIÇÃO (inserção): POST na tabela com os campos no corpo; resposta
-//   {type:"success", id:"<novo id>"}.
+//
+//	{type:"success", id:"<novo id>"}.
+//
 // SUPOSIÇÃO (edição): PUT em <tabela>/<id>.
 // SUPOSIÇÃO (tabelas): "cliente" para assinantes, "su_oss_chamado" para
-//   chamados de suporte.
+//
+//	chamados de suporte.
 type IXCConnector struct {
 	baseURL string
 	user    string
@@ -148,10 +153,10 @@ func (c *IXCConnector) CreateTicket(ctx context.Context, customerID, subject str
 	}
 	// SUPOSIÇÃO: campos mínimos para abrir chamado.
 	payload := map[string]string{
-		"id_cliente": customerID,
-		"titulo":     truncate(subject, 200),
-		"mensagem":   truncate(subject, 2000),
-		"status":     "N", // SUPOSIÇÃO: N = novo/aberto
+		"id_cliente":      customerID,
+		"titulo":          truncate(subject, 200),
+		"mensagem":        truncate(subject, 2000),
+		"status":          "N", // SUPOSIÇÃO: N = novo/aberto
 		"origem_endereco": "M",
 	}
 	body, err := c.do(ctx, http.MethodPost, ixcTableTicket, nil, payload, false)

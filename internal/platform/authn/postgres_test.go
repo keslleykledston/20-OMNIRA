@@ -15,21 +15,33 @@ func TestPostgresIdentityResolverCrossesRLSOnlyForProvisionedIdentity(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	owner, err := pgxpool.New(ctx, ownerURL)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer owner.Close()
 	app, err := pgxpool.New(ctx, appURL)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer app.Close()
 
 	userID, tenantID := uuid.New(), uuid.New()
 	subject := "oidc-test-" + uuid.NewString()
 	issuer := "https://idp.test/realms/" + uuid.NewString()
-	if _, err := owner.Exec(ctx, `INSERT INTO users(id,external_subject,email,display_name,status) VALUES($1,$2,$3,'OIDC Test','active')`, userID, issuer+"|"+subject, subject+"@invalid"); err != nil { t.Fatal(err) }
+	if _, err := owner.Exec(ctx, `INSERT INTO users(id,external_subject,email,display_name,status) VALUES($1,$2,$3,'OIDC Test','active')`, userID, issuer+"|"+subject, subject+"@invalid"); err != nil {
+		t.Fatal(err)
+	}
 	// Authentication resolves through user_identities, so the identity row is
 	// what makes this user reachable — not users.external_subject.
-	if _, err := owner.Exec(ctx, `INSERT INTO user_identities(user_id,issuer,subject) VALUES($1,$2,$3)`, userID, issuer, subject); err != nil { t.Fatal(err) }
-	if _, err := owner.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,'OIDC Tenant','active')`, tenantID); err != nil { t.Fatal(err) }
-	if _, err := owner.Exec(ctx, `INSERT INTO memberships(tenant_id,user_id,role_id,status) SELECT $1,$2,id,'active' FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL`, tenantID, userID); err != nil { t.Fatal(err) }
+	if _, err := owner.Exec(ctx, `INSERT INTO user_identities(user_id,issuer,subject) VALUES($1,$2,$3)`, userID, issuer, subject); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `INSERT INTO tenants(id,legal_name,status) VALUES($1,'OIDC Tenant','active')`, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `INSERT INTO memberships(tenant_id,user_id,role_id,status) SELECT $1,$2,id,'active' FROM roles WHERE key='tenant_agent' AND tenant_id IS NULL`, tenantID, userID); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		_, _ = owner.Exec(context.Background(), `DELETE FROM tenants WHERE id=$1`, tenantID)
 		_, _ = owner.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)

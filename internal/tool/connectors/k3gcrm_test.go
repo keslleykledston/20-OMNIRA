@@ -294,9 +294,9 @@ func TestK3GCRMCreateActivityRejectsEmptyFields(t *testing.T) {
 
 func TestK3GCRMCreateActivityMapsErrors(t *testing.T) {
 	tests := []struct {
-		name           string
-		statusCode     int
-		expectedErr    error
+		name        string
+		statusCode  int
+		expectedErr error
 	}{
 		{"unauthorized", http.StatusUnauthorized, ErrCRMUnauthorized},
 		{"forbidden", http.StatusForbidden, ErrCRMUnauthorized},

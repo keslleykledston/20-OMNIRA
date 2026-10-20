@@ -498,10 +498,10 @@ func (h *InvitationsHandler) deliver(ctx context.Context, q platformdb.Querier, 
 	_ = q.QueryRow(ctx, `SELECT COALESCE(email,'') FROM users WHERE id=$1`, tc.ActorID).Scan(&inviter)
 	msg := InvitationMessage{
 		To: inv.Email, TenantName: tenantName, InviterEmail: inviter,
-		AcceptURL: strings.TrimRight(h.webBaseURL, "/") + "/invite/" + raw,
+		AcceptURL:         strings.TrimRight(h.webBaseURL, "/") + "/invite/" + raw,
 		TemporaryPassword: tempPassword,
 		PasswordExpiresAt: password.ExpiresAt(),
-		ExpiresAt: inv.ExpiresAt,
+		ExpiresAt:         inv.ExpiresAt,
 	}
 	if err := h.sender.Send(ctx, msg); err != nil {
 		log.Printf("tenancy: invitation %s e-mail delivery failed", inv.ID)
@@ -1055,13 +1055,13 @@ func (h *InvitationsHandler) recordPlanApplied(ctx context.Context, tenantID, ac
 }
 
 var (
-	errInvitationNotFound         = errors.New("invitation not found")
-	errInvitationAlreadyUsed      = errors.New("invitation already accepted")
-	errInvitationOtherInstance    = errors.New("person already works in another instance")
-	errInvitationRevoked          = errors.New("invitation revoked")
-	errInvitationExpired          = errors.New("invitation expired")
-	errInvitationEmailUnverified  = errors.New("invitation e-mail not verified by the identity provider")
-	errInvitationPasswordInvalid  = errors.New("invitation temporary password is invalid")
+	errInvitationNotFound        = errors.New("invitation not found")
+	errInvitationAlreadyUsed     = errors.New("invitation already accepted")
+	errInvitationOtherInstance   = errors.New("person already works in another instance")
+	errInvitationRevoked         = errors.New("invitation revoked")
+	errInvitationExpired         = errors.New("invitation expired")
+	errInvitationEmailUnverified = errors.New("invitation e-mail not verified by the identity provider")
+	errInvitationPasswordInvalid = errors.New("invitation temporary password is invalid")
 )
 
 // emailVerified: o e-mail do convite só vale como prova de identidade se o IdP afirmou

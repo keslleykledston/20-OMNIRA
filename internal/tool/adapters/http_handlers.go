@@ -6,15 +6,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/omnira/omnira/internal/tenancy/domain"
-	tooldomain "github.com/omnira/omnira/internal/tool/domain"
 	"github.com/omnira/omnira/internal/tool/application"
+	tooldomain "github.com/omnira/omnira/internal/tool/domain"
 	"github.com/omnira/omnira/internal/tool/execution"
 )
 
 // ToolHandler — handlers HTTP para Tool API
 type ToolHandler struct {
-	toolSvc     *application.ToolService
-	executor    *execution.Executor
+	toolSvc  *application.ToolService
+	executor *execution.Executor
 }
 
 // NewToolHandler — cria novo ToolHandler
@@ -131,15 +131,15 @@ type ExecuteToolRequest struct {
 
 // ExecutionResponse — resposta de execução
 type ExecutionResponse struct {
-	ID            string                 `json:"id"`
-	ToolID        string                 `json:"tool_id"`
-	Status        string                 `json:"status"`
-	Input         map[string]interface{} `json:"input"`
-	Output        map[string]interface{} `json:"output,omitempty"`
-	Error         string                 `json:"error,omitempty"`
-	Duration      int                    `json:"duration"` // milliseconds
-	StartedAt     string                 `json:"started_at"`
-	CompletedAt   *string                `json:"completed_at,omitempty"`
+	ID          string                 `json:"id"`
+	ToolID      string                 `json:"tool_id"`
+	Status      string                 `json:"status"`
+	Input       map[string]interface{} `json:"input"`
+	Output      map[string]interface{} `json:"output,omitempty"`
+	Error       string                 `json:"error,omitempty"`
+	Duration    int                    `json:"duration"` // milliseconds
+	StartedAt   string                 `json:"started_at"`
+	CompletedAt *string                `json:"completed_at,omitempty"`
 }
 
 // ExecuteTool — POST /tools/{toolID}/execute

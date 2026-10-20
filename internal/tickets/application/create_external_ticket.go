@@ -40,7 +40,7 @@ var (
 	ErrInvalidIdempotencyKey = errors.New("tickets: Idempotency-Key must be 8-128 chars of [A-Za-z0-9._:-]")
 	ErrForbidden             = errors.New("tickets: forbidden")
 	// ErrHubStatusDisabled: the company switched off the Hub's right to change the ERP status.
-	ErrHubStatusDisabled = errors.New("tickets: changing the ERP status through the Hub is disabled for this company")
+	ErrHubStatusDisabled     = errors.New("tickets: changing the ERP status through the Hub is disabled for this company")
 	ErrConversationNotFound  = errors.New("tickets: conversation not found")
 	ErrUnassigned            = errors.New("tickets: conversation must be assigned before an external ticket can be created")
 	ErrNotAssignedToYou      = errors.New("tickets: conversation is assigned to another agent")

@@ -15,11 +15,11 @@ type Tool struct {
 	TenantID    uuid.UUID
 	Name        string
 	Description string
-	Type        ToolType       // http, webhook, script, etc
-	Spec        ToolSpec       // Configuração específica do tipo
-	Status      ToolStatus     // active, inactive, deprecated
-	Schema      ToolSchema     // Input/output schema para validação
-	Version     int            // Versão incremental
+	Type        ToolType   // http, webhook, script, etc
+	Spec        ToolSpec   // Configuração específica do tipo
+	Status      ToolStatus // active, inactive, deprecated
+	Schema      ToolSchema // Input/output schema para validação
+	Version     int        // Versão incremental
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	CreatedBy   uuid.UUID
@@ -40,10 +40,10 @@ const (
 type ToolStatus string
 
 const (
-	ToolStatusActive      ToolStatus = "active"
-	ToolStatusInactive    ToolStatus = "inactive"
-	ToolStatusDeprecated  ToolStatus = "deprecated"
-	ToolStatusError       ToolStatus = "error"
+	ToolStatusActive     ToolStatus = "active"
+	ToolStatusInactive   ToolStatus = "inactive"
+	ToolStatusDeprecated ToolStatus = "deprecated"
+	ToolStatusError      ToolStatus = "error"
 )
 
 // ToolSpec — configuração específica
@@ -60,7 +60,7 @@ type ToolSpec struct {
 	Code     string `json:"code,omitempty"`     // Código fonte
 
 	// SQL
-	Query   string `json:"query,omitempty"` // SQL query
+	Query   string `json:"query,omitempty"`   // SQL query
 	Timeout int    `json:"timeout,omitempty"` // Segundos
 
 	// Webhook

@@ -224,11 +224,11 @@ func (h *AuditAPIHandler) Stats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := map[string]interface{}{
-		"total_events":  len(events),
-		"successful":    successCount,
-		"failed":        len(events) - successCount,
-		"by_action":     actionCounts,
-		"by_actor":      actorCounts,
+		"total_events": len(events),
+		"successful":   successCount,
+		"failed":       len(events) - successCount,
+		"by_action":    actionCounts,
+		"by_actor":     actorCounts,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

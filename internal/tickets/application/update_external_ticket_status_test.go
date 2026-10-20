@@ -164,11 +164,11 @@ func (f *fakeStatusAttempts) MarkProjectionSynced(ctx context.Context, attemptID
 // O2B3 extends fakeTicketing with updateHook for concurrency simulation
 
 type fakeLocalTicketsForStatus struct {
-	mu                   sync.Mutex
-	candidate            *ticketsdomain.Ticket
-	enrichCalls          int
-	enrichErrSeq         []error
-	gotExternalStatus    string
+	mu                     sync.Mutex
+	candidate              *ticketsdomain.Ticket
+	enrichCalls            int
+	enrichErrSeq           []error
+	gotExternalStatus      string
 	gotExternalStatusLabel string
 }
 

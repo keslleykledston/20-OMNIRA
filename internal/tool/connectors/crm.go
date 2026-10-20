@@ -11,12 +11,12 @@ import (
 
 // CRMTicket — representação local de ticket no CRM
 type CRMTicket struct {
-	ID        string
+	ID         string
 	CustomerID string
-	Subject   string
-	Status    string // open, in_progress, resolved, closed
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Subject    string
+	Status     string // open, in_progress, resolved, closed
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // CRMConnector — porta canônica de CRM/ERP. O core não conhece campos de
@@ -89,12 +89,12 @@ func (m *MockCRMConnector) CreateTicket(ctx context.Context, customerID, subject
 	ticketID := "ticket_" + uuid.New().String()
 	now := time.Now().UTC()
 	m.tickets[ticketID] = &CRMTicket{
-		ID:        ticketID,
+		ID:         ticketID,
 		CustomerID: customerID,
-		Subject:   subject,
-		Status:    "open",
-		CreatedAt: now,
-		UpdatedAt: now,
+		Subject:    subject,
+		Status:     "open",
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 
 	return ticketID, nil

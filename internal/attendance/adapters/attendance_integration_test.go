@@ -551,7 +551,9 @@ func TestFinalizeBySystemClosesLikeAnAgentAndIsRecordedAsTheSystem(t *testing.T)
 	s.exec(`UPDATE conversations SET automation_mode='waiting_human' WHERE id=$1`, conv)
 
 	var err error
-	s.env.AsSystem(t, s.env.TenantA, func(ctx context.Context) { err = s.svc.CloseForCustomer(ctx, conv, "Encerrado pelo cliente por comando (confirmed).") })
+	s.env.AsSystem(t, s.env.TenantA, func(ctx context.Context) {
+		err = s.svc.CloseForCustomer(ctx, conv, "Encerrado pelo cliente por comando (confirmed).")
+	})
 	if err != nil {
 		t.Fatalf("close: %v", err)
 	}
