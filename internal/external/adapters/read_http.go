@@ -616,6 +616,213 @@ func (h *ReadHandler) ListQueues(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusOK, map[string]any{"items": items})
 }
 
+// attachGroupLastMessagePreviews mirrors attachLastMessagePreviews (ADR-0051): ONE batched query for the whole page, never a per-group
+// lateral — same perf lesson (Codex H3-LAT) that drove the conversation list's own design.
+func attachGroupLastMessagePreviews(ctx context.Context, db platformdb.Querier, tenantID uuid.UUID, items []GroupDTO) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(items))
+	for i, it := range items {
+		ids[i] = it.ID
+	}
+	rows, err := db.Query(ctx, `
+		SELECT DISTINCT ON (gm.group_id) gm.group_id, COALESCE(NULLIF(ct.alias, ''), gm.author_name), gm.from_me, gm.message_type, gm.body, gm.sent_at
+		  FROM wa_group_messages gm
+		  LEFT JOIN channel_participants cp ON cp.tenant_id = gm.tenant_id AND cp.id = gm.sender_channel_participant_id
+		  LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
+		 WHERE gm.tenant_id = $1 AND gm.group_id = ANY($2::uuid[])
+		 ORDER BY gm.group_id, gm.sent_at DESC, gm.id DESC`, tenantID, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byGroup := make(map[uuid.UUID]GroupLastMessagePreviewDTO, len(items))
+	for rows.Next() {
+		var gid uuid.UUID
+		var lm GroupLastMessagePreviewDTO
+		if err := rows.Scan(&gid, &lm.AuthorName, &lm.FromMe, &lm.Type, &lm.Body, &lm.SentAt); err != nil {
+			return err
+		}
+		byGroup[gid] = lm
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range items {
+		if lm, ok := byGroup[items[i].ID]; ok {
+			items[i].LastMessage = &lm
+		}
+	}
+	return nil
+}
+
+// ListGroups: GET /external/groups (ADR-0051, scope group.read.external). The company's ENABLED WhatsApp groups, narrowed to the
+// installation's channel allow-list when the administrator set one — same allow-list that already narrows conversations/queues/templates.
+// A disabled group never appears: same rule the Workspace itself applies before group.manage history access.
+func (h *ReadHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	items := []GroupDTO{}
+	err := h.scoped(r, p, func(ctx context.Context, db platformdb.Querier, v Visibility) error {
+		var args Args
+		where := v.Group("g", &args)
+		rows, err := db.Query(ctx, `
+			SELECT g.id, g.name, g.channel_connection_id, g.last_message_at
+			  FROM wa_groups g
+			 WHERE `+where+`
+			 ORDER BY g.last_message_at DESC NULLS LAST, g.id`, args.Values()...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d GroupDTO
+			if err := rows.Scan(&d.ID, &d.Name, &d.ChannelConnectionID, &d.LastMessageAt); err != nil {
+				return err
+			}
+			items = append(items, d)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return attachGroupLastMessagePreviews(ctx, db, p.TenantID, items)
+	})
+	if err != nil {
+		failRead(w, r, err)
+		return
+	}
+	externalMetric.Inc("served")
+	WriteJSON(w, r, http.StatusOK, map[string]any{"items": items})
+}
+
+// ListGroupMessages: GET /external/groups/{id}/messages?order=asc|desc&limit=&cursor= (ADR-0051), same keyset/cursor pattern as
+// conversations/{id}/messages. AuthorName only on every row — never author_jid (ADR-0015/0051 minimization).
+func (h *ReadHandler) ListGroupMessages(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	id, ok := uuidParam(r, "id")
+	if !ok {
+		problemNotFound(w, r)
+		return
+	}
+	limit, ok := pageSize(r)
+	cur, ok2 := cursorOf(r)
+	if !ok || !ok2 {
+		problemBad(w, r, "limit must be 1 to 200 and cursor must be one returned by this API.")
+		return
+	}
+	order, cmp := "ASC", ">"
+	switch r.URL.Query().Get("order") {
+	case "", "asc":
+	case "desc":
+		order, cmp = "DESC", "<"
+	default:
+		problemBad(w, r, "order must be asc or desc.")
+		return
+	}
+	var out PageDTO[GroupMessageDTO]
+	err := h.scoped(r, p, func(ctx context.Context, db platformdb.Querier, v Visibility) error {
+		// the group must be visible (enabled, tenant, channel allow-list): the whole page is a 404 otherwise, same as conversation messages
+		var args Args
+		vis := v.Group("g", &args)
+		var exists bool
+		if err := db.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM wa_groups g WHERE "+vis+" AND g.id = "+args.Add(id)+")", args.Values()...).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return errNotVisible
+		}
+		var args2 Args
+		vis2 := v.Group("g", &args2)
+		where2 := vis2 + " AND gm.tenant_id = g.tenant_id AND gm.group_id = g.id AND g.id = " + args2.Add(id)
+		if cur != nil {
+			cid, _ := uuid.Parse(cur.ID)
+			where2 += " AND (gm.sent_at, gm.id) " + cmp + " (" + args2.Add(cur.Timestamp.UTC()) + ", " + args2.Add(cid) + ")"
+		}
+		rows, err := db.Query(ctx, `
+			SELECT gm.id, COALESCE(NULLIF(ct.alias, ''), gm.author_name), gm.from_me, gm.message_type, gm.body, gm.sent_at
+			  FROM wa_group_messages gm
+			  JOIN wa_groups g ON g.tenant_id = gm.tenant_id AND g.id = gm.group_id
+			  LEFT JOIN channel_participants cp ON cp.tenant_id = gm.tenant_id AND cp.id = gm.sender_channel_participant_id
+			  LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
+			 WHERE `+where2+` ORDER BY gm.sent_at `+order+`, gm.id `+order+` LIMIT `+args2.Add(limit+1), args2.Values()...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m GroupMessageDTO
+			if err := rows.Scan(&m.ID, &m.AuthorName, &m.FromMe, &m.Type, &m.Body, &m.SentAt); err != nil {
+				return err
+			}
+			out.Items = append(out.Items, m)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		failRead(w, r, err)
+		return
+	}
+	if out.Items == nil {
+		out.Items = []GroupMessageDTO{}
+	}
+	if len(out.Items) > limit {
+		out.Items, out.HasMore = out.Items[:limit], true
+		last := out.Items[len(out.Items)-1]
+		out.NextCursor = (&pagination.Cursor{ID: last.ID.String(), Timestamp: last.SentAt}).Encode()
+	}
+	externalMetric.Inc("served")
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
+// ListGroupParticipants: GET /external/groups/{id}/participants (ADR-0051 §5). Distinct authors actually seen in this group's stored
+// history — name only, derived from channel_participants, never the opaque WhatsApp id/JID. A group that is not visible (wrong tenant,
+// disabled, outside the channel allow-list) answers 404, the same document as a group that never existed — no cross-tenant enumeration oracle.
+func (h *ReadHandler) ListGroupParticipants(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	id, ok := uuidParam(r, "id")
+	if !ok {
+		problemNotFound(w, r)
+		return
+	}
+	items := []GroupParticipantDTO{}
+	err := h.scoped(r, p, func(ctx context.Context, db platformdb.Querier, v Visibility) error {
+		var args Args
+		vis := v.Group("g", &args)
+		var exists bool
+		if err := db.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM wa_groups g WHERE "+vis+" AND g.id = "+args.Add(id)+")", args.Values()...).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return errNotVisible
+		}
+		rows, err := db.Query(ctx, `
+			SELECT DISTINCT cp.id, COALESCE(NULLIF(ct.alias, ''), cp.display_name, '') AS name
+			  FROM wa_group_messages gm
+			  JOIN channel_participants cp ON cp.tenant_id = gm.tenant_id AND cp.id = gm.sender_channel_participant_id
+			  LEFT JOIN contacts ct ON ct.tenant_id = cp.tenant_id AND ct.id = cp.contact_id
+			 WHERE gm.tenant_id = $1 AND gm.group_id = $2
+			 ORDER BY name, cp.id`, p.TenantID, id)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d GroupParticipantDTO
+			if err := rows.Scan(&d.ID, &d.Name); err != nil {
+				return err
+			}
+			items = append(items, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		failRead(w, r, err)
+		return
+	}
+	externalMetric.Inc("served")
+	WriteJSON(w, r, http.StatusOK, map[string]any{"items": items})
+}
+
 // ListTemplates: GET /external/templates (ADR-0052, scope template.read). Approved, sendable WhatsApp templates of the company, narrowed to
 // the installation's channel allow-list when the administrator set one — the same allow-list that already narrows conversations and queues.
 func (h *ReadHandler) ListTemplates(w http.ResponseWriter, r *http.Request) {

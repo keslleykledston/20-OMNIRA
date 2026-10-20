@@ -615,6 +615,10 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	s.mux.Handle("GET /api/v1/external/contacts", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactRead, http.HandlerFunc(read.SearchContacts))))
 	s.mux.Handle("GET /api/v1/external/templates", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeTemplateRead, http.HandlerFunc(read.ListTemplates))))
 	s.mux.Handle("GET /api/v1/external/media/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMediaRead, http.HandlerFunc(read.GetMedia))))
+	// ADR-0051: read-only surface for WhatsApp groups, its own scope (never group.manage, never message.send's territory).
+	s.mux.Handle("GET /api/v1/external/groups", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeGroupReadExternal, http.HandlerFunc(read.ListGroups))))
+	s.mux.Handle("GET /api/v1/external/groups/{id}/messages", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeGroupReadExternal, http.HandlerFunc(read.ListGroupMessages))))
+	s.mux.Handle("GET /api/v1/external/groups/{id}/participants", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeGroupReadExternal, http.HandlerFunc(read.ListGroupParticipants))))
 	// the durable journal (H4): the checkpoint to bootstrap from and the facts after a sequence number
 	s.mux.Handle("GET /api/v1/external/sync/checkpoint", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.Checkpoint))))
 	s.mux.Handle("GET /api/v1/external/events", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.ListEvents))))

@@ -18,6 +18,7 @@ export const SCOPES: { key: string; label: string; write: boolean }[] = [
   { key: 'service.read', label: 'Receber eventos de protocolos, ocorrências, tarefas e ordens de serviço', write: false },
   { key: 'template.read', label: 'Listar templates aprovados do WhatsApp', write: false },
   { key: 'message.note', label: 'Registrar notas internas (nunca enviadas ao cliente)', write: true },
+  { key: 'group.read.external', label: 'Ler grupos de WhatsApp habilitados (nome dos participantes, nunca telefone)', write: false },
 ]
 
 export const EVENT_TYPES: { key: string; label: string }[] = [

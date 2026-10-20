@@ -770,8 +770,8 @@ func TestEveryStatementOfTheExternalReadSideNamesTheTenant(t *testing.T) {
 				continue // a call to a SECURITY DEFINER door that binds tenant + installation itself
 			}
 			checked++
-			// the shared constants carry the tenant through Visibility (conversation_select), which is built with it
-			if !strings.Contains(m[1], "tenant_id") && !strings.Contains(m[1], "conversations c") {
+			// the shared constants carry the tenant through Visibility (conversation_select / Visibility.Group's "wa_groups g"), which is built with it
+			if !strings.Contains(m[1], "tenant_id") && !strings.Contains(m[1], "conversations c") && !strings.Contains(m[1], "wa_groups g") {
 				t.Errorf("%s: a statement without tenant_id: %.80s", f, strings.Join(strings.Fields(m[1]), " "))
 			}
 		}

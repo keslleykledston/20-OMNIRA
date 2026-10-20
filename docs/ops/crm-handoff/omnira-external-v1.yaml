@@ -41,6 +41,7 @@ tags:
   - { name: Identity, description: "Who the credential is and what it may do" }
   - { name: Conversations, description: "Read the conversations and their messages" }
   - { name: Contacts, description: "Read a contact" }
+  - { name: Groups, description: "Read-only WhatsApp groups (ADR-0051): never mixed into conversations/messages" }
   - { name: Media, description: "Download a message's file" }
   - { name: Commands, description: "Coordinated writes: claim, release, transfer, send, finalize" }
   - { name: Journal, description: "The durable journal of facts: checkpoint and replay" }
@@ -104,6 +105,73 @@ paths:
                     items: { $ref: '#/components/schemas/Template' }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/groups:
+    get:
+      operationId: listExternalGroups
+      tags: [Groups]
+      summary: Enabled WhatsApp groups the installation may see (ADR-0051)
+      description: |
+        Needs the scope `group.read.external`. Groups live in their own read-only model (ADR-0015), never mixed into `conversations`/`messages`/`contacts` — a
+        group is never a conversation. Only groups an administrator explicitly ENABLED are ever listed; narrowed to the installation's channel allowlist when
+        the administrator set one. The author of a preview message is a name only — never a phone number or WhatsApp JID (ADR-0015/ADR-0051 minimization).
+      responses:
+        '200':
+          description: The groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Group' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/groups/{id}/messages:
+    get:
+      operationId: listExternalGroupMessages
+      tags: [Groups]
+      summary: A group's message history (ADR-0051)
+      description: |
+        Needs the scope `group.read.external`. Same keyset/cursor pagination pattern as `GET /conversations/{id}/messages`. `author_name` only on every
+        message — never the sender's phone number or WhatsApp JID. A group that is not visible (wrong company, disabled, outside the channel allowlist)
+        answers the same `404` as one that never existed.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/GroupMessagePage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/groups/{id}/participants:
+    get:
+      operationId: listExternalGroupParticipants
+      tags: [Groups]
+      summary: Distinct participants seen in a group's stored history (ADR-0051 §5)
+      description: |
+        Needs the scope `group.read.external`. Only the participants who actually sent a stored message — there is no full roster beyond that. Name only,
+        never a phone number or WhatsApp JID. A group that is not visible answers the same `404` as one that never existed (no enumeration oracle).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The participants
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/GroupParticipant' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
   /external/queues:
     get:
@@ -749,6 +817,48 @@ components:
         language: { type: string }
         body: { type: string }
         variable_count: { type: integer }
+    GroupLastMessagePreview:
+      type: object
+      description: Enough of the newest message to render a group list preview without a second call per row. Author name only, never a phone number or JID.
+      required: [from_me, type, sent_at]
+      properties:
+        author_name: { type: string }
+        from_me: { type: boolean }
+        type: { type: string }
+        body: { type: string }
+        sent_at: { type: string, format: date-time }
+    Group:
+      type: object
+      required: [id, name, channel_connection_id]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        channel_connection_id: { type: string, format: uuid }
+        last_message_at: { type: string, format: date-time }
+        last_message: { $ref: '#/components/schemas/GroupLastMessagePreview' }
+    GroupMessage:
+      type: object
+      required: [id, from_me, type, sent_at]
+      properties:
+        id: { type: string, format: uuid }
+        author_name: { type: string, description: "Never a phone number or WhatsApp JID (ADR-0015/ADR-0051 minimization)." }
+        from_me: { type: boolean }
+        type: { type: string }
+        body: { type: string }
+        sent_at: { type: string, format: date-time }
+    GroupMessagePage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/GroupMessage' } }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+    GroupParticipant:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
     Problem:
       type: object
       required: [type, title, status, code]
@@ -779,7 +889,7 @@ components:
             id: { type: string, format: uuid }
         scopes:
           type: array
-          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read, message.note] }
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read, message.note, group.read.external] }
         limits:
           type: object
           required: [rate_limit_per_min, allow_outside_hours]

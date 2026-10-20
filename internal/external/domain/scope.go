@@ -30,16 +30,25 @@ const (
 	// ScopeMessageNote (ADR-0053) lets the application record an internal note on a conversation it holds — a message that is NEVER queued for
 	// delivery. Independent of message.send: an installation may hold one without the other.
 	ScopeMessageNote Scope = "message.note"
+	// ScopeGroupReadExternal (ADR-0051) lets the application list the company's ENABLED WhatsApp groups and read their message history —
+	// never a group's participant phone/JID (name only, same minimization as the Workspace's own group.read), and never group.manage
+	// (enable/disable/purge history stays exclusive to the Workspace). Independent of group.read, the Workspace-user permission: a
+	// closed-list scope of its own, same pattern as every other capability in this catalog.
+	ScopeGroupReadExternal Scope = "group.read.external"
 )
 
 // AllScopes is every scope in a stable order.
 var AllScopes = []Scope{
 	ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead,
 	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend, ScopeServiceRead, ScopeTemplateRead, ScopeMessageNote,
+	ScopeGroupReadExternal,
 }
 
 // ReadScopes are the scopes that never change anything.
-var ReadScopes = []Scope{ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead, ScopeServiceRead, ScopeTemplateRead}
+var ReadScopes = []Scope{
+	ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead, ScopeServiceRead, ScopeTemplateRead,
+	ScopeGroupReadExternal,
+}
 
 func (s Scope) Valid() bool {
 	for _, k := range AllScopes {
