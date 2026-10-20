@@ -1,7 +1,13 @@
 # ADR-0050: Abrir conversa outbound por telefone na API externa (Headless)
 
 ## Status
-**Proposto (2026-10-20).** Reabre a "fase D" de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4-G5 e §7.1, a pedido explícito do dono do produto nesta sessão. **Não implementar antes deste ADR ser aceito e sem a resposta à questão em aberto da §"Questões em aberto"**, que é bloqueante.
+**Aceito (2026-10-20).** Reabre a "fase D" de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4-G5 e §7.1, a pedido explícito do dono do produto nesta sessão.
+
+O dono do produto decidiu destravar a implementação sem esperar a resposta do CRM sobre o número do Gateway, porque essa resposta **não muda o desenho técnico** deste ADR (seção "Decisão", item 1 já condiciona `channel_id` à allowlist da instalação chamadora — o mecanismo é o mesmo esteja o número compartilhado com o atendimento ou não). O que a resposta pendente muda é só:
+- a **urgência operacional** de uma migração separada do inbox de alerta para dentro do OMNIRA, caso o número seja de fato compartilhado com o atendimento (sessão única do WhatsApp oficial) — isso é decisão de operação/infra, não de arquitetura da API, e fica registrado como follow-up em aberto, não como bloqueio de engenharia;
+- nada no contrato do endpoint, nos scopes ou nos testes de tenancy.
+
+Questões em aberto 2 e 3 (catálogo de template e auto-claim) resolvidas abaixo.
 
 ## Contexto
 O pacote `OMNIRA_API_PENDENCIAS_CRM.md` (equipe CRM K3G, out/2026) pede um endpoint que crie ou reutilize uma conversa a partir de um telefone E.164, usado hoje pelo Gateway de monitoramento do CRM para abrir alertas via WhatsApp quando não há conversa aberta. Essa mesma lacuna já tinha sido mapeada como **G5** em `HEADLESS-CHATWOOT-MAPPING.md` §4 e §7.1 em 2026-10-17, quando **o dono não soube decidir** e a recomendação registrada foi adiar para uma "fase D", por ser "a parte mais arriscada" (envio ativo a terceiro, exige template aprovado pela Meta fora da janela de 24h, exige consentimento).
@@ -40,7 +46,7 @@ A pergunta que ficou sem resposta em 2026-10-17 (§7.1) permanece em aberto e é
 - **Expor outbound sem exigir template fora da janela**: mais simples, mas viola a política da Meta e arrisca o número oficial (ban). Rejeitada.
 - **CRM mantém a lógica de outbound no próprio Chatwoot-replacement e o OMNIRA só expõe `contact.search` + `conversation.create` genérico sem template embutido**: separa as duas chamadas (cria contato/conversa já dentro da janela só se houver conversa anterior; senão falha e obriga o CRM a resolver template por fora). Mais simples do lado do OMNIRA, mas empurra a decisão de compliance para o CRM sem dar a ele o catálogo de templates (depende de ADR-0051... tratado em separado, ver pendência de listagem de templates). Considerar se o esforço do item "Decisão" acima for grande demais para uma primeira fatia.
 
-## Questões em aberto (bloqueantes)
-1. **O inbox de alertas do Gateway usa o mesmo número de WhatsApp do atendimento, ou outro número?** Precisa de resposta do time CRM K3G antes de iniciar a implementação — muda a prioridade e pode mudar o desenho.
-2. Quem decide quais templates valem para alerta de Gateway (catálogo fixo vs. livre por tipo de alerta)? Depende também da pendência de listagem de templates (lacuna separada, menor, já endereçada em paralelo).
-3. `conversation.open` precisa também assumir (`claim`) automaticamente a conversa recém-criada para a aplicação chamadora, ou a aplicação sempre faz um `claim` explícito depois? Afeta o contrato de resposta do endpoint.
+## Questões em aberto
+1. **(Não bloqueante, follow-up operacional)** O inbox de alertas do Gateway usa o mesmo número de WhatsApp do atendimento, ou outro número? Ainda sem resposta do time CRM K3G desde 17/10 — não bloqueia este ADR (ver "Status"), mas decide se é preciso um projeto separado de migração do inbox de alerta para dentro do OMNIRA.
+2. **Resolvido:** catálogo de template é livre por tipo de alerta — a aplicação chamadora escolhe entre os templates que `GET /api/v1/external/templates` (ADR-0052, já implementado) já retorna para a instalação (aprovados, `sendable=true`, dentro da allowlist de canal); não há catálogo fixo adicional específico de "alerta" nesta fatia.
+3. **Resolvido:** `conversation.open` assume (`claim`) automaticamente a conversa **somente quando ela é criada por esta chamada** (não havia controlador anterior, não é "tomar" de ninguém). Se a chamada **reusa** uma conversa já existente e já controlada por outra parte (Workspace ou outra instalação), não há claim automático — a chamada falha com `409 held_by_other`, igual ao restante do padrão de controle de conversa; a aplicação chamadora precisa de um `conversation.claim` explícito (fora de escopo desta fatia) para assumir uma conversa pré-existente.

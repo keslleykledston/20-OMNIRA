@@ -1,7 +1,11 @@
 # ADR-0051: Superfície de leitura de grupos do WhatsApp na API externa (Headless)
 
 ## Status
-**Proposto (2026-10-20).** Reabre G6 de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4, a pedido explícito do dono do produto nesta sessão. G6 estava **fechada em 2026-10-18** ("o CRM usa só contatos hoje; grupos ficam para o futuro"), mas o próprio texto da decisão já previa o caminho: *"Se o CRM precisar deles, é uma superfície nova e só de leitura (`/external/groups`), com ADR"* — este ADR é exatamente esse caminho, não uma contradição da decisão anterior.
+**Aceito e implementado (2026-10-20).** Reabre G6 de `docs/ops/HEADLESS-CHATWOOT-MAPPING.md` §4, a pedido explícito do dono do produto nesta sessão. G6 estava **fechada em 2026-10-18** ("o CRM usa só contatos hoje; grupos ficam para o futuro"), mas o próprio texto da decisão já previa o caminho: *"Se o CRM precisar deles, é uma superfície nova e só de leitura (`/external/groups`), com ADR"* — este ADR é exatamente esse caminho, não uma contradição da decisão anterior.
+
+O dono do produto confirmou nesta sessão o caso de uso que faltava na "Questão em aberto" nº1: o próprio pedido P1 do CRM (`OMNIRA_API_PENDENCIAS_CRM.md` §3.1/§3.2 — `kind`/`is_group`/`jid`, participantes, remetente em mensagem de grupo) **é** o caso de uso concreto; não há um fluxo adicional a esperar. Questão nº2 (nome do scope) resolvida abaixo: `group.read.external`.
+
+Implementado como desenhado, sem desvio: `GET /external/groups`, `GET /external/groups/{id}/messages`, `GET /external/groups/{id}/participants`, migration `000171` (só o scope, nenhuma tabela nova), testes Tenant A/B/allowlist/enumeração contra PostgreSQL real. Detalhes no CHANGELOG.
 
 ## Contexto
 O pacote `OMNIRA_API_PENDENCIAS_CRM.md` pede, como item P1: `kind`/`is_group`/`jid` em contato/conversa, endpoint de participantes, e remetente (`name`/`phone_e164`/`jid`) em mensagens inbound de grupo.
@@ -31,5 +35,4 @@ Confirmado por inspeção nesta sessão: `ContactDTO.kind` existe mas com valore
 - **Reusar `group.read` do Workspace como scope da API externa**: mistura autorização de usuário humano com autorização de aplicação, modelo diferente do resto da API external (que sempre tem scope próprio por capability). Rejeitada por consistência.
 
 ## Questões em aberto
-1. Qual é o caso de uso concreto do CRM para grupos? O documento de pendências não descreve um fluxo — vale confirmar com o CRM antes de implementar, para não construir superfície sem consumidor real.
-2. Nome final do scope (`group.read.external` é só uma proposta de trabalho).
+Nenhuma — resolvidas acima (ver "Status").
