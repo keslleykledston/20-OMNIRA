@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (Aplicações externas — editar sem recriar, ADR-0048, pendência CRM §3.6)
+- Tela "Aplicações externas" ganhou botão **Editar** (nome, escopos, filas/linhas da allowlist), reaproveitando o `PATCH /tenants/{t}/integrations/apps/{app_id}` que já existia no backend (testado) mas nunca era chamado pela tela — até agora, qualquer ajuste exigia criar outra aplicação. `rate_limit_per_min` e `lease_seconds` continuam fora da tela (decisão já tomada no commit `9df1010`).
+- **Histórico** por aplicação: `GET /tenants/{t}/integrations/apps/{app_id}/audit` (novo `AdminHandler.History`, novo `AuditEventRepository.FindByResource`), listado na tela — quem criou/alterou/suspendeu/revogou e quando, sem token nem segredo.
+- Testes: `TestEditingNameScopesAndAllowlistIsAuditedAndNeverCrossesTenants` (Tenant A/B, Postgres real) — editar não cruza tenant, histórico de A é 404 para B em toda rota (leitura, escrita, auditoria), supervisor lê o histórico mas não edita. Frontend: 2 testes novos em `ExternalAppsPage.test.tsx` (editar e mostrar histórico). Sem migration.
+- **Não implantado ainda** (só no branch/working tree; falta build e deploy das imagens `api`/`web`).
+
 ### Added (Multi-Tenant Service Hub — estado `LAB`, migrations 093–121)
 - Hub como plano de controle: contratos, concessões, painel `/acessos`, convites por e-mail, pools e distribuição, auditoria; atender uma empresa pelo Hub (`X-Omnira-Acting-As`) com chaves delegáveis; aba "Todas" no layout aprovado (fila × histórico, abas, painel recolhível) com sinal de mudança em tempo real (`GET /api/v1/hubs/{id}/events`, SSE sem conteúdo).
 - Isolamento: RLS FORCE, contexto de sessão assinado em `enforce` (ADR-0042, migration 118), escopo das escritas de auditoria/outbox (121), checagem de mesma origem nas escritas por cookie, limpeza de cache/rascunhos ao sair.

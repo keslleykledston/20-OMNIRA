@@ -6,7 +6,7 @@ import { SettingsShell, SETTINGS_SECTIONS } from '../components/SettingsShell'
 import { SecretOnce } from '../components/externalapps/SecretOnce'
 import WebhooksPanel from '../components/externalapps/WebhooksPanel'
 import { channelsAPI } from '../lib/channels'
-import { SCOPES, externalAppErrorMessage, externalAppsAPI, statusLabel, type ExternalApp, type IssuedCredential } from '../lib/externalApps'
+import { SCOPES, auditActionLabel, externalAppErrorMessage, externalAppsAPI, statusLabel, type ExternalApp, type IssuedCredential } from '../lib/externalApps'
 import { queuesAPI } from '../lib/queues'
 import { getTenantId } from '../lib/session'
 import { useAccess } from '../lib/useAccess'
@@ -79,6 +79,67 @@ function CreateForm({ onCreated, onClose }: { onCreated: (app: ExternalApp, cred
   )
 }
 
+// Edits name, scopes and the queue/channel allow-list of an installation already created — PATCH /tenants/{t}/integrations/apps/{app_id},
+// which already accepted and persisted these fields (store.go Update); only the screen to call it was missing.
+function EditForm({ app, onSaved, onClose }: { app: ExternalApp; onSaved: (app: ExternalApp) => void; onClose: () => void }) {
+  const tenantId = getTenantId()
+  const qc = useQueryClient()
+  const [name, setName] = useState(app.name)
+  const [scopes, setScopes] = useState<string[]>(app.scopes)
+  const [queueIds, setQueueIds] = useState<string[]>(app.queue_ids)
+  const [channelIds, setChannelIds] = useState<string[]>(app.channel_ids)
+  const [outside, setOutside] = useState(app.allow_outside_hours)
+  const [error, setError] = useState<string | null>(null)
+  const queues = useQuery({ queryKey: ['queues', tenantId], queryFn: queuesAPI.list })
+  const channels = useQuery({ queryKey: ['channel-connections', tenantId], queryFn: channelsAPI.list })
+  const save = useMutation({
+    mutationFn: () => externalAppsAPI.update(app.id, { name: name.trim(), scopes, queue_ids: queueIds, channel_ids: channelIds, allow_outside_hours: outside }),
+    onSuccess: (updated) => {
+      void qc.invalidateQueries({ queryKey: ['external-apps', tenantId] })
+      void qc.invalidateQueries({ queryKey: ['external-app-audit', tenantId, app.id] })
+      onSaved(updated)
+    },
+    onError: (e) => setError(externalAppErrorMessage(e)),
+  })
+  const toggle = (list: string[], set: (v: string[]) => void, k: string) => set(list.includes(k) ? list.filter((x) => x !== k) : [...list, k])
+  const writes = scopes.some((s) => SCOPES.find((x) => x.key === s)?.write)
+  const valid = name.trim().length > 0 && scopes.length > 0
+  return (
+    <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (valid) save.mutate() }}>
+      {error && <ErrorState title="Não foi possível salvar" message={error} isDismissible onDismiss={() => setError(null)} />}
+      <Input label="Nome da aplicação" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+      <fieldset className="space-y-1">
+        <legend className="text-xs font-medium text-text-secondary">O que a aplicação pode fazer</legend>
+        {SCOPES.map((s) => (
+          <label key={s.key} className="flex items-center gap-2 text-sm text-text-primary">
+            <input type="checkbox" checked={scopes.includes(s.key)} onChange={() => toggle(scopes, setScopes, s.key)} /> {s.label} {s.write && <Badge size="sm" variant="warning">escreve</Badge>}
+          </label>
+        ))}
+      </fieldset>
+      {writes && <Notice tone="warning">Com permissões de escrita a aplicação responde clientes e assume conversas. Remover um escopo em uso devolve imediatamente as conversas que dependiam dele.</Notice>}
+      <fieldset className="space-y-1">
+        <legend className="text-xs font-medium text-text-secondary">Filas que a aplicação enxerga <span className="text-text-tertiary">(vazio = todas)</span></legend>
+        {queues.data?.map((q) => (
+          <label key={q.id} className="flex items-center gap-2 text-sm text-text-primary"><input type="checkbox" checked={queueIds.includes(q.id)} onChange={() => toggle(queueIds, setQueueIds, q.id)} /> {q.name}</label>
+        ))}
+        {queues.isError && <p className="text-xs text-text-tertiary">Não foi possível listar as filas.</p>}
+      </fieldset>
+      <fieldset className="space-y-1">
+        <legend className="text-xs font-medium text-text-secondary">Linhas (canais) que a aplicação enxerga <span className="text-text-tertiary">(vazio = todas)</span></legend>
+        {channels.data?.map((c) => (
+          <label key={c.id} className="flex items-center gap-2 text-sm text-text-primary"><input type="checkbox" checked={channelIds.includes(c.id)} onChange={() => toggle(channelIds, setChannelIds, c.id)} /> {c.external_account_id ?? c.provider}</label>
+        ))}
+        {channels.isError && <p className="text-xs text-text-tertiary">Não foi possível listar as linhas.</p>}
+      </fieldset>
+      <label className="flex items-center gap-2 text-sm text-text-primary"><input type="checkbox" checked={outside} onChange={() => setOutside(!outside)} /> Pode assumir conversas fora do horário do setor</label>
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" type="button" onClick={onClose}>Cancelar</Button>
+        <Button type="submit" isLoading={save.isPending} disabled={!valid}>Salvar alterações</Button>
+      </div>
+    </form>
+  )
+}
+
 // The Drawer is a bare right-anchored panel: its content brings its own padding and its visible title (the close button sits in the top right corner).
 function DrawerBody({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -93,12 +154,15 @@ function Detail({ appId, canManage, onChanged }: { appId: string; canManage: boo
   const tenantId = getTenantId()
   const qc = useQueryClient()
   const app = useQuery({ queryKey: ['external-app', tenantId, appId], queryFn: () => externalAppsAPI.get(appId) })
+  const history = useQuery({ queryKey: ['external-app-audit', tenantId, appId], queryFn: () => externalAppsAPI.audit(appId) })
   const [issued, setIssued] = useState<IssuedCredential | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'suspend' | 'revoke' | null>(null)
+  const [editing, setEditing] = useState(false)
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['external-app', tenantId, appId] })
     void qc.invalidateQueries({ queryKey: ['external-apps', tenantId] })
+    void qc.invalidateQueries({ queryKey: ['external-app-audit', tenantId, appId] })
     onChanged()
   }
   const fail = (e: unknown) => setError(externalAppErrorMessage(e))
@@ -113,6 +177,9 @@ function Detail({ appId, canManage, onChanged }: { appId: string; canManage: boo
   if (app.isError || !app.data) return <ErrorState message="Não foi possível carregar a aplicação." action={{ label: 'Tentar novamente', onClick: () => { void app.refetch() } }} />
   const a = app.data
   const live = a.status !== 'revoked'
+  if (editing) {
+    return <EditForm app={a} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); refresh() }} />
+  }
   return (
     <div className="space-y-5">
       {error && <ErrorState title="Não foi possível concluir" message={error} isDismissible onDismiss={() => setError(null)} />}
@@ -124,6 +191,7 @@ function Detail({ appId, canManage, onChanged }: { appId: string; canManage: boo
       </div>
       {canManage && live && (
         <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>Editar</Button>
           {a.status === 'active' ? <Button size="sm" variant="secondary" onClick={() => setConfirm('suspend')}>Suspender</Button> : <Button size="sm" variant="secondary" disabled={transition.isPending} onClick={() => transition.mutate('reactivate')}>Reativar</Button>}
           <Button size="sm" variant="danger" onClick={() => setConfirm('revoke')}>Revogar</Button>
         </div>
@@ -142,6 +210,19 @@ function Detail({ appId, canManage, onChanged }: { appId: string; canManage: boo
         {canManage && live && <Button size="sm" variant="secondary" isLoading={newToken.isPending} onClick={() => newToken.mutate()}>Gerar novo token</Button>}
       </section>
       <WebhooksPanel appId={a.id} canManage={canManage} revoked={!live} scopes={a.scopes} />
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold text-text-primary">Histórico</h3>
+        {history.isLoading && <Skeleton className="h-16" />}
+        {history.isError && <p className="text-xs text-text-tertiary">Não foi possível carregar o histórico.</p>}
+        {history.data && history.data.items.length === 0 && <p className="text-xs text-text-tertiary">Sem alterações registradas.</p>}
+        <ul className="space-y-1">
+          {history.data?.items.map((e) => (
+            <li key={e.id} className="rounded-control bg-surface-muted px-3 py-2 text-xs text-text-secondary">
+              {auditActionLabel(e.action)} · {when(e.created_at)}
+            </li>
+          ))}
+        </ul>
+      </section>
       <ConfirmDialog open={confirm === 'suspend'} title="Suspender esta aplicação?" message="Ela deixa de acessar a API e devolve à empresa as conversas que está atendendo. Dá para reativar depois." confirmLabel="Suspender" isPending={transition.isPending}
         onCancel={() => setConfirm(null)} onConfirm={() => { setConfirm(null); transition.mutate('suspend') }} />
       <ConfirmDialog open={confirm === 'revoke'} title="Revogar esta aplicação?" message="Definitivo: os tokens deixam de valer, os endpoints param e as conversas que ela atende voltam para a fila. Não dá para desfazer." confirmLabel="Revogar" destructive isPending={transition.isPending}

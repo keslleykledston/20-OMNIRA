@@ -59,6 +59,9 @@ func (alwaysFailingAuditRepo) FindByTenant(context.Context, uuid.UUID, int, int)
 func (alwaysFailingAuditRepo) FindByAction(context.Context, uuid.UUID, auditdomain.AuditAction, int, int) ([]*auditdomain.AuditEvent, error) {
 	return nil, errors.New("not implemented")
 }
+func (alwaysFailingAuditRepo) FindByResource(context.Context, uuid.UUID, auditdomain.ResourceType, uuid.UUID, int, int) ([]*auditdomain.AuditEvent, error) {
+	return nil, errors.New("not implemented")
+}
 
 type aiTestFixture struct {
 	t                *testing.T

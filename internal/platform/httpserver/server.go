@@ -636,6 +636,7 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	route("GET "+appsPath, admin.List)
 	route("POST "+appsPath, admin.Create)
 	route("GET "+appsPath+"/{app_id}", admin.Get)
+	route("GET "+appsPath+"/{app_id}/audit", admin.History)
 	route("PATCH "+appsPath+"/{app_id}", admin.Update)
 	route("POST "+appsPath+"/{app_id}/suspend", admin.Transition(externaladapters.Suspend, auditdomain.ActionExternalAppSuspended))
 	route("POST "+appsPath+"/{app_id}/reactivate", admin.Transition(externaladapters.Reactivate, auditdomain.ActionExternalAppReactivated))

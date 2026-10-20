@@ -52,6 +52,16 @@ func (m *MockAuditEventRepository) FindByAction(ctx context.Context, tenantID uu
 	return result, nil
 }
 
+func (m *MockAuditEventRepository) FindByResource(ctx context.Context, tenantID uuid.UUID, resourceType domain.ResourceType, resourceID uuid.UUID, limit, offset int) ([]*domain.AuditEvent, error) {
+	var result []*domain.AuditEvent
+	for _, e := range m.events {
+		if e.TenantID == tenantID && e.ResourceType == resourceType && e.ResourceID == resourceID {
+			result = append(result, e)
+		}
+	}
+	return result, nil
+}
+
 func TestRecordEvent(t *testing.T) {
 	repo := &MockAuditEventRepository{events: make(map[uuid.UUID]*domain.AuditEvent)}
 	svc := NewAuditService(repo)
