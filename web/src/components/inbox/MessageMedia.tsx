@@ -192,5 +192,7 @@ function formatSize(bytes: number): string {
 }
 
 function safeName(name: string): string {
+  // Intentional: strips ASCII control characters from a generated download filename.
+  // eslint-disable-next-line no-control-regex
   return name.replace(/[/\\]/g, '_').replace(/[\x00-\x1f\x7f]/g, '_');
 }

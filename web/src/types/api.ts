@@ -78,8 +78,8 @@ export interface PageResult<T> {
   next_cursor?: string;
 }
 
-export interface ConversationPageResult extends PageResult<ConversationItem> {}
-export interface MessagePageResult extends PageResult<MessageItem> {}
+export type ConversationPageResult = PageResult<ConversationItem>;
+export type MessagePageResult = PageResult<MessageItem>;
 
 // M05.2 - SSE realtime events
 export interface RealtimeEvent {
