@@ -31,9 +31,14 @@ const DEFAULT_AUTHENTICATED_ROUTE = '/inbox'
 const AUTO_SSO_KEY = 'omnira.sso-auto'
 const AUTO_SSO_RETRY_MS = 30_000
 
+// localStorage (não sessionStorage): a trava precisa valer para o navegador
+// todo, não só para esta aba. Duas abas em /login quase ao mesmo tempo, cada
+// uma com sua própria sessionStorage, disparavam /oidc/start duas vezes; o
+// segundo Set-Cookie sobrescrevia o state/verifier/nonce do primeiro antes do
+// redirect terminar, e o callback rejeitava com "invalid oidc callback".
 function autoSignInBlocked(): boolean {
   try {
-    const at = Number(sessionStorage.getItem(AUTO_SSO_KEY))
+    const at = Number(localStorage.getItem(AUTO_SSO_KEY))
     return at > 0 && Date.now() - at < AUTO_SSO_RETRY_MS
   } catch {
     return false
@@ -42,7 +47,7 @@ function autoSignInBlocked(): boolean {
 
 function markAutoSignIn(): void {
   try {
-    sessionStorage.setItem(AUTO_SSO_KEY, String(Date.now()))
+    localStorage.setItem(AUTO_SSO_KEY, String(Date.now()))
   } catch {
     /* storage blocked: only the loop guard is lost */
   }
@@ -50,7 +55,7 @@ function markAutoSignIn(): void {
 
 function forgetAutoSignIn(): void {
   try {
-    sessionStorage.removeItem(AUTO_SSO_KEY)
+    localStorage.removeItem(AUTO_SSO_KEY)
   } catch {
     /* nothing was kept */
   }

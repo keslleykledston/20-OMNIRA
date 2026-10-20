@@ -20,6 +20,8 @@ const (
 	PermissionClaim  = "conversation.claim"
 	PermissionManage = "conversation.manage"
 	MaxTextRunes     = 4096
+	// MaxNoteRunes (ADR-0053) mirrors contact_notes' own limit — an internal note is short working context, not a document.
+	MaxNoteRunes = 4000
 )
 
 var (
@@ -35,6 +37,9 @@ var (
 	ErrTemplateParams      = errors.New("messages: the template variables are missing, empty, too long or contain line breaks")
 	ErrWindowClosed        = errors.New("messages: the 24 h customer-service window is closed, a template is required")
 	ErrInvalidText         = errors.New("messages: text is required (max 4096 characters)")
+	// ErrInvalidNote (ADR-0053): the external note's own validation, separate from ErrInvalidText — a note has its own limit and nothing to do
+	// with templates/attachments, so its error can never be confused with a real message's.
+	ErrInvalidNote         = errors.New("messages: note text is required (max 4000 characters)")
 	ErrInvalidKey          = errors.New("messages: Idempotency-Key must be 8-128 chars of [A-Za-z0-9._:-]")
 	ErrConversationChanged = ports.ErrConversationChanged
 	ErrIdempotencyMismatch = errors.New("messages: Idempotency-Key was already used with a different request")

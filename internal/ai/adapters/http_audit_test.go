@@ -139,6 +139,9 @@ func (r postCallFailingAuditRepo) FindByTenant(ctx context.Context, tenantID uui
 func (r postCallFailingAuditRepo) FindByAction(ctx context.Context, tenantID uuid.UUID, action auditdomain.AuditAction, limit, offset int) ([]*auditdomain.AuditEvent, error) {
 	return r.inner.FindByAction(ctx, tenantID, action, limit, offset)
 }
+func (r postCallFailingAuditRepo) FindByResource(ctx context.Context, tenantID uuid.UUID, resourceType auditdomain.ResourceType, resourceID uuid.UUID, limit, offset int) ([]*auditdomain.AuditEvent, error) {
+	return r.inner.FindByResource(ctx, tenantID, resourceType, resourceID, limit, offset)
+}
 
 // TestAISummary_PostCallAuditFailure_DoesNotAffectResponseOrRetry proves the
 // invariant required by the FINAL COMMIT CORRECTION GATE: a successful

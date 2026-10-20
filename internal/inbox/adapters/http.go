@@ -274,12 +274,12 @@ func (h *InboxAPIHandler) ListConversations(w http.ResponseWriter, r *http.Reque
 			WHERE tk.conversation_id=c.id AND tk.tenant_id=c.tenant_id AND tk.status IN ('open','in_progress','waiting')
 			ORDER BY tk.topic_scoped ASC, tk.created_at DESC LIMIT 1) t ON true
 		LEFT JOIN LATERAL (SELECT m.direction,m.message_type,m.body,m.created_at FROM messages m
-			WHERE m.tenant_id=c.tenant_id AND m.conversation_id=c.id
+			WHERE m.tenant_id=c.tenant_id AND m.conversation_id=c.id AND NOT m.private
 			ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lm ON true
 		LEFT JOIN LATERAL (SELECT min(m.created_at) AS since FROM messages m
 			WHERE lm.direction='inbound' AND m.tenant_id=c.tenant_id AND m.conversation_id=c.id AND m.direction='inbound'
 			  AND m.created_at > COALESCE((SELECT max(o.created_at) FROM messages o
-			        WHERE o.tenant_id=c.tenant_id AND o.conversation_id=c.id AND o.direction='outbound' AND o.status<>'failed'),'-infinity'::timestamptz)) w ON true
+			        WHERE o.tenant_id=c.tenant_id AND o.conversation_id=c.id AND o.direction='outbound' AND o.status<>'failed' AND NOT o.private),'-infinity'::timestamptz)) w ON true
 		WHERE `+where+` ORDER BY `+activity+` DESC,c.id DESC LIMIT `+limit, args...)
 	if err != nil {
 		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
@@ -363,7 +363,7 @@ func (h *InboxAPIHandler) GetConversation(w http.ResponseWriter, r *http.Request
 	}
 	var messageCount int
 	if err := platformdb.QuerierFromContext(r.Context(), h.pool).QueryRow(r.Context(),
-		`SELECT count(*) FROM messages WHERE tenant_id=$1 AND conversation_id=$2`, tenantID, conversationID).Scan(&messageCount); err != nil {
+		`SELECT count(*) FROM messages WHERE tenant_id=$1 AND conversation_id=$2 AND NOT private`, tenantID, conversationID).Scan(&messageCount); err != nil {
 		http.Error(w, "failed to read conversation", http.StatusInternalServerError)
 		return
 	}
@@ -396,7 +396,9 @@ func (h *InboxAPIHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := []any{tenantID, conversationID, opts.Limit + 1}
-	where := "m.tenant_id=$1 AND m.conversation_id=$2"
+	// ADR-0053: a private note is a CRM-only capability (external API), out of scope for the Workspace feed until it has a UI that labels it as
+	// internal — so it stays invisible here rather than risk an operator reading it as something that was sent to the customer.
+	where := "m.tenant_id=$1 AND m.conversation_id=$2 AND NOT m.private"
 	limitPos := 3
 	if cursor != nil {
 		where += " AND (m.created_at,m.id) < ($3,$4)"

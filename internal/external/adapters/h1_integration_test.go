@@ -78,6 +78,7 @@ func newEnv(t *testing.T) *env {
 	route("GET "+base, admin.List)
 	route("POST "+base, admin.Create)
 	route("GET "+base+"/{app_id}", admin.Get)
+	route("GET "+base+"/{app_id}/audit", admin.History)
 	route("PATCH "+base+"/{app_id}", admin.Update)
 	route("POST "+base+"/{app_id}/suspend", admin.Transition(adapters.Suspend, auditdomain.ActionExternalAppSuspended))
 	route("POST "+base+"/{app_id}/reactivate", admin.Transition(adapters.Reactivate, auditdomain.ActionExternalAppReactivated))
@@ -916,5 +917,75 @@ func TestAuditRowsOfAdministrationCarryTheRequestID(t *testing.T) {
 	var got uuid.UUID
 	if err := e.seed.QueryRow(e.ctx, `SELECT correlation_id FROM audit_events WHERE tenant_id=$1 AND action='external_app.created'`, a).Scan(&got); err != nil || got != rid {
 		t.Fatalf("correlation id = %s (%v), want the request id %s", got, err, rid)
+	}
+}
+
+// OMNIRA_API_PENDENCIAS_CRM.md §3.6: editing name/scopes/allow-list of an installation already created, without recreating it, and the
+// light audit trail (GET .../audit) that goes with it — both tenant-scoped like everything else under this handler.
+func TestEditingNameScopesAndAllowlistIsAuditedAndNeverCrossesTenants(t *testing.T) {
+	e := newEnv(t)
+	a, b := e.tenant(), e.tenant()
+	adminA, supA, adminB := e.member(a, "tenant_admin"), e.member(a, "tenant_supervisor"), e.member(b, "tenant_admin")
+	q1 := e.queue(a)
+
+	app := e.install(adminA, a, "CRM Acme", "conversation.read", "events.read")
+	id := app.Installation.ID.String()
+
+	// edit name, add a write scope and narrow the allow-list to one queue
+	code, body := e.admin(adminA, a, http.MethodPatch, "/"+id, map[string]any{
+		"name": "CRM Acme Renomeado", "scopes": []string{"conversation.read", "events.read", "message.send"}, "queue_ids": []string{q1.String()},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("update = %d %s", code, body)
+	}
+	var updated struct {
+		Name     string   `json:"name"`
+		Scopes   []string `json:"scopes"`
+		QueueIDs []string `json:"queue_ids"`
+	}
+	if err := json.Unmarshal(body, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "CRM Acme Renomeado" || len(updated.QueueIDs) != 1 || updated.QueueIDs[0] != q1.String() {
+		t.Fatalf("updated = %+v", updated)
+	}
+	foundSend := false
+	for _, s := range updated.Scopes {
+		if s == "message.send" {
+			foundSend = true
+		}
+	}
+	if !foundSend {
+		t.Fatalf("scopes = %v, want message.send", updated.Scopes)
+	}
+
+	// the history shows the creation and the update, most recent first; a supervisor (read-only) can see it too
+	for _, actor := range []uuid.UUID{adminA, supA} {
+		code, body = e.admin(actor, a, http.MethodGet, "/"+id+"/audit", nil)
+		if code != http.StatusOK {
+			t.Fatalf("history as %s = %d %s", actor, code, body)
+		}
+		var hist struct {
+			Items []struct{ Action string } `json:"items"`
+		}
+		if err := json.Unmarshal(body, &hist); err != nil {
+			t.Fatal(err)
+		}
+		if len(hist.Items) < 2 || hist.Items[0].Action != "external_app.updated" || hist.Items[len(hist.Items)-1].Action != "external_app.created" {
+			t.Fatalf("history as %s = %+v", actor, hist.Items)
+		}
+	}
+
+	// tenant B: the installation doesn't exist for them — same 404 as a made-up id, on every verb (read, write and history)
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/" + id}, {http.MethodGet, "/" + id + "/audit"}, {http.MethodPatch, "/" + id},
+	} {
+		var reqBody any
+		if c.method == http.MethodPatch {
+			reqBody = map[string]any{"name": "pwn"}
+		}
+		if code, resp := e.admin(adminB, b, c.method, c.path, reqBody); code != http.StatusNotFound {
+			t.Errorf("B %s %s = %d %s, want 404", c.method, c.path, code, resp)
+		}
 	}
 }

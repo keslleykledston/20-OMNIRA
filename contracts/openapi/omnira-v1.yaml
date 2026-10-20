@@ -5067,6 +5067,39 @@ paths:
         '403': { $ref: '#/components/responses/Text403' }
         '404': { $ref: '#/components/responses/Text404' }
         '409': { description: "Name in use, or the installation is revoked", content: { text/plain: { schema: { type: string } } } }
+  /tenants/{tenant_id}/integrations/apps/{app_id}/audit:
+    get:
+      operationId: getExternalAppAudit
+      tags: [ExternalApps]
+      summary: Light audit trail of this installation (created, updated, suspended, reactivated, revoked, credential issued/revoked)
+      description: Requires `integration.read`. Never a token or a secret. Most recent first.
+      parameters:
+        - { $ref: '#/components/parameters/TenantId' }
+        - { $ref: '#/components/parameters/AppId' }
+      responses:
+        '200':
+          description: The audit trail
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, action, actor_id, created_at]
+                      properties:
+                        id: { type: string, format: uuid }
+                        action: { type: string }
+                        actor_id: { type: string, format: uuid }
+                        metadata: { type: object }
+                        created_at: { type: string, format: date-time }
+                  count: { type: integer }
+        '401': { $ref: '#/components/responses/Text401' }
+        '403': { $ref: '#/components/responses/Text403' }
+        '404': { $ref: '#/components/responses/Text404' }
   /tenants/{tenant_id}/integrations/apps/{app_id}/suspend:
     post:
       operationId: suspendExternalApp

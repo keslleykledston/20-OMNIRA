@@ -612,7 +612,13 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	s.mux.Handle("GET /api/v1/external/conversations/{id}/messages", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMessageRead, http.HandlerFunc(read.ListMessages))))
 	s.mux.Handle("GET /api/v1/external/queues", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeConversationRead, http.HandlerFunc(read.ListQueues))))
 	s.mux.Handle("GET /api/v1/external/contacts/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactRead, http.HandlerFunc(read.GetContact))))
+	s.mux.Handle("GET /api/v1/external/contacts", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactRead, http.HandlerFunc(read.SearchContacts))))
+	s.mux.Handle("GET /api/v1/external/templates", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeTemplateRead, http.HandlerFunc(read.ListTemplates))))
 	s.mux.Handle("GET /api/v1/external/media/{id}", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeMediaRead, http.HandlerFunc(read.GetMedia))))
+	// ADR-0051: read-only surface for WhatsApp groups, its own scope (never group.manage, never message.send's territory).
+	s.mux.Handle("GET /api/v1/external/groups", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeGroupReadExternal, http.HandlerFunc(read.ListGroups))))
+	s.mux.Handle("GET /api/v1/external/groups/{id}/messages", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeGroupReadExternal, http.HandlerFunc(read.ListGroupMessages))))
+	s.mux.Handle("GET /api/v1/external/groups/{id}/participants", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeGroupReadExternal, http.HandlerFunc(read.ListGroupParticipants))))
 	// the durable journal (H4): the checkpoint to bootstrap from and the facts after a sequence number
 	s.mux.Handle("GET /api/v1/external/sync/checkpoint", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.Checkpoint))))
 	s.mux.Handle("GET /api/v1/external/events", ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeEventsRead, http.HandlerFunc(events.ListEvents))))
@@ -636,6 +642,7 @@ func (s *Server) RegisterExternalHandlers(dbPool *pgxpool.Pool, enabled bool, o 
 	route("GET "+appsPath, admin.List)
 	route("POST "+appsPath, admin.Create)
 	route("GET "+appsPath+"/{app_id}", admin.Get)
+	route("GET "+appsPath+"/{app_id}/audit", admin.History)
 	route("PATCH "+appsPath+"/{app_id}", admin.Update)
 	route("POST "+appsPath+"/{app_id}/suspend", admin.Transition(externaladapters.Suspend, auditdomain.ActionExternalAppSuspended))
 	route("POST "+appsPath+"/{app_id}/reactivate", admin.Transition(externaladapters.Reactivate, auditdomain.ActionExternalAppReactivated))
@@ -666,14 +673,20 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 	ext := externaladapters.NewMiddleware(externaladapters.NewPostgresLookup(dbPool))
 	deps := externaladapters.WriteDeps{
 		Sender:    messagesapplication.NewExternalSender(messagesadapters.NewPostgresOutboundStore(dbPool)),
+		Note:      messagesapplication.NewExternalNoteWriter(messagesadapters.NewPostgresOutboundStore(dbPool)),
 		Finalize:  finalize,
 		Eligible:  externaladapters.SectorsEligible,
 		QueueOpen: externaladapters.SectorsQueueOpen,
+		Starter:   externaladapters.PostgresStartStore{}, // ADR-0050
 	}
 	if s.outboundAttachments != nil { // files for an application exist only where outbound media is on (a nil pointer in the interface would not be nil)
 		deps.Media = s.outboundAttachments
 	}
 	w := externaladapters.NewWriteHandler(dbPool, deps)
+	// ADR-0050: create-or-reuse a conversation by phone. No {id} (nothing may exist yet), so it needs BOTH contact.write and
+	// conversation.open — chaining RequireScope twice is the same "this installation lacks scope X" 403 either scope is missing.
+	s.mux.Handle("POST /api/v1/external/conversations",
+		ext.Authenticated(externaladapters.RequireScope(externaldomain.ScopeContactWrite, externaladapters.RequireScope(externaldomain.ScopeConversationOpen, w.StartConversation()))))
 	post := func(path string, scope externaldomain.Scope, h http.Handler) {
 		s.mux.Handle("POST /api/v1/external/conversations/{id}/"+path, ext.Authenticated(externaladapters.RequireScope(scope, h)))
 	}
@@ -681,6 +694,7 @@ func (s *Server) RegisterExternalWriteHandlers(dbPool *pgxpool.Pool, enabled boo
 	post("release", externaldomain.ScopeConversationClaim, w.Release())
 	post("transfer", externaldomain.ScopeConversationTransfer, w.Transfer())
 	post("messages", externaldomain.ScopeMessageSend, w.Message())
+	post("notes", externaldomain.ScopeMessageNote, w.Note())
 	post("finalize", externaldomain.ScopeConversationFinalize, w.Finalize())
 	post("heartbeat", externaldomain.ScopeConversationClaim, w.Heartbeat())
 	// the route always exists (the contract says so); without outbound media it answers 501 before reading the body. The multipart body is read BEFORE the database

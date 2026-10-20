@@ -43,6 +43,12 @@ type MessageSender interface {
 	Send(ctx context.Context, m messagesapp.ExternalMessage) (*messagesports.QueuedMessage, error)
 }
 
+// NoteWriter records an internal note for an application (ADR-0053; messages/application.ExternalNoteWriter). Deliberately a different
+// interface from MessageSender: nothing that satisfies it may also queue a delivery job.
+type NoteWriter interface {
+	Note(ctx context.Context, n messagesapp.ExternalNote) (*messagesports.QueuedMessage, error)
+}
+
 // FinalizeOutcome is what a finalize reports.
 type FinalizeOutcome struct {
 	ClosureID uuid.UUID
@@ -64,10 +70,12 @@ type QueueOpener func(ctx context.Context, q platformdb.Querier, tenant, queue u
 // WriteDeps are the pieces of the platform the write side reuses; none of them is reimplemented here.
 type WriteDeps struct {
 	Sender    MessageSender
+	Note      NoteWriter  // ADR-0053: records internal notes, never a delivery
 	Media     MediaSender // nil: this deployment does not deliver files (outbound media off)
 	Finalize  Finalizer
 	Eligible  conversationcontrol.Eligible
 	QueueOpen QueueOpener
+	Starter   ConversationStarter // ADR-0050: create-or-reuse a conversation by phone
 }
 
 // SectorsEligible is the rule the router applies to a person of a queue (membership, active, shift, capacity). Presence is not asked: it lives in Valkey,
@@ -216,6 +224,10 @@ func agentRefOf(p any) string {
 		return v.ExternalAgentID
 	case finalizePayload:
 		return v.ExternalAgentID
+	case notePayload:
+		return v.ExternalAgentID
+	case startPayload:
+		return v.ExternalAgentID
 	}
 	return ""
 }
@@ -281,6 +293,27 @@ func decodeMessage(body []byte) (any, []byte, error) {
 	if v.Template != nil && v.Template.ID == uuid.Nil {
 		return nil, nil, errors.New("template.id is required")
 	}
+	if err := checkAgentRef(v.ExternalAgentID); err != nil {
+		return nil, nil, err
+	}
+	c, _ := json.Marshal(v)
+	return v, c, nil
+}
+
+// notePayload (ADR-0053): plain text only — no template, no attachment. A note is never sent to the contact, so none of the delivery
+// concerns of messagePayload apply here.
+type notePayload struct {
+	Text            string `json:"text"`
+	ExternalAgentID string `json:"external_agent_id,omitempty"`
+}
+
+func decodeNote(body []byte) (any, []byte, error) {
+	var v notePayload
+	if err := strictJSON(body, &v); err != nil {
+		return nil, nil, err
+	}
+	// emptiness and length are judged by ExternalNoteWriter (messagesapp.ErrInvalidNote), not here, so both ways of sending "no real text" answer
+	// with the same code instead of two different ones depending on which layer happened to notice first.
 	if err := checkAgentRef(v.ExternalAgentID); err != nil {
 		return nil, nil, err
 	}
@@ -473,6 +506,28 @@ func (h *WriteHandler) messageSpec() cmdSpec {
 	}}
 }
 
+// noteSpec (ADR-0053): an internal note, never sent to the contact. Same hold/If-Match discipline as a real message — an installation records a
+// note only on a conversation it currently holds — but 201, never 202/"queued": nothing is pending delivery.
+func (h *WriteHandler) noteSpec() cmdSpec {
+	return cmdSpec{op: "note", ifMatch: ifMatchRequired, decode: decodeNote, run: func(h *WriteHandler, ctx context.Context, q platformdb.Querier, in *cmdInput) (*cmdOutput, error) {
+		pl := in.payload.(notePayload)
+		cur, err := h.ctl.Lock(ctx, q, in.p.TenantID, in.conv)
+		if err != nil {
+			return nil, h.fromControl(err, &cur)
+		}
+		if err := h.mustHold(cur, in); err != nil {
+			return nil, err
+		}
+		msg, err := h.d.Note.Note(ctx, messagesapp.ExternalNote{InstallationID: in.p.InstallationID, ConversationID: in.conv, ControlVersion: cur.Version, Text: pl.Text})
+		if err != nil {
+			return nil, h.fromNote(err, &cur)
+		}
+		r := result(cur, in.p.InstallationID)
+		r.MessageID = &msg.ID
+		return &cmdOutput{status: http.StatusCreated, body: r, messageID: &msg.ID, version: cur.Version}, nil
+	}}
+}
+
 func (h *WriteHandler) finalizeSpec() cmdSpec {
 	return cmdSpec{op: "finalize", ifMatch: ifMatchRequired, decode: decodeFinalize, run: func(h *WriteHandler, ctx context.Context, q platformdb.Querier, in *cmdInput) (*cmdOutput, error) {
 		pl := in.payload.(finalizePayload)
@@ -569,6 +624,21 @@ func (h *WriteHandler) fromMessage(err error, st *conversationcontrol.State) err
 		return refuse(http.StatusForbidden, "forbidden", "Forbidden", "This operation is not allowed.", st)
 	}
 	return fromMedia(err, st)
+}
+
+// fromNote maps what recording an internal note can refuse (ADR-0053) — a small subset of fromMessage's: no window, no channel, no template.
+func (h *WriteHandler) fromNote(err error, st *conversationcontrol.State) error {
+	switch {
+	case errors.Is(err, messagesapp.ErrNotFound):
+		return errNotVisible
+	case errors.Is(err, messagesapp.ErrConversationChanged):
+		return refuse(http.StatusConflict, "conversation_changed", "The conversation changed", "The holder changed while the note was being recorded; read the conversation again.", st)
+	case errors.Is(err, messagesapp.ErrInvalidNote):
+		return refuse(http.StatusUnprocessableEntity, "invalid_note", "Invalid note", "Send text of 1 to 4000 characters.", st)
+	case errors.Is(err, messagesapp.ErrForbidden):
+		return refuse(http.StatusForbidden, "forbidden", "Forbidden", "This operation is not allowed.", st)
+	}
+	return err
 }
 
 // fromMedia maps what a file operation can refuse; anything else is left to the caller (an unexpected error stays a 500 with no detail).
@@ -716,6 +786,7 @@ func (h *WriteHandler) Claim() http.Handler     { return h.handle(h.claimSpec())
 func (h *WriteHandler) Release() http.Handler   { return h.handle(h.releaseSpec()) }
 func (h *WriteHandler) Transfer() http.Handler  { return h.handle(h.transferSpec()) }
 func (h *WriteHandler) Message() http.Handler   { return h.handle(h.messageSpec()) }
+func (h *WriteHandler) Note() http.Handler      { return h.handle(h.noteSpec()) }
 func (h *WriteHandler) Finalize() http.Handler  { return h.handle(h.finalizeSpec()) }
 func (h *WriteHandler) Heartbeat() http.Handler { return h.handle(h.heartbeatSpec()) }
 

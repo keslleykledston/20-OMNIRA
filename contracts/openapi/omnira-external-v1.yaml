@@ -41,6 +41,7 @@ tags:
   - { name: Identity, description: "Who the credential is and what it may do" }
   - { name: Conversations, description: "Read the conversations and their messages" }
   - { name: Contacts, description: "Read a contact" }
+  - { name: Groups, description: "Read-only WhatsApp groups (ADR-0051): never mixed into conversations/messages" }
   - { name: Media, description: "Download a message's file" }
   - { name: Commands, description: "Coordinated writes: claim, release, transfer, send, finalize" }
   - { name: Journal, description: "The durable journal of facts: checkpoint and replay" }
@@ -80,6 +81,133 @@ paths:
         '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: startExternalConversation
+      tags: [Commands]
+      summary: Create-or-reuse an outbound conversation by phone (ADR-0050)
+      description: |
+        Needs BOTH scopes `contact.write` and `conversation.open`. The Gateway-alert use case: open a conversation with a contact the
+        company has not been talked to yet, and optionally send the opening message in the same call.
+
+        **Create vs. reuse.** When no OPEN conversation exists yet for `phone_e164` (on `channel_id`, or on one of the installation's
+        allowed lines when it is not given), one is created and **auto-claimed by this installation** — there was no prior holder to take
+        from. When one already exists: reusing it **never** changes who holds it. Already held by this SAME installation: reused as-is,
+        `message` (if sent) goes through normally. Free (nobody holds it): reused, but `message` fails `409 not_holder` — claim it first.
+        Held by anyone else: `409 held_by_other`, nothing is created or changed.
+
+        **The message, if given, is subject to the same rules as `POST .../messages`**: outside the 24h customer-service window, only an
+        approved template may be sent (`422 window_closed` otherwise) — exactly the one-call "create + template" ADR-0050 asks for.
+
+        No `If-Match`: there is nothing to match against before this call (a brand-new conversation, or an existing one whose control this
+        call never changes).
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartConversationRequest' }
+      responses:
+        '200': { description: Reused an existing conversation, content: { application/json: { schema: { $ref: '#/components/schemas/StartConversationResult' } } } }
+        '201': { description: Created a new conversation, content: { application/json: { schema: { $ref: '#/components/schemas/StartConversationResult' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '415': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/templates:
+    get:
+      operationId: listExternalTemplates
+      tags: [Conversations]
+      summary: Approved, sendable WhatsApp templates (ADR-0052)
+      description: |
+        Needs the scope `template.read`. Templates the company already synced and that Meta approved, narrowed to the installation's channel
+        allowlist when the administrator set one. `id` is the same value `message.template_id` expects in `POST .../messages`. Never sync, create
+        or edit a template — that stays exclusive to `channel.manage` in the Workspace.
+      responses:
+        '200':
+          description: The templates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Template' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/groups:
+    get:
+      operationId: listExternalGroups
+      tags: [Groups]
+      summary: Enabled WhatsApp groups the installation may see (ADR-0051)
+      description: |
+        Needs the scope `group.read.external`. Groups live in their own read-only model (ADR-0015), never mixed into `conversations`/`messages`/`contacts` — a
+        group is never a conversation. Only groups an administrator explicitly ENABLED are ever listed; narrowed to the installation's channel allowlist when
+        the administrator set one. The author of a preview message is a name only — never a phone number or WhatsApp JID (ADR-0015/ADR-0051 minimization).
+      responses:
+        '200':
+          description: The groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Group' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/groups/{id}/messages:
+    get:
+      operationId: listExternalGroupMessages
+      tags: [Groups]
+      summary: A group's message history (ADR-0051)
+      description: |
+        Needs the scope `group.read.external`. Same keyset/cursor pagination pattern as `GET /conversations/{id}/messages`. `author_name` only on every
+        message — never the sender's phone number or WhatsApp JID. A group that is not visible (wrong company, disabled, outside the channel allowlist)
+        answers the same `404` as one that never existed.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { description: A page, content: { application/json: { schema: { $ref: '#/components/schemas/GroupMessagePage' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/groups/{id}/participants:
+    get:
+      operationId: listExternalGroupParticipants
+      tags: [Groups]
+      summary: Distinct participants seen in a group's stored history (ADR-0051 §5)
+      description: |
+        Needs the scope `group.read.external`. Only the participants who actually sent a stored message — there is no full roster beyond that. Name only,
+        never a phone number or WhatsApp JID. A group that is not visible answers the same `404` as one that never existed (no enumeration oracle).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The participants
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/GroupParticipant' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
   /external/queues:
     get:
@@ -163,6 +291,35 @@ paths:
             schema: { $ref: '#/components/schemas/MessageRequest' }
       responses:
         '202': { $ref: '#/components/responses/Command' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '412': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '428': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /external/conversations/{id}/notes:
+    post:
+      operationId: addExternalNote
+      tags: [Commands]
+      summary: Record an internal note, never sent to the contact (ADR-0053)
+      description: |
+        Needs the scope `message.note` and `If-Match`; this installation must HOLD the conversation at that version, same as sending a message. **`201 Created`,
+        never `202`**: nothing is queued for delivery — a note cannot reach WhatsApp. It appears intercalated in `GET .../messages` with `private: true` and
+        `status: "noted"`.
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/IfMatchRequired' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NoteRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/Command' }
         '400': { $ref: '#/components/responses/Problem' }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
@@ -360,6 +517,27 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
         '428': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+  /external/contacts:
+    get:
+      operationId: searchExternalContacts
+      tags: [Contacts]
+      summary: Find a contact by phone number
+      description: |
+        Needs the scope `contact.read`. Same visibility as GET /contacts/{id}: a contact exists for this installation only through a conversation
+        it may see, never when classified internal or spam. Returns `open_conversation_id` when there is a currently open conversation with it
+        that the installation may see, so a caller stops scanning the open list to find out. Creating a contact or a conversation is not covered
+        here (see ADR-0050 — not implemented).
+      parameters:
+        - name: phone_e164
+          in: query
+          required: true
+          schema: { type: string, example: "+5592999999999" }
+      responses:
+        '200': { description: The contact, content: { application/json: { schema: { $ref: '#/components/schemas/Contact' } } } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
   /external/contacts/{id}:
     get:
       operationId: getExternalContact
@@ -490,6 +668,48 @@ components:
           properties:
             id: { type: string, format: uuid, description: "An approved template of the conversation's line" }
             params: { type: array, items: { type: string } }
+    NoteRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      description: "ADR-0053: an internal note, plain text only — no template, no attachment."
+      properties:
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        text: { type: string, minLength: 1, maxLength: 4000 }
+    StartConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [phone_e164]
+      description: "ADR-0050. message, if given, follows the same text-or-template rule as MessageRequest (no attachment_id here: a file needs an existing conversation and a hold, so it always goes through the normal POST .../messages after this call)."
+      properties:
+        phone_e164: { type: string, pattern: '^\+[1-9][0-9]{6,14}$', example: '+5592999999999' }
+        queue_id: { type: string, format: uuid, description: "Optional: the queue a newly created conversation starts in (must be one of the installation's allowed queues, when it has an allow-list)." }
+        channel_id: { type: string, format: uuid, description: "Optional: which WhatsApp line to use. Omitted: the installation's one allowed active line, when unambiguous (422 channel_ambiguous otherwise)." }
+        external_agent_id: { $ref: '#/components/schemas/ExternalAgentID' }
+        message:
+          type: object
+          additionalProperties: false
+          description: "Exactly one of text and template."
+          properties:
+            text: { type: string, minLength: 1, maxLength: 4096 }
+            template:
+              type: object
+              additionalProperties: false
+              required: [id]
+              properties:
+                id: { type: string, format: uuid }
+                params: { type: array, items: { type: string } }
+    StartConversationResult:
+      type: object
+      required: [conversation_id, contact_id, created, status, control]
+      properties:
+        conversation_id: { type: string, format: uuid }
+        contact_id: { type: string, format: uuid }
+        created: { type: boolean, description: "true: this call created the conversation (and so holds it now). false: an existing OPEN conversation was reused, unchanged in who holds it." }
+        status: { type: string, enum: [open, closed] }
+        control: { $ref: '#/components/schemas/Control' }
+        message_id: { type: string, format: uuid }
+        delivery: { type: string, enum: [queued] }
     FinalizeRequest:
       type: object
       additionalProperties: false
@@ -591,8 +811,19 @@ components:
         control: { $ref: '#/components/schemas/Control' }
         can: { $ref: '#/components/schemas/Can' }
         last_message_at: { type: string, format: date-time }
+        last_message: { $ref: '#/components/schemas/LastMessagePreview' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    LastMessagePreview:
+      type: object
+      description: Enough of the newest message to render a list preview without a second call per row. Never the full message (no media, no sender) — that stays behind GET .../messages.
+      required: [id, direction, type, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        direction: { type: string, enum: [inbound, outbound] }
+        type: { type: string }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
     ConversationPage:
       type: object
       required: [items, has_more]
@@ -617,7 +848,8 @@ components:
         direction: { type: string, enum: [inbound, outbound] }
         type: { type: string, enum: [text, image, video, audio, document, sticker] }
         body: { type: string }
-        status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain] }
+        status: { type: string, enum: [received, queued, sent, delivered, read, failed, uncertain, noted] }
+        private: { type: boolean, description: "ADR-0053: true for an internal note. A private message is never sent to the contact; status is always noted." }
         sender:
           type: object
           required: [kind]
@@ -644,6 +876,59 @@ components:
         kind: { type: string, enum: [unclassified, customer, other] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        open_conversation_id: { type: string, format: uuid, description: "Set only by GET /contacts?phone_e164=: the newest OPEN conversation with this contact the installation may see, if any." }
+    Template:
+      type: object
+      required: [id, channel_connection_id, name, language, variable_count]
+      properties:
+        id: { type: string, format: uuid, description: "The value message.template_id expects." }
+        channel_connection_id: { type: string, format: uuid }
+        name: { type: string }
+        language: { type: string }
+        body: { type: string }
+        variable_count: { type: integer }
+    GroupLastMessagePreview:
+      type: object
+      description: Enough of the newest message to render a group list preview without a second call per row. Author name only, never a phone number or JID.
+      required: [from_me, type, sent_at]
+      properties:
+        author_name: { type: string }
+        from_me: { type: boolean }
+        type: { type: string }
+        body: { type: string }
+        sent_at: { type: string, format: date-time }
+    Group:
+      type: object
+      required: [id, name, channel_connection_id]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        channel_connection_id: { type: string, format: uuid }
+        last_message_at: { type: string, format: date-time }
+        last_message: { $ref: '#/components/schemas/GroupLastMessagePreview' }
+    GroupMessage:
+      type: object
+      required: [id, from_me, type, sent_at]
+      properties:
+        id: { type: string, format: uuid }
+        author_name: { type: string, description: "Never a phone number or WhatsApp JID (ADR-0015/ADR-0051 minimization)." }
+        from_me: { type: boolean }
+        type: { type: string }
+        body: { type: string }
+        sent_at: { type: string, format: date-time }
+    GroupMessagePage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/GroupMessage' } }
+        has_more: { type: boolean }
+        next_cursor: { type: string }
+    GroupParticipant:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
     Problem:
       type: object
       required: [type, title, status, code]
@@ -674,7 +959,7 @@ components:
             id: { type: string, format: uuid }
         scopes:
           type: array
-          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read] }
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read, message.note, group.read.external, contact.write, conversation.open] }
         limits:
           type: object
           required: [rate_limit_per_min, allow_outside_hours]

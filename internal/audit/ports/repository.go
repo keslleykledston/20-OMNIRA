@@ -23,4 +23,7 @@ type AuditEventRepository interface {
 
 	// FindByAction — lista eventos de um tenant por tipo de ação.
 	FindByAction(ctx context.Context, tenantID uuid.UUID, action domain.AuditAction, limit, offset int) ([]*domain.AuditEvent, error)
+
+	// FindByResource — histórico de um recurso específico (ex.: uma aplicação externa), mais recente primeiro.
+	FindByResource(ctx context.Context, tenantID uuid.UUID, resourceType domain.ResourceType, resourceID uuid.UUID, limit, offset int) ([]*domain.AuditEvent, error)
 }
