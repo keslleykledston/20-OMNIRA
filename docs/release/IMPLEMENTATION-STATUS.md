@@ -134,3 +134,119 @@ Próxima fase: F2 — CI Quality Gates (workflows .github/workflows/*, scripts d
 ```
 
 **Veredito: PASS**
+
+---
+
+## F2 — CI completo
+
+**Escopo desta fase** (relido com cuidado antes de codificar): a definição por fase (§D) pede
+"workflows de PR, main, análise de segurança e scripts de validação reutilizáveis" — `release-
+build.yml`/`release-staging.yml`/`release-promote.yml`/`release-dryrun.yml` (citados no inventário
+cross-cutting §4.2) pertencem a F3/F8 pela própria definição de cada fase (§D), não a F2; ficam
+para as próximas fases, não "esquecidos".
+
+```
+Fase: F2
+Baseline SHA: 5b828d0 (commit de F1 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+Implementação:
+  .github/workflows/ci-pr.yml — G1-G5 em todo PR contra main: Go (gofmt diff-scoped, vet, build,
+    test -race), frontend (eslint diff-scoped, typecheck+build, vitest), migrations (pairing/
+    naming lint), contratos (OpenAPI/AsyncAPI via tools/validate-specs.sh), integração real
+    (scripts/test-integration.sh — Postgres 16 + NATS disposable, RLS/Hub cobertos pelos pacotes
+    que esse script já roda), scan de segredo bloqueante (trivy).
+  .github/workflows/ci-main.yml — os mesmos gates em push para main, mais: relatório de drift de
+    gofmt/eslint no repo INTEIRO (informativo, nunca bloqueia — ver Pendências), coverage +
+    SBOM de baseline como artefato (reaproveitado por F3, não regerado).
+  .github/workflows/security-scheduled.yml — govulncheck (Go), npm audit (frontend), trivy fs
+    (vuln+secret+misconfig) com upload SARIF para a aba Security do GitHub; cron semanal +
+    workflow_dispatch; relatório, nunca bloqueia (bloqueio fica para release-promote.yml, F3/F9).
+  scripts/release/validate-migrations.sh (novo) — lint estático (sem Postgres) de pareamento
+    up/down, nomes e números de versão únicos em migrations/*.sql. NÃO é o ledger de checksums
+    que F4 constrói — isso é explicitamente fora do escopo desta fase.
+  scripts/release/ci-go-fmt-diff.sh, ci-web-lint-diff.sh (novos) — gates de formatação/lint
+    ESCOPADOS ao diff do PR (ver "Pendências" abaixo sobre por que um gate de repo inteiro
+    quebraria toda PR desde o dia 1).
+  web/eslint.config.js (novo) + devDependencies (eslint 9, typescript-eslint, eslint-plugin-
+    react-hooks, eslint-plugin-react-refresh) — `npm run lint` não tinha NENHUMA configuração
+    antes desta fase (falhava imediatamente com "ESLint couldn't find a configuration file" —
+    achado real, não hipotético); agora funciona de verdade.
+  .redocly.lint-ignore.yaml (novo) — baseline dos 35 erros + 7 warnings pré-existentes que
+    `tools/validate-specs.sh` (redocly lint) já encontrava em contracts/openapi/omnira-v1.yaml
+    antes desta fase (achado real do Codex, ver Review Codex) — nunca executado em CI até agora
+    porque não existia `.github/workflows/`. Ratchet: qualquer violação NOVA (não presente na
+    lista exata de localizações ignoradas) ainda falha o gate — testado injetando um endpoint
+    sem operationId num YAML de teste e confirmando que ainda é pego.
+Arquivos: ver Implementação acima; nenhuma migration nova.
+Migrations: nenhuma.
+Contratos/endpoints: nenhum novo; o contrato REST/AsyncAPI existente passou a ser VALIDADO em CI
+  pela primeira vez (ver achado do .redocly.lint-ignore.yaml acima).
+Testes executados (comandos, PASS/FAIL):
+  actionlint .github/workflows/*.yml → limpo (instalado via `go install
+    github.com/rhysd/actionlint/cmd/actionlint@latest`; usa shellcheck internamente — também
+    instalado — para validar todo `run:` embutido)
+  shellcheck scripts/release/*.sh → limpo
+  bash scripts/release/validate-migrations.sh → "160 migration(s) checked... OK"; testado também
+    contra fixtures sintéticas quebradas (nome inválido, .down.sql órfão, versão duplicada) —
+    os 3 casos foram pegos corretamente, e o caso válido não gerou falso positivo
+  bash scripts/release/ci-go-fmt-diff.sh <ref> e ci-web-lint-diff.sh <ref> → testados em branch/
+    worktree descartável (criada e removida só para o teste, nunca tocando outras branches):
+    confirma que só arquivos mudados são checados, que um arquivo sujo É pego, e (depois da
+    correção do achado Codex #2) que uma ref inválida FALHA em vez de reportar "OK" por engano
+  bash tools/validate-specs.sh → OK (com o ignore file; sem ele, 35 erros + 7 warnings — achado
+    documentado, não escondido)
+  go vet ./..., go build ./... (repo inteiro) → PASS
+  govulncheck -format sarif ./... → executa, SARIF válido, 19 achados reais (maioria "depende
+    mas não chama"; alguns "chama função vulnerável" em go-redis/html-template/net-http —
+    classificado como achado pré-existente, não corrigido nesta fase, ver Pendências)
+  npm audit --audit-level=low (web/) → 16 vulnerabilidades reais (2 critical, 8 high, 6 moderate)
+    em devDependencies (vitest/tinypool, source-map-js, react-router) — achado pré-existente,
+    mesmo tratamento
+  npm run lint (web/, escaneando TUDO, não só o diff) → 47 problemas reais (4 erros, 43 warnings)
+    em código pré-existente — classificado, gate real é diff-scoped (ver acima)
+Gates de segurança / RLS: nenhuma tabela nova. ci-pr.yml/ci-main.yml rodam
+  scripts/test-integration.sh, que já cobre RLS/Hub adversarial nos pacotes existentes (nada
+  novo verificado aqui além de ligar isso ao CI pela primeira vez). secret-scan é bloqueante por
+  design (um segredo commitado nunca é aceitável, mesmo numa PR "só de CI").
+Review Codex (evidência real): `codex exec review --uncommitted` executado 3 vezes nesta branch.
+  2 achados reais corrigidos entre as rodadas; 3ª rodada "No actionable defects were identified":
+    1. [P1] O gate de contratos (`tools/validate-specs.sh` em ambos os workflows) falhava no
+       repositório sem NENHUMA mudança: 35 erros reais de redocly lint já existiam em
+       contracts/openapi/omnira-v1.yaml, nunca detectados porque nenhum CI rodava isso antes.
+       Corrigido com `redocly lint --generate-ignore-file` (baseline ratcheted, não blanket
+       disable — verificado que uma violação NOVA ainda é pega).
+    2. [P2] `ci-go-fmt-diff.sh`/`ci-web-lint-diff.sh` tinham `|| true` no `git diff` que
+       calculava os arquivos mudados: uma ref base inexistente ou inalcançável (clone shallow,
+       digitação errada) fazia o `git diff` falhar, mas o `|| true` transformava isso em "nenhum
+       arquivo mudado" — ou seja, um gate que deveria FALHAR por não conseguir checar nada
+       reportava sucesso. Reproduzido com uma ref inventada antes de corrigir (exit 0 indevido),
+       e confirmado exit 128 correto depois.
+Commits: (ver git log da branch feat/omnira-release-update-engine — commit desta fase citado no
+  próximo update deste arquivo)
+Pendências/risco:
+  - Playwright E2E (`npm run test:e2e`) foi DELIBERADAMENTE deixado fora de ci-pr.yml/ci-main.yml.
+    Achado real desta fase: `web/playwright.config.ts` tem `baseURL` fixo em
+    `https://omnira.devops.k3gsolutions.com.br` — o host real, `LIMITED_INTERNAL_PRODUCTION`
+    (docs/release/00-audit.md §0), com WhatsApp conectado de verdade — e os specs usam caminhos
+    relativos (`page.goto('/inbox')` etc.), resolvidos contra esse baseURL. Ligar isso ao CI hoje
+    mandaria tráfego automatizado real contra produção em todo push. Corrigir isso com um target
+    isolado é exatamente o trabalho de F8 (staging); não é patch de F2.
+  - `tools/validate-schema.sh` e `tools/check-rls.sh` existentes apontam, por padrão, para
+    `omnira-postgres`/`omnira_dev` (o banco real) — não foram usados nestes workflows; os gates
+    novos usam exclusivamente containers descartáveis (scripts/test-integration.sh).
+  - Drift pré-existente classificado, não corrigido (fora de escopo — "não refatore partes não
+    relacionadas"): 42 arquivos Go sem gofmt, 47 problemas de ESLint (4 erros), 19 achados do
+    govulncheck, 16 vulnerabilidades de dependências npm, 35 erros/7 warnings de redocly (este
+    último já baselined via .redocly.lint-ignore.yaml; os outros quatro não têm mecanismo de
+    ratchet ainda — recomendado como item de limpeza separado ao dono do repositório).
+  - Publicação real de qualquer workflow (execução no GitHub Actions, push de imagem, SARIF na
+    aba Security) continua BLOCKED_EXTERNAL: sem `gh` CLI, sem credenciais confirmadas, sem
+    acesso a Settings/Environments deste repositório nesta sessão (achado original do F0,
+    inalterado). Todo o restante (sintaxe, lint das próprias workflows, scripts que elas chamam)
+    foi verificado localmente, de verdade, não hipoteticamente.
+Próxima fase: F3 — Builder de releases e cadeia de suprimentos (release-build.yml: build OCI por
+  SHA para api/worker/web, SBOM, provenance/attestation, assinatura, manifesto de release validado
+  contra o schema de F1; publicação real fica BLOCKED_EXTERNAL pelas mesmas razões acima)
+```
+
+**Veredito: PASS**

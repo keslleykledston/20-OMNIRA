@@ -1,0 +1,117 @@
+name: CI (main)
+
+# Runs on every push to main (post-merge): the same real gates as ci-pr.yml
+# (G1-G5), plus two things a PR-scoped run does not do: (1) a whole-repo
+# gofmt/lint DRIFT REPORT (informational, never blocking — see
+# scripts/release/ci-go-fmt-diff.sh and ci-web-lint-diff.sh headers for why a
+# repo-wide hard gate would be wrong here: 42 Go files and 47 lint
+# problems pre-date this program and are a separate, tracked cleanup item,
+# not something ci-pr.yml's new gates are allowed to silently hide or
+# retroactively block); (2) a coverage + SBOM baseline artifact per commit,
+# which release-build.yml (F3) reuses rather than regenerating.
+#
+# Playwright E2E is DELIBERATELY NOT wired into this workflow yet: an audit
+# in F2 found web/playwright.config.ts's baseURL hardcoded to
+# https://omnira.devops.k3gsolutions.com.br — the real, live
+# LIMITED_INTERNAL_PRODUCTION host (docs/release/00-audit.md §0) — so running
+# it today would send real CI traffic at a live, WhatsApp-connected
+# installation on every push to main. Wiring E2E safely needs an isolated
+# target, which is exactly what F8 (staging) builds; doing it here first
+# would be the "placeholder that happens to look green" the specification
+# explicitly forbids. See docs/release/IMPLEMENTATION-STATUS.md fase F2.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-main
+  cancel-in-progress: false # never cancel a main-branch run that may already be mid-way through recording baseline evidence
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (vet, build, unit test, coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go build ./...
+      - name: unit tests with coverage
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: gofmt drift report (whole repo, informational — never fails this job)
+        run: |
+          count=$(gofmt -l . | grep -vc '^web/' || true)
+          echo "gofmt drift: ${count} non-web Go file(s) not gofmt-clean (tracked, not blocking — see workflow header)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 30
+
+  web:
+    name: Frontend (typecheck, build, unit test, lint drift report)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: npm test -- --run
+        working-directory: web
+      - name: eslint drift report (whole src/, informational — never fails this job)
+        working-directory: web
+        run: |
+          set +e
+          npx eslint src
+          echo "eslint exit code was $?  (tracked, not blocking — see workflow header)"
+
+  migrations:
+    name: Migrations (pairing/naming lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: bash scripts/release/validate-migrations.sh
+
+  contracts:
+    name: Contracts (OpenAPI/AsyncAPI YAML)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: bash tools/validate-specs.sh
+
+  integration-postgres:
+    name: Integration (real PostgreSQL 16 + NATS, RLS/Hub adversarial tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: bash scripts/test-integration.sh
+
+  sbom:
+    name: SBOM baseline (informational artifact, reused by release-build.yml in F3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom-source.spdx.json
+          upload-artifact: true
+          upload-release-assets: false

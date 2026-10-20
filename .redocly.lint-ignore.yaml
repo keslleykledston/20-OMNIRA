@@ -1,0 +1,106 @@
+# This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
+# See https://redocly.com/docs/cli/ for more information.
+contracts/openapi/omnira-v1.yaml:
+  no-ambiguous-paths:
+    - '#/paths/~1tenants~1{tenant_id}~1team~1invitations~1{invitation_id}'
+  operation-4xx-response:
+    - '#/paths/~1auth~1mode/get/responses'
+    - '#/paths/~1auth~1oidc~1start/get/responses'
+    - '#/paths/~1auth~1logout/post/responses'
+  operation-2xx-response:
+    - '#/paths/~1auth~1oidc~1start/get/responses'
+    - '#/paths/~1auth~1oidc~1callback/get/responses'
+  struct:
+    - '#/paths/~1tenants~1{tenant_id}~1channels~1lines~1{connection_id}~1queue/put/requestBody/content/application~1json/schema/properties/queue_id/type'
+    - '#/paths/~1tenants~1{tenant_id}~1channels~1lines~1{connection_id}~1queue/put/responses/200/content/application~1json/schema/properties/queue_id/type'
+    - >-
+      #/components/schemas/HubInboxItem/properties/tenant_name/so only tenants
+      they hold a live grant for
+    - >-
+      #/components/schemas/HubInboxItemDetail/properties/conversation/properties/assignment/relative
+      to the caller (no other user is named).
+    - '#/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1claim/post/responses/409/finalized'
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1claim/post/responses/409/or
+      the company on screen is not the item's company
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1messages/post/responses/409/held
+      by another agent
+    - '#/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1messages/post/responses/409/finalized'
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1messages/post/responses/409/24
+      h window closed
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1messages/post/responses/409/no
+      channel
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1messages/post/responses/409/or
+      company mismatch
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1messages/post/responses/422/or
+      the Idempotency-Key was used with a different request
+    - >-
+      #/paths/~1hubs~1{hub_id}~1companies/post/responses/422/unknown
+      administrator
+    - >-
+      #/paths/~1hubs~1{hub_id}~1companies/post/responses/422/or the
+      Idempotency-Key was used with a different request
+    - >-
+      #/paths/~1hubs~1{hub_id}~1companies~1{tenant_id}/patch/responses/422/or
+      nothing to change
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1transfer-candidates/get/responses/409/the
+      conversation is finalized or it is not yours
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1transfer/post/responses/409/target
+      not available
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1transfer/post/responses/409/other
+      instance on screen
+    - >-
+      #/paths/~1hubs~1{hub_id}~1inbox~1{item_id}~1transfer/post/responses/409/or
+      finalized
+    - >-
+      #/paths/~1hubs~1{hub_id}~1access~1agents/post/responses/422/ambiguous and
+      inactive are indistinguishable)
+    - >-
+      #/paths/~1hubs~1{hub_id}~1access~1invitations/post/responses/422/repeated
+      company or mode other than read~1reply
+    - '#/paths/~1hubs~1{hub_id}~1access~1agents~1{user_id}~1instances~1{tenant_id}/put/requestBody/content/application~1json/schema/properties/valid_until/type'
+    - >-
+      #/paths/~1hubs~1{hub_id}~1access~1agents~1{user_id}~1instances~1{tenant_id}/put/responses/422/validity
+      in the past
+    - >-
+      #/paths/~1hubs~1{hub_id}~1access~1agents~1{user_id}~1instances~1{tenant_id}/put/responses/422/the
+      person is not an agent of the hub
+    - >-
+      #/paths/~1hubs~1{hub_id}~1access~1agents~1{user_id}~1instances~1{tenant_id}/put/responses/422/or
+      the instance is not active
+    - '#/components/schemas/TimelineEvent/properties/system/a timer'
+    - '#/components/schemas/TimelineEvent/properties/system/a rule)'
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1identities/post/responses/422/user not in
+      the tenant or unknown connection
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1identities~1{identity_id}~1verify/post/responses/409/or
+      already verified for another user
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1topics~1{topic_id}~1accounts/post/responses/422/foreign
+      or archived account
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1topics~1{topic_id}~1accounts/post/responses/422/or
+      invalid relation
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1inbox~1conversations~1{conversation_id}~1template/post/responses/409/finalized
+      or its channel unavailable
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1inbox~1conversations~1{conversation_id}~1template/post/responses/422/not
+      from this line
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1inbox~1conversations~1{conversation_id}~1template/post/responses/422/or
+      invalid variables
+    - >-
+      #/paths/~1tenants~1{tenant_id}~1inbox~1conversations~1open/post/responses/422/or
+      a channel that is not an active line
+  no-unused-components:
+    - '#/components/responses/JsonError'

@@ -1,0 +1,68 @@
+name: Security (scheduled)
+
+# Periodic SCA/secret/image scanning (specification §4.2 item 6, §4.3 G7).
+# Reports only — never blocks a branch or a PR; blocking on severity happens
+# at release-promote.yml (F3/F9), which has not been built yet (this
+# workflow's findings are exactly what that gate will read). Runs on a
+# schedule and on manual dispatch, never on pull_request, so it never needs
+# to consider a fork PR's trust level.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC — arbitrary, adjust freely; not a correctness requirement
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write # to upload SARIF to the repo's Code Scanning tab
+
+jobs:
+  go-vulncheck:
+    name: Go dependency vulnerabilities (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: govulncheck (SARIF report, never fails this job)
+        run: govulncheck -format sarif ./... > govulncheck.sarif || true
+      - uses: github/codeql-action/upload-sarif@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck
+
+  web-audit:
+    name: Frontend dependency vulnerabilities (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: npm audit (report only — never fails this job)
+        working-directory: web
+        run: npm audit --audit-level=low || true
+
+  fs-scan:
+    name: Filesystem scan (vulnerabilities + secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "0" # report only; ci-pr.yml's secret-scan job is the blocking gate for new secrets
+      - uses: github/codeql-action/upload-sarif@ce5e7eeac396d720fe2d802714996c8ce561e311 # v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
