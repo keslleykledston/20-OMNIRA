@@ -98,6 +98,17 @@ type ContactDTO struct {
 	OpenConversationID *uuid.UUID `json:"open_conversation_id,omitempty"`
 }
 
+// TemplateDTO is an approved, sendable WhatsApp template (ADR-0052): enough to pick one and send it (message.template_id = ID), never the
+// provider's own id or sync metadata.
+type TemplateDTO struct {
+	ID                  uuid.UUID `json:"id"`
+	ChannelConnectionID uuid.UUID `json:"channel_connection_id"`
+	Name                string    `json:"name"`
+	Language            string    `json:"language"`
+	Body                string    `json:"body,omitempty"`
+	VariableCount       int       `json:"variable_count"`
+}
+
 type PageDTO[T any] struct {
 	Items      []T    `json:"items"`
 	HasMore    bool   `json:"has_more"`

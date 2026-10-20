@@ -35,6 +35,7 @@ func (e *env) readAPI(media mediaports.MediaReader) {
 	e.ext.Handle("GET /api/v1/external/queues", mw.Authenticated(adapters.RequireScope(domain.ScopeConversationRead, http.HandlerFunc(h.ListQueues))))
 	e.ext.Handle("GET /api/v1/external/contacts/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeContactRead, http.HandlerFunc(h.GetContact))))
 	e.ext.Handle("GET /api/v1/external/contacts", mw.Authenticated(adapters.RequireScope(domain.ScopeContactRead, http.HandlerFunc(h.SearchContacts))))
+	e.ext.Handle("GET /api/v1/external/templates", mw.Authenticated(adapters.RequireScope(domain.ScopeTemplateRead, http.HandlerFunc(h.ListTemplates))))
 	e.ext.Handle("GET /api/v1/external/media/{id}", mw.Authenticated(adapters.RequireScope(domain.ScopeMediaRead, http.HandlerFunc(h.GetMedia))))
 }
 
@@ -934,5 +935,68 @@ func TestReadAPIListsTheQueuesOfTheCompanyNarrowedByTheAllowlist(t *testing.T) {
 	}
 	if code, _ := queues(""); code != http.StatusUnauthorized {
 		t.Errorf("without a token = %d, want 401", code)
+	}
+}
+
+func (e *env) template(tenant, connID uuid.UUID, name, status string, sendable bool) uuid.UUID {
+	id := uuid.New()
+	e.exec(`INSERT INTO channel_message_templates(id,tenant_id,connection_id,name,language,status,body_text,variable_count,sendable)
+	        VALUES($1,$2,$3,$4,'pt_BR',$5,'corpo do template',0,$6)`, id, tenant, connID, name, status, sendable)
+	return id
+}
+
+// OMNIRA_API_PENDENCIAS_CRM.md §2.2: list approved, sendable templates, narrowed by the channel allow-list, scoped by template.read.
+func TestReadAPIListTemplatesIsApprovedOnlyAllowlistedAndTenantScoped(t *testing.T) {
+	e := newEnv(t)
+	e.readAPI(nil)
+	a, b := e.tenant(), e.tenant()
+	adminA, adminB := e.member(a, "tenant_admin"), e.member(b, "tenant_admin")
+	connA1, connA2 := e.connection(a), e.connection(a)
+	connB := e.connection(b)
+
+	tplVisible := e.template(a, connA1, "boas_vindas", "APPROVED", true)
+	tplOtherConn := e.template(a, connA2, "cobranca", "APPROVED", true)
+	e.template(a, connA1, "nao_suportado", "APPROVED", false) // sendable=false: excluded
+	e.template(a, connA1, "em_analise", "PENDING", true)      // not approved: excluded
+	tplB := e.template(b, connB, "boas_vindas_b", "APPROVED", true)
+
+	full := e.install(adminA, a, "CRM full", append(append([]string{}, readScopes...), "template.read")...)
+	code, body := e.admin(adminA, a, http.MethodPost, "", map[string]any{"name": "limited", "scopes": append(append([]string{}, readScopes...), "template.read"), "channel_ids": []string{connA1.String()}})
+	if code != http.StatusCreated {
+		t.Fatalf("create limited = %d %s", code, body)
+	}
+	var limited created
+	_ = json.Unmarshal(body, &limited)
+	other := e.install(adminB, b, "CRM B", append(append([]string{}, readScopes...), "template.read")...)
+	noScope := e.install(adminA, a, "CRM no template scope", readScopes...)
+
+	templates := func(token string) (int, []uuid.UUID) {
+		code, raw, _ := e.callExt(http.MethodGet, "/api/v1/external/templates", token, nil)
+		var doc struct {
+			Items []struct {
+				ID uuid.UUID `json:"id"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal(raw, &doc)
+		var out []uuid.UUID
+		for _, it := range doc.Items {
+			out = append(out, it.ID)
+		}
+		return code, out
+	}
+
+	code, got := templates(full.Credential.Token)
+	if code != http.StatusOK {
+		t.Fatalf("templates = %d", code)
+	}
+	sameSet(t, "A sees approved+sendable across its own connections", got, setOf(tplVisible, tplOtherConn))
+	if _, got := templates(limited.Credential.Token); len(got) != 1 || got[0] != tplVisible {
+		t.Errorf("the channel allow-list narrows the list: %v", got)
+	}
+	if _, got := templates(other.Credential.Token); len(got) != 1 || got[0] != tplB {
+		t.Errorf("another tenant sees only its own: %v", got)
+	}
+	if code, _ := templates(noScope.Credential.Token); code != http.StatusForbidden {
+		t.Errorf("without template.read = %d, want 403", code)
 	}
 }

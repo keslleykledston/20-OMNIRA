@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added (API externa — listar templates aprovados, ADR-0052, pendência CRM §2.2)
+- Novo scope `template.read` (migration `000169`, catálogo fechado em `internal/external/domain/scope.go`) e `GET /api/v1/external/templates`: templates já aprovados pela Meta e sincronizados (`channel_message_templates`), narrowed pela allowlist de canais da instalação. `id` é o mesmo valor que `message.template_id` espera no envio — fecha a lacuna que hoje obriga o dono a passar UUIDs de template manualmente ao CRM.
+- Sem escrita: sincronizar/criar/editar template continua exclusivo de `channel.manage` no Workspace.
+- Teste `TestReadAPIListTemplatesIsApprovedOnlyAllowlistedAndTenantScoped` (Tenant A/B, Postgres real): só aprovado+sendable aparece, allowlist de canal filtra, outro tenant nunca vê, 403 sem o scope. Contrato `omnira-external-v1.yaml` atualizado (rota, schema `Template`, enum de scopes) e sincronizado em `docs/ops/crm-handoff/`. UI de Aplicações externas ganhou o checkbox do novo scope.
+- Migration `000169` (aditiva; `down` remove o scope das instalações que o tiverem, suspendendo quem ficar sem nenhum scope restante).
+
 ### Added (API externa — busca de contato por telefone, pendência CRM §2.3)
 - `GET /api/v1/external/contacts?phone_e164=+55...`: acha um contato pelo telefone e devolve `open_conversation_id` quando há conversa aberta visível a essa instalação. Mesma regra de visibilidade do `GET /contacts/{id}` já existente (precisa de uma conversa visível, nunca contato interno/spam) — não é porta nova, reusa o scope `contact.read`, sem scope novo. Não cria contato nem conversa (isso é ADR-0050, bloqueado por decisão do dono).
 - Teste `TestReadAPISearchContactsByPhoneRespectsVisibilityAndNeverCrossesTenants` (Tenant A/B, Postgres real): contato com conversa aberta, contato só com conversa fechada (sem `open_conversation_id`), contato interno/de outro tenant/inexistente respondem o mesmo 404, validação de E.164, 403 sem o scope. Contrato `omnira-external-v1.yaml` atualizado (`GET /contacts`, campo `open_conversation_id`) e sincronizado em `docs/ops/crm-handoff/`. Sem migration.

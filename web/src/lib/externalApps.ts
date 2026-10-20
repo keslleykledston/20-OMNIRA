@@ -16,6 +16,7 @@ export const SCOPES: { key: string; label: string; write: boolean }[] = [
   { key: 'conversation.transfer', label: 'Transferir conversas', write: true },
   { key: 'conversation.finalize', label: 'Finalizar atendimentos', write: true },
   { key: 'service.read', label: 'Receber eventos de protocolos, ocorrências, tarefas e ordens de serviço', write: false },
+  { key: 'template.read', label: 'Listar templates aprovados do WhatsApp', write: false },
 ]
 
 export const EVENT_TYPES: { key: string; label: string }[] = [

@@ -24,16 +24,19 @@ const (
 	// ScopeServiceRead lets the application hear about the company's service protocols, cases, tasks and ERP records (ADR-0049 gate 4): the events, never the
 	// conversation itself (that is conversation.read). It never changes anything.
 	ScopeServiceRead Scope = "service.read"
+	// ScopeTemplateRead (ADR-0052) lets the application list the company's APPROVED, sendable WhatsApp templates — never sync, create or edit one
+	// (that stays exclusive to channel.manage in the Workspace), and never a template outside the installation's channel allow-list.
+	ScopeTemplateRead Scope = "template.read"
 )
 
 // AllScopes is every scope in a stable order.
 var AllScopes = []Scope{
 	ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead,
-	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend, ScopeServiceRead,
+	ScopeConversationClaim, ScopeConversationTransfer, ScopeConversationFinalize, ScopeMessageSend, ScopeServiceRead, ScopeTemplateRead,
 }
 
 // ReadScopes are the scopes that never change anything.
-var ReadScopes = []Scope{ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead, ScopeServiceRead}
+var ReadScopes = []Scope{ScopeConversationRead, ScopeMessageRead, ScopeMediaRead, ScopeContactRead, ScopeEventsRead, ScopeServiceRead, ScopeTemplateRead}
 
 func (s Scope) Valid() bool {
 	for _, k := range AllScopes {

@@ -81,6 +81,30 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+  /external/templates:
+    get:
+      operationId: listExternalTemplates
+      tags: [Conversations]
+      summary: Approved, sendable WhatsApp templates (ADR-0052)
+      description: |
+        Needs the scope `template.read`. Templates the company already synced and that Meta approved, narrowed to the installation's channel
+        allowlist when the administrator set one. `id` is the same value `message.template_id` expects in `POST .../messages`. Never sync, create
+        or edit a template — that stays exclusive to `channel.manage` in the Workspace.
+      responses:
+        '200':
+          description: The templates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Template' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
   /external/queues:
     get:
       operationId: listExternalQueues
@@ -677,6 +701,16 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         open_conversation_id: { type: string, format: uuid, description: "Set only by GET /contacts?phone_e164=: the newest OPEN conversation with this contact the installation may see, if any." }
+    Template:
+      type: object
+      required: [id, channel_connection_id, name, language, variable_count]
+      properties:
+        id: { type: string, format: uuid, description: "The value message.template_id expects." }
+        channel_connection_id: { type: string, format: uuid }
+        name: { type: string }
+        language: { type: string }
+        body: { type: string }
+        variable_count: { type: integer }
     Problem:
       type: object
       required: [type, title, status, code]
@@ -707,7 +741,7 @@ components:
             id: { type: string, format: uuid }
         scopes:
           type: array
-          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read] }
+          items: { type: string, enum: [conversation.read, message.read, media.read, contact.read, events.read, conversation.claim, conversation.transfer, conversation.finalize, message.send, service.read, template.read] }
         limits:
           type: object
           required: [rate_limit_per_min, allow_outside_hours]

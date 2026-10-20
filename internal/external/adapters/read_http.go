@@ -615,3 +615,41 @@ func (h *ReadHandler) ListQueues(w http.ResponseWriter, r *http.Request) {
 	externalMetric.Inc("served")
 	WriteJSON(w, r, http.StatusOK, map[string]any{"items": items})
 }
+
+// ListTemplates: GET /external/templates (ADR-0052, scope template.read). Approved, sendable WhatsApp templates of the company, narrowed to
+// the installation's channel allow-list when the administrator set one — the same allow-list that already narrows conversations and queues.
+func (h *ReadHandler) ListTemplates(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	items := []TemplateDTO{}
+	err := h.scoped(r, p, func(ctx context.Context, db platformdb.Querier, v Visibility) error {
+		var args Args
+		tenant := args.Add(v.TenantID)
+		narrow := ""
+		if len(v.ChannelIDs) > 0 {
+			narrow = " AND t.connection_id = ANY(" + args.Add(v.ChannelIDs) + "::uuid[])"
+		}
+		rows, err := db.Query(ctx, `
+			SELECT t.id, t.connection_id, t.name, t.language, t.body_text, t.variable_count
+			  FROM channel_message_templates t
+			 WHERE t.tenant_id = `+tenant+` AND t.status = 'APPROVED' AND t.sendable = true`+narrow+`
+			 ORDER BY t.name, t.language`, args.Values()...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d TemplateDTO
+			if err := rows.Scan(&d.ID, &d.ChannelConnectionID, &d.Name, &d.Language, &d.Body, &d.VariableCount); err != nil {
+				return err
+			}
+			items = append(items, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		failRead(w, r, err)
+		return
+	}
+	externalMetric.Inc("served")
+	WriteJSON(w, r, http.StatusOK, map[string]any{"items": items})
+}
