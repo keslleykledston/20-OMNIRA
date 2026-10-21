@@ -45,6 +45,7 @@ import (
 	platformdb "github.com/omnira/omnira/internal/platform/db"
 	"github.com/omnira/omnira/internal/platform/health"
 	"github.com/omnira/omnira/internal/platform/ratelimit"
+	"github.com/omnira/omnira/internal/platformrelease/updatemgr"
 	presenceadapters "github.com/omnira/omnira/internal/presence/adapters"
 	presenceapplication "github.com/omnira/omnira/internal/presence/application"
 	routingadapters "github.com/omnira/omnira/internal/routing/adapters"
@@ -581,6 +582,30 @@ func (s *Server) RegisterHubHandlers(dbPool *pgxpool.Pool, adminAPI, accessAPI b
 		s.mux.Handle("POST /api/v1/hubs/{hub_id}/companies", authnMiddleware(userSession(http.HandlerFunc(a.CreateCompany))))
 		s.mux.Handle("PATCH /api/v1/hubs/{hub_id}/companies/{tenant_id}", authnMiddleware(userSession(http.HandlerFunc(a.UpdateCompany))))
 	}
+}
+
+// RegisterPlatformReleaseHandlers mounts the Update Manager API (ADR-0054 §2.1, F6) when enabled.
+// Authority is always IsPlatformOperator (internal/hub/provisioning), never tenant/Hub membership
+// nor the API Headless — see internal/platformrelease/updatemgr's package doc. svc is nil-safe:
+// with the flag off, nothing here is routed (404, byte-for-byte what it was before this phase).
+func (s *Server) RegisterPlatformReleaseHandlers(dbPool *pgxpool.Pool, enabled bool, svc *updatemgr.Service) {
+	if !enabled || s.authenticator == nil {
+		return
+	}
+	authnMiddleware := authn.WebMiddleware(s.authenticator, s.sessionStore)
+	userSession := tenancyadapters.UserSessionMiddleware(dbPool)
+	h := updatemgr.NewHTTPHandler(svc, dbPool)
+	s.mux.Handle("GET /api/v1/platform/releases", authnMiddleware(userSession(http.HandlerFunc(h.ListReleases))))
+	s.mux.Handle("POST /api/v1/platform/releases", authnMiddleware(userSession(http.HandlerFunc(h.IngestRelease))))
+	s.mux.Handle("GET /api/v1/platform/installation", authnMiddleware(userSession(http.HandlerFunc(h.GetInstallation))))
+	s.mux.Handle("PUT /api/v1/platform/installation/version", authnMiddleware(userSession(http.HandlerFunc(h.SetInstallationVersion))))
+	s.mux.Handle("POST /api/v1/platform/backups", authnMiddleware(userSession(http.HandlerFunc(h.RecordBackupEvidence))))
+	s.mux.Handle("POST /api/v1/platform/updates/plans", authnMiddleware(userSession(http.HandlerFunc(h.CreatePlan))))
+	s.mux.Handle("GET /api/v1/platform/updates/plans/{plan_id}", authnMiddleware(userSession(http.HandlerFunc(h.GetPlan))))
+	s.mux.Handle("POST /api/v1/platform/updates/runs", authnMiddleware(userSession(http.HandlerFunc(h.StartRun))))
+	s.mux.Handle("GET /api/v1/platform/updates/runs", authnMiddleware(userSession(http.HandlerFunc(h.ListRuns))))
+	s.mux.Handle("GET /api/v1/platform/updates/runs/{run_id}", authnMiddleware(userSession(http.HandlerFunc(h.GetRun))))
+	s.mux.Handle("GET /api/v1/platform/updates/runs/{run_id}/events", authnMiddleware(userSession(http.HandlerFunc(h.ListEvents))))
 }
 
 // RegisterExternalHandlers mounts the Headless integration (ADR-0048) when OMNIRA_HEADLESS_ENABLED is on:

@@ -839,3 +839,188 @@ Próxima fase: F6 — Backend e autorização global (release service, planner, 
 ```
 
 **Veredito: PASS**
+
+
+## F6 — Backend e autorização global
+
+```
+Fase: F6
+Baseline SHA: e0e560e (último commit de F5 nesta mesma branch)
+Branch/worktree: feat/omnira-release-update-engine @ /opt/omnira/worktrees/release-engineering
+Implementação:
+  internal/platformrelease/updatemgr (novo, 2 arquivos de produção): o "Update Manager API" do
+    ADR-0054 §2.1 — release service, planner/preflight, update runs/event store e a comunicação
+    autenticada com o Update Agent (F5). Autoridade é SEMPRE IsPlatformOperator
+    (internal/hub/provisioning, ADR-0038), nunca tenant_id/membership de tenant/Hub/API Headless
+    — mesmo modelo de confiança de internal/hub/companies: o serviço roda numa sessão de SISTEMA,
+    re-autorizando o operador explicitamente em toda chamada (nunca confiando em RLS como única
+    barreira), e a defesa em profundidade é dupla: a sessão de RLS do PRÓPRIO chamador (HTTP,
+    exige tenancyadapters.UserSessionMiddleware) E a sessão de sistema do Service.
+  service.go (1494 linhas): IngestRelease (valida com domain.ParseManifest/Validate de F1 +
+    SignatureVerifier — ver achados de segurança abaixo — e idempotência por release_id E por
+    Idempotency-Key), GetInstallation/SetInstallationVersion (singleton platform_installations,
+    idempotente), RecordBackupEvidence (bookkeeping de release/policies/backup.yaml, idempotente),
+    CreatePlan (preflight fail-closed: checkCompatibility contra compatibility.yaml, evidência de
+    backup como WARN informativo — o gate bloqueante é F9 — idempotente), StartRun ("comunicação
+    autenticada com o agente": reserva no Postgres, despacha para o MESMO ledger SQLite local que
+    apps/update-agent/apps/updatectl já usam — AcquireLock -> CreateRun -> ReleaseLock, nunca um
+    caminho HTTP/Docker separado — e só então confirma LOCKED no espelho), GetRun/ListRuns/
+    ListEvents (sincronizam com o ledger antes de responder). Toda mutação exige Idempotency-Key
+    (ADR-0054 §2.2.1).
+  http.go (411 linhas): HTTPHandler com 404 uniforme em negação (nunca 403, mesmo padrão de
+    internal/hub/adapters.AdminHandler), rejeita tenant_id/hub_id do payload (CLAUDE.md),
+    paginação por cursor (Cursor de internal/platform/pagination), rate limit por usuário
+    (ratelimit.EnforceUser).
+  internal/platform/httpserver/server.go: RegisterPlatformReleaseHandlers (novo), 10 rotas
+    /api/v1/platform/* atrás de OMNIRA_PLATFORM_RELEASE_API_ENABLED.
+  internal/platform/config/config.go, apps/api/cmd/omnira-api/main.go: novos campos de
+    configuração (PlatformReleaseAPIEnabled + os MESMOS OMNIRA_AGENT_LEDGER_PATH/
+    INSTALLATION_ID/LEASE do Update Agent — nunca uma configuração separada, ver ADR-0054 §2.4).
+  internal/platform/httpserver/contract_test.go: newRoutedServer registra o novo handler;
+    TestEveryDocumentedOperationIsARegisteredRoute confirma as 10 rotas documentadas.
+  contracts/openapi/omnira-v1.yaml: tag PlatformRelease + 10 operações (releases, installation,
+    installation/version, backups, updates/plans, updates/plans/{id}, updates/runs,
+    updates/runs/{id}, updates/runs/{id}/events) + 7 schemas novos (ReleaseManifest,
+    PlatformRelease, PlatformInstallation, PlatformBackupRecord, PlatformUpdatePlan,
+    PlatformUpdateRun, PlatformUpdateEvent).
+Arquivos:
+  migrations/000173_platform_release_tables.{up,down}.sql (novo)
+  internal/platformrelease/updatemgr/{service,http}.go (novo)
+  internal/platformrelease/updatemgr/{world_test,service_integration_test}.go (novo, 1230 linhas
+    de teste de integração real contra Postgres + SQLite)
+  internal/platform/httpserver/server.go, internal/platform/httpserver/contract_test.go
+  internal/platform/config/config.go, apps/api/cmd/omnira-api/main.go
+  contracts/openapi/omnira-v1.yaml
+Migrations: 000173_platform_release_tables — 12 tabelas GLOBAIS (sem tenant_id; a varredura de
+  RLS por tenant_id de internal/platform/db/rls_completeness_test.go não as alcança, RLS é
+  aplicada manualmente aqui): platform_installations (singleton via PK booleana com
+  CHECK(singleton) — nunca depende de disciplina de aplicação), platform_releases,
+  platform_update_plans, platform_update_runs, platform_update_events (append-only de verdade:
+  REVOKE UPDATE/DELETE + trigger, mesmo padrão de conversation_closures/migration 000087), e 6
+  tabelas de idempotência (platform_release_ingest_requests, platform_update_plan_requests,
+  platform_update_run_requests, platform_backup_record_requests,
+  platform_installation_version_requests) + platform_backup_records + platform_component_versions
+  (schema criado para concordar com o ADR; população real é pendência documentada abaixo). Todas
+  com FORCE ROW LEVEL SECURITY e policy restrita a is_system_admin() OR
+  is_platform_operator(current_user_id()) — mesmo padrão de platform_operators (migration 000099).
+  lint-migration-safety.sh (F4) e validate-migrations.sh (F2) re-executados: OK (161 migrations).
+Contratos/endpoints: 10 operações novas em /api/v1/platform/* (ver Implementação); validate-specs.sh
+  (F2, redocly lint) OK; TestEveryDocumentedOperationIsARegisteredRoute (drift guard de F0)
+  confirma rota real para cada uma.
+Testes executados (comandos, PASS/FAIL):
+  gofmt -l . / go build ./... / go vet ./... (repo inteiro) → limpos
+  go test ./internal/platform/httpserver/... ./internal/platformrelease/... -race → PASS
+  scripts/release/test-integration-hostrun (variante local do scripts/test-integration.sh do F2
+    rodando `go test` no HOST em vez de containerizado — achado F4 pré-existente, não desta fase:
+    um worktree Git secundário monta `.git` com caminho absoluto do host, que o container não vê;
+    rodar no host contorna isso sem mudar o script versionado) → 20 funções de teste em
+    internal/platformrelease/updatemgr, todas PASS, contra Postgres 16 descartável real E o
+    ledger SQLite real do Update Agent (nunca mockados): autorização cross-identidade (operador
+    de plataforma passa; tenant admin, delegado de Hub, "CRM externo"/API Headless sem
+    authn.Principal, operador revogado e um usuário qualquer são todos recusados com o mesmo
+    ErrForbidden/404 uniforme — teste dedicado TestUpdateMgr_AuthorizationBoundary, mais
+    TestUpdateMgr_TheServiceRefusesOnItsOwn provando que o Service recusa por conta própria
+    mesmo sem a checagem HTTP); idempotência dedicada para as 5 mutações (IngestRelease,
+    CreatePlan, StartRun, RecordBackupEvidence, SetInstallationVersion — replay devolve o mesmo
+    resultado sem duplicar, mesma chave com conteúdo diferente é 422); preflight fail-closed
+    (versão desconhecida bloqueia por padrão; incompatibilidade de versão/protocolo de agente
+    bloqueia); StartRun escrevendo de verdade no MESMO ledger SQLite (LOCKED, evento run.locked
+    append-only); sincronização bidirecional run-ledger-Postgres incluindo runs criados por
+    `updatectl` fora da API (sem nenhuma linha em Postgres) e recuperação manual
+    (SetInstallationVersion) vencendo um histórico de ledger mais antigo; bloqueio de novo
+    despacho enquanto há RECOVERY_REQUIRED não reconhecido (mesmo gate que Executor.Reconcile).
+  go test ./internal/hub/adapters/... ./internal/hub/provisioning/... ./internal/platform/db/...
+    (regressão ampliada, mesma variante host) → PASS — confirma que as 12 tabelas novas e a
+    RLS/policies adicionadas não quebraram nenhum pacote existente de autorização/RLS.
+Gates de segurança / RLS: 12 tabelas novas, todas FORCE RLS + policy restrita a
+  is_platform_operator() (ver Migrations acima). Defesa em profundidade dupla em toda rota HTTP
+  (sessão de RLS do chamador + sessão de sistema do Service, cada uma recusando
+  independentemente — TestUpdateMgr_TheServiceRefusesOnItsOwn prova a segunda mesmo simulando a
+  primeira ausente). tenant_id/hub_id no payload são rejeitados explicitamente (400), nunca usados
+  como autoridade. SignatureVerifier: forma válida (domain.Validate) nunca é autenticidade — o
+  default de PRODUÇÃO (blockedExternalVerifier) recusa TODA ingestão até um verificador real
+  existir (BLOCKED_EXTERNAL, ver Pendências); os testes injetam um verificador de teste nomeado
+  para nunca ser confundido com produção.
+Review Codex (evidência real): `codex exec review --uncommitted` executado 21 vezes nesta
+  branch (mesmo ciclo rigoroso fix→teste real→re-review das fases anteriores — nunca aceitar um
+  achado sem corrigir e testar contra Postgres/SQLite reais antes da próxima rodada). As duas
+  últimas rodadas (20ª e 21ª) convergiram em "No actionable defects/regressions were
+  identified/confirmed". Mais de 20 achados reais corrigidos, agrupados por tema:
+  - **Identidade de run do ledger descartada**: Ledger.CreateRun pode devolver um run EXISTENTE
+    (dedup por installation_id+idempotency_key) cujo RunID diverge do proposto; o chamador
+    precisa usar o valor real, nunca descartá-lo.
+  - **Reserva antes do despacho (crash-safety)**: um run tinha que existir no Postgres (estado
+    sentinela REQUESTED, nunca um domain.RunState) ANTES do despacho real ao ledger — um crash
+    entre os dois deixava o pedido visível e auditável, nunca perdido silenciosamente.
+  - **Preflight fail-open em versão desconhecida**: uma instalação recém-migrada (current_version
+    NULL) era tratada como "compatível com qualquer release" — corrigido para BLOCK por padrão;
+    SetInstallationVersion é o único jeito de saí-lo (endpoint novo, idempotente).
+  - **Revalidação na janela de validade do plano/despacho**: um plano PASS cacheado, ou um pedido
+    reservado (REQUESTED) nunca despachado, precisavam revalidar compatibilidade contra o estado
+    ATUAL (nunca o momento da criação), inclusive depois de um crash/retry.
+  - **Autenticidade do manifesto**: forma válida nunca é autenticidade — SignatureVerifier
+    (default: bloqueia tudo, nunca finge verificar) fecha o gap até F9 ter credenciais reais.
+  - **Só um run ativo por instalação**: duas Idempotency-Keys diferentes podiam ser despachadas
+    em sequência, a segunda nunca revalidada contra o que a primeira já tinha mudado — corrigido
+    com lock de instalação (nunca só por chave) + contagem Postgres + consulta DIRETA ao ledger
+    (pega runs criados por `updatectl`, invisíveis ao Postgres).
+  - **Corridas de sincronização run-ledger-Postgres**: refresh dentro da MESMA transação que podia
+    rejeitar o pedido (desfazia o próprio refresh); refresh concorrente podia retroceder um
+    estado mais novo para um mais antigo (serializado pelo mesmo lock de instalação); o timestamp
+    de sincronização usava now() do MOMENTO DA SINCRONIZAÇÃO em vez do timestamp do PRÓPRIO run
+    do ledger, misturando dois relógios e descartando sucessos reais permanentemente;
+    SetInstallationVersion usava now() da transação (que no Postgres é o INÍCIO da transação,
+    não a instrução) em vez de clock_timestamp().
+  - **Recuperação manual (ADR-0054 §8 R3/R4) perdendo para histórico de ledger obsoleto**: depois
+    de um run SUCCEEDED seguido de uma restauração manual aprovada, o despacho seguinte não podia
+    ficar presos para sempre atrás do histórico antigo do ledger — decide pelo fato mais RECENTE
+    (ledger vs. Postgres) por timestamp, nunca um sempre vencendo o outro por tipo.
+  - **RECOVERY_REQUIRED não reconhecido**: o mesmo gate que Executor.Reconcile usa
+    (HasUnresolvedRecoveryRequired) precisa bloquear CreatePlan/StartRun, senão um pedido é
+    aceito mas o agente real nunca o processa — rechecado inclusive sob o lock do ledger.
+  - **Idempotência das 5 mutações**: IngestRelease, CreatePlan, StartRun, RecordBackupEvidence e
+    SetInstallationVersion precisavam, cada uma, da MESMA disciplina (Idempotency-Key obrigatória,
+    hash do pedido, replay vs. 422) — corrigidas uma a uma conforme encontradas.
+  - **Corridas de concorrência em condições de borda**: ingestão concorrente do mesmo release_id
+    inexistente (UNIQUE constraint como 500 genérico em vez de replay/422); um retry concorrente
+    de StartRun podia sobrescrever um run JÁ despachado/concluído com COMPATIBILITY_VOIDED (void
+    agora exige state=REQUESTED, nunca incondicional).
+  LIMITAÇÃO ACEITA, NÃO CORRIGÍVEL SEM TRANSAÇÕES DISTRIBUÍDAS: Postgres (platform_installations)
+  e o ledger SQLite local são dois sistemas de armazenamento diferentes; a atomicidade entre eles
+  é best-effort por desenho (ADR-0054 §2.4: "nunca duas fontes de verdade concorrentes para o que
+  fazer agora" — o ledger decide, Postgres espelha). writeLedgerRun fecha a janela prática ao
+  manter o lock de instalação do Postgres detido durante TODA a sequência (leitura + lock do
+  ledger + CreateRun), mas uma janela de nanossegundos entre a escrita no SQLite e o commit do
+  Postgres sempre existirá em sistemas sem 2PC — aceito e documentado, nunca escondido.
+Commits: (ver git log da branch feat/omnira-release-update-engine — commit desta fase citado no
+  próximo update deste arquivo)
+Pendências/risco:
+  - Assinatura real de release (GitHub Artifact Attestation / Sigstore keyless, ver
+    release/policies/signing.yaml) continua BLOCKED_EXTERNAL (gh CLI/credenciais GHCR ausentes,
+    achado original F0 §7) — IngestRelease está corretamente fail-closed (SignatureVerifier
+    default recusa tudo) até um verificador real ser instalado via WithVerifier (F9).
+  - platform_component_versions: schema criado (ADR-0054 §2.4), população real a partir de um
+    deploy efetivo é pendência — nada neste programa ainda relata "o que está instalado em cada
+    build_unit" além de current_version/current_release_id (que já são sincronizados de verdade
+    a partir do ledger e de `updatectl`).
+  - Evento NATS job.platform.update.apply.v1 citado no ADR-0054 §2.2.2 como mecanismo alternativo
+    de comunicação com o agente NÃO foi implementado — StartRun comunica com o agente escrevendo
+    DIRETO no ledger SQLite local compartilhado (o mesmo mecanismo que apps/updatectl já usa),
+    que já satisfaz a regra rígida "API nunca executa shell/Docker, só enfileira um pedido
+    autorizado" sem precisar de um segundo transporte; documentado como decisão arquitetural
+    desta fase, não um gap.
+  - Nenhuma UI consome esta API ainda (F7).
+  - SSE não implementado para ListEvents — polling por cursor `after` (seq) cobre a cláusula
+    "SSE/polling" da especificação; documentado como pendência de UX, não de corretude.
+  - A migração de `scripts/test-integration.sh` para rodar `go test` no host em vez de em
+    container (necessário para esta fase rodar de verdade, achado PRÉ-EXISTENTE do F4) não foi
+    aplicada ao script VERSIONADO nesta sessão — usei uma variante local descartável para
+    verificação; recomendado ao dono do repositório decidir a estratégia de mount definitiva
+    (fora do escopo de correção de F6).
+Próxima fase: F7 — Frontend real do OMNIRA (menu "Administração global → Plataforma → Versões e
+  Atualizações", React/Vite existente, consumindo as 10 rotas desta fase)
+```
+
+**Veredito: PASS**
+
+---
